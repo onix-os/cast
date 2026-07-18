@@ -60,11 +60,11 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s test "$$( timeout 10s grep -Fc '    drop(journal);' <<<"$$suffix" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' <<<"$$suffix" )" = 1; \
 	if timeout 10s rg -n 'retained_mutable_cast_directory|open_in_retained_cast|journal\.load\(' "$$executor"; then exit 1; fi; \
-	timeout 10s rg -U -q 'installation\.revalidate_mutable_namespace\(\)\?;\n    let cast = installation\.retained_mutable_cast_directory\(\)\?;\n    let journal = TransitionJournalStore::open_in_retained_cast\(cast, &installation\.root\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;\n    let record = journal\.load\(\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;' "$$reopen"; \
+	timeout 10s rg -U -q 'installation\.revalidate_mutable_namespace\(\)\?;\n    let cast = installation\.retained_mutable_cast_directory\(\)\?;\n    let journal = TransitionJournalStore::open_in_retained_cast\(cast, &installation\.root\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;\n    let record = journal\.load_revalidated_retained_cast\(cast\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;' "$$reopen"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    installation.revalidate_mutable_namespace()?;' "$$reopen" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'installation.retained_mutable_cast_directory()?' "$$reopen" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'TransitionJournalStore::open_in_retained_cast(' "$$reopen" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'journal.load()?' "$$reopen" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal.load_revalidated_retained_cast(cast)?' "$$reopen" )" = 1; \
 	timeout 10s grep -Fqx '            CanonicalJournalReopenError::Installation(source) => Self::Installation(source),' "$$executor"; \
 	timeout 10s grep -Fqx '            CanonicalJournalReopenError::Journal(source) => Self::Journal(source),' "$$executor"; \
 	if timeout 10s rg -n 'Phase|rollback_decision|rollback_successor|forward_successor|TransitionJournalStore::(open|open_retained|try_open_in_retained_cast)\(|std::fs|fs::|File::open|OpenOptions|openat|AsRawFd|IntoRawFd|FromRawFd|AsFd|RawFd|BorrowedFd|OwnedFd|unsafe[[:space:]]*\{' "$$reopen"; then exit 1; fi; \

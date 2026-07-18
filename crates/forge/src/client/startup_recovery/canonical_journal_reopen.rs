@@ -18,7 +18,7 @@ pub(super) fn reopen_canonical_journal(
     let cast = installation.retained_mutable_cast_directory()?;
     let journal = TransitionJournalStore::open_in_retained_cast(cast, &installation.root)?;
     installation.revalidate_mutable_namespace()?;
-    let record = journal.load()?;
+    let record = journal.load_revalidated_retained_cast(cast)?;
     installation.revalidate_mutable_namespace()?;
     Ok((journal, record))
 }
