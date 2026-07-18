@@ -10,7 +10,7 @@ forge-startup-usr-rollback-active-reblit-finalization-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	gate_prefix='client::startup_gate::usr_rollback_active_reblit::tests::finalization_'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$gate_prefix.*: test$$" "$$listed" )" = 16; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$gate_prefix.*: test$$" "$$listed" )" = 17; \
 	for name in \
 		authority_binding::startup_active_reblit_finalization_authority_covers_both_indices_in_both_epochs_and_rejects_wrong_bindings \
 		authority_binding::startup_active_reblit_finalization_authority_refuses_terminal_candidate_without_exact_previous_identity \
@@ -22,6 +22,7 @@ forge-startup-usr-rollback-active-reblit-finalization-test:
 		evidence_races::startup_active_reblit_finalization_rejects_database_and_provenance_changes_at_final_pre_and_after_delete \
 		lock_handoff::startup_active_reblit_finalization_hands_the_same_lock_into_clean_startup_until_proof_drop \
 		matrix::startup_active_reblit_finalization_covers_all_sixteen_exact_terminal_cases_and_both_wrapper_indices \
+		process_kill::startup_active_reblit_finalization_process_kills_restart_cleanly \
 		public_binding_races::startup_active_reblit_finalization_rejects_hidden_entry_set_substitution \
 		public_binding_races::startup_active_reblit_finalization_rejects_public_directory_and_lock_substitution \
 		public_binding_races::startup_active_reblit_finalization_rejects_source_recreation_after_delete_and_after_absence_proof \
@@ -49,6 +50,7 @@ forge-startup-usr-rollback-active-reblit-finalization-test:
 	reconciliation_root=crates/forge/src/client/startup_reconciliation.rs; \
 	namespace_root=crates/forge/src/client/startup_reconciliation/activation_namespace.rs; \
 	gate_tests=crates/forge/src/client/startup_gate/usr_rollback_active_reblit/tests; \
+	process_kill="$$gate_tests/finalization_process_kill.rs"; \
 	executor_tests=crates/forge/src/client/startup_recovery/usr_rollback_active_reblit_finalization/tests; \
 	timeout 10s grep -Fqx 'mod usr_rollback_active_reblit_finalization_authority;' "$$reconciliation_root"; \
 	timeout 10s grep -Fqx 'mod active_reblit_finalization_proof;' "$$namespace_root"; \
@@ -59,7 +61,7 @@ forge-startup-usr-rollback-active-reblit-finalization-test:
 	for symbol in DurableUsrRollbackActiveReblitFinalizationRecord UsrRollbackActiveReblitFinalizationError UsrRollbackActiveReblitFinalizationVerificationError finalize_usr_rollback_active_reblit; do \
 		timeout 10s grep -Fq "$$symbol" "$$recovery_root"; \
 	done; \
-	for module in finalization_authority_binding finalization_boundaries finalization_evidence_races finalization_lock_handoff finalization_matrix finalization_public_binding_races finalization_restart finalization_storage_faults; do \
+	for module in finalization_authority_binding finalization_boundaries finalization_evidence_races finalization_lock_handoff finalization_matrix finalization_process_kill finalization_public_binding_races finalization_restart finalization_storage_faults; do \
 		timeout 10s grep -Fqx "mod $$module;" "$$gate_tests/mod.rs"; \
 	done; \
 	for module in reconcile_delete support; do timeout 10s grep -Fqx "mod $$module;" "$$executor_tests/mod.rs"; done; \
@@ -177,6 +179,58 @@ forge-startup-usr-rollback-active-reblit-finalization-test:
 	timeout 10s grep -Fq 'assert_eq!(WRAPPER_INDICES, [0, WRAPPER_INDEX]);' "$$gate_tests/finalization_matrix.rs"; \
 	timeout 10s grep -Fq 'assert_eq!(cases, 16);' "$$gate_tests/finalization_matrix.rs"; \
 	timeout 10s grep -Fq 'for wrapper_index in WRAPPER_INDICES {' "$$gate_tests/finalization_authority_binding.rs"; \
+	timeout 10s grep -Fq 'const ALL: [Self; 3] = [' "$$process_kill"; \
+	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'for boundary in FinalizationKillBoundary::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq '        cases, 12,' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc ') => Self {' "$$process_kill" )" = 4; \
+	timeout 10s rg -U -q '\(ProcessEpoch::Current, ProcessSource::Intent\) => Self \{\n[[:space:]]+usr_outcome: RollbackActionOutcome::Applied,\n[[:space:]]+candidate_origin: CandidateOrigin::Applied,\n[[:space:]]+wrapper_index: 0,\n[[:space:]]+\},' "$$process_kill"; \
+	timeout 10s rg -U -q '\(ProcessEpoch::Current, ProcessSource::Exchanged\) => Self \{\n[[:space:]]+usr_outcome: RollbackActionOutcome::Applied,\n[[:space:]]+candidate_origin: CandidateOrigin::AlreadySatisfied,\n[[:space:]]+wrapper_index: 13,\n[[:space:]]+\},' "$$process_kill"; \
+	timeout 10s rg -U -q '\(ProcessEpoch::Historical, ProcessSource::Intent\) => Self \{\n[[:space:]]+usr_outcome: RollbackActionOutcome::AlreadySatisfied,\n[[:space:]]+candidate_origin: CandidateOrigin::Applied,\n[[:space:]]+wrapper_index: 13,\n[[:space:]]+\},' "$$process_kill"; \
+	timeout 10s rg -U -q '\(ProcessEpoch::Historical, ProcessSource::Exchanged\) => Self \{\n[[:space:]]+usr_outcome: RollbackActionOutcome::AlreadySatisfied,\n[[:space:]]+candidate_origin: CandidateOrigin::AlreadySatisfied,\n[[:space:]]+wrapper_index: 0,\n[[:space:]]+\},' "$$process_kill"; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_active_reblit_finalization_final_revalidation(kill_self)' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'arm_journal_delete_durability_callback(' "$$process_kill" )" = 2; \
+	for boundary in CanonicalUnlinked DeleteDirectorySynced; do timeout 10s grep -Fq "JournalDeleteDurabilityBoundary::$$boundary" "$$process_kill"; done; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$process_kill" )" = 2; \
+	timeout 10s grep -Fq 'let installation = Installation::open(&case.root, None).unwrap();' "$$process_kill"; \
+	timeout 10s grep -Fq 'let database = open_state_database(&installation);' "$$process_kill"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$process_kill"; \
+	timeout 10s grep -Fq '.arg(TEST_NAME)' "$$process_kill"; \
+	timeout 10s grep -Fq '.arg("--exact")' "$$process_kill"; \
+	timeout 10s grep -Fq '.arg("--test-threads=1")' "$$process_kill"; \
+	timeout 10s grep -Fq 'Some(nix::libc::SIGKILL)' "$$process_kill"; \
+	timeout 10s grep -Fq 'nix::libc::kill(nix::libc::getpid(), nix::libc::SIGKILL)' "$$process_kill"; \
+	timeout 10s grep -Fq 'const CHILD_DEADLINE: Duration = Duration::from_secs(15);' "$$process_kill"; \
+	timeout 10s grep -Fq 'struct DeadlineChild {' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.wait(CHILD_DEADLINE)' "$$process_kill" )" = 2; \
+	timeout 10s grep -Fq 'if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {' "$$process_kill"; \
+	timeout 10s grep -Fq 'if Instant::now() >= deadline {' "$$process_kill"; \
+	timeout 10s grep -Fq 'impl Drop for DeadlineChild {' "$$process_kill"; \
+	timeout 10s grep -Fq 'let control = tempfile::tempdir().unwrap();' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_separate_control_path(&root, &control_path);' "$$process_kill"; \
+	timeout 10s grep -Fq 'external ActiveReblit process-kill control does not match the terminal case' "$$process_kill"; \
+	timeout 10s grep -Fq 'let terminal_bytes = fs::read(canonical_path(&root)).unwrap();' "$$process_kill"; \
+	timeout 10s grep -Fq 'install_persistent_database(&mut fixture);' "$$process_kill"; \
+	timeout 10s grep -Fq 'let retained_root = release_candidate_handles(fixture);' "$$process_kill"; \
+	timeout 10s grep -Fqx 'struct ExistingCandidateDatabase {' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_eq!(record.candidate.id, record.previous.id);' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_eq!(in_flight, None);' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_eq!(ownership, db::state::TransitionOwnership::Cleared);' "$$process_kill"; \
+	timeout 10s grep -Fq '.expect("ActiveReblit candidate provenance must remain present");' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'ExistingCandidateDatabase::capture(' "$$process_kill" )" = 6; \
+	timeout 10s grep -Fq 'let wrapper = active_wrapper_path_at(&fixture, dimensions.wrapper_index);' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_wrapper(' "$$process_kill" )" = 7; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'snapshot_startup_recovery_namespace(' "$$process_kill" )" = 6; \
+	timeout 10s grep -Fqx 'struct PublicJournalIdentity {' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_journal_inventory(root, canonical_present);' "$$process_kill"; \
+	timeout 10s grep -Fq 'public_before.assert_same_public_anchors(final_public);' "$$process_kill"; \
+	timeout 10s grep -Fq 'StorageError::AcquireLock' "$$process_kill"; \
+	timeout 10s grep -Fq 'assert_eq!(reopened.load().unwrap(), None)' "$$process_kill"; \
+	timeout 10s grep -Fq 'arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::TemporaryFullySynced' "$$process_kill"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_no_candidate_effects()' "$$process_kill" )" = 4; \
+	timeout 10s grep -Fq 'not a reboot or power-loss oracle' "$$process_kill"; \
+	if timeout 10s rg -n 'arm_next_|assert_.*fault_consumed|finalize_usr_rollback_active_reblit[[:space:]]*\(|capture_finalization_ready[[:space:]]*\(|enter_clean_(candidate|fresh_handles)[[:space:]]*\(|FaultPoint|StorageFault' "$$process_kill"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'release_candidate_handles(fixture)' "$$gate_tests/finalization_restart.rs" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_fresh_existing_candidate_database(' "$$gate_tests/finalization_restart.rs" )" = 4; \
 	for disclaimer in 'fresh process-like' 'do not claim SIGKILL' 'reboot' 'power-loss durability'; do timeout 10s grep -Fq "$$disclaimer" "$$gate_tests/finalization_restart.rs"; done; \

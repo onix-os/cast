@@ -701,7 +701,7 @@ Separate entries normalize exchange durability, persist and route rollback, reve
 from `CandidatePreserved` to `RollbackComplete` using exact cleared-row and wrapper evidence. On a separate
 `RollbackComplete` entry it captures exact cleared existing-candidate/provenance plus preserved-wrapper authority, performs
 one same-store conditional journal delete, proves public absence, and enters shared clean admission without redispatch.
-Every entry is bounded; real ActiveReblit terminal `SIGKILL`/process-death proof is the next gap. Reboot and power-loss remain unproved.
+Every entry is bounded. An exact 2 x 2 x 3 ActiveReblit matrix now sends genuine same-boot `SIGKILL` across current/historical record epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence, and post-directory-sync absence. A historical epoch is not a reboot simulation; no reboot or power-loss durability is claimed, and ActivateArchived remains the next operation gap.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
@@ -906,10 +906,10 @@ startup, 5 authority, 13 executor, and 5 clean-handoff contracts pass alongside
 `make check` and the 1153-file limit. Commits `932ab3bb` and `0e56aff3` add
 test-only delete-boundary seams and a 12-case current/historical, intent/exchanged
 real-`SIGKILL` restart matrix through production startup. ActiveReblit candidate preservation, its journal-only completion
-route, and its deterministic terminal finalizer are now in production. A separate `RollbackComplete` entry captures exact
-cleared existing-candidate/provenance plus preserved-wrapper authority, performs one same-store conditional journal delete,
-proves public absence, and enters shared clean admission without redispatch. Real ActiveReblit terminal `SIGKILL`/process-death
-coverage is the next gap. ActivateArchived has no candidate suffix; reboot and power-loss proof remain absent everywhere.
+route and deterministic terminal finalizer are now in production; an exact 12-case real-process restart matrix covers that terminal finalizer.
+The matrix crosses both epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence,
+and post-directory-sync absence with fresh crash and recovery processes. Historical epoch is not a reboot simulation, and
+no reboot or power-loss durability is claimed. ActivateArchived has no candidate suffix and remains the next operation gap.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

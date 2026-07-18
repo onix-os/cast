@@ -15,6 +15,7 @@ mod finalization_boundaries;
 mod finalization_evidence_races;
 mod finalization_lock_handoff;
 mod finalization_matrix;
+mod finalization_process_kill;
 mod finalization_public_binding_races;
 mod finalization_restart;
 mod finalization_storage_faults;

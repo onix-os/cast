@@ -342,7 +342,13 @@ closure remain authoritative in `PLAN.md`.
   canonical reopen. Source-side restart uses zero-removal Finish; successor-
   side restart skips invalidation. Production dispatch, namespace mutation,
   later rollback actions, roll-forward, triggers, and cleanup are not executed,
-  so this item remains open. ActiveReblit's deterministic terminal-delete
-  faults and fresh-handle restarts do not prove process death, reboot, or power
-  loss. Its genuine `SIGKILL` terminal-delete matrix is the next separate
-  checkpoint, while reboot and power-loss proof remains open afterward.
+  so this item remains open. ActiveReblit's terminal finalizer now has an exact
+  12-case real-process matrix across current/historical record epochs, both
+  rollback sources, and final-PRE source retention, kernel-observed post-unlink
+  absence, and post-directory-sync absence. Each crash is a genuine same-boot
+  `SIGKILL`, followed by fresh-process production startup; it is not evidence
+  that a pre-sync state survives reboot. Historical epoch is only a mismatched
+  runtime witness, not a reboot simulation, and no power-loss claim is made.
+  Phase 11 and its broad interruption campaign therefore remain open.
+  ActivateArchived's candidate suffix is the next operation-specific gap,
+  followed by roll-forward, boot, cleanup, and power-loss work.

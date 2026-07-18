@@ -393,7 +393,7 @@ pub(super) fn assert_fresh_existing_candidate_database(
     );
 }
 
-fn open_state_database(installation: &Installation) -> db::state::Database {
+pub(super) fn open_state_database(installation: &Installation) -> db::state::Database {
     let location = installation.mutable_database_location(DatabaseKind::State).unwrap();
     let (url, anchor) = location.parts();
     let database = db::state::Database::new_anchored(url, anchor).unwrap();

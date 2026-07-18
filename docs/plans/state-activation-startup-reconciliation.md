@@ -645,11 +645,13 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   Deterministic terminal-delete faults and fresh-handle restart cover both
   observed source-or-absence sides without treating absence as deletion
-  causality. They are not
-  real process-death, reboot, or power-loss evidence. A genuine `SIGKILL`
-  matrix at the ActiveReblit terminal-delete boundaries is the next separate
-  checkpoint. Reboot and power-loss behavior remains unproved even after that
-  same-boot process matrix is added.
+  causality. A separate real-process checkpoint now covers an exact 2 x 2 x 3
+  matrix: current and historical record epochs, both rollback sources, and
+  final-PRE, post-unlink, and post-directory-sync kill boundaries. Those 12
+  cases use genuine same-boot `SIGKILL` followed by fresh-process production
+  startup. Historical epoch means only that the journal witness differs from
+  the running epoch; it is not a reboot simulation, and no reboot or power-loss
+  durability is claimed.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -812,6 +814,38 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   same-boot process-death evidence: `SIGKILL` does not prove which pre-fsync
   state survives reboot or power loss.
 
+  The ActiveReblit terminal lane applies the same real-process method to an
+  exact 12-case matrix. Its four epoch/source rows deliberately bind the other
+  recovery dimensions rather than leaving them incidental:
+
+  - current + `UsrExchangeIntent`: `/usr` `Applied`, candidate `Applied`,
+    preserved-wrapper index 0;
+  - current + `UsrExchanged`: `/usr` `Applied`, candidate
+    `AlreadySatisfied`, preserved-wrapper index 13;
+  - historical + `UsrExchangeIntent`: `/usr` `AlreadySatisfied`, candidate
+    `Applied`, preserved-wrapper index 13; and
+  - historical + `UsrExchanged`: `/usr` `AlreadySatisfied`, candidate
+    `AlreadySatisfied`, preserved-wrapper index 0.
+
+  Each row crosses three terminal-delete boundaries. Final-PRE death leaves
+  the canonical `RollbackComplete` source byte- and identity-exact. Death at
+  `CanonicalUnlinked` proves only that the running kernel observes the
+  canonical name absent immediately after unlink, before directory-sync
+  durability. Death at `DeleteDirectorySynced` observes absence after the
+  journal-directory sync. At both absence boundaries, recovery does not infer
+  that its own invocation caused deletion; it authenticates the public
+  lock-only inventory and enters shared clean admission through the retained
+  store. Fresh crash and recovery processes reopen the installation and source
+  database, and production `CleanSystemStartup` preserves the exact
+  `ExistingCandidate`/`Cleared` row, immutable provenance, non-journal
+  namespace, whole-wrapper topology, and selected wrapper index.
+
+  This remains same-boot process-death evidence. The historical row uses a
+  deliberately out-of-current-epoch record under the same kernel boot; it is
+  not a reboot simulation. Even the post-directory-sync observation is not
+  presented as a power-loss oracle, so no reboot or power-loss durability
+  claim follows from this matrix.
+
   The same lane classifies all four raw exchange report/layout combinations,
   rejects ambiguous post-attempt evidence, and freezes exact `Applied` versus
   `AlreadySatisfied` outcomes. Its evidence-race cross-product injects database,
@@ -871,17 +905,18 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   non-journal namespace.
 
   The ladder still has no candidate suffix for ActivateArchived. ActiveReblit
-  now has deterministic terminal finalization and authenticated clean handoff,
-  but its real `SIGKILL` terminal-delete matrix is the next separate checkpoint.
-  The ladder also has no roll-forward executor, boot repair, or cleanup.
+  now has deterministic terminal finalization, authenticated clean handoff,
+  and the exact 12-case same-boot terminal `SIGKILL` matrix described above.
+  ActivateArchived is therefore the next operation-specific recovery gap. The
+  ladder also has no roll-forward executor, boot repair, or cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
   persistence boundaries, deterministic terminal-delete faults, and 12 real
   terminal process-death cases, but not process death at every earlier suffix
-  effect. ActiveReblit terminal-delete fault injection and fresh-handle restart
-  are deterministic evidence only, not process-death or power-loss evidence.
-  Neither prefix has reboot or power-loss proof: `SIGKILL` preserves the
+  effect. ActiveReblit now adds terminal-delete fault injection, fresh-handle
+  restart, and 12 genuine same-boot process-death cases. Neither suffix has
+  reboot or power-loss proof: `SIGKILL` preserves the
   kernel-visible state at termination and cannot establish which pre-fsync
   rename survives a power cycle. The complete campaign required below
   therefore remains open, as do this item and all six broad Phase 11 work items.
@@ -895,6 +930,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   must converge to exactly one authenticated live tree and one terminal
   outcome without deleting or overwriting a foreign entry.
   The reverse `/usr` prefix now covers 12 execution-boundary and 30
-  journal-update-boundary `SIGKILL` cases with fresh-process reopen. This item
-  remains unchecked because the other phases and true power-loss-equivalent
-  durability outcomes are not yet covered.
+  journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState
+  and ActiveReblit terminal deletion each add an exact 12-case fresh-process
+  matrix. This item remains unchecked because the other phases and true
+  power-loss-equivalent durability outcomes are not yet covered.

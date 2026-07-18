@@ -424,11 +424,24 @@ audit. It performs no database, non-journal namespace, trigger, cleanup, or
 wrapper effect. Compiler-local seals prevent sibling authority construction,
 and operation-specific real-gate contracts cover the complete deterministic
 matrices, journal-update and terminal-delete faults, evidence races, and
-fresh-handle restart. Those deterministic restarts are not process-death,
-reboot, or power-loss proof. A genuine `SIGKILL` terminal-delete matrix is the
-next separate ActiveReblit checkpoint; the document also owns the missing
-ActivateArchived suffix, later rollback actions, and the reboot and power-loss
-campaign.
+fresh-handle restart.
+
+The separate ActiveReblit terminal process lane now runs an exact 2 x 2 x 3
+matrix: current and historical record epochs, both rollback sources, and three
+genuine same-boot `SIGKILL` boundaries. Final-PRE death retains the exact
+canonical source; death immediately after unlink exposes kernel-observed
+absence before the journal-directory barrier; and death after that directory
+sync exposes post-barrier absence. Fresh recovery processes enter production
+startup and preserve the exact cleared existing-candidate row, provenance,
+wrapper topology, and wrapper index while converging through the appropriate
+source-or-absence path to clean admission.
+
+The historical epoch dimension is an out-of-current-epoch journal witness in
+the same boot, not a reboot simulation. Neither it nor the post-sync kill is a
+power-loss oracle, so reboot and power-loss durability remain unproved. Phase
+11 and the broad interruption campaign stay open; ActivateArchived's missing
+candidate suffix is the next operation-specific recovery gap, followed by the
+later rollback, roll-forward, boot, cleanup, and durability work.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.
