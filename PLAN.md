@@ -574,13 +574,13 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
-By 2026-07-18, the matrix contains eighteen fixtures, including two declarative
-generated payloads, an empty userspace profile, a runtime-loaded plugin, a staged post-install proof, and a staged-header consumer.
+By 2026-07-18, the matrix contains nineteen fixtures, including a mixed archive/Git/raw build,
+two generated payloads, an empty userspace profile, a runtime-loaded plugin, a staged post-install proof, and a staged-header consumer.
 The plugin host validates the exact identity returned through `dlopen`/`dlsym`;
 its complete compiler commands are frozen, and bundle goldens require PIE,
 RELRO, immediate binding, non-executable stack, separated writable/executable
 loads, no runtime search path or text relocations, and the exact loader imports.
-Both GCC and Clang compiled and ran that source as a supplemental host proof.
+Both GCC and Clang compile and run the plugin and mixed-source goldens as supplemental host proofs.
 `make test`, `make examples`, and `make execution-fixtures` pass for the complete
 offline corpus and exact bootstrap closures. Required live runs for the new
 fixtures materialized their offline roots and then failed closed at the host's
@@ -607,7 +607,7 @@ remain open.
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for Autotools, configured no-check Autotools, Cargo, feature-selected
   multi-binary Cargo, vendored Cargo, CMake, custom-step, header-only,
-  staged-post-install, generated-daemon, pre-setup-hook, Meson, explicit plugin-output, and split-output builds.
+  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
 - [x] Add source-less generated-configuration and generated-shell fixtures whose
@@ -634,7 +634,7 @@ remain open.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the eighteen exact closure declarations and their aggregate bootstrap
+  each of the nineteen exact closure declarations and their aggregate bootstrap
   package pool before the delegated runner materializes the production-format
   root.
 - [x] Before entering the container, require every frozen executable binding's

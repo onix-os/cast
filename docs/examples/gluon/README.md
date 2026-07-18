@@ -91,13 +91,14 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Eighteen separate fixtures cover representative package shapes. Fifteen contain
+Nineteen separate fixtures cover representative package shapes. Sixteen contain
 small, real source trees for Autotools, configured Autotools with an
 intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
 generated daemon assets, Gluon factory/override composition, a runtime-loaded
 plugin with an explicit output relation, a staged post-install smoke test, and
-an independently compiled staged header-only interface, and native split-output builds. The
+an independently compiled staged header-only interface, native split-output
+builds, and one mixed archive, exact-commit Git, and raw-file build. The
 patch-hook case now binds two independent sources: a deterministic XZ USTAR
 archive and a raw HTTPS-identified patch. Only the archive is extracted; the
 declared pre-setup patch program consumes the separately materialized bytes.
@@ -144,21 +145,23 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has fifteen deterministic tar streams: twelve plain
-USTAR archives plus vendored Cargo as deterministic gzip, the patch-hook
-fixture as deterministic XZ, and the generated-daemon fixture as deterministic
-Zstandard. It also contains the patch hook's independently locked raw patch.
-`make fixture-sources` rebuilds all sixteen exact source artifacts; the
-offline lane rejects any format, filename, order, unpack policy, or digest
-drift.
-The default `flake.nix` development shell supplies the required gzip, XZ, and
-Zstandard command-line encoders.
+The checked-in source matrix has sixteen deterministic tar streams: twelve plain
+USTAR archives, vendored Cargo as deterministic gzip, two deterministic XZ
+archives, and the generated-daemon fixture as deterministic Zstandard. It also
+contains two independently locked raw files and one deterministic Git bundle.
+`make fixture-sources` rebuilds all eighteen archive/raw artifacts plus that one
+bundle; the offline lane rejects any format, filename, order, unpack policy,
+commit, normalized Git tree, or digest drift. The source generator fixes Git's
+identity, timestamps, refs, and configuration before producing the bundle.
+The default `flake.nix` development shell supplies gzip, XZ, Zstandard, and Git
+for this hermetic generation path.
 
 ```sh
 make execution-fixtures
 make delegated-execution-preflight
 make bootstrap-fixtures
 make bootstrap-fixtures FIXTURE=cmake
+make bootstrap-fixtures FIXTURE=multiple-sources
 make delegated-execution-fixtures FIXTURE=cmake
 make fixtures-ci
 ```
@@ -172,7 +175,8 @@ materializes the production-format root mirror, then attempts to build,
 package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
 one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `factory-override`,
-`generated-config`, `generated-shell`, `header-only-library`, `hooks-patch`, `meson`, `plugin-output`,
+`generated-config`, `generated-shell`, `header-only-library`, `hooks-patch`,
+`meson`, `multiple-sources`, `plugin-output`,
 `post-install-smoke-test`, `split`, or `userspace-profile`;
 `FIXTURE=all` is the default, and any other value is rejected before execution.
 The selector also
@@ -181,7 +185,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all eighteen, and always requires execution.
+selection, runs all nineteen, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -203,13 +207,19 @@ plugin identity, and depends explicitly on the `plugins` output rather than an
 accidental ELF link. Its native-ELF checks require PIE, RELRO, immediate
 binding, a non-executable stack, separated writable/executable loads, no runtime
 search path or text relocations, and exact build-ID debug payloads. The
+multiple-sources golden separately pins its XZ application archive, exact Git
+commit and normalized exported tree, and raw schema bytes. The raw schema stays
+`unpack = false`; one typed pre-setup Bash step, with only its declared `cp`
+capability, copies it from `CAST_SOURCE_DIR` into the private application tree
+without overwriting an existing file and while preserving mode and timestamp.
+The build then consumes all three identities in one exact executable output. The
 userspace-profile golden additionally decodes its
 production-format `.stone` to prove a Meta-only payload topology, no layout or
 content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all eighteen fixtures complete both executions. It records the exact matrix
+all nineteen fixtures complete both executions. It records the exact matrix
 totals, repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle
