@@ -9,7 +9,7 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_activate_archived::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'.*: test$$' "$$listed" )" = 21; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'.*: test$$' "$$listed" )" = 37; \
 	for name in \
 		authority_binding::startup_activate_archived_complete_route_rejects_reopened_and_cross_root_journal_bindings \
 		evidence_races::startup_activate_archived_complete_route_capture_sandwich_rejects_database_provenance_and_namespace_races \
@@ -54,7 +54,7 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	timeout 10s grep -Fqx '    if record.operation != Operation::ActivateArchived {' "$$seal"; \
 	timeout 10s grep -Fqx '        Phase::CandidatePreserveIntent => {' "$$seal"; \
 	timeout 10s grep -Fqx '        Phase::CandidatePreserved => {' "$$seal"; \
-	complete_arm="$$( timeout 10s sed -n '/Phase::CandidatePreserved => {/,/        _ =>/p' "$$seal" | timeout 10s sed '$$d' )"; \
+	complete_arm="$$( timeout 10s sed -n '/Phase::CandidatePreserved => {/,/        Phase::RollbackComplete =>/p' "$$seal" | timeout 10s sed '$$d' )"; \
 	if timeout 10s rg -n 'Phase::RollbackComplete|finalize_usr_rollback|journal\.delete|run_(transaction|system)_triggers|loop|while|retry' <<<"$$complete_arm"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'Ok(Dispatch::Handled { journal, record })' <<<"$$complete_arm"; \
 	handled="$$( timeout 10s sed -n '/usr_rollback_activate_archived::Dispatch::Handled/,/^                }/p' "$$gate" )"; \
@@ -130,9 +130,10 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	done; \
 	timeout 10s grep -Fq 'DurableUsrRollbackActivateArchivedCompleteRouteRecord::CandidatePreserved' "$$tests/restart.rs"; \
 	timeout 10s grep -Fq 'DurableUsrRollbackActivateArchivedCompleteRouteRecord::RollbackComplete' "$$tests/restart.rs"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'enter_candidate_with_fresh_handles(retained.path())' "$$tests/restart.rs" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'enter_candidate_with_fresh_handles(retained.path())' "$$tests/restart.rs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'enter_clean_fresh_handles(retained.path())' "$$tests/restart.rs" )" = 1; \
 	timeout 10s grep -Fq 'assert_route_pending_audit(&error, &fixture, &expected);' "$$tests/exclusions.rs"; \
-	if timeout 10s rg -n 'finalize_usr_rollback|journal\.delete' "$$tests/exclusions.rs" "$$seal"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'finalize_usr_rollback|journal\.delete' "$$tests/exclusions.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in "$$seal" "$$gate" "$$reconciliation" "$$recovery" "$$namespace" "$$authority" "$$proof" "$$candidate_proof" "$$executor" "$$tests"/*.rs misc/make/startup-rollback-activate-archived-complete-route-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

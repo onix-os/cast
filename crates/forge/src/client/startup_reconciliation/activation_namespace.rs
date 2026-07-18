@@ -14,6 +14,7 @@
 //! exposes general cleanup or trigger authority.
 
 mod activate_archived_complete_route_proof;
+mod activate_archived_finalization_proof;
 mod active_reblit_complete_route_proof;
 mod active_reblit_finalization_proof;
 mod candidate_preserve_proof;
@@ -43,6 +44,12 @@ pub(super) use activate_archived_complete_route_proof::{
     UsrRollbackActivateArchivedCompleteRouteNamespaceError,
     UsrRollbackActivateArchivedCompleteRouteNamespaceInspection,
     UsrRollbackActivateArchivedCompleteRouteNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use activate_archived_finalization_proof::arm_before_usr_rollback_activate_archived_finalization_fresh_namespace_capture;
+pub(super) use activate_archived_finalization_proof::{
+    UsrRollbackActivateArchivedFinalizationNamespaceError, UsrRollbackActivateArchivedFinalizationNamespaceInspection,
+    UsrRollbackActivateArchivedFinalizationNamespaceProof,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_complete_route_proof::arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture;

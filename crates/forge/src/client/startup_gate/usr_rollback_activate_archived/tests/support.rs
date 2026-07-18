@@ -1,6 +1,6 @@
 use std::{
     fs,
-    os::unix::fs::MetadataExt as _,
+    os::unix::fs::{MetadataExt as _, symlink},
     path::{Path, PathBuf},
 };
 
@@ -8,10 +8,14 @@ use crate::{
     Installation,
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_gate::{self, CleanSystemStartup, UsrRollbackActivateArchivedCompleteRouteSeal},
+        startup_gate::{
+            self, CleanSystemStartup, UsrRollbackActivateArchivedCompleteRouteSeal,
+            UsrRollbackActivateArchivedFinalizationSeal,
+        },
         startup_reconciliation::{
             UsrRollbackActivateArchivedCompleteRouteAdmission, UsrRollbackActivateArchivedCompleteRouteAuthority,
-            UsrRollbackActivateArchivedCompleteRouteAuthorityError, archived_candidate_preserve_move_attempt_count,
+            UsrRollbackActivateArchivedCompleteRouteAuthorityError, UsrRollbackActivateArchivedFinalizationAdmission,
+            UsrRollbackActivateArchivedFinalizationAuthority, archived_candidate_preserve_move_attempt_count,
             reset_archived_candidate_preserve_move_attempt_count,
         },
         startup_recovery::{
@@ -35,6 +39,13 @@ use super::super::{
 
 const OS_RELEASE: &[u8] = b"NAME=Rollback Decision Test\nID=rollback-decision-test\n";
 const SYSTEM_MODEL: &[u8] = b"let system = { hostname = \"rollback-decision-test\" } in system\n";
+const ROOT_ABI: [(&str, &str); 5] = [
+    ("bin", "usr/bin"),
+    ("sbin", "usr/sbin"),
+    ("lib", "usr/lib"),
+    ("lib32", "usr/lib32"),
+    ("lib64", "usr/lib"),
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Epoch {
@@ -261,6 +272,12 @@ fn open_state_database(installation: &Installation) -> db::state::Database {
     database
 }
 
+fn install_live_root_abi(installation: &Installation) {
+    for (name, target) in ROOT_ABI {
+        symlink(target, installation.root.join(name)).unwrap();
+    }
+}
+
 impl CandidateOutcome {
     pub(super) const ALL: [Self; 2] = [Self::Applied, Self::AlreadySatisfied];
 
@@ -295,6 +312,7 @@ impl RouteFixture {
                 CandidateLayout::Preserved,
             ),
         };
+        install_live_root_abi(&fixture.fixture.installation);
         let source = fixture
             .candidate_intent
             .rollback_successor(Some(candidate_outcome.outcome()))
@@ -448,6 +466,97 @@ pub(super) fn install_persistent_route_database(fixture: &mut RouteFixture) {
 
 pub(super) fn release_route_handles(fixture: RouteFixture) -> tempfile::TempDir {
     release_candidate_handles(fixture.fixture)
+}
+
+pub(super) fn persist_rollback_complete(fixture: &RouteFixture) -> TransitionRecord {
+    let terminal = fixture.expected_successor();
+    let journal = fixture.open_journal();
+    journal.advance(&fixture.source, &terminal).unwrap();
+    drop(journal);
+    assert_eq!(fixture.canonical_record(), terminal);
+    terminal
+}
+
+pub(super) fn capture_finalization_ready<'reservation>(
+    fixture: &RouteFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> UsrRollbackActivateArchivedFinalizationAuthority<'reservation> {
+    let seal = UsrRollbackActivateArchivedFinalizationSeal::new_for_test();
+    let admission = UsrRollbackActivateArchivedFinalizationAuthority::capture(
+        &seal,
+        &fixture.fixture.fixture.installation,
+        journal,
+        &fixture.fixture.fixture.database,
+        reservation,
+        record,
+    )
+    .unwrap();
+    let UsrRollbackActivateArchivedFinalizationAdmission::Ready(authority) = admission else {
+        panic!("exact terminal ActivateArchived evidence did not admit finalization");
+    };
+    authority
+}
+
+pub(super) fn enter_clean_route(fixture: &RouteFixture) -> CleanSystemStartup {
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    CleanSystemStartup::enter(
+        &fixture.fixture.fixture.installation,
+        &fixture.fixture.fixture.database,
+        &reservation,
+    )
+    .expect("exact terminal ActivateArchived evidence did not admit clean startup")
+}
+
+pub(super) fn enter_clean_fresh_handles(root: &Path) -> CleanSystemStartup {
+    let installation = Installation::open(root, None).unwrap();
+    let database = open_state_database(&installation);
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    CleanSystemStartup::enter(&installation, &database, &reservation)
+        .expect("fresh handles did not finalize exact terminal ActivateArchived evidence")
+}
+
+pub(super) fn assert_canonical_absent(root: &Path) {
+    assert!(!root.join(".cast/journal/state-transition").exists());
+}
+
+pub(super) fn assert_finalization_dispatch_error(error: &startup_gate::Error) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActivateArchivedDispatch(super::super::Error::RollbackFinalization(_))
+        ),
+        "expected exact ActivateArchived rollback-finalization dispatch error, got {error:?}"
+    );
+}
+
+pub(super) fn assert_fresh_exact_database_pair(
+    root: &Path,
+    record: &TransitionRecord,
+    expected_provenance: &db::state::MetadataProvenance,
+) {
+    let installation = Installation::open(root, None).unwrap();
+    let database = open_state_database(&installation);
+    let candidate = crate::state::Id::from(record.candidate.id.unwrap());
+    let previous = crate::state::Id::from(record.previous.id.unwrap());
+    assert_ne!(candidate, previous);
+    assert_eq!(database.all().unwrap().len(), 2);
+    assert_eq!(database.get(candidate).unwrap().id, candidate);
+    assert_eq!(database.get(previous).unwrap().id, previous);
+    assert_eq!(database.audit_in_flight_transition().unwrap(), None);
+    assert_eq!(
+        database.transition_ownership(candidate, &record.transition_id).unwrap(),
+        db::state::TransitionOwnership::Cleared
+    );
+    assert_eq!(
+        database.transition_ownership(previous, &record.transition_id).unwrap(),
+        db::state::TransitionOwnership::Cleared
+    );
+    assert_eq!(
+        database.metadata_provenance(candidate).unwrap().as_ref(),
+        Some(expected_provenance)
+    );
 }
 
 pub(super) fn capture_record<'reservation>(

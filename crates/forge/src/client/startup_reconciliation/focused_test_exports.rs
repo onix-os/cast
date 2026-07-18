@@ -19,6 +19,7 @@ pub(in crate::client) use super::usr_rollback_reverse_authority::{
 };
 pub(in crate::client) use super::{
     usr_rollback_activate_archived_complete_route_authority::arm_between_usr_rollback_activate_archived_complete_route_database_captures,
+    usr_rollback_activate_archived_finalization_authority::arm_between_usr_rollback_activate_archived_finalization_database_captures,
     usr_rollback_active_reblit_complete_route_authority::arm_between_usr_rollback_active_reblit_complete_route_database_captures,
     usr_rollback_active_reblit_finalization_authority::arm_between_usr_rollback_active_reblit_finalization_database_captures,
     usr_rollback_complete_route_authority::arm_between_usr_rollback_complete_route_database_captures,
@@ -78,6 +79,7 @@ pub(in crate::client) use super::activation_namespace::{
     arm_before_new_state_target_normalize_reconciliation_capture, arm_before_new_state_target_normalize_target_sync,
     arm_before_reverse_exchange_reconciliation_capture,
     arm_before_usr_rollback_activate_archived_complete_route_fresh_namespace_capture,
+    arm_before_usr_rollback_activate_archived_finalization_fresh_namespace_capture,
     arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture,
     arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture,
     arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture,

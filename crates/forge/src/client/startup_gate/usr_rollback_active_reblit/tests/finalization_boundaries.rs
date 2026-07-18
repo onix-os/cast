@@ -140,13 +140,13 @@ fn startup_active_reblit_finalization_keeps_new_state_and_archived_in_their_own_
     let archived_namespace = archived.fixture.namespace_snapshot();
     reset_candidate_effect_observers();
 
-    let archived_error = enter_candidate(&archived);
+    let archived_clean = enter_clean_candidate(&archived);
 
-    assert_pending_phase(&archived_error, Phase::RollbackComplete);
-    assert_eq!(archived.fixture.canonical_record(), archived_terminal);
+    assert_canonical_absent(&archived.fixture.installation.root);
     assert_eq!(archived.fixture.database_snapshot(), archived_database);
     assert_eq!(archived.fixture.namespace_snapshot(), archived_namespace);
     assert_no_candidate_effects();
+    drop(archived_clean);
 
     let new_state = build_other(
         OperationKind::NewState,

@@ -30,6 +30,7 @@ mod focused_test_exports;
 mod metadata_provenance;
 mod replacement_mutation_authority;
 mod usr_rollback_activate_archived_complete_route_authority;
+mod usr_rollback_activate_archived_finalization_authority;
 mod usr_rollback_active_reblit_complete_route_authority;
 mod usr_rollback_active_reblit_finalization_authority;
 mod usr_rollback_candidate_preserve_authority;
@@ -48,6 +49,10 @@ pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAu
 pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::{
     UsrRollbackActivateArchivedCompleteRouteAdmission, UsrRollbackActivateArchivedCompleteRouteAuthority,
     UsrRollbackActivateArchivedCompleteRouteAuthorityError,
+};
+pub(in crate::client) use usr_rollback_activate_archived_finalization_authority::{
+    UsrRollbackActivateArchivedFinalizationAdmission, UsrRollbackActivateArchivedFinalizationAuthority,
+    UsrRollbackActivateArchivedFinalizationAuthorityError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_complete_route_authority::{
     UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
@@ -116,23 +121,25 @@ use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
     UsrRollbackActivateArchivedCompleteRouteNamespaceError,
     UsrRollbackActivateArchivedCompleteRouteNamespaceInspection,
-    UsrRollbackActivateArchivedCompleteRouteNamespaceProof, UsrRollbackActiveReblitCompleteRouteNamespaceError,
-    UsrRollbackActiveReblitCompleteRouteNamespaceInspection, UsrRollbackActiveReblitCompleteRouteNamespaceProof,
-    UsrRollbackActiveReblitFinalizationNamespaceError, UsrRollbackActiveReblitFinalizationNamespaceInspection,
-    UsrRollbackActiveReblitFinalizationNamespaceProof, UsrRollbackCandidatePreserveNamespaceError,
-    UsrRollbackCandidatePreserveNamespaceInspection, UsrRollbackCandidatePreserveNamespaceProof,
-    UsrRollbackCandidatePreserveTopology, UsrRollbackCompleteRouteNamespaceError,
-    UsrRollbackCompleteRouteNamespaceInspection, UsrRollbackCompleteRouteNamespaceProof,
-    UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection, UsrRollbackDecisionNamespaceProof,
-    UsrRollbackFinalizationNamespaceError, UsrRollbackFinalizationNamespaceInspection,
-    UsrRollbackFinalizationNamespaceProof, UsrRollbackFreshDbInvalidationNamespaceError,
-    UsrRollbackFreshDbInvalidationNamespaceInspection, UsrRollbackFreshDbInvalidationNamespaceProof,
-    UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
-    UsrRollbackFreshDbInvalidationRouteNamespaceProof, UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
-    UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
-    UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
-    UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
-    UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
+    UsrRollbackActivateArchivedCompleteRouteNamespaceProof, UsrRollbackActivateArchivedFinalizationNamespaceError,
+    UsrRollbackActivateArchivedFinalizationNamespaceInspection, UsrRollbackActivateArchivedFinalizationNamespaceProof,
+    UsrRollbackActiveReblitCompleteRouteNamespaceError, UsrRollbackActiveReblitCompleteRouteNamespaceInspection,
+    UsrRollbackActiveReblitCompleteRouteNamespaceProof, UsrRollbackActiveReblitFinalizationNamespaceError,
+    UsrRollbackActiveReblitFinalizationNamespaceInspection, UsrRollbackActiveReblitFinalizationNamespaceProof,
+    UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,
+    UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackCandidatePreserveTopology,
+    UsrRollbackCompleteRouteNamespaceError, UsrRollbackCompleteRouteNamespaceInspection,
+    UsrRollbackCompleteRouteNamespaceProof, UsrRollbackDecisionNamespaceError, UsrRollbackDecisionNamespaceInspection,
+    UsrRollbackDecisionNamespaceProof, UsrRollbackFinalizationNamespaceError,
+    UsrRollbackFinalizationNamespaceInspection, UsrRollbackFinalizationNamespaceProof,
+    UsrRollbackFreshDbInvalidationNamespaceError, UsrRollbackFreshDbInvalidationNamespaceInspection,
+    UsrRollbackFreshDbInvalidationNamespaceProof, UsrRollbackFreshDbInvalidationRouteNamespaceError,
+    UsrRollbackFreshDbInvalidationRouteNamespaceInspection, UsrRollbackFreshDbInvalidationRouteNamespaceProof,
+    UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence, UsrRollbackNewStateTargetCreateNamespaceEvidence,
+    UsrRollbackNewStateTargetNormalizeNamespaceEvidence, UsrRollbackResumeRouteNamespaceError,
+    UsrRollbackResumeRouteNamespaceInspection, UsrRollbackResumeRouteNamespaceProof,
+    UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
+    UsrRollbackReverseNamespaceProof,
 };
 use activation_namespace::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,

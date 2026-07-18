@@ -331,7 +331,6 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
 ///
 /// This distinct phase predicate prevents a `CandidatePreserved` route proof
 /// from being reused as terminal authority.
-#[allow(dead_code)] // consumed only by the separately sealed finalization checkpoint
 pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_activate_archived_rollback_complete_topology(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,

@@ -10,6 +10,7 @@ mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_rollback_activate_archived_candidate_preserve_persistence;
 mod usr_rollback_activate_archived_complete_route;
+mod usr_rollback_activate_archived_finalization;
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
 mod usr_rollback_active_reblit_complete_route;
 mod usr_rollback_active_reblit_finalization;
@@ -118,6 +119,10 @@ pub(super) use usr_rollback_activate_archived_complete_route::{
     persist_usr_rollback_activate_archived_complete_route_and_reopen,
 };
 
+pub(super) use usr_rollback_activate_archived_finalization::{
+    UsrRollbackActivateArchivedFinalizationError, finalize_usr_rollback_activate_archived,
+};
+
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_candidate_preserve_persistence::{
     DurableUsrRollbackActiveReblitCandidatePreserveRecord,
@@ -145,6 +150,11 @@ pub(in crate::client) use usr_rollback_active_reblit_finalization::{
 pub(in crate::client) use usr_rollback_activate_archived_complete_route::{
     DurableUsrRollbackActivateArchivedCompleteRouteRecord,
     arm_before_usr_rollback_activate_archived_complete_route_final_revalidation,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_activate_archived_finalization::{
+    DurableUsrRollbackActivateArchivedFinalizationRecord, UsrRollbackActivateArchivedFinalizationVerificationError,
 };
 
 pub(super) use usr_rollback_complete_route::{
@@ -203,6 +213,13 @@ pub(crate) use usr_rollback_active_reblit_finalization::{
     arm_after_usr_rollback_active_reblit_finalization_delete,
     arm_before_usr_rollback_active_reblit_finalization_final_durable_inspection,
     arm_before_usr_rollback_active_reblit_finalization_final_revalidation,
+};
+
+#[cfg(test)]
+pub(crate) use usr_rollback_activate_archived_finalization::{
+    arm_after_usr_rollback_activate_archived_finalization_delete,
+    arm_before_usr_rollback_activate_archived_finalization_final_durable_inspection,
+    arm_before_usr_rollback_activate_archived_finalization_final_revalidation,
 };
 
 #[cfg(test)]

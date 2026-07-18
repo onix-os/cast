@@ -51,6 +51,7 @@ include misc/make/startup-rollback-finalization-tests.mk
 include misc/make/startup-rollback-active-reblit-candidate-dispatch-tests.mk
 include misc/make/startup-rollback-active-reblit-complete-route-tests.mk
 include misc/make/startup-rollback-activate-archived-complete-route-tests.mk
+include misc/make/startup-rollback-activate-archived-finalization-tests.mk
 include misc/make/startup-rollback-active-reblit-finalization-tests.mk
 include misc/make/startup-rollback-new-state-dispatch-tests.mk
 include misc/make/startup-rollback-reverse-admission-tests.mk

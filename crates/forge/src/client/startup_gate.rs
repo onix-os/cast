@@ -12,7 +12,9 @@ mod usr_rollback_activate_archived;
 mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
 
-pub(in crate::client) use usr_rollback_activate_archived::UsrRollbackActivateArchivedCompleteRouteSeal;
+pub(in crate::client) use usr_rollback_activate_archived::{
+    UsrRollbackActivateArchivedCompleteRouteSeal, UsrRollbackActivateArchivedFinalizationSeal,
+};
 pub(in crate::client) use usr_rollback_active_reblit::{
     UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
 };
@@ -263,6 +265,9 @@ impl CleanSystemStartup {
                     )
                     .map_err(map_reconciliation_error)?;
                     return Err(Error::RecoveryPending(pending));
+                }
+                usr_rollback_activate_archived::Dispatch::Finalized { journal } => {
+                    return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);
                 }
             };
 

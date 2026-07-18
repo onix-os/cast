@@ -9,9 +9,10 @@ use crate::{
 };
 
 use super::support::{
-    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_complete_persistence_advance, assert_pending_phase,
-    candidate_move_count, canonical_record_from_root, enter_candidate_with_fresh_handles, enter_route,
-    install_persistent_route_database, release_route_handles, reset_candidate_observers,
+    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_canonical_absent,
+    assert_complete_persistence_advance, assert_pending_phase, candidate_move_count, canonical_record_from_root,
+    enter_candidate_with_fresh_handles, enter_clean_fresh_handles, enter_route, install_persistent_route_database,
+    release_route_handles, reset_candidate_observers,
 };
 
 #[test]
@@ -83,12 +84,11 @@ fn startup_activate_archived_complete_route_successor_fault_restart_skips_the_ro
     assert_eq!(candidate_move_count(), 0);
 
     let retained = release_route_handles(fixture);
-    let second = enter_candidate_with_fresh_handles(retained.path());
+    let clean = enter_clean_fresh_handles(retained.path());
 
-    assert_pending_phase(&second, crate::transition_journal::Phase::RollbackComplete);
-    assert_eq!(canonical_record_from_root(retained.path()), expected);
-    assert!(retained.path().join(".cast/journal/state-transition").is_file());
+    assert_canonical_absent(retained.path());
     assert!(wrapper.join("usr").is_dir());
     assert!(slot.is_file());
     assert_eq!(candidate_move_count(), 0);
+    drop(clean);
 }
