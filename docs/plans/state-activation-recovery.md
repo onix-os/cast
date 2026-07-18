@@ -468,19 +468,32 @@ preservation entirely. A handled entry immediately returns
 `RecoveryPending`, so the separately sealed completion authority cannot run in
 that same entry.
 
-The production gate passes 11 persistence/shared-leaf tests and 10
+The production gate passes 11 persistence/shared-leaf tests and 11
 candidate-filter tests. It covers both epochs, rollback sources, recorded
 `/usr` outcomes, Apply and Finish, all five journal faults, all six final
 evidence races, exact Pending inspection, cross-operation authority rejection,
 and fresh-handle source/successor restart. Adjacent NewState, ActiveReblit,
 reverse, target-preparation, shared-effect, completion-foundation, workspace
-check, and 1285-file line-limit gates pass; independent production review is
+check, and 1321-file line-limit gates pass; independent production review is
 clean.
 
+Commit `f44c2be9` adds an exact 2 x 2 real-process matrix at the first
+ActivateArchived candidate-preservation interruption boundary: current and
+historical record epochs, both rollback sources, and death after the real
+no-replace child move returns but before semantic recapture, POST durability,
+or journal advancement. Each crash child reaches that seam through production
+`CleanSystemStartup`, performs exactly one real move, and leaves the exact
+`CandidatePreserveIntent` source journal canonical while the candidate is
+already preserved. A fresh recovery process opens new handles, selects Finish,
+makes zero second moves, completes POST durability, and persists
+`CandidatePreserved(AlreadySatisfied)`. The entry returns only
+`RecoveryPending`; completion and finalization remain later checkpoints.
+
 The historical epoch dimension is an out-of-current-epoch journal witness in
-the same boot, not a reboot simulation. Neither it nor the post-sync kill is a
-power-loss oracle, so reboot and power-loss durability remain unproved. Phase
-11 and the broad interruption campaign stay open. ActivateArchived completion
+the same boot, not a reboot simulation. Neither the terminal post-sync kills
+nor the pre-POST candidate-move kill is a power-loss oracle, so reboot and
+power-loss durability remain unproved. Phase 11 and the broad interruption
+campaign stay open. ActivateArchived completion
 dispatch is production-wired by `c8c5ea41` as its own bounded entry.
 Commit `32bf8589` adds a separately authorized terminal checkpoint with one
 same-store conditional journal delete, repeated exact-source-or-absence
@@ -488,8 +501,8 @@ classification, and same-lock clean handoff. Commit `c6362aae` adds the exact
 12-case real-process terminal matrix across current and historical epochs,
 both rollback sources, and final-PRE, post-unlink, and post-directory-sync
 same-boot `SIGKILL` boundaries. It does not simulate reboot or power loss;
-later rollback, roll-forward, boot, cleanup, earlier interruption boundaries,
-and power-loss-equivalent durability work remain.
+later rollback, roll-forward, boot, cleanup, other earlier interruption
+boundaries, and power-loss-equivalent durability work remain.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

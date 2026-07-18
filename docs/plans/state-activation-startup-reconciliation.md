@@ -877,6 +877,25 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   excluding kernel rename timestamps, which a forward/reverse exchange cannot
   preserve.
 
+  Commit `f44c2be9` adds the first genuine ActivateArchived process-death
+  proof inside candidate preservation. Its exact 2 x 2 matrix crosses current
+  and historical record epochs with both rollback sources at one production
+  boundary: the real no-replace `staging/usr` move has returned, but fresh
+  semantic recapture, every POST durability barrier, and journal advancement
+  have not begun. Each crash child reaches that seam through
+  `CleanSystemStartup`, proves exactly one real move attempt, and dies by
+  `SIGKILL`. The parent then finds the canonical `CandidatePreserveIntent`
+  source journal byte- and identity-exact while the candidate tree is already
+  preserved in its archived wrapper.
+
+  A fresh recovery process opens new installation and database handles, enters
+  production startup, selects Finish with zero second move, completes the POST
+  durability suffix, and persists `CandidatePreserved(AlreadySatisfied)`. That
+  entry returns only `RecoveryPending`; it cannot run completion or
+  finalization. This is same-boot evidence only. The historical row is not a
+  reboot, and death before POST durability cannot prove which move survives
+  power loss.
+
 ## Remaining recovery campaign
 
   The production ladder now covers the authenticated `/usr` rollback prefix,
@@ -914,7 +933,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   reopen. A handled checkpoint immediately returns `RecoveryPending`, so the
   sealed completion foundation cannot run in the same entry.
 
-  The production lane passes 11 persistence/shared-leaf tests and 10
+  The production lane passes 11 persistence/shared-leaf tests and 11
   candidate-filter tests across current and historical epochs, both rollback
   sources, both recorded `/usr` outcomes, Apply and Finish, all five journal
   faults, six evidence races, and both fresh-handle restart sides. Updated
@@ -939,9 +958,11 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   real-startup matrices, all five journal durability faults across each of four
   persistence boundaries, deterministic terminal-delete faults, and 12 real
   terminal process-death cases, but not process death at every earlier suffix
-  effect. ActiveReblit now adds terminal-delete fault injection, fresh-handle
-  restart, and 12 genuine same-boot process-death cases. Neither suffix has
-  reboot or power-loss proof: `SIGKILL` preserves the
+  effect. ActiveReblit adds terminal-delete fault injection, fresh-handle
+  restart, and 12 genuine same-boot process-death cases. ActivateArchived adds
+  its 12 terminal cases plus the four post-move/pre-recapture cases above, but
+  its other earlier interruption boundaries remain open. None of these lanes
+  has reboot or power-loss proof: `SIGKILL` preserves the
   kernel-visible state at termination and cannot establish which pre-fsync
   rename survives a power cycle. The complete campaign required below
   therefore remains open, as do this item and all six broad Phase 11 work items.
@@ -957,5 +978,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   The reverse `/usr` prefix now covers 12 execution-boundary and 30
   journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState,
   ActiveReblit, and ActivateArchived terminal deletion each add an exact
-  12-case fresh-process matrix. This item remains unchecked because the other
-  phases and true power-loss-equivalent durability outcomes are not yet covered.
+  12-case fresh-process matrix. ActivateArchived candidate preservation also
+  covers the exact four-case post-move/pre-recapture matrix. This item remains
+  unchecked because the other phases and true power-loss-equivalent durability
+  outcomes are not yet covered.
