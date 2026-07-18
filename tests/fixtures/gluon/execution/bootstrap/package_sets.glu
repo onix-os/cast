@@ -1,6 +1,7 @@
 let aggregate = import! "./aggregate_package_ids.glu"
 let build_systems = import! "./build_system_package_sets.glu"
 let specialized = import! "./specialized_package_sets.glu"
+let system_integration = import! "./system_integration_package_set.glu"
 let tooling = import! "./tooling_package_sets.glu"
 
 {
@@ -18,5 +19,7 @@ let tooling = import! "./tooling_package_sets.glu"
     hooks_patch = tooling.hooks_patch,
     meson = tooling.meson,
     multiple_sources = build_systems.multiple_sources,
+    python_module = specialized.python_module,
+    system_integration_assets = system_integration,
     userspace_profile = specialized.userspace_profile,
 }

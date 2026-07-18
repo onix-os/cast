@@ -10,9 +10,9 @@ const LIBFYAML_PACKAGE_ID: &str = "a035a7509f5d58b2d4072ccd0f8b450e5b58504bdf618
 const LIBXMLB_PACKAGE_ID: &str = "fb34f3d06b4dfb9a068584fc2210b3b540fb273b090d3366dc43b7c75cc300a9";
 
 fn assert_desktop_integration_bootstrap_contract(closure: &BootstrapClosure, indexed: &BTreeMap<String, Meta>) {
-    assert_eq!(closure.packages.sha256.len(), 151, "bootstrap package count drift");
+    assert_eq!(closure.packages.sha256.len(), 172, "bootstrap package count drift");
     assert_eq!(
-        closure.packages.total_download_bytes, 377_615_920,
+        closure.packages.total_download_bytes, 383_747_528,
         "bootstrap download byte total drift"
     );
     let fixture = closure

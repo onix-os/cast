@@ -65,6 +65,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-multiple-sources-fixture-1.0.0",
             "cast-plugin-output-fixture-1.0.0",
             "cast-post-install-smoke-test-fixture-1.0.0",
+            "cast-python-module-fixture-1.0.0",
             "cast-split-fixture-1.0.0",
             "cast-system-integration-assets-fixture-1.0.0",
         ]
@@ -143,6 +144,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             assert_go_module_fixture_contract(
                 &recipe.declaration,
                 &source_trees.join("cast-go-module-fixture-1.0.0"),
+            );
+        }
+        if name == "python-module" {
+            assert_python_module_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-python-module-fixture-1.0.0"),
             );
         }
         if name == "meson" {
@@ -837,6 +844,12 @@ install -Dm644 build/cast-plugin-output.so \
                 &published,
             );
         }
+        if name == "python-module" {
+            assert_python_module_archive_matches_tracked_sources(
+                &source_trees.join("cast-python-module-fixture-1.0.0"),
+                &published,
+            );
+        }
         if name == "system-integration-assets" {
             assert_system_integration_assets_archive_matches_tracked_sources(
                 &source_trees.join("cast-system-integration-assets-fixture-1.0.0"),
@@ -862,12 +875,12 @@ install -Dm644 build/cast-plugin-output.so \
         .map(|entry| entry.file_name().into_string().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(present_git_bundles, admitted_git_bundles, "orphaned execution Git bundle");
-    assert_eq!(locked_source_count, 24, "locked execution source inventory drift");
+    assert_eq!(locked_source_count, 25, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
-        [16, 1, 2, 2],
-        "execution fixtures must cover sixteen plain tar streams, two XZ, one gzip, and two Zstandard"
+        [17, 1, 2, 2],
+        "execution fixtures must cover seventeen plain tar streams, two XZ, one gzip, and two Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 21, "execution source inventory drift");
+    assert_eq!(sourceful_fixtures, 22, "execution source inventory drift");
     assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
 }

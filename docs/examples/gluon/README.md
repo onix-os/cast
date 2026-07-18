@@ -191,6 +191,17 @@ the userspace baseline plus the single pinned Go compiler package. The
 supplemental hostile-host lane proves two clean offline builds are
 byte-identical and that deleting the vendor tree fails; it is not delegated
 Stone execution evidence.
+The `python-module` fixture builds a real `py3-none-any` wheel from a
+self-authored `pyproject.toml` source tree through the PEP 517 setuptools
+backend. Build, installer, setuptools, pytest, interpreter, and
+typing-extension roles resolve from one exact 76-package, 214,660,406-byte
+closure. The recipe builds without isolation or network access, runs the test
+suite and module self-test, stages installation with the pinned installer, and
+declares only Python plus `typing-extensions` at runtime. Its one-output bundle
+contract pins the console script, module, metadata, license, entry points, and
+RECORD. The hostile-host lane rebuilds two byte-identical wheels, executes the
+extracted wheel module, and proves a missing module fails; it remains supplemental
+and does not claim a delegated Stone build.
 The other three fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no
@@ -204,13 +215,13 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has twenty-one deterministic tar streams: sixteen
+The checked-in source matrix has twenty-two deterministic tar streams: seventeen
 plain USTAR archives, vendored Cargo as deterministic gzip, two deterministic
 XZ archives, and the generated-daemon and Go fixtures as deterministic
 Zstandard. It
 also contains two independently locked raw files and one deterministic Git
 bundle.
-`make fixture-sources` rebuilds all twenty-three archive/raw artifacts plus that one
+`make fixture-sources` rebuilds all twenty-four archive/raw artifacts plus that one
 bundle; the offline lane rejects any format, filename, order, unpack policy,
 commit, normalized Git tree, or digest drift. The source generator fixes Git's
 identity, timestamps, refs, and configuration before producing the bundle.
@@ -227,17 +238,19 @@ make bootstrap-fixtures FIXTURE=font-family
 make bootstrap-fixtures FIXTURE=gettext-localization
 make bootstrap-fixtures FIXTURE=go-module
 make bootstrap-fixtures FIXTURE=multiple-sources
+make bootstrap-fixtures FIXTURE=python-module
 make bootstrap-fixtures FIXTURE=system-integration-assets
 make delegated-execution-fixtures FIXTURE=cmake
 make font-family-fixture-test
 make go-module-fixture-test
+make python-module-fixture-test
 make fixtures-ci
 ```
 
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
 source artifacts, validates the pinned Stone index and closure declaration, and
 proves that each recipe resolves to its own exact, sorted package-ID closure
-and that their union is the exact 151-package, 377,615,920-byte aggregate
+and that their union is the exact 172-package, 383,747,528-byte aggregate
 bootstrap closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
 materializes the production-format root mirror, then attempts to build,
@@ -246,7 +259,7 @@ one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `desktop-integration`, `factory-override`, `font-family`,
 `generated-config`, `generated-shell`, `gettext-localization`, `go-module`, `header-only-library`, `hooks-patch`,
 `meson`, `multiple-sources`, `plugin-output`,
-`post-install-smoke-test`, `split`, `system-integration-assets`, or
+`post-install-smoke-test`, `python-module`, `split`, `system-integration-assets`, or
 `userspace-profile`;
 `FIXTURE=all` is the default, and any other value is rejected before execution.
 The selector also
@@ -255,7 +268,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all twenty-four, and always requires execution.
+selection, runs all twenty-five, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -289,8 +302,8 @@ content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all twenty-four fixtures complete both executions. It records exactly 48
-executions, 72 bundle validations, 129 Stones, 48 manifests, and 177 artifacts,
+all twenty-five fixtures complete both executions. It records exactly 50
+executions, 75 bundle validations, 130 Stones, 50 manifests, and 180 artifacts,
 plus repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle

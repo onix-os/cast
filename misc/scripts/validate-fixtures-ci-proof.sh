@@ -115,7 +115,7 @@ fi
 # framing here binds its ledger field to those byte digests, names, and sizes;
 # it deliberately does not claim to re-read artifacts which no longer exist.
 fixture_index=0
-while [ "$fixture_index" -lt 24 ]; do
+while [ "$fixture_index" -lt 25 ]; do
     ledger_entries="$work/entries.$fixture_index"
     if ! jq -r --argjson index "$fixture_index" \
         '.fixtures[$index].artifacts.entries[]

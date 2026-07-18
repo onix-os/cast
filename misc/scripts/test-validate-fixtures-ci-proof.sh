@@ -109,7 +109,7 @@ chmod 644 "$duplicate_top"
 expect_rejected duplicate-top-key "$duplicate_top"
 
 duplicate_nested="$work/duplicate-nested.json"
-sed '0,/"fixture_count": 24,/s//"fixture_count": 24,\n    "fixture_count": 24,/' \
+sed '0,/"fixture_count": 25,/s//"fixture_count": 25,\n    "fixture_count": 25,/' \
     "$valid" >"$duplicate_nested"
 chmod 644 "$duplicate_nested"
 expect_rejected duplicate-nested-key "$duplicate_nested"
@@ -196,6 +196,9 @@ mutate_and_reject ledger-uppercase '.fixtures[0].artifacts.ledger_sha256 |= asci
 mutate_and_reject coordinated-ledger-forgery \
     '.fixtures[0].artifacts.ledger_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
      | .fixtures[0].bundle_observations[].ledger_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"'
+mutate_and_reject last-fixture-coordinated-ledger-forgery \
+    '.fixtures[24].artifacts.ledger_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+     | .fixtures[24].bundle_observations[].ledger_sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"'
 mutate_and_reject artifact-extra-key '.fixtures[0].artifacts.entries[0].unexpected = true'
 
 mutate_and_reject observation-order '.fixtures[0].bundle_observations |= reverse'

@@ -1,0 +1,114 @@
+let b = import! cast.package.v3
+
+let bash = b.program.binary "bash"
+let python = b.program.binary "python3"
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [],
+            script = r#"test -s pyproject.toml
+test -s src/cast_python_module_fixture/__init__.py
+test -s src/cast_python_module_fixture/codec.py
+test -s src/cast_python_module_fixture/__main__.py
+test -s tests/test_codec.py
+test ! -e setup.py
+test ! -e setup.cfg
+test ! -e tox.ini"#,
+        },
+    ],
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [python],
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export PYTHONHASHSEED=0
+export PYTHONDONTWRITEBYTECODE=1
+umask 022
+python3 -m build --wheel --no-isolation --outdir dist
+shopt -s nullglob
+wheels=(dist/*.whl)
+test "${#wheels[@]}" -eq 1
+test "${wheels[0]}" = dist/cast_python_module_fixture-1.0.0-py3-none-any.whl
+test -s "${wheels[0]}""#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [python],
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export PYTHONHASHSEED=0
+export PYTHONDONTWRITEBYTECODE=1
+umask 022
+python3 -m pytest -q
+PYTHONPATH=src python3 -m cast_python_module_fixture --self-test"#,
+        },
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [python],
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export PYTHONHASHSEED=0
+export PYTHONDONTWRITEBYTECODE=1
+umask 022
+python3 -m installer --destdir "${CAST_INSTALL_ROOT}" --prefix "${CAST_PREFIX}" --no-compile-bytecode --validate-record all dist/cast_python_module_fixture-1.0.0-py3-none-any.whl
+staged_purelib=$(python3 -c 'import sysconfig, sys; print(sysconfig.get_path("purelib", vars={"base": sys.argv[1], "platbase": sys.argv[1]}))' "${CAST_INSTALL_ROOT}${CAST_PREFIX}")
+test -s "${staged_purelib}/cast_python_module_fixture/codec.py"
+test -s "${staged_purelib}/cast_python_module_fixture-1.0.0.dist-info/METADATA"
+PYTHONPATH="${staged_purelib}" "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-python-module-fixture" --self-test"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Pinned offline PEP 517 Python module fixture",
+    description = b.optional.set "A reproducible pure-Python wheel built, tested, installed, and packaged from one exact self-authored source archive.",
+    runtime_inputs = [
+        b.dep.binary "python3",
+        b.dep.python "typing-extensions",
+    ],
+    paths = [
+        b.path.exe "/usr/bin/cast-python-module-fixture",
+        b.path.any "/usr/lib/python*/site-packages/cast_python_module_fixture",
+        b.path.any "/usr/lib/python*/site-packages/cast_python_module_fixture-1.0.0.dist-info",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-python-module-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-python-module-fixture",
+    license = ["MIT"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "bash",
+        b.dep.binary "python3",
+    ],
+    native_build_inputs = [
+        b.dep.python "build",
+        b.dep.python "installer",
+        b.dep.python "setuptools",
+    ],
+    check_inputs = [b.dep.python "pytest"],
+    outputs = [root],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-python-module-fixture-1.0.0.tar",
+            hash = "c21e8157b3119a2453aa76de45672b7c8f63a761c973d4fdbd20893958b402f7",
+            rename = b.optional.set "cast-python-module-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-python-module-fixture",
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

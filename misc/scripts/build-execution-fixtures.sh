@@ -56,7 +56,7 @@ for entry in "$package_root"/*; do
     }
     fixture=$(basename "$entry")
     case "$fixture" in
-        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|split|system-integration-assets) ;;
+        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|python-module|split|system-integration-assets) ;;
         *) printf 'unexpected execution fixture package: %s\n' "$entry" >&2; exit 1 ;;
     esac
     test -f "$entry/stone.glu" && test ! -L "$entry/stone.glu" || {
@@ -78,8 +78,8 @@ for entry in "$package_root"/*; do
     package_count=$((package_count + 1))
 done
 
-test "$package_count" -eq 23 || {
-    printf 'expected exactly twenty-three source-matrix package directories, found %s\n' "$package_count" >&2
+test "$package_count" -eq 24 || {
+    printf 'expected exactly twenty-four source-matrix package directories, found %s\n' "$package_count" >&2
     exit 1
 }
 test "$source_less_count" -eq 2 || {
@@ -131,6 +131,7 @@ for entry in "$source_root"/*; do
         cast-multiple-sources-fixture-1.0.0|\
         cast-plugin-output-fixture-1.0.0|\
         cast-post-install-smoke-test-fixture-1.0.0|\
+        cast-python-module-fixture-1.0.0|\
         cast-split-fixture-1.0.0|\
         cast-system-integration-assets-fixture-1.0.0) ;;
         *) printf 'unexpected execution source tree: %s\n' "$entry" >&2; exit 1 ;;
@@ -138,8 +139,8 @@ for entry in "$source_root"/*; do
     source_tree_count=$((source_tree_count + 1))
 done
 
-test "$source_tree_count" -eq 21 || {
-    printf 'expected exactly twenty-one archive-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
+test "$source_tree_count" -eq 22 || {
+    printf 'expected exactly twenty-two archive-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
     exit 1
 }
 
@@ -204,6 +205,7 @@ for fixture in \
     cast-multiple-sources-fixture-1.0.0 \
     cast-plugin-output-fixture-1.0.0 \
     cast-post-install-smoke-test-fixture-1.0.0 \
+    cast-python-module-fixture-1.0.0 \
     cast-split-fixture-1.0.0 \
     cast-system-integration-assets-fixture-1.0.0
 do
@@ -471,6 +473,7 @@ for entry in "$archive_root"/*; do
         cast-multiple-sources-schema-1.0.0.h|\
         cast-plugin-output-fixture-1.0.0.tar|\
         cast-post-install-smoke-test-fixture-1.0.0.tar|\
+        cast-python-module-fixture-1.0.0.tar|\
         cast-split-fixture-1.0.0.tar|\
         cast-system-integration-assets-fixture-1.0.0.tar) ;;
         *) printf 'unexpected execution fixture archive: %s\n' "$entry" >&2; exit 1 ;;
@@ -478,8 +481,8 @@ for entry in "$archive_root"/*; do
     count=$((count + 1))
 done
 
-test "$count" -eq 23 || {
-    printf 'expected exactly twenty-three archive/raw execution fixture artifacts, found %s\n' "$count" >&2
+test "$count" -eq 24 || {
+    printf 'expected exactly twenty-four archive/raw execution fixture artifacts, found %s\n' "$count" >&2
     exit 1
 }
 

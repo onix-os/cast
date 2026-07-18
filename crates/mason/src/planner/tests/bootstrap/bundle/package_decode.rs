@@ -40,6 +40,7 @@ pub(super) fn assert_fixture_bundle(
                 | "multiple-sources"
                 | "plugin-output"
                 | "post-install-smoke-test"
+                | "python-module"
                 | "split"
                 | "system-integration-assets"
                 | "userspace-profile"
@@ -76,7 +77,7 @@ pub(super) fn assert_fixture_bundle(
             .collect::<Vec<_>>(),
         if name == "font-family" {
             ["OFL-1.1"]
-        } else if name == "go-module" {
+        } else if matches!(name, "go-module" | "python-module") {
             ["MIT"]
         } else {
             ["MPL-2.0"]
@@ -118,6 +119,7 @@ pub(super) fn assert_fixture_bundle(
             | "font-family"
             | "gettext-localization"
             | "go-module"
+            | "python-module"
             | "system-integration-assets"
             | "userspace-profile"
     ) {
@@ -172,6 +174,8 @@ pub(super) fn assert_fixture_bundle(
         assert_gettext_localization_fixture(planned, &packages);
     } else if name == "go-module" {
         assert_go_module_fixture(planned, &packages);
+    } else if name == "python-module" {
+        assert_python_module_fixture(planned, &packages);
     } else if name == "desktop-integration" {
         assert_desktop_integration_fixture(planned, &packages);
     } else if name == "font-family" {

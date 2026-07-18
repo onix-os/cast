@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 24] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 25] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -20,6 +20,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 24] = [
     "multiple-sources",
     "plugin-output",
     "post-install-smoke-test",
+    "python-module",
     "split",
     "system-integration-assets",
     "userspace-profile",
@@ -60,6 +61,12 @@ mod go_module_topology {
     use super::*;
 
     include!("execution_topology/go_module.rs");
+}
+
+mod python_module_topology {
+    use super::*;
+
+    include!("execution_topology/python_module.rs");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -522,6 +529,7 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
         "font-family" => font_family_topology::expected(),
         "gettext-localization" => gettext_localization_topology::expected(&job.work_dir),
         "go-module" => go_module_topology::expected(&job.work_dir),
+        "python-module" => python_module_topology::expected(),
         "system-integration-assets" => system_integration_assets_topology::expected(),
         "cargo" | "cargo-features" | "cargo-vendored" => vec![
             prepare(match name {
@@ -768,6 +776,9 @@ fi
     }
     if name == "go-module" {
         go_module_topology::assert_contract(plan, job);
+    }
+    if name == "python-module" {
+        python_module_topology::assert_contract(plan, job);
     }
     if name == "system-integration-assets" {
         system_integration_assets_topology::assert_contract(plan, job);

@@ -575,12 +575,12 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
-By 2026-07-18, the matrix contains twenty-four fixtures spanning standard/custom builders, mixed archive/Git/raw sources, generated payloads, an empty userspace profile, plugin/split outputs, localization, system/desktop integration, fonts, and a vendored Go module.
+By 2026-07-18, the matrix contains twenty-five fixtures spanning standard/custom builders, mixed archive/Git/raw sources, generated payloads, an empty userspace profile, plugin/split outputs, localization, system/desktop integration, fonts, a vendored Go module, and an offline PEP 517 Python wheel.
 Commit `4c59473d` adds a self-authored Regular/Bold family as a deterministic 30,720-byte USTAR with SHA-256
 `8710f0728fbde240fd94ce8bce46c4e4d71336b8470416e8da7c0895dc2d700c`. Its exact three-leaf `out` contains both TTFs and OFL
 at mode `0644`; its closure is 63 packages and 213,892,544 bytes, caches are forbidden, and no runtime relation is invented.
 Commit `b0f16ef1` adds a pinned, vendored, network-disabled Go module whose one-output static ELF has no runtime relation; its exact 71-package closure adds only Go to the userspace baseline.
-All fixtures union to an exact 151-package, 377,615,920-byte bootstrap pool. Offline and hostile-host contracts pin bytes, modes, providers, behavior, metadata, and syntax without claiming host deployment, a transaction, or rollback.
+The Python fixture binds build, installer, setuptools, pytest, interpreter, and typing-extension roles to an exact 76-package, 214,660,406-byte closure. Its hostile-host proof rebuilds and executes the wheel in disposable roots, but remains supplemental rather than delegated Stone execution. All fixtures union to an exact 172-package, 383,747,528-byte bootstrap pool. Offline and hostile-host contracts pin bytes, modes, providers, behavior, metadata, and syntax without claiming host deployment, a transaction, or rollback.
 An optional live run classified supplementary-group `setgroups` `EPERM` before package execution; no Stone was emitted, decoded, or reproduced, so every supported-host live-evidence item remains open.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
@@ -602,7 +602,7 @@ An optional live run classified supplementary-group `setgroups` `EPERM` before p
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for Autotools, configured no-check Autotools, Cargo, feature-selected
   multi-binary Cargo, vendored Cargo, CMake, custom-step, header-only,
-  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, split-output, gettext-localization, declarative system-integration, desktop-integration, font-family, and vendored Go-module builds.
+  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, split-output, gettext-localization, declarative system-integration, desktop-integration, font-family, vendored Go-module, and offline PEP 517 Python-module builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
 - [x] Add source-less generated-configuration and generated-shell fixtures whose
@@ -629,8 +629,8 @@ An optional live run classified supplementary-group `setgroups` `EPERM` before p
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the twenty-four exact closure declarations and their exact 151-package,
-  377,615,920-byte aggregate bootstrap pool before the delegated runner materializes
+  each of the twenty-five exact closure declarations and their exact 172-package,
+  383,747,528-byte aggregate bootstrap pool before the delegated runner materializes
   the production-format root.
 - [x] Before entering the container, require every frozen executable binding's
   entry point to belong to its declared provider and resolve to a regular
@@ -658,8 +658,8 @@ An optional live run classified supplementary-group `setgroups` `EPERM` before p
   capability boundary, before restoring the Stone bootstrap cache.
   The complete live execution, bundle decoding, and repeated-build assertions
   are implemented. Only a complete required matrix can atomically publish its
-  bounded v2 receipt: 48 executions, 72 bundle validations, 129 Stones,
-  48 manifests, and 177 artifacts, with each fixture's repeated plan and lock,
+  bounded v2 receipt: 50 executions, 75 bundle validations, 130 Stones,
+  50 manifests, and 180 artifacts, with each fixture's repeated plan and lock,
   publication outcomes, sorted artifact digests, and three matching bundle
   ledgers. Exact validation rejects duplicate keys, structural drift, unsafe
   bounds, and ledger-framing changes; a direct producer/validator test still

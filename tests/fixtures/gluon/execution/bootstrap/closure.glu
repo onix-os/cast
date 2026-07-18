@@ -3,7 +3,6 @@
 // derived from the pinned immutable Stone index. Only content identities are
 // repeated here, so the index remains the single metadata authority.
 
-let arrays = import! std.array.prim
 let package_sets = import! "./package_sets.glu"
 
 type IndexPin = {
@@ -47,34 +46,6 @@ let repository = {
     },
 }
 
-let package_slice = arrays.slice package_sets.all
-let merge = arrays.append
-let system_integration_assets_packages =
-    merge (package_slice 1 6)
-        (merge (package_slice 7 8)
-        (merge (package_slice 9 11)
-        (merge (package_slice 12 15)
-        (merge (package_slice 16 17)
-        (merge (package_slice 18 32)
-        (merge (package_slice 33 40)
-        (merge (package_slice 41 47)
-        (merge (package_slice 48 50)
-        (merge (package_slice 51 53)
-        (merge (package_slice 54 56)
-        (merge (package_slice 57 64)
-        (merge (package_slice 66 69)
-        (merge (package_slice 70 80)
-        (merge (package_slice 81 82)
-        (merge (package_slice 83 95)
-        (merge (package_slice 96 98)
-        (merge (package_slice 100 103)
-        (merge (package_slice 104 110)
-        (merge (package_slice 111 116)
-        (merge (package_slice 117 131)
-        (merge (package_slice 132 135)
-        (merge (package_slice 139 148)
-            (package_slice 149 150)))))))))))))))))))))))
-
 {
     schema_version = 2,
     repository,
@@ -100,12 +71,13 @@ let system_integration_assets_packages =
         { name = "multiple-sources", package_ids = package_sets.multiple_sources },
         { name = "plugin-output", package_ids = package_sets.custom },
         { name = "post-install-smoke-test", package_ids = package_sets.cmake },
+        { name = "python-module", package_ids = package_sets.python_module },
         { name = "split", package_ids = package_sets.cmake },
-        { name = "system-integration-assets", package_ids = system_integration_assets_packages },
+        { name = "system-integration-assets", package_ids = package_sets.system_integration_assets },
         { name = "userspace-profile", package_ids = package_sets.userspace_profile },
     ],
     packages = {
-        total_download_bytes = 377615920,
+        total_download_bytes = 383747528,
         sha256 = package_sets.all,
     },
 }

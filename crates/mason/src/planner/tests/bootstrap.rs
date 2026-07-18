@@ -41,6 +41,7 @@ include!("bootstrap/font_family.rs");
 include!("bootstrap/gettext_localization.rs");
 include!("bootstrap/go_module.rs");
 include!("bootstrap/meson_dependency_roles.rs");
+include!("bootstrap/python_module.rs");
 include!("bootstrap/system_integration_assets.rs");
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -270,6 +271,7 @@ fn bootstrap_closure_fingerprints_every_functional_data_module() {
             "package_sets.glu",
             "specialized_package_sets.glu",
             "std.array.prim",
+            "system_integration_package_set.glu",
             "tooling_package_sets.glu",
         ]
     );
@@ -522,6 +524,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     assert_gettext_localization_bootstrap_contract(&closure, &indexed);
     assert_go_module_bootstrap_contract(&closure, &indexed);
     assert_meson_dependency_role_bootstrap_contract(&closure, &indexed);
+    assert_python_module_bootstrap_contract(&closure, &indexed);
     assert_system_integration_assets_bootstrap_contract(&closure, &indexed);
 
     assert!(!closure.packages.sha256.is_empty());

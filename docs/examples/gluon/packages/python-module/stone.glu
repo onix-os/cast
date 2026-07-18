@@ -15,7 +15,7 @@ let phases = b.scripts {
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [python],
-            script = r#"python3 -m installer --destdir "${CAST_INSTALL_ROOT}" dist/*.whl"#,
+            script = r#"python3 -m installer --destdir "${CAST_INSTALL_ROOT}" --validate-record all dist/*.whl"#,
         },
     ],
     check = b.phase [

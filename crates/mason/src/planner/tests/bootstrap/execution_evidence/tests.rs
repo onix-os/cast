@@ -89,15 +89,15 @@ fn proof_v2_serializes_the_exact_complete_matrix_and_totals_within_its_bound() {
     assert_eq!(value["schema"], "cast.fixtures-ci-proof.v2");
     assert_eq!(value["git_commit"], TEST_COMMIT);
     assert_eq!(value["bundle_ledger_schema"], "cast.fixtures-ci.bundle.v1");
-    assert_eq!(value["totals"]["fixture_count"], 24);
-    assert_eq!(value["totals"]["execution_count"], 48);
-    assert_eq!(value["totals"]["bundle_validation_count"], 72);
-    assert_eq!(value["totals"]["stone_count"], 129);
-    assert_eq!(value["totals"]["manifest_count"], 48);
-    assert_eq!(value["totals"]["artifact_count"], 177);
+    assert_eq!(value["totals"]["fixture_count"], 25);
+    assert_eq!(value["totals"]["execution_count"], 50);
+    assert_eq!(value["totals"]["bundle_validation_count"], 75);
+    assert_eq!(value["totals"]["stone_count"], 130);
+    assert_eq!(value["totals"]["manifest_count"], 50);
+    assert_eq!(value["totals"]["artifact_count"], 180);
     assert!(value["totals"]["artifact_bytes"].as_u64().unwrap() > 0);
     let fixtures = value["fixtures"].as_array().unwrap();
-    assert_eq!(fixtures.len(), 24);
+    assert_eq!(fixtures.len(), 25);
     assert_eq!(fixtures[0]["name"], "autotools");
     assert_eq!(fixtures[8]["name"], "desktop-integration");
     assert_eq!(fixtures[10]["name"], "font-family");
@@ -106,8 +106,9 @@ fn proof_v2_serializes_the_exact_complete_matrix_and_totals_within_its_bound() {
     assert_eq!(fixtures[15]["name"], "header-only-library");
     assert_eq!(fixtures[18]["name"], "multiple-sources");
     assert_eq!(fixtures[20]["name"], "post-install-smoke-test");
-    assert_eq!(fixtures[22]["name"], "system-integration-assets");
-    assert_eq!(fixtures[23]["name"], "userspace-profile");
+    assert_eq!(fixtures[21]["name"], "python-module");
+    assert_eq!(fixtures[23]["name"], "system-integration-assets");
+    assert_eq!(fixtures[24]["name"], "userspace-profile");
     for fixture in fixtures {
         assert_eq!(fixture["plans"]["first"], fixture["plans"]["repeat"]);
         assert_eq!(

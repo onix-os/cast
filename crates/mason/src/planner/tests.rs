@@ -136,7 +136,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 24] = [
+const EXECUTION_FIXTURES: [&str; 25] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -158,12 +158,13 @@ const EXECUTION_FIXTURES: [&str; 24] = [
     "multiple-sources",
     "plugin-output",
     "post-install-smoke-test",
+    "python-module",
     "split",
     "system-integration-assets",
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 23] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 24] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -185,6 +186,7 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 23] = [
     "multiple-sources",
     "plugin-output",
     "post-install-smoke-test",
+    "python-module",
     "split",
     "system-integration-assets",
 ];
@@ -239,6 +241,7 @@ include!("tests/execution_header_only_library.rs");
 include!("tests/execution_meson_dependency_roles.rs");
 include!("tests/execution_multiple_sources.rs");
 include!("tests/execution_post_install_smoke.rs");
+include!("tests/execution_python_module.rs");
 include!("tests/execution_system_integration_assets.rs");
 include!("tests/frozen_runtime.rs");
 include!("tests/package_examples.rs");
