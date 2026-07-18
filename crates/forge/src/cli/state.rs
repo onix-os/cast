@@ -9,11 +9,14 @@ use crate::{
     environment, state,
 };
 use chrono::Local;
-use clap::{ArgAction, ArgMatches, Command, CommandFactory, FromArgMatches, Parser, arg};
+use clap::{ArgAction, ArgMatches, Command, CommandFactory, FromArgMatches, Parser, arg, builder::ValueParser};
 use fs_err as fs;
 use nix::unistd::gethostname;
 use thiserror::Error;
 use tui::Styled;
+
+mod request;
+pub use request::StateRequestError;
 
 pub fn command() -> Command {
     Command::new("state")
@@ -28,7 +31,7 @@ pub fn command() -> Command {
                 .arg(
                     arg!(<ID> "State id to be activated")
                         .action(ArgAction::Set)
-                        .value_parser(clap::value_parser!(u64)),
+                        .value_parser(ValueParser::new(request::parse_state_id)),
                 )
                 .arg(arg!(--"skip-triggers" "Do not run triggers on activation").action(ArgAction::SetTrue))
                 .arg(arg!(--"skip-boot" "Do not sync boot on activation").action(ArgAction::SetTrue)),
@@ -37,7 +40,7 @@ pub fn command() -> Command {
             Command::new("query").about("Query information for a state").arg(
                 arg!(<ID> "State id to query")
                     .action(ArgAction::Set)
-                    .value_parser(clap::value_parser!(u64)),
+                    .value_parser(ValueParser::new(request::parse_state_id)),
             ),
         )
         .subcommand(
@@ -54,11 +57,9 @@ pub fn command() -> Command {
                         .action(ArgAction::SetTrue),
                 ),
         )
-        .subcommand(
-            Command::new("remove")
-                .about("Remove archived state(s)")
-                .arg(arg!(<ID> ... "State id(s) to be removed").value_parser(clap::value_parser!(String))),
-        )
+        .subcommand(Command::new("remove").about("Remove archived state(s)").arg(
+            arg!(<ID> ... "State id(s) to be removed").value_parser(ValueParser::new(request::parse_removal_token)),
+        ))
         .subcommand(
             Command::new("verify")
                 .about("Verify and fix system states and assets")
@@ -80,7 +81,8 @@ pub fn command() -> Command {
 )]
 struct Export {
     /// State id to export or current state if omitted
-    id: Option<i32>,
+    #[arg(value_parser = request::parse_state_id)]
+    id: Option<state::Id>,
     /// Export to the provided path or stdout if not supplied
     ///
     /// If supplied without a path or path is a directory, outputs to "system-model-{hostname}-fstxn-{id}.glu"
@@ -103,19 +105,12 @@ pub fn handle(args: &ArgMatches, installation: Installation, yes: bool, verbose:
     }
 }
 
-pub fn parse_id_or_range(s: &str) -> Result<Vec<u64>, String> {
-    if let Some((start, end)) = s.split_once('-') {
-        let start = start.parse::<u64>().map_err(|_| "invalid start")?;
-        let end = end.parse::<u64>().map_err(|_| "invalid end")?;
-
-        if start > end {
-            return Err("range start must be <= end".into());
-        }
-
-        Ok((start..=end).collect())
-    } else {
-        Ok(vec![s.parse().map_err(|_| "invalid number")?])
+pub(super) fn preflight(args: &ArgMatches) -> Result<(), Error> {
+    if let Some(("remove", args)) = args.subcommand() {
+        let _ = removal_ids(args)?;
     }
+
+    Ok(())
 }
 
 /// List the active state
@@ -141,12 +136,15 @@ pub fn list(installation: Installation, verbose: bool) -> Result<(), Error> {
 }
 
 pub fn activate(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
-    let new_id = *args.get_one::<u64>("ID").unwrap() as i32;
+    let new_id = args
+        .get_one::<state::Id>("ID")
+        .copied()
+        .ok_or(Error::MissingArgument("ID"))?;
     let skip_triggers = args.get_flag("skip-triggers");
     let skip_boot = args.get_flag("skip-boot");
 
     let client = Client::for_cli(environment::NAME, installation, verbose)?;
-    let old_id = client.activate_state(new_id.into(), skip_triggers, skip_boot)?;
+    let old_id = client.activate_state(new_id, skip_triggers, skip_boot)?;
 
     println!(
         "State {} activated {}",
@@ -170,11 +168,14 @@ pub fn build_vfs(installation: Installation, verbose: bool) -> Result<(), Error>
 }
 
 pub fn query(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
-    let id = *args.get_one::<u64>("ID").unwrap() as i32;
+    let id = args
+        .get_one::<state::Id>("ID")
+        .copied()
+        .ok_or(Error::MissingArgument("ID"))?;
 
     let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
-    let state = client.get_state(id.into())?;
+    let state = client.get_state(id)?;
 
     print_state(state.clone());
     print_state_selections(state, &client)?;
@@ -192,22 +193,19 @@ pub fn prune(args: &ArgMatches, installation: Installation, yes: bool, verbose: 
 }
 
 pub fn remove(args: &ArgMatches, installation: Installation, yes: bool, verbose: bool) -> Result<(), Error> {
-    let ids = args
-        .get_many::<String>("ID")
-        .into_iter()
-        .flatten()
-        .map(|s| parse_id_or_range(s))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(Error::InvalidRange)?
-        .into_iter()
-        .flatten()
-        .map(|id| state::Id::from(id as i32))
-        .collect::<Vec<state::Id>>();
+    let ids = removal_ids(args)?;
 
     let client = Client::for_cli(environment::NAME, installation, verbose)?;
     client.prune_states(prune::Strategy::Remove(&ids), yes)?;
 
     Ok(())
+}
+
+fn removal_ids(args: &ArgMatches) -> Result<Vec<state::Id>, Error> {
+    let tokens = args
+        .get_many::<request::RemovalToken>("ID")
+        .ok_or(Error::MissingArgument("ID"))?;
+    request::collect_removal_ids(tokens).map_err(Error::from)
 }
 
 pub fn verify(args: &ArgMatches, installation: Installation, yes: bool, global_verbose: bool) -> Result<(), Error> {
@@ -220,11 +218,11 @@ pub fn verify(args: &ArgMatches, installation: Installation, yes: bool, global_v
 }
 
 fn export(args: &ArgMatches, installation: Installation, verbose: bool) -> Result<(), Error> {
-    let export = Export::from_arg_matches(args).expect("validate by clap");
+    let export = Export::from_arg_matches(args)?;
     let client = Client::for_cli(environment::NAME, installation, verbose)?;
 
     let id = match export.id {
-        Some(id) => state::Id::from(id),
+        Some(id) => id,
         None => client.get_active_state()?.ok_or(Error::NoActiveState)?.id,
     };
 
@@ -361,8 +359,12 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error("no active state")]
     NoActiveState,
-    #[error("invalid state id or range: {0}")]
-    InvalidRange(String),
+    #[error(transparent)]
+    Arguments(#[from] clap::Error),
+    #[error(transparent)]
+    Request(#[from] StateRequestError),
+    #[error("validated command is missing required argument {0}")]
+    MissingArgument(&'static str),
 }
 
 #[cfg(test)]

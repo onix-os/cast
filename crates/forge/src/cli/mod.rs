@@ -28,6 +28,8 @@ mod search_file;
 mod state;
 mod sync;
 
+pub use state::StateRequestError;
+
 /// Canonical top-level command names owned exclusively by Forge.
 pub const COMMAND_NAMES: &[&str] = &[
     "boot",
@@ -133,6 +135,10 @@ pub fn try_dispatch(command: &str, args: &ArgMatches, context: &Context) -> Resu
             return Ok(true);
         }
         _ => {}
+    }
+
+    if command == "state" {
+        state::preflight(args).map_err(Error::State)?;
     }
 
     let installation = open_installation(context)?;
@@ -275,5 +281,25 @@ mod tests {
         let context = Context::new("/definitely/not/a/cast/root", None, false, false);
 
         assert!(try_dispatch("inspect", &matches, &context).unwrap());
+    }
+
+    #[test]
+    fn state_remove_aggregate_rejection_precedes_context_root_open() {
+        let matches = state::command()
+            .try_get_matches_from(["state", "remove", "1-64", "65"])
+            .unwrap();
+        let temporary = tempfile::tempdir().unwrap();
+        let absent_root = temporary.path().join("absent-context-root");
+        let context = Context::new(&absent_root, None, false, true);
+        assert!(!absent_root.exists());
+
+        let error = try_dispatch("state", &matches, &context).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::State(state::Error::Request(StateRequestError::TooManyIds { actual: 65, limit }))
+                if limit == crate::transition_identity::MAX_ARCHIVED_STATE_PRUNE_BATCH
+        ));
+        assert!(!absent_root.exists());
     }
 }

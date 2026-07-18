@@ -55,6 +55,7 @@ help:
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
 	@echo "  forge-cache-test  Run the exact descriptor-rooted download and asset cache tests"
 	@echo "  forge-client-direct-test  Run all direct frozen and state-transition client tests"
+	@echo "  forge-cli-state-request-test  Run bounded canonical state-ID and removal-range contracts"
 	@echo "  forge-database-adapter-test  Run extracted layout and metadata database adapter tests"
 	@echo "  forge-read-only-substrate-test  Run immutable database-image and clean-journal substrate tests"
 	@timeout 10s echo "  forge-exact-fresh-transition-removal-test  Run exact fresh-state database removal contracts"
