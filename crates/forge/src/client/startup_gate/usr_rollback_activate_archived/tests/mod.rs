@@ -5,6 +5,7 @@ mod candidate_admission;
 mod candidate_evidence_races;
 mod candidate_matrix;
 mod candidate_move_process_kill;
+mod candidate_process_kill_boundaries;
 mod candidate_restart;
 mod evidence_races;
 mod exclusions;

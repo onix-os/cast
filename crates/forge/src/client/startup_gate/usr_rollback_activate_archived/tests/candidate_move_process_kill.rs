@@ -1,4 +1,4 @@
-//! Real-process restart proof after the ActivateArchived candidate child move.
+//! Real-process restart proof across ActivateArchived candidate preservation.
 
 use std::{
     env,
@@ -19,7 +19,6 @@ use crate::{
         startup_gate::{self, CleanSystemStartup},
         startup_reconciliation::{
             ArchivedCandidatePreservePostMoveDurabilityEvent, archived_candidate_preserve_move_attempt_count,
-            arm_before_archived_candidate_preserve_move_reconciliation_capture,
             arm_before_archived_candidate_preserve_pre_move_revalidation,
             reset_archived_candidate_preserve_move_attempt_count,
             reset_archived_candidate_preserve_post_move_durability_events,
@@ -36,6 +35,7 @@ use crate::{
 
 use super::{
     super::candidate_test_support::CandidateSource,
+    candidate_process_kill_boundaries::CandidateProcessKillBoundary,
     support::{
         CandidateOrigin as FixtureCandidateOrigin, Epoch, build_candidate, install_persistent_candidate_database,
         open_state_database, release_candidate_handles,
@@ -49,6 +49,7 @@ const TEST_NAME: &str = concat!(
 const ROLE_ENV: &str = "CAST_FORGE_ACTIVATE_ARCHIVED_CANDIDATE_MOVE_KILL_ROLE";
 const EPOCH_ENV: &str = "CAST_FORGE_ACTIVATE_ARCHIVED_CANDIDATE_MOVE_KILL_EPOCH";
 const SOURCE_ENV: &str = "CAST_FORGE_ACTIVATE_ARCHIVED_CANDIDATE_MOVE_KILL_SOURCE";
+const BOUNDARY_ENV: &str = "CAST_FORGE_ACTIVATE_ARCHIVED_CANDIDATE_MOVE_KILL_BOUNDARY";
 const ROOT_ENV: &str = "CAST_FORGE_ACTIVATE_ARCHIVED_CANDIDATE_MOVE_KILL_ROOT";
 const CONTROL_ENV: &str = "CAST_FORGE_ACTIVATE_ARCHIVED_CANDIDATE_MOVE_KILL_CONTROL";
 const CHILD_DEADLINE: Duration = Duration::from_secs(15);
@@ -56,7 +57,6 @@ const CAST_NAME: &str = ".cast";
 const JOURNAL_NAME: &str = "journal";
 const CANONICAL_NAME: &str = "state-transition";
 const LOCK_NAME: &str = "state-transition.lock";
-const BOUNDARY_NAME: &str = "post-move-pre-recapture";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessRole {
@@ -186,6 +186,7 @@ struct ChildCase {
     role: ProcessRole,
     epoch: ProcessEpoch,
     source: ProcessSource,
+    boundary: CandidateProcessKillBoundary,
     root: PathBuf,
     control: PathBuf,
 }
@@ -195,6 +196,7 @@ impl ChildCase {
         let role = ProcessRole::parse(&required_unicode_env(ROLE_ENV));
         let epoch = ProcessEpoch::parse(&required_unicode_env(EPOCH_ENV));
         let source = ProcessSource::parse(&required_unicode_env(SOURCE_ENV));
+        let boundary = CandidateProcessKillBoundary::parse(&required_unicode_env(BOUNDARY_ENV));
         let root = canonical_environment_path(ROOT_ENV);
         let control = canonical_environment_path(CONTROL_ENV);
         assert_separate_control_path(&root, &control);
@@ -202,6 +204,7 @@ impl ChildCase {
             role,
             epoch,
             source,
+            boundary,
             root,
             control,
         }
@@ -220,7 +223,7 @@ impl ChildCase {
             "v1\n{}\n{}\n{}\n{:?}\n{}\n{}\n",
             self.epoch.as_str(),
             self.source.as_str(),
-            BOUNDARY_NAME,
+            self.boundary.as_str(),
             self.dimensions().usr_outcome,
             record.transition_id,
             record.generation,
@@ -383,17 +386,19 @@ fn run_parent() {
     let mut cases = 0;
     for epoch in Epoch::ALL {
         for source in CandidateSource::ALL {
-            run_parent_case(epoch, source);
-            cases += 1;
+            for boundary in CandidateProcessKillBoundary::ALL {
+                run_parent_case(epoch, source, boundary);
+                cases += 1;
+            }
         }
     }
     assert_eq!(
-        cases, 4,
-        "ActivateArchived candidate-move SIGKILL matrix must remain exactly 2 x 2 x 1"
+        cases, 28,
+        "ActivateArchived candidate-move SIGKILL matrix must remain exactly 2 x 2 x 7"
     );
 }
 
-fn run_parent_case(epoch: Epoch, source: CandidateSource) {
+fn run_parent_case(epoch: Epoch, source: CandidateSource, boundary: CandidateProcessKillBoundary) {
     let process_epoch = ProcessEpoch::from_fixture(epoch);
     let process_source = ProcessSource::from_fixture(source);
     let dimensions = MatrixDimensions::for_case(process_epoch, process_source);
@@ -419,7 +424,7 @@ fn run_parent_case(epoch: Epoch, source: CandidateSource) {
             "v1\n{}\n{}\n{}\n{:?}\n{}\n{}\n",
             process_epoch.as_str(),
             process_source.as_str(),
-            BOUNDARY_NAME,
+            boundary.as_str(),
             dimensions.usr_outcome,
             source_record.transition_id,
             source_record.generation,
@@ -429,12 +434,19 @@ fn run_parent_case(epoch: Epoch, source: CandidateSource) {
     fs::write(control_path.join("source-record"), &source_bytes).unwrap();
     let retained_root = release_candidate_handles(fixture);
 
-    let crash = spawn_child(ProcessRole::Crash, process_epoch, process_source, &root, &control_path);
+    let crash = spawn_child(
+        ProcessRole::Crash,
+        process_epoch,
+        process_source,
+        boundary,
+        &root,
+        &control_path,
+    );
     let crash_status = DeadlineChild::new(crash, "ActivateArchived candidate-move crash child").wait(CHILD_DEADLINE);
     assert_eq!(
         crash_status.signal(),
         Some(nix::libc::SIGKILL),
-        "crash child for {process_epoch:?} {process_source:?} missed the post-move boundary: {crash_status:?}"
+        "crash child for {process_epoch:?} {process_source:?} {boundary:?} missed its boundary: {crash_status:?}"
     );
     let public_after_crash = PublicJournalIdentity::capture(&root);
     assert_eq!(public_after_crash, public_before);
@@ -448,6 +460,7 @@ fn run_parent_case(epoch: Epoch, source: CandidateSource) {
         ProcessRole::Recover,
         process_epoch,
         process_source,
+        boundary,
         &root,
         &control_path,
     );
@@ -496,7 +509,7 @@ fn run_crash_child(
     reset_archived_candidate_preserve_post_move_durability_events();
     assert_eq!(archived_candidate_preserve_move_attempt_count(), 0);
     assert!(take_archived_candidate_preserve_post_move_durability_events().is_empty());
-    arm_before_archived_candidate_preserve_move_reconciliation_capture(kill_after_real_candidate_move);
+    case.boundary.arm(kill_after_real_candidate_move);
 
     let reservation = ActiveStateReservation::acquire().unwrap();
     let result = CleanSystemStartup::enter(installation, database, &reservation);
@@ -744,7 +757,14 @@ fn assert_journal_reopenable_from_installation(installation: &Installation, expe
     assert_journal_inventory(&installation.root);
 }
 
-fn spawn_child(role: ProcessRole, epoch: ProcessEpoch, source: ProcessSource, root: &Path, control: &Path) -> Child {
+fn spawn_child(
+    role: ProcessRole,
+    epoch: ProcessEpoch,
+    source: ProcessSource,
+    boundary: CandidateProcessKillBoundary,
+    root: &Path,
+    control: &Path,
+) -> Child {
     Command::new(env::current_exe().unwrap())
         .arg(TEST_NAME)
         .arg("--exact")
@@ -753,6 +773,7 @@ fn spawn_child(role: ProcessRole, epoch: ProcessEpoch, source: ProcessSource, ro
         .env(ROLE_ENV, role.as_str())
         .env(EPOCH_ENV, epoch.as_str())
         .env(SOURCE_ENV, source.as_str())
+        .env(BOUNDARY_ENV, boundary.as_str())
         .env(ROOT_ENV, root)
         .env(CONTROL_ENV, control)
         .stdin(Stdio::null())
@@ -851,7 +872,7 @@ fn assert_separate_control_path(root: &Path, control: &Path) {
 }
 
 fn assert_parent_environment_clean() {
-    for name in [ROLE_ENV, EPOCH_ENV, SOURCE_ENV, ROOT_ENV, CONTROL_ENV] {
+    for name in [ROLE_ENV, EPOCH_ENV, SOURCE_ENV, BOUNDARY_ENV, ROOT_ENV, CONTROL_ENV] {
         assert!(
             env::var_os(name).is_none(),
             "parent process inherited child-only environment {name}"

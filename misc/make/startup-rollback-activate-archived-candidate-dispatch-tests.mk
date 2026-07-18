@@ -47,6 +47,7 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	persistence_tests=crates/forge/src/client/startup_recovery/usr_rollback_activate_archived_candidate_preserve_persistence/tests; \
 	startup_tests=crates/forge/src/client/startup_gate/usr_rollback_activate_archived/tests; \
 	process_kill="$$startup_tests/candidate_move_process_kill.rs"; \
+	process_kill_boundaries="$$startup_tests/candidate_process_kill_boundaries.rs"; \
 	timeout 10s grep -Fqx 'mod usr_rollback_activate_archived;' "$$gate"; \
 	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "mod usr_rollback_activate_archived;" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; fi; \
 	timeout 10s grep -Fq 'record.operation != Operation::ActivateArchived' "$$child"; \
@@ -82,10 +83,13 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	for race in Database Provenance Journal Installation Namespace Plan; do timeout 10s grep -Fq "EvidenceRace::$$race" "$$persistence_tests/evidence_races.rs" "$$startup_tests/candidate_evidence_races.rs"; done; \
 	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do timeout 10s grep -Fq "$$fault" "$$persistence_tests/storage_reopen.rs"; done; \
 	timeout 10s grep -Fqx 'mod candidate_move_process_kill;' "$$startup_tests/mod.rs"; \
+	timeout 10s grep -Fqx 'mod candidate_process_kill_boundaries;' "$$startup_tests/mod.rs"; \
 	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$process_kill"; \
 	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$process_kill"; \
-	timeout 10s grep -Fq 'cases, 4,' "$$process_kill"; \
-	timeout 10s grep -Fq 'arm_before_archived_candidate_preserve_move_reconciliation_capture' "$$process_kill"; \
+	timeout 10s grep -Fq 'for boundary in CandidateProcessKillBoundary::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'cases, 28,' "$$process_kill"; \
+	for boundary in PostMovePreRecapture BeforeCandidateSync BeforeStagingParentSync BeforeTargetParentSync BeforeRootsParentSync BeforeFinalPostCapture BeforeDurablePostRevalidation; do timeout 10s grep -Fq "Self::$$boundary" "$$process_kill_boundaries"; done; \
+	for hook in arm_before_archived_candidate_preserve_move_reconciliation_capture arm_before_archived_candidate_preserve_post_candidate_sync arm_before_archived_candidate_preserve_post_staging_parent_sync arm_before_archived_candidate_preserve_post_target_parent_sync arm_before_archived_candidate_preserve_post_roots_parent_sync arm_before_archived_candidate_preserve_post_final_capture arm_before_archived_candidate_preserve_durable_post_revalidation_capture; do timeout 10s grep -Fq "$$hook" "$$process_kill_boundaries"; done; \
 	timeout 10s grep -Fq 'kill_after_real_candidate_move' "$$process_kill"; \
 	timeout 10s grep -Fq 'nix::libc::kill(nix::libc::getpid(), nix::libc::SIGKILL)' "$$process_kill"; \
 	timeout 10s grep -Fq 'crash_status.signal()' "$$process_kill"; \
@@ -104,7 +108,7 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	timeout 10s grep -Fq 'same-boot process death only' "$$process_kill"; \
 	timeout 10s grep -Fq 'power-loss oracle' "$$process_kill"; \
 	timeout 10s grep -Fq 'historical record epoch is not a reboot' "$$process_kill"; \
-	if timeout 10s rg -n 'dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback|journal\.(advance|delete)|reconcile_move|arm_archived_candidate_preserve_move_fault|arm_next_|StorageFault' "$$process_kill"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback|journal\.(advance|delete)|reconcile_move|arm_archived_candidate_preserve_move_fault|arm_next_|StorageFault' "$$process_kill" "$$process_kill_boundaries"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in "$$gate" "$$child" "$$reconciliation" "$$authority" "$$archived_authority" "$$archived_persistence_authority" "$$production_leaf" "$$recovery" "$$persistence" "$$persistence_tests"/*.rs "$$startup_tests"/*.rs misc/make/startup-rollback-activate-archived-candidate-dispatch-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
