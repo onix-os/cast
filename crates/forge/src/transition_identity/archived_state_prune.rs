@@ -27,12 +27,11 @@ use crate::{
     linux_fs::{controlled_resolution, openat2_file, renameat2_noreplace_once},
     state,
     transition_journal::TransitionJournalStore,
-    tree_marker::TreeMarkerStore,
 };
 
 use super::{
-    QUARANTINE_RELATIVE, ROOTS_RELATIVE, RetainedDirectory, RetainedIdentity, canonical_state_name,
-    state_slot_marker::RetainedStateSlotMarker,
+    QUARANTINE_RELATIVE, ROOTS_RELATIVE, RetainedDirectory, RetainedIdentity,
+    archived_state_identity::RetainedArchivedStateIdentity, state_slot_marker::RetainedStateSlotMarker,
 };
 
 use self::{
@@ -49,7 +48,6 @@ pub(crate) use fault_injection::{
 };
 
 pub(super) const WRAPPER_NAME: &CStr = c"wrapper";
-const USR_NAME: &CStr = c"usr";
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 pub(crate) const MAX_ARCHIVED_STATE_PRUNE_BATCH: usize = 64;
 
@@ -458,53 +456,17 @@ fn prepare_one(
     state: state::Id,
     limits: ArchivedStatePruneLimits,
 ) -> Result<PreparedArchivedState, ArchivedStatePruneError> {
-    let canonical_name = canonical_state_name(state).map_err(|source| identity_error(state, &roots.path, source))?;
-    let wrapper_path = roots.path.join(canonical_name.to_string_lossy().as_ref());
-    let wrapper = roots
-        .open_child(&canonical_name, wrapper_path.clone())
-        .map_err(|source| identity_error(state, &wrapper_path, source))?;
-    let usr_path = wrapper_path.join("usr");
-    let usr = wrapper
-        .open_child(USR_NAME, usr_path.clone())
-        .map_err(|source| identity_error(state, &usr_path, source))?;
-    let store = TreeMarkerStore::open(&usr.file, &usr_path)
-        .map_err(super::Error::from)
-        .map_err(|source| identity_error(state, &usr_path, source))?;
-    let marker = store
-        .read_for_transition_recovery()
-        .map_err(super::Error::from)
-        .map_err(|source| identity_error(state, &usr_path, source))?;
-    let identity = RetainedIdentity::with_marker(store, marker, Some(state))
-        .map_err(|source| identity_error(state, &usr_path, source))?;
-    let slot_marker = if identity.marker.needs_slot_link_authorization() {
-        let slot_marker = RetainedStateSlotMarker::open_recovery_candidate(&wrapper, state, &identity.marker)
-            .map_err(super::Error::from)
-            .map_err(|source| identity_error(state, &wrapper_path, source))?;
-        wrapper
-            .require_exact_entries(&[USR_NAME.to_bytes(), slot_marker.name_bytes()])
-            .map_err(|source| identity_error(state, &wrapper_path, source))?;
-        identity
-            .marker
-            .authorize_recovered_slot_link()
-            .map_err(super::Error::from)
-            .map_err(|source| identity_error(state, &usr_path, source))?;
-        slot_marker
-            .require_named(&wrapper)
-            .map_err(super::Error::from)
-            .map_err(|source| identity_error(state, &wrapper_path, source))?;
-        Some(slot_marker)
-    } else {
-        wrapper
-            .require_exact_entries(&[USR_NAME.to_bytes()])
-            .map_err(|source| identity_error(state, &wrapper_path, source))?;
-        None
-    };
-    let named_store = TreeMarkerStore::open(&usr.file, &usr_path)
-        .map_err(super::Error::from)
-        .map_err(|source| identity_error(state, &usr_path, source))?;
-    identity
-        .verify_store_with_state_id(&named_store)
-        .map_err(|source| identity_error(state, &usr_path, source))?;
+    let authenticated = RetainedArchivedStateIdentity::retain(roots, state).map_err(|source| {
+        let path = source.path().to_owned();
+        identity_error(state, &path, source.into_source())
+    })?;
+    let RetainedArchivedStateIdentity {
+        canonical_name,
+        wrapper,
+        identity,
+        slot_marker,
+        ..
+    } = authenticated;
 
     let slot_name = archived_state_prune_quarantine_name(state, identity.marker.token().as_str())?;
     let slot_path = quarantine.path.join(slot_name.to_string_lossy().as_ref());
@@ -740,32 +702,16 @@ fn require_detached_layout(
 }
 
 fn require_strict_wrapper(state: &PreparedArchivedState) -> Result<(), ArchivedStatePruneError> {
-    let expected_entries = match &state._slot_marker {
-        Some(marker) => vec![USR_NAME.to_bytes(), marker.name_bytes()],
-        None => vec![USR_NAME.to_bytes()],
-    };
-    state
-        .wrapper
-        .require_exact_entries(&expected_entries)
-        .map_err(|source| identity_error(state.state, &state.wrapper.path, source))?;
-    if let Some(marker) = &state._slot_marker {
-        marker
-            .require_named(&state.wrapper)
-            .map_err(super::Error::from)
-            .map_err(|source| identity_error(state.state, &state.wrapper.path, source))?;
-    }
-    let usr_path = state.wrapper.path.join("usr");
-    let usr = state
-        .wrapper
-        .open_child(USR_NAME, usr_path.clone())
-        .map_err(|source| identity_error(state.state, &usr_path, source))?;
-    let named_store = TreeMarkerStore::open(&usr.file, &usr_path)
-        .map_err(super::Error::from)
-        .map_err(|source| identity_error(state.state, &usr_path, source))?;
-    state
-        .identity
-        .verify_store_with_state_id(&named_store)
-        .map_err(|source| identity_error(state.state, &usr_path, source))
+    RetainedArchivedStateIdentity::revalidate_parts(
+        state.state,
+        &state.wrapper,
+        &state.identity,
+        state._slot_marker.as_ref(),
+    )
+    .map_err(|source| {
+        let path = source.path().to_owned();
+        identity_error(state.state, &path, source.into_source())
+    })
 }
 
 fn revalidate_parents(

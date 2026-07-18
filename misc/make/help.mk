@@ -110,6 +110,7 @@ help:
 	@echo "  forge-active-state-snapshot-test  Run descriptor-rooted live active-state and stale-client tests"
 	@echo "  forge-transition-identity-test  Run focused durable /usr identity and recovery tests"
 	@echo "  forge-state-prune-test  Run exact retained archived-state prune and restart-residue tests"
+	@timeout 10s echo "  forge-active-reblit-boot-state-root-test  Run authenticated live/archive boot-state root contracts"
 	@echo "  forge-archived-repair-test  Run retained whole-wrapper inactive-state repair tests"
 	@echo "  forge-ephemeral-candidate-metadata-test  Run retained external candidate and trigger tests"
 	@echo "  forge-fixed-staging-test  Run retained fixed-staging and external-target security tests"

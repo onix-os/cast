@@ -32,8 +32,11 @@ use crate::{
 };
 
 mod active_previous_slot_parking;
+#[allow(dead_code)] // pre-claim boot repair substrate; client composition is the next slice
+mod active_reblit_boot_state_roots;
 mod active_reblit_replacement_recovery;
 mod archived_candidate;
+mod archived_state_identity;
 mod archived_state_prune;
 mod archived_state_repair;
 mod candidate_metadata;
@@ -57,6 +60,12 @@ mod state_slot_marker;
 mod state_tree_metadata;
 mod tree_lifecycle;
 
+#[allow(unused_imports)] // pre-claim boot repair substrate; client composition is the next slice
+pub(crate) use active_reblit_boot_state_roots::{
+    ActiveReblitBootStateRootKind, ActiveReblitBootStateRootsError, ArchivedBootStateRootExclusion,
+    ArchivedBootStateRootExclusionReason, BoundActiveReblitBootStateRoot, PreparedActiveReblitBootStateRoots,
+    RevalidatedActiveReblitBootStateRoots,
+};
 #[cfg(test)]
 pub(crate) use active_reblit_replacement_recovery::{
     ActiveReblitReplacementRecovery, arm_before_active_reblit_replacement_normalization_preflight,

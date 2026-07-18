@@ -243,10 +243,22 @@ fn open_named_file(wrapper: &RetainedDirectory, name: &CStr, path: &Path) -> Res
         Err(source) => return Err(io_error("probe state-slot marker", path.to_owned(), source)),
     };
     let expected = witness_raw(&probe, path)?;
+    // O_NOATIME is permitted for an inode owned by the effective user.  Check
+    // that invariant through the non-reading O_PATH pin before reopening the
+    // marker, so a foreign occupant is rejected without either mutating its
+    // atime or turning a structural mismatch into an O_NOATIME EPERM.
+    // SAFETY: geteuid takes no arguments and cannot fail.
+    if expected.owner != unsafe { nix::libc::geteuid() } {
+        return Err(Error::Changed { path: path.to_owned() });
+    }
     let file = openat2_file(
         wrapper.file.as_raw_fd(),
         name,
-        nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+        nix::libc::O_RDONLY
+            | nix::libc::O_CLOEXEC
+            | nix::libc::O_NOFOLLOW
+            | nix::libc::O_NONBLOCK
+            | nix::libc::O_NOATIME,
         0,
         controlled_resolution(),
     )
