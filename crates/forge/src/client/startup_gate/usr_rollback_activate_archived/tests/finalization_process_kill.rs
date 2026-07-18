@@ -425,6 +425,8 @@ fn run_parent_case(epoch: Epoch, source: CandidateSource, boundary: Finalization
     let terminal = persist_rollback_complete(&fixture);
     dimensions.validate(&terminal);
     install_persistent_route_database(&mut fixture);
+    let layout_database = open_layout_database(&fixture.fixture.fixture.installation);
+    drop(layout_database);
 
     let root = fs::canonicalize(&fixture.fixture.fixture.installation.root).unwrap();
     let terminal_bytes = fs::read(canonical_path(&root)).unwrap();

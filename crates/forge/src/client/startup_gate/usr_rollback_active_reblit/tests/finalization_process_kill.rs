@@ -410,6 +410,8 @@ fn run_parent_case(epoch: Epoch, source: CandidateSource, boundary: Finalization
     let terminal = persist_rollback_complete(&fixture, dimensions.candidate_origin);
     dimensions.validate(&terminal);
     install_persistent_database(&mut fixture);
+    let layout_database = super::support::open_layout_database(&fixture.fixture.installation);
+    drop(layout_database);
 
     let root = fs::canonicalize(&fixture.fixture.installation.root).unwrap();
     let terminal_bytes = fs::read(canonical_path(&root)).unwrap();
