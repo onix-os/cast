@@ -902,6 +902,14 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   A fresh recovery child selects Finish, makes zero second moves, repeats the idempotent durability suffix, and persists exact `CandidatePreserved(AlreadySatisfied)`.
   The 15-second deadlines kill and reap a hung child. This remains same-boot proof, not reboot or power-loss evidence.
 
+  Commit `19f60c51` applies the same exact 2 x 2 x 7 process-death matrix to NewState candidate preservation.
+  Current and historical epochs cross both rollback sources and seven seams from post-move recapture through final durable revalidation.
+  Each production-startup child performs exactly one real no-replace move, retains the source record, and dies by genuine `SIGKILL`.
+  The parent proves exact database, non-journal namespace, tree bytes, topology, and inode identities.
+  Fresh recovery reopens installation and database capabilities, selects Finish, makes zero second moves, repeats durability, and persists
+  exact `CandidatePreserved(AlreadySatisfied)`. Bounded deadlines kill and reap every child. Historical epochs remain same-boot records;
+  they are not reboot simulations or power-loss durability evidence.
+
 ## Remaining recovery campaign
 
   The production ladder now covers the authenticated `/usr` rollback prefix,
@@ -962,9 +970,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
-  persistence boundaries, deterministic terminal-delete faults, and 12 real
-  terminal process-death cases, but not process death at every earlier suffix
-  effect. ActiveReblit adds terminal-delete fault injection, fresh-handle
+  persistence boundaries, deterministic terminal-delete faults, 12 real
+  terminal process-death cases, and the 28 candidate-move cases above, but not
+  process death at every earlier database and routing effect. ActiveReblit adds terminal-delete fault injection, fresh-handle
   restart, and 12 genuine same-boot process-death cases. ActivateArchived adds
   its 12 terminal cases plus the 28 candidate-preservation cases above, but
   its other earlier interruption boundaries remain open. None of these lanes
@@ -984,7 +992,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   The reverse `/usr` prefix now covers 12 execution-boundary and 30
   journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState,
   ActiveReblit, and ActivateArchived terminal deletion each add an exact
-  12-case fresh-process matrix. ActivateArchived candidate preservation also covers
-  the exact 2 x 2 x 7 process-death matrix through the durability suffix. This item remains
+  12-case fresh-process matrix. NewState and ActivateArchived candidate
+  preservation each also cover an exact 2 x 2 x 7 process-death matrix through
+  the durability suffix. This item remains
   unchecked because the other phases and true power-loss-equivalent durability
   outcomes are not yet covered.

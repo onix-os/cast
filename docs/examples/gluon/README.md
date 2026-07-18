@@ -91,7 +91,7 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Twenty-one separate fixtures cover representative package shapes. Eighteen contain
+Twenty-two separate fixtures cover representative package shapes. Nineteen contain
 small, real source trees for Autotools, configured Autotools with an
 intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
@@ -99,7 +99,8 @@ generated daemon assets, Gluon factory/override composition, a runtime-loaded
 plugin with an explicit output relation, a staged post-install smoke test, and
 an independently compiled staged header-only interface, native split-output
 builds, one mixed archive, exact-commit Git, and raw-file build, compiled
-gettext localization, and declarative system-integration assets. The
+gettext localization, declarative system-integration assets, and declarative
+desktop integration. The
 patch-hook case now binds two independent sources: a deterministic XZ USTAR
 archive and a raw HTTPS-identified patch. Only the archive is extracted; the
 declared pre-setup patch program consumes the separately materialized bytes.
@@ -156,6 +157,17 @@ eight exact bytes and modes if a supported execution host emits the Stone.
 These checks do not enable or start a service, create a host account, apply
 tmpfiles to host state, trigger a device event, load polkitd, authorize an
 action, boot, reboot, or prove a transaction or rollback.
+The `desktop-integration` fixture installs one helper plus a desktop entry,
+AppStream metadata, GSettings schema, shared-MIME declaration, scalable icon,
+and license. Its exact closure contains 99 packages. The check phase binds
+`desktop-file-validate`, `glib-compile-schemas`, `appstreamcli`,
+`update-mime-database`, and `xmllint` to pinned providers. Cache generation is
+tested only in disposable build scratch space: `gschemas.compiled`,
+`mime.cache`, `mimeinfo.cache`, and `icon-theme.cache` are forbidden from the
+immutable output so transaction triggers can generate them for the deployed
+package set. A hostile-environment host lane validates the same staged files
+without touching the host desktop, MIME, schema, or icon databases. It is
+supplemental validation, not a GUI, activation, transaction, or rollback test.
 The other three fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no
@@ -169,12 +181,12 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has eighteen deterministic tar streams: fourteen
+The checked-in source matrix has nineteen deterministic tar streams: fifteen
 plain USTAR archives, vendored Cargo as deterministic gzip, two deterministic
 XZ archives, and the generated-daemon fixture as deterministic Zstandard. It
 also contains two independently locked raw files and one deterministic Git
 bundle.
-`make fixture-sources` rebuilds all twenty archive/raw artifacts plus that one
+`make fixture-sources` rebuilds all twenty-one archive/raw artifacts plus that one
 bundle; the offline lane rejects any format, filename, order, unpack policy,
 commit, normalized Git tree, or digest drift. The source generator fixes Git's
 identity, timestamps, refs, and configuration before producing the bundle.
@@ -186,6 +198,7 @@ make execution-fixtures
 make delegated-execution-preflight
 make bootstrap-fixtures
 make bootstrap-fixtures FIXTURE=cmake
+make bootstrap-fixtures FIXTURE=desktop-integration
 make bootstrap-fixtures FIXTURE=gettext-localization
 make bootstrap-fixtures FIXTURE=multiple-sources
 make bootstrap-fixtures FIXTURE=system-integration-assets
@@ -196,12 +209,13 @@ make fixtures-ci
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
 source artifacts, validates the pinned Stone index and closure declaration, and
 proves that each recipe resolves to its own exact, sorted package-ID closure
-and that their union is the aggregate bootstrap closure. `make
+and that their union is the exact 147-package, 341,660,667-byte aggregate
+bootstrap closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
 materializes the production-format root mirror, then attempts to build,
 package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
 one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
-`cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `factory-override`,
+`cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `desktop-integration`, `factory-override`,
 `generated-config`, `generated-shell`, `gettext-localization`, `header-only-library`, `hooks-patch`,
 `meson`, `multiple-sources`, `plugin-output`,
 `post-install-smoke-test`, `split`, `system-integration-assets`, or
@@ -213,7 +227,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all twenty-one, and always requires execution.
+selection, runs all twenty-two, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -247,7 +261,7 @@ content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all twenty-one fixtures complete both executions. It records the exact matrix
+all twenty-two fixtures complete both executions. It records the exact matrix
 totals, repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle

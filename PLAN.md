@@ -574,19 +574,19 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
-By 2026-07-18, the matrix contains twenty-one fixtures: a mixed archive/Git/raw
+By 2026-07-18, the matrix contains twenty-two fixtures: a mixed archive/Git/raw
 build, two generated payloads, an empty userspace profile, a runtime-loaded
-plugin, staged post-install and header-consumer proofs, compiled gettext
-localization, and declarative system-integration assets. Gettext compiles French and German catalogs, exercises both through a build-only libc consumer, and installs no tool or runtime relation.
-The system install-only case freezes one deterministic USTAR source, an exact provider closure, and an eight-file `out` bundle.
-Offline and supplemental staged checks validate bytes, modes, translations, helper behavior, and declared asset syntax without activating or deploying host state.
-Only a supported delegated run can emit, decode, and reproduce either Stone; none of this proves boot, transactions, deployment, or rollback.
-The plugin host validates identity returned through `dlopen`/`dlsym`; frozen commands and bundle goldens require PIE, RELRO, immediate binding,
-non-executable stack, separated writable/executable loads, no runtime search path or text relocations, and exact loader imports.
-GCC and Clang compile and run the plugin and mixed-source goldens as supplemental host proofs.
+plugin, staged post-install and header-consumer proofs, compiled gettext localization, declarative system-integration assets, and desktop integration.
+Commit `d0c5093e` adds the twenty-second, `desktop-integration`, with one deterministic USTAR source and an exact seven-file
+`out`: helper, desktop entry, AppStream metadata, GSettings schema, MIME declaration, scalable icon, and
+license. Its exact closure contains 99 packages; all fixture closures union to an exact
+147-package, 341,660,667-byte aggregate bootstrap pool.
+Offline contracts and a supplemental hostile-host lane pin bytes, modes, declared providers, staged behavior, and syntax while
+forbidding generated `gschemas.compiled`, `mime.cache`, `mimeinfo.cache`, and `icon-theme.cache`; they do not activate or deploy host state.
+Gettext still exercises two catalogs through a build-only consumer, while system integration freezes its exact eight-file bundle.
+The plugin host and bundle goldens retain their exact loader identity and ELF-hardening checks; GCC and Clang supply supplemental host proofs.
 `make test`, `make examples`, and `make execution-fixtures` pass for the offline corpus and exact bootstrap closures.
-This host's required runs fail closed at supplementary-group `EPERM` before package execution;
-no Stone was emitted, decoded, or reproduced, so the three live-evidence items remain open.
+An optional live run classified supplementary-group `setgroups` `EPERM` before package execution; no Stone was emitted, decoded, or reproduced, so every supported-host live-evidence item remains open.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
@@ -607,7 +607,7 @@ no Stone was emitted, decoded, or reproduced, so the three live-evidence items r
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for Autotools, configured no-check Autotools, Cargo, feature-selected
   multi-binary Cargo, vendored Cargo, CMake, custom-step, header-only,
-  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, split-output, gettext-localization, and declarative system-integration builds.
+  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, split-output, gettext-localization, declarative system-integration, and desktop-integration builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
 - [x] Add source-less generated-configuration and generated-shell fixtures whose
@@ -634,9 +634,9 @@ no Stone was emitted, decoded, or reproduced, so the three live-evidence items r
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the twenty-one exact closure declarations and their aggregate bootstrap
-  package pool before the delegated runner materializes the production-format
-  root.
+  each of the twenty-two exact closure declarations and their exact 147-package,
+  341,660,667-byte aggregate bootstrap pool before the delegated runner materializes
+  the production-format root.
 - [x] Before entering the container, require every frozen executable binding's
   entry point to belong to its declared provider and resolve to a regular
   executable through uniquely owned symlink hops inside the exact frozen
@@ -698,10 +698,10 @@ The production startup ladder handles one freshly observed checkpoint per entry,
 Separate entries normalize exchange durability, persist and route rollback, reverse `/usr`, and persist
 `UsrRestored`. NewState then preserves the candidate, invalidates the exact fresh row, reaches
 `RollbackComplete`, and finalizes to authenticated journal absence. ActiveReblit preserves its whole wrapper and advances
-from `CandidatePreserved` to `RollbackComplete` using exact cleared-row and wrapper evidence. On a separate
-`RollbackComplete` entry it captures exact cleared existing-candidate/provenance plus preserved-wrapper authority, performs
-one same-store conditional journal delete, proves public absence, and enters shared clean admission without redispatch.
-Every entry is bounded. An exact 2 x 2 x 3 ActiveReblit matrix now sends genuine same-boot `SIGKILL` across current/historical record epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence, and post-directory-sync absence. A historical epoch is not a reboot simulation; no reboot or power-loss durability is claimed. ActivateArchived candidate preservation, one-entry completion, and terminal finalization are production-wired; its terminal matrix covers the same exact 2 x 2 x 3 dimensions, while candidate preservation now covers an exact 2 x 2 x 7 matrix from post-move/pre-recapture through every ordered POST barrier and final durable revalidation.
+from `CandidatePreserved` to `RollbackComplete`; a separate terminal entry authenticates deletion and clean admission.
+Commit `19f60c51` adds an exact 2 x 2 x 7 = 28 NewState candidate-move matrix across current/historical record epochs,
+both rollback sources, and seven post-move seams. Genuine same-boot `SIGKILL` is followed by fresh-process Finish with zero second move; it is not reboot or power-loss evidence.
+Every entry remains bounded. ActiveReblit retains its exact 2 x 2 x 3 terminal matrix, while ActivateArchived retains exact 2 x 2 x 3 terminal and 2 x 2 x 7 candidate-preservation matrices under the same no-reboot, no-power-loss limit.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
