@@ -923,8 +923,15 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   ActiveReblit retains deterministic terminal finalization, authenticated clean
   handoff, and its exact 12-case same-boot terminal `SIGKILL` matrix.
   Commit `c8c5ea41` production-wires ActivateArchived completion as a separate
-  bounded entry. Terminal finalization is the next operation-specific gap; the
-  ladder also has no roll-forward executor, boot repair, or cleanup.
+  bounded entry. Commit `32bf8589` adds its operation-specific terminal
+  finalizer: exact cleared candidate and previous rows with candidate
+  provenance are retained through binding-first database -> namespace ->
+  database proof, two final authority and public-source checks, one same-store
+  conditional delete, repeated authenticated absence, and same-lock clean
+  admission. Its 16 startup contracts and four executor truth-table contracts
+  pass; no real-process interruption, reboot, or power-loss claim is made by
+  that checkpoint. The matching terminal `SIGKILL` matrix remains next, and
+  the ladder also has no roll-forward executor, boot repair, or cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
