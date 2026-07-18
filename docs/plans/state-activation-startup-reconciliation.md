@@ -929,9 +929,11 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   database proof, two final authority and public-source checks, one same-store
   conditional delete, repeated authenticated absence, and same-lock clean
   admission. Its 16 startup contracts and four executor truth-table contracts
-  pass; no real-process interruption, reboot, or power-loss claim is made by
-  that checkpoint. The matching terminal `SIGKILL` matrix remains next, and
-  the ladder also has no roll-forward executor, boot repair, or cleanup.
+  pass; that checkpoint alone made no real-process interruption, reboot, or
+  power-loss claim. Commit `c6362aae` adds the matching exact 12-case same-boot
+  terminal `SIGKILL` matrix across both epochs, both rollback sources, and the
+  three deletion boundaries. The ladder still has no roll-forward executor,
+  boot repair, cleanup, or power-loss-equivalent proof.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
@@ -953,7 +955,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   must converge to exactly one authenticated live tree and one terminal
   outcome without deleting or overwriting a foreign entry.
   The reverse `/usr` prefix now covers 12 execution-boundary and 30
-  journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState
-  and ActiveReblit terminal deletion each add an exact 12-case fresh-process
-  matrix. This item remains unchecked because the other phases and true
-  power-loss-equivalent durability outcomes are not yet covered.
+  journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState,
+  ActiveReblit, and ActivateArchived terminal deletion each add an exact
+  12-case fresh-process matrix. This item remains unchecked because the other
+  phases and true power-loss-equivalent durability outcomes are not yet covered.

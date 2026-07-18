@@ -483,10 +483,12 @@ power-loss oracle, so reboot and power-loss durability remain unproved. Phase
 dispatch is production-wired by `c8c5ea41` as its own bounded entry.
 Commit `32bf8589` adds a separately authorized terminal checkpoint with one
 same-store conditional journal delete, repeated exact-source-or-absence
-classification, and same-lock clean handoff. Its deterministic 20-test gate
-does not claim process-death evidence; the matching terminal `SIGKILL` matrix
-is next, followed by later rollback, roll-forward, boot, cleanup, and
-durability work.
+classification, and same-lock clean handoff. Commit `c6362aae` adds the exact
+12-case real-process terminal matrix across current and historical epochs,
+both rollback sources, and final-PRE, post-unlink, and post-directory-sync
+same-boot `SIGKILL` boundaries. It does not simulate reboot or power loss;
+later rollback, roll-forward, boot, cleanup, earlier interruption boundaries,
+and power-loss-equivalent durability work remain.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

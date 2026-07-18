@@ -353,5 +353,7 @@ closure remain authoritative in `PLAN.md`.
   Phase 11 and its broad interruption campaign therefore remain open.
   Commit `c8c5ea41` production-wires ActivateArchived's bounded completion
   suffix. Commit `32bf8589` adds its separate deterministic terminal deletion
-  and same-lock clean handoff. Its real-process terminal `SIGKILL` matrix is
-  next, followed by roll-forward, boot, cleanup, and power-loss work.
+  and same-lock clean handoff. Commit `c6362aae` adds its exact 12-case
+  real-process terminal `SIGKILL` matrix across both epochs, both rollback
+  sources, and the three deletion boundaries. Roll-forward, boot, cleanup,
+  earlier interruption boundaries, and power-loss-equivalent work remain.
