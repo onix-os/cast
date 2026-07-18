@@ -10,8 +10,9 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_new_state::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 34; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 35; \
 	for name in \
+		candidate_move_process_kill::startup_new_state_candidate_move_process_kill_recovers_without_second_move \
 		exclusions::startup_new_state_suffix_leaves_archived_candidate_preservation_zero_effect \
 		exclusions::startup_new_state_suffix_defers_inexact_rollback_complete_with_zero_suffix_effects \
 		failures::startup_new_state_suffix_candidate_effect_failure_retries_once_on_a_fresh_entry \
@@ -58,6 +59,9 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	finalization_leaf=crates/forge/src/client/startup_recovery/usr_rollback_finalization.rs; \
 	tests=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests; \
 	process_kill="$$tests/terminal_delete_process_kill.rs"; \
+	candidate_process_kill="$$tests/candidate_move_process_kill.rs"; \
+	candidate_process_harness="$$tests/candidate_move_process_harness.rs"; \
+	candidate_boundaries="$$tests/candidate_process_kill_boundaries.rs"; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {' "$$gate"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {" { open = 1; next } open && $$0 == "    _private: ()," { field = 1; next } open && $$0 == "}" { closed = 1; open = 0 } END { exit !(field && closed) }' "$$gate"; \
@@ -90,6 +94,9 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fqx 'mod usr_rollback_new_state;' "$$gate"; \
 	timeout 10s grep -Fqx '#[cfg(test)]' "$$orchestrator"; \
 	timeout 10s grep -Fqx 'mod tests;' "$$orchestrator"; \
+	timeout 10s grep -Fqx 'mod candidate_move_process_kill;' "$$tests/mod.rs"; \
+	timeout 10s grep -Fqx 'mod candidate_move_process_harness;' "$$tests/mod.rs"; \
+	timeout 10s grep -Fqx 'mod candidate_process_kill_boundaries;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod exclusions;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod failures;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod finalization;' "$$tests/mod.rs"; \
@@ -200,7 +207,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fq 'return Self::admit_clean(installation, state_db, journal, in_flight);' <<<"$$terminal_handoff"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'return Self::admit_clean(installation, state_db, journal, in_flight);' "$$gate" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'Self::admit_clean(installation, state_db, journal, in_flight)' "$$gate" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);' "$$gate" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);' "$$gate" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'authority.journal().load_revalidated_retained_cast(cast)' "$$gate" )" = 1; \
 	timeout 10s grep -Fq 'CanonicalTransitionAppearedDuringCleanAdmission {' "$$gate"; \
 	timeout 10s grep -Fq 'arm_after_usr_rollback_finalization_before_clean_audit' "$$tests/finalization.rs"; \
@@ -261,7 +268,35 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fq 'assert_eq!(reopened.load().unwrap(), None)' "$$process_kill"; \
 	timeout 10s grep -Fq 'not a reboot or' "$$process_kill"; \
 	if timeout 10s rg -n 'arm_next_|finalize_usr_rollback|FaultPoint|StorageFault' "$$process_kill"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	for file in "$$gate" "$$orchestrator" "$$active_orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$finalization_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/finalization.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" "$$process_kill" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
+	timeout 10s grep -Fq 'const ALL: [Self; 7] = [' "$$candidate_boundaries"; \
+	for boundary in PostMovePreRecapture BeforeCandidateSync BeforeStagingParentSync BeforeTargetParentSync BeforeQuarantineParentSync BeforeFinalPostCapture BeforeDurablePostRevalidation; do timeout 10s grep -Fq "Self::$$boundary" "$$candidate_boundaries"; done; \
+	for seam in arm_before_new_state_candidate_preserve_move_reconciliation_capture arm_before_new_state_candidate_preserve_post_move_candidate_sync arm_before_new_state_candidate_preserve_post_move_staging_parent_sync arm_before_new_state_candidate_preserve_post_move_target_parent_sync arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync arm_before_new_state_candidate_preserve_post_move_final_post_capture arm_before_new_state_candidate_preserve_durable_post_revalidation_capture; do timeout 10s grep -Fq "$$seam" "$$candidate_boundaries"; done; \
+	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'for boundary in CandidateProcessKillBoundary::ALL {' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq '        cases, 28,' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'TargetPrefix::Canonical' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq '.arg(TEST_NAME)' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq '.arg("--exact")' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq '.arg("--test-threads=1")' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq 'Some(nix::libc::SIGKILL)' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'crash_status.signal()' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'new_state_candidate_preserve_move_attempt_count()' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'snapshot_startup_recovery_namespace' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'struct PublicJournalIdentity {' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq 'struct FreshCandidateDatabase {' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq 'struct CandidateMoveEvidence {' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq 'struct DeadlineChild {' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq 'external NewState candidate-move control does not match' "$$candidate_process_harness"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$candidate_process_kill" )" = 2; \
+	timeout 10s grep -Fq 'release_candidate_handles(fixture)' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'install_persistent_database(&mut fixture)' "$$candidate_process_kill"; \
+	timeout 10s grep -Fq 'RollbackActionOutcome::AlreadySatisfied' "$$candidate_process_harness"; \
+	timeout 10s grep -Fq 'not a reboot or' "$$candidate_process_harness"; \
+	if timeout 10s rg -n 'arm_next_|finalize_usr_rollback|FaultPoint|StorageFault' "$$candidate_process_kill" "$$candidate_process_harness" "$$candidate_boundaries"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	for file in "$$gate" "$$orchestrator" "$$active_orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$finalization_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/finalization.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" "$$process_kill" "$$candidate_process_kill" "$$candidate_process_harness" "$$candidate_boundaries" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1
