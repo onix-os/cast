@@ -263,7 +263,7 @@ pub(super) fn enter_candidate_with_fresh_handles(root: &Path) -> startup_gate::E
     }
 }
 
-fn open_state_database(installation: &Installation) -> db::state::Database {
+pub(super) fn open_state_database(installation: &Installation) -> db::state::Database {
     let location = installation.mutable_database_location(DatabaseKind::State).unwrap();
     let (url, anchor) = location.parts();
     let database = db::state::Database::new_anchored(url, anchor).unwrap();
