@@ -80,6 +80,9 @@ pub use self::read_only::{ReadOnlyClient, ReadOnlyClientError};
 pub use self::resolve::{AvailableClosure, Error as ResolveError, ResolvedPackage, ResolvedRequest};
 pub use self::self_upgrade::self_upgrade;
 
+#[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
+#[path = "boot/active_reblit_projection.rs"]
+pub(crate) mod active_reblit_boot_projection;
 #[cfg(test)]
 mod active_reblit_tests;
 mod active_state_authority;
