@@ -750,7 +750,7 @@ gitwrap-all-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p gitwrap --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 32; \
+	timeout 10s test "$$count" = 35; \
 	timeout 900s $(CARGO) test -p gitwrap --lib "tests::" -- --test-threads=1
 
 forge-repository-manager-test:

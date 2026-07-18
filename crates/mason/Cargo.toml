@@ -15,7 +15,7 @@ cache-clean-test-support = []
 # This feature exists only so Cargo can link the harness-free delegated
 # execution fixture below against Mason's existing contentful test machinery.
 # Production consumers and the Cast binary never enable it.
-delegated-fixture-test-support = []
+delegated-fixture-test-support = ["gitwrap/fixture-test-support"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -68,6 +68,7 @@ tar.workspace = true
 xz2.workspace = true
 
 [dev-dependencies]
+gitwrap = { path = "../../crates/gitwrap", features = ["fixture-test-support"] }
 tempfile.workspace = true
 
 [[test]]

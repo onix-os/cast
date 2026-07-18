@@ -7,6 +7,11 @@ edition = "2021"
 version.workspace = true
 rust-version.workspace = true
 
+[features]
+# Offline fixture bundles exist only for Mason's tracked execution proofs.
+# Production Git acquisition never enables this local-path API.
+fixture-test-support = []
+
 [dependencies]
 fs-err.workspace = true
 nix.workspace = true

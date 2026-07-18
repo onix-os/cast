@@ -559,6 +559,8 @@ fn progress_callback(progress: mpsc::Sender<FetchProgress>) -> impl Fn(FetchProg
 }
 
 include!("runtime/repository_operations.rs");
+#[cfg(any(test, feature = "fixture-test-support"))]
+include!("runtime/fixture_bundle.rs");
 include!("runtime/process_supervision.rs");
 
 mod repository_fs;

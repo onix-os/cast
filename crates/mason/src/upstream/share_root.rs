@@ -95,6 +95,13 @@ impl ShareRoot {
         &self.descriptor_path
     }
 
+    /// Borrow the exact root inode retained across the whole synchronization.
+    /// Git publication uses a cloned descriptor instead of reopening the
+    /// `/proc/.../fd/...` diagnostic path as though it were an ordinary name.
+    pub(super) fn directory(&self) -> &File {
+        &self.directory
+    }
+
     pub(super) fn normalize_and_verify(&self, source_date_epoch: i64) -> Result<(), Error> {
         self.directory
             .set_permissions(Permissions::from_mode(0o755))

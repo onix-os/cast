@@ -141,6 +141,17 @@ pub(crate) enum InnerError {
     #[error("Git remote URL is not a valid absolute URL")]
     InvalidRemoteUrl,
 
+    /// Fixture bundle mirrors are always rebound to an exact production-like
+    /// HTTPS identity before they leave private staging.
+    #[cfg(any(test, feature = "fixture-test-support"))]
+    #[error("Git fixture mirror origin must use HTTPS")]
+    InvalidFixtureOrigin,
+
+    /// A fixture bundle was not a small, non-empty, singly-linked regular file.
+    #[cfg(any(test, feature = "fixture-test-support"))]
+    #[error("Git fixture bundle is not an admissible private regular file")]
+    InvalidFixtureBundle,
+
     /// A cache-owned mirror did not have the exact, finite configuration
     /// required at the network boundary.
     #[error("Git mirror configuration is not canonical or does not match the expected origin")]

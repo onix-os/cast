@@ -30,6 +30,9 @@ mod share_root;
 
 pub(crate) use plain::ARCHIVE_DOWNLOAD_LIMITS;
 
+#[cfg(feature = "delegated-fixture-test-support")]
+const _: [(); 1] = [(); gitwrap::FIXTURE_TEST_SUPPORT_ENABLED as usize];
+
 /// An upstream is a backend where
 /// to get source code from.
 #[derive(Debug, Clone)]
@@ -132,11 +135,12 @@ impl Stored {
     ///
     /// Build-visible source files always receive independent inodes so a build
     /// cannot mutate the verified persistent cache.
-    async fn share(&self, dest_dir: &Path, source_date_epoch: i64) -> Result<(), Error> {
+    async fn share(&self, share_root: &ShareRoot, source_date_epoch: i64) -> Result<(), Error> {
         match self {
-            Stored::Plain(plain) => plain.share(dest_dir, source_date_epoch)?,
+            Stored::Plain(plain) => plain.share(share_root.descriptor_path(), source_date_epoch)?,
             Stored::Git(git) => {
-                git.share(&dest_dir.join(&git.name), source_date_epoch).await?;
+                git.share_into_root(share_root.directory(), share_root.descriptor_path(), source_date_epoch)
+                    .await?;
             }
         }
         Ok(())
@@ -249,25 +253,8 @@ pub fn sync_locked_into_root(
     Ok(stored)
 }
 
-/// Seed one HTTPS-identified archive into the normal content-addressed cache
-/// from a tracked offline fixture.
-///
-/// This function is deliberately absent from production binaries. Tests can
-/// prove real frozen execution without adding `file:` sources or mounting the
-/// mutable recipe/fixture tree inside the build container.
 #[cfg(any(test, feature = "delegated-fixture-test-support"))]
-pub(crate) fn import_locked_archive_fixture(
-    source: &LockedSource,
-    storage_dir: &Path,
-    fixture: &Path,
-) -> Result<(), Error> {
-    let upstreams = locked_upstreams(std::slice::from_ref(source))?;
-    let [Upstream::Plain(plain)] = upstreams.as_slice() else {
-        return Err(Error::FixtureImportRequiresArchive);
-    };
-    plain.import_fixture(storage_dir, fixture)?;
-    Ok(())
-}
+include!("upstream/fixture_import.rs");
 
 fn locked_upstreams(sources: &[LockedSource]) -> Result<Vec<Upstream>, Error> {
     sources
@@ -354,7 +341,7 @@ fn sync_upstreams_into(
                         .tick_chars("--=≡■≡=--"),
                 );
 
-                stored.share(share_root.descriptor_path(), source_date_epoch).await?;
+                stored.share(share_root, source_date_epoch).await?;
 
                 let cached_tag = stored
                     .was_cached()
@@ -463,6 +450,9 @@ pub enum Error {
     #[cfg(any(test, feature = "delegated-fixture-test-support"))]
     #[error("offline fixture import requires one locked archive source")]
     FixtureImportRequiresArchive,
+    #[cfg(any(test, feature = "delegated-fixture-test-support"))]
+    #[error("offline Git fixture import requires one locked Git source")]
+    FixtureImportRequiresGit,
     #[error("prepare build-visible source root")]
     ShareRoot(#[from] share_root::Error),
     #[error("io")]

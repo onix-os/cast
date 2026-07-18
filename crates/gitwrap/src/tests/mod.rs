@@ -10,6 +10,8 @@ use tokio::io::AsyncWriteExt;
 
 use super::*;
 
+mod fixture_bundle;
+
 fn test_limits() -> Limits {
     Limits {
         wall_timeout: Duration::from_secs(2),
