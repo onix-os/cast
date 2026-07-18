@@ -92,6 +92,7 @@ pub(super) struct Fixture {
     pub(super) _temporary: tempfile::TempDir,
     pub(super) installation: Installation,
     pub(super) database: db::state::Database,
+    pub(super) layout_database: db::layout::Database,
     pub(super) source: TransitionRecord,
     pub(super) kind: OperationKind,
     pub(super) candidate_state: state::Id,
@@ -113,6 +114,7 @@ impl Fixture {
         let root = temporary.path();
         let mut installation = Installation::open(root, None).unwrap();
         let database = db::state::Database::new(":memory:").unwrap();
+        let layout_database = db::layout::Database::new(":memory:").unwrap();
         let transition_id = transition_id();
         let (previous_state, candidate_state) = database_states(&database, kind, &transition_id);
 
@@ -191,6 +193,7 @@ impl Fixture {
             _temporary: temporary,
             installation,
             database,
+            layout_database,
             source: source_record,
             kind,
             candidate_state,
@@ -201,7 +204,7 @@ impl Fixture {
 
     pub(super) fn enter(&self) -> startup_gate::Error {
         let reservation = ActiveStateReservation::acquire().unwrap();
-        match CleanSystemStartup::enter(&self.installation, &self.database, &reservation) {
+        match CleanSystemStartup::enter(&self.installation, &self.database, &self.layout_database, &reservation) {
             Ok(_) => panic!("startup unexpectedly admitted an unresolved transition"),
             Err(source) => source,
         }

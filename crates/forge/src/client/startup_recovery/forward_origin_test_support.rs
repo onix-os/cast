@@ -17,9 +17,10 @@ use super::{
 pub(crate) fn assert_usr_exchange_intent_post_recovers_to_pending_reverse(
     installation: &Installation,
     state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
 ) {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, &reservation) {
+    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved forward-exchange residue"),
         Err(error) => error,
     };
@@ -40,9 +41,10 @@ pub(crate) fn assert_usr_exchange_intent_post_recovers_to_pending_reverse(
 pub(crate) fn assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
     installation: &Installation,
     state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
 ) {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, &reservation) {
+    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted a decided /usr rollback"),
         Err(error) => error,
     };
@@ -63,9 +65,10 @@ pub(crate) fn assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
 pub(crate) fn assert_reverse_exchange_intent_recovers_to_usr_restored(
     installation: &Installation,
     state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
 ) {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, &reservation) {
+    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unfinished /usr rollback"),
         Err(error) => error,
     };
@@ -86,9 +89,10 @@ pub(crate) fn assert_reverse_exchange_intent_recovers_to_usr_restored(
 pub(crate) fn assert_usr_restored_routes_to_candidate_preserve_intent(
     installation: &Installation,
     state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
 ) {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, &reservation) {
+    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unfinished candidate rollback"),
         Err(error) => error,
     };

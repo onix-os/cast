@@ -385,6 +385,7 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             assert_usr_exchange_intent_post_recovers_to_pending_reverse(
                 &fixture.installation,
                 &fixture.database,
+                &fixture.layout_database,
             );
 
             assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {point:?}");
@@ -404,6 +405,7 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
                 &fixture.installation,
                 &fixture.database,
+                &fixture.layout_database,
             );
 
             assert!(
@@ -427,7 +429,11 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             );
 
             let reverse_intent = decision.rollback_successor(None).unwrap();
-            assert_reverse_exchange_intent_recovers_to_usr_restored(&fixture.installation, &fixture.database);
+            assert_reverse_exchange_intent_recovers_to_usr_restored(
+                &fixture.installation,
+                &fixture.database,
+                &fixture.layout_database,
+            );
 
             let restored = reverse_intent
                 .rollback_successor(Some(RollbackActionOutcome::Applied))
@@ -447,7 +453,11 @@ fn journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exa
             );
             assert_root_links_absent(&fixture);
 
-            assert_usr_restored_routes_to_candidate_preserve_intent(&fixture.installation, &fixture.database);
+            assert_usr_restored_routes_to_candidate_preserve_intent(
+                &fixture.installation,
+                &fixture.database,
+                &fixture.layout_database,
+            );
             let preserve_intent = restored.rollback_successor(None).unwrap();
             assert_eq!(retained_exchange_syscall_count(), 2, "{candidate_kind:?} {point:?}");
             assert_eq!(read_canonical(&fixture.installation.root), preserve_intent);
@@ -740,6 +750,7 @@ fn journal_coordinator_usr_exchange_completion_faults_recover_from_exact_source_
             assert_usr_exchange_intent_post_recovers_to_pending_reverse(
                 &fixture.installation,
                 &fixture.database,
+                &fixture.layout_database,
             );
 
             assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {durable_phase:?}");
@@ -760,6 +771,7 @@ fn journal_coordinator_usr_exchange_completion_faults_recover_from_exact_source_
             assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
                 &fixture.installation,
                 &fixture.database,
+                &fixture.layout_database,
             );
 
             assert_eq!(retained_exchange_syscall_count(), 1, "{candidate_kind:?} {durable_phase:?}");
@@ -777,7 +789,11 @@ fn journal_coordinator_usr_exchange_completion_faults_recover_from_exact_source_
             );
             assert_root_links_absent(&fixture);
 
-            assert_reverse_exchange_intent_recovers_to_usr_restored(&fixture.installation, &fixture.database);
+            assert_reverse_exchange_intent_recovers_to_usr_restored(
+                &fixture.installation,
+                &fixture.database,
+                &fixture.layout_database,
+            );
 
             let restored = reverse_intent
                 .rollback_successor(Some(RollbackActionOutcome::Applied))
@@ -797,7 +813,11 @@ fn journal_coordinator_usr_exchange_completion_faults_recover_from_exact_source_
             );
             assert_root_links_absent(&fixture);
 
-            assert_usr_restored_routes_to_candidate_preserve_intent(&fixture.installation, &fixture.database);
+            assert_usr_restored_routes_to_candidate_preserve_intent(
+                &fixture.installation,
+                &fixture.database,
+                &fixture.layout_database,
+            );
             let preserve_intent = restored.rollback_successor(None).unwrap();
             assert_eq!(retained_exchange_syscall_count(), 2, "{candidate_kind:?} {durable_phase:?}");
             assert_eq!(read_canonical(&fixture.installation.root), preserve_intent);

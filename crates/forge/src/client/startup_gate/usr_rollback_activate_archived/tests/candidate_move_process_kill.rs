@@ -38,7 +38,7 @@ use super::{
     candidate_process_kill_boundaries::CandidateProcessKillBoundary,
     support::{
         CandidateOrigin as FixtureCandidateOrigin, Epoch, build_candidate, install_persistent_candidate_database,
-        open_state_database, release_candidate_handles,
+        open_layout_database, open_state_database, release_candidate_handles,
     },
 };
 
@@ -489,10 +489,11 @@ fn run_child(case: ChildCase) {
     let installation = Installation::open(&case.root, None).unwrap();
     assert_eq!(installation.root, case.root);
     let database = open_state_database(&installation);
+    let layout_database = open_layout_database(&installation);
     ExistingCandidateDatabase::capture(&database, &source);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &source),
-        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &source),
+        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &layout_database, &source),
+        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &layout_database, &source),
     }
 }
 
@@ -500,6 +501,7 @@ fn run_crash_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     source: &TransitionRecord,
 ) {
     assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *source);
@@ -512,7 +514,7 @@ fn run_crash_child(
     case.boundary.arm(kill_after_real_candidate_move);
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let result = CleanSystemStartup::enter(installation, database, &reservation);
+    let result = CleanSystemStartup::enter(installation, database, layout_database, &reservation);
     panic!(
         "crash child escaped ActivateArchived post-move boundary with startup success={} error={:?}",
         result.is_ok(),
@@ -524,6 +526,7 @@ fn run_recovery_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     source: &TransitionRecord,
 ) {
     assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *source);
@@ -540,7 +543,7 @@ fn run_recovery_child(
     });
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, database, &reservation) {
+    let error = match CleanSystemStartup::enter(installation, database, layout_database, &reservation) {
         Ok(_) => panic!("fresh startup admitted unresolved ActivateArchived candidate evidence"),
         Err(error) => error,
     };

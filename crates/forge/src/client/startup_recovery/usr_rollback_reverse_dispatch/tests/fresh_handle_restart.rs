@@ -19,8 +19,8 @@ use crate::{
 use super::super::UsrRollbackReverseDispatchError;
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged,
-    assert_usr_restored_pending, expected_usr_restored, open_state_database, persistent_state_database,
-    release_fixture_handles, usr_layout, usr_layout_at,
+    assert_usr_restored_pending, expected_usr_restored, open_layout_database, open_state_database,
+    persistent_state_database, release_fixture_handles, usr_layout, usr_layout_at,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -82,7 +82,11 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
             reset_usr_rollback_reverse_namespace_durability_events();
             fault.arm();
 
-            let first = enter_with_handles(&fixture.fixture.installation, &state_database);
+            let first = enter_with_handles(
+                &fixture.fixture.installation,
+                &state_database,
+                &fixture.fixture.layout_database,
+            );
 
             fault.assert_error(&first);
             assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {fault:?}");
@@ -98,6 +102,7 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
 
             let installation = Installation::open(&root, None).unwrap();
             let state_database = open_state_database(&installation);
+            let layout_database = open_layout_database(&installation);
             assert_eq!(state_database.all().unwrap(), states_before, "{kind:?} {fault:?}");
             assert_eq!(
                 state_database.audit_in_flight_transition().unwrap(),
@@ -105,7 +110,7 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
                 "{kind:?} {fault:?}"
             );
 
-            let restart = enter_with_handles(&installation, &state_database);
+            let restart = enter_with_handles(&installation, &state_database, &layout_database);
 
             assert_usr_restored_pending(&restart);
             assert_eq!(canonical_record(&root), restored, "{kind:?} {fault:?}");
@@ -132,9 +137,13 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
     }
 }
 
-fn enter_with_handles(installation: &Installation, state_database: &crate::db::state::Database) -> startup_gate::Error {
+fn enter_with_handles(
+    installation: &Installation,
+    state_database: &crate::db::state::Database,
+    layout_database: &crate::db::layout::Database,
+) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(installation, state_database, &reservation) {
+    match CleanSystemStartup::enter(installation, state_database, layout_database, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved rollback"),
         Err(error) => error,
     }

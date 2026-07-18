@@ -32,7 +32,8 @@ use super::{
     super::candidate_test_support::CandidateSource,
     support::{
         CandidateOutcome, Epoch, RouteFixture, candidate_move_count, install_persistent_route_database,
-        open_state_database, persist_rollback_complete, release_route_handles, reset_candidate_observers,
+        open_layout_database, open_state_database, persist_rollback_complete, release_route_handles,
+        reset_candidate_observers,
     },
 };
 
@@ -504,10 +505,11 @@ fn run_child(case: ChildCase) {
     let installation = Installation::open(&case.root, None).unwrap();
     assert_eq!(installation.root, case.root);
     let database = open_state_database(&installation);
+    let layout_database = open_layout_database(&installation);
     ExistingArchivedDatabase::capture(&database, &terminal);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &terminal),
-        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &terminal),
+        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &layout_database, &terminal),
+        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &layout_database, &terminal),
     }
 }
 
@@ -515,6 +517,7 @@ fn run_crash_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     terminal: &TransitionRecord,
 ) {
     assert_eq!(
@@ -530,7 +533,7 @@ fn run_crash_child(
     });
     case.boundary.arm_kill();
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let result = CleanSystemStartup::enter(installation, database, &reservation);
+    let result = CleanSystemStartup::enter(installation, database, layout_database, &reservation);
     panic!(
         "crash child escaped ActivateArchived finalization boundary {:?} with startup success={} error={:?}",
         case.boundary,
@@ -543,6 +546,7 @@ fn run_recovery_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     terminal: &TransitionRecord,
 ) {
     if case.boundary.canonical_survives() {
@@ -563,7 +567,7 @@ fn run_recovery_child(
     });
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let clean = CleanSystemStartup::enter(installation, database, &reservation)
+    let clean = CleanSystemStartup::enter(installation, database, layout_database, &reservation)
         .unwrap_or_else(|error| panic!("ActivateArchived terminal restart did not admit clean startup: {error:?}"));
 
     assert!(!canonical_path(&case.root).exists());

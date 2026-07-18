@@ -407,11 +407,12 @@ fn run_child(case: ChildCase) {
     let installation = Installation::open(&case.root, None).unwrap();
     assert_eq!(installation.root, case.root);
     let database = reopen_persistent_state_database(&installation);
+    let layout_database = super::support::open_layout_database(&installation);
     let candidate = Id::from(terminal.candidate.id.unwrap());
     assert_joint_absence(&database, candidate, &terminal.transition_id);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &terminal),
-        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &terminal),
+        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &layout_database, &terminal),
+        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &layout_database, &terminal),
     }
 }
 
@@ -419,6 +420,7 @@ fn run_crash_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     terminal: &TransitionRecord,
 ) {
     assert_eq!(
@@ -433,7 +435,7 @@ fn run_crash_child(
     });
     case.boundary.arm_kill();
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let result = CleanSystemStartup::enter(installation, database, &reservation);
+    let result = CleanSystemStartup::enter(installation, database, layout_database, &reservation);
     panic!(
         "crash child escaped terminal-delete boundary {:?} with startup success={} error={:?}",
         case.boundary,
@@ -446,6 +448,7 @@ fn run_recovery_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     terminal: &TransitionRecord,
 ) {
     if case.boundary.canonical_survives() {
@@ -466,7 +469,7 @@ fn run_recovery_child(
     });
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let clean = CleanSystemStartup::enter(installation, database, &reservation)
+    let clean = CleanSystemStartup::enter(installation, database, layout_database, &reservation)
         .unwrap_or_else(|error| panic!("terminal-delete restart did not admit clean startup: {error:?}"));
 
     assert!(!canonical_path(&case.root).exists());

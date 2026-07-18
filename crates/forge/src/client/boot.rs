@@ -203,8 +203,11 @@ fn boot_files_from_new_state<'a>(
 }
 
 /// Grab all layouts for the provided state, mapped to package id
-fn layouts_for_state(client: &Client, state: &State) -> Result<Vec<(Id, StonePayloadLayoutRecord)>, db::Error> {
-    client.layout_db.query(state.selections.iter().map(|s| &s.package))
+fn layouts_for_state(
+    layout_db: &db::layout::Database,
+    state: &State,
+) -> Result<Vec<(Id, StonePayloadLayoutRecord)>, db::Error> {
+    layout_db.query(state.selections.iter().map(|s| &s.package))
 }
 
 /// Select the bounded rollback-state IDs for one active head.
@@ -266,12 +269,12 @@ fn resolve_rollback_states<T: Clone, E>(
 }
 
 fn rollback_states_excluding(
-    client: &Client,
+    state_db: &db::state::Database,
     state: &State,
     immediate_previous: Option<&State>,
     excluded: &BTreeSet<StateId>,
 ) -> Result<Vec<State>, db::Error> {
-    let candidates = client.state_db.list_ids()?;
+    let candidates = state_db.list_ids()?;
     let ids = if excluded.is_empty() {
         select_rollback_state_ids(state.id, immediate_previous.map(|previous| previous.id), candidates)
     } else {
@@ -284,7 +287,7 @@ fn rollback_states_excluding(
     };
 
     resolve_rollback_states(ids, immediate_previous.map(|previous| (previous.id, previous)), |id| {
-        client.state_db.get(id)
+        state_db.get(id)
     })
 }
 
@@ -317,7 +320,37 @@ fn os_schema_for_root(root: &Path) -> Result<Schema, Error> {
 /// retained as the first rollback choice even when activating a lower ID.
 /// Standalone synchronization and pruning may pass `None`.
 pub fn synchronize(client: &Client, state: &State, immediate_previous: Option<&State>) -> Result<(), Error> {
-    synchronize_excluding(client, state, immediate_previous, &BTreeSet::new()).map(|_| ())
+    synchronize_databases(
+        &client.installation,
+        &client.state_db,
+        &client.layout_db,
+        state,
+        immediate_previous,
+    )
+}
+
+/// Synchronize boot metadata from the exact database capabilities already
+/// opened by mutable-system construction.
+///
+/// Startup recovery runs before a complete [`Client`] exists. Keeping this
+/// boundary capability-based avoids constructing a partial client or
+/// reopening databases by path while the startup gate is retained.
+fn synchronize_databases(
+    installation: &Installation,
+    state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
+    state: &State,
+    immediate_previous: Option<&State>,
+) -> Result<(), Error> {
+    synchronize_excluding_databases(
+        installation,
+        state_db,
+        layout_db,
+        state,
+        immediate_previous,
+        &BTreeSet::new(),
+    )
+    .map(|_| ())
 }
 
 /// Synchronize boot metadata while categorically excluding exact state IDs.
@@ -331,10 +364,28 @@ pub(crate) fn synchronize_excluding(
     immediate_previous: Option<&State>,
     excluded: &BTreeSet<StateId>,
 ) -> Result<ProjectionSyncOutcome, Error> {
+    synchronize_excluding_databases(
+        &client.installation,
+        &client.state_db,
+        &client.layout_db,
+        state,
+        immediate_previous,
+        excluded,
+    )
+}
+
+fn synchronize_excluding_databases(
+    installation: &Installation,
+    state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
+    state: &State,
+    immediate_previous: Option<&State>,
+    excluded: &BTreeSet<StateId>,
+) -> Result<ProjectionSyncOutcome, Error> {
     if excluded.contains(&state.id) {
         return Err(Error::ExcludedHead(i32::from(state.id)));
     }
-    let root = client.installation.root.clone();
+    let root = installation.root.clone();
     let is_native = root.to_string_lossy() == "/";
     // Create an appropriate configuration
     let config = blsforme::Configuration {
@@ -347,12 +398,12 @@ pub(crate) fn synchronize_excluding(
     };
 
     // For the new/active state
-    let head_layouts = layouts_for_state(client, state)?;
+    let head_layouts = layouts_for_state(layout_db, state)?;
     let kernel_pattern = Pattern::from_str("lib/kernel/(version:*)/*")?;
     let systemd = Pattern::from_str("lib*/systemd/boot/efi/*.efi")?;
-    let booty_bits = boot_files_from_new_state(&client.installation, &head_layouts, &systemd);
+    let booty_bits = boot_files_from_new_state(installation, &head_layouts, &systemd);
 
-    let mut all_states = rollback_states_excluding(client, state, immediate_previous, excluded)?;
+    let mut all_states = rollback_states_excluding(state_db, state, immediate_previous, excluded)?;
 
     let exact_prune_projection = !excluded.is_empty();
     // Ordinary synchronization keeps its historical no-bootloader no-op.
@@ -371,7 +422,7 @@ pub(crate) fn synchronize_excluding(
         if excluded.contains(&state.id) {
             continue;
         }
-        let layouts = layouts_for_state(client, state)?;
+        let layouts = layouts_for_state(layout_db, state)?;
         let local_kernels = kernel_files_from_state(&layouts, &kernel_pattern);
         let mapped = global_schema.discover_system_kernels(local_kernels.into_iter())?;
         all_kernels.push((mapped, state.id));
@@ -386,7 +437,7 @@ pub(crate) fn synchronize_excluding(
                 let sysroot = if state.id == state_id {
                     rootref.clone()
                 } else {
-                    client.installation.root_path(state_id.to_string()).to_owned()
+                    installation.root_path(state_id.to_string()).to_owned()
                 };
 
                 if !boot_state_is_eligible(state_id, excluded, sysroot.exists()) {

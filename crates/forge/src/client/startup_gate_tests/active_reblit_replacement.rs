@@ -29,6 +29,7 @@ struct Fixture {
     _temporary: tempfile::TempDir,
     installation: Installation,
     state_db: db::state::Database,
+    layout_db: db::layout::Database,
     record: TransitionRecord,
     replacement: PathBuf,
 }
@@ -38,7 +39,12 @@ fn compatible_database_and_active_selection_admit_restrictive_replacement_repair
     let fixture = Fixture::new(false, false);
     let reservation = ActiveStateReservation::acquire().unwrap();
 
-    let result = startup_gate::CleanSystemStartup::enter(&fixture.installation, &fixture.state_db, &reservation);
+    let result = startup_gate::CleanSystemStartup::enter(
+        &fixture.installation,
+        &fixture.state_db,
+        &fixture.layout_db,
+        &reservation,
+    );
 
     assert!(matches!(result, Err(startup_gate::Error::RecoveryPending(_))));
     assert_eq!(mode(&fixture.replacement), 0o700);
@@ -52,7 +58,12 @@ fn foreign_in_flight_database_ownership_causes_zero_replacement_chmod() {
     let in_flight_before = fixture.state_db.audit_in_flight_transition().unwrap();
     let reservation = ActiveStateReservation::acquire().unwrap();
 
-    let result = startup_gate::CleanSystemStartup::enter(&fixture.installation, &fixture.state_db, &reservation);
+    let result = startup_gate::CleanSystemStartup::enter(
+        &fixture.installation,
+        &fixture.state_db,
+        &fixture.layout_db,
+        &reservation,
+    );
 
     assert!(matches!(
         result,
@@ -76,7 +87,12 @@ fn stale_active_selection_causes_zero_replacement_chmod() {
     assert_eq!(fixture.installation.active_state, None);
     let reservation = ActiveStateReservation::acquire().unwrap();
 
-    let result = startup_gate::CleanSystemStartup::enter(&fixture.installation, &fixture.state_db, &reservation);
+    let result = startup_gate::CleanSystemStartup::enter(
+        &fixture.installation,
+        &fixture.state_db,
+        &fixture.layout_db,
+        &reservation,
+    );
 
     assert!(matches!(
         result,
@@ -159,6 +175,7 @@ impl Fixture {
         let temporary = private_installation_tempdir();
         let provisioned = Installation::open(temporary.path(), None).unwrap();
         let state_db = db::state::Database::new(provisioned.db_path("state").to_str().unwrap()).unwrap();
+        let layout_db = db::layout::Database::new(provisioned.db_path("layout").to_str().unwrap()).unwrap();
         let record_transition = transition_id(RECORD_TRANSITION);
         let candidate = state_db
             .add_with_transition(&record_transition, &[], Some("active-reblit candidate"), None)
@@ -235,6 +252,7 @@ impl Fixture {
             _temporary: temporary,
             installation,
             state_db,
+            layout_db,
             record,
             replacement,
         }

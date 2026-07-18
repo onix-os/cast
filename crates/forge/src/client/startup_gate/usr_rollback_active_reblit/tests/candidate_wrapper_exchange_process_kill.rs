@@ -152,10 +152,11 @@ fn run_child(case: ChildCase) {
     let installation = Installation::open(&case.root, None).unwrap();
     assert_eq!(installation.root, case.root);
     let database = open_state_database(&installation);
+    let layout_database = super::support::open_layout_database(&installation);
     ExistingCandidateDatabase::capture(&database, &source);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &source),
-        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &source),
+        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &layout_database, &source),
+        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &layout_database, &source),
     }
 }
 
@@ -163,6 +164,7 @@ fn run_crash_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     source: &crate::transition_journal::TransitionRecord,
 ) {
     assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *source);
@@ -175,7 +177,7 @@ fn run_crash_child(
     case.boundary.arm(kill_after_real_wrapper_exchange);
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let result = CleanSystemStartup::enter(installation, database, &reservation);
+    let result = CleanSystemStartup::enter(installation, database, layout_database, &reservation);
     panic!(
         "crash child escaped ActiveReblit wrapper-exchange boundary {:?} with startup success={} error={:?}",
         case.boundary,
@@ -188,6 +190,7 @@ fn run_recovery_child(
     case: &ChildCase,
     installation: &Installation,
     database: &db::state::Database,
+    layout_database: &db::layout::Database,
     source: &crate::transition_journal::TransitionRecord,
 ) {
     assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *source);
@@ -201,7 +204,7 @@ fn run_recovery_child(
     reset_active_reblit_candidate_preserve_post_exchange_durability_events();
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, database, &reservation) {
+    let error = match CleanSystemStartup::enter(installation, database, layout_database, &reservation) {
         Ok(_) => panic!("fresh startup admitted unresolved ActiveReblit candidate evidence"),
         Err(error) => error,
     };

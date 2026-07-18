@@ -65,6 +65,7 @@ impl ClientBuilder {
         let startup_gate = startup_gate::CleanSystemStartup::enter(
             &self.installation,
             &state_db,
+            &layout_db,
             &active_state_reservation,
         )
         .map_err(|source| Error::SystemStartupGate {

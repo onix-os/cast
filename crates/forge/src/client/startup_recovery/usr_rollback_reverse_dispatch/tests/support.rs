@@ -28,7 +28,12 @@ pub(super) struct UsrLayout {
 
 pub(super) fn enter(fixture: &Fixture) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(&fixture.fixture.installation, &fixture.fixture.database, &reservation) {
+    match CleanSystemStartup::enter(
+        &fixture.fixture.installation,
+        &fixture.fixture.database,
+        &fixture.fixture.layout_database,
+        &reservation,
+    ) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved rollback"),
         Err(error) => error,
     }
@@ -161,6 +166,15 @@ pub(super) fn open_state_database(installation: &Installation) -> db::state::Dat
     let location = installation.mutable_database_location(DatabaseKind::State).unwrap();
     let (url, anchor) = location.parts();
     let database = db::state::Database::new_anchored(url, anchor).unwrap();
+    location.revalidate().unwrap();
+    installation.revalidate_mutable_namespace().unwrap();
+    database
+}
+
+pub(super) fn open_layout_database(installation: &Installation) -> db::layout::Database {
+    let location = installation.mutable_database_location(DatabaseKind::Layout).unwrap();
+    let (url, anchor) = location.parts();
+    let database = db::layout::Database::new_anchored(url, anchor).unwrap();
     location.revalidate().unwrap();
     installation.revalidate_mutable_namespace().unwrap();
     database

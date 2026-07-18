@@ -118,8 +118,10 @@ impl CleanSystemStartup {
     pub(super) fn enter(
         installation: &Installation,
         state_db: &db::state::Database,
+        layout_db: &db::layout::Database,
         active_state_reservation: &ActiveStateReservation,
     ) -> Result<Self, Error> {
+        let _ = layout_db;
         installation.revalidate_mutable_namespace()?;
         let cast = installation.retained_mutable_cast_directory()?;
         after_mutable_namespace_preflight();

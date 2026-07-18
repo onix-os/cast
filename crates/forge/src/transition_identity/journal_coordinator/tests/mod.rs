@@ -54,6 +54,7 @@ struct CoordinatorFixture {
     _temporary: tempfile::TempDir,
     installation: Installation,
     database: db::state::Database,
+    layout_database: db::layout::Database,
     previous_state: state::Id,
     candidate_state: state::Id,
     candidate_path: PathBuf,
@@ -100,6 +101,7 @@ fn fixture_parts(
     let temporary = private_installation_tempdir();
     let mut installation = Installation::open(temporary.path(), None).unwrap();
     let database = db::state::Database::new(":memory:").unwrap();
+    let layout_database = db::layout::Database::new(":memory:").unwrap();
     let previous_state = if candidate_kind == CandidateKind::ActiveReblit {
         add_cleared_state_with_provenance(&database, "coordinator active reblit", 'd')
     } else {
@@ -204,6 +206,7 @@ fn fixture_parts(
         _temporary: temporary,
         installation,
         database,
+        layout_database,
         previous_state,
         candidate_state,
         candidate_path,

@@ -26,7 +26,8 @@ use crate::{
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
     assert_layout_unchanged, assert_usr_restored_pending, expected_candidate_preserve_intent, expected_usr_restored,
-    open_state_database, persistent_state_database, release_fixture_handles, usr_layout, usr_layout_at,
+    open_layout_database, open_state_database, persistent_state_database, release_fixture_handles, usr_layout,
+    usr_layout_at,
 };
 
 const TEST_NAME: &str = concat!(
@@ -329,11 +330,19 @@ fn run_child(case: ChildCase) {
     let installation = Installation::open(&case.root, None).unwrap();
     assert_eq!(installation.root, case.root);
     let state_database = open_state_database(&installation);
+    let layout_database = open_layout_database(&installation);
     let source = canonical_record(&case.root);
     let post_layout = case.validate_control(&source);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &state_database, post_layout),
-        ProcessRole::Recover => run_recovery_child(&case, &installation, &state_database, source, post_layout),
+        ProcessRole::Crash => run_crash_child(&case, &installation, &state_database, &layout_database, post_layout),
+        ProcessRole::Recover => run_recovery_child(
+            &case,
+            &installation,
+            &state_database,
+            &layout_database,
+            source,
+            post_layout,
+        ),
     }
 }
 
@@ -341,11 +350,12 @@ fn run_crash_child(
     case: &ChildCase,
     installation: &Installation,
     state_database: &crate::db::state::Database,
+    layout_database: &crate::db::layout::Database,
     post_layout: RawUsrLayout,
 ) {
     assert_eq!(RawUsrLayout::capture(&case.root), post_layout);
     case.kill_point.arm_crash();
-    let error = enter_with_handles(installation, state_database);
+    let error = enter_with_handles(installation, state_database, layout_database);
     panic!(
         "crash child escaped armed boundary {:?} with startup result {error:?}",
         case.kill_point
@@ -356,6 +366,7 @@ fn run_recovery_child(
     case: &ChildCase,
     installation: &Installation,
     state_database: &crate::db::state::Database,
+    layout_database: &crate::db::layout::Database,
     source: TransitionRecord,
     post_layout: RawUsrLayout,
 ) {
@@ -372,7 +383,7 @@ fn run_recovery_child(
         panic!("PRE recovery attempted a second retained /usr exchange")
     });
 
-    let recovered = enter_with_handles(installation, state_database);
+    let recovered = enter_with_handles(installation, state_database, layout_database);
 
     assert_usr_restored_pending(&recovered);
     assert_eq!(canonical_record(&case.root), expected);
@@ -385,7 +396,7 @@ fn run_recovery_child(
     drop(recovered);
 
     let preserve_intent = expected_candidate_preserve_intent(&expected);
-    let stable = enter_with_handles(installation, state_database);
+    let stable = enter_with_handles(installation, state_database, layout_database);
 
     assert_candidate_preserve_intent_pending(&stable);
     assert_eq!(canonical_record(&case.root), preserve_intent);
@@ -421,9 +432,13 @@ fn spawn_child(
         .unwrap()
 }
 
-fn enter_with_handles(installation: &Installation, state_database: &crate::db::state::Database) -> startup_gate::Error {
+fn enter_with_handles(
+    installation: &Installation,
+    state_database: &crate::db::state::Database,
+    layout_database: &crate::db::layout::Database,
+) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(installation, state_database, &reservation) {
+    match CleanSystemStartup::enter(installation, state_database, layout_database, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved rollback"),
         Err(error) => error,
     }
