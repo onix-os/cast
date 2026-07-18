@@ -230,6 +230,17 @@ pass_content_case \
     '"checksums.yaml.gz" if file.depth() == 0 => state.increment_confidence(50),'
 
 pass_content_case \
+    'exact desktop bootstrap libfyaml package metadata is test data' \
+    'crates/mason/src/planner/tests/bootstrap/desktop_integration.rs' \
+    $'const LIBFYAML_PACKAGE_ID: &str = "a035a7509f5d58b2d4072ccd0f8b450e5b58504bdf61857bd3d2b08d1cd641eb";\nLIBFYAML_PACKAGE_ID,\n"libfyaml",\n"../../../pool/v0/libf/libfyaml/libfyaml-0.9.6-7-1-x86_64.stone",'
+
+fail_content_case \
+    'desktop bootstrap test path is not a blanket YAML exception' \
+    'serde_yaml::from_str' \
+    'crates/mason/src/planner/tests/bootstrap/desktop_integration.rs' \
+    'let legacy = serde_yaml::from_str(source)?;'
+
+pass_content_case \
     'completed historical migration document is an audit exception' \
     'docs/plans/gluon-migration.md' \
     'The former loader called serde_yaml::from_slice and parsed control.kdl.'

@@ -141,6 +141,19 @@ is_allowed_runtime_reference() {
                 return 0
             fi
             ;;
+        'crates/mason/src/planner/tests/bootstrap/desktop_integration.rs')
+            # The pinned AppStream closure contains libfyaml package metadata.
+            # Bind this test-data exception to its exact path, ID, name, and
+            # Stone URI; it is not a YAML loader or configuration dependency.
+            case "${line}" in
+                'const LIBFYAML_PACKAGE_ID: &str = "a035a7509f5d58b2d4072ccd0f8b450e5b58504bdf61857bd3d2b08d1cd641eb";' \
+                    | 'LIBFYAML_PACKAGE_ID,' \
+                    | '"libfyaml",' \
+                    | '"../../../pool/v0/libf/libfyaml/libfyaml-0.9.6-7-1-x86_64.stone",')
+                    return 0
+                    ;;
+            esac
+            ;;
     esac
 
     return 1
