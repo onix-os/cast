@@ -166,6 +166,19 @@ let custom_packages = [
     "f9ca3142d2264f46d387e0af1136ec5f85d917ee1f0c7fb5c8ba08861d77dfa5"
 ]
 
+// Install-only font packages share the custom builder baseline. Insert the
+// semantic scanner and its new transitive libraries at their sorted positions.
+let font_family_packages =
+    arrays.append (arrays.slice custom_packages 0 8)
+        (arrays.append ["13176ec161af3ef04bc317491634a7a518addb28ebefe429261d6ce02ae412f1"]
+        (arrays.append (arrays.slice custom_packages 8 28)
+        (arrays.append ["508b08cab0d181f2da112463d2347ab3277937b3ea6853d68b72d8bba398e0a2"]
+        (arrays.append (arrays.slice custom_packages 28 30)
+        (arrays.append ["5f3d91a7bc277253f0b7be784fca3e51a8b0f5e9c3356c00afca0cda83d8cc2b"]
+        (arrays.append (arrays.slice custom_packages 30 38)
+        (arrays.append ["81a0304440fa51734e83e3b4c24cde4a2c0bfbb58290ccc0c3c5c408788929b5"]
+            (arrays.slice custom_packages 38 59))))))))
+
 let generated_config_packages = [
     "04be20d87761c89e088ac79fedd3822026400655cec694b3f2b867d422b221bd",
     "084f838746d2aee9093642049d8ca228aabee6085ef2c278db5dc99451bafeda",
@@ -316,6 +329,7 @@ let userspace_profile_packages = [
 {
     custom = custom_packages,
     desktop_integration = desktop_integration_packages,
+    font_family = font_family_packages,
     generated_config = generated_config_packages,
     gettext_localization = gettext_localization_packages,
     userspace_profile = userspace_profile_packages,

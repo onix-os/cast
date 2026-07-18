@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 22] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 23] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -9,6 +9,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 22] = [
     "daemon-generated",
     "desktop-integration",
     "factory-override",
+    "font-family",
     "generated-config",
     "generated-shell",
     "gettext-localization",
@@ -34,6 +35,12 @@ mod desktop_integration_topology {
     use super::*;
 
     include!("execution_topology/desktop_integration.rs");
+}
+
+mod font_family_topology {
+    use super::*;
+
+    include!("execution_topology/font_family.rs");
 }
 
 mod system_integration_assets_topology {
@@ -505,6 +512,7 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
         ],
         "multiple-sources" => multiple_sources_topology::expected(),
         "desktop-integration" => desktop_integration_topology::expected(),
+        "font-family" => font_family_topology::expected(),
         "gettext-localization" => gettext_localization_topology::expected(&job.work_dir),
         "system-integration-assets" => system_integration_assets_topology::expected(),
         "cargo" | "cargo-features" | "cargo-vendored" => vec![
@@ -743,6 +751,9 @@ fi
     }
     if name == "desktop-integration" {
         desktop_integration_topology::assert_contract(plan, job);
+    }
+    if name == "font-family" {
+        font_family_topology::assert_contract(plan, job);
     }
     if name == "gettext-localization" {
         gettext_localization_topology::assert_contract(plan, job);

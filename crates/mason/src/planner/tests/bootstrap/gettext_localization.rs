@@ -13,9 +13,9 @@ fn assert_gettext_localization_bootstrap_contract(
     closure: &BootstrapClosure,
     indexed: &BTreeMap<String, Meta>,
 ) {
-    assert_eq!(closure.packages.sha256.len(), 147, "bootstrap package count drift");
+    assert_eq!(closure.packages.sha256.len(), 150, "bootstrap package count drift");
     assert_eq!(
-        closure.packages.total_download_bytes, 341_660_667,
+        closure.packages.total_download_bytes, 342_384_777,
         "bootstrap download byte total drift"
     );
     let fixture = closure

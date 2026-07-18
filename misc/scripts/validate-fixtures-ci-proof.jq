@@ -67,6 +67,7 @@ def expected_stone_count($fixture):
   elif $fixture == "generated-config" then 1
   elif $fixture == "generated-shell" then 1
   elif $fixture == "desktop-integration" then 1
+  elif $fixture == "font-family" then 1
   elif $fixture == "gettext-localization" then 1
   elif $fixture == "plugin-output" then 3
   elif $fixture == "split" then 5
@@ -162,6 +163,7 @@ def fixture_names:
     "daemon-generated",
     "desktop-integration",
     "factory-override",
+    "font-family",
     "generated-config",
     "generated-shell",
     "gettext-localization",
@@ -207,12 +209,12 @@ and (
       "artifact_count",
       "artifact_bytes"
     ]))
-  and $proof.totals.fixture_count == 22
-  and $proof.totals.execution_count == 44
-  and $proof.totals.bundle_validation_count == 66
-  and $proof.totals.stone_count == 127
-  and $proof.totals.manifest_count == 44
-  and $proof.totals.artifact_count == 171
+  and $proof.totals.fixture_count == 23
+  and $proof.totals.execution_count == 46
+  and $proof.totals.bundle_validation_count == 69
+  and $proof.totals.stone_count == 128
+  and $proof.totals.manifest_count == 46
+  and $proof.totals.artifact_count == 174
   and ($proof.totals.artifact_bytes | bounded_positive_integer(4294967296))
   and ($proof.fixtures | type == "array")
   and ($proof.fixtures | map(.name)) == $fixture_names

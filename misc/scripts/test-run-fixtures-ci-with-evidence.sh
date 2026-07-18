@@ -5,7 +5,9 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-fixtures-ci-with-evidence.sh"
 proof_generator="$root/misc/scripts/test-support/write-fixtures-ci-proof-v2.sh"
+proof_validator="$root/misc/scripts/validate-fixtures-ci-proof.sh"
 work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixtures-ci-evidence-test.XXXXXXXXXXXX")
+canonical_proof="$work/canonical-fixtures-ci-proof.json"
 current_case=initialization
 tracked_runner_pid=
 tracked_gate_fifo=
@@ -83,7 +85,7 @@ outer_state="$work/outer-state"
 gates="$work/gates"
 real_tee=$(command -v tee)
 real_jq=$(command -v jq)
-fake_commit=$(git -C "$root" rev-parse --verify HEAD)
+fake_commit=$(timeout 10s git -C "$root" rev-parse --verify HEAD)
 mkdir -p "$fakebin" "$evidence" "$outer_state" "$gates"
 chmod 700 "$evidence"
 if [ -L "$proof_generator" ] || [ ! -f "$proof_generator" ] \
@@ -92,6 +94,17 @@ if [ -L "$proof_generator" ] || [ ! -f "$proof_generator" ] \
         "$proof_generator" >&2
     exit 1
 fi
+if [ -L "$proof_validator" ] || [ ! -f "$proof_validator" ] \
+    || [ ! -x "$proof_validator" ]; then
+    printf 'fixture proof validator is unavailable or unsafe: %s\n' \
+        "$proof_validator" >&2
+    exit 1
+fi
+timeout 120s "$proof_generator" "$canonical_proof" "$fake_commit"
+timeout 120s "$proof_validator" "$canonical_proof" "$fake_commit"
+test -f "$canonical_proof"
+test ! -L "$canonical_proof"
+test "$(timeout 10s stat -c '%a' "$canonical_proof")" = 644
 
 grep -Fq 'CAST_FIXTURE_EVIDENCE_DIR="$${CAST_FIXTURE_EVIDENCE_DIR:-$(TOP_DIR)/target/fixture-evidence}"' \
     "$root/Makefile"
@@ -122,6 +135,19 @@ emit_proof() {
     : "${FAKE_PROOF_GENERATOR:?}"
     "$FAKE_PROOF_GENERATOR" \
         "$CAST_FIXTURE_EVIDENCE_DIR/fixtures-ci-proof.json" "$commit"
+    printf 'temporary-proof-from-%s\n' "$FAKE_MAKE_MODE" \
+        >"$CAST_FIXTURE_EVIDENCE_DIR/.fixtures-ci-proof.json.tmp"
+}
+
+install_canonical_proof() {
+    : "${FAKE_CANONICAL_PROOF:?}"
+    if [ -L "$FAKE_CANONICAL_PROOF" ] || [ ! -f "$FAKE_CANONICAL_PROOF" ]; then
+        printf 'canonical fixture proof is unavailable or unsafe: %s\n' \
+            "$FAKE_CANONICAL_PROOF" >&2
+        return 1
+    fi
+    timeout 10s install -m 0644 "$FAKE_CANONICAL_PROOF" \
+        "$CAST_FIXTURE_EVIDENCE_DIR/fixtures-ci-proof.json"
     printf 'temporary-proof-from-%s\n' "$FAKE_MAKE_MODE" \
         >"$CAST_FIXTURE_EVIDENCE_DIR/.fixtures-ci-proof.json.tmp"
 }
@@ -167,7 +193,6 @@ case "$FAKE_MAKE_MODE" in
         : "${FAKE_PUBLIC_EVIDENCE_DIR:?}"
         : "${FAKE_OUTER_STATE:?}"
         : "${FAKE_DESCENDANT_GATE:?}"
-        emit_proof
         setsid sh -c '
             set -eu
             trap "" HUP INT TERM
@@ -190,6 +215,7 @@ case "$FAKE_MAKE_MODE" in
         printf '%s\n' "$descendant_pid" >"$FAKE_OUTER_STATE/descendant-pid"
         wait_for_child_receipt "$FAKE_DESCENDANT_GATE.ready" \
             "$descendant_pid" 'public late-proof writer readiness'
+        emit_proof
         printf 'SUCCESS-WITH-CGROUP-DESCENDANT\n'
         ;;
     success-no-proof)
@@ -239,14 +265,22 @@ case "$FAKE_MAKE_MODE" in
         exit 38
         ;;
     timeout)
-        emit_proof
+        : "${FAKE_TIMEOUT_GATE:?}"
         printf 'BEGIN-TIMEOUT\n'
-        sleep 5
+        # Install the precomputed proof before entering an explicit blocker.
+        # The receipt proves the one-second runtime reached the intended
+        # long-lived phase rather than expiring during matrix-sized setup.
+        install_canonical_proof
+        : >"$FAKE_TIMEOUT_GATE.ready"
+        IFS= read -r timeout_token <"$FAKE_TIMEOUT_GATE.hold"
+        test "$timeout_token" = unreachable
         ;;
     ignore-term)
-        emit_proof
         trap '' TERM
         printf 'BEGIN-IGNORE-TERM\n'
+        # Install the hostile signal policy before matrix-sized setup so this
+        # case deterministically exercises the SIGKILL escalation path.
+        emit_proof
         while :; do
             sleep 1
         done
@@ -289,13 +323,15 @@ case "$FAKE_MAKE_MODE" in
         ;;
     freeze-supervisor)
         : "${FAKE_OUTER_STATE:?}"
-        emit_proof
         printf '%s\n' "${CAST_FIXTURE_WRAPPER_PID:?}" \
             >"$FAKE_OUTER_STATE/wrapper-pid"
         printf '%s\n' "${CAST_LATCHED_SUPERVISOR_PID:?}" \
             >"$FAKE_OUTER_STATE/supervisor-pid"
         kill -STOP "${CAST_LATCHED_SUPERVISOR_PID:?}"
         : >"$FAKE_OUTER_STATE/frozen-supervisor-ready"
+        # Freeze and identify the supervisor before matrix-sized setup so the
+        # one-second status bound tests the frozen channel, not proof latency.
+        emit_proof
         while :; do
             sleep 1
         done
@@ -665,10 +701,12 @@ run_wrapper() {
         CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS="${CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS-}" \
         FAKE_LATE_PID_FILE="$work/late-child.pid" \
         FAKE_PROOF_GENERATOR="$proof_generator" \
+        FAKE_CANONICAL_PROOF="$canonical_proof" \
         FAKE_GIT_COMMIT="$fake_commit" \
         FAKE_GIT_STATUS_MODE="${FAKE_GIT_STATUS_MODE-clean}" \
         FAKE_JQ_SIGNAL_CALL="${FAKE_JQ_SIGNAL_CALL-}" \
         FAKE_DESCENDANT_GATE="${FAKE_DESCENDANT_GATE-}" \
+        FAKE_TIMEOUT_GATE="${FAKE_TIMEOUT_GATE-}" \
         FAKE_DOUBLE_SIGNAL_GATE="${FAKE_DOUBLE_SIGNAL_GATE-}" \
         FAKE_FINALIZE_STOP_GATE="${FAKE_FINALIZE_STOP_GATE-}" \
         FAKE_LOAD_STATE_GATE="${FAKE_LOAD_STATE_GATE-}" \

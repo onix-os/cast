@@ -12,7 +12,7 @@ EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 REQUIRE_EXECUTION ?= 0
 FIXTURE ?= all
-EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated desktop-integration factory-override generated-config generated-shell gettext-localization header-only-library hooks-patch meson multiple-sources plugin-output post-install-smoke-test split system-integration-assets userspace-profile
+EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated desktop-integration factory-override font-family generated-config generated-shell gettext-localization header-only-library hooks-patch meson multiple-sources plugin-output post-install-smoke-test split system-integration-assets userspace-profile
 VALID_EXECUTION_FIXTURES := all $(EXECUTION_FIXTURE_NAMES)
 # Capture the literal command-line value once. A recursive make variable such
 # as '$$(shell ...)' must never be re-expanded into a bootstrap shell recipe.
@@ -70,6 +70,7 @@ include misc/make/git-source-hardening-tests.mk
 include misc/make/multiple-sources-fixture-tests.mk
 include misc/make/gettext-localization-fixture-tests.mk
 include misc/make/desktop-integration-fixture-tests.mk
+include misc/make/font-family-fixture-tests.mk
 include misc/make/system-integration-assets-fixture-tests.mk
 include misc/make/help.mk
 
@@ -724,7 +725,7 @@ fixture-sources:
 fixture-sources-check:
 	@"$(TOP_DIR)/misc/scripts/build-execution-fixtures.sh" --check
 
-execution-fixtures: fixture-sources-check multiple-sources-fixture-test gettext-localization-fixture-test desktop-integration-fixture-test system-integration-assets-fixture-test
+execution-fixtures: fixture-sources-check multiple-sources-fixture-test gettext-localization-fixture-test desktop-integration-fixture-test font-family-fixture-test system-integration-assets-fixture-test
 	@echo "Checking locked offline execution-source fixtures..."
 	@set -eu; \
 	listed="$$( $(CARGO) test -p mason --lib \
@@ -755,7 +756,7 @@ execution-fixtures: fixture-sources-check multiple-sources-fixture-test gettext-
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
 		--exact --nocapture
-	@echo "Resolving all twenty-two execution fixtures against the pinned real Stone index..."
+	@echo "Resolving all twenty-three execution fixtures against the pinned real Stone index..."
 	@set -eu; \
 	listed="$$( $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \

@@ -89,23 +89,24 @@ fn proof_v2_serializes_the_exact_complete_matrix_and_totals_within_its_bound() {
     assert_eq!(value["schema"], "cast.fixtures-ci-proof.v2");
     assert_eq!(value["git_commit"], TEST_COMMIT);
     assert_eq!(value["bundle_ledger_schema"], "cast.fixtures-ci.bundle.v1");
-    assert_eq!(value["totals"]["fixture_count"], 22);
-    assert_eq!(value["totals"]["execution_count"], 44);
-    assert_eq!(value["totals"]["bundle_validation_count"], 66);
-    assert_eq!(value["totals"]["stone_count"], 127);
-    assert_eq!(value["totals"]["manifest_count"], 44);
-    assert_eq!(value["totals"]["artifact_count"], 171);
+    assert_eq!(value["totals"]["fixture_count"], 23);
+    assert_eq!(value["totals"]["execution_count"], 46);
+    assert_eq!(value["totals"]["bundle_validation_count"], 69);
+    assert_eq!(value["totals"]["stone_count"], 128);
+    assert_eq!(value["totals"]["manifest_count"], 46);
+    assert_eq!(value["totals"]["artifact_count"], 174);
     assert!(value["totals"]["artifact_bytes"].as_u64().unwrap() > 0);
     let fixtures = value["fixtures"].as_array().unwrap();
-    assert_eq!(fixtures.len(), 22);
+    assert_eq!(fixtures.len(), 23);
     assert_eq!(fixtures[0]["name"], "autotools");
     assert_eq!(fixtures[8]["name"], "desktop-integration");
-    assert_eq!(fixtures[12]["name"], "gettext-localization");
-    assert_eq!(fixtures[13]["name"], "header-only-library");
-    assert_eq!(fixtures[16]["name"], "multiple-sources");
-    assert_eq!(fixtures[18]["name"], "post-install-smoke-test");
-    assert_eq!(fixtures[20]["name"], "system-integration-assets");
-    assert_eq!(fixtures[21]["name"], "userspace-profile");
+    assert_eq!(fixtures[10]["name"], "font-family");
+    assert_eq!(fixtures[13]["name"], "gettext-localization");
+    assert_eq!(fixtures[14]["name"], "header-only-library");
+    assert_eq!(fixtures[17]["name"], "multiple-sources");
+    assert_eq!(fixtures[19]["name"], "post-install-smoke-test");
+    assert_eq!(fixtures[21]["name"], "system-integration-assets");
+    assert_eq!(fixtures[22]["name"], "userspace-profile");
     for fixture in fixtures {
         assert_eq!(fixture["plans"]["first"], fixture["plans"]["repeat"]);
         assert_eq!(

@@ -45,6 +45,7 @@
             pkgs.appstream
             pkgs.dash
             pkgs.desktop-file-utils
+            pkgs.fontconfig
             pkgs.gettext
             pkgs.glib
             pkgs.glibcLocales

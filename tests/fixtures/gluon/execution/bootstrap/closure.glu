@@ -54,23 +54,25 @@ let system_integration_assets_packages =
         (merge (package_slice 7 8)
         (merge (package_slice 9 11)
         (merge (package_slice 12 15)
-        (merge (package_slice 16 38)
-        (merge (package_slice 39 45)
-        (merge (package_slice 46 48)
-        (merge (package_slice 49 51)
-        (merge (package_slice 52 54)
-        (merge (package_slice 55 62)
-        (merge (package_slice 63 66)
-        (merge (package_slice 67 77)
-        (merge (package_slice 78 91)
-        (merge (package_slice 92 94)
-        (merge (package_slice 96 99)
-        (merge (package_slice 100 106)
-        (merge (package_slice 107 112)
-        (merge (package_slice 113 127)
-        (merge (package_slice 128 131)
-        (merge (package_slice 135 144)
-            (package_slice 145 146))))))))))))))))))))
+        (merge (package_slice 16 17)
+        (merge (package_slice 18 39)
+        (merge (package_slice 40 46)
+        (merge (package_slice 47 49)
+        (merge (package_slice 50 52)
+        (merge (package_slice 53 55)
+        (merge (package_slice 56 63)
+        (merge (package_slice 65 68)
+        (merge (package_slice 69 79)
+        (merge (package_slice 80 81)
+        (merge (package_slice 82 94)
+        (merge (package_slice 95 97)
+        (merge (package_slice 99 102)
+        (merge (package_slice 103 109)
+        (merge (package_slice 110 115)
+        (merge (package_slice 116 130)
+        (merge (package_slice 131 134)
+        (merge (package_slice 138 147)
+            (package_slice 148 149))))))))))))))))))))))
 
 {
     schema_version = 2,
@@ -86,6 +88,7 @@ let system_integration_assets_packages =
         { name = "daemon-generated", package_ids = package_sets.cmake },
         { name = "desktop-integration", package_ids = package_sets.desktop_integration },
         { name = "factory-override", package_ids = package_sets.cmake },
+        { name = "font-family", package_ids = package_sets.font_family },
         { name = "generated-config", package_ids = package_sets.generated_config },
         { name = "generated-shell", package_ids = package_sets.generated_config },
         { name = "gettext-localization", package_ids = package_sets.gettext_localization },
@@ -100,7 +103,7 @@ let system_integration_assets_packages =
         { name = "userspace-profile", package_ids = package_sets.userspace_profile },
     ],
     packages = {
-        total_download_bytes = 341660667,
+        total_download_bytes = 342384777,
         sha256 = package_sets.all,
     },
 }

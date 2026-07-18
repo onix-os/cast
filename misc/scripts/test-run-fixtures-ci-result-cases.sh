@@ -77,13 +77,26 @@ test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
 grep -Fq 'EMIT-THEN-FAIL' "$evidence/fixtures-ci.log"
 assert_bounded_inventory
 
+timeout_gate="$gates/timeout"
+timeout 10s rm -f "$timeout_gate.ready" "$timeout_gate.hold"
+timeout 10s mkfifo -m 600 "$timeout_gate.hold"
+tracked_gate_fifo="$timeout_gate.hold"
+tracked_gate_token=unexpected-release
 set +e
-run_wrapper timeout 1 >"$work/timeout.out" 2>&1
+FAKE_TIMEOUT_GATE="$timeout_gate" \
+    run_wrapper timeout 1 >"$work/timeout.out" 2>&1
 status=$?
 set -e
+tracked_gate_fifo=
+tracked_gate_token=
 test "$status" -eq 124
+require_receipt "$timeout_gate.ready" 'timeout blocker readiness'
 test ! -e "$evidence/fixtures-ci-proof.json"
-grep -Fq 'BEGIN-TIMEOUT' "$evidence/fixtures-ci.log"
+if ! timeout 10s grep -Fq 'BEGIN-TIMEOUT' "$evidence/fixtures-ci.log"; then
+    printf '%s\n' 'bounded timeout log did not retain its payload marker:' >&2
+    timeout 10s cat "$evidence/fixtures-ci.log" >&2
+    exit 1
+fi
 assert_bounded_inventory
 
 set +e
@@ -93,5 +106,9 @@ set -e
 test "$status" -eq 137
 test ! -e "$evidence/fixtures-ci-proof.json"
 test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
-grep -Fq 'BEGIN-IGNORE-TERM' "$evidence/fixtures-ci.log"
+if ! timeout 10s grep -Fq 'BEGIN-IGNORE-TERM' "$evidence/fixtures-ci.log"; then
+    printf '%s\n' 'bounded ignore-term log did not retain its payload marker:' >&2
+    timeout 10s cat "$evidence/fixtures-ci.log" >&2
+    exit 1
+fi
 assert_bounded_inventory

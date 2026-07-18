@@ -29,6 +29,7 @@ pub(super) fn assert_fixture_bundle(
                 | "daemon-generated"
                 | "desktop-integration"
                 | "factory-override"
+                | "font-family"
                 | "generated-config"
                 | "generated-shell"
                 | "gettext-localization"
@@ -72,7 +73,11 @@ pub(super) fn assert_fixture_bundle(
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>(),
-        ["MPL-2.0"]
+        if name == "font-family" {
+            ["OFL-1.1"]
+        } else {
+            ["MPL-2.0"]
+        }
     );
     assert!(planned.plan.analysis.debug, "{name}: fixtures exercise debug splitting");
     assert!(
@@ -107,6 +112,7 @@ pub(super) fn assert_fixture_bundle(
         "generated-config"
             | "generated-shell"
             | "desktop-integration"
+            | "font-family"
             | "gettext-localization"
             | "system-integration-assets"
             | "userspace-profile"
@@ -162,6 +168,8 @@ pub(super) fn assert_fixture_bundle(
         assert_gettext_localization_fixture(planned, &packages);
     } else if name == "desktop-integration" {
         assert_desktop_integration_fixture(planned, &packages);
+    } else if name == "font-family" {
+        assert_font_family_fixture(planned, &packages);
     } else if name == "system-integration-assets" {
         assert_system_integration_assets_fixture(planned, &packages);
     } else if name == "userspace-profile" {

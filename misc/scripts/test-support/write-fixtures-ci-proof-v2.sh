@@ -71,6 +71,7 @@ set -- \
     daemon-generated \
     desktop-integration \
     factory-override \
+    font-family \
     generated-config \
     generated-shell \
     gettext-localization \
@@ -92,7 +93,7 @@ stone_count_for_fixture() {
         header-only-library) stone_count=2 ;;
         daemon-generated|plugin-output) stone_count=3 ;;
         split) stone_count=5 ;;
-        desktop-integration|generated-config|generated-shell|gettext-localization|system-integration-assets|userspace-profile) stone_count=1 ;;
+        desktop-integration|font-family|generated-config|generated-shell|gettext-localization|system-integration-assets|userspace-profile) stone_count=1 ;;
         *) printf 'unknown test fixture proof fixture: %s\n' "$1" >&2; exit 1 ;;
     esac
 }
@@ -134,12 +135,12 @@ cat >>"$output" <<EOF_HEADER
   "required_execution": true,
   "bundle_ledger_schema": "cast.fixtures-ci.bundle.v1",
   "totals": {
-    "fixture_count": 22,
-    "execution_count": 44,
-    "bundle_validation_count": 66,
-    "stone_count": 127,
-    "manifest_count": 44,
-    "artifact_count": 171,
+    "fixture_count": 23,
+    "execution_count": 46,
+    "bundle_validation_count": 69,
+    "stone_count": 128,
+    "manifest_count": 46,
+    "artifact_count": 174,
     "artifact_bytes": $artifact_bytes
   },
   "fixtures": [
@@ -225,7 +226,7 @@ EOF_FIXTURE
       ]
     }
 EOF_ENTRIES
-    if [ "$fixture_number" -lt 22 ]; then
+    if [ "$fixture_number" -lt 23 ]; then
         printf '    ,\n' >>"$output"
     fi
     fixture_number=$((fixture_number + 1))
