@@ -325,6 +325,14 @@ let userspace_profile_packages = [
     "f9ca3142d2264f46d387e0af1136ec5f85d917ee1f0c7fb5c8ba08861d77dfa5"
 ]
 
+// The offline Go fixture extends the userspace baseline with exactly the
+// pinned Go compiler package at its canonical sorted position.
+let go_module_packages =
+    arrays.append (arrays.slice userspace_profile_packages 0 18)
+        (arrays.append
+            ["210231d9f3f937bf6190d7900ef197268dcc0b37b048d186661a84b5adf26c43"]
+            (arrays.slice userspace_profile_packages 18 70))
+
 
 {
     custom = custom_packages,
@@ -332,5 +340,6 @@ let userspace_profile_packages = [
     font_family = font_family_packages,
     generated_config = generated_config_packages,
     gettext_localization = gettext_localization_packages,
+    go_module = go_module_packages,
     userspace_profile = userspace_profile_packages,
 }

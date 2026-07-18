@@ -33,6 +33,7 @@ pub(super) fn assert_fixture_bundle(
                 | "generated-config"
                 | "generated-shell"
                 | "gettext-localization"
+                | "go-module"
                 | "header-only-library"
                 | "hooks-patch"
                 | "meson"
@@ -75,6 +76,8 @@ pub(super) fn assert_fixture_bundle(
             .collect::<Vec<_>>(),
         if name == "font-family" {
             ["OFL-1.1"]
+        } else if name == "go-module" {
+            ["MIT"]
         } else {
             ["MPL-2.0"]
         }
@@ -114,6 +117,7 @@ pub(super) fn assert_fixture_bundle(
             | "desktop-integration"
             | "font-family"
             | "gettext-localization"
+            | "go-module"
             | "system-integration-assets"
             | "userspace-profile"
     ) {
@@ -166,6 +170,8 @@ pub(super) fn assert_fixture_bundle(
         assert_generated_shell_fixture(planned, &packages);
     } else if name == "gettext-localization" {
         assert_gettext_localization_fixture(planned, &packages);
+    } else if name == "go-module" {
+        assert_go_module_fixture(planned, &packages);
     } else if name == "desktop-integration" {
         assert_desktop_integration_fixture(planned, &packages);
     } else if name == "font-family" {

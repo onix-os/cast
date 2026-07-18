@@ -1,0 +1,122 @@
+let b = import! cast.package.v3
+
+let bash = b.program.binary "bash"
+let go = b.program.binary "go"
+let install = b.program.binary "install"
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [],
+            script = r#"test -s go.mod
+test -s go.sum
+test -s vendor/modules.txt
+test -s vendor/fixtures.invalid/cast/go-message/message.go
+test ! -e go.work
+test ! -e vendor/fixtures.invalid/cast/go-message/go.mod
+replace_pattern='^[[:space:]]*replace([[:space:](]|$)'
+while IFS= read -r line; do
+    [[ ! $line =~ $replace_pattern ]] || exit 1
+done < go.mod"#,
+        },
+    ],
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [go],
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
+export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
+export GOENV=off
+export GOWORK=off
+export GOTOOLCHAIN=local
+export GOPROXY=off
+export GOSUMDB=off
+export GONOSUMDB='*'
+export GONOPROXY='*'
+export GOFLAGS=
+export GO111MODULE=on
+export CGO_ENABLED=0
+export GOOS=linux
+export GOARCH=amd64
+export GOAMD64=v1
+go build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cast-go-module-fixture ./cmd/cast-go-module-fixture"#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [go],
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
+export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
+export GOENV=off
+export GOWORK=off
+export GOTOOLCHAIN=local
+export GOPROXY=off
+export GOSUMDB=off
+export GONOSUMDB='*'
+export GONOPROXY='*'
+export GOFLAGS=
+export GO111MODULE=on
+export CGO_ENABLED=0
+export GOOS=linux
+export GOARCH=amd64
+export GOAMD64=v1
+go test -mod=vendor -trimpath -count=1 ./..."#,
+        },
+        b.step.run_built
+            (b.program.built "cast-go-module-fixture")
+            ["--self-test"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = bash,
+            declared_programs = [install],
+            script = r#"install -Dm755 cast-go-module-fixture "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-go-module-fixture"
+install -Dm644 LICENSE "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-go-module-fixture/LICENSE""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Pinned offline Go module fixture",
+    description = b.optional.set "A reproducible static Go executable built exclusively from an exact self-authored vendor tree.",
+    runtime_inputs = [],
+    paths = [
+        b.path.exe "/usr/bin/cast-go-module-fixture",
+        b.path.any "/usr/share/licenses/cast-go-module-fixture/LICENSE",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-go-module-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-go-module-fixture",
+    license = ["MIT"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "bash",
+        b.dep.binary "go",
+        b.dep.binary "install",
+    ],
+    outputs = [root],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-go-module-fixture-1.0.0.tar.zst",
+            hash = "f4c4eb74304956e3f3e650d2004c78a39c4d4c009e447b9c28b3819370dbc78f",
+            rename = b.optional.set "cast-go-module-fixture.tar.zst",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-go-module-fixture",
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

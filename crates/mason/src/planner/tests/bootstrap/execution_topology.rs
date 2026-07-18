@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 23] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 24] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -13,6 +13,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 23] = [
     "generated-config",
     "generated-shell",
     "gettext-localization",
+    "go-module",
     "header-only-library",
     "hooks-patch",
     "meson",
@@ -53,6 +54,12 @@ mod gettext_localization_topology {
     use super::*;
 
     include!("execution_topology/gettext_localization.rs");
+}
+
+mod go_module_topology {
+    use super::*;
+
+    include!("execution_topology/go_module.rs");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +521,7 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
         "desktop-integration" => desktop_integration_topology::expected(),
         "font-family" => font_family_topology::expected(),
         "gettext-localization" => gettext_localization_topology::expected(&job.work_dir),
+        "go-module" => go_module_topology::expected(&job.work_dir),
         "system-integration-assets" => system_integration_assets_topology::expected(),
         "cargo" | "cargo-features" | "cargo-vendored" => vec![
             prepare(match name {
@@ -757,6 +765,9 @@ fi
     }
     if name == "gettext-localization" {
         gettext_localization_topology::assert_contract(plan, job);
+    }
+    if name == "go-module" {
+        go_module_topology::assert_contract(plan, job);
     }
     if name == "system-integration-assets" {
         system_integration_assets_topology::assert_contract(plan, job);

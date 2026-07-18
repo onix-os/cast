@@ -421,4 +421,5 @@ include!("bundle/tracked_sources.rs");
 include!("bundle/desktop_integration.rs");
 include!("bundle/font_family.rs");
 include!("bundle/gettext_localization.rs");
+include!("bundle/go_module.rs");
 include!("bundle/system_integration_assets.rs");

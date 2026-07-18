@@ -33,6 +33,7 @@
             })
             pkgs.git
             pkgs.gcc
+            pkgs.go
             pkgs.gzip
             pkgs.gnumake
             pkgs.jq

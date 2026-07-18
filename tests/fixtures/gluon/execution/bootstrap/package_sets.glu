@@ -14,6 +14,7 @@ let tooling = import! "./tooling_package_sets.glu"
     font_family = specialized.font_family,
     generated_config = specialized.generated_config,
     gettext_localization = specialized.gettext_localization,
+    go_module = specialized.go_module,
     hooks_patch = tooling.hooks_patch,
     meson = tooling.meson,
     multiple_sources = build_systems.multiple_sources,

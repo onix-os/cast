@@ -173,6 +173,7 @@ pub(super) fn expected_stones(fixture: &str) -> u64 {
         | "desktop-integration"
         | "font-family"
         | "gettext-localization"
+        | "go-module"
         | "system-integration-assets"
         | "userspace-profile" => 1,
         _ => panic!("unknown execution fixture in proof inventory: {fixture:?}"),

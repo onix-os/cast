@@ -136,7 +136,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 23] = [
+const EXECUTION_FIXTURES: [&str; 24] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -151,6 +151,7 @@ const EXECUTION_FIXTURES: [&str; 23] = [
     "generated-config",
     "generated-shell",
     "gettext-localization",
+    "go-module",
     "header-only-library",
     "hooks-patch",
     "meson",
@@ -162,7 +163,7 @@ const EXECUTION_FIXTURES: [&str; 23] = [
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 22] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 23] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -177,6 +178,7 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 22] = [
     "generated-config",
     "generated-shell",
     "gettext-localization",
+    "go-module",
     "header-only-library",
     "hooks-patch",
     "meson",
@@ -232,6 +234,7 @@ include!("tests/execution_desktop_integration.rs");
 include!("tests/execution_external_patch.rs");
 include!("tests/execution_font_family.rs");
 include!("tests/execution_gettext_localization.rs");
+include!("tests/execution_go_module.rs");
 include!("tests/execution_header_only_library.rs");
 include!("tests/execution_meson_dependency_roles.rs");
 include!("tests/execution_multiple_sources.rs");

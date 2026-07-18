@@ -58,6 +58,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-factory-override-fixture-1.0.0",
             "cast-font-family-fixture-1.0.0",
             "cast-gettext-localization-fixture-1.0.0",
+            "cast-go-module-fixture-1.0.0",
             "cast-header-only-library-fixture-1.0.0",
             "cast-hooks-fixture-1.0.0",
             "cast-meson-fixture-1.0.0",
@@ -136,6 +137,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             assert_gettext_fixture_contract(
                 &recipe.declaration,
                 &source_trees.join("cast-gettext-localization-fixture-1.0.0"),
+            );
+        }
+        if name == "go-module" {
+            assert_go_module_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-go-module-fixture-1.0.0"),
             );
         }
         if name == "meson" {
@@ -704,8 +711,13 @@ install -Dm644 build/cast-plugin-output.so \
                 archive_format_counts[2] += 1;
                 Box::new(xz2::read::XzDecoder::new(primary_bytes.as_slice()))
             }
-            "daemon-generated" => {
-                assert_eq!(primary_filename, "cast-daemon-fixture-1.0.0.tar.zst");
+            "daemon-generated" | "go-module" => {
+                let expected = if name == "daemon-generated" {
+                    "cast-daemon-fixture-1.0.0.tar.zst"
+                } else {
+                    "cast-go-module-fixture-1.0.0.tar.zst"
+                };
+                assert_eq!(primary_filename, expected);
                 assert!(
                     primary_bytes.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]),
                     "{name}: missing Zstandard magic"
@@ -738,7 +750,7 @@ install -Dm644 build/cast-plugin-output.so \
             "{name}: decoded fixture is not a USTAR archive"
         );
         // Exercise the same structural two-pass extractor and atomic
-        // publication path used by a real build. In particular, the three
+        // publication path used by a real build. In particular, the four
         // compressed fixtures must not be accepted on filename or magic alone.
         let build = temporary.path().join("extracted").join(name);
         fs::create_dir_all(&build).unwrap();
@@ -819,6 +831,12 @@ install -Dm644 build/cast-plugin-output.so \
                 &published,
             );
         }
+        if name == "go-module" {
+            assert_go_module_archive_matches_tracked_sources(
+                &source_trees.join("cast-go-module-fixture-1.0.0"),
+                &published,
+            );
+        }
         if name == "system-integration-assets" {
             assert_system_integration_assets_archive_matches_tracked_sources(
                 &source_trees.join("cast-system-integration-assets-fixture-1.0.0"),
@@ -844,12 +862,12 @@ install -Dm644 build/cast-plugin-output.so \
         .map(|entry| entry.file_name().into_string().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(present_git_bundles, admitted_git_bundles, "orphaned execution Git bundle");
-    assert_eq!(locked_source_count, 23, "locked execution source inventory drift");
+    assert_eq!(locked_source_count, 24, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
-        [16, 1, 2, 1],
-        "execution fixtures must cover sixteen plain tar streams, two XZ, one gzip, and one Zstandard"
+        [16, 1, 2, 2],
+        "execution fixtures must cover sixteen plain tar streams, two XZ, one gzip, and two Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 20, "execution source inventory drift");
+    assert_eq!(sourceful_fixtures, 21, "execution source inventory drift");
     assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
 }

@@ -56,7 +56,7 @@ for entry in "$package_root"/*; do
     }
     fixture=$(basename "$entry")
     case "$fixture" in
-        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|factory-override|font-family|generated-config|generated-shell|gettext-localization|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|split|system-integration-assets) ;;
+        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|split|system-integration-assets) ;;
         *) printf 'unexpected execution fixture package: %s\n' "$entry" >&2; exit 1 ;;
     esac
     test -f "$entry/stone.glu" && test ! -L "$entry/stone.glu" || {
@@ -78,8 +78,8 @@ for entry in "$package_root"/*; do
     package_count=$((package_count + 1))
 done
 
-test "$package_count" -eq 22 || {
-    printf 'expected exactly twenty-two source-matrix package directories, found %s\n' "$package_count" >&2
+test "$package_count" -eq 23 || {
+    printf 'expected exactly twenty-three source-matrix package directories, found %s\n' "$package_count" >&2
     exit 1
 }
 test "$source_less_count" -eq 2 || {
@@ -124,6 +124,7 @@ for entry in "$source_root"/*; do
         cast-factory-override-fixture-1.0.0|\
         cast-font-family-fixture-1.0.0|\
         cast-gettext-localization-fixture-1.0.0|\
+        cast-go-module-fixture-1.0.0|\
         cast-header-only-library-fixture-1.0.0|\
         cast-hooks-fixture-1.0.0|\
         cast-meson-fixture-1.0.0|\
@@ -137,8 +138,8 @@ for entry in "$source_root"/*; do
     source_tree_count=$((source_tree_count + 1))
 done
 
-test "$source_tree_count" -eq 20 || {
-    printf 'expected exactly twenty archive-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
+test "$source_tree_count" -eq 21 || {
+    printf 'expected exactly twenty-one archive-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
     exit 1
 }
 
@@ -196,6 +197,7 @@ for fixture in \
     cast-factory-override-fixture-1.0.0 \
     cast-font-family-fixture-1.0.0 \
     cast-gettext-localization-fixture-1.0.0 \
+    cast-go-module-fixture-1.0.0 \
     cast-header-only-library-fixture-1.0.0 \
     cast-hooks-fixture-1.0.0 \
     cast-meson-fixture-1.0.0 \
@@ -215,7 +217,7 @@ do
             suffix=tar.xz
             compression=xz
             ;;
-        cast-daemon-fixture-1.0.0)
+        cast-daemon-fixture-1.0.0|cast-go-module-fixture-1.0.0)
             suffix=tar.zst
             compression=zstd
             ;;
@@ -460,6 +462,7 @@ for entry in "$archive_root"/*; do
         cast-factory-override-fixture-1.0.0.tar|\
         cast-font-family-fixture-1.0.0.tar|\
         cast-gettext-localization-fixture-1.0.0.tar|\
+        cast-go-module-fixture-1.0.0.tar.zst|\
         cast-header-only-library-fixture-1.0.0.tar|\
         cast-hooks-fixture-1.0.0.tar.xz|\
         cast-hooks-fixture-1.0.0-pre-setup.patch|\
@@ -475,8 +478,8 @@ for entry in "$archive_root"/*; do
     count=$((count + 1))
 done
 
-test "$count" -eq 22 || {
-    printf 'expected exactly twenty-two archive/raw execution fixture artifacts, found %s\n' "$count" >&2
+test "$count" -eq 23 || {
+    printf 'expected exactly twenty-three archive/raw execution fixture artifacts, found %s\n' "$count" >&2
     exit 1
 }
 

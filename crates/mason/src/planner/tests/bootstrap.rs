@@ -39,6 +39,7 @@ include!("bootstrap/cmake_zlib.rs");
 include!("bootstrap/desktop_integration.rs");
 include!("bootstrap/font_family.rs");
 include!("bootstrap/gettext_localization.rs");
+include!("bootstrap/go_module.rs");
 include!("bootstrap/meson_dependency_roles.rs");
 include!("bootstrap/system_integration_assets.rs");
 
@@ -519,6 +520,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     assert_desktop_integration_bootstrap_contract(&closure, &indexed);
     assert_font_family_bootstrap_contract(&closure, &indexed);
     assert_gettext_localization_bootstrap_contract(&closure, &indexed);
+    assert_go_module_bootstrap_contract(&closure, &indexed);
     assert_meson_dependency_role_bootstrap_contract(&closure, &indexed);
     assert_system_integration_assets_bootstrap_contract(&closure, &indexed);
 
@@ -564,8 +566,8 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     );
 
     for required in [
-        "autoconf", "automake", "clang", "cmake", "dash", "make", "meson", "ninja", "patch", "pkgconf", "python",
-        "rust",
+        "autoconf", "automake", "clang", "cmake", "dash", "golang", "make", "meson", "ninja", "patch", "pkgconf",
+        "python", "rust",
     ] {
         assert!(
             names.contains(required),
