@@ -91,7 +91,7 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Twenty-three separate fixtures cover representative package shapes. Twenty contain
+Twenty-four separate fixtures cover representative package shapes. Twenty-one contain
 small, real source trees for Autotools, configured Autotools with an
 intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
@@ -99,8 +99,9 @@ generated daemon assets, Gluon factory/override composition, a runtime-loaded
 plugin with an explicit output relation, a staged post-install smoke test, and
 an independently compiled staged header-only interface, native split-output
 builds, one mixed archive, exact-commit Git, and raw-file build, compiled
-gettext localization, declarative system-integration assets, and declarative
-desktop integration, plus a deterministic font family. The
+gettext localization, declarative system-integration assets, declarative
+desktop integration, a deterministic font family, and a pinned vendored Go
+module. The
 patch-hook case now binds two independent sources: a deterministic XZ USTAR
 archive and a raw HTTPS-identified patch. Only the archive is extracted; the
 declared pre-setup patch program consumes the separately materialized bytes.
@@ -178,6 +179,18 @@ provenance, and every generated font cache remain outside the Stone. The exact
 closure is 63 packages and 213,892,544 bytes with no runtime relation. The
 supplemental hostile-host scan proves deterministic bytes and metadata, not
 font-cache activation, graphical rendering, deployment, or rollback.
+The `go-module` fixture builds a real command from a self-authored module and
+its authentic checked-in vendor tree. Its typed custom builder disables the
+network, module proxy, checksum database, workspace discovery, toolchain
+downloads, CGO, and ambient Go configuration; it selects the frozen local
+toolchain and requires `-mod=vendor`. Both Go tests and the installed command's
+self-test run before publication. The resulting one-output Stone contains the
+exact static ELF plus its MIT license, carries no runtime dependency, and must
+not retain module sources or vendor contents. Its exact 71-package closure is
+the userspace baseline plus the single pinned Go compiler package. The
+supplemental hostile-host lane proves two clean offline builds are
+byte-identical and that deleting the vendor tree fails; it is not delegated
+Stone execution evidence.
 The other three fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no
@@ -191,12 +204,13 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has twenty deterministic tar streams: sixteen
+The checked-in source matrix has twenty-one deterministic tar streams: sixteen
 plain USTAR archives, vendored Cargo as deterministic gzip, two deterministic
-XZ archives, and the generated-daemon fixture as deterministic Zstandard. It
+XZ archives, and the generated-daemon and Go fixtures as deterministic
+Zstandard. It
 also contains two independently locked raw files and one deterministic Git
 bundle.
-`make fixture-sources` rebuilds all twenty-two archive/raw artifacts plus that one
+`make fixture-sources` rebuilds all twenty-three archive/raw artifacts plus that one
 bundle; the offline lane rejects any format, filename, order, unpack policy,
 commit, normalized Git tree, or digest drift. The source generator fixes Git's
 identity, timestamps, refs, and configuration before producing the bundle.
@@ -211,24 +225,26 @@ make bootstrap-fixtures FIXTURE=cmake
 make bootstrap-fixtures FIXTURE=desktop-integration
 make bootstrap-fixtures FIXTURE=font-family
 make bootstrap-fixtures FIXTURE=gettext-localization
+make bootstrap-fixtures FIXTURE=go-module
 make bootstrap-fixtures FIXTURE=multiple-sources
 make bootstrap-fixtures FIXTURE=system-integration-assets
 make delegated-execution-fixtures FIXTURE=cmake
 make font-family-fixture-test
+make go-module-fixture-test
 make fixtures-ci
 ```
 
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
 source artifacts, validates the pinned Stone index and closure declaration, and
 proves that each recipe resolves to its own exact, sorted package-ID closure
-and that their union is the exact 150-package, 342,384,777-byte aggregate
+and that their union is the exact 151-package, 377,615,920-byte aggregate
 bootstrap closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
 materializes the production-format root mirror, then attempts to build,
 package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
 one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `desktop-integration`, `factory-override`, `font-family`,
-`generated-config`, `generated-shell`, `gettext-localization`, `header-only-library`, `hooks-patch`,
+`generated-config`, `generated-shell`, `gettext-localization`, `go-module`, `header-only-library`, `hooks-patch`,
 `meson`, `multiple-sources`, `plugin-output`,
 `post-install-smoke-test`, `split`, `system-integration-assets`, or
 `userspace-profile`;
@@ -239,7 +255,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all twenty-three, and always requires execution.
+selection, runs all twenty-four, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -273,8 +289,8 @@ content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all twenty-three fixtures complete both executions. It records exactly 46
-executions, 69 bundle validations, 128 Stones, 46 manifests, and 174 artifacts,
+all twenty-four fixtures complete both executions. It records exactly 48
+executions, 72 bundle validations, 129 Stones, 48 manifests, and 177 artifacts,
 plus repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle
