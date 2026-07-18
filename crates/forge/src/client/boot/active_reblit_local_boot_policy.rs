@@ -249,7 +249,7 @@ impl PreparedActiveReblitLocalBootPolicy {
 
 impl RevalidatedActiveReblitLocalBootPolicy<'_> {
     pub(in crate::client) fn is_absent(&self) -> bool {
-        self.policy.is_absent()
+        self.policy.location.is_absent()
     }
 
     pub(in crate::client) fn entries(&self) -> impl ExactSizeIterator<Item = BoundActiveReblitLocalCmdlineEntry<'_>> {
