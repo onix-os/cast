@@ -1,14 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt},
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt, symlink},
     path::{Path, PathBuf},
     time::Duration,
 };
 
 use forge::package::Meta;
 use fs_err as fs;
-use gluon_config::{Evaluator, ImportPolicy, Source};
+use gluon_config::{DiagnosticCategory, Evaluator, ImportPolicy, LimitKind, Limits, SourceRoot};
 use sha2::{Digest, Sha256};
 use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType};
 use url::Url;
@@ -27,6 +27,8 @@ mod execution_evidence;
 pub(crate) use execution_evidence::DelegatedExecutionOutcome;
 
 const BOOTSTRAP_SCHEMA_VERSION: i64 = 2;
+const MAX_BOOTSTRAP_GLUON_MODULE_BYTES: usize = 64 * 1024;
+const MAX_BOOTSTRAP_GLUON_IMPORT_GRAPH_BYTES: usize = 4 * MAX_BOOTSTRAP_GLUON_MODULE_BYTES;
 const MAX_BOOTSTRAP_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_BOOTSTRAP_PACKAGE_COUNT: usize = 512;
 const MAX_BOOTSTRAP_DOWNLOAD_BYTES: u64 = 512 * 1024 * 1024;
@@ -221,25 +223,125 @@ fn package_store() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/bootstrap-fixtures/packages"))
 }
 
-fn load_bootstrap_closure() -> BootstrapClosure {
-    let path = bootstrap_root().join("closure.glu");
-    let metadata = std::fs::symlink_metadata(&path).unwrap();
-    assert!(
-        metadata.file_type().is_file(),
-        "bootstrap closure must be a regular file"
-    );
-    assert!(
-        metadata.len() <= 64 * 1024,
-        "bootstrap closure exceeds its test boundary"
-    );
-    let source = std::fs::read_to_string(&path).unwrap();
+fn bootstrap_closure_evaluator(source_root: SourceRoot) -> Evaluator {
     let mut import_policy = ImportPolicy::new();
     import_policy.enable_array_primitives();
-    Evaluator::default()
+    let limits = Limits {
+        max_source_bytes: MAX_BOOTSTRAP_GLUON_MODULE_BYTES,
+        max_imported_file_bytes: MAX_BOOTSTRAP_GLUON_MODULE_BYTES,
+        max_imports: 16,
+        max_import_graph_bytes: MAX_BOOTSTRAP_GLUON_IMPORT_GRAPH_BYTES,
+        ..Limits::default()
+    };
+    Evaluator::new(limits)
+        .with_source_root(source_root)
         .with_import_policy(import_policy)
-        .evaluate::<BootstrapClosure>(&Source::new("bootstrap/closure.glu", &source))
+}
+
+fn evaluate_bootstrap_closure() -> gluon_config::Evaluation<BootstrapClosure> {
+    let source_root = SourceRoot::new(bootstrap_root()).unwrap();
+    bootstrap_closure_evaluator(source_root)
+        .evaluate_file::<BootstrapClosure>("closure.glu")
         .unwrap()
-        .value
+}
+
+fn load_bootstrap_closure() -> BootstrapClosure {
+    evaluate_bootstrap_closure().value
+}
+
+#[test]
+fn bootstrap_closure_fingerprints_every_functional_data_module() {
+    let evaluation = evaluate_bootstrap_closure();
+    evaluation.fingerprint.validate().unwrap();
+    let imported = evaluation
+        .fingerprint
+        .imported_modules
+        .iter()
+        .map(|module| module.logical_name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        imported,
+        [
+            "aggregate_package_ids.glu",
+            "build_system_package_sets.glu",
+            "package_sets.glu",
+            "specialized_package_sets.glu",
+            "std.array.prim",
+            "tooling_package_sets.glu",
+        ]
+    );
+}
+
+#[test]
+fn bootstrap_closure_imports_cannot_escape_the_descriptor_root() {
+    let root = crate::private_tempdir();
+    let source_root = root.path().join("bootstrap");
+    fs::create_dir(&source_root).unwrap();
+    fs::write(root.path().join("outside.glu"), "42").unwrap();
+    fs::write(source_root.join("closure.glu"), "import! \"../outside.glu\"").unwrap();
+
+    let error = bootstrap_closure_evaluator(SourceRoot::new(&source_root).unwrap())
+        .evaluate_file::<i64>("closure.glu")
+        .unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert!(error.message.contains("parent traversal"));
+}
+
+#[test]
+fn bootstrap_closure_imports_reject_symlinks_and_oversized_modules() {
+    let root = crate::private_tempdir();
+    let source_root = root.path().join("bootstrap");
+    fs::create_dir(&source_root).unwrap();
+    fs::write(source_root.join("closure.glu"), "import! \"./package_sets.glu\"").unwrap();
+    fs::write(root.path().join("outside.glu"), "42").unwrap();
+    symlink("../outside.glu", source_root.join("package_sets.glu")).unwrap();
+    let evaluator = bootstrap_closure_evaluator(SourceRoot::new(&source_root).unwrap());
+
+    let symlink_error = evaluator.evaluate_file::<i64>("closure.glu").unwrap_err();
+    assert_eq!(symlink_error.category, DiagnosticCategory::Import);
+    assert!(symlink_error.message.contains("symbolic links"));
+
+    fs::remove_file(source_root.join("package_sets.glu")).unwrap();
+    fs::write(
+        source_root.join("package_sets.glu"),
+        vec![b' '; MAX_BOOTSTRAP_GLUON_MODULE_BYTES + 1],
+    )
+    .unwrap();
+    let size_error = evaluator.evaluate_file::<i64>("closure.glu").unwrap_err();
+    assert_eq!(size_error.category, DiagnosticCategory::Limit);
+    assert_eq!(size_error.limit, Some(LimitKind::ImportedFileSize));
+}
+
+#[test]
+fn bootstrap_closure_import_graph_has_an_explicit_total_byte_boundary() {
+    let root = crate::private_tempdir();
+    let source_root = root.path().join("bootstrap");
+    fs::create_dir(&source_root).unwrap();
+    let module_bytes = MAX_BOOTSTRAP_GLUON_MODULE_BYTES - 1024;
+    let module_source = format!("\"{}\"", "x".repeat(module_bytes - 2));
+    for name in ["one", "two", "three", "four", "five"] {
+        fs::write(source_root.join(format!("{name}.glu")), &module_source).unwrap();
+    }
+    fs::write(
+        source_root.join("closure.glu"),
+        concat!(
+            "let _ = import! \"./one.glu\"\n",
+            "let _ = import! \"./two.glu\"\n",
+            "let _ = import! \"./three.glu\"\n",
+            "let _ = import! \"./four.glu\"\n",
+            "let _ = import! \"./five.glu\"\n",
+            "0\n",
+        ),
+    )
+    .unwrap();
+
+    let error = bootstrap_closure_evaluator(SourceRoot::new(&source_root).unwrap())
+        .evaluate_file::<i64>("closure.glu")
+        .unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ImportGraphSize));
 }
 
 fn validate_sha256(value: &str, field: &str) {

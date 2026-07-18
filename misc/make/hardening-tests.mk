@@ -695,7 +695,7 @@ mason-planner-bootstrap-test:
 		'/^planner::hermetic_tests::bootstrap::.*: test$$/ && \
 		 !/^planner::hermetic_tests::bootstrap::execution_evidence::tests::/ \
 		 { count += 1 } END { print count + 0 }' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 11; \
+	timeout 10s test "$$count" = 15; \
 	timeout 1200s $(CARGO) test -p mason --lib \
 		"planner::hermetic_tests::bootstrap::" -- \
 		--skip "planner::hermetic_tests::bootstrap::execution_evidence::tests::" \
