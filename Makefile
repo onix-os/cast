@@ -26,6 +26,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 .DEFAULT_GOAL := cast
 
 include misc/make/hardening-tests.mk
+include misc/make/host-storage-safety-tests.mk
 include misc/make/linux-mountinfo-parser-tests.mk
 include misc/make/linux-sysfs-block-parser-tests.mk
 include misc/make/draft-hardening-tests.mk
@@ -165,7 +166,7 @@ source-loc-test:
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
 # separately by harness-free container and delegated Mason integration targets.
-test: lint config-formats-test examples-gate-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test
+test: host-storage-safety-test lint config-formats-test examples-gate-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
 
@@ -879,7 +880,7 @@ fixtures-ci: execution-fixtures
 	@$(MAKE) --no-print-directory bootstrap-fixtures-prepare
 	@$(MAKE) --no-print-directory bootstrap-fixtures-offline REQUIRE_EXECUTION=1 FIXTURE=all
 
-check:
+check: host-storage-safety-test
 	@$(CARGO) check --workspace --all-targets
 	@$(CARGO) check -p mason --features cache-clean-test-support \
 		--test cache_clean
