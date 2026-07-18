@@ -7,6 +7,7 @@ use std::{
 use crate::{Installation, db, transition_journal::Phase};
 
 use super::{
+    MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
     active_state_snapshot::ActiveStateReservation,
     startup_gate::{self, CleanSystemStartup},
 };
@@ -19,8 +20,14 @@ pub(crate) fn assert_usr_exchange_intent_post_recovers_to_pending_reverse(
     state_db: &db::state::Database,
     layout_db: &db::layout::Database,
 ) {
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_db.clone(),
+        layout_db.clone(),
+    );
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
+    let error = match CleanSystemStartup::enter(&system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved forward-exchange residue"),
         Err(error) => error,
     };
@@ -43,8 +50,14 @@ pub(crate) fn assert_usr_rollback_decision_routes_to_reverse_exchange_intent(
     state_db: &db::state::Database,
     layout_db: &db::layout::Database,
 ) {
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_db.clone(),
+        layout_db.clone(),
+    );
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
+    let error = match CleanSystemStartup::enter(&system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted a decided /usr rollback"),
         Err(error) => error,
     };
@@ -67,8 +80,14 @@ pub(crate) fn assert_reverse_exchange_intent_recovers_to_usr_restored(
     state_db: &db::state::Database,
     layout_db: &db::layout::Database,
 ) {
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_db.clone(),
+        layout_db.clone(),
+    );
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
+    let error = match CleanSystemStartup::enter(&system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unfinished /usr rollback"),
         Err(error) => error,
     };
@@ -91,8 +110,14 @@ pub(crate) fn assert_usr_restored_routes_to_candidate_preserve_intent(
     state_db: &db::state::Database,
     layout_db: &db::layout::Database,
 ) {
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_db.clone(),
+        layout_db.clone(),
+    );
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, state_db, layout_db, &reservation) {
+    let error = match CleanSystemStartup::enter(&system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unfinished candidate rollback"),
         Err(error) => error,
     };

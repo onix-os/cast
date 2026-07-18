@@ -19,7 +19,8 @@ use crate::{
 };
 
 use super::super::{
-    ActiveReblitReplacementMutationAuthorityProvider, active_state_snapshot::ActiveStateReservation, startup_gate,
+    ActiveReblitReplacementMutationAuthorityProvider, MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
+    active_state_snapshot::ActiveStateReservation, startup_gate,
 };
 
 const RECORD_TRANSITION: &str = "0123456789abcdef0123456789abcdef";
@@ -27,9 +28,7 @@ const FOREIGN_TRANSITION: &str = "fedcba9876543210fedcba9876543210";
 
 struct Fixture {
     _temporary: tempfile::TempDir,
-    installation: Installation,
-    state_db: db::state::Database,
-    layout_db: db::layout::Database,
+    system: MutableSystemCapabilities,
     record: TransitionRecord,
     replacement: PathBuf,
 }
@@ -39,12 +38,7 @@ fn compatible_database_and_active_selection_admit_restrictive_replacement_repair
     let fixture = Fixture::new(false, false);
     let reservation = ActiveStateReservation::acquire().unwrap();
 
-    let result = startup_gate::CleanSystemStartup::enter(
-        &fixture.installation,
-        &fixture.state_db,
-        &fixture.layout_db,
-        &reservation,
-    );
+    let result = startup_gate::CleanSystemStartup::enter(&fixture.system, &reservation);
 
     assert!(matches!(result, Err(startup_gate::Error::RecoveryPending(_))));
     assert_eq!(mode(&fixture.replacement), 0o700);
@@ -55,15 +49,10 @@ fn foreign_in_flight_database_ownership_causes_zero_replacement_chmod() {
     let fixture = Fixture::new(false, true);
     write_replacement_payload(&fixture.replacement, b"database-conflict");
     let before = exact_witness(&fixture.replacement);
-    let in_flight_before = fixture.state_db.audit_in_flight_transition().unwrap();
+    let in_flight_before = fixture.state_db().audit_in_flight_transition().unwrap();
     let reservation = ActiveStateReservation::acquire().unwrap();
 
-    let result = startup_gate::CleanSystemStartup::enter(
-        &fixture.installation,
-        &fixture.state_db,
-        &fixture.layout_db,
-        &reservation,
-    );
+    let result = startup_gate::CleanSystemStartup::enter(&fixture.system, &reservation);
 
     assert!(matches!(
         result,
@@ -76,7 +65,10 @@ fn foreign_in_flight_database_ownership_causes_zero_replacement_chmod() {
         fs::read(fixture.replacement.join("sentinel")).unwrap(),
         b"database-conflict"
     );
-    assert_eq!(fixture.state_db.audit_in_flight_transition().unwrap(), in_flight_before);
+    assert_eq!(
+        fixture.state_db().audit_in_flight_transition().unwrap(),
+        in_flight_before
+    );
 }
 
 #[test]
@@ -84,15 +76,10 @@ fn stale_active_selection_causes_zero_replacement_chmod() {
     let fixture = Fixture::new(true, false);
     write_replacement_payload(&fixture.replacement, b"stale-active");
     let before = exact_witness(&fixture.replacement);
-    assert_eq!(fixture.installation.active_state, None);
+    assert_eq!(fixture.installation().active_state, None);
     let reservation = ActiveStateReservation::acquire().unwrap();
 
-    let result = startup_gate::CleanSystemStartup::enter(
-        &fixture.installation,
-        &fixture.state_db,
-        &fixture.layout_db,
-        &reservation,
-    );
+    let result = startup_gate::CleanSystemStartup::enter(&fixture.system, &reservation);
 
     assert!(matches!(
         result,
@@ -102,7 +89,7 @@ fn stale_active_selection_causes_zero_replacement_chmod() {
     ));
     assert_eq!(exact_witness(&fixture.replacement), before);
     assert_eq!(fs::read(fixture.replacement.join("sentinel")).unwrap(), b"stale-active");
-    assert_eq!(fixture.state_db.audit_in_flight_transition().unwrap(), None);
+    assert_eq!(fixture.state_db().audit_in_flight_transition().unwrap(), None);
 }
 
 #[test]
@@ -117,7 +104,7 @@ fn mismatched_record_cannot_reuse_replacement_mutation_authority() {
     mismatched_record.generation += 1;
 
     let result = recover_active_reblit_replacement_residue_with_explicit_context_for_test(
-        &fixture.installation,
+        fixture.installation(),
         &journal,
         &mismatched_record,
         &mut provider,
@@ -148,7 +135,7 @@ fn mismatched_installation_cannot_reuse_replacement_mutation_authority() {
     let mut provider = mutation_authority_provider(&fixture, &journal, &reservation);
 
     let result = recover_active_reblit_replacement_residue_with_explicit_context_for_test(
-        &other.installation,
+        other.installation(),
         &journal,
         &fixture.record,
         &mut provider,
@@ -248,19 +235,32 @@ impl Fixture {
         fs::create_dir(&replacement).unwrap();
         fs::set_permissions(&replacement, fs::Permissions::from_mode(0o500)).unwrap();
 
-        Self {
-            _temporary: temporary,
+        let system = MutableSystemCapabilities::from_test_parts(
+            &MutableSystemCapabilitiesTestSeal::new(),
             installation,
             state_db,
             layout_db,
+        );
+        Self {
+            _temporary: temporary,
+            system,
             record,
             replacement,
         }
     }
+
+    fn installation(&self) -> &Installation {
+        self.system.installation()
+    }
+
+    fn state_db(&self) -> &db::state::Database {
+        self.system.state_db()
+    }
 }
 
 fn retained_journal(fixture: &Fixture) -> TransitionJournalStore {
-    TransitionJournalStore::open_retained(fixture.installation.root_directory(), &fixture.installation.root).unwrap()
+    TransitionJournalStore::open_retained(fixture.installation().root_directory(), &fixture.installation().root)
+        .unwrap()
 }
 
 fn mutation_authority_provider<'authority>(
@@ -269,12 +269,12 @@ fn mutation_authority_provider<'authority>(
     reservation: &'authority ActiveStateReservation,
 ) -> ActiveReblitReplacementMutationAuthorityProvider<'authority> {
     ActiveReblitReplacementMutationAuthorityProvider::new_for_test(
-        &fixture.installation,
+        fixture.installation(),
         journal,
-        &fixture.state_db,
+        fixture.state_db(),
         reservation,
         &fixture.record,
-        fixture.state_db.audit_in_flight_transition().unwrap(),
+        fixture.state_db().audit_in_flight_transition().unwrap(),
     )
 }
 

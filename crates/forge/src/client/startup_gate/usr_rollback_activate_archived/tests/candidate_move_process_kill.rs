@@ -14,6 +14,7 @@ use std::{
 use crate::{
     Installation, State,
     client::{
+        MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
         active_state_snapshot::ActiveStateReservation,
         snapshot_startup_recovery_namespace,
         startup_gate::{self, CleanSystemStartup},
@@ -490,20 +491,20 @@ fn run_child(case: ChildCase) {
     assert_eq!(installation.root, case.root);
     let database = open_state_database(&installation);
     let layout_database = open_layout_database(&installation);
-    ExistingCandidateDatabase::capture(&database, &source);
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation,
+        database,
+        layout_database,
+    );
+    ExistingCandidateDatabase::capture(system.state_db(), &source);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &layout_database, &source),
-        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &layout_database, &source),
+        ProcessRole::Crash => run_crash_child(&case, &system, &source),
+        ProcessRole::Recover => run_recovery_child(&case, &system, &source),
     }
 }
 
-fn run_crash_child(
-    case: &ChildCase,
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-    source: &TransitionRecord,
-) {
+fn run_crash_child(case: &ChildCase, system: &MutableSystemCapabilities, source: &TransitionRecord) {
     assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *source);
     assert_journal_inventory(&case.root);
     assert_staged_topology(&case.root, source);
@@ -514,7 +515,7 @@ fn run_crash_child(
     case.boundary.arm(kill_after_real_candidate_move);
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let result = CleanSystemStartup::enter(installation, database, layout_database, &reservation);
+    let result = CleanSystemStartup::enter(system, &reservation);
     panic!(
         "crash child escaped ActivateArchived post-move boundary with startup success={} error={:?}",
         result.is_ok(),
@@ -522,13 +523,9 @@ fn run_crash_child(
     );
 }
 
-fn run_recovery_child(
-    case: &ChildCase,
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-    source: &TransitionRecord,
-) {
+fn run_recovery_child(case: &ChildCase, system: &MutableSystemCapabilities, source: &TransitionRecord) {
+    let installation = system.installation();
+    let database = system.state_db();
     assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *source);
     assert_journal_inventory(&case.root);
     assert_preserved_topology(&case.root, source);
@@ -543,7 +540,7 @@ fn run_recovery_child(
     });
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let error = match CleanSystemStartup::enter(installation, database, layout_database, &reservation) {
+    let error = match CleanSystemStartup::enter(system, &reservation) {
         Ok(_) => panic!("fresh startup admitted unresolved ActivateArchived candidate evidence"),
         Err(error) => error,
     };

@@ -14,8 +14,8 @@ use std::{
 use crate::{
     Installation, State,
     client::{
-        active_state_snapshot::ActiveStateReservation, snapshot_startup_recovery_namespace,
-        startup_gate::CleanSystemStartup,
+        MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal, active_state_snapshot::ActiveStateReservation,
+        snapshot_startup_recovery_namespace, startup_gate::CleanSystemStartup,
         startup_recovery::arm_before_usr_rollback_activate_archived_finalization_final_revalidation,
     },
     db,
@@ -506,20 +506,20 @@ fn run_child(case: ChildCase) {
     assert_eq!(installation.root, case.root);
     let database = open_state_database(&installation);
     let layout_database = open_layout_database(&installation);
-    ExistingArchivedDatabase::capture(&database, &terminal);
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation,
+        database,
+        layout_database,
+    );
+    ExistingArchivedDatabase::capture(system.state_db(), &terminal);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &database, &layout_database, &terminal),
-        ProcessRole::Recover => run_recovery_child(&case, &installation, &database, &layout_database, &terminal),
+        ProcessRole::Crash => run_crash_child(&case, &system, &terminal),
+        ProcessRole::Recover => run_recovery_child(&case, &system, &terminal),
     }
 }
 
-fn run_crash_child(
-    case: &ChildCase,
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-    terminal: &TransitionRecord,
-) {
+fn run_crash_child(case: &ChildCase, system: &MutableSystemCapabilities, terminal: &TransitionRecord) {
     assert_eq!(
         decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(),
         *terminal
@@ -533,7 +533,7 @@ fn run_crash_child(
     });
     case.boundary.arm_kill();
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let result = CleanSystemStartup::enter(installation, database, layout_database, &reservation);
+    let result = CleanSystemStartup::enter(system, &reservation);
     panic!(
         "crash child escaped ActivateArchived finalization boundary {:?} with startup success={} error={:?}",
         case.boundary,
@@ -542,13 +542,9 @@ fn run_crash_child(
     );
 }
 
-fn run_recovery_child(
-    case: &ChildCase,
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-    terminal: &TransitionRecord,
-) {
+fn run_recovery_child(case: &ChildCase, system: &MutableSystemCapabilities, terminal: &TransitionRecord) {
+    let installation = system.installation();
+    let database = system.state_db();
     if case.boundary.canonical_survives() {
         assert_eq!(
             decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(),
@@ -567,7 +563,7 @@ fn run_recovery_child(
     });
 
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let clean = CleanSystemStartup::enter(installation, database, layout_database, &reservation)
+    let clean = CleanSystemStartup::enter(system, &reservation)
         .unwrap_or_else(|error| panic!("ActivateArchived terminal restart did not admit clean startup: {error:?}"));
 
     assert!(!canonical_path(&case.root).exists());

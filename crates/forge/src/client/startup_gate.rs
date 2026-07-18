@@ -3,6 +3,7 @@ use thiserror::Error;
 use crate::{Installation, db, installation, transition_identity, transition_journal};
 
 use super::{
+    MutableSystemCapabilities,
     active_state_snapshot::{ActiveStateLease, ActiveStateReservation},
     startup_reconciliation,
 };
@@ -116,12 +117,11 @@ impl UsrRollbackReverseSeal {
 
 impl CleanSystemStartup {
     pub(super) fn enter(
-        installation: &Installation,
-        state_db: &db::state::Database,
-        layout_db: &db::layout::Database,
+        system: &MutableSystemCapabilities,
         active_state_reservation: &ActiveStateReservation,
     ) -> Result<Self, Error> {
-        let _ = layout_db;
+        let installation = system.installation();
+        let state_db = system.state_db();
         installation.revalidate_mutable_namespace()?;
         let cast = installation.retained_mutable_cast_directory()?;
         after_mutable_namespace_preflight();

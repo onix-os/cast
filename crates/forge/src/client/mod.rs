@@ -102,6 +102,7 @@ mod install;
 mod journal_usr_exchange_authority;
 #[cfg(test)]
 mod mutable_startup_namespace_tests;
+mod mutable_system_capabilities;
 mod postblit;
 mod read_only;
 mod remove;
@@ -115,6 +116,11 @@ mod startup_recovery;
 #[cfg(test)]
 #[path = "startup_recovery/forward_origin_test_support.rs"]
 mod startup_recovery_forward_origin_test_support;
+use mutable_system_capabilities::{MutableSystemCapabilities, open_mutable_system_capabilities};
+#[cfg(test)]
+pub(in crate::client) use mutable_system_capabilities::{
+    MutableSystemCapabilitiesTestSeal, arm_after_system_database_open,
+};
 pub(crate) use startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider;
 #[cfg(test)]
 pub(crate) use startup_recovery_forward_origin_test_support::{

@@ -7,6 +7,7 @@ use std::{
 use crate::{
     Installation,
     client::{
+        MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, CleanSystemStartup, UsrRollbackActiveReblitFinalizationSeal},
         startup_reconciliation::{
@@ -200,43 +201,36 @@ pub(super) fn assert_no_candidate_effects() {
     );
 }
 
-pub(super) fn enter(
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-) -> startup_gate::Error {
+pub(super) fn enter(system: &MutableSystemCapabilities) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(installation, database, layout_database, &reservation) {
+    match CleanSystemStartup::enter(system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved transition"),
         Err(error) => error,
     }
 }
 
 pub(super) fn enter_candidate(fixture: &CandidatePreserveFixture) -> startup_gate::Error {
-    enter(
-        &fixture.fixture.installation,
-        &fixture.fixture.database,
-        &fixture.fixture.layout_database,
-    )
+    enter(&fixture.fixture.system)
 }
 
 pub(super) fn enter_clean_candidate(fixture: &CandidatePreserveFixture) -> CleanSystemStartup {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    CleanSystemStartup::enter(
-        &fixture.fixture.installation,
-        &fixture.fixture.database,
-        &fixture.fixture.layout_database,
-        &reservation,
-    )
-    .expect("exact terminal ActiveReblit evidence did not admit clean startup")
+    CleanSystemStartup::enter(&fixture.fixture.system, &reservation)
+        .expect("exact terminal ActiveReblit evidence did not admit clean startup")
 }
 
 pub(super) fn enter_clean_fresh_handles(root: &Path) -> CleanSystemStartup {
     let installation = Installation::open(root, None).unwrap();
     let database = open_state_database(&installation);
     let layout_database = open_layout_database(&installation);
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation,
+        database,
+        layout_database,
+    );
     let reservation = ActiveStateReservation::acquire().unwrap();
-    CleanSystemStartup::enter(&installation, &database, &layout_database, &reservation)
+    CleanSystemStartup::enter(&system, &reservation)
         .expect("fresh handles did not finalize exact terminal ActiveReblit evidence")
 }
 
@@ -383,7 +377,13 @@ pub(super) fn enter_fresh_handles(root: &Path) -> startup_gate::Error {
     let installation = Installation::open(root, None).unwrap();
     let database = open_state_database(&installation);
     let layout_database = open_layout_database(&installation);
-    enter(&installation, &database, &layout_database)
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation,
+        database,
+        layout_database,
+    );
+    enter(&system)
 }
 
 pub(super) fn assert_fresh_existing_candidate_database(

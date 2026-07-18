@@ -12,6 +12,7 @@ use std::{
 use crate::{
     Installation,
     client::{
+        MutableSystemCapabilities,
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, CleanSystemStartup},
         startup_reconciliation::{
@@ -29,7 +30,7 @@ use crate::{
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_usr_restored_pending,
     expected_candidate_preserve_intent, open_layout_database, open_state_database, persistent_state_database,
-    release_fixture_handles,
+    release_fixture_handles, test_system_capabilities,
 };
 
 const TEST_NAME: &str = concat!(
@@ -456,29 +457,17 @@ fn run_child(case: ChildCase) {
     assert_eq!(installation.root, case.root);
     let state_database = open_state_database(&installation);
     let layout_database = open_layout_database(&installation);
+    let system = test_system_capabilities(&installation, &state_database, &layout_database);
     match case.role {
-        ProcessRole::Crash => run_crash_child(&case, &installation, &state_database, &layout_database, starting_layout),
-        ProcessRole::Recover => run_recovery_child(
-            &case,
-            &installation,
-            &state_database,
-            &layout_database,
-            source,
-            starting_layout,
-        ),
+        ProcessRole::Crash => run_crash_child(&case, &system, starting_layout),
+        ProcessRole::Recover => run_recovery_child(&case, &system, source, starting_layout),
     }
 }
 
-fn run_crash_child(
-    case: &ChildCase,
-    installation: &Installation,
-    state_database: &crate::db::state::Database,
-    layout_database: &crate::db::layout::Database,
-    starting_layout: RawUsrLayout,
-) {
+fn run_crash_child(case: &ChildCase, system: &MutableSystemCapabilities, starting_layout: RawUsrLayout) {
     assert_eq!(RawUsrLayout::capture(&case.root), starting_layout);
     arm_journal_update_durability_callback(case.boundary.durability_boundary(), kill_self);
-    let error = enter_with_handles(installation, state_database, layout_database);
+    let error = enter_with_handles(system);
     panic!(
         "crash child escaped armed journal-update boundary {:?} with startup result {error:?}",
         case.boundary
@@ -487,12 +476,11 @@ fn run_crash_child(
 
 fn run_recovery_child(
     case: &ChildCase,
-    installation: &Installation,
-    state_database: &crate::db::state::Database,
-    layout_database: &crate::db::layout::Database,
+    system: &MutableSystemCapabilities,
     source: TransitionRecord,
     starting_layout: RawUsrLayout,
 ) {
+    let state_database = system.state_db();
     let published_successor = source
         .rollback_successor(Some(case.layout.initial_outcome()))
         .expect("reverse intent must admit its exact initial UsrRestored successor");
@@ -515,7 +503,7 @@ fn run_recovery_child(
     arm_before_reverse_exchange_reconciliation_capture(|| {
         panic!("PRE journal-update recovery attempted a second retained /usr exchange")
     });
-    let recovered = enter_with_handles(installation, state_database, layout_database);
+    let recovered = enter_with_handles(system);
 
     let restored = if case.boundary.canonical_is_source() {
         restart_successor
@@ -549,7 +537,7 @@ fn run_recovery_child(
     // route UsrRestored. The newly production-wired archived child then owns a
     // separate later entry for the exact CandidatePreserveIntent checkpoint.
     if case.boundary.canonical_is_source() {
-        let routed = enter_with_handles(installation, state_database, layout_database);
+        let routed = enter_with_handles(system);
         assert_candidate_preserve_intent_pending(&routed);
         assert_eq!(canonical_record(&case.root), preserve_intent);
         drop(routed);
@@ -562,7 +550,7 @@ fn run_recovery_child(
             .expect("archived candidate intent must admit its exact applied successor");
         assert_eq!(candidate_preserved.phase, Phase::CandidatePreserved);
 
-        let handled = enter_with_handles(installation, state_database, layout_database);
+        let handled = enter_with_handles(system);
         assert_candidate_preserved_pending(&handled);
         assert_eq!(canonical_record(&case.root), candidate_preserved);
         assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);
@@ -572,7 +560,7 @@ fn run_recovery_child(
             .rollback_successor(None)
             .expect("archived candidate preservation must admit rollback completion");
         assert_eq!(rollback_complete.phase, Phase::RollbackComplete);
-        let stable = enter_with_handles(installation, state_database, layout_database);
+        let stable = enter_with_handles(system);
         assert_rollback_complete_pending(&stable);
         assert_eq!(canonical_record(&case.root), rollback_complete);
         assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);
@@ -675,13 +663,9 @@ fn spawn_child(
         .unwrap()
 }
 
-fn enter_with_handles(
-    installation: &Installation,
-    state_database: &crate::db::state::Database,
-    layout_database: &crate::db::layout::Database,
-) -> startup_gate::Error {
+fn enter_with_handles(system: &MutableSystemCapabilities) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(installation, state_database, layout_database, &reservation) {
+    match CleanSystemStartup::enter(system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved rollback"),
         Err(error) => error,
     }

@@ -3,6 +3,7 @@ use std::{fs, os::unix::fs::MetadataExt as _, path::Path};
 use crate::{
     Installation,
     client::{
+        MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
         active_state_snapshot::ActiveStateReservation,
         snapshot_startup_recovery_namespace,
         startup_gate::{self, CleanSystemStartup},
@@ -28,12 +29,7 @@ pub(super) struct UsrLayout {
 
 pub(super) fn enter(fixture: &Fixture) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(
-        &fixture.fixture.installation,
-        &fixture.fixture.database,
-        &fixture.fixture.layout_database,
-        &reservation,
-    ) {
+    match CleanSystemStartup::enter(&fixture.fixture.system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved rollback"),
         Err(error) => error,
     }
@@ -178,6 +174,19 @@ pub(super) fn open_layout_database(installation: &Installation) -> db::layout::D
     location.revalidate().unwrap();
     installation.revalidate_mutable_namespace().unwrap();
     database
+}
+
+pub(super) fn test_system_capabilities(
+    installation: &Installation,
+    state_database: &db::state::Database,
+    layout_database: &db::layout::Database,
+) -> MutableSystemCapabilities {
+    MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_database.clone(),
+        layout_database.clone(),
+    )
 }
 
 pub(super) fn release_fixture_handles(fixture: &mut Fixture) -> tempfile::TempDir {

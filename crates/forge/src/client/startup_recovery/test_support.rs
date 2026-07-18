@@ -20,6 +20,7 @@ use crate::{
 };
 
 use crate::client::{
+    MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
     active_state_snapshot::ActiveStateReservation,
     startup_gate::{self, CleanSystemStartup},
     startup_reconciliation::PendingSystemTransition,
@@ -92,7 +93,7 @@ pub(super) struct Fixture {
     pub(super) _temporary: tempfile::TempDir,
     pub(super) installation: Installation,
     pub(super) database: db::state::Database,
-    pub(super) layout_database: db::layout::Database,
+    pub(super) system: MutableSystemCapabilities,
     pub(super) source: TransitionRecord,
     pub(super) kind: OperationKind,
     pub(super) candidate_state: state::Id,
@@ -189,11 +190,18 @@ impl Fixture {
             source.phase()
         );
 
+        let system = MutableSystemCapabilities::from_test_parts(
+            &MutableSystemCapabilitiesTestSeal::new(),
+            installation.clone(),
+            database.clone(),
+            layout_database,
+        );
+
         Self {
             _temporary: temporary,
             installation,
             database,
-            layout_database,
+            system,
             source: source_record,
             kind,
             candidate_state,
@@ -204,7 +212,7 @@ impl Fixture {
 
     pub(super) fn enter(&self) -> startup_gate::Error {
         let reservation = ActiveStateReservation::acquire().unwrap();
-        match CleanSystemStartup::enter(&self.installation, &self.database, &self.layout_database, &reservation) {
+        match CleanSystemStartup::enter(&self.system, &reservation) {
             Ok(_) => panic!("startup unexpectedly admitted an unresolved transition"),
             Err(source) => source,
         }

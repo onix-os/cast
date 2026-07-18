@@ -7,6 +7,7 @@ use std::{
 use crate::{
     Installation,
     client::{
+        MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, CleanSystemStartup},
         startup_reconciliation::{
@@ -239,63 +240,35 @@ pub(super) fn persist_rollback_complete(
     successor
 }
 
-pub(super) fn enter(
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-) -> startup_gate::Error {
-    match enter_result(installation, database, layout_database) {
+pub(super) fn enter(system: &MutableSystemCapabilities) -> startup_gate::Error {
+    match enter_result(system) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved transition"),
         Err(error) => error,
     }
 }
 
 pub(super) fn enter_candidate(fixture: &CandidatePreserveFixture) -> startup_gate::Error {
-    enter(
-        &fixture.fixture.installation,
-        &fixture.fixture.database,
-        &fixture.fixture.layout_database,
-    )
+    enter(&fixture.fixture.system)
 }
 
 pub(super) fn enter_invalidation(fixture: &FreshDbInvalidationFixture) -> startup_gate::Error {
-    enter(
-        &fixture.fixture.fixture.installation,
-        &fixture.fixture.fixture.database,
-        &fixture.fixture.fixture.layout_database,
-    )
+    enter(&fixture.fixture.fixture.system)
 }
 
-pub(super) fn enter_clean(
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-) {
-    drop(retain_clean(installation, database, layout_database));
+pub(super) fn enter_clean(system: &MutableSystemCapabilities) {
+    drop(retain_clean(system));
 }
 
 pub(super) fn enter_clean_invalidation(fixture: &FreshDbInvalidationFixture) {
-    enter_clean(
-        &fixture.fixture.fixture.installation,
-        &fixture.fixture.fixture.database,
-        &fixture.fixture.fixture.layout_database,
-    )
+    enter_clean(&fixture.fixture.fixture.system)
 }
 
 pub(super) fn enter_clean_candidate(fixture: &CandidatePreserveFixture) {
-    enter_clean(
-        &fixture.fixture.installation,
-        &fixture.fixture.database,
-        &fixture.fixture.layout_database,
-    )
+    enter_clean(&fixture.fixture.system)
 }
 
 pub(super) fn retain_clean_invalidation(fixture: &FreshDbInvalidationFixture) -> CleanSystemStartup {
-    retain_clean(
-        &fixture.fixture.fixture.installation,
-        &fixture.fixture.fixture.database,
-        &fixture.fixture.fixture.layout_database,
-    )
+    retain_clean(&fixture.fixture.fixture.system)
 }
 
 pub(super) fn assert_pending_phase(error: &startup_gate::Error, phase: Phase) {
@@ -419,14 +392,26 @@ pub(super) fn enter_fresh_handles(root: &Path) -> startup_gate::Error {
     let installation = Installation::open(root, None).unwrap();
     let database = open_state_database(&installation);
     let layout_database = open_layout_database(&installation);
-    enter(&installation, &database, &layout_database)
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation,
+        database,
+        layout_database,
+    );
+    enter(&system)
 }
 
 pub(super) fn enter_fresh_clean_handles(root: &Path) {
     let installation = Installation::open(root, None).unwrap();
     let database = open_state_database(&installation);
     let layout_database = open_layout_database(&installation);
-    enter_clean(&installation, &database, &layout_database);
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation,
+        database,
+        layout_database,
+    );
+    enter_clean(&system);
 }
 
 pub(super) fn release_candidate_handles(mut fixture: CandidatePreserveFixture) -> tempfile::TempDir {
@@ -459,22 +444,13 @@ pub(super) fn open_layout_database(installation: &Installation) -> db::layout::D
     database
 }
 
-fn enter_result(
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-) -> Result<CleanSystemStartup, startup_gate::Error> {
+fn enter_result(system: &MutableSystemCapabilities) -> Result<CleanSystemStartup, startup_gate::Error> {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    CleanSystemStartup::enter(installation, database, layout_database, &reservation)
+    CleanSystemStartup::enter(system, &reservation)
 }
 
-fn retain_clean(
-    installation: &Installation,
-    database: &db::state::Database,
-    layout_database: &db::layout::Database,
-) -> CleanSystemStartup {
-    enter_result(installation, database, layout_database)
-        .unwrap_or_else(|error| panic!("expected clean startup, got {error:?}"))
+fn retain_clean(system: &MutableSystemCapabilities) -> CleanSystemStartup {
+    enter_result(system).unwrap_or_else(|error| panic!("expected clean startup, got {error:?}"))
 }
 
 pub(super) fn canonical_record(root: &Path) -> TransitionRecord {

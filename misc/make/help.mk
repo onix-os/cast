@@ -14,6 +14,7 @@ help:
 	@echo "  forge-read-only-installation-test  Run retained read-only snapshot and mutable-client rejection tests"
 	@echo "  forge-installation-test  Run all direct installation policy and filesystem tests"
 	@echo "  forge-mutable-startup-namespace-test  Run retained mutable startup namespace substitution tests"
+	@timeout 10s echo "  forge-mutable-system-capabilities-test  Run coherent mutable startup capability and drop-order contracts"
 	@timeout 10s echo "  forge-candidate-pre-journal-durability-test  Run candidate durability, marker-link, and namespace tests"
 	@timeout 10s echo "  forge-transition-journal-coordinator-test  Run the unwired durable journal coordinator through /usr exchange completion"
 	@timeout 10s echo "  forge-transition-recovery-classifier-test  Run persisted-phase startup recovery direction tests"

@@ -3,6 +3,7 @@ use std::{fs, path::Path};
 use crate::{
     Installation,
     client::{
+        MutableSystemCapabilities,
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, CleanSystemStartup},
         startup_reconciliation::{
@@ -20,7 +21,7 @@ use super::super::UsrRollbackReverseDispatchError;
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged,
     assert_usr_restored_pending, expected_usr_restored, open_layout_database, open_state_database,
-    persistent_state_database, release_fixture_handles, usr_layout, usr_layout_at,
+    persistent_state_database, release_fixture_handles, test_system_capabilities, usr_layout, usr_layout_at,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -76,17 +77,18 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
             let restored = expected_usr_restored(&fixture, RollbackActionOutcome::AlreadySatisfied);
             let layout_before = usr_layout(&fixture);
             let state_database = persistent_state_database(&fixture, kind);
+            let system = test_system_capabilities(
+                &fixture.fixture.installation,
+                &state_database,
+                fixture.fixture.system.layout_db(),
+            );
             let states_before = state_database.all().unwrap();
             let in_flight_before = state_database.audit_in_flight_transition().unwrap();
             reset_retained_exchange_syscall_count();
             reset_usr_rollback_reverse_namespace_durability_events();
             fault.arm();
 
-            let first = enter_with_handles(
-                &fixture.fixture.installation,
-                &state_database,
-                &fixture.fixture.layout_database,
-            );
+            let first = enter_with_handles(&system);
 
             fault.assert_error(&first);
             assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} {fault:?}");
@@ -97,12 +99,14 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
             // No startup result, retained database connection, installation
             // authority, or reservation crosses the simulated restart.
             drop(first);
+            drop(system);
             drop(state_database);
             let replacement_root = release_fixture_handles(&mut fixture);
 
             let installation = Installation::open(&root, None).unwrap();
             let state_database = open_state_database(&installation);
             let layout_database = open_layout_database(&installation);
+            let system = test_system_capabilities(&installation, &state_database, &layout_database);
             assert_eq!(state_database.all().unwrap(), states_before, "{kind:?} {fault:?}");
             assert_eq!(
                 state_database.audit_in_flight_transition().unwrap(),
@@ -110,7 +114,7 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
                 "{kind:?} {fault:?}"
             );
 
-            let restart = enter_with_handles(&installation, &state_database, &layout_database);
+            let restart = enter_with_handles(&system);
 
             assert_usr_restored_pending(&restart);
             assert_eq!(canonical_record(&root), restored, "{kind:?} {fault:?}");
@@ -137,13 +141,9 @@ fn startup_usr_rollback_reverse_dispatch_fresh_handles_restart_pre_without_secon
     }
 }
 
-fn enter_with_handles(
-    installation: &Installation,
-    state_database: &crate::db::state::Database,
-    layout_database: &crate::db::layout::Database,
-) -> startup_gate::Error {
+fn enter_with_handles(system: &MutableSystemCapabilities) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
-    match CleanSystemStartup::enter(installation, state_database, layout_database, &reservation) {
+    match CleanSystemStartup::enter(system, &reservation) {
         Ok(_) => panic!("startup unexpectedly admitted an unresolved rollback"),
         Err(error) => error,
     }
