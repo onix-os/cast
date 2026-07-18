@@ -5,8 +5,6 @@
 //! state-slot link in the canonical wrapper, so the sole namespace delta is a
 //! no-replace move of `usr` from fixed staging into that wrapper.
 
-#![allow(dead_code)] // test-sealed until the operation-specific production leaf lands
-
 mod effect;
 mod post_move_durability;
 mod target_durability;

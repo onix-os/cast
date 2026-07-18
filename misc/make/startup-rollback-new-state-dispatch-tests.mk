@@ -50,6 +50,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	done; \
 	gate=crates/forge/src/client/startup_gate.rs; \
 	orchestrator=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
+	archived_orchestrator=crates/forge/src/client/startup_gate/usr_rollback_activate_archived.rs; \
 	active_orchestrator=crates/forge/src/client/startup_gate/usr_rollback_active_reblit.rs; \
 	recovery_root=crates/forge/src/client/startup_recovery.rs; \
 	candidate_leaf=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
@@ -126,8 +127,8 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveDurabilitySeal::new();' "$$candidate_leaf" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationEffectSeal::new();' "$$fresh_leaf" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.into_effect_selection(&effect_seal, &journal)?' "$$candidate_leaf" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc '.reconcile(&effect_seal, &journal)?' "$$candidate_leaf" )" = 4; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'complete_post_move_durability(&durability_seal, &journal)?' "$$candidate_leaf" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.reconcile(&effect_seal, &journal)?' "$$candidate_leaf" )" = 5; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'complete_post_move_durability(&durability_seal, &journal)?' "$$candidate_leaf" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_candidate_preserve_and_reopen(journal, durable)' "$$candidate_leaf" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority)' "$$fresh_leaf" )" = 1; \
 	production_single_ref() { \
@@ -144,12 +145,14 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 		production_single_ref "$$seal::new();" "$$orchestrator"; \
 	done; \
 	timeout 10s rg -n -F 'UsrRollbackCandidatePreserveAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 2; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$orchestrator:" "$$inventory" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$archived_orchestrator:" "$$inventory" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$active_orchestrator:" "$$inventory" )" = 1; \
 	timeout 10s rg -n -F 'UsrRollbackCandidatePreserveSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 2; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$orchestrator:" "$$inventory" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$archived_orchestrator:" "$$inventory" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$active_orchestrator:" "$$inventory" )" = 1; \
 	production_single_ref 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$candidate_leaf"; \
 	production_single_ref 'UsrRollbackCandidatePreserveDurabilitySeal::new();' "$$candidate_leaf"; \
@@ -160,16 +163,17 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	production_single_ref 'persist_usr_rollback_complete_route_and_reopen(journal, authority)?' "$$orchestrator"; \
 	production_single_ref 'finalize_usr_rollback(journal, authority)?' "$$orchestrator"; \
 	timeout 10s rg -n -F 'dispatch_usr_rollback_candidate_preserve_and_reopen(journal, record, ready)?' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 2; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$orchestrator:" "$$inventory" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$archived_orchestrator:" "$$inventory" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$active_orchestrator:" "$$inventory" )" = 1; \
 	production_single_ref 'dispatch_usr_rollback_fresh_db_invalidation_and_reopen(journal, ready)?' "$$orchestrator"; \
 	production_single_ref '.into_effect_selection(&effect_seal, &journal)?' "$$candidate_leaf"; \
 	production_single_ref 'UsrRollbackFreshDbInvalidationReady::Apply(authority) => match authority.reconcile(&effect_seal, &journal)? {' "$$fresh_leaf"; \
 	production_single_ref 'UsrRollbackFreshDbInvalidationReady::Finish(authority) => authority.reconcile(&effect_seal, &journal)?,' "$$fresh_leaf"; \
 	timeout 10s rg -n -F 'complete_post_move_durability(&durability_seal, &journal)?' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc "$$candidate_leaf:" "$$inventory" )" = 2; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$candidate_leaf:" "$$inventory" )" = 4; \
 	timeout 10s rg -n -F 'return_exact_unchanged_source(journal, source_record)' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$candidate_leaf:" "$$inventory" )" = 2; \

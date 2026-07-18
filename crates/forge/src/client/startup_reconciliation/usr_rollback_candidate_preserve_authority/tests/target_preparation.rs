@@ -7,8 +7,10 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
             UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyEffectSelection,
-            active_reblit_candidate_preserve_exchange_attempt_count, new_state_candidate_preserve_move_attempt_count,
+            active_reblit_candidate_preserve_exchange_attempt_count, archived_candidate_preserve_move_attempt_count,
+            new_state_candidate_preserve_move_attempt_count,
             reset_active_reblit_candidate_preserve_exchange_attempt_count,
+            reset_archived_candidate_preserve_move_attempt_count,
             reset_new_state_candidate_preserve_move_attempt_count,
         },
         startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
@@ -90,7 +92,7 @@ fn startup_candidate_target_preparation_selects_every_new_state_prefix_for_every
 }
 
 #[test]
-fn startup_candidate_target_preparation_keeps_archived_unsupported_and_selects_opaque_active_reblit_exchange() {
+fn startup_candidate_target_preparation_selects_opaque_archived_move_and_active_reblit_exchange() {
     for source in CandidateSource::ALL {
         for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
             let archived =
@@ -101,15 +103,18 @@ fn startup_candidate_target_preparation_keeps_archived_unsupported_and_selects_o
             let archived_authority = apply_authority(&archived, &archived_journal, &archived_reservation);
             let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
             reset_new_state_candidate_preserve_move_attempt_count();
+            reset_archived_candidate_preserve_move_attempt_count();
             reset_active_reblit_candidate_preserve_exchange_attempt_count();
 
-            assert!(matches!(
-                archived_authority
-                    .into_effect_selection(&seal, &archived_journal)
-                    .unwrap(),
-                UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
-            ));
+            let UsrRollbackCandidatePreserveApplyEffectSelection::MoveArchived(lease) = archived_authority
+                .into_effect_selection(&seal, &archived_journal)
+                .unwrap()
+            else {
+                panic!("exact staged ActivateArchived evidence did not select its opaque child-move lease")
+            };
+            drop(lease);
             assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+            assert_eq!(archived_candidate_preserve_move_attempt_count(), 0);
             assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
             archived.assert_evidence_unchanged(&archived_before);
             drop(archived_reservation);

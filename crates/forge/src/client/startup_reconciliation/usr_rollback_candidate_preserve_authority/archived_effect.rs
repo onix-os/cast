@@ -1,7 +1,13 @@
-//! Test-sealed authority bridge for the archived child-move foundation.
+//! Sealed authority bridge for one archived candidate child move.
 //!
-//! No production dispatcher or persistence path imports this module. It keeps
-//! the namespace foundation unreachable until its complete leaf is designed.
+//! Exact staged and already-preserved evidence converge only after their
+//! operation-specific durability suffix. The resulting authority fixes its
+//! origin privately for the separate journal-persistence boundary.
+
+mod persistence;
+
+#[cfg(test)]
+pub(in crate::client) use persistence::arm_before_archived_candidate_preserve_persistence_durable_trailing_evidence;
 
 use crate::{
     Installation, db,
@@ -9,10 +15,10 @@ use crate::{
 };
 
 use super::{
-    DatabaseEvidence, UsrRollbackCandidatePreserveApplyAuthority, UsrRollbackCandidatePreserveAuthority,
-    UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveAuthorityErrorKind,
-    UsrRollbackCandidatePreserveFinishAuthority, UsrRollbackCandidatePreserveTopology,
-    candidate_preserve_plan_is_exact, inspect_current_database, require_exact_database,
+    DatabaseEvidence, UsrRollbackCandidatePreserveAuthority, UsrRollbackCandidatePreserveAuthorityError,
+    UsrRollbackCandidatePreserveAuthorityErrorKind, UsrRollbackCandidatePreserveFinishAuthority,
+    UsrRollbackCandidatePreserveTopology, candidate_preserve_plan_is_exact, inspect_current_database,
+    require_exact_database,
 };
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
@@ -22,17 +28,8 @@ use crate::client::{
         UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
         UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence,
     },
+    startup_recovery::{UsrRollbackArchivedCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveEffectSeal},
 };
-
-pub(in crate::client) struct UsrRollbackArchivedCandidatePreserveEffectSeal {
-    _private: (),
-}
-
-impl UsrRollbackArchivedCandidatePreserveEffectSeal {
-    pub(in crate::client) fn new_for_test() -> Self {
-        Self { _private: () }
-    }
-}
 
 struct ArchivedEffect<'reservation, Namespace> {
     installation: Installation,
@@ -44,7 +41,7 @@ struct ArchivedEffect<'reservation, Namespace> {
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
-#[must_use = "test-sealed archived candidate move lease must be reconciled"]
+#[must_use = "an archived candidate move lease must be reconciled"]
 pub(in crate::client) struct UsrRollbackArchivedCandidatePreserveEffectLease<'reservation> {
     effect: ArchivedEffect<'reservation, UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence>,
 }
@@ -59,31 +56,33 @@ pub(in crate::client) struct UsrRollbackArchivedCandidatePreserveAlreadySatisfie
     effect: ArchivedEffect<'reservation, UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace>,
 }
 
-#[must_use = "durable archived candidate authority remains test-sealed"]
+#[must_use = "durable archived candidate authority must remain sealed"]
 pub(in crate::client) struct UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'reservation> {
     effect: ArchivedEffect<'reservation, UsrRollbackArchivedCandidatePreserveDurableNamespace>,
+    origin: ArchivedDurabilityOrigin,
 }
 
-#[must_use = "test-sealed archived candidate reconciliation must be handled"]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArchivedDurabilityOrigin {
+    Applied,
+    AlreadySatisfied,
+}
+
+#[must_use = "an archived candidate reconciliation must be handled"]
 pub(in crate::client) enum UsrRollbackArchivedCandidatePreserveApplyReconciliation<'reservation> {
     Applied(UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority<'reservation>),
     NotApplied,
     Ambiguous,
 }
 
-impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
-    pub(in crate::client) fn into_archived_effect_for_test(
+impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
+    pub(super) fn into_archived_effect_after_revalidation(
         self,
-        _seal: &UsrRollbackArchivedCandidatePreserveEffectSeal,
-        journal: &TransitionJournalStore,
     ) -> Result<UsrRollbackArchivedCandidatePreserveEffectLease<'reservation>, UsrRollbackCandidatePreserveAuthorityError>
     {
-        self.evidence.require_journal_binding(journal)?;
-        let topology = self.evidence.namespace.topology();
-        if topology != UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot {
+        if self.namespace.topology() != UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
         }
-        self.evidence.revalidate_after_binding(journal, topology)?;
         let UsrRollbackCandidatePreserveAuthority {
             installation,
             state_db,
@@ -92,7 +91,7 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
             namespace,
             journal_binding,
             _active_state_reservation,
-        } = self.evidence;
+        } = self;
         let namespace = namespace.into_archived_apply_effect_evidence(&record)?;
         Ok(UsrRollbackArchivedCandidatePreserveEffectLease {
             effect: ArchivedEffect {
@@ -109,20 +108,16 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
 }
 
 impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
-    pub(in crate::client) fn into_archived_finish_for_test(
+    pub(super) fn into_archived_finish_after_revalidation(
         self,
-        _seal: &UsrRollbackArchivedCandidatePreserveEffectSeal,
         journal: &TransitionJournalStore,
     ) -> Result<
         UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        self.evidence.require_journal_binding(journal)?;
-        let topology = self.evidence.namespace.topology();
-        if topology != UsrRollbackCandidatePreserveTopology::ArchivedPreserved {
+        if self.evidence.namespace.topology() != UsrRollbackCandidatePreserveTopology::ArchivedPreserved {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
         }
-        self.evidence.revalidate_after_binding(journal, topology)?;
         let UsrRollbackCandidatePreserveAuthority {
             installation,
             state_db,
@@ -154,7 +149,7 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
 impl<'reservation> UsrRollbackArchivedCandidatePreserveEffectLease<'reservation> {
     pub(in crate::client) fn reconcile(
         self,
-        _seal: &UsrRollbackArchivedCandidatePreserveEffectSeal,
+        _seal: &UsrRollbackCandidatePreserveEffectSeal,
         journal: &TransitionJournalStore,
     ) -> Result<
         UsrRollbackArchivedCandidatePreserveApplyReconciliation<'reservation>,
@@ -211,32 +206,33 @@ impl<'reservation> UsrRollbackArchivedCandidatePreserveEffectLease<'reservation>
 impl<'reservation> UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority<'reservation> {
     pub(in crate::client) fn complete_post_move_durability(
         self,
-        _seal: &UsrRollbackArchivedCandidatePreserveEffectSeal,
+        _seal: &UsrRollbackArchivedCandidatePreserveDurabilitySeal,
         journal: &TransitionJournalStore,
     ) -> Result<
         UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        complete_post_move(self.effect, journal)
+        complete_post_move(self.effect, journal, ArchivedDurabilityOrigin::Applied)
     }
 }
 
 impl<'reservation> UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation> {
     pub(in crate::client) fn complete_post_move_durability(
         self,
-        _seal: &UsrRollbackArchivedCandidatePreserveEffectSeal,
+        _seal: &UsrRollbackArchivedCandidatePreserveDurabilitySeal,
         journal: &TransitionJournalStore,
     ) -> Result<
         UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        complete_post_move(self.effect, journal)
+        complete_post_move(self.effect, journal, ArchivedDurabilityOrigin::AlreadySatisfied)
     }
 }
 
 fn complete_post_move<'reservation, Namespace>(
     effect: ArchivedEffect<'reservation, Namespace>,
     journal: &TransitionJournalStore,
+    origin: ArchivedDurabilityOrigin,
 ) -> Result<
     UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'reservation>,
     UsrRollbackCandidatePreserveAuthorityError,
@@ -276,6 +272,7 @@ where
             journal_binding,
             _active_state_reservation,
         },
+        origin,
     })
 }
 
@@ -304,32 +301,6 @@ impl CompleteArchivedPostMove for UsrRollbackArchivedCandidatePreserveAlreadySat
         record: &TransitionRecord,
     ) -> Result<UsrRollbackArchivedCandidatePreserveDurableNamespace, UsrRollbackCandidatePreserveAuthorityError> {
         Ok(self.complete_post_move_durability(installation, record)?)
-    }
-}
-
-impl UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'_> {
-    pub(in crate::client) fn revalidate_for_test(
-        &self,
-        journal: &TransitionJournalStore,
-    ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
-        require_binding(&self.effect.journal_binding, journal)?;
-        require_archived_post_effect_evidence(
-            &self.effect.installation,
-            &self.effect.state_db,
-            &self.effect.record,
-            &self.effect.database,
-            journal,
-        )?;
-        self.effect
-            .namespace
-            .revalidate(&self.effect.installation, &self.effect.record)?;
-        require_archived_post_effect_evidence(
-            &self.effect.installation,
-            &self.effect.state_db,
-            &self.effect.record,
-            &self.effect.database,
-            journal,
-        )
     }
 }
 

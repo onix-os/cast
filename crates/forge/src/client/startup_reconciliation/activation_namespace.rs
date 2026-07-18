@@ -5,17 +5,15 @@
 //! rollback-reverse child may consume already sealed effect evidence through
 //! one exchange attempt and the exact ordered parent-durability suffix. It
 //! exposes no general namespace-mutation API. Separate candidate-preservation
-//! children may consume exact NewState target prefixes through one creation,
-//! normalization, or movement attempt. Normalization privately completes its
-//! exact target and quarantine-parent barriers before reporting a restart.
-//! Every movement lease separately completes its candidate, target, and
-//! quarantine-parent pre-move barriers before rename. Freshly applied and
-//! already-preserved NewState evidence then converge on the same ordered
-//! post-move candidate-and-parent durability suffix. Production dispatch may
-//! consume only those phase-specific paths and their journal persistence
-//! boundaries; no path exposes general cleanup or trigger authority.
+//! children may consume exact NewState target prefixes, an ActivateArchived
+//! child move, or an ActiveReblit wrapper exchange through one attempt.
+//! Operation-specific preparation and durability barriers remain disjoint;
+//! freshly applied and already-preserved evidence converge only inside their
+//! own operation family. Production dispatch may consume only those
+//! phase-specific paths and their journal-persistence boundaries; no path
+//! exposes general cleanup or trigger authority.
 
-#[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
+#[allow(dead_code)] // sealed until ActivateArchived completion-route production dispatch is independently complete
 mod activate_archived_complete_route_proof;
 mod active_reblit_complete_route_proof;
 mod active_reblit_finalization_proof;
@@ -121,7 +119,6 @@ pub(in crate::client::startup_reconciliation) use candidate_preserve_proof::{
     UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };
-#[cfg(test)]
 pub(super) use candidate_preserve_proof::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
     UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,

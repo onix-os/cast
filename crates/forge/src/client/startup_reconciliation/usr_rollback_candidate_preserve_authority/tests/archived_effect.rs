@@ -1,4 +1,4 @@
-//! Focused contracts for the test-sealed archived child-move foundation.
+//! Focused contracts for the production archived child-move foundation.
 
 mod post_move_durability;
 
@@ -10,8 +10,8 @@ use crate::{
         startup_reconciliation::{
             ArchivedCandidatePreserveMoveFault, ArchivedCandidatePreserveTargetDurabilityEvent,
             ArchivedCandidatePreserveTargetDurabilityFaultPoint, UsrRollbackCandidatePreserveAdmission,
-            archived_candidate_preserve_move_attempt_count, arm_archived_candidate_preserve_move_fault,
-            arm_archived_candidate_preserve_target_durability_fault,
+            UsrRollbackCandidatePreserveApplyEffectSelection, archived_candidate_preserve_move_attempt_count,
+            arm_archived_candidate_preserve_move_fault, arm_archived_candidate_preserve_target_durability_fault,
             arm_before_archived_candidate_preserve_move_reconciliation_capture,
             arm_before_archived_candidate_preserve_move_reconciliation_closing,
             arm_before_archived_candidate_preserve_pre_candidate_sync,
@@ -24,6 +24,7 @@ use crate::{
             reset_archived_candidate_preserve_target_durability_events,
             take_archived_candidate_preserve_target_durability_events,
         },
+        startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
     },
     transition_journal::{RollbackActionOutcome, TransitionJournalStore},
 };
@@ -31,7 +32,6 @@ use crate::{
 use super::super::{
     UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveApplyReconciliation, UsrRollbackArchivedCandidatePreserveEffectLease,
-    UsrRollbackArchivedCandidatePreserveEffectSeal,
 };
 use super::{
     fixture::{OperationKind, create_private_directory},
@@ -120,8 +120,13 @@ pub(super) fn apply_lease<'reservation>(
     let UsrRollbackCandidatePreserveAdmission::Apply(authority) = fixture.capture(journal, reservation) else {
         panic!("exact archived staged-with-slot evidence did not admit Apply")
     };
-    let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
-    authority.into_archived_effect_for_test(&seal, journal).unwrap()
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    let UsrRollbackCandidatePreserveApplyEffectSelection::MoveArchived(lease) =
+        authority.into_effect_selection(&seal, journal).unwrap()
+    else {
+        panic!("exact archived staged evidence did not select child movement")
+    };
+    lease
 }
 
 pub(super) fn reconcile_applied<'reservation>(
@@ -129,7 +134,7 @@ pub(super) fn reconcile_applied<'reservation>(
     journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,
 ) -> UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority<'reservation> {
-    let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
     let UsrRollbackArchivedCandidatePreserveApplyReconciliation::Applied(authority) =
         apply_lease(fixture, journal, reservation)
             .reconcile(&seal, journal)
@@ -178,7 +183,7 @@ fn startup_archived_candidate_child_move_reconciles_every_raw_report_for_every_o
                     if let Some(fault) = fault {
                         arm_archived_candidate_preserve_move_fault(fault);
                     }
-                    let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+                    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
                     let result = lease.reconcile(&seal, &journal).unwrap();
 
@@ -235,7 +240,7 @@ fn startup_archived_candidate_pre_faults_stop_at_exact_ordered_prefixes_without_
                 let expected = expected_pre_events(&fixture);
                 reset_observations();
                 arm_archived_candidate_preserve_target_durability_fault(fault);
-                let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+                let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
                 assert!(lease.reconcile(&seal, &journal).is_err());
 
@@ -296,7 +301,7 @@ fn startup_archived_candidate_pre_races_fail_at_every_boundary_without_a_move() 
         let expected = expected_pre_events(&fixture);
         reset_observations();
         boundary.arm(fixture.namespace_change_hook(format!("archived-pre-race-{boundary:?}")));
-        let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+        let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
         assert!(lease.reconcile(&seal, &journal).is_err());
 
@@ -340,7 +345,7 @@ fn startup_archived_candidate_final_pre_revalidation_refuses_rebound_move_parent
             create_private_directory(&selected);
         });
         reset_observations();
-        let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+        let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
         assert!(lease.reconcile(&seal, &journal).is_err());
 
@@ -364,7 +369,7 @@ fn startup_archived_candidate_reconciliation_uses_fresh_namespace_not_the_raw_re
     arm_before_archived_candidate_preserve_move_reconciliation_capture(
         fixture.namespace_change_hook("archived-post-move-race".to_owned()),
     );
-    let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
     let result = lease.reconcile(&seal, &journal).unwrap();
 
@@ -394,7 +399,7 @@ fn startup_archived_candidate_reconciliation_closing_rejects_post_classification
     arm_before_archived_candidate_preserve_move_reconciliation_closing(move || {
         fs::rename(staging_usr, preserved_usr).unwrap();
     });
-    let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
     let result = lease.reconcile(&seal, &journal).unwrap();
 
@@ -454,7 +459,7 @@ fn startup_archived_candidate_non_namespace_races_never_escape_the_authority_san
     let expected = expected_pre_events(&fixture);
     reset_observations();
     arm_before_archived_candidate_preserve_pre_final_capture(fixture.journal_change_hook());
-    let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
 
     assert!(lease.reconcile(&seal, &journal).is_err());
     assert_eq!(archived_candidate_preserve_move_attempt_count(), 0);

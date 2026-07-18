@@ -12,7 +12,7 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_exact_post_races_at_every_barrier \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_rejects_evidence_races_and_fresh_admission_reruns \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_new_state_post_move_durability_converges_applied_error_after_apply_and_finish_origins \
-		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_archived_finish_durability_is_fieldless_unsupported_without_events; do \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::post_move_durability::startup_archived_finish_selects_its_separate_durability_authority_without_new_state_events; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority.rs; \
@@ -57,10 +57,10 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 	timeout 10s test "$$( timeout 10s grep -Fc '.complete(installation, record)?;' "$$proof_post" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'\''reservation>' "$$authority_post" )" -ge 3; \
 	timeout 10s grep -Fqx '    NewState(UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority<'\''reservation>),' "$$authority_post"; \
+	timeout 10s grep -Fqx '    Archived(UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority<'\''reservation>),' "$$authority_post"; \
 	timeout 10s grep -Fqx '    ActiveReblit(UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority<'\''reservation>),' "$$authority_post"; \
-	timeout 10s grep -Fqx '    Unsupported,' "$$authority_post"; \
 	timeout 10s grep -Fq '            UsrRollbackCandidatePreserveTopology::NewStatePreserved => {' "$$authority_post"; \
-	timeout 10s awk '/UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved/ { active = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit\(/ { active_selection = NR } /UsrRollbackCandidatePreserveTopology::ArchivedPreserved/ { archived = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported\)/ { unsupported = NR } END { exit !(active && active_selection && archived && unsupported && active < active_selection && active_selection < archived && archived < unsupported) }' "$$authority_post"; \
+	timeout 10s awk '/UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved/ { active = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit\(/ { active_selection = NR } /UsrRollbackCandidatePreserveTopology::ArchivedPreserved/ { archived = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived\(/ { archived_selection = NR } END { exit !(active && active_selection && archived && archived_selection && active < active_selection && active_selection < archived && archived < archived_selection) }' "$$authority_post"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: RollbackActionOutcome::Applied,' "$$authority_post" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: RollbackActionOutcome::AlreadySatisfied,' "$$authority_post" )" = 1; \
 	if timeout 10s rg -U -n 'fn[^\(]*\([^\)]*(origin|outcome)[^\)]*\)' "$$authority_post"; then exit 1; fi; \
@@ -68,13 +68,13 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 	if timeout 10s rg -n 'renameat|std::fs::rename[[:space:]]*\(|(^|[^_[:alnum:]])fs::rename[[:space:]]*\(|attempt_move|reconcile_move|move_attempt|mkdir|create_dir|set_permissions|chmod|unlink|remove_dir|remove_file' <<<"$$production_post_code"; then exit 1; fi; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]|retry' <<<"$$production_post_code"; then exit 1; fi; \
 	if timeout 10s rg -n '\.advance[[:space:]]*\(|rollback_successor|forward_successor|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|insert_fresh_metadata|delete_metadata|\.execute\(|\.transaction\(|\.delete\(|cleanup|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived' <<<"$$production_post_code"; then exit 1; fi; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'complete_post_move_durability(&durability_seal, &journal)?' "$$production_dispatch" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'complete_post_move_durability(&durability_seal, &journal)?' "$$production_dispatch" )" = 4; \
 	production_completion_calls="$$( timeout 10s rg -n -F 'complete_post_move_durability(&durability_seal, &journal)?' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; \
-	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_completion_calls" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" <<<"$$production_completion_calls" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_completion_calls" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" <<<"$$production_completion_calls" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc '#[test]' "$$tests" )" = 6; \
 	timeout 10s grep -Fq 'NewStateCandidatePreserveMoveFault::ErrorAfterApply' "$$tests"; \
-	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported' "$$tests"; \
+	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived' "$$tests"; \
 	for file in "$$authority" "$$authority_effect" "$$authority_post" "$$proof_effect" "$$proof_post" "$$namespace" "$$namespace_post" "$$startup_recovery" "$$tests" misc/make/startup-candidate-preserve-post-move-durability-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

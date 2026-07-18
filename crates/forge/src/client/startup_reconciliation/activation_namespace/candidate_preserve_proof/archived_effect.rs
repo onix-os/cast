@@ -1,7 +1,5 @@
 //! Sealed archived-candidate child-move namespace proof.
 
-#![allow(dead_code)] // test-sealed until the operation-specific production leaf lands
-
 mod post_move_durability;
 
 use crate::{Installation, transition_journal::TransitionRecord};
@@ -17,7 +15,6 @@ use crate::client::startup_reconciliation::activation_namespace::capture::{
     RetainedArchivedCandidatePreserveParents, TargetDurableArchivedCandidatePreservePre, capture_snapshot,
 };
 
-#[allow(unused_imports)] // exported only through the test-sealed authority bridge for now
 pub(in crate::client::startup_reconciliation) use post_move_durability::UsrRollbackArchivedCandidatePreserveDurableNamespace;
 
 pub(in crate::client::startup_reconciliation) struct UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence {

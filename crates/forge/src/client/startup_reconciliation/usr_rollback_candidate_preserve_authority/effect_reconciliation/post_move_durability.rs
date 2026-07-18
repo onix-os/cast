@@ -23,6 +23,7 @@ use crate::client::{
     active_state_snapshot::ActiveStateReservation,
     startup_reconciliation::{
         DatabaseEvidence, UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
+        UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
         UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
         UsrRollbackCandidatePreserveTopology,
         activation_namespace::{
@@ -40,8 +41,8 @@ use crate::client::{
 #[must_use = "candidate-preservation Finish durability selection must be handled"]
 pub(in crate::client) enum UsrRollbackCandidatePreserveFinishDurabilitySelection<'reservation> {
     NewState(UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>),
+    Archived(UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>),
     ActiveReblit(UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>),
-    Unsupported,
 }
 
 /// Exact NewState POST authority admitted without moving the candidate in this
@@ -73,7 +74,7 @@ struct DurableNewStateCandidatePreserveEffect<'reservation> {
 
 impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
     /// Consume Finish admission into one exact operation-specific durability
-    /// authority or a fieldless unsupported result for archived activation.
+    /// authority or a fieldless unsupported result.
     pub(in crate::client) fn into_post_move_durability_selection(
         self,
         _seal: &UsrRollbackCandidatePreserveEffectSeal,
@@ -116,7 +117,9 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
                 ))
             }
             UsrRollbackCandidatePreserveTopology::ArchivedPreserved => {
-                Ok(UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported)
+                Ok(UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived(
+                    self.into_archived_finish_after_revalidation(journal)?,
+                ))
             }
             UsrRollbackCandidatePreserveTopology::NewStateStaged
             | UsrRollbackCandidatePreserveTopology::NewStateStagedWithTargetResidue

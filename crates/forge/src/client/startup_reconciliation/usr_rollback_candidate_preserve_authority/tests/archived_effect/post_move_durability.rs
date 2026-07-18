@@ -5,8 +5,8 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
             ArchivedCandidatePreservePostMoveDurabilityEvent, ArchivedCandidatePreservePostMoveDurabilityFaultPoint,
-            UsrRollbackCandidatePreserveAdmission, archived_candidate_preserve_move_attempt_count,
-            arm_archived_candidate_preserve_post_move_durability_fault,
+            UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveFinishDurabilitySelection,
+            archived_candidate_preserve_move_attempt_count, arm_archived_candidate_preserve_post_move_durability_fault,
             arm_before_archived_candidate_preserve_durable_post_revalidation_capture,
             arm_before_archived_candidate_preserve_post_candidate_sync,
             arm_before_archived_candidate_preserve_post_final_capture,
@@ -16,13 +16,16 @@ use crate::{
             reset_archived_candidate_preserve_post_move_durability_events,
             take_archived_candidate_preserve_post_move_durability_events,
         },
+        startup_recovery::{
+            UsrRollbackArchivedCandidatePreserveDurabilitySeal, UsrRollbackCandidatePreserveEffectSeal,
+        },
     },
     transition_journal::{RollbackActionOutcome, TransitionJournalStore},
 };
 
 use super::super::super::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
-    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority, UsrRollbackArchivedCandidatePreserveEffectSeal,
+    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority,
 };
 use super::{
     FixtureEpoch, archived_fixture, archived_fixture_at_epoch, assert_preserved, identity, reconcile_applied,
@@ -40,8 +43,13 @@ fn select_finish<'reservation>(
     let UsrRollbackCandidatePreserveAdmission::Finish(authority) = fixture.capture(journal, reservation) else {
         panic!("exact archived preserved evidence did not admit Finish")
     };
-    let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
-    authority.into_archived_finish_for_test(&seal, journal).unwrap()
+    let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
+    let UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived(authority) =
+        authority.into_post_move_durability_selection(&seal, journal).unwrap()
+    else {
+        panic!("exact archived Finish evidence did not select archived durability")
+    };
+    authority
 }
 
 fn expected_post_events(fixture: &CandidatePreserveFixture) -> Vec<ArchivedCandidatePreservePostMoveDurabilityEvent> {
@@ -75,7 +83,7 @@ fn assert_durable(
     durable: UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'_>,
     journal: &TransitionJournalStore,
 ) {
-    durable.revalidate_for_test(journal).unwrap();
+    durable.revalidate(journal).unwrap();
 }
 
 #[test]
@@ -90,7 +98,7 @@ fn startup_archived_post_durability_has_one_exact_order_for_applied_and_already_
                 let authority = reconcile_applied(&fixture, &journal, &reservation);
                 let expected = expected_post_events(&fixture);
                 reset_archived_candidate_preserve_post_move_durability_events();
-                let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+                let seal = UsrRollbackArchivedCandidatePreserveDurabilitySeal::new_for_test();
 
                 let durable = authority.complete_post_move_durability(&seal, &journal).unwrap();
 
@@ -157,7 +165,7 @@ fn startup_archived_post_faults_stop_at_exact_prefixes_for_both_origins() {
             let journal = fixture.open_journal();
             let reservation = ActiveStateReservation::acquire().unwrap();
             reset_observations();
-            let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+            let seal = UsrRollbackArchivedCandidatePreserveDurabilitySeal::new_for_test();
             if applied {
                 let authority = reconcile_applied(&fixture, &journal, &reservation);
                 let expected = expected_post_events(&fixture);
@@ -240,7 +248,7 @@ fn startup_archived_post_races_fail_at_every_boundary_for_both_origins() {
             let journal = fixture.open_journal();
             let reservation = ActiveStateReservation::acquire().unwrap();
             reset_observations();
-            let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+            let seal = UsrRollbackArchivedCandidatePreserveDurabilitySeal::new_for_test();
             if applied {
                 let authority = reconcile_applied(&fixture, &journal, &reservation);
                 let expected = expected_post_events(&fixture);
@@ -319,7 +327,7 @@ fn startup_archived_post_authority_rejects_journal_database_and_provenance_races
             let journal = fixture.open_journal();
             let reservation = ActiveStateReservation::acquire().unwrap();
             reset_observations();
-            let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+            let seal = UsrRollbackArchivedCandidatePreserveDurabilitySeal::new_for_test();
             if applied {
                 let authority = reconcile_applied(&fixture, &journal, &reservation);
                 let expected = expected_post_events(&fixture);
@@ -367,7 +375,7 @@ fn startup_archived_durable_revalidation_is_fresh_and_never_repeats_barriers() {
         let journal = fixture.open_journal();
         let reservation = ActiveStateReservation::acquire().unwrap();
         reset_observations();
-        let seal = UsrRollbackArchivedCandidatePreserveEffectSeal::new_for_test();
+        let seal = UsrRollbackArchivedCandidatePreserveDurabilitySeal::new_for_test();
         let durable = if applied {
             reconcile_applied(&fixture, &journal, &reservation)
                 .complete_post_move_durability(&seal, &journal)
@@ -382,7 +390,7 @@ fn startup_archived_durable_revalidation_is_fresh_and_never_repeats_barriers() {
             fixture.namespace_change_hook(format!("archived-durable-race-{applied}")),
         );
 
-        assert!(durable.revalidate_for_test(&journal).is_err());
+        assert!(durable.revalidate(&journal).is_err());
 
         assert!(take_archived_candidate_preserve_post_move_durability_events().is_empty());
         assert_preserved(&fixture);

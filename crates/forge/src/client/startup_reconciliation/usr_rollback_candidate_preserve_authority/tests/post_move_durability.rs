@@ -479,7 +479,7 @@ fn startup_new_state_post_move_durability_converges_applied_error_after_apply_an
 }
 
 #[test]
-fn startup_archived_finish_durability_is_fieldless_unsupported_without_events() {
+fn startup_archived_finish_selects_its_separate_durability_authority_without_new_state_events() {
     for kind in [OperationKind::Archived] {
         for source in CandidateSource::ALL {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
@@ -494,10 +494,12 @@ fn startup_archived_finish_durability_is_fieldless_unsupported_without_events() 
                 let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
                 reset_observations();
 
-                assert!(matches!(
-                    authority.into_post_move_durability_selection(&seal, &journal).unwrap(),
-                    UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported
-                ));
+                let UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived(authority) =
+                    authority.into_post_move_durability_selection(&seal, &journal).unwrap()
+                else {
+                    panic!("exact archived POST did not select archived durability")
+                };
+                drop(authority);
                 assert!(take_new_state_candidate_preserve_post_move_durability_events().is_empty());
                 assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
                 fixture.assert_evidence_unchanged(&before);

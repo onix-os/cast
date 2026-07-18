@@ -2,13 +2,16 @@
 
 use std::os::unix::fs::PermissionsExt as _;
 
-use crate::transition_journal::{Phase, RollbackActionOutcome};
+use crate::{
+    client::active_state_snapshot::ActiveStateReservation,
+    transition_journal::{Phase, RollbackActionOutcome},
+};
 
 use super::{
-    super::{candidate_test_support::CandidateSource, test_fixture::OperationKind},
+    super::{Dispatch, candidate_test_support::CandidateSource, dispatch, test_fixture::OperationKind},
     support::{
         CandidateOutcome, Epoch, FreshOutcome, assert_pending_phase, build_fresh_invalidation, build_non_new_state,
-        effect_counts, enter_candidate, enter_invalidation, invalidation_target_path, persist_fresh_invalidated,
+        effect_counts, enter_invalidation, invalidation_target_path, persist_fresh_invalidated,
         persist_rollback_complete, reset_namespace_effect_counts,
     },
 };
@@ -22,10 +25,25 @@ fn startup_new_state_suffix_leaves_archived_candidate_preservation_zero_effect()
     let namespace_before = fixture.fixture.namespace_snapshot();
     reset_namespace_effect_counts();
     let removal_before = effect_counts().fresh_removal;
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let in_flight = fixture.fixture.database.audit_in_flight_transition().unwrap();
 
-    let error = enter_candidate(&fixture);
+    let result = dispatch(
+        &fixture.fixture.installation,
+        &fixture.fixture.database,
+        &reservation,
+        journal,
+        fixture.candidate_intent.clone(),
+        in_flight,
+    )
+    .unwrap();
 
-    assert_pending_phase(&error, Phase::CandidatePreserveIntent);
+    let Dispatch::Unhandled { journal, record } = result else {
+        panic!("NewState child claimed an ActivateArchived candidate checkpoint")
+    };
+    assert_eq!(record, fixture.candidate_intent);
+    drop(journal);
     assert_eq!(fixture.fixture.canonical_bytes(), journal_before);
     assert_eq!(fixture.fixture.database_snapshot(), database_before);
     assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);

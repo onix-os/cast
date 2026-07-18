@@ -31,6 +31,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-post-move-durability-test  Run shared NewState post-move durability contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-persistence-test  Run durable CandidatePreserved journal persistence contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-archived-candidate-preserve-foundation-test  Run test-sealed archived child-move foundation contracts"
+	@timeout 10s echo "  forge-startup-usr-rollback-activate-archived-candidate-dispatch-test  Run production ActivateArchived candidate-preservation contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-fresh-db-invalidation-route-test  Run journal-only fresh-database invalidation routing contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-fresh-db-invalidation-effect-test  Run sealed exact fresh-database invalidation effect contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-fresh-db-invalidation-persistence-test  Run durable FreshDbInvalidated journal persistence contracts"

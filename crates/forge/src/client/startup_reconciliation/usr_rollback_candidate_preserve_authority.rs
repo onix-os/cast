@@ -4,13 +4,12 @@
 //! namespace evidence. It remains read-only and classifies staged/crash-prefix
 //! evidence separately from already-preserved evidence. Only the exact
 //! NewState target prefixes can be consumed into disjoint sealed create,
-//! normalize, or move leases. Exact ActiveReblit evidence can instead be
-//! consumed into one sealed wrapper-exchange lease. Each operation family
-//! retains its own durability suffix and persistence boundary; cleanup and
-//! trigger authority remain absent.
+//! normalize, or move leases. ActivateArchived and ActiveReblit evidence can
+//! instead be consumed into their separate child-move or wrapper-exchange
+//! leases. Each operation family retains its own durability suffix and
+//! persistence boundary; cleanup and trigger authority remain absent.
 
 mod active_reblit_effect;
-#[cfg(test)]
 mod archived_effect;
 mod effect_evidence;
 mod effect_reconciliation;
@@ -50,12 +49,12 @@ pub(in crate::client) use active_reblit_effect::{
     arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence,
 };
 #[cfg(test)]
+pub(in crate::client) use archived_effect::arm_before_archived_candidate_preserve_persistence_durable_trailing_evidence;
 pub(in crate::client) use archived_effect::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveApplyReconciliation,
     UsrRollbackArchivedCandidatePreserveDurableEffectAuthority, UsrRollbackArchivedCandidatePreserveEffectLease,
-    UsrRollbackArchivedCandidatePreserveEffectSeal,
 };
 
 #[cfg(test)]
@@ -101,13 +100,13 @@ pub(in crate::client) struct UsrRollbackCandidatePreserveFinishAuthority<'reserv
 
 /// Consuming effect selection derived without exposing namespace selectors.
 ///
-/// `Unsupported` deliberately carries no retained authority and covers only
-/// archived activation without leaking a quarantine name or descriptor.
+/// `Unsupported` deliberately carries no retained authority.
 #[must_use = "a consumed candidate-preservation Apply authority must be handled"]
 pub(in crate::client) enum UsrRollbackCandidatePreserveApplyEffectSelection<'reservation> {
     CreateNewStateTarget(UsrRollbackNewStateCandidatePreserveCreateTargetLease<'reservation>),
     NormalizeNewStateTarget(UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'reservation>),
     MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'reservation>),
+    MoveArchived(UsrRollbackArchivedCandidatePreserveEffectLease<'reservation>),
     ExchangeActiveReblit(UsrRollbackActiveReblitCandidatePreserveEffectLease<'reservation>),
     Unsupported,
 }
@@ -386,8 +385,12 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                     self.into_active_reblit_effect_after_revalidation(wrapper_index)?,
                 ))
             }
+            UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot => {
+                Ok(UsrRollbackCandidatePreserveApplyEffectSelection::MoveArchived(
+                    self.into_archived_effect_after_revalidation()?,
+                ))
+            }
             UsrRollbackCandidatePreserveTopology::NewStatePreserved
-            | UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot
             | UsrRollbackCandidatePreserveTopology::ArchivedPreserved
             | UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { .. } => {
                 Ok(UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported)

@@ -3,11 +3,10 @@
 //!
 //! Admission remains read-only. Consumed rollback-reverse typestates cross the
 //! production one-shot exchange and ordered parent-durability boundaries. A
-//! separate production leaf consumes exact NewState target prefixes and exact
-//! ActiveReblit exchange evidence into disjoint capabilities. NewState target
-//! preparation and movement retain their separate one-attempt reconciliation
-//! and durability boundaries. ActiveReblit retains a separate one-attempt
-//! wrapper exchange and post-exchange durability suffix. Applied and exact
+//! separate production leaf consumes exact NewState target prefixes,
+//! ActivateArchived child-move evidence, and ActiveReblit exchange evidence
+//! into disjoint capabilities. Each operation retains its own one-attempt
+//! reconciliation and durability boundaries. Applied and exact
 //! already-preserved evidence converge only within their operation family
 //! before separate journal-persistence boundaries. The complete suffix remains
 //! phase-specific and has no cleanup or trigger authority.
@@ -26,6 +25,8 @@ use crate::{
 
 mod activation_namespace;
 mod database_evidence;
+#[cfg(test)]
+mod focused_test_exports;
 mod metadata_provenance;
 mod replacement_mutation_authority;
 #[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
@@ -41,6 +42,9 @@ mod usr_rollback_fresh_db_invalidation_route_authority;
 mod usr_rollback_resume_route_authority;
 mod usr_rollback_reverse_authority;
 
+#[cfg(test)]
+pub(in crate::client) use focused_test_exports::*;
+
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 #[allow(unused_imports)] // retained for the test-sealed ActivateArchived route foundation
 pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::{
@@ -55,15 +59,15 @@ pub(in crate::client) use usr_rollback_active_reblit_finalization_authority::{
     UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
     UsrRollbackActiveReblitFinalizationAuthorityError,
 };
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_candidate_preserve_authority::UsrRollbackNewStateCandidatePreserveEffectLease;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence;
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveApplyReconciliation,
+    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority,
 };
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
@@ -82,9 +86,6 @@ pub(in crate::client) use usr_rollback_complete_route_authority::{
 };
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
-#[cfg(test)]
-#[allow(unused_imports)] // exported for focused rollback-decision race contracts
-pub(in crate::client) use usr_rollback_decision_authority::arm_between_usr_rollback_decision_database_captures;
 pub(in crate::client) use usr_rollback_decision_authority::{
     UsrExchangeParentDurabilityAuthority, UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority,
     UsrRollbackDecisionAuthorityError,
@@ -113,59 +114,6 @@ pub(in crate::client) use usr_rollback_reverse_authority::{
     UsrRollbackReverseFinishAuthority,
 };
 
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_reverse_authority::{
-    UsrRollbackReverseApplyEffectLease, UsrRollbackReverseFinishEffectLease,
-};
-
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::arm_between_usr_rollback_activate_archived_complete_route_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_active_reblit_complete_route_authority::arm_between_usr_rollback_active_reblit_complete_route_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_active_reblit_finalization_authority::arm_between_usr_rollback_active_reblit_finalization_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_candidate_preserve_authority::arm_between_usr_rollback_candidate_preserve_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_complete_route_authority::arm_between_usr_rollback_complete_route_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_finalization_authority::arm_between_usr_rollback_finalization_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_fresh_db_invalidation_authority::{
-    arm_between_usr_rollback_fresh_db_invalidation_database_captures, fresh_db_invalidation_removal_call_count,
-};
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_fresh_db_invalidation_route_authority::arm_between_usr_rollback_fresh_db_invalidation_route_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_resume_route_authority::arm_between_usr_rollback_resume_route_database_captures;
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_reverse_authority::arm_between_usr_rollback_reverse_database_captures;
-
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_activate_archived_complete_route_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_complete_route_fresh_namespace_capture;
-#[cfg(test)]
-#[allow(unused_imports)] // exported for focused rollback-decision race contracts
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_decision_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_finalization_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_fresh_db_invalidation_route_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_resume_route_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_usr_rollback_reverse_fresh_namespace_capture;
 use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
     UsrRollbackActivateArchivedCompleteRouteNamespaceError,
@@ -188,89 +136,11 @@ use activation_namespace::{
     UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
     UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
 };
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::{
-    ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
-    ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, ArchivedCandidatePreserveMoveFault,
-    ArchivedCandidatePreservePostMoveDurabilityEvent, ArchivedCandidatePreservePostMoveDurabilityFaultPoint,
-    ArchivedCandidatePreserveTargetDurabilityEvent, ArchivedCandidatePreserveTargetDurabilityFaultPoint,
-    NewStateCandidatePreserveMoveFault, NewStateCandidatePreservePostMoveDurabilityEvent,
-    NewStateCandidatePreservePostMoveDurabilityFaultPoint, NewStateCandidatePreserveTargetDurabilityEvent,
-    NewStateCandidatePreserveTargetDurabilityFaultPoint, NewStateTargetCreateFault,
-    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
-    active_reblit_candidate_preserve_exchange_attempt_count, archived_candidate_preserve_move_attempt_count,
-    arm_active_reblit_candidate_preserve_exchange_fault,
-    arm_active_reblit_candidate_preserve_post_exchange_durability_fault, arm_archived_candidate_preserve_move_fault,
-    arm_archived_candidate_preserve_post_move_durability_fault,
-    arm_archived_candidate_preserve_target_durability_fault,
-    arm_before_active_reblit_candidate_preserve_durable_post_revalidation_capture,
-    arm_before_archived_candidate_preserve_durable_post_revalidation_capture,
-    arm_before_archived_candidate_preserve_move_reconciliation_capture,
-    arm_before_archived_candidate_preserve_move_reconciliation_closing,
-    arm_before_archived_candidate_preserve_post_candidate_sync,
-    arm_before_archived_candidate_preserve_post_final_capture,
-    arm_before_archived_candidate_preserve_post_roots_parent_sync,
-    arm_before_archived_candidate_preserve_post_staging_parent_sync,
-    arm_before_archived_candidate_preserve_post_target_parent_sync,
-    arm_before_archived_candidate_preserve_pre_candidate_sync,
-    arm_before_archived_candidate_preserve_pre_final_capture,
-    arm_before_archived_candidate_preserve_pre_move_revalidation,
-    arm_before_archived_candidate_preserve_pre_roots_parent_sync,
-    arm_before_archived_candidate_preserve_pre_staging_parent_sync,
-    arm_before_archived_candidate_preserve_pre_target_parent_sync,
-    arm_before_new_state_candidate_preserve_candidate_sync,
-    arm_before_new_state_candidate_preserve_durable_post_revalidation_capture,
-    arm_before_new_state_candidate_preserve_move_reconciliation_capture,
-    arm_before_new_state_candidate_preserve_post_move_candidate_sync,
-    arm_before_new_state_candidate_preserve_post_move_final_post_capture,
-    arm_before_new_state_candidate_preserve_post_move_quarantine_parent_sync,
-    arm_before_new_state_candidate_preserve_post_move_staging_parent_sync,
-    arm_before_new_state_candidate_preserve_post_move_target_parent_sync,
-    arm_before_new_state_candidate_preserve_quarantine_parent_sync,
-    arm_before_new_state_candidate_preserve_target_durability_final_pre_capture,
-    arm_before_new_state_candidate_preserve_target_durability_pre_move_revalidation,
-    arm_before_new_state_candidate_preserve_target_sync, arm_before_new_state_target_create_attempt,
-    arm_before_new_state_target_create_reconciliation_capture, arm_before_new_state_target_normalize_attempt,
-    arm_before_new_state_target_normalize_final_canonical_capture,
-    arm_before_new_state_target_normalize_quarantine_parent_sync,
-    arm_before_new_state_target_normalize_reconciliation_capture, arm_before_new_state_target_normalize_target_sync,
-    arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
-    arm_before_usr_rollback_new_state_target_create_final_pre_capture,
-    arm_before_usr_rollback_new_state_target_normalize_final_pre_capture, arm_new_state_candidate_preserve_move_fault,
-    arm_new_state_candidate_preserve_post_move_durability_fault,
-    arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_create_fault,
-    arm_new_state_target_normalize_durability_fault, arm_new_state_target_normalize_fault,
-    new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
-    new_state_target_normalize_attempt_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
-    reset_active_reblit_candidate_preserve_post_exchange_durability_events,
-    reset_archived_candidate_preserve_move_attempt_count,
-    reset_archived_candidate_preserve_post_move_durability_events,
-    reset_archived_candidate_preserve_target_durability_events, reset_new_state_candidate_preserve_move_attempt_count,
-    reset_new_state_candidate_preserve_post_move_durability_events,
-    reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_create_attempt_count,
-    reset_new_state_target_normalize_attempt_count, reset_new_state_target_normalize_durability_events,
-    take_active_reblit_candidate_preserve_post_exchange_durability_events,
-    take_archived_candidate_preserve_post_move_durability_events,
-    take_archived_candidate_preserve_target_durability_events,
-    take_new_state_candidate_preserve_post_move_durability_events,
-    take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
-};
-#[cfg(test)]
 use activation_namespace::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
     UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
     UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence,
-};
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::{
-    UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
-    arm_before_reverse_exchange_reconciliation_capture, arm_before_usr_rollback_reverse_durable_namespace_capture,
-    arm_before_usr_rollback_reverse_effect_final_namespace_capture,
-    arm_before_usr_rollback_reverse_namespace_final_pre_capture,
-    arm_before_usr_rollback_reverse_namespace_installation_root_sync,
-    arm_usr_rollback_reverse_namespace_durability_fault, reset_usr_rollback_reverse_namespace_durability_events,
-    take_usr_rollback_reverse_namespace_durability_events,
 };
 #[cfg(test)]
 use database_evidence::{

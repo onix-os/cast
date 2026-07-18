@@ -14,7 +14,10 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, CleanSystemStartup},
-        startup_reconciliation::arm_before_reverse_exchange_reconciliation_capture,
+        startup_reconciliation::{
+            archived_candidate_preserve_move_attempt_count, arm_before_reverse_exchange_reconciliation_capture,
+            reset_archived_candidate_preserve_move_attempt_count,
+        },
     },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
     transition_journal::{
@@ -348,6 +351,23 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
         .expect("PRE restart must admit its exact AlreadySatisfied UsrRestored successor");
     let starting_layout = RawUsrLayout::capture(&root);
     let expected_pre_layout = starting_layout.after_reverse(layout);
+    if operation == ProcessOperation::Archived {
+        let candidate = source
+            .candidate
+            .id
+            .expect("ActivateArchived candidate must retain its state id");
+        let wrapper = root.join(".cast/root").join(candidate.to_string());
+        fs::create_dir(&wrapper).unwrap();
+        let candidate_marker = match layout {
+            ProcessLayout::Post => root.join("usr/.cast-tree-id"),
+            ProcessLayout::Pre => root.join(".cast/root/staging/usr/.cast-tree-id"),
+        };
+        let slot = wrapper.join(format!(
+            ".cast-state-slot-{candidate}-{}",
+            source.candidate.tree_token.as_str()
+        ));
+        fs::hard_link(candidate_marker, slot).unwrap();
+    }
     let source_inode = file_identity(&root.join(".cast/journal").join(CANONICAL_NAME));
     let state_database = persistent_state_database(&fixture, kind);
     let states_before = state_database.all().unwrap();
@@ -399,10 +419,23 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
     } else {
         &published_successor
     };
-    let final_successor = expected_candidate_preserve_intent(final_restored);
+    let final_preserve_intent = expected_candidate_preserve_intent(final_restored);
+    let final_successor = if operation == ProcessOperation::Archived {
+        let successor = final_preserve_intent
+            .rollback_successor(Some(RollbackActionOutcome::Applied))
+            .expect("archived candidate intent must admit its exact applied successor");
+        assert_eq!(successor.phase, Phase::CandidatePreserved);
+        successor
+    } else {
+        final_preserve_intent
+    };
     assert_eq!(canonical_record(&root), final_successor);
     assert_clean_journal_directory(&root);
-    assert_eq!(RawUsrLayout::capture(&root), expected_pre_layout);
+    if operation == ProcessOperation::Archived {
+        assert_archived_candidate_preserved_layout(&root, expected_pre_layout, &final_successor);
+    } else {
+        assert_eq!(RawUsrLayout::capture(&root), expected_pre_layout);
+    }
     assert_root_links_absent_at(&root);
     assert_database_unchanged(&root, &states_before, &in_flight_before);
 
@@ -497,30 +530,47 @@ fn run_recovery_child(
     drop(recovered);
 
     let preserve_intent = expected_candidate_preserve_intent(&restored);
-    // A source-durable restart still needs one later entry to route
-    // UsrRestored. An already-routed archived activation is also stable because
-    // that operation has no candidate suffix yet. NewState and ActiveReblit
-    // instead own CandidatePreserveIntent in later operation-specific
-    // dispatchers, so this reverse-only recovery child stops before crossing
-    // into those independent checkpoints.
-    let enter_candidate_checkpoint =
-        case.boundary.canonical_is_source() || case.operation == ProcessOperation::Archived;
-    if enter_candidate_checkpoint {
-        if !case.boundary.canonical_is_source() {
-            arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::TemporaryFullySynced, || {
-                panic!("stable archived CandidatePreserveIntent recovery attempted another journal update")
-            });
-        }
-        let stable = enter_with_handles(installation, state_database);
-        assert_candidate_preserve_intent_pending(&stable);
+    // Source-durable reverse recovery still needs one bounded later entry to
+    // route UsrRestored. The newly production-wired archived child then owns a
+    // separate later entry for the exact CandidatePreserveIntent checkpoint.
+    if case.boundary.canonical_is_source() {
+        let routed = enter_with_handles(installation, state_database);
+        assert_candidate_preserve_intent_pending(&routed);
+        assert_eq!(canonical_record(&case.root), preserve_intent);
+        drop(routed);
     }
 
-    assert_eq!(canonical_record(&case.root), preserve_intent);
+    let expected_final = if case.operation == ProcessOperation::Archived {
+        reset_archived_candidate_preserve_move_attempt_count();
+        let candidate_preserved = preserve_intent
+            .rollback_successor(Some(RollbackActionOutcome::Applied))
+            .expect("archived candidate intent must admit its exact applied successor");
+        assert_eq!(candidate_preserved.phase, Phase::CandidatePreserved);
+
+        let handled = enter_with_handles(installation, state_database);
+        assert_candidate_preserved_pending(&handled);
+        assert_eq!(canonical_record(&case.root), candidate_preserved);
+        assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);
+        drop(handled);
+
+        let stable = enter_with_handles(installation, state_database);
+        assert_candidate_preserved_pending(&stable);
+        assert_eq!(canonical_record(&case.root), candidate_preserved);
+        assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);
+        drop(stable);
+        candidate_preserved
+    } else {
+        preserve_intent
+    };
+
+    assert_eq!(canonical_record(&case.root), expected_final);
     assert_eq!(retained_exchange_syscall_count(), 0);
-    assert_eq!(
-        RawUsrLayout::capture(&case.root),
-        starting_layout.after_reverse(case.layout)
-    );
+    let reversed_layout = starting_layout.after_reverse(case.layout);
+    if case.operation == ProcessOperation::Archived {
+        assert_archived_candidate_preserved_layout(&case.root, reversed_layout, &expected_final);
+    } else {
+        assert_eq!(RawUsrLayout::capture(&case.root), reversed_layout);
+    }
     assert_eq!(state_database.all().unwrap(), states_before);
     assert_eq!(state_database.audit_in_flight_transition().unwrap(), in_flight_before);
     assert_root_links_absent_at(&case.root);
@@ -612,6 +662,43 @@ fn enter_with_handles(installation: &Installation, state_database: &crate::db::s
         Ok(_) => panic!("startup unexpectedly admitted an unresolved rollback"),
         Err(error) => error,
     }
+}
+
+fn assert_candidate_preserved_pending(error: &startup_gate::Error) {
+    match error {
+        startup_gate::Error::RecoveryPending(pending) => {
+            assert_eq!(pending.phase(), Phase::CandidatePreserved);
+            assert!(
+                pending.blockers().is_empty(),
+                "unexpected CandidatePreserved blockers: {:?}",
+                pending.blockers()
+            );
+        }
+        other => panic!("expected CandidatePreserved recovery-pending result, got {other:?}"),
+    }
+}
+
+fn assert_archived_candidate_preserved_layout(root: &Path, reversed: RawUsrLayout, record: &TransitionRecord) {
+    assert_eq!(record.operation, Operation::ActivateArchived);
+    assert_eq!(record.phase, Phase::CandidatePreserved);
+    assert_eq!(directory_identity(&root.join("usr")), reversed.live);
+    assert!(
+        fs::symlink_metadata(root.join(".cast/root/staging/usr")).is_err(),
+        "archived candidate preservation must consume staging/usr"
+    );
+
+    let candidate = record
+        .candidate
+        .id
+        .expect("ActivateArchived candidate must retain its state id");
+    let target = root.join(".cast/root").join(candidate.to_string());
+    assert_eq!(directory_identity(&target.join("usr")), reversed.staged);
+    assert_eq!(fs::read_dir(&target).unwrap().count(), 2);
+    let slot = target.join(format!(
+        ".cast-state-slot-{candidate}-{}",
+        record.candidate.tree_token.as_str()
+    ));
+    assert_eq!(file_identity(&target.join("usr/.cast-tree-id")), file_identity(&slot));
 }
 
 fn canonical_record(root: &Path) -> TransitionRecord {

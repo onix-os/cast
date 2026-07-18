@@ -14,7 +14,10 @@ use crate::transition_journal::{Phase, StorageError, TransitionJournalStore, Tra
 use super::super::startup_reconciliation::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority,
-    UsrRollbackActiveReblitCandidatePreserveApplyReconciliation, UsrRollbackCandidatePreserveApplyAuthority,
+    UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
+    UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveApplyReconciliation, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthorityError,
     UsrRollbackCandidatePreserveFinishAuthority, UsrRollbackCandidatePreserveFinishDurabilitySelection,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
@@ -24,9 +27,9 @@ use super::super::startup_reconciliation::{
     UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation,
 };
 use super::{
-    UsrRollbackActiveReblitCandidatePreservePersistenceError, UsrRollbackCandidatePreservePersistenceError,
-    persist_usr_rollback_active_reblit_candidate_preserve_and_reopen,
-    persist_usr_rollback_candidate_preserve_and_reopen,
+    UsrRollbackActiveReblitCandidatePreservePersistenceError, UsrRollbackArchivedCandidatePreservePersistenceError,
+    UsrRollbackCandidatePreservePersistenceError, persist_usr_rollback_active_reblit_candidate_preserve_and_reopen,
+    persist_usr_rollback_archived_candidate_preserve_and_reopen, persist_usr_rollback_candidate_preserve_and_reopen,
 };
 
 /// Unforgeable permission to consume read-only candidate-preservation
@@ -83,6 +86,23 @@ impl UsrRollbackActiveReblitCandidatePreserveDurabilitySeal {
     }
 }
 
+/// Unforgeable permission to consume exact ActivateArchived POST authority
+/// through its child-move durability suffix.
+pub(in crate::client) struct UsrRollbackArchivedCandidatePreserveDurabilitySeal {
+    _private: (),
+}
+
+impl UsrRollbackArchivedCandidatePreserveDurabilitySeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
 /// Exact read-only candidate-preservation admission ready for one consuming
 /// operation-specific startup checkpoint.
 pub(in crate::client) enum UsrRollbackCandidatePreserveReady<'reservation> {
@@ -104,8 +124,14 @@ enum ActiveReblitCandidatePreserveDurabilityReady<'reservation> {
     Finish(UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>),
 }
 
+enum ArchivedCandidatePreserveDurabilityReady<'reservation> {
+    Applied(UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority<'reservation>),
+    Finish(UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority<'reservation>),
+}
+
 enum CandidatePreserveDurabilityReady<'reservation> {
     NewState(NewStateCandidatePreserveDurabilityReady<'reservation>),
+    Archived(ArchivedCandidatePreserveDurabilityReady<'reservation>),
     ActiveReblit(ActiveReblitCandidatePreserveDurabilityReady<'reservation>),
 }
 
@@ -170,6 +196,23 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
                         }
                     }
                 }
+                UsrRollbackCandidatePreserveApplyEffectSelection::MoveArchived(lease) => {
+                    match lease.reconcile(&effect_seal, &journal)? {
+                        UsrRollbackArchivedCandidatePreserveApplyReconciliation::Applied(authority) => {
+                            CandidatePreserveDurabilityReady::Archived(
+                                ArchivedCandidatePreserveDurabilityReady::Applied(authority),
+                            )
+                        }
+                        UsrRollbackArchivedCandidatePreserveApplyReconciliation::NotApplied => {
+                            drop(journal);
+                            return Err(UsrRollbackCandidatePreserveDispatchError::NotApplied);
+                        }
+                        UsrRollbackArchivedCandidatePreserveApplyReconciliation::Ambiguous => {
+                            drop(journal);
+                            return Err(UsrRollbackCandidatePreserveDispatchError::Ambiguous);
+                        }
+                    }
+                }
                 UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit(lease) => {
                     match lease.reconcile(&effect_seal, &journal)? {
                         UsrRollbackActiveReblitCandidatePreserveApplyReconciliation::Applied(authority) => {
@@ -200,14 +243,15 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
                         authority,
                     ))
                 }
+                UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived(authority) => {
+                    CandidatePreserveDurabilityReady::Archived(ArchivedCandidatePreserveDurabilityReady::Finish(
+                        authority,
+                    ))
+                }
                 UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit(authority) => {
                     CandidatePreserveDurabilityReady::ActiveReblit(
                         ActiveReblitCandidatePreserveDurabilityReady::Finish(authority),
                     )
-                }
-                UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported => {
-                    drop(journal);
-                    return Err(UsrRollbackCandidatePreserveDispatchError::Unsupported);
                 }
             }
         }
@@ -238,6 +282,19 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
                 }
             };
             persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(journal, durable)
+                .map_err(UsrRollbackCandidatePreserveDispatchError::from)
+        }
+        CandidatePreserveDurabilityReady::Archived(ready) => {
+            let durability_seal = UsrRollbackArchivedCandidatePreserveDurabilitySeal::new();
+            let durable = match ready {
+                ArchivedCandidatePreserveDurabilityReady::Applied(authority) => {
+                    authority.complete_post_move_durability(&durability_seal, &journal)?
+                }
+                ArchivedCandidatePreserveDurabilityReady::Finish(authority) => {
+                    authority.complete_post_move_durability(&durability_seal, &journal)?
+                }
+            };
+            persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, durable)
                 .map_err(UsrRollbackCandidatePreserveDispatchError::from)
         }
     }
@@ -304,6 +361,8 @@ pub(in crate::client) enum UsrRollbackCandidatePreserveDispatchError {
     Persistence(#[from] UsrRollbackCandidatePreservePersistenceError),
     #[error("persist exact durable ActiveReblit candidate-preservation outcome")]
     ActiveReblitPersistence(#[from] UsrRollbackActiveReblitCandidatePreservePersistenceError),
+    #[error("persist exact durable ActivateArchived candidate-preservation outcome")]
+    ArchivedPersistence(#[from] UsrRollbackArchivedCandidatePreservePersistenceError),
     #[error("one-shot candidate-preservation namespace attempt was not applied")]
     NotApplied,
     #[error("one-shot candidate-preservation namespace attempt has ambiguous evidence")]

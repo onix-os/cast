@@ -60,6 +60,7 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s test "$$( timeout 10s grep -c . <<<"$$production_selection_calls" )" = 1; \
 	timeout 10s test "$$( timeout 10s cut -d: -f1 <<<"$$production_selection_calls" )" = "$$production_dispatch"; \
 	timeout 10s grep -Fqx '    MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'\''reservation>),' "$$authority"; \
+	timeout 10s grep -Fqx '    MoveArchived(UsrRollbackArchivedCandidatePreserveEffectLease<'\''reservation>),' "$$authority"; \
 	timeout 10s grep -Fqx '    ExchangeActiveReblit(UsrRollbackActiveReblitCandidatePreserveEffectLease<'\''reservation>),' "$$authority"; \
 	timeout 10s grep -Fqx '    Unsupported,' "$$authority"; \
 	timeout 10s grep -Fqx '    Applied(UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority<'\''reservation>),' "$$authority_effect"; \

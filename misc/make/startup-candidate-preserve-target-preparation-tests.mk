@@ -8,7 +8,7 @@ forge-startup-usr-rollback-candidate-preserve-target-preparation-test:
 	timeout 10s test "$$count" = 3; \
 	for test in \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_selects_every_new_state_prefix_for_every_origin \
-		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_keeps_archived_unsupported_and_selects_opaque_active_reblit_exchange \
+		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_selects_opaque_archived_move_and_active_reblit_exchange \
 		client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::target_preparation::startup_candidate_target_preparation_selection_is_binding_first_for_every_lease; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
@@ -39,6 +39,7 @@ forge-startup-usr-rollback-candidate-preserve-target-preparation-test:
 	timeout 10s test "$$( timeout 10s grep -Fc '    CreateNewStateTarget(UsrRollbackNewStateCandidatePreserveCreateTargetLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    NormalizeNewStateTarget(UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    MoveNewState(UsrRollbackNewStateCandidatePreserveEffectLease<'\''reservation>),' "$$authority" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    MoveArchived(UsrRollbackArchivedCandidatePreserveEffectLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    ExchangeActiveReblit(UsrRollbackActiveReblitCandidatePreserveEffectLease<'\''reservation>),' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    Unsupported,' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc "pub(in crate::client) struct $$create_lease<'reservation> {" "$$authority" )" = 1; \

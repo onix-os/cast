@@ -8,12 +8,10 @@ use super::{
 };
 
 mod default_system_intent;
-#[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
 mod usr_rollback_activate_archived;
 mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
 
-#[allow(unused_imports)] // retained for the test-sealed ActivateArchived route foundation
 pub(in crate::client) use usr_rollback_activate_archived::UsrRollbackActivateArchivedCompleteRouteSeal;
 pub(in crate::client) use usr_rollback_active_reblit::{
     UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
@@ -245,6 +243,29 @@ impl CleanSystemStartup {
                 return Err(Error::RecoveryPending(pending));
             }
 
+            let (journal, record) = match usr_rollback_activate_archived::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+                in_flight.clone(),
+            )? {
+                usr_rollback_activate_archived::Dispatch::Unhandled { journal, record } => (journal, record),
+                usr_rollback_activate_archived::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+            };
+
             let (journal, record) = match usr_rollback_active_reblit::dispatch(
                 installation,
                 state_db,
@@ -471,6 +492,8 @@ pub(super) enum Error {
     UsrRollbackReverseDispatch(#[from] super::startup_recovery::UsrRollbackReverseDispatchError),
     #[error("dispatch the exact startup ActiveReblit candidate-preservation checkpoint")]
     UsrRollbackActiveReblitDispatch(#[from] usr_rollback_active_reblit::Error),
+    #[error("dispatch the exact startup ActivateArchived candidate-preservation checkpoint")]
+    UsrRollbackActivateArchivedDispatch(#[from] usr_rollback_activate_archived::Error),
     #[error("dispatch one exact phase of the startup NewState rollback suffix")]
     UsrRollbackNewStateDispatch(#[from] usr_rollback_new_state::Error),
     #[error("revalidate retained mutable installation namespace during startup")]

@@ -88,7 +88,6 @@ forge-startup-usr-rollback-active-reblit-candidate-preserve-persistence-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveApplyEffectSelection::ExchangeActiveReblit' "$$production_dispatch"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit' "$$production_dispatch"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported' "$$production_dispatch"; \
-	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::Unsupported' "$$production_dispatch"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveDispatchError::ActiveReblitPersistence' "$$production_tests"; \
 	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$matrix" "$$races" "$$storage" "$$restart" "$$production_tests" | timeout 10s wc -l )" = 11; \
 	for race in Database Provenance Journal Installation Namespace Plan; do timeout 10s grep -Fq "EvidenceRace::$$race" "$$races"; done; \

@@ -104,7 +104,7 @@ forge-startup-usr-rollback-archived-candidate-preserve-foundation-test:
 	timeout 10s grep -Fq 'Self::Journal =>' "$$post_tests"; \
 	timeout 10s grep -Fq 'Self::DatabaseOwnership' "$$post_tests"; \
 	timeout 10s grep -Fq 'Self::Provenance' "$$post_tests"; \
-	timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "mod archived_effect;" { found = 1 } { previous = $$0 } END { exit !found }' "$$authority_root"; \
+	timeout 10s grep -Fqx 'mod archived_effect;' "$$authority_root"; \
 	if timeout 10s rg -n 'ArchivedCandidatePreserveEffectSeal|into_archived_effect_for_test|into_archived_finish_for_test' crates/forge/src/client/startup_gate crates/forge/src/client/startup_recovery --glob '*.rs'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n '\.advance[[:space:]]*\(|persist_|dispatch_|rollback_successor|run_(transaction|system)_triggers' "$$capture" "$$target" "$$post" "$$reconciliation" "$$proof" "$$proof_post" "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	production_code="$$( timeout 10s sed -E 's,//.*$$,,' "$$target" "$$post" "$$reconciliation" "$$proof" "$$proof_post" "$$authority" )"; \

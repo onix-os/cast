@@ -1,4 +1,4 @@
-//! Focused contracts for the sealed first NewState preservation move.
+//! Focused contracts for operation-disjoint candidate-preservation effects.
 
 mod target_durability;
 
@@ -11,11 +11,12 @@ use crate::{
             NewStateCandidatePreserveMoveFault, UsrRollbackCandidatePreserveAdmission,
             UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackNewStateCandidatePreserveApplyReconciliation,
             UsrRollbackNewStateCandidatePreserveEffectLease, active_reblit_candidate_preserve_exchange_attempt_count,
-            arm_before_new_state_candidate_preserve_candidate_sync,
+            archived_candidate_preserve_move_attempt_count, arm_before_new_state_candidate_preserve_candidate_sync,
             arm_before_new_state_candidate_preserve_move_reconciliation_capture,
             arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
             arm_new_state_candidate_preserve_move_fault, new_state_candidate_preserve_move_attempt_count,
             reset_active_reblit_candidate_preserve_exchange_attempt_count,
+            reset_archived_candidate_preserve_move_attempt_count,
             reset_new_state_candidate_preserve_move_attempt_count,
             reset_new_state_candidate_preserve_target_durability_events,
             take_new_state_candidate_preserve_target_durability_events,
@@ -130,15 +131,18 @@ fn startup_candidate_preserve_effect_selects_disjoint_operation_and_new_state_pr
     };
     let seal = UsrRollbackCandidatePreserveEffectSeal::new_for_test();
     reset_new_state_candidate_preserve_move_attempt_count();
+    reset_archived_candidate_preserve_move_attempt_count();
     reset_active_reblit_candidate_preserve_exchange_attempt_count();
 
-    assert!(matches!(
-        archived_authority
-            .into_effect_selection(&seal, &archived_journal)
-            .unwrap(),
-        UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported
-    ));
+    let UsrRollbackCandidatePreserveApplyEffectSelection::MoveArchived(lease) = archived_authority
+        .into_effect_selection(&seal, &archived_journal)
+        .unwrap()
+    else {
+        panic!("exact archived staged evidence did not select its child-move lease")
+    };
+    drop(lease);
     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
+    assert_eq!(archived_candidate_preserve_move_attempt_count(), 0);
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
     archived.assert_evidence_unchanged(&archived_before);
     drop(archived_reservation);

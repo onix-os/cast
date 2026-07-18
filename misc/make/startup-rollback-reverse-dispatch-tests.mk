@@ -81,8 +81,10 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s grep -Fq 'nix::libc::SIGKILL' "$$journal_process_kill"; \
 	timeout 10s grep -Fq 'crash_status.signal()' "$$journal_process_kill"; \
 	timeout 10s grep -Fq 'power-loss oracle' "$$journal_process_kill"; \
-	timeout 10s grep -Fq 'case.boundary.canonical_is_source() || case.operation == ProcessOperation::Archived' "$$journal_process_kill"; \
-	timeout 10s grep -Fq 'this reverse-only recovery child stops before crossing' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'if case.boundary.canonical_is_source() {' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'The newly production-wired archived child then owns a' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'assert_candidate_preserved_pending(&handled);' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);' "$$journal_process_kill"; \
 	if timeout 10s rg -n 'arm_next_.*fault|StorageFault' "$$journal_process_kill"; then exit 1; fi; \
 	timeout 10s grep -Fqx '    const ALL: [Self; 4] = [' "$$process_kill"; \
 	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$process_kill"; \

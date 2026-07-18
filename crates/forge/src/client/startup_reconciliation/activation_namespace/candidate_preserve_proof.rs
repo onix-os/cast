@@ -36,7 +36,6 @@ pub(in crate::client::startup_reconciliation) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };
-#[cfg(test)]
 pub(in crate::client::startup_reconciliation) use archived_effect::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
     UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
@@ -740,7 +739,6 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     NewStateEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("capture or reconcile an exact ActiveReblit whole-wrapper candidate-preservation effect")]
     ActiveReblitEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[allow(dead_code)] // test-sealed until ActivateArchived production dispatch lands
     #[error("capture or reconcile an exact archived candidate child-move effect")]
     ArchivedEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("read the retained canonical transition journal")]
