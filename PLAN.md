@@ -574,13 +574,13 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
-By 2026-07-18, the matrix contains twenty fixtures: a mixed archive/Git/raw
+By 2026-07-18, the matrix contains twenty-one fixtures: a mixed archive/Git/raw
 build, two generated payloads, an empty userspace profile, a runtime-loaded
-plugin, staged post-install and header-consumer proofs, and the declarative
-system-integration-assets package. That install-only case freezes one deterministic USTAR source, an exact provider closure, and an eight-file `out` bundle.
-Offline contract and disposable staged-root checks validate exact bytes, modes,
-helper behavior, and declared system asset checks without activating host state.
-Only a supported delegated run can emit, decode, and reproduce its Stone; none of this proves boot, transactions, or rollback.
+plugin, staged post-install and header-consumer proofs, compiled gettext
+localization, and declarative system-integration assets. Gettext compiles French and German catalogs, exercises both through a build-only libc consumer, and installs no tool or runtime relation.
+The system install-only case freezes one deterministic USTAR source, an exact provider closure, and an eight-file `out` bundle.
+Offline and supplemental staged checks validate bytes, modes, translations, helper behavior, and declared asset syntax without activating or deploying host state.
+Only a supported delegated run can emit, decode, and reproduce either Stone; none of this proves boot, transactions, deployment, or rollback.
 The plugin host validates identity returned through `dlopen`/`dlsym`; frozen commands and bundle goldens require PIE, RELRO, immediate binding,
 non-executable stack, separated writable/executable loads, no runtime search path or text relocations, and exact loader imports.
 GCC and Clang compile and run the plugin and mixed-source goldens as supplemental host proofs.
@@ -607,7 +607,7 @@ no Stone was emitted, decoded, or reproduced, so the three live-evidence items r
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for Autotools, configured no-check Autotools, Cargo, feature-selected
   multi-binary Cargo, vendored Cargo, CMake, custom-step, header-only,
-  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, split-output, and declarative system-integration builds.
+  staged-post-install, generated-daemon, pre-setup-hook, Meson, mixed archive/exact-Git/raw, explicit plugin-output, split-output, gettext-localization, and declarative system-integration builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
 - [x] Add source-less generated-configuration and generated-shell fixtures whose
@@ -634,7 +634,7 @@ no Stone was emitted, decoded, or reproduced, so the three live-evidence items r
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the twenty exact closure declarations and their aggregate bootstrap
+  each of the twenty-one exact closure declarations and their aggregate bootstrap
   package pool before the delegated runner materializes the production-format
   root.
 - [x] Before entering the container, require every frozen executable binding's
