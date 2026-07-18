@@ -3,6 +3,15 @@ fn fixture_source_root() -> PathBuf {
 }
 
 fn tracked_bytes(tree: &str, relative: &str) -> Vec<u8> {
+    tracked_bytes_with_permissions(tree, relative, 0o644)
+}
+
+fn tracked_executable_bytes(tree: &str, relative: &str) -> Vec<u8> {
+    tracked_bytes_with_permissions(tree, relative, 0o755)
+}
+
+fn tracked_bytes_with_permissions(tree: &str, relative: &str, expected_permissions: u32) -> Vec<u8> {
+    assert!(matches!(expected_permissions, 0o644 | 0o755));
     let root_path = fixture_source_root();
     let root = OpenOptions::new()
         .read(true)
@@ -100,14 +109,9 @@ fn tracked_bytes(tree: &str, relative: &str) -> Vec<u8> {
         "tracked source fixture {relative_path:?} mode/type mismatch"
     );
     assert_eq!(
-        before.mode() & 0o7000,
-        0,
-        "tracked source fixture {relative_path:?} must not carry special mode bits"
-    );
-    assert_eq!(
-        before.mode() & 0o113,
-        0,
-        "tracked source fixture {relative_path:?} must be non-executable and non-world-writable"
+        before.mode() & 0o7777,
+        expected_permissions,
+        "tracked source fixture {relative_path:?} permissions drifted"
     );
     assert!(
         before.size() <= MAX_TRACKED_FIXTURE_BYTES,

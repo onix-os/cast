@@ -109,7 +109,7 @@ chmod 644 "$duplicate_top"
 expect_rejected duplicate-top-key "$duplicate_top"
 
 duplicate_nested="$work/duplicate-nested.json"
-sed '0,/"fixture_count": 19,/s//"fixture_count": 19,\n    "fixture_count": 19,/' \
+sed '0,/"fixture_count": 20,/s//"fixture_count": 20,\n    "fixture_count": 20,/' \
     "$valid" >"$duplicate_nested"
 chmod 644 "$duplicate_nested"
 expect_rejected duplicate-nested-key "$duplicate_nested"

@@ -35,6 +35,7 @@ include!("bootstrap/execution_topology.rs");
 include!("bootstrap/autotools_regeneration.rs");
 include!("bootstrap/cmake_zlib.rs");
 include!("bootstrap/meson_dependency_roles.rs");
+include!("bootstrap/system_integration_assets.rs");
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct BootstrapClosure {
@@ -411,6 +412,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     assert_autotools_regeneration_bootstrap_contract(&closure, &indexed);
     assert_cmake_zlib_bootstrap_contract(&closure, &indexed);
     assert_meson_dependency_role_bootstrap_contract(&closure, &indexed);
+    assert_system_integration_assets_bootstrap_contract(&closure, &indexed);
 
     assert!(!closure.packages.sha256.is_empty());
     assert!(closure.packages.sha256.len() <= MAX_BOOTSTRAP_PACKAGE_COUNT);

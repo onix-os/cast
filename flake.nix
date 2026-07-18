@@ -41,6 +41,10 @@
             pkgs.valgrind
             pkgs.xz
             pkgs.zstd
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+            pkgs.dash
+            pkgs.libxml2
+            pkgs.systemd
           ];
 
           CC = "${pkgs.clang}/bin/clang";

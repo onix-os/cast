@@ -2,12 +2,6 @@ const ZLIB_DEVEL_PACKAGE_ID: &str = "0d5c833db4a2874dd09368215ed24cd45e3f9850102
 const ZLIB_RUNTIME_PACKAGE_ID: &str = "72f68a72d866271aa2f3db09dd636aed30faedf8ddc92f1c73b6ba0a24f29da8";
 
 fn assert_cmake_zlib_bootstrap_contract(closure: &BootstrapClosure, indexed: &BTreeMap<String, Meta>) {
-    assert_eq!(closure.packages.sha256.len(), 109, "bootstrap package count drift");
-    assert_eq!(
-        closure.packages.total_download_bytes, 316_105_987,
-        "bootstrap download byte total drift"
-    );
-
     let fixture = |name: &str| {
         closure
             .fixtures

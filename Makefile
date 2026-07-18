@@ -12,7 +12,7 @@ EXAMPLE ?= read
 STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
 REQUIRE_EXECUTION ?= 0
 FIXTURE ?= all
-EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config generated-shell header-only-library hooks-patch meson multiple-sources plugin-output post-install-smoke-test split userspace-profile
+EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated factory-override generated-config generated-shell header-only-library hooks-patch meson multiple-sources plugin-output post-install-smoke-test split system-integration-assets userspace-profile
 VALID_EXECUTION_FIXTURES := all $(EXECUTION_FIXTURE_NAMES)
 # Capture the literal command-line value once. A recursive make variable such
 # as '$$(shell ...)' must never be re-expanded into a bootstrap shell recipe.
@@ -67,6 +67,7 @@ include misc/make/userspace-profile-fixture.mk
 include misc/make/fixture-proof-tests.mk
 include misc/make/git-source-hardening-tests.mk
 include misc/make/multiple-sources-fixture-tests.mk
+include misc/make/system-integration-assets-fixture-tests.mk
 include misc/make/help.mk
 
 .PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-preflight delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
@@ -720,7 +721,7 @@ fixture-sources:
 fixture-sources-check:
 	@"$(TOP_DIR)/misc/scripts/build-execution-fixtures.sh" --check
 
-execution-fixtures: fixture-sources-check multiple-sources-fixture-test
+execution-fixtures: fixture-sources-check multiple-sources-fixture-test system-integration-assets-fixture-test
 	@echo "Checking locked offline execution-source fixtures..."
 	@set -eu; \
 	listed="$$( $(CARGO) test -p mason --lib \
@@ -751,7 +752,7 @@ execution-fixtures: fixture-sources-check multiple-sources-fixture-test
 	@$(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::pinned_bootstrap_manifest_is_bounded_and_index_authoritative -- \
 		--exact --nocapture
-	@echo "Resolving all nineteen execution fixtures against the pinned real Stone index..."
+	@echo "Resolving all twenty execution fixtures against the pinned real Stone index..."
 	@set -eu; \
 	listed="$$( $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::bootstrap::all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure -- \

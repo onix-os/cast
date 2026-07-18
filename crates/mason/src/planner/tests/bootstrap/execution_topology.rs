@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 19] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 20] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -17,6 +17,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 19] = [
     "plugin-output",
     "post-install-smoke-test",
     "split",
+    "system-integration-assets",
     "userspace-profile",
 ];
 const EXECUTION_FIXTURE_SELECTOR_ENV: &str = "CAST_EXECUTION_FIXTURE";
@@ -25,6 +26,12 @@ mod multiple_sources_topology {
     use super::*;
 
     include!("execution_topology/multiple_sources.rs");
+}
+
+mod system_integration_assets_topology {
+    use super::*;
+
+    include!("execution_topology/system_integration_assets.rs");
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -483,6 +490,7 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Check", vec![run("meson", "test")]),
         ],
         "multiple-sources" => multiple_sources_topology::expected(),
+        "system-integration-assets" => system_integration_assets_topology::expected(),
         "cargo" | "cargo-features" | "cargo-vendored" => vec![
             prepare(match name {
                 "cargo" => "cast-cargo-fixture",
@@ -716,6 +724,9 @@ fi
     }
     if name == "multiple-sources" {
         multiple_sources_topology::assert_contract(plan, job);
+    }
+    if name == "system-integration-assets" {
+        system_integration_assets_topology::assert_contract(plan, job);
     }
     if name == "generated-shell" {
         assert_generated_shell_relations(plan);

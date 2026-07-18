@@ -72,10 +72,11 @@ jobs:
       - name: Install and verify fixture host tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes jq uidmap util-linux
+          sudo apt-get install --yes jq libxml2-utils uidmap util-linux
           for tool in \
-            git id jq make mkfifo mktemp newgidmap setsid stat \
-            systemctl systemd-run tail tee timeout unshare; do
+            dash git id jq make mkfifo mktemp newgidmap setsid stat \
+            systemctl systemd-analyze systemd-run systemd-sysusers \
+            systemd-tmpfiles tail tee timeout udevadm unshare xmllint; do
             tool_path="/usr/bin/$tool"
             test -x "$tool_path"
             test "$(command -v "$tool")" = "$tool_path"

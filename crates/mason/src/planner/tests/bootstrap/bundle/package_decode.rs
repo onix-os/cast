@@ -37,6 +37,7 @@ pub(super) fn assert_fixture_bundle(
                 | "plugin-output"
                 | "post-install-smoke-test"
                 | "split"
+                | "system-integration-assets"
                 | "userspace-profile"
         ),
         "unknown contentful execution fixture {name:?}"
@@ -99,7 +100,10 @@ pub(super) fn assert_fixture_bundle(
         .iter()
         .map(|output| output.name.as_str())
         .collect::<BTreeSet<_>>();
-    if matches!(name, "generated-config" | "generated-shell" | "userspace-profile") {
+    if matches!(
+        name,
+        "generated-config" | "generated-shell" | "system-integration-assets" | "userspace-profile"
+    ) {
         assert_eq!(output_names, BTreeSet::from(["out"]));
     } else if name == "header-only-library" {
         assert_eq!(output_names, BTreeSet::from(["out", "devel"]));
@@ -147,6 +151,8 @@ pub(super) fn assert_fixture_bundle(
         assert_generated_config_fixture(planned, &packages);
     } else if name == "generated-shell" {
         assert_generated_shell_fixture(planned, &packages);
+    } else if name == "system-integration-assets" {
+        assert_system_integration_assets_fixture(planned, &packages);
     } else if name == "userspace-profile" {
         assert_userspace_profile_fixture(planned, &packages);
     } else if name == "header-only-library" {

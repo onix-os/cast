@@ -28,10 +28,15 @@ fn assert_meson_dependency_role_bootstrap_contract(
     assert_eq!(meson_download_bytes, 235_857_108, "meson: closure download bytes drifted");
 
     for sibling in closure.fixtures.iter().filter(|fixture| fixture.name != "meson") {
-        for meson_only in [FILE_PACKAGE_ID, LIBSECCOMP_PACKAGE_ID] {
+        assert!(
+            !sibling.package_ids.iter().any(|id| id == FILE_PACKAGE_ID),
+            "{}: Meson check-only package {FILE_PACKAGE_ID} leaked into an unrelated closure",
+            sibling.name
+        );
+        if sibling.name != "system-integration-assets" {
             assert!(
-                !sibling.package_ids.iter().any(|id| id == meson_only),
-                "{}: Meson check-only package {meson_only} leaked into an unrelated closure",
+                !sibling.package_ids.iter().any(|id| id == LIBSECCOMP_PACKAGE_ID),
+                "{}: Meson check-only package {LIBSECCOMP_PACKAGE_ID} leaked into an unrelated closure",
                 sibling.name
             );
         }
