@@ -50,7 +50,7 @@ fn startup_activate_archived_candidate_child_excludes_other_operations_and_phase
     for operation in [Operation::NewState, Operation::ActiveReblit] {
         assert_unhandled(|record| record.operation = operation);
     }
-    for phase in [Phase::UsrRestored, Phase::CandidatePreserved, Phase::RollbackComplete] {
+    for phase in [Phase::UsrRestored, Phase::RollbackComplete] {
         assert_unhandled(|record| record.phase = phase);
     }
 }

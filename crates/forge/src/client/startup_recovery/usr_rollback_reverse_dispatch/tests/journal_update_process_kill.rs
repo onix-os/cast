@@ -421,18 +421,22 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
     };
     let final_preserve_intent = expected_candidate_preserve_intent(final_restored);
     let final_successor = if operation == ProcessOperation::Archived {
-        let successor = final_preserve_intent
+        let candidate_preserved = final_preserve_intent
             .rollback_successor(Some(RollbackActionOutcome::Applied))
             .expect("archived candidate intent must admit its exact applied successor");
-        assert_eq!(successor.phase, Phase::CandidatePreserved);
-        successor
+        assert_eq!(candidate_preserved.phase, Phase::CandidatePreserved);
+        let rollback_complete = candidate_preserved
+            .rollback_successor(None)
+            .expect("archived candidate preservation must admit rollback completion");
+        assert_eq!(rollback_complete.phase, Phase::RollbackComplete);
+        rollback_complete
     } else {
         final_preserve_intent
     };
     assert_eq!(canonical_record(&root), final_successor);
     assert_clean_journal_directory(&root);
     if operation == ProcessOperation::Archived {
-        assert_archived_candidate_preserved_layout(&root, expected_pre_layout, &final_successor);
+        assert_archived_candidate_layout(&root, expected_pre_layout, &final_successor);
     } else {
         assert_eq!(RawUsrLayout::capture(&root), expected_pre_layout);
     }
@@ -553,12 +557,16 @@ fn run_recovery_child(
         assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);
         drop(handled);
 
+        let rollback_complete = candidate_preserved
+            .rollback_successor(None)
+            .expect("archived candidate preservation must admit rollback completion");
+        assert_eq!(rollback_complete.phase, Phase::RollbackComplete);
         let stable = enter_with_handles(installation, state_database);
-        assert_candidate_preserved_pending(&stable);
-        assert_eq!(canonical_record(&case.root), candidate_preserved);
+        assert_rollback_complete_pending(&stable);
+        assert_eq!(canonical_record(&case.root), rollback_complete);
         assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);
         drop(stable);
-        candidate_preserved
+        rollback_complete
     } else {
         preserve_intent
     };
@@ -567,7 +575,7 @@ fn run_recovery_child(
     assert_eq!(retained_exchange_syscall_count(), 0);
     let reversed_layout = starting_layout.after_reverse(case.layout);
     if case.operation == ProcessOperation::Archived {
-        assert_archived_candidate_preserved_layout(&case.root, reversed_layout, &expected_final);
+        assert_archived_candidate_layout(&case.root, reversed_layout, &expected_final);
     } else {
         assert_eq!(RawUsrLayout::capture(&case.root), reversed_layout);
     }
@@ -678,9 +686,21 @@ fn assert_candidate_preserved_pending(error: &startup_gate::Error) {
     }
 }
 
-fn assert_archived_candidate_preserved_layout(root: &Path, reversed: RawUsrLayout, record: &TransitionRecord) {
+fn assert_rollback_complete_pending(error: &startup_gate::Error) {
+    match error {
+        startup_gate::Error::RecoveryPending(pending) => {
+            assert_eq!(pending.phase(), Phase::RollbackComplete);
+        }
+        other => panic!("expected RollbackComplete recovery-pending result, got {other:?}"),
+    }
+}
+
+fn assert_archived_candidate_layout(root: &Path, reversed: RawUsrLayout, record: &TransitionRecord) {
     assert_eq!(record.operation, Operation::ActivateArchived);
-    assert_eq!(record.phase, Phase::CandidatePreserved);
+    assert!(matches!(
+        record.phase,
+        Phase::CandidatePreserved | Phase::RollbackComplete
+    ));
     assert_eq!(directory_identity(&root.join("usr")), reversed.live);
     assert!(
         fs::symlink_metadata(root.join(".cast/root/staging/usr")).is_err(),

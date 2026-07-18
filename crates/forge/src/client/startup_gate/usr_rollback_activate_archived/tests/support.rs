@@ -15,8 +15,9 @@ use crate::{
             reset_archived_candidate_preserve_move_attempt_count,
         },
         startup_recovery::{
-            DurableUsrRollbackArchivedCandidatePreserveRecord, UsrRollbackArchivedCandidatePreservePersistenceError,
-            UsrRollbackCandidatePreserveDispatchError,
+            DurableUsrRollbackActivateArchivedCompleteRouteRecord, DurableUsrRollbackArchivedCandidatePreserveRecord,
+            UsrRollbackActivateArchivedCompleteRoutePersistenceError,
+            UsrRollbackArchivedCandidatePreservePersistenceError, UsrRollbackCandidatePreserveDispatchError,
         },
     },
     db,
@@ -143,6 +144,35 @@ pub(super) fn assert_candidate_persistence_authority_error(error: &startup_gate:
             ))
         ),
         "expected ActivateArchived persistence authority error, got {error:?}"
+    );
+}
+
+pub(super) fn assert_complete_persistence_advance(
+    error: &startup_gate::Error,
+    expected: DurableUsrRollbackActivateArchivedCompleteRouteRecord,
+) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActivateArchivedDispatch(
+                super::super::Error::CompleteRoutePersistence(
+                    UsrRollbackActivateArchivedCompleteRoutePersistenceError::Advance { durable, .. }
+                )
+            ) if *durable == expected
+        ),
+        "expected durable {expected:?} ActivateArchived completion-route advance failure, got {error:?}"
+    );
+}
+
+pub(super) fn assert_complete_persistence_authority_error(error: &startup_gate::Error) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActivateArchivedDispatch(super::super::Error::CompleteRoutePersistence(
+                UsrRollbackActivateArchivedCompleteRoutePersistenceError::Authority(_)
+            ))
+        ),
+        "expected exact ActivateArchived completion-route persistence authority error, got {error:?}"
     );
 }
 
@@ -392,6 +422,32 @@ impl RouteFixture {
             self.fixture.fixture.previous_state.to_string()
         );
     }
+}
+
+pub(super) fn enter_route(fixture: &RouteFixture) -> startup_gate::Error {
+    enter_candidate(&fixture.fixture)
+}
+
+pub(super) fn assert_route_pending_audit(
+    error: &startup_gate::Error,
+    fixture: &RouteFixture,
+    expected: &TransitionRecord,
+) {
+    let startup_gate::Error::RecoveryPending(pending) = error else {
+        panic!("expected exact RollbackComplete recovery-pending result, got {error:?}");
+    };
+    assert_eq!(pending.transition_id(), &expected.transition_id);
+    assert_eq!(pending.phase(), Phase::RollbackComplete);
+    assert_eq!(pending.disposition(), expected.recovery_disposition());
+    assert!(pending.retains_database(&fixture.fixture.fixture.database));
+}
+
+pub(super) fn install_persistent_route_database(fixture: &mut RouteFixture) {
+    install_persistent_candidate_database(&mut fixture.fixture);
+}
+
+pub(super) fn release_route_handles(fixture: RouteFixture) -> tempfile::TempDir {
+    release_candidate_handles(fixture.fixture)
 }
 
 pub(super) fn capture_record<'reservation>(

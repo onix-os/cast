@@ -52,7 +52,7 @@ fn startup_activate_archived_candidate_source_fault_fresh_entry_finishes_without
 }
 
 #[test]
-fn startup_activate_archived_candidate_successor_fault_fresh_entry_never_moves_or_completes_again() {
+fn startup_activate_archived_candidate_successor_fault_fresh_entry_completes_without_second_move() {
     for epoch in Epoch::ALL {
         for origin in CandidateOrigin::ALL {
             for source in CandidateSource::ALL {
@@ -79,9 +79,8 @@ fn startup_activate_archived_candidate_successor_fault_fresh_entry_never_moves_o
                     let retained = release_candidate_handles(fixture);
                     let second = enter_candidate_with_fresh_handles(retained.path());
 
-                    assert_pending_phase(&second, Phase::CandidatePreserved);
-                    assert_eq!(canonical_record_from_root(retained.path()), preserved);
-                    assert_ne!(canonical_record_from_root(retained.path()), completion);
+                    assert_pending_phase(&second, Phase::RollbackComplete);
+                    assert_eq!(canonical_record_from_root(retained.path()), completion);
                     assert_eq!(candidate_move_count(), expected_moves);
                 }
             }

@@ -29,7 +29,6 @@ mod database_evidence;
 mod focused_test_exports;
 mod metadata_provenance;
 mod replacement_mutation_authority;
-#[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
 mod usr_rollback_activate_archived_complete_route_authority;
 mod usr_rollback_active_reblit_complete_route_authority;
 mod usr_rollback_active_reblit_finalization_authority;
@@ -46,7 +45,6 @@ mod usr_rollback_reverse_authority;
 pub(in crate::client) use focused_test_exports::*;
 
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
-#[allow(unused_imports)] // retained for the test-sealed ActivateArchived route foundation
 pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::{
     UsrRollbackActivateArchivedCompleteRouteAdmission, UsrRollbackActivateArchivedCompleteRouteAuthority,
     UsrRollbackActivateArchivedCompleteRouteAuthorityError,

@@ -13,7 +13,6 @@
 //! phase-specific paths and their journal-persistence boundaries; no path
 //! exposes general cleanup or trigger authority.
 
-#[allow(dead_code)] // sealed until ActivateArchived completion-route production dispatch is independently complete
 mod activate_archived_complete_route_proof;
 mod active_reblit_complete_route_proof;
 mod active_reblit_finalization_proof;

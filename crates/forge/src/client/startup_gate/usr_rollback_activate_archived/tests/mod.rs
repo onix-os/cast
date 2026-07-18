@@ -1,4 +1,4 @@
-//! Test-sealed contracts for the ActivateArchived rollback-completion route.
+//! Production contracts for the ActivateArchived rollback startup child.
 
 mod authority_binding;
 mod candidate_admission;

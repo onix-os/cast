@@ -10,26 +10,86 @@ use crate::{
     state::TransitionId,
     transition_journal::{
         AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin,
-        RollbackAction, RollbackActionOutcome,
+        RollbackAction, RollbackActionOutcome, encode,
     },
 };
 
-use super::support::{CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_pending_phase, capture_record};
+use super::support::{
+    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_pending_phase, assert_route_pending_audit,
+    candidate_move_count, capture_record, enter_route, reset_candidate_observers,
+};
 
 #[test]
-fn startup_activate_archived_complete_route_remains_absent_from_production_dispatch() {
+fn startup_activate_archived_complete_route_advances_once_without_same_entry_finalization() {
     let fixture = exact_fixture();
+    let expected = fixture.expected_successor();
     let database_before = fixture.database_snapshot();
     let namespace_before = fixture.namespace_snapshot();
+    reset_candidate_observers();
 
-    let error = fixture.fixture.fixture.enter();
+    let error = enter_route(&fixture);
 
-    assert_pending_phase(&error, Phase::CandidatePreserved);
-    assert_eq!(fixture.canonical_record(), fixture.source);
+    assert_route_pending_audit(&error, &fixture, &expected);
+    assert_eq!(fixture.canonical_record(), expected);
+    assert!(
+        fixture
+            .fixture
+            .fixture
+            .installation
+            .root
+            .join(".cast/journal/state-transition")
+            .is_file()
+    );
     assert_eq!(fixture.database_snapshot(), database_before);
     assert_eq!(fixture.namespace_snapshot(), namespace_before);
     fixture.assert_exact_database_pair();
     fixture.assert_exact_archived_topology();
+    assert_eq!(candidate_move_count(), 0);
+}
+
+#[test]
+fn startup_activate_archived_complete_route_production_defers_inexact_plan_and_topology_without_effects() {
+    let fixture = exact_fixture();
+    let mut inexact = fixture.source.clone();
+    let rollback = inexact.rollback.as_mut().unwrap();
+    rollback.source = ForwardPhase::PreviousArchiveIntent;
+    rollback.previous_archive = RollbackAction::AlreadySatisfied;
+    rollback.external_effects_may_remain = true;
+    let database_before = fixture.database_snapshot();
+    let namespace_before = fixture.namespace_snapshot();
+    fs::write(
+        fixture
+            .fixture
+            .fixture
+            .installation
+            .root
+            .join(".cast/journal/state-transition"),
+        encode(&inexact).unwrap(),
+    )
+    .unwrap();
+    reset_candidate_observers();
+
+    let inexact_error = enter_route(&fixture);
+
+    assert_pending_phase(&inexact_error, Phase::CandidatePreserved);
+    assert_eq!(fixture.canonical_record(), inexact);
+    assert_eq!(fixture.database_snapshot(), database_before);
+    assert_eq!(fixture.namespace_snapshot(), namespace_before);
+    assert_eq!(candidate_move_count(), 0);
+
+    let fixture = exact_fixture();
+    fs::remove_file(fixture.archived_slot_path()).unwrap();
+    let database_before = fixture.database_snapshot();
+    let namespace_after_mutation = fixture.namespace_snapshot();
+    reset_candidate_observers();
+
+    let topology_error = enter_route(&fixture);
+
+    assert_pending_phase(&topology_error, Phase::CandidatePreserved);
+    assert_eq!(fixture.canonical_record(), fixture.source);
+    assert_eq!(fixture.database_snapshot(), database_before);
+    assert_eq!(fixture.namespace_snapshot(), namespace_after_mutation);
+    assert_eq!(candidate_move_count(), 0);
 }
 
 #[test]

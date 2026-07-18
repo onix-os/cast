@@ -28,14 +28,15 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
         CandidateLayout::Preserved,
     );
     let archived_preserved = persist_candidate_preserved(&archived, CandidateOrigin::Applied);
+    let archived_complete = expected_rollback_complete(&archived_preserved);
     let archived_database = archived.fixture.database_snapshot();
     let archived_namespace = archived.fixture.namespace_snapshot();
     reset_candidate_effect_observers();
 
     let archived_error = enter_candidate(&archived);
 
-    assert_pending_phase(&archived_error, Phase::CandidatePreserved);
-    assert_eq!(archived.fixture.canonical_record(), archived_preserved);
+    assert_pending_phase(&archived_error, Phase::RollbackComplete);
+    assert_eq!(archived.fixture.canonical_record(), archived_complete);
     assert_eq!(archived.fixture.database_snapshot(), archived_database);
     assert_eq!(archived.fixture.namespace_snapshot(), archived_namespace);
     assert_no_candidate_effects();

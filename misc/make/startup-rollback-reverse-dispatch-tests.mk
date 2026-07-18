@@ -84,6 +84,7 @@ forge-startup-usr-rollback-reverse-dispatch-test:
 	timeout 10s grep -Fq 'if case.boundary.canonical_is_source() {' "$$journal_process_kill"; \
 	timeout 10s grep -Fq 'The newly production-wired archived child then owns a' "$$journal_process_kill"; \
 	timeout 10s grep -Fq 'assert_candidate_preserved_pending(&handled);' "$$journal_process_kill"; \
+	timeout 10s grep -Fq 'assert_rollback_complete_pending(&stable);' "$$journal_process_kill"; \
 	timeout 10s grep -Fq 'assert_eq!(archived_candidate_preserve_move_attempt_count(), 1);' "$$journal_process_kill"; \
 	if timeout 10s rg -n 'arm_next_.*fault|StorageFault' "$$journal_process_kill"; then exit 1; fi; \
 	timeout 10s grep -Fqx '    const ALL: [Self; 4] = [' "$$process_kill"; \

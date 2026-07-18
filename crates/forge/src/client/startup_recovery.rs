@@ -9,7 +9,6 @@
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_rollback_activate_archived_candidate_preserve_persistence;
-#[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
 mod usr_rollback_activate_archived_complete_route;
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
 mod usr_rollback_active_reblit_complete_route;
@@ -114,7 +113,6 @@ pub(super) use usr_rollback_active_reblit_finalization::{
     UsrRollbackActiveReblitFinalizationError, finalize_usr_rollback_active_reblit,
 };
 
-#[allow(unused_imports)] // intentionally test-sealed until operation-specific production dispatch exists
 pub(super) use usr_rollback_activate_archived_complete_route::{
     UsrRollbackActivateArchivedCompleteRoutePersistenceError,
     persist_usr_rollback_activate_archived_complete_route_and_reopen,

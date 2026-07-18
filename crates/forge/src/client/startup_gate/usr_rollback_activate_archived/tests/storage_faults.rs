@@ -1,14 +1,7 @@
-//! All five conditional journal-update faults at the test-sealed route.
+//! All five conditional journal-update faults through production startup.
 
 use crate::{
-    client::{
-        active_state_snapshot::ActiveStateReservation,
-        startup_recovery::{
-            DurableUsrRollbackActivateArchivedCompleteRouteRecord,
-            UsrRollbackActivateArchivedCompleteRoutePersistenceError,
-            persist_usr_rollback_activate_archived_complete_route_and_reopen,
-        },
-    },
+    client::startup_recovery::DurableUsrRollbackActivateArchivedCompleteRouteRecord,
     transition_journal::{
         RollbackActionOutcome, arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
         arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
@@ -18,7 +11,11 @@ use crate::{
     },
 };
 
-use super::support::{CandidateOutcome, CandidateSource, Epoch, RouteFixture};
+use super::support::{
+    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_complete_persistence_advance, assert_pending_phase,
+    candidate_move_count, canonical_record_from_root, enter_candidate_with_fresh_handles, enter_route,
+    install_persistent_route_database, release_route_handles, reset_candidate_observers,
+};
 
 #[derive(Clone, Copy)]
 struct JournalFault {
@@ -58,32 +55,23 @@ const JOURNAL_FAULTS: [JournalFault; 5] = [
 #[test]
 fn startup_activate_archived_complete_route_all_five_journal_faults_reopen_exact_durable_record() {
     for fault in JOURNAL_FAULTS {
-        let fixture = RouteFixture::new(
+        let mut fixture = RouteFixture::new(
             Epoch::Current,
             CandidateSource::Exchanged,
             RollbackActionOutcome::AlreadySatisfied,
             CandidateOutcome::Applied,
         );
-        let journal = fixture.open_journal();
-        let reservation = ActiveStateReservation::acquire().unwrap();
-        let authority = fixture.capture_ready(&journal, &reservation);
+        install_persistent_route_database(&mut fixture);
         let expected = fixture.expected_successor();
         let database_before = fixture.database_snapshot();
         let namespace_before = fixture.namespace_snapshot();
+        reset_candidate_observers();
         (fault.arm)();
 
-        let error = persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority).unwrap_err();
+        let error = enter_route(&fixture);
 
         (fault.assert_consumed)();
-        assert!(
-            matches!(
-                error,
-                UsrRollbackActivateArchivedCompleteRoutePersistenceError::Advance { durable, .. }
-                    if durable == fault.durable
-            ),
-            "expected {:?}, got {error:?}",
-            fault.durable
-        );
+        assert_complete_persistence_advance(&error, fault.durable);
         match fault.durable {
             DurableUsrRollbackActivateArchivedCompleteRouteRecord::CandidatePreserved => {
                 assert_eq!(fixture.canonical_record(), fixture.source)
@@ -96,5 +84,13 @@ fn startup_activate_archived_complete_route_all_five_journal_faults_reopen_exact
         assert_eq!(fixture.namespace_snapshot(), namespace_before);
         fixture.assert_exact_database_pair();
         fixture.assert_exact_archived_topology();
+        assert_eq!(candidate_move_count(), 0);
+
+        let retained = release_route_handles(fixture);
+        let second = enter_candidate_with_fresh_handles(retained.path());
+
+        assert_pending_phase(&second, crate::transition_journal::Phase::RollbackComplete);
+        assert_eq!(canonical_record_from_root(retained.path()), expected);
+        assert_eq!(candidate_move_count(), 0);
     }
 }

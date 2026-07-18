@@ -1,14 +1,11 @@
-//! Exact test-sealed ActivateArchived CandidatePreserved route matrix.
+//! Exact ActivateArchived CandidatePreserved completion matrix through startup.
 
-use crate::{
-    client::{
-        active_state_snapshot::ActiveStateReservation,
-        startup_recovery::persist_usr_rollback_activate_archived_complete_route_and_reopen,
-    },
-    transition_journal::{Phase, RollbackActionOutcome},
+use crate::transition_journal::{Phase, RollbackActionOutcome};
+
+use super::support::{
+    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_route_pending_audit, candidate_move_count,
+    enter_route, reset_candidate_observers,
 };
-
-use super::support::{CandidateOutcome, CandidateSource, Epoch, RouteFixture};
 
 #[test]
 fn startup_activate_archived_complete_route_covers_all_sixteen_exact_candidate_preserved_cases() {
@@ -19,29 +16,25 @@ fn startup_activate_archived_complete_route_covers_all_sixteen_exact_candidate_p
                 for candidate_outcome in CandidateOutcome::ALL {
                     let case = (epoch, source, usr_outcome, candidate_outcome);
                     let fixture = RouteFixture::new(epoch, source, usr_outcome, candidate_outcome);
-                    let journal = fixture.open_journal();
-                    let reservation = ActiveStateReservation::acquire().unwrap();
-                    let authority = fixture.capture_ready(&journal, &reservation);
-                    authority.revalidate(&journal).unwrap();
                     let expected = fixture.expected_successor();
                     let canonical_before = fixture.canonical_bytes();
                     let database_before = fixture.database_snapshot();
                     let namespace_before = fixture.namespace_snapshot();
+                    reset_candidate_observers();
 
-                    let (reopened, actual) =
-                        persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority).unwrap();
+                    let error = enter_route(&fixture);
 
-                    assert_eq!(actual, expected, "{case:?}");
-                    assert_eq!(actual.phase, Phase::RollbackComplete, "{case:?}");
-                    assert_eq!(actual.generation, fixture.source.generation + 1, "{case:?}");
-                    assert_eq!(actual.rollback, fixture.source.rollback, "{case:?}");
+                    assert_route_pending_audit(&error, &fixture, &expected);
+                    assert_eq!(expected.phase, Phase::RollbackComplete, "{case:?}");
+                    assert_eq!(expected.generation, fixture.source.generation + 1, "{case:?}");
+                    assert_eq!(expected.rollback, fixture.source.rollback, "{case:?}");
                     assert_ne!(fixture.canonical_bytes(), canonical_before, "{case:?}");
-                    assert_eq!(reopened.load().unwrap(), Some(expected.clone()), "{case:?}");
                     assert_eq!(fixture.canonical_record(), expected, "{case:?}");
                     assert_eq!(fixture.database_snapshot(), database_before, "{case:?}");
                     assert_eq!(fixture.namespace_snapshot(), namespace_before, "{case:?}");
                     fixture.assert_exact_database_pair();
                     fixture.assert_exact_archived_topology();
+                    assert_eq!(candidate_move_count(), 0, "{case:?}");
                     cases += 1;
                 }
             }

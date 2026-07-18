@@ -4,22 +4,20 @@ use std::fs;
 
 use crate::{
     client::{
-        active_state_snapshot::ActiveStateReservation,
+        startup_gate,
         startup_reconciliation::{
-            UsrRollbackActivateArchivedCompleteRouteAdmission,
-            arm_before_usr_rollback_activate_archived_complete_route_fresh_namespace_capture,
+            RecoveryBlocker, arm_before_usr_rollback_activate_archived_complete_route_fresh_namespace_capture,
             arm_between_usr_rollback_activate_archived_complete_route_database_captures,
         },
-        startup_recovery::{
-            UsrRollbackActivateArchivedCompleteRoutePersistenceError,
-            arm_before_usr_rollback_activate_archived_complete_route_final_revalidation,
-            persist_usr_rollback_activate_archived_complete_route_and_reopen,
-        },
+        startup_recovery::arm_before_usr_rollback_activate_archived_complete_route_final_revalidation,
     },
-    transition_journal::{RollbackActionOutcome, encode},
+    transition_journal::{Phase, RollbackActionOutcome, encode},
 };
 
-use super::support::{CandidateOutcome, CandidateSource, Epoch, RouteFixture};
+use super::support::{
+    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_complete_persistence_authority_error,
+    candidate_move_count, enter_route, reset_candidate_observers,
+};
 
 #[derive(Clone, Copy, Debug)]
 enum CaptureRace {
@@ -59,21 +57,14 @@ fn startup_activate_archived_complete_route_capture_sandwich_rejects_database_pr
             ),
         };
         arm_between_usr_rollback_activate_archived_complete_route_database_captures(hook);
-        let journal = fixture.open_journal();
-        let reservation = ActiveStateReservation::acquire().unwrap();
+        reset_candidate_observers();
 
-        let admission = fixture.capture(&journal, &reservation);
+        let error = enter_route(&fixture);
 
-        assert!(
-            admission.is_err()
-                || matches!(
-                    admission.unwrap(),
-                    UsrRollbackActivateArchivedCompleteRouteAdmission::Deferred
-                ),
-            "{race:?}"
-        );
+        assert_capture_race_pending(&error, race);
         assert_eq!(fixture.canonical_bytes(), canonical_before, "{race:?}");
         assert_eq!(fixture.canonical_record(), fixture.source, "{race:?}");
+        assert_eq!(candidate_move_count(), 0, "{race:?}");
         match race {
             CaptureRace::Database => {
                 assert_eq!(
@@ -121,9 +112,6 @@ fn startup_activate_archived_complete_route_final_revalidation_rejects_database_
         FinalRace::Namespace,
     ] {
         let fixture = exact_fixture();
-        let journal = fixture.open_journal();
-        let reservation = ActiveStateReservation::acquire().unwrap();
-        let authority = fixture.capture_ready(&journal, &reservation);
         let expected = fixture.expected_successor();
         let rows_before = fixture.fixture.fixture.database.all().unwrap();
         let database_before = fixture.database_snapshot();
@@ -165,16 +153,12 @@ fn startup_activate_archived_complete_route_final_revalidation_rejects_database_
             }
         };
         arm_before_usr_rollback_activate_archived_complete_route_final_revalidation(hook);
+        reset_candidate_observers();
 
-        let error = persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority).unwrap_err();
+        let error = enter_route(&fixture);
 
-        assert!(
-            matches!(
-                error,
-                UsrRollbackActivateArchivedCompleteRoutePersistenceError::Authority(_)
-            ),
-            "{race:?}: {error:?}"
-        );
+        assert_complete_persistence_authority_error(&error);
+        assert_eq!(candidate_move_count(), 0, "{race:?}");
         match race {
             FinalRace::Database => {
                 assert_eq!(fixture.canonical_record(), fixture.source);
@@ -209,6 +193,24 @@ fn startup_activate_archived_complete_route_final_revalidation_rejects_database_
                 assert!(inserted.is_dir());
             }
         }
+    }
+}
+
+fn assert_capture_race_pending(error: &startup_gate::Error, race: CaptureRace) {
+    let startup_gate::Error::RecoveryPending(pending) = error else {
+        panic!("expected {race:?} capture race to remain recovery-pending, got {error:?}");
+    };
+    assert_eq!(pending.phase(), Phase::CandidatePreserved);
+    match race {
+        CaptureRace::Database => assert!(pending.blockers().contains(&RecoveryBlocker::DatabaseConflict)),
+        CaptureRace::Provenance => {
+            assert!(
+                pending
+                    .blockers()
+                    .contains(&RecoveryBlocker::MetadataProvenanceConflict)
+            )
+        }
+        CaptureRace::Namespace => {}
     }
 }
 
