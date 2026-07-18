@@ -12,7 +12,7 @@ use crate::{package, state};
 
 use super::PreparedActiveReblitBootProjection;
 
-const MAX_BOOT_PLAN_ASSETS: usize = 8_192;
+pub(crate) const MAX_BOOT_PLAN_ASSETS: usize = 8_192;
 const MAX_BOOT_PLAN_PATH_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BOOT_PLAN_KERNELS: usize = 128;
 pub(crate) const MAX_BOOT_PLAN_SNAPSHOT_DIGESTS: usize = 256;

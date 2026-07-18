@@ -270,7 +270,8 @@ mod asset_plan;
 #[allow(unused_imports)] // consumed by the sealed-asset and systemd-plan slices
 pub(crate) use asset_plan::{
     ActiveReblitBootAssetPlanError, BootAssetPlanNotApplicable, BootAssetPlanOutcome, BootAssetRole,
-    KernelMetadataKind, MAX_BOOT_PLAN_SNAPSHOT_DIGESTS, PlannedBootAsset, PreparedActiveReblitBootAssetPlan,
+    KernelMetadataKind, MAX_BOOT_PLAN_ASSETS, MAX_BOOT_PLAN_SNAPSHOT_DIGESTS, PlannedBootAsset,
+    PreparedActiveReblitBootAssetPlan,
 };
 
 #[cfg(test)]

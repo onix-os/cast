@@ -2,7 +2,31 @@
 	forge-legacy-boot-repair-test \
 	forge-active-reblit-boot-projection-database-test \
 	forge-active-reblit-boot-asset-plan-test \
+	forge-active-reblit-stone-boot-input-test \
 	forge-boot-asset-snapshot-test
+
+forge-active-reblit-stone-boot-input-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::active_reblit_boot_inputs::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 12; \
+	for test in \
+		client::active_reblit_boot_inputs::tests::ready_binds_each_plan_reference_by_digest_when_plan_and_snapshot_orders_differ \
+		client::active_reblit_boot_inputs::tests::duplicate_plan_references_share_one_sealed_snapshot \
+		client::active_reblit_boot_inputs::tests::explicit_offset_reads_ignore_a_shared_snapshot_cursor_mutation \
+		client::active_reblit_boot_inputs::tests::optional_empty_digest_references_share_one_zero_length_binding \
+		client::active_reblit_boot_inputs::tests::expected_head_mismatch_fails_before_returning_prepared_inputs \
+		client::active_reblit_boot_inputs::tests::every_role_byte_policy_admits_exact_n_and_rejects_n_plus_one \
+		client::active_reblit_boot_inputs::tests::combined_control_byte_policy_admits_exact_n_and_rejects_n_plus_one \
+		client::active_reblit_boot_inputs::tests::referenced_byte_policy_counts_every_reference_to_one_shared_snapshot \
+		client::active_reblit_boot_inputs::tests::binding_work_policy_admits_exact_n_and_rejects_n_plus_one \
+		client::active_reblit_boot_inputs::tests::final_revalidation_rejects_state_mutation_after_snapshot_binding \
+		client::active_reblit_boot_inputs::tests::failed_final_revalidation_drops_every_prepared_snapshot_descriptor \
+		client::active_reblit_boot_inputs::tests::final_revalidation_rejects_layout_mutation_after_snapshot_binding; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_boot_inputs::tests::" -- --test-threads=1
 
 forge-active-reblit-boot-asset-plan-test:
 	@set -euo pipefail; \

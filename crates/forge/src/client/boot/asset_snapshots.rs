@@ -65,10 +65,18 @@ impl PreparedBootAssetSnapshots {
     }
 
     pub(in crate::client) fn snapshot_for(&self, digest: u128) -> Option<&SealedBootAssetSnapshot> {
+        self.snapshot_index_for(digest)
+            .and_then(|index| self.snapshot_at(index))
+    }
+
+    pub(in crate::client) fn snapshot_index_for(&self, digest: u128) -> Option<usize> {
         self.snapshots
             .binary_search_by_key(&digest, SealedBootAssetSnapshot::digest)
             .ok()
-            .map(|index| &self.snapshots[index])
+    }
+
+    pub(in crate::client) fn snapshot_at(&self, index: usize) -> Option<&SealedBootAssetSnapshot> {
+        self.snapshots.get(index)
     }
 
     pub(in crate::client) fn len(&self) -> usize {
