@@ -8,8 +8,9 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_active_reblit::tests::'; \
-	timeout 10s test "$$( timeout 10s grep "^$$prefix.*: test$$" "$$listed" | timeout 10s grep -vc "^$$prefix"'finalization_' )" = 17; \
+	timeout 10s test "$$( timeout 10s grep "^$$prefix.*: test$$" "$$listed" | timeout 10s grep -vc "^$$prefix"'finalization_' )" = 18; \
 	for name in \
+		candidate_wrapper_exchange_process_kill::startup_active_reblit_candidate_wrapper_exchange_process_kill_recovers_without_second_exchange \
 		complete_authority_binding::startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_root_journal_bindings \
 		complete_evidence_races::startup_active_reblit_complete_route_rejects_database_provenance_journal_and_namespace_races \
 		complete_exclusions::startup_active_reblit_complete_route_preserves_operation_and_phase_ordering \
@@ -34,14 +35,18 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 	new_state=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
 	leaf=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_gate/usr_rollback_active_reblit/tests; \
+	process_kill="$$tests/candidate_wrapper_exchange_process_kill.rs"; \
+	process_harness="$$tests/candidate_wrapper_exchange_process_harness.rs"; \
+	process_boundaries="$$tests/candidate_wrapper_exchange_kill_boundaries.rs"; \
+	focused_exports=crates/forge/src/client/startup_reconciliation/focused_test_exports.rs; \
 	timeout 10s grep -Fqx 'mod usr_rollback_active_reblit;' "$$gate"; \
 	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "mod usr_rollback_active_reblit;" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; fi; \
 	timeout 10s grep -Fqx '#[cfg(test)]' "$$orchestrator"; \
 	timeout 10s grep -Fqx 'mod tests;' "$$orchestrator"; \
-	for module in complete_authority_binding complete_evidence_races complete_exclusions complete_matrix complete_restart complete_storage_faults durability_failures effect_failures evidence_races exclusions matrix new_state_regression restart storage_faults support; do \
+	for module in candidate_wrapper_exchange_kill_boundaries candidate_wrapper_exchange_process_harness candidate_wrapper_exchange_process_kill complete_authority_binding complete_evidence_races complete_exclusions complete_matrix complete_restart complete_storage_faults durability_failures effect_failures evidence_races exclusions matrix new_state_regression restart storage_faults support; do \
 		timeout 10s grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
-	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests" --glob '!finalization_*.rs' | timeout 10s wc -l )" = 17; \
+	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests" --glob '!finalization_*.rs' | timeout 10s wc -l )" = 18; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$tests/support.rs" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$tests/support.rs" )" = 3; \
 	if timeout 10s rg -n --glob '!complete_authority_binding.rs' --glob '!finalization_*.rs' 'UsrRollbackCandidatePreserve(?:Seal::new_for_test|Authority::capture)|UsrRollbackActiveReblitCompleteRoute(?:Seal::new_for_test|Authority::capture)|usr_rollback_active_reblit::dispatch|super::super::dispatch|dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback_active_reblit_(candidate_preserve|complete_route)_and_reopen' "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
@@ -113,7 +118,38 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 	timeout 10s grep -Fq 'OperationKind::Archived' "$$tests/exclusions.rs"; \
 	timeout 10s grep -Fq 'OperationKind::NewState' "$$tests/new_state_regression.rs"; \
 	timeout 10s grep -Fq 'active_reblit_candidate_preserve_exchange_attempt_count(), 0' "$$tests/new_state_regression.rs"; \
-	for file in "$$gate" "$$orchestrator" "$$new_state" "$$leaf" "$$tests"/*.rs misc/make/startup-rollback-active-reblit-candidate-dispatch-tests.mk; do \
+	timeout 10s grep -Fq 'pub(super) const ALL: [Self; 8] = [' "$$process_boundaries"; \
+	for boundary in PostExchangePreRecapture BeforeCandidateSync BeforeCandidateWrapperSync BeforeReservationWrapperSync BeforeRootsParentSync BeforeQuarantineParentSync BeforeFinalPostCapture BeforeDurablePostRevalidation; do timeout 10s grep -Fq "Self::$$boundary" "$$process_boundaries"; done; \
+	for seam in arm_before_active_reblit_candidate_preserve_reconciliation_capture arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync arm_before_active_reblit_candidate_preserve_post_exchange_candidate_wrapper_sync arm_before_active_reblit_candidate_preserve_post_exchange_reservation_wrapper_sync arm_before_active_reblit_candidate_preserve_post_exchange_roots_parent_sync arm_before_active_reblit_candidate_preserve_post_exchange_quarantine_parent_sync arm_before_active_reblit_candidate_preserve_post_exchange_final_post_capture arm_before_active_reblit_candidate_preserve_durable_post_revalidation_capture; do timeout 10s grep -Fq "$$seam" "$$process_boundaries"; timeout 10s grep -Fq "$$seam" "$$focused_exports"; done; \
+	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq 'for boundary in CandidateWrapperExchangeKillBoundary::ALL {' "$$process_kill"; \
+	timeout 10s grep -Fq '        cases, 32,' "$$process_kill"; \
+	timeout 10s grep -Fq 'CandidateOrigin::Applied' "$$process_kill"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$process_harness"; \
+	timeout 10s grep -Fq '.arg(TEST_NAME)' "$$process_harness"; \
+	timeout 10s grep -Fq '.arg("--exact")' "$$process_harness"; \
+	timeout 10s grep -Fq '.arg("--test-threads=1")' "$$process_harness"; \
+	timeout 10s grep -Fq 'const CHILD_DEADLINE: Duration = Duration::from_secs(15);' "$$process_harness"; \
+	timeout 10s grep -Fq 'Some(nix::libc::SIGKILL)' "$$process_kill"; \
+	timeout 10s grep -Fq 'crash_status.signal()' "$$process_kill"; \
+	timeout 10s grep -Fq 'active_reblit_candidate_preserve_exchange_attempt_count(),' "$$process_harness"; \
+	timeout 10s grep -Fq 'active_reblit_candidate_preserve_exchange_attempt_count(), 0' "$$process_kill"; \
+	timeout 10s grep -Fq 'take_active_reblit_candidate_preserve_post_exchange_durability_events()' "$$process_kill"; \
+	timeout 10s grep -Fq 'snapshot_startup_recovery_namespace' "$$process_kill"; \
+	timeout 10s grep -Fq 'struct PublicJournalIdentity {' "$$process_harness"; \
+	timeout 10s grep -Fq 'struct ExistingCandidateDatabase {' "$$process_harness"; \
+	timeout 10s grep -Fq 'struct WrapperExchangeEvidence {' "$$process_harness"; \
+	timeout 10s grep -Fq 'struct DeadlineChild {' "$$process_harness"; \
+	timeout 10s grep -Fq 'Option<(PathBuf, (u64, u64))>' "$$process_harness"; \
+	timeout 10s grep -Fq 'external ActiveReblit wrapper-exchange control does not match' "$$process_harness"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$process_kill" )" = 2; \
+	timeout 10s grep -Fq 'release_candidate_handles(fixture)' "$$process_kill"; \
+	timeout 10s grep -Fq 'install_persistent_database(&mut fixture)' "$$process_kill"; \
+	timeout 10s grep -Fq 'RollbackActionOutcome::AlreadySatisfied' "$$process_harness"; \
+	timeout 10s grep -Fq 'same-boot process death only' "$$process_harness"; \
+	if timeout 10s rg -n 'arm_next_|finalize_usr_rollback|FaultPoint|StorageFault|dispatch_usr_rollback|persist_usr_rollback|journal\.(advance|delete)' "$$process_kill" "$$process_harness" "$$process_boundaries"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	for file in "$$gate" "$$orchestrator" "$$new_state" "$$leaf" "$$focused_exports" "$$tests"/*.rs misc/make/startup-rollback-active-reblit-candidate-dispatch-tests.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1800s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1
