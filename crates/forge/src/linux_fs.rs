@@ -92,5 +92,8 @@ include!("linux_fs/directory_security.rs");
 
 include!("linux_fs/descriptor_access.rs");
 
+#[allow(dead_code)] // parser foundation consumed by the authenticated topology layer
+pub(crate) mod mountinfo;
+
 #[cfg(test)]
 mod tests;

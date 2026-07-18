@@ -9,6 +9,9 @@ use std::{
 use super::*;
 
 mod chmod_once;
+mod mountinfo_bounds;
+mod mountinfo_compatibility;
+mod mountinfo_grammar;
 mod xattrs;
 
 struct InterruptingBoundedReader<'a> {

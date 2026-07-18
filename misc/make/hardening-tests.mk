@@ -146,12 +146,12 @@ forge-startup-reconciliation-test:
 		"client::startup_reconciliation::tests::startup_reconciliation_" \
 		-- --test-threads=1
 
-forge-linux-fs-test:
+forge-linux-fs-test: forge-linux-mountinfo-parser-test
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^linux_fs::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 25; \
+	timeout 10s test "$$count" = 44; \
 	for test in \
 		linux_fs::tests::xattrs::no_xattr_probe_classifies_empty_positive_unsupported_and_indeterminate_results \
 		linux_fs::tests::xattrs::no_xattr_probe_bounds_interrupted_retries_and_obeys_its_deadline \

@@ -60,6 +60,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-persistence-test  Run exact UsrRestored persistence and reopen contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-dispatch-test  Run one-phase real-startup reverse dispatch contracts"
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
+	@timeout 10s echo "  forge-linux-mountinfo-parser-test  Run the bounded byte-preserving Linux mountinfo parser contracts"
 	@echo "  forge-cache-test  Run the exact descriptor-rooted download and asset cache tests"
 	@echo "  forge-client-direct-test  Run all direct frozen and state-transition client tests"
 	@echo "  forge-cli-state-request-test  Run bounded canonical state-ID and removal-range contracts"
