@@ -10,6 +10,8 @@
 //! trigger authority remain absent.
 
 mod active_reblit_effect;
+#[cfg(test)]
+mod archived_effect;
 mod effect_evidence;
 mod effect_reconciliation;
 mod target_creation;
@@ -46,6 +48,14 @@ pub(in crate::client) use active_reblit_effect::{
 pub(in crate::client) use active_reblit_effect::{
     arm_before_active_reblit_candidate_preserve_durable_trailing_evidence,
     arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence,
+};
+#[cfg(test)]
+pub(in crate::client) use archived_effect::{
+    UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveApplyReconciliation,
+    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority, UsrRollbackArchivedCandidatePreserveEffectLease,
+    UsrRollbackArchivedCandidatePreserveEffectSeal,
 };
 
 #[cfg(test)]

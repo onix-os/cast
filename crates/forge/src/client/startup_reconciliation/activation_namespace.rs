@@ -15,6 +15,8 @@
 //! consume only those phase-specific paths and their journal persistence
 //! boundaries; no path exposes general cleanup or trigger authority.
 
+#[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
+mod activate_archived_complete_route_proof;
 mod active_reblit_complete_route_proof;
 mod active_reblit_finalization_proof;
 mod candidate_preserve_proof;
@@ -39,6 +41,13 @@ use crate::{
 };
 
 #[cfg(test)]
+pub(in crate::client) use activate_archived_complete_route_proof::arm_before_usr_rollback_activate_archived_complete_route_fresh_namespace_capture;
+pub(super) use activate_archived_complete_route_proof::{
+    UsrRollbackActivateArchivedCompleteRouteNamespaceError,
+    UsrRollbackActivateArchivedCompleteRouteNamespaceInspection,
+    UsrRollbackActivateArchivedCompleteRouteNamespaceProof,
+};
+#[cfg(test)]
 pub(in crate::client) use active_reblit_complete_route_proof::arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture;
 pub(super) use active_reblit_complete_route_proof::{
     UsrRollbackActiveReblitCompleteRouteNamespaceError, UsrRollbackActiveReblitCompleteRouteNamespaceInspection,
@@ -57,9 +66,28 @@ pub(super) use candidate_preserve_proof::UsrRollbackNewStateTargetNormalizeNames
 pub(in crate::client) use candidate_preserve_proof::arm_before_usr_rollback_candidate_preserve_fresh_namespace_capture;
 #[cfg(test)]
 pub(in crate::client) use candidate_preserve_proof::{
-    NewStateCandidatePreservePostMoveDurabilityEvent, NewStateCandidatePreservePostMoveDurabilityFaultPoint,
-    NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
-    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
+    ArchivedCandidatePreserveMoveFault, ArchivedCandidatePreservePostMoveDurabilityEvent,
+    ArchivedCandidatePreservePostMoveDurabilityFaultPoint, ArchivedCandidatePreserveTargetDurabilityEvent,
+    ArchivedCandidatePreserveTargetDurabilityFaultPoint, NewStateCandidatePreservePostMoveDurabilityEvent,
+    NewStateCandidatePreservePostMoveDurabilityFaultPoint, NewStateCandidatePreserveTargetDurabilityEvent,
+    NewStateCandidatePreserveTargetDurabilityFaultPoint, NewStateTargetNormalizeDurabilityEvent,
+    NewStateTargetNormalizeDurabilityFaultPoint, archived_candidate_preserve_move_attempt_count,
+    arm_archived_candidate_preserve_move_fault, arm_archived_candidate_preserve_post_move_durability_fault,
+    arm_archived_candidate_preserve_target_durability_fault,
+    arm_before_archived_candidate_preserve_durable_post_revalidation_capture,
+    arm_before_archived_candidate_preserve_move_reconciliation_capture,
+    arm_before_archived_candidate_preserve_move_reconciliation_closing,
+    arm_before_archived_candidate_preserve_post_candidate_sync,
+    arm_before_archived_candidate_preserve_post_final_capture,
+    arm_before_archived_candidate_preserve_post_roots_parent_sync,
+    arm_before_archived_candidate_preserve_post_staging_parent_sync,
+    arm_before_archived_candidate_preserve_post_target_parent_sync,
+    arm_before_archived_candidate_preserve_pre_candidate_sync,
+    arm_before_archived_candidate_preserve_pre_final_capture,
+    arm_before_archived_candidate_preserve_pre_move_revalidation,
+    arm_before_archived_candidate_preserve_pre_roots_parent_sync,
+    arm_before_archived_candidate_preserve_pre_staging_parent_sync,
+    arm_before_archived_candidate_preserve_pre_target_parent_sync,
     arm_before_new_state_candidate_preserve_candidate_sync,
     arm_before_new_state_candidate_preserve_durable_post_revalidation_capture,
     arm_before_new_state_candidate_preserve_post_move_candidate_sync,
@@ -77,8 +105,13 @@ pub(in crate::client) use candidate_preserve_proof::{
     arm_before_usr_rollback_new_state_target_normalize_final_pre_capture,
     arm_new_state_candidate_preserve_post_move_durability_fault,
     arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_normalize_durability_fault,
+    reset_archived_candidate_preserve_move_attempt_count,
+    reset_archived_candidate_preserve_post_move_durability_events,
+    reset_archived_candidate_preserve_target_durability_events,
     reset_new_state_candidate_preserve_post_move_durability_events,
     reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_normalize_durability_events,
+    take_archived_candidate_preserve_post_move_durability_events,
+    take_archived_candidate_preserve_target_durability_events,
     take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
@@ -87,6 +120,13 @@ pub(in crate::client::startup_reconciliation) use candidate_preserve_proof::{
     UsrRollbackActiveReblitCandidatePreserveAppliedNamespace, UsrRollbackActiveReblitCandidatePreserveDurableNamespace,
     UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
+};
+#[cfg(test)]
+pub(super) use candidate_preserve_proof::{
+    UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
+    UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
+    UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence,
 };
 pub(super) use candidate_preserve_proof::{
     UsrRollbackCandidatePreserveNamespaceError, UsrRollbackCandidatePreserveNamespaceInspection,

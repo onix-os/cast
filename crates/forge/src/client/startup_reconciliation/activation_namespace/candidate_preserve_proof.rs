@@ -9,6 +9,7 @@
 //! quarantine-parent durability before it can reach rename.
 
 mod active_reblit_effect;
+mod archived_effect;
 mod effect_reconciliation;
 mod target_creation;
 mod target_normalization;
@@ -35,12 +36,38 @@ pub(in crate::client::startup_reconciliation) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
 };
+#[cfg(test)]
+pub(in crate::client::startup_reconciliation) use archived_effect::{
+    UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
+    UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
+    UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
+    UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence,
+};
 
 #[cfg(test)]
 pub(in crate::client) use super::capture::{
-    NewStateCandidatePreservePostMoveDurabilityEvent, NewStateCandidatePreservePostMoveDurabilityFaultPoint,
-    NewStateCandidatePreserveTargetDurabilityEvent, NewStateCandidatePreserveTargetDurabilityFaultPoint,
-    NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint,
+    ArchivedCandidatePreserveMoveFault, ArchivedCandidatePreservePostMoveDurabilityEvent,
+    ArchivedCandidatePreservePostMoveDurabilityFaultPoint, ArchivedCandidatePreserveTargetDurabilityEvent,
+    ArchivedCandidatePreserveTargetDurabilityFaultPoint, NewStateCandidatePreservePostMoveDurabilityEvent,
+    NewStateCandidatePreservePostMoveDurabilityFaultPoint, NewStateCandidatePreserveTargetDurabilityEvent,
+    NewStateCandidatePreserveTargetDurabilityFaultPoint, NewStateTargetNormalizeDurabilityEvent,
+    NewStateTargetNormalizeDurabilityFaultPoint, archived_candidate_preserve_move_attempt_count,
+    arm_archived_candidate_preserve_move_fault, arm_archived_candidate_preserve_post_move_durability_fault,
+    arm_archived_candidate_preserve_target_durability_fault,
+    arm_before_archived_candidate_preserve_durable_post_revalidation_capture,
+    arm_before_archived_candidate_preserve_move_reconciliation_capture,
+    arm_before_archived_candidate_preserve_move_reconciliation_closing,
+    arm_before_archived_candidate_preserve_post_candidate_sync,
+    arm_before_archived_candidate_preserve_post_final_capture,
+    arm_before_archived_candidate_preserve_post_roots_parent_sync,
+    arm_before_archived_candidate_preserve_post_staging_parent_sync,
+    arm_before_archived_candidate_preserve_post_target_parent_sync,
+    arm_before_archived_candidate_preserve_pre_candidate_sync,
+    arm_before_archived_candidate_preserve_pre_final_capture,
+    arm_before_archived_candidate_preserve_pre_move_revalidation,
+    arm_before_archived_candidate_preserve_pre_roots_parent_sync,
+    arm_before_archived_candidate_preserve_pre_staging_parent_sync,
+    arm_before_archived_candidate_preserve_pre_target_parent_sync,
     arm_before_new_state_candidate_preserve_durable_post_revalidation_capture,
     arm_before_new_state_candidate_preserve_post_move_candidate_sync,
     arm_before_new_state_candidate_preserve_post_move_final_post_capture,
@@ -55,8 +82,13 @@ pub(in crate::client) use super::capture::{
     arm_before_usr_rollback_new_state_candidate_preserve_effect_final_pre_capture,
     arm_new_state_candidate_preserve_post_move_durability_fault,
     arm_new_state_candidate_preserve_target_durability_fault, arm_new_state_target_normalize_durability_fault,
+    reset_archived_candidate_preserve_move_attempt_count,
+    reset_archived_candidate_preserve_post_move_durability_events,
+    reset_archived_candidate_preserve_target_durability_events,
     reset_new_state_candidate_preserve_post_move_durability_events,
     reset_new_state_candidate_preserve_target_durability_events, reset_new_state_target_normalize_durability_events,
+    take_archived_candidate_preserve_post_move_durability_events,
+    take_archived_candidate_preserve_target_durability_events,
     take_new_state_candidate_preserve_post_move_durability_events,
     take_new_state_candidate_preserve_target_durability_events, take_new_state_target_normalize_durability_events,
 };
@@ -263,6 +295,56 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
     if candidate_preserve_topology_after_phase(record, snapshot)?
         == UsrRollbackCandidatePreserveTopology::NewStatePreserved
+    {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
+    }
+}
+
+/// Require the exact canonical-slot ActivateArchived preservation topology
+/// while the journal is at its already-persisted `CandidatePreserved`
+/// checkpoint.
+///
+/// The completion route receives a phase-specific read-only predicate rather
+/// than widening the earlier candidate-preservation admission surface.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_activate_archived_candidate_preserved_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::CandidatePreserved {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongCandidatePreservedPhase);
+    }
+    if record.operation != Operation::ActivateArchived {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActivateArchivedRequired);
+    }
+    if candidate_preserve_topology_after_phase(record, snapshot)?
+        == UsrRollbackCandidatePreserveTopology::ArchivedPreserved
+    {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch)
+    }
+}
+
+/// Require the same exact canonical-slot ActivateArchived preservation
+/// topology at terminal rollback.
+///
+/// This distinct phase predicate prevents a `CandidatePreserved` route proof
+/// from being reused as terminal authority.
+#[allow(dead_code)] // consumed only by the separately sealed finalization checkpoint
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_activate_archived_rollback_complete_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::RollbackComplete {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongRollbackCompletePhase);
+    }
+    if record.operation != Operation::ActivateArchived {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActivateArchivedRequired);
+    }
+    if candidate_preserve_topology_after_phase(record, snapshot)?
+        == UsrRollbackCandidatePreserveTopology::ArchivedPreserved
     {
         Ok(())
     } else {
@@ -658,6 +740,9 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     NewStateEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("capture or reconcile an exact ActiveReblit whole-wrapper candidate-preservation effect")]
     ActiveReblitEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[allow(dead_code)] // test-sealed until ActivateArchived production dispatch lands
+    #[error("capture or reconcile an exact archived candidate child-move effect")]
+    ArchivedEffect(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("read the retained canonical transition journal")]
     Journal(#[from] StorageError),
     #[error("the retained canonical transition journal changed during candidate-preservation proof")]
@@ -681,6 +766,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     NewStateRequired,
     #[error("whole-wrapper rollback-completion routing requires an ActiveReblit transition")]
     ActiveReblitRequired,
+    #[error("canonical-slot rollback-completion routing requires an ActivateArchived transition")]
+    ActivateArchivedRequired,
     #[error("the candidate tree is absent from the accepted namespace inventory")]
     CandidateMissing,
     #[error("the candidate state ID required by archived preservation is absent")]

@@ -8,9 +8,13 @@ use super::{
 };
 
 mod default_system_intent;
+#[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
+mod usr_rollback_activate_archived;
 mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
 
+#[allow(unused_imports)] // retained for the test-sealed ActivateArchived route foundation
+pub(in crate::client) use usr_rollback_activate_archived::UsrRollbackActivateArchivedCompleteRouteSeal;
 pub(in crate::client) use usr_rollback_active_reblit::{
     UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
 };

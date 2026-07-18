@@ -1,4 +1,5 @@
 mod active_reblit_candidate_preserve;
+mod archived_candidate_preserve;
 mod model;
 mod new_state_candidate_preserve;
 mod new_state_candidate_target_preparation;
@@ -60,6 +61,40 @@ pub(in crate::client) use active_reblit_candidate_preserve::{
     reset_active_reblit_candidate_preserve_exchange_attempt_count,
     reset_active_reblit_candidate_preserve_post_exchange_durability_events,
     take_active_reblit_candidate_preserve_post_exchange_durability_events,
+};
+pub(in crate::client::startup_reconciliation::activation_namespace) use archived_candidate_preserve::{
+    AppliedArchivedCandidatePreserveMoveReconciliation, ArchivedCandidatePreserveCaptureError,
+    ArchivedCandidatePreserveLayout, ArchivedCandidatePreserveMoveReconciliation,
+    ArchivedCandidatePreservePostMoveDurabilityError, DurableArchivedCandidatePreservePostMoveNamespace,
+    PendingArchivedCandidatePreservePostMoveDurability, ProjectedArchivedCandidatePreserveNamespace,
+    RetainedArchivedCandidatePreserveParents, TargetDurableArchivedCandidatePreservePre,
+};
+#[cfg(test)]
+pub(in crate::client) use archived_candidate_preserve::{
+    ArchivedCandidatePreserveMoveFault, ArchivedCandidatePreservePostMoveDurabilityEvent,
+    ArchivedCandidatePreservePostMoveDurabilityFaultPoint, ArchivedCandidatePreserveTargetDurabilityEvent,
+    ArchivedCandidatePreserveTargetDurabilityFaultPoint, archived_candidate_preserve_move_attempt_count,
+    arm_archived_candidate_preserve_move_fault, arm_archived_candidate_preserve_post_move_durability_fault,
+    arm_archived_candidate_preserve_target_durability_fault,
+    arm_before_archived_candidate_preserve_durable_post_revalidation_capture,
+    arm_before_archived_candidate_preserve_move_reconciliation_capture,
+    arm_before_archived_candidate_preserve_move_reconciliation_closing,
+    arm_before_archived_candidate_preserve_post_candidate_sync,
+    arm_before_archived_candidate_preserve_post_final_capture,
+    arm_before_archived_candidate_preserve_post_roots_parent_sync,
+    arm_before_archived_candidate_preserve_post_staging_parent_sync,
+    arm_before_archived_candidate_preserve_post_target_parent_sync,
+    arm_before_archived_candidate_preserve_pre_candidate_sync,
+    arm_before_archived_candidate_preserve_pre_final_capture,
+    arm_before_archived_candidate_preserve_pre_move_revalidation,
+    arm_before_archived_candidate_preserve_pre_roots_parent_sync,
+    arm_before_archived_candidate_preserve_pre_staging_parent_sync,
+    arm_before_archived_candidate_preserve_pre_target_parent_sync,
+    reset_archived_candidate_preserve_move_attempt_count,
+    reset_archived_candidate_preserve_post_move_durability_events,
+    reset_archived_candidate_preserve_target_durability_events,
+    take_archived_candidate_preserve_post_move_durability_events,
+    take_archived_candidate_preserve_target_durability_events,
 };
 use model::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};

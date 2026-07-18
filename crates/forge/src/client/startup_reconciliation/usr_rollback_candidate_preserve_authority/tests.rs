@@ -1,6 +1,7 @@
 mod active_reblit_effect;
 mod active_reblit_post_exchange_durability;
 mod admission;
+mod archived_effect;
 mod evidence;
 mod post_move_durability;
 pub(super) use super::{test_fixture as fixture, test_support as support};

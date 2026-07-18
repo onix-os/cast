@@ -8,6 +8,8 @@
 
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
+#[allow(dead_code)] // test-sealed until ActivateArchived production dispatch is independently complete
+mod usr_rollback_activate_archived_complete_route;
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
 mod usr_rollback_active_reblit_complete_route;
 mod usr_rollback_active_reblit_finalization;
@@ -106,6 +108,12 @@ pub(super) use usr_rollback_active_reblit_finalization::{
     UsrRollbackActiveReblitFinalizationError, finalize_usr_rollback_active_reblit,
 };
 
+#[allow(unused_imports)] // intentionally test-sealed until operation-specific production dispatch exists
+pub(super) use usr_rollback_activate_archived_complete_route::{
+    UsrRollbackActivateArchivedCompleteRoutePersistenceError,
+    persist_usr_rollback_activate_archived_complete_route_and_reopen,
+};
+
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_candidate_preserve_persistence::{
     DurableUsrRollbackActiveReblitCandidatePreserveRecord,
@@ -121,6 +129,12 @@ pub(in crate::client) use usr_rollback_active_reblit_complete_route::{
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_finalization::{
     DurableUsrRollbackActiveReblitFinalizationRecord, UsrRollbackActiveReblitFinalizationVerificationError,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_activate_archived_complete_route::{
+    DurableUsrRollbackActivateArchivedCompleteRouteRecord,
+    arm_before_usr_rollback_activate_archived_complete_route_final_revalidation,
 };
 
 pub(super) use usr_rollback_complete_route::{
