@@ -180,11 +180,7 @@ pub(crate) fn descriptor_mount_id(file: &std::fs::File) -> io::Result<u64> {
         controlled_resolution(),
     )?;
     require_procfs(&fdinfo, Path::new("/proc/<pid>/task/<tid>/fdinfo/<fd>"))?;
-    let mut bytes = Vec::with_capacity(512);
-    fdinfo
-        .by_ref()
-        .take((MAX_PROC_FDINFO_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)?;
+    let bytes = read_to_end_bounded(&mut fdinfo, MAX_PROC_FDINFO_BYTES + 1)?;
     let mount_id = parse_descriptor_mount_id(&bytes)?;
 
     let (_descriptors, _descriptor, after) = authenticated_descriptor_name(file)?;

@@ -11,6 +11,44 @@ use super::*;
 mod chmod_once;
 mod xattrs;
 
+struct InterruptingBoundedReader<'a> {
+    interruptions: usize,
+    bytes: &'a [u8],
+    offset: usize,
+    calls: usize,
+    bytewise: bool,
+}
+
+impl<'a> InterruptingBoundedReader<'a> {
+    fn new(interruptions: usize, bytes: &'a [u8], bytewise: bool) -> Self {
+        Self {
+            interruptions,
+            bytes,
+            offset: 0,
+            calls: 0,
+            bytewise,
+        }
+    }
+}
+
+impl io::Read for InterruptingBoundedReader<'_> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        self.calls += 1;
+        if self.interruptions > 0 {
+            self.interruptions -= 1;
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        if self.offset == self.bytes.len() {
+            return Ok(0);
+        }
+        let available = self.bytes.len() - self.offset;
+        let count = if self.bytewise { 1 } else { available.min(output.len()) };
+        output[..count].copy_from_slice(&self.bytes[self.offset..self.offset + count]);
+        self.offset += count;
+        Ok(count)
+    }
+}
+
 #[test]
 fn interrupted_retry_limit_accepts_n_and_rejects_n_plus_one() {
     let accepted_attempts = Cell::new(0usize);
@@ -34,6 +72,19 @@ fn interrupted_retry_limit_accepts_n_and_rejects_n_plus_one() {
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     assert_eq!(rejected_attempts.get(), MAX_INTERRUPTED_SYSCALL_RETRIES + 1);
+
+    let mut accepted_read = InterruptingBoundedReader::new(MAX_INTERRUPTED_SYSCALL_RETRIES, b"ok", false);
+    assert_eq!(read_to_end_bounded(&mut accepted_read, 3).unwrap(), b"ok");
+    assert_eq!(accepted_read.calls, MAX_INTERRUPTED_SYSCALL_RETRIES + 2);
+
+    let mut rejected_read = InterruptingBoundedReader::new(MAX_INTERRUPTED_SYSCALL_RETRIES + 1, b"ok", false);
+    let error = read_to_end_bounded(&mut rejected_read, 3).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(rejected_read.calls, MAX_INTERRUPTED_SYSCALL_RETRIES + 1);
+
+    let mut bytewise = InterruptingBoundedReader::new(0, b"oversized", true);
+    assert_eq!(read_to_end_bounded(&mut bytewise, 4).unwrap(), b"over");
+    assert_eq!(bytewise.calls, 4);
 }
 
 #[test]

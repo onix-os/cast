@@ -6,7 +6,7 @@
 
 use std::{
     ffi::{CStr, CString},
-    io::{self, Read as _},
+    io,
     mem::{size_of, zeroed},
     os::{
         fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd},
@@ -51,6 +51,37 @@ fn retry_interrupted<T>(deadline: Option<Instant>, mut operation: impl FnMut() -
             result => return result,
         }
     }
+}
+
+/// Read at most `max_bytes` without inheriting `Read::read_to_end`'s
+/// unbounded EINTR retry loop.
+///
+/// Positive reads are bounded by the byte ceiling because every successful
+/// call must contribute at least one byte. Interrupted calls share the same
+/// finite retry ceiling as the other retained-filesystem primitives.
+pub(crate) fn read_to_end_bounded(reader: &mut impl io::Read, max_bytes: usize) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(max_bytes.min(4 * 1024));
+    let mut buffer = [0_u8; 512];
+    let mut interruptions = 0usize;
+    while bytes.len() < max_bytes {
+        let remaining = max_bytes - bytes.len();
+        let chunk = remaining.min(buffer.len());
+        match reader.read(&mut buffer[..chunk]) {
+            Ok(0) => break,
+            Ok(read) => bytes.extend_from_slice(&buffer[..read]),
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                if interruptions >= MAX_INTERRUPTED_SYSCALL_RETRIES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Interrupted,
+                        format!("bounded read exceeded {MAX_INTERRUPTED_SYSCALL_RETRIES} interrupted retries"),
+                    ));
+                }
+                interruptions += 1;
+            }
+            Err(source) => return Err(source),
+        }
+    }
+    Ok(bytes)
 }
 
 include!("linux_fs/descriptor_metadata.rs");

@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Read as _},
+    io,
     mem::zeroed,
     os::{fd::AsRawFd as _, unix::fs::MetadataExt as _},
     path::Path,
@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::linux_fs::{
     authenticated_current_thread_procfs, authenticated_procfs_root, controlled_resolution, descriptor_mount_id,
-    openat2_file, require_procfs,
+    openat2_file, read_to_end_bounded, require_procfs,
 };
 
 use super::{BootId, CodecError, MountNamespaceIdentity, RuntimeEpoch, RuntimeTreeIdentity};
@@ -67,11 +67,7 @@ fn capture_boot_id() -> Result<BootId, RuntimeEvidenceError> {
     require_procfs(&file, Path::new("/proc/sys/kernel/random/boot_id"))
         .map_err(RuntimeEvidenceError::AuthenticateBootId)?;
 
-    let mut bytes = Vec::with_capacity(BOOT_ID_FILE_BYTES);
-    file.by_ref()
-        .take((BOOT_ID_FILE_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(RuntimeEvidenceError::ReadBootId)?;
+    let bytes = read_to_end_bounded(&mut file, BOOT_ID_FILE_BYTES + 1).map_err(RuntimeEvidenceError::ReadBootId)?;
     parse_boot_id_bytes(&bytes)
 }
 
