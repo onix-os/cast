@@ -489,9 +489,19 @@ makes zero second moves, completes POST durability, and persists
 `CandidatePreserved(AlreadySatisfied)`. The entry returns only
 `RecoveryPending`; completion and finalization remain later checkpoints.
 
+Commit `bc6d6792` expands that production path to an exact 2 x 2 x 7 matrix.
+In addition to the original post-move/pre-recapture seam, a real crash process
+now dies before candidate-tree sync, each of the three retained parent
+barriers, final POST capture, and the pre-persistence durable POST
+revalidation. Every callback first requires exactly one move attempt. The parent
+then proves the candidate is preserved with exact source journal, database,
+bytes, and inode identities; a fresh recovery process takes Finish, performs zero second moves,
+replays the idempotent durability suffix, and persists the exact
+`CandidatePreserved(AlreadySatisfied)` successor.
+
 The historical epoch dimension is an out-of-current-epoch journal witness in
 the same boot, not a reboot simulation. Neither the terminal post-sync kills
-nor the pre-POST candidate-move kill is a power-loss oracle, so reboot and
+nor any candidate-preservation kill is a power-loss oracle, so reboot and
 power-loss durability remain unproved. Phase 11 and the broad interruption
 campaign stay open. ActivateArchived completion
 dispatch is production-wired by `c8c5ea41` as its own bounded entry.

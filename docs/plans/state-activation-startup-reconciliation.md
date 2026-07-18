@@ -896,6 +896,12 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   reboot, and death before POST durability cannot prove which move survives
   power loss.
 
+  Commit `bc6d6792` expands that first proof into an exact 2 x 2 x 7 matrix.
+  Additional crash children die before candidate-tree sync, each retained parent sync, final POST capture, and pre-persistence durable POST revalidation.
+  Every seam first observes one move attempt; the parent proves the preserved tree and exact source record, database, bytes, and inode identities.
+  A fresh recovery child selects Finish, makes zero second moves, repeats the idempotent durability suffix, and persists exact `CandidatePreserved(AlreadySatisfied)`.
+  The 15-second deadlines kill and reap a hung child. This remains same-boot proof, not reboot or power-loss evidence.
+
 ## Remaining recovery campaign
 
   The production ladder now covers the authenticated `/usr` rollback prefix,
@@ -960,7 +966,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   terminal process-death cases, but not process death at every earlier suffix
   effect. ActiveReblit adds terminal-delete fault injection, fresh-handle
   restart, and 12 genuine same-boot process-death cases. ActivateArchived adds
-  its 12 terminal cases plus the four post-move/pre-recapture cases above, but
+  its 12 terminal cases plus the 28 candidate-preservation cases above, but
   its other earlier interruption boundaries remain open. None of these lanes
   has reboot or power-loss proof: `SIGKILL` preserves the
   kernel-visible state at termination and cannot establish which pre-fsync
@@ -978,7 +984,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   The reverse `/usr` prefix now covers 12 execution-boundary and 30
   journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState,
   ActiveReblit, and ActivateArchived terminal deletion each add an exact
-  12-case fresh-process matrix. ActivateArchived candidate preservation also
-  covers the exact four-case post-move/pre-recapture matrix. This item remains
+  12-case fresh-process matrix. ActivateArchived candidate preservation also covers
+  the exact 2 x 2 x 7 process-death matrix through the durability suffix. This item remains
   unchecked because the other phases and true power-loss-equivalent durability
   outcomes are not yet covered.
