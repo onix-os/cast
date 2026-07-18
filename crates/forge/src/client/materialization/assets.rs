@@ -90,8 +90,17 @@ struct AssetPool {
 
 impl AssetPool {
     fn open(installation: &Installation) -> Result<Self, Error> {
-        let installation_path = lexical_absolute_path(&installation.root)?;
-        let assets_path = lexical_absolute_path(&installation.assets_path("v2"))?;
+        Self::open_with_deadline(installation, None)
+    }
+
+    fn open_until(installation: &Installation, deadline: Instant) -> Result<Self, Error> {
+        Self::open_with_deadline(installation, Some(deadline))
+    }
+
+    fn open_with_deadline(installation: &Installation, deadline: Option<Instant>) -> Result<Self, Error> {
+        require_asset_deadline(deadline)?;
+        let installation_path = complete_asset_io(lexical_absolute_path(&installation.root), deadline)?;
+        let assets_path = complete_asset_io(lexical_absolute_path(&installation.assets_path("v2")), deadline)?;
         let relative_path = assets_path
             .strip_prefix(&installation_path)
             .ok()
@@ -100,9 +109,9 @@ impl AssetPool {
             .to_owned();
         require_beneath_path(&relative_path)?;
 
-        let installation_root = open_absolute_directory(&installation_path)?;
-        let installation_identity = asset_directory_identity(&installation_root)?;
-        let root = openat2_frozen(
+        let installation_root = open_absolute_directory_with_deadline(&installation_path, deadline)?;
+        let installation_identity = asset_directory_identity_with_deadline(&installation_root, deadline)?;
+        let root = open_asset_path(
             installation_root.as_raw_fd(),
             &relative_path,
             nix::libc::O_RDONLY
@@ -111,8 +120,9 @@ impl AssetPool {
                 | nix::libc::O_NOFOLLOW
                 | nix::libc::O_NONBLOCK,
             asset_resolve_flags(),
+            deadline,
         )?;
-        let identity = asset_directory_identity(&root)?;
+        let identity = asset_directory_identity_with_deadline(&root, deadline)?;
         let pool = Self {
             installation_path,
             installation_root,
@@ -121,24 +131,33 @@ impl AssetPool {
             root,
             identity,
         };
-        pool.revalidate()?;
+        pool.revalidate_with_deadline(deadline)?;
         Ok(pool)
     }
 
     fn revalidate(&self) -> Result<(), Error> {
-        if asset_directory_identity(&self.installation_root)? != self.installation_identity
-            || asset_directory_identity(&self.root)? != self.identity
+        self.revalidate_with_deadline(None)
+    }
+
+    fn revalidate_until(&self, deadline: Instant) -> Result<(), Error> {
+        self.revalidate_with_deadline(Some(deadline))
+    }
+
+    fn revalidate_with_deadline(&self, deadline: Option<Instant>) -> Result<(), Error> {
+        require_asset_deadline(deadline)?;
+        if asset_directory_identity_with_deadline(&self.installation_root, deadline)? != self.installation_identity
+            || asset_directory_identity_with_deadline(&self.root, deadline)? != self.identity
         {
             return Err(asset_copy_error("retained asset-cache anchor changed"));
         }
 
-        let named_installation = open_absolute_directory(&self.installation_path)?;
-        if asset_directory_identity(&named_installation)? != self.installation_identity {
+        let named_installation = open_absolute_directory_with_deadline(&self.installation_path, deadline)?;
+        if asset_directory_identity_with_deadline(&named_installation, deadline)? != self.installation_identity {
             return Err(asset_copy_error(
                 "installation root was replaced while using asset cache",
             ));
         }
-        let named_root = openat2_frozen(
+        let named_root = open_asset_path(
             named_installation.as_raw_fd(),
             &self.relative_path,
             nix::libc::O_RDONLY
@@ -147,57 +166,76 @@ impl AssetPool {
                 | nix::libc::O_NOFOLLOW
                 | nix::libc::O_NONBLOCK,
             asset_resolve_flags(),
+            deadline,
         )?;
-        if asset_directory_identity(&named_root)? != self.identity {
+        if asset_directory_identity_with_deadline(&named_root, deadline)? != self.identity {
             return Err(asset_copy_error("asset pool was replaced while materializing a root"));
         }
+        require_asset_deadline(deadline)?;
         Ok(())
     }
 
     fn open_asset(&self, path: &Path) -> Result<OpenedAsset, Error> {
-        self.revalidate()?;
+        self.open_asset_with_deadline(path, None)
+    }
+
+    fn open_asset_until(&self, path: &Path, deadline: Instant) -> Result<OpenedAsset, Error> {
+        self.open_asset_with_deadline(path, Some(deadline))
+    }
+
+    fn open_asset_with_deadline(&self, path: &Path, deadline: Option<Instant>) -> Result<OpenedAsset, Error> {
+        self.revalidate_with_deadline(deadline)?;
         require_beneath_path(path)?;
-        let parent_path = path
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .ok_or_else(|| asset_copy_error("asset path has no descriptor-rooted parent"))?;
         let name = path
             .file_name()
             .ok_or_else(|| asset_copy_error("asset path has no final component"))?
             .to_owned();
         require_single_component(Path::new(&name))?;
-        let parent = openat2_frozen(
-            self.root.as_raw_fd(),
-            parent_path,
-            nix::libc::O_RDONLY
-                | nix::libc::O_DIRECTORY
-                | nix::libc::O_CLOEXEC
-                | nix::libc::O_NOFOLLOW
-                | nix::libc::O_NONBLOCK,
-            asset_resolve_flags(),
-        )?;
+        let parent = match path.parent().filter(|path| !path.as_os_str().is_empty()) {
+            Some(parent_path) => open_asset_path(
+                self.root.as_raw_fd(),
+                parent_path,
+                nix::libc::O_RDONLY
+                    | nix::libc::O_DIRECTORY
+                    | nix::libc::O_CLOEXEC
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_NONBLOCK,
+                asset_resolve_flags(),
+                deadline,
+            )?,
+            // Cache hashes shorter than ten hexadecimal characters are stored
+            // directly under assets/v2. Retain an independently owned clone of
+            // the already authenticated pool descriptor as their parent; never
+            // reopen the public path or relax the descendant resolution flags.
+            None => {
+                require_asset_deadline(deadline)?;
+                complete_asset_io(self.root.try_clone(), deadline)?
+            }
+        };
         // Probe through O_PATH first so a hostile FIFO or device is rejected
         // without invoking its open handler. Only an exact regular inode is
         // then opened for bounded nonblocking reads.
-        let probe = openat2_frozen(
+        let probe = open_asset_path(
             parent.as_raw_fd(),
             Path::new(&name),
             nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
             asset_resolve_flags(),
+            deadline,
         )?;
-        let witness = asset_source_witness(&probe)?;
-        let file = openat2_frozen(
+        let witness = asset_source_witness_with_deadline(&probe, deadline)?;
+        let file = open_asset_path(
             parent.as_raw_fd(),
             Path::new(&name),
             nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
             asset_resolve_flags(),
+            deadline,
         )?;
-        if asset_source_witness(&file)? != witness {
+        if asset_source_witness_with_deadline(&file, deadline)? != witness {
             return Err(asset_copy_error(
                 "cached asset was replaced between type probe and open",
             ));
         }
-        self.revalidate()?;
+        self.revalidate_with_deadline(deadline)?;
         Ok(OpenedAsset {
             path: path.to_owned(),
             parent,
@@ -221,6 +259,41 @@ fn asset_resolve_flags() -> u64 {
         | nix::libc::RESOLVE_NO_SYMLINKS
         | nix::libc::RESOLVE_NO_MAGICLINKS
         | nix::libc::RESOLVE_NO_XDEV) as u64
+}
+
+fn require_asset_deadline(deadline: Option<Instant>) -> Result<(), Error> {
+    if deadline.is_some_and(|deadline| Instant::now() > deadline) {
+        Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "authenticated asset operation exceeded its deadline",
+        )
+        .into())
+    } else {
+        Ok(())
+    }
+}
+
+fn complete_asset_io<T>(result: io::Result<T>, deadline: Option<Instant>) -> Result<T, Error> {
+    // Deadline failure wins even when the bounded syscall returned another
+    // error after the deadline. This preserves the caller's temporal contract
+    // instead of misclassifying a late operation as an ordinary path failure.
+    require_asset_deadline(deadline)?;
+    result.map_err(Error::from)
+}
+
+fn open_asset_path(
+    parent: RawFd,
+    path: &Path,
+    flags: i32,
+    resolve: u64,
+    deadline: Option<Instant>,
+) -> Result<fs::File, Error> {
+    require_asset_deadline(deadline)?;
+    let result = match deadline {
+        Some(deadline) => openat2_frozen_until(parent, path, flags, resolve, deadline),
+        None => openat2_frozen(parent, path, flags, resolve),
+    };
+    complete_asset_io(result, deadline)
 }
 
 fn lexical_absolute_path(path: &Path) -> io::Result<PathBuf> {
@@ -247,15 +320,20 @@ fn lexical_absolute_path(path: &Path) -> io::Result<PathBuf> {
 }
 
 fn open_absolute_directory(path: &Path) -> Result<fs::File, Error> {
+    open_absolute_directory_with_deadline(path, None)
+}
+
+fn open_absolute_directory_with_deadline(path: &Path, deadline: Option<Instant>) -> Result<fs::File, Error> {
+    require_asset_deadline(deadline)?;
     let relative = path
         .strip_prefix(Path::new("/"))
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "asset-cache anchor is not absolute"))?;
-    let system_root = fs::File::open("/")?;
+    let system_root = complete_asset_io(fs::File::open("/"), deadline)?;
     if relative.as_os_str().is_empty() {
         return Ok(system_root);
     }
     require_beneath_path(relative)?;
-    openat2_frozen(
+    open_asset_path(
         system_root.as_raw_fd(),
         relative,
         nix::libc::O_RDONLY
@@ -264,8 +342,8 @@ fn open_absolute_directory(path: &Path) -> Result<fs::File, Error> {
             | nix::libc::O_NOFOLLOW
             | nix::libc::O_NONBLOCK,
         (nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_SYMLINKS | nix::libc::RESOLVE_NO_MAGICLINKS) as u64,
+        deadline,
     )
-    .map_err(Error::from)
 }
 
 fn require_beneath_path(path: &Path) -> Result<(), Error> {
@@ -291,11 +369,29 @@ fn require_single_component(path: &Path) -> Result<(), Error> {
 }
 
 fn asset_directory_identity(file: &fs::File) -> Result<AssetDirectoryIdentity, Error> {
-    AssetDirectoryIdentity::from_metadata(&file.metadata()?).map_err(Error::from)
+    asset_directory_identity_with_deadline(file, None)
+}
+
+fn asset_directory_identity_with_deadline(
+    file: &fs::File,
+    deadline: Option<Instant>,
+) -> Result<AssetDirectoryIdentity, Error> {
+    require_asset_deadline(deadline)?;
+    let metadata = complete_asset_io(file.metadata(), deadline)?;
+    complete_asset_io(AssetDirectoryIdentity::from_metadata(&metadata), deadline)
 }
 
 fn asset_source_witness(file: &fs::File) -> Result<AssetFileWitness, Error> {
-    let witness = AssetFileWitness::from_metadata(&file.metadata()?);
+    asset_source_witness_with_deadline(file, None)
+}
+
+fn asset_source_witness_with_deadline(
+    file: &fs::File,
+    deadline: Option<Instant>,
+) -> Result<AssetFileWitness, Error> {
+    require_asset_deadline(deadline)?;
+    let metadata = complete_asset_io(file.metadata(), deadline)?;
+    let witness = AssetFileWitness::from_metadata(&metadata);
     if witness.mode & nix::libc::S_IFMT != nix::libc::S_IFREG {
         return Err(asset_copy_error("cached asset is not a regular file"));
     }
@@ -308,26 +404,46 @@ fn asset_source_witness(file: &fs::File) -> Result<AssetFileWitness, Error> {
             witness.length, MAX_BLIT_ASSET_BYTES
         )));
     }
+    require_asset_deadline(deadline)?;
     Ok(witness)
 }
 
 fn open_named_asset(asset: &OpenedAsset) -> Result<fs::File, Error> {
-    openat2_frozen(
+    open_named_asset_with_deadline(asset, None)
+}
+
+fn open_named_asset_with_deadline(
+    asset: &OpenedAsset,
+    deadline: Option<Instant>,
+) -> Result<fs::File, Error> {
+    open_asset_path(
         asset.parent.as_raw_fd(),
         Path::new(&asset.name),
         nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
         asset_resolve_flags(),
+        deadline,
     )
-    .map_err(Error::from)
 }
 
 fn require_asset_unchanged(pool: &AssetPool, asset: &OpenedAsset) -> Result<(), Error> {
-    let descriptor = asset_source_witness(&asset.file)?;
-    let reopened = open_named_asset(asset)?;
-    let named = asset_source_witness(&reopened)?;
-    let full_reopened = pool.open_asset(&asset.path)?;
-    let final_descriptor = asset_source_witness(&asset.file)?;
-    pool.revalidate()?;
+    require_asset_unchanged_with_deadline(pool, asset, None)
+}
+
+fn require_asset_unchanged_until(pool: &AssetPool, asset: &OpenedAsset, deadline: Instant) -> Result<(), Error> {
+    require_asset_unchanged_with_deadline(pool, asset, Some(deadline))
+}
+
+fn require_asset_unchanged_with_deadline(
+    pool: &AssetPool,
+    asset: &OpenedAsset,
+    deadline: Option<Instant>,
+) -> Result<(), Error> {
+    let descriptor = asset_source_witness_with_deadline(&asset.file, deadline)?;
+    let reopened = open_named_asset_with_deadline(asset, deadline)?;
+    let named = asset_source_witness_with_deadline(&reopened, deadline)?;
+    let full_reopened = pool.open_asset_with_deadline(&asset.path, deadline)?;
+    let final_descriptor = asset_source_witness_with_deadline(&asset.file, deadline)?;
+    pool.revalidate_with_deadline(deadline)?;
     if descriptor != asset.witness
         || named != asset.witness
         || full_reopened.witness != asset.witness
@@ -337,6 +453,7 @@ fn require_asset_unchanged(pool: &AssetPool, asset: &OpenedAsset) -> Result<(), 
             "cached asset changed or was replaced while being materialized",
         ));
     }
+    require_asset_deadline(deadline)?;
     Ok(())
 }
 

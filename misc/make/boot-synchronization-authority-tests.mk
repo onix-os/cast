@@ -1,6 +1,33 @@
 .PHONY: forge-clean-boot-synchronization-test \
 	forge-legacy-boot-repair-test \
-	forge-active-reblit-boot-projection-database-test
+	forge-active-reblit-boot-projection-database-test \
+	forge-boot-asset-snapshot-test
+
+forge-boot-asset-snapshot-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::boot_asset_snapshots::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 15; \
+	for test in \
+		client::boot_asset_snapshots::tests::sealed_snapshot_has_exact_bytes_digest_length_metadata_and_seals \
+		client::boot_asset_snapshots::tests::sealed_snapshot_rejects_write_shrink_grow_and_additional_seals \
+		client::boot_asset_snapshots::tests::wrong_digest_fails_without_publishing_a_snapshot \
+		client::boot_asset_snapshots::tests::count_and_aggregate_byte_limits_admit_n_and_reject_n_plus_one \
+		client::boot_asset_snapshots::tests::per_asset_and_descriptor_budgets_fail_before_memfd_allocation \
+		client::boot_asset_snapshots::tests::expired_deadline_fails_before_opening_the_asset_pool \
+		client::boot_asset_snapshots::tests::canonical_empty_asset_is_sealed_without_an_asset_pool \
+		client::boot_asset_snapshots::tests::short_digest_uses_the_descriptor_rooted_flat_asset_path \
+		client::boot_asset_snapshots::tests::fifo_and_symlink_sources_fail_closed_without_blocking \
+		client::boot_asset_snapshots::tests::source_replacement_after_open_fails_closed \
+		client::boot_asset_snapshots::tests::source_mutation_after_copy_fails_closed \
+		client::boot_asset_snapshots::tests::failed_batch_drops_prior_snapshots_and_leaves_policy_reusable \
+		client::boot_asset_snapshots::tests::duplicate_digest_is_canonicalized_without_a_duplicate_snapshot \
+		client::boot_asset_snapshots::tests::source_growth_after_length_preflight_fails_before_snapshot_publication \
+		client::boot_asset_snapshots::tests::materialization_timeout_maps_to_the_boot_snapshot_deadline; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::boot_asset_snapshots::tests::" -- --test-threads=1
 
 forge-active-reblit-boot-projection-database-test:
 	@set -euo pipefail; \

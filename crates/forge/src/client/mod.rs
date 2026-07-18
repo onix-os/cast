@@ -96,6 +96,9 @@ mod archived_repair_materialization;
 #[cfg(test)]
 mod archived_repair_tests;
 mod boot;
+#[allow(dead_code)] // pre-claim substrate; wired only after the worker input model is complete
+#[path = "boot/asset_snapshots.rs"]
+mod boot_asset_snapshots;
 mod cache;
 mod candidate_metadata;
 mod clean_boot_synchronization;
