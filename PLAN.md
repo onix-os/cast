@@ -909,7 +909,7 @@ real-`SIGKILL` restart matrix through production startup. ActiveReblit candidate
 route and deterministic terminal finalizer are now in production; an exact 12-case real-process restart matrix covers that terminal finalizer.
 The matrix crosses both epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence,
 and post-directory-sync absence with fresh crash and recovery processes. Historical epoch is not a reboot simulation, and
-no reboot or power-loss durability is claimed. ActivateArchived has no candidate suffix and remains the next operation gap.
+no reboot or power-loss durability is claimed. Commit `8c22ec67` adds independently reviewed, test-sealed ActivateArchived child-move and rollback-completion foundations with 12+12 proof; production dispatch and finalization remain absent.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

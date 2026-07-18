@@ -436,12 +436,33 @@ startup and preserve the exact cleared existing-candidate row, provenance,
 wrapper topology, and wrapper index while converging through the appropriate
 source-or-absence path to clean admission.
 
+Commit `8c22ec67` establishes two independently sealed ActivateArchived
+foundations without making either production-reachable. Candidate preservation
+authenticates the staged archived tree and its exact canonical state-slot hard
+link, orders candidate, source-parent, destination-parent, and roots-parent
+durability, and permits at most one descriptor-relative no-replace move of
+only `staging/usr` into that canonical wrapper. Fresh namespace evidence,
+rather than the raw syscall report, classifies the result. A closing retained-
+snapshot revalidation rejects both PRE-to-POST and POST-to-PRE races after
+classification without leaking retry or effect authority.
+
+The second seal admits only exact ActivateArchived `CandidatePreserved`
+evidence with distinct cleared candidate and previous-state rows plus immutable
+candidate provenance. It derives the sole `RollbackComplete` successor,
+performs one conditional journal advance, drops the old authority and store,
+and then classifies only the exact source or successor after canonical reopen.
+The child-move and completion-route lanes each pass 12 focused tests across
+current and historical epochs, rollback sources, recorded outcomes, durability
+faults, evidence races, and restart sides. Independent review is clean and all
+1258 tracked text files remain within the 1000-line limit.
+
 The historical epoch dimension is an out-of-current-epoch journal witness in
 the same boot, not a reboot simulation. Neither it nor the post-sync kill is a
 power-loss oracle, so reboot and power-loss durability remain unproved. Phase
-11 and the broad interruption campaign stay open; ActivateArchived's missing
-candidate suffix is the next operation-specific recovery gap, followed by the
-later rollback, roll-forward, boot, cleanup, and durability work.
+11 and the broad interruption campaign stay open. ActivateArchived production
+candidate persistence and one-entry dispatch are the next operation-specific
+gap, followed by completion dispatch, terminal finalization, the later
+rollback, roll-forward, boot, cleanup, and durability work.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.
