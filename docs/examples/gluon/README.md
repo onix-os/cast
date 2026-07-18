@@ -91,12 +91,13 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Sixteen separate fixtures cover representative package shapes. Thirteen contain
+Seventeen separate fixtures cover representative package shapes. Fourteen contain
 small, real source trees for Autotools, configured Autotools with an
 intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
 generated daemon assets, Gluon factory/override composition, a runtime-loaded
-plugin with an explicit output relation, and native split-output builds. The
+plugin with an explicit output relation, a staged post-install smoke test, and
+native split-output builds. The
 patch-hook case now binds two independent sources: a deterministic XZ USTAR
 archive and a raw HTTPS-identified patch. Only the archive is extracted; the
 declared pre-setup patch program consumes the separately materialized bytes.
@@ -109,6 +110,14 @@ exact pinned `zlib-devel` provider, and performs a real `compress2`/`uncompress`
 round trip under CTest. Its bundle checks bind the manifest BuildDepends entry
 to that provider and require the installed ELF and emitted Stone metadata to
 carry `soname(libz.so.1(x86_64))`.
+The second CMake fixture turns the documented `post_install` pattern into an
+offline executable proof. Its ordinary check phase runs the build-tree target,
+then its post-install hook invokes only
+`${CAST_INSTALL_ROOT}${CAST_BINDIR}/staged-probe`. The probe rejects an
+invocation path that does not exactly match that staged location. Only after
+that check does it write the fixed
+`/usr/share/cast/post-install-smoke-test.proof` bytes; package decoding requires
+that proof artifact as well as the tracked installed ELF behavior.
 The Meson case exercises the complementary dependency roles. It resolves the
 same pinned library through `pkgconfig(zlib)`, compiles and links a real zlib
 round trip, and admits `binary(file)` only as a check input. A non-installed
@@ -130,11 +139,11 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has thirteen deterministic tar streams: ten plain
+The checked-in source matrix has fourteen deterministic tar streams: eleven plain
 USTAR archives plus vendored Cargo as deterministic gzip, the patch-hook
 fixture as deterministic XZ, and the generated-daemon fixture as deterministic
 Zstandard. It also contains the patch hook's independently locked raw patch.
-`make fixture-sources` rebuilds all fourteen exact source artifacts; the
+`make fixture-sources` rebuilds all fifteen exact source artifacts; the
 offline lane rejects any format, filename, order, unpack policy, or digest
 drift.
 The default `flake.nix` development shell supplies the required gzip, XZ, and
@@ -159,7 +168,7 @@ package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
 one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `factory-override`,
 `generated-config`, `generated-shell`, `hooks-patch`, `meson`, `plugin-output`,
-`split`, or `userspace-profile`;
+`post-install-smoke-test`, `split`, or `userspace-profile`;
 `FIXTURE=all` is the default, and any other value is rejected before execution.
 The selector also
 works with `make bootstrap-fixtures-offline` when the package store has already
@@ -167,7 +176,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all sixteen, and always requires execution.
+selection, runs all seventeen, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -195,7 +204,7 @@ content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all sixteen fixtures complete both executions. It records the exact matrix
+all seventeen fixtures complete both executions. It records the exact matrix
 totals, repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle

@@ -136,7 +136,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 16] = [
+const EXECUTION_FIXTURES: [&str; 17] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -151,11 +151,12 @@ const EXECUTION_FIXTURES: [&str; 16] = [
     "hooks-patch",
     "meson",
     "plugin-output",
+    "post-install-smoke-test",
     "split",
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 15] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 16] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -170,6 +171,7 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 15] = [
     "hooks-patch",
     "meson",
     "plugin-output",
+    "post-install-smoke-test",
     "split",
 ];
 
@@ -215,6 +217,7 @@ include!("tests/execution_autotools_regeneration.rs");
 include!("tests/execution_capability.rs");
 include!("tests/execution_cmake_zlib.rs");
 include!("tests/execution_meson_dependency_roles.rs");
+include!("tests/execution_post_install_smoke.rs");
 include!("tests/frozen_runtime.rs");
 include!("tests/package_examples.rs");
 include!("tests/planning_identity.rs");

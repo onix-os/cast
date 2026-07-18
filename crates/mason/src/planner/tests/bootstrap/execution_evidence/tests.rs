@@ -89,17 +89,18 @@ fn proof_v2_serializes_the_exact_complete_matrix_and_totals_within_its_bound() {
     assert_eq!(value["schema"], "cast.fixtures-ci-proof.v2");
     assert_eq!(value["git_commit"], TEST_COMMIT);
     assert_eq!(value["bundle_ledger_schema"], "cast.fixtures-ci.bundle.v1");
-    assert_eq!(value["totals"]["fixture_count"], 16);
-    assert_eq!(value["totals"]["execution_count"], 32);
-    assert_eq!(value["totals"]["bundle_validation_count"], 48);
-    assert_eq!(value["totals"]["stone_count"], 104);
-    assert_eq!(value["totals"]["manifest_count"], 32);
-    assert_eq!(value["totals"]["artifact_count"], 136);
+    assert_eq!(value["totals"]["fixture_count"], 17);
+    assert_eq!(value["totals"]["execution_count"], 34);
+    assert_eq!(value["totals"]["bundle_validation_count"], 51);
+    assert_eq!(value["totals"]["stone_count"], 113);
+    assert_eq!(value["totals"]["manifest_count"], 34);
+    assert_eq!(value["totals"]["artifact_count"], 147);
     assert!(value["totals"]["artifact_bytes"].as_u64().unwrap() > 0);
     let fixtures = value["fixtures"].as_array().unwrap();
-    assert_eq!(fixtures.len(), 16);
+    assert_eq!(fixtures.len(), 17);
     assert_eq!(fixtures[0]["name"], "autotools");
-    assert_eq!(fixtures[15]["name"], "userspace-profile");
+    assert_eq!(fixtures[14]["name"], "post-install-smoke-test");
+    assert_eq!(fixtures[16]["name"], "userspace-profile");
     for fixture in fixtures {
         assert_eq!(fixture["plans"]["first"], fixture["plans"]["repeat"]);
         assert_eq!(

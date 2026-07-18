@@ -1,0 +1,33 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-post-install-smoke-test-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-post-install-smoke-test-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = cmake.default,
+    hooks = b.hooks {
+        // The probe validates argv[0] against these same staged-root values.
+        // A build-tree executable or host PATH substitute therefore fails.
+        post_install = [
+            b.step.shell r#""${CAST_INSTALL_ROOT}${CAST_BINDIR}/staged-probe" --self-test"#,
+        ],
+        .. b.defaults.hooks
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-post-install-smoke-test-fixture-1.0.0.tar",
+            hash = "76796dcbea00da45083634a3784f6a3ced54d1445f58f4777ebc2d8dc01c4a94",
+            rename = b.optional.set "cast-post-install-smoke-test-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-post-install-smoke-test-fixture",
+        },
+    ],
+    .. base
+}

@@ -182,6 +182,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-hooks-fixture-1.0.0",
             "cast-meson-fixture-1.0.0",
             "cast-plugin-output-fixture-1.0.0",
+            "cast-post-install-smoke-test-fixture-1.0.0",
             "cast-split-fixture-1.0.0",
         ]
     );
@@ -218,6 +219,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             assert_meson_dependency_role_fixture_contract(
                 &recipe.declaration,
                 &source_trees.join("cast-meson-fixture-1.0.0"),
+            );
+        }
+        if name == "post-install-smoke-test" {
+            assert_post_install_smoke_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-post-install-smoke-test-fixture-1.0.0"),
             );
         }
         if name == "factory-override" {
@@ -791,6 +798,12 @@ install -Dm644 build/cast-plugin-output.so \
                 &published,
             );
         }
+        if name == "post-install-smoke-test" {
+            assert_post_install_smoke_archive_matches_tracked_sources(
+                &source_trees.join("cast-post-install-smoke-test-fixture-1.0.0"),
+                &published,
+            );
+        }
     }
 
     let present_source_artifacts = fs::read_dir(archives)
@@ -803,12 +816,12 @@ install -Dm644 build/cast-plugin-output.so \
         present_source_artifacts, admitted_source_artifacts,
         "orphaned execution fixture source artifact"
     );
-    assert_eq!(locked_source_count, 14, "locked execution source inventory drift");
+    assert_eq!(locked_source_count, 15, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
-        [10, 1, 1, 1],
-        "execution fixtures must cover ten plain tar streams plus one each of gzip, XZ, and Zstandard"
+        [11, 1, 1, 1],
+        "execution fixtures must cover eleven plain tar streams plus one each of gzip, XZ, and Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 13, "execution archive inventory drift");
+    assert_eq!(sourceful_fixtures, 14, "execution archive inventory drift");
     assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
 }

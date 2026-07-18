@@ -33,6 +33,7 @@ pub(super) fn assert_fixture_bundle(
                 | "hooks-patch"
                 | "meson"
                 | "plugin-output"
+                | "post-install-smoke-test"
                 | "split"
                 | "userspace-profile"
         ),

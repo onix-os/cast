@@ -816,6 +816,7 @@ let meson_packages = [
         { name = "hooks-patch", package_ids = hooks_patch_packages },
         { name = "meson", package_ids = meson_packages },
         { name = "plugin-output", package_ids = custom_packages },
+        { name = "post-install-smoke-test", package_ids = cmake_packages },
         { name = "split", package_ids = cmake_packages },
         { name = "userspace-profile", package_ids = userspace_profile_packages },
     ],

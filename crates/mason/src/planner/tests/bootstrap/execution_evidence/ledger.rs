@@ -153,8 +153,17 @@ fn require_safe_name(name: &str) {
 
 pub(super) fn expected_stones(fixture: &str) -> u64 {
     match fixture {
-        "autotools" | "autotools-options" | "cargo" | "cargo-features" | "cargo-vendored" | "cmake" | "custom"
-        | "factory-override" | "hooks-patch" | "meson" => 9,
+        "autotools"
+        | "autotools-options"
+        | "cargo"
+        | "cargo-features"
+        | "cargo-vendored"
+        | "cmake"
+        | "custom"
+        | "factory-override"
+        | "hooks-patch"
+        | "meson"
+        | "post-install-smoke-test" => 9,
         "daemon-generated" | "plugin-output" => 3,
         "split" => 5,
         "generated-config" | "generated-shell" | "userspace-profile" => 1,

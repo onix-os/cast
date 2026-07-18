@@ -75,12 +75,13 @@ set -- \
     hooks-patch \
     meson \
     plugin-output \
+    post-install-smoke-test \
     split \
     userspace-profile
 
 stone_count_for_fixture() {
     case "$1" in
-        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|factory-override|hooks-patch|meson)
+        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|factory-override|hooks-patch|meson|post-install-smoke-test)
             stone_count=9
             ;;
         daemon-generated|plugin-output) stone_count=3 ;;
@@ -127,12 +128,12 @@ cat >>"$output" <<EOF_HEADER
   "required_execution": true,
   "bundle_ledger_schema": "cast.fixtures-ci.bundle.v1",
   "totals": {
-    "fixture_count": 16,
-    "execution_count": 32,
-    "bundle_validation_count": 48,
-    "stone_count": 104,
-    "manifest_count": 32,
-    "artifact_count": 136,
+    "fixture_count": 17,
+    "execution_count": 34,
+    "bundle_validation_count": 51,
+    "stone_count": 113,
+    "manifest_count": 34,
+    "artifact_count": 147,
     "artifact_bytes": $artifact_bytes
   },
   "fixtures": [
@@ -218,7 +219,7 @@ EOF_FIXTURE
       ]
     }
 EOF_ENTRIES
-    if [ "$fixture_number" -lt 16 ]; then
+    if [ "$fixture_number" -lt 17 ]; then
         printf '    ,\n' >>"$output"
     fi
     fixture_number=$((fixture_number + 1))

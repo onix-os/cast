@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 16] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 17] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -13,6 +13,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 16] = [
     "hooks-patch",
     "meson",
     "plugin-output",
+    "post-install-smoke-test",
     "split",
     "userspace-profile",
 ];
@@ -153,6 +154,15 @@ fn phase_with_pre(name: &str, pre: Vec<FrozenStepShape>, steps: Vec<FrozenStepSh
         pre,
         steps,
         post: Vec::new(),
+    }
+}
+
+fn phase_with_post(name: &str, steps: Vec<FrozenStepShape>, post: Vec<FrozenStepShape>) -> FrozenPhaseShape {
+    FrozenPhaseShape {
+        name: name.to_owned(),
+        pre: Vec::new(),
+        steps,
+        post,
     }
 }
 
@@ -515,6 +525,21 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase("Setup", vec![run("cmake", "-G")]),
             phase("Build", vec![run("cmake", "--build")]),
             phase("Install", vec![run("cmake", "--install")]),
+            phase("Check", vec![run("ctest", "--test-dir")]),
+        ],
+        "post-install-smoke-test" => vec![
+            prepare("cast-post-install-smoke-test-fixture"),
+            phase("Setup", vec![run("cmake", "-G")]),
+            phase("Build", vec![run("cmake", "--build")]),
+            phase_with_post(
+                "Install",
+                vec![run("cmake", "--install")],
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/bash".to_owned(),
+                    declared_programs: Vec::new(),
+                    script: r#""${CAST_INSTALL_ROOT}${CAST_BINDIR}/staged-probe" --self-test"#.to_owned(),
+                }],
+            ),
             phase("Check", vec![run("ctest", "--test-dir")]),
         ],
         "plugin-output" => vec![

@@ -22,6 +22,13 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
             vec!["hello from ", "vendored Cargo fixture"],
         ),
         "hooks-patch" => ("bin/cast-hooks-fixture".to_owned(), vec!["pre_setup hook applied"]),
+        "post-install-smoke-test" => (
+            "bin/staged-probe".to_owned(),
+            vec![
+                "staged-probe: staged install self-test passed",
+                "staged-probe: staged executable path mismatch",
+            ],
+        ),
         _ => (
             format!("bin/cast-{fixture}-fixture"),
             vec![match fixture {
@@ -35,7 +42,14 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
             }],
         ),
     };
-    assert_leaf_paths(fixture, "out", root, [executable.as_str()]);
+    if fixture == "post-install-smoke-test" {
+        const PROOF: &str = "share/cast/post-install-smoke-test.proof";
+        const PROOF_BYTES: &[u8] = b"staged-probe: staged install self-test passed\n";
+        assert_leaf_paths(fixture, "out", root, [executable.as_str(), PROOF]);
+        assert_regular(fixture, root, PROOF, 0o644, PROOF_BYTES.to_vec());
+    } else {
+        assert_leaf_paths(fixture, "out", root, [executable.as_str()]);
+    }
     assert_no_directories(fixture, "out", root);
     let bytes = regular_bytes(fixture, root, &executable);
     assert_eq!(root.layouts[&executable].mode & 0o777, 0o755);
