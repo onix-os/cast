@@ -9,6 +9,8 @@
 
 [default.extend-words]
 restat = "restat"
+# OpenType's mandatory glyph-location table tag.
+loca = "loca"
 
 # thanks to base yamls
 idae = "idae"
