@@ -77,7 +77,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   now covers the shared `/usr` reversal prefix, the complete NewState suffix
   through authenticated terminal journal absence, and the complete
   ActiveReblit rollback suffix through the same clean-startup handoff.
-  ActivateArchived candidate recovery, roll-forward execution, boot repair,
+  The complete ActivateArchived rollback suffix now reaches that same
+  authenticated clean-startup handoff. Roll-forward execution, boot repair,
   and cleanup are not implemented. The public
   `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
