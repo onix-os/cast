@@ -456,13 +456,32 @@ current and historical epochs, rollback sources, recorded outcomes, durability
 faults, evidence races, and restart sides. Independent review is clean and all
 1258 tracked text files remain within the 1000-line limit.
 
+Commit `cbe3679a` makes only the candidate-preservation half production
+reachable. One exact ActivateArchived `CandidatePreserveIntent` startup entry
+selects Apply or Finish, crosses the operation-specific durability boundary,
+and performs one conditional advance to `CandidatePreserved`. Canonical reopen
+accepts only the exact source or successor after the old authority and journal
+handle are destroyed. Source-durable restart observes the already-preserved
+namespace and finishes without another move; successor-durable restart skips
+preservation entirely. A handled entry immediately returns
+`RecoveryPending`, so the separately sealed completion authority cannot run in
+that same entry.
+
+The production gate passes 11 persistence/shared-leaf tests and 10
+candidate-filter tests. It covers both epochs, rollback sources, recorded
+`/usr` outcomes, Apply and Finish, all five journal faults, all six final
+evidence races, exact Pending inspection, cross-operation authority rejection,
+and fresh-handle source/successor restart. Adjacent NewState, ActiveReblit,
+reverse, target-preparation, shared-effect, completion-foundation, workspace
+check, and 1285-file line-limit gates pass; independent production review is
+clean.
+
 The historical epoch dimension is an out-of-current-epoch journal witness in
 the same boot, not a reboot simulation. Neither it nor the post-sync kill is a
 power-loss oracle, so reboot and power-loss durability remain unproved. Phase
-11 and the broad interruption campaign stay open. ActivateArchived production
-candidate persistence and one-entry dispatch are the next operation-specific
-gap, followed by completion dispatch, terminal finalization, the later
-rollback, roll-forward, boot, cleanup, and durability work.
+11 and the broad interruption campaign stay open. ActivateArchived completion
+dispatch is the next operation-specific gap, followed by terminal finalization,
+the later rollback, roll-forward, boot, cleanup, and durability work.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

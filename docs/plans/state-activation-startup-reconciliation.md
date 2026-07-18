@@ -904,11 +904,27 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   candidate durability effect and changes neither the database nor the
   non-journal namespace.
 
-  The ladder still has no candidate suffix for ActivateArchived. ActiveReblit
-  now has deterministic terminal finalization, authenticated clean handoff,
-  and the exact 12-case same-boot terminal `SIGKILL` matrix described above.
-  ActivateArchived is therefore the next operation-specific recovery gap. The
-  ladder also has no roll-forward executor, boot repair, or cleanup.
+  Commit `cbe3679a` production-wires exactly one ActivateArchived
+  `CandidatePreserveIntent` checkpoint per startup entry. Exact staged evidence
+  may move only `staging/usr` once into the authenticated archived wrapper;
+  exact already-preserved evidence takes the idempotent Finish path with no
+  second move. Ordered durability then permits one conditional advance to the
+  sole `CandidatePreserved` successor, destroys the old authority and journal
+  handle, and accepts only the exact source or successor after canonical
+  reopen. A handled checkpoint immediately returns `RecoveryPending`, so the
+  sealed completion foundation cannot run in the same entry.
+
+  The production lane passes 11 persistence/shared-leaf tests and 10
+  candidate-filter tests across current and historical epochs, both rollback
+  sources, both recorded `/usr` outcomes, Apply and Finish, all five journal
+  faults, six evidence races, and both fresh-handle restart sides. Updated
+  sibling-dispatch and reverse-`SIGKILL` contracts prove one operation owns the
+  checkpoint and no restart performs a second move or same-entry completion.
+  ActiveReblit retains deterministic terminal finalization, authenticated clean
+  handoff, and its exact 12-case same-boot terminal `SIGKILL` matrix.
+  ActivateArchived completion dispatch is therefore the next
+  operation-specific recovery gap. The ladder also has no roll-forward
+  executor, boot repair, or cleanup.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four

@@ -314,8 +314,9 @@ closure remain authoritative in `PLAN.md`.
   index. It retains the same continuously locked journal store for one
   conditional delete, authenticates public absence, and transfers that store
   to shared clean admission without a database, non-journal namespace,
-  trigger, wrapper, or cleanup effect. ActivateArchived still has no candidate
-  suffix.
+  trigger, wrapper, or cleanup effect. ActivateArchived now production-preserves
+  its staged archived candidate through one bounded startup entry and stops at
+  `CandidatePreserved`; its completion route and terminal finalizer remain sealed.
   Commits
   `62b15f29`, `e69ad276`, and `50cb98f8` respectively sealed the exact restored
   outcome, connected the one-phase reverse dispatcher to real mutable startup,

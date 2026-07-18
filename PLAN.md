@@ -574,8 +574,8 @@ The contentful build, decoded-bundle, reproduction, and required-capability
 items below remain open until a non-skipped required-capability run provides
 that evidence.
 
-By 2026-07-17, the matrix contained sixteen fixtures, including two declarative
-generated payloads, an empty userspace profile, and a runtime-loaded plugin.
+By 2026-07-18, the matrix contains eighteen fixtures, including two declarative
+generated payloads, an empty userspace profile, a runtime-loaded plugin, a staged post-install proof, and a staged-header consumer.
 The plugin host validates the exact identity returned through `dlopen`/`dlsym`;
 its complete compiler commands are frozen, and bundle goldens require PIE,
 RELRO, immediate binding, non-executable stack, separated writable/executable
@@ -606,8 +606,8 @@ remain open.
   not prove. Real execution remains exclusive to contentful fixture closures.
 - [x] Add content-addressed, offline fixture sources with real bytes and hashes
   for Autotools, configured no-check Autotools, Cargo, feature-selected
-  multi-binary Cargo, vendored Cargo, CMake, custom-step, generated-daemon,
-  pre-setup-hook, Meson, explicit plugin-output, and split-output builds.
+  multi-binary Cargo, vendored Cargo, CMake, custom-step, header-only,
+  staged-post-install, generated-daemon, pre-setup-hook, Meson, explicit plugin-output, and split-output builds.
   Seed them through a narrow verified cache-import boundary; do not weaken the
   production HTTPS source policy or expose the mutable recipe directory.
 - [x] Add source-less generated-configuration and generated-shell fixtures whose
@@ -634,7 +634,7 @@ remain open.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the sixteen exact closure declarations and their aggregate bootstrap
+  each of the eighteen exact closure declarations and their aggregate bootstrap
   package pool before the delegated runner materializes the production-format
   root.
 - [x] Before entering the container, require every frozen executable binding's
@@ -701,7 +701,7 @@ Separate entries normalize exchange durability, persist and route rollback, reve
 from `CandidatePreserved` to `RollbackComplete` using exact cleared-row and wrapper evidence. On a separate
 `RollbackComplete` entry it captures exact cleared existing-candidate/provenance plus preserved-wrapper authority, performs
 one same-store conditional journal delete, proves public absence, and enters shared clean admission without redispatch.
-Every entry is bounded. An exact 2 x 2 x 3 ActiveReblit matrix now sends genuine same-boot `SIGKILL` across current/historical record epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence, and post-directory-sync absence. A historical epoch is not a reboot simulation; no reboot or power-loss durability is claimed, and ActivateArchived remains the next operation gap.
+Every entry is bounded. An exact 2 x 2 x 3 ActiveReblit matrix now sends genuine same-boot `SIGKILL` across current/historical record epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence, and post-directory-sync absence. A historical epoch is not a reboot simulation; no reboot or power-loss durability is claimed. ActivateArchived candidate preservation is production-wired; completion dispatch is the next operation gap.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
@@ -909,7 +909,7 @@ real-`SIGKILL` restart matrix through production startup. ActiveReblit candidate
 route and deterministic terminal finalizer are now in production; an exact 12-case real-process restart matrix covers that terminal finalizer.
 The matrix crosses both epochs, both rollback sources, and final-PRE source retention, kernel-observed post-unlink absence,
 and post-directory-sync absence with fresh crash and recovery processes. Historical epoch is not a reboot simulation, and
-no reboot or power-loss durability is claimed. Commit `8c22ec67` adds independently reviewed, test-sealed ActivateArchived child-move and rollback-completion foundations with 12+12 proof; production dispatch and finalization remain absent.
+no reboot or power-loss durability is claimed. Commits `8c22ec67` and `cbe3679a` add reviewed ActivateArchived child-move and completion foundations, then production-wire bounded candidate preservation; completion dispatch and finalization remain absent.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,
