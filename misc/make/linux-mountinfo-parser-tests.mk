@@ -36,7 +36,7 @@ forge-linux-mountinfo-parser-test:
 		bounds::expired_snapshot_deadline_reads_zero_bytes \
 		bounds::expired_parser_deadline_fails_before_parsing_complete_bytes \
 		bounds::production_limits_are_finite_and_internally_consistent \
-		compatibility::live_thread_self_snapshot_is_parser_compatible_without_granting_authority; do \
+		compatibility::synthetic_kernel_format_snapshot_is_parser_compatible_without_host_topology; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	module="$(MOUNTINFO_TOP_DIR)/crates/forge/src/linux_fs/mountinfo.rs"; \
@@ -45,11 +45,13 @@ forge-linux-mountinfo-parser-test:
 	timeout 10s grep -Fq 'pub(crate) fn read_mountinfo_snapshot_bounded_until(' "$$module"; \
 	timeout 10s grep -Fq 'MAX_MOUNTINFO_WORK' "$$module"; \
 	if timeout 10s rg -n 'from_utf8|to_string_lossy|PathBuf|read_to_end[[:space:]]*\(' "$$module"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	compatibility="$(MOUNTINFO_TOP_DIR)/crates/forge/src/linux_fs/tests/mountinfo_compatibility.rs"; \
+	if timeout 10s rg -n '/proc|File::open|OpenOptions|std::fs::read|thread-self|self/mountinfo' "$$compatibility"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in \
 		"$$module" \
 		"$(MOUNTINFO_TOP_DIR)/crates/forge/src/linux_fs/tests/mountinfo_grammar.rs" \
 		"$(MOUNTINFO_TOP_DIR)/crates/forge/src/linux_fs/tests/mountinfo_bounds.rs" \
-		"$(MOUNTINFO_TOP_DIR)/crates/forge/src/linux_fs/tests/mountinfo_compatibility.rs" \
+		"$$compatibility" \
 		"$(MOUNTINFO_TOP_DIR)/misc/make/linux-mountinfo-parser-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

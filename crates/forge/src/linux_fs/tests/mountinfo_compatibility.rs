@@ -1,15 +1,28 @@
-use std::fs::File;
+use std::io::Cursor;
 
 use super::super::mountinfo::read_mountinfo_bounded;
 
-#[test]
-fn live_thread_self_snapshot_is_parser_compatible_without_granting_authority() {
-    // This is only a compatibility fixture for the Linux grammar. Opening a
-    // public procfs path here does not authenticate procfs or produce a
-    // retained capability suitable for production topology decisions.
-    let mut mountinfo = File::open("/proc/thread-self/mountinfo").unwrap();
-    let parsed = read_mountinfo_bounded(&mut mountinfo).unwrap();
+const SYNTHETIC_KERNEL_FORMAT_SNAPSHOT: &[u8] =
+    b"101 1 0:99 / / rw,relatime shared:1 - overlay overlay rw,lowerdir=/immutable\n\
+102 101 0:42 / /run rw,nosuid,nodev shared:2 master:1 - tmpfs tmpfs rw,size=65536k,mode=755\n\
+103 101 4294967295:4294967294 / /firmware\\040volume rw,relatime - vfat synthetic-partition rw,fmask=0077,dmask=0077\n\
+104 101 0:5 /subtree /bind\\011target ro,nosuid,nodev unbindable - ext4 synthetic\\134source ro\n";
 
-    assert!(!parsed.entries().is_empty());
-    assert!(parsed.entries().iter().any(|entry| entry.mount_point() == b"/"));
+#[test]
+fn synthetic_kernel_format_snapshot_is_parser_compatible_without_host_topology() {
+    let mut snapshot = Cursor::new(SYNTHETIC_KERNEL_FORMAT_SNAPSHOT);
+    let parsed = read_mountinfo_bounded(&mut snapshot).unwrap();
+
+    assert_eq!(parsed.entries().len(), 4);
+    assert_eq!(parsed.entries()[0].mount_point(), b"/");
+    assert_eq!(
+        parsed.entries()[1].optional_fields().collect::<Vec<_>>(),
+        [b"shared:2", b"master:1"]
+    );
+    assert_eq!(parsed.entries()[2].device().major(), u32::MAX);
+    assert_eq!(parsed.entries()[2].device().minor(), u32::MAX - 1);
+    assert_eq!(parsed.entries()[2].mount_point(), b"/firmware volume");
+    assert_eq!(parsed.entries()[3].root(), b"/subtree");
+    assert_eq!(parsed.entries()[3].mount_point(), b"/bind\ttarget");
+    assert_eq!(parsed.entries()[3].mount_source(), b"synthetic\\source");
 }
