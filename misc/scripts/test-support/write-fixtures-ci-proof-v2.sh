@@ -72,6 +72,7 @@ set -- \
     factory-override \
     generated-config \
     generated-shell \
+    header-only-library \
     hooks-patch \
     meson \
     plugin-output \
@@ -84,6 +85,7 @@ stone_count_for_fixture() {
         autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|factory-override|hooks-patch|meson|post-install-smoke-test)
             stone_count=9
             ;;
+        header-only-library) stone_count=2 ;;
         daemon-generated|plugin-output) stone_count=3 ;;
         split) stone_count=5 ;;
         generated-config|generated-shell|userspace-profile) stone_count=1 ;;
@@ -128,12 +130,12 @@ cat >>"$output" <<EOF_HEADER
   "required_execution": true,
   "bundle_ledger_schema": "cast.fixtures-ci.bundle.v1",
   "totals": {
-    "fixture_count": 17,
-    "execution_count": 34,
-    "bundle_validation_count": 51,
-    "stone_count": 113,
-    "manifest_count": 34,
-    "artifact_count": 147,
+    "fixture_count": 18,
+    "execution_count": 36,
+    "bundle_validation_count": 54,
+    "stone_count": 115,
+    "manifest_count": 36,
+    "artifact_count": 151,
     "artifact_bytes": $artifact_bytes
   },
   "fixtures": [
@@ -219,7 +221,7 @@ EOF_FIXTURE
       ]
     }
 EOF_ENTRIES
-    if [ "$fixture_number" -lt 17 ]; then
+    if [ "$fixture_number" -lt 18 ]; then
         printf '    ,\n' >>"$output"
     fi
     fixture_number=$((fixture_number + 1))

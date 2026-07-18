@@ -525,6 +525,91 @@ fn generated_daemon_bytes(relative: &str) -> Vec<u8> {
         .into_bytes()
 }
 
+fn assert_header_only_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
+    const FIXTURE: &str = "header-only-library";
+    let flags = planned
+        .plan
+        .outputs
+        .iter()
+        .map(|output| (output.name.as_str(), output.include_in_manifest))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(flags, BTreeMap::from([("out", true), ("devel", true)]));
+    assert_eq!(packages.len(), 2, "header-only-library: unexpected implicit output package");
+
+    let (root_plan, root) = output(planned, packages, "out");
+    let (devel_plan, devel) = output(planned, packages, "devel");
+    assert_eq!(root_plan.package_name, "cast-header-only-library-fixture");
+    assert_eq!(devel_plan.package_name, "cast-header-only-library-fixture-devel");
+    assert_eq!(
+        planned
+            .plan
+            .outputs
+            .iter()
+            .map(|output| (output.name.as_str(), output.summary.as_deref()))
+            .collect::<BTreeMap<_, _>>(),
+        BTreeMap::from([
+            ("out", Some("Header-only fixture license metadata")),
+            ("devel", Some("Staged header-only development interface")),
+        ])
+    );
+    assert!(planned.plan.outputs.iter().all(|output| output.description.is_none()));
+    assert!(planned.plan.outputs.iter().all(|output| output.runtime_inputs.is_empty()));
+
+    assert_leaf_paths(
+        FIXTURE,
+        "out",
+        root,
+        ["share/licenses/cast-header-only-library-fixture/LICENSE"],
+    );
+    assert_no_directories(FIXTURE, "out", root);
+    assert_leaf_paths(
+        FIXTURE,
+        "devel",
+        devel,
+        [
+            "include/cast-header-only/vector.h",
+            "lib/pkgconfig/cast-header-only.pc",
+        ],
+    );
+    assert_no_directories(FIXTURE, "devel", devel);
+    assert_regular(
+        FIXTURE,
+        root,
+        "share/licenses/cast-header-only-library-fixture/LICENSE",
+        0o644,
+        tracked_bytes("cast-header-only-library-fixture-1.0.0", "LICENSE"),
+    );
+    assert_regular(
+        FIXTURE,
+        devel,
+        "include/cast-header-only/vector.h",
+        0o644,
+        tracked_bytes("cast-header-only-library-fixture-1.0.0", "include/vector.h"),
+    );
+    assert_regular(
+        FIXTURE,
+        devel,
+        "lib/pkgconfig/cast-header-only.pc",
+        0o644,
+        tracked_bytes("cast-header-only-library-fixture-1.0.0", "cast-header-only.pc"),
+    );
+    assert_exact_relations(
+        FIXTURE,
+        root,
+        planned_output_dependencies(planned, root_plan),
+        BTreeSet::from([root_plan.package_name.clone()]),
+    );
+    assert_exact_relations(
+        FIXTURE,
+        devel,
+        planned_output_dependencies(planned, devel_plan),
+        BTreeSet::from([
+            devel_plan.package_name.clone(),
+            "pkgconfig(cast-header-only)".to_owned(),
+        ]),
+    );
+}
+
 fn assert_split_fixture(planned: &super::super::Planned, packages: &BTreeMap<String, PackageImage>) {
     const FIXTURE: &str = "split";
     let flags = planned

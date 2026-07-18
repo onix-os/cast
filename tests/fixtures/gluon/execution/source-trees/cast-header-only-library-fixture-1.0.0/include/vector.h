@@ -1,0 +1,7 @@
+#ifndef CAST_HEADER_ONLY_VECTOR_H
+#define CAST_HEADER_ONLY_VECTOR_H
+
+#define CAST_HEADER_ONLY_VECTOR_MAGIC 0x48445231
+#define CAST_HEADER_ONLY_VECTOR_ADD(left, right) ((left) + (right))
+
+#endif

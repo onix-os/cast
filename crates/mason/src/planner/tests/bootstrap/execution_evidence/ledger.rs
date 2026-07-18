@@ -164,6 +164,7 @@ pub(super) fn expected_stones(fixture: &str) -> u64 {
         | "hooks-patch"
         | "meson"
         | "post-install-smoke-test" => 9,
+        "header-only-library" => 2,
         "daemon-generated" | "plugin-output" => 3,
         "split" => 5,
         "generated-config" | "generated-shell" | "userspace-profile" => 1,

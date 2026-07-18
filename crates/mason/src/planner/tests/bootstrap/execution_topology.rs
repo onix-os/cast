@@ -1,4 +1,4 @@
-const REQUIRED_EXECUTION_FIXTURES: [&str; 17] = [
+const REQUIRED_EXECUTION_FIXTURES: [&str; 18] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -10,6 +10,7 @@ const REQUIRED_EXECUTION_FIXTURES: [&str; 17] = [
     "factory-override",
     "generated-config",
     "generated-shell",
+    "header-only-library",
     "hooks-patch",
     "meson",
     "plugin-output",
@@ -518,6 +519,25 @@ fn assert_execution_fixture_topology(name: &str, plan: &stone_recipe::derivation
             phase(
                 "Check",
                 vec![run_built("build/cast-custom-fixture", "--self-test")],
+            ),
+        ],
+        "header-only-library" => vec![
+            prepare("cast-header-only-library-fixture"),
+            phase(
+                "Install",
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/dash".to_owned(),
+                    declared_programs: vec!["/usr/bin/install".to_owned()],
+                    script: HEADER_ONLY_INSTALL_SCRIPT.to_owned(),
+                }],
+            ),
+            phase(
+                "Check",
+                vec![FrozenStepShape::Shell {
+                    interpreter: "/usr/bin/dash".to_owned(),
+                    declared_programs: vec!["/usr/bin/cc".to_owned()],
+                    script: HEADER_ONLY_CHECK_SCRIPT.to_owned(),
+                }],
             ),
         ],
         "daemon-generated" => vec![

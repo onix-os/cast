@@ -813,6 +813,7 @@ let meson_packages = [
         { name = "factory-override", package_ids = cmake_packages },
         { name = "generated-config", package_ids = generated_config_packages },
         { name = "generated-shell", package_ids = generated_config_packages },
+        { name = "header-only-library", package_ids = custom_packages },
         { name = "hooks-patch", package_ids = hooks_patch_packages },
         { name = "meson", package_ids = meson_packages },
         { name = "plugin-output", package_ids = custom_packages },

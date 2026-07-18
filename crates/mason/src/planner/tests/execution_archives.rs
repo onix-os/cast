@@ -179,6 +179,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-custom-fixture-1.0.0",
             "cast-daemon-fixture-1.0.0",
             "cast-factory-override-fixture-1.0.0",
+            "cast-header-only-library-fixture-1.0.0",
             "cast-hooks-fixture-1.0.0",
             "cast-meson-fixture-1.0.0",
             "cast-plugin-output-fixture-1.0.0",
@@ -213,6 +214,12 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             assert_cmake_zlib_fixture_contract(
                 &recipe.declaration,
                 &source_trees.join("cast-cmake-fixture-1.0.0"),
+            );
+        }
+        if name == "header-only-library" {
+            assert_header_only_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-header-only-library-fixture-1.0.0"),
             );
         }
         if name == "meson" {
@@ -798,6 +805,12 @@ install -Dm644 build/cast-plugin-output.so \
                 &published,
             );
         }
+        if name == "header-only-library" {
+            assert_header_only_archive_matches_tracked_sources(
+                &source_trees.join("cast-header-only-library-fixture-1.0.0"),
+                &published,
+            );
+        }
         if name == "post-install-smoke-test" {
             assert_post_install_smoke_archive_matches_tracked_sources(
                 &source_trees.join("cast-post-install-smoke-test-fixture-1.0.0"),
@@ -816,12 +829,12 @@ install -Dm644 build/cast-plugin-output.so \
         present_source_artifacts, admitted_source_artifacts,
         "orphaned execution fixture source artifact"
     );
-    assert_eq!(locked_source_count, 15, "locked execution source inventory drift");
+    assert_eq!(locked_source_count, 16, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
-        [11, 1, 1, 1],
-        "execution fixtures must cover eleven plain tar streams plus one each of gzip, XZ, and Zstandard"
+        [12, 1, 1, 1],
+        "execution fixtures must cover twelve plain tar streams plus one each of gzip, XZ, and Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 14, "execution archive inventory drift");
+    assert_eq!(sourceful_fixtures, 15, "execution archive inventory drift");
     assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
 }

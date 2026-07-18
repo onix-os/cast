@@ -30,6 +30,7 @@ pub(super) fn assert_fixture_bundle(
                 | "factory-override"
                 | "generated-config"
                 | "generated-shell"
+                | "header-only-library"
                 | "hooks-patch"
                 | "meson"
                 | "plugin-output"
@@ -99,6 +100,8 @@ pub(super) fn assert_fixture_bundle(
         .collect::<BTreeSet<_>>();
     if matches!(name, "generated-config" | "generated-shell" | "userspace-profile") {
         assert_eq!(output_names, BTreeSet::from(["out"]));
+    } else if name == "header-only-library" {
+        assert_eq!(output_names, BTreeSet::from(["out", "devel"]));
     } else if name == "plugin-output" {
         assert_eq!(output_names, BTreeSet::from(["out", "plugins", "dbginfo"]));
     } else if name == "split" {
@@ -145,6 +148,8 @@ pub(super) fn assert_fixture_bundle(
         assert_generated_shell_fixture(planned, &packages);
     } else if name == "userspace-profile" {
         assert_userspace_profile_fixture(planned, &packages);
+    } else if name == "header-only-library" {
+        assert_header_only_fixture(planned, &packages);
     } else if name == "plugin-output" {
         assert_plugin_output_fixture(planned, &packages);
     } else if name == "split" {
