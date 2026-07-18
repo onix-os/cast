@@ -83,15 +83,18 @@ pub use self::self_upgrade::self_upgrade;
 #[allow(dead_code)] // pre-claim substrate; wired only with the descriptor-safe output plan
 #[path = "boot/active_reblit_boot_inputs.rs"]
 mod active_reblit_boot_inputs;
+#[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
+#[path = "boot/active_reblit_projection.rs"]
+pub(crate) mod active_reblit_boot_projection;
+#[allow(dead_code)] // authenticated schemas prepared before descriptor-safe rendering
+#[path = "boot/active_reblit_boot_schema_inputs.rs"]
+mod active_reblit_boot_schema_inputs;
 #[allow(dead_code)] // authenticated pre-claim local policy; no mutation authority
 #[path = "boot/active_reblit_local_boot_policy.rs"]
 mod active_reblit_local_boot_policy;
 #[allow(dead_code)] // pre-claim pure output plan; consumed by the descriptor-safe publisher
 #[path = "boot/active_reblit_publication_plan.rs"]
 mod active_reblit_publication_plan;
-#[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
-#[path = "boot/active_reblit_projection.rs"]
-pub(crate) mod active_reblit_boot_projection;
 #[cfg(test)]
 mod active_reblit_tests;
 mod active_state_authority;

@@ -18,7 +18,7 @@ use super::{
     active_reblit_boot_projection::{
         ActiveReblitBootAssetPlanError, ActiveReblitBootProjectionError, BootAssetPlanNotApplicable,
         BootAssetPlanOutcome, BootAssetRole, MAX_BOOT_PLAN_ASSETS, MAX_BOOT_PLAN_SNAPSHOT_DIGESTS, PlannedBootAsset,
-        PreparedActiveReblitBootAssetPlan, PreparedActiveReblitBootProjection,
+        PlannedBootSchemaRequirement, PreparedActiveReblitBootAssetPlan, PreparedActiveReblitBootProjection,
     },
     boot_asset_snapshots::{BootAssetSnapshotError, PreparedBootAssetSnapshots, SealedBootAssetSnapshot},
 };
@@ -115,18 +115,33 @@ impl PreparedActiveReblitStoneBootInputs {
         self.plan.kernel_count()
     }
 
+    /// Ordered schema requirements from the exact Stone plan owned by this
+    /// composite. Generated metadata is still resolved only beneath retained
+    /// state-root descriptors; exposing these copy-only declarations does not
+    /// expose either database or filesystem authority.
+    pub(in crate::client) fn schema_requirements(&self) -> &[PlannedBootSchemaRequirement] {
+        self.plan.schema_requirements()
+    }
+
+    /// Bind one stable plan coordinate back to the sealed snapshot retained by
+    /// this exact owner. Later generated publication records carry this index,
+    /// digest and length together and must re-check all three before use.
+    pub(in crate::client) fn asset_at(&self, index: usize) -> Option<BoundActiveReblitBootAsset<'_>> {
+        let planned = self.plan.assets().get(index)?;
+        let binding = self.bindings.get(index)?;
+        let snapshot = self.snapshots.snapshot_at(usize::from(binding.snapshot_index))?;
+        debug_assert_eq!(planned.digest(), snapshot.digest());
+        Some(BoundActiveReblitBootAsset {
+            planned,
+            snapshot,
+            length: binding.length,
+        })
+    }
+
     pub(in crate::client) fn assets(&self) -> impl ExactSizeIterator<Item = BoundActiveReblitBootAsset<'_>> {
-        self.plan.assets().iter().zip(&self.bindings).map(|(planned, binding)| {
-            let snapshot = self
-                .snapshots
-                .snapshot_at(usize::from(binding.snapshot_index))
-                .expect("validated snapshot index remains owned by the composite");
-            debug_assert_eq!(planned.digest(), snapshot.digest());
-            BoundActiveReblitBootAsset {
-                planned,
-                snapshot,
-                length: binding.length,
-            }
+        (0..self.plan.assets().len()).map(|index| {
+            self.asset_at(index)
+                .expect("validated asset and snapshot coordinates remain owned by the composite")
         })
     }
 
