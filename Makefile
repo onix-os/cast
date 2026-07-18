@@ -314,9 +314,12 @@ forge-transition-identity-test:
 	done
 
 forge-state-prune-test:
-	@set -eu; \
-	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
-	test -n "$$listed"; \
+	@set -euo pipefail; \
+	timeout 10s mkdir -p "$(TOP_DIR)/target"; \
+	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/state-prune-list.XXXXXXXXXXXX" )"; \
+	trap 'timeout 10s rm -f "$$listed"' EXIT; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 10s grep -q . "$$listed"; \
 	for test in \
 		client::boot::tests::prune_exclusions_are_applied_before_bounded_rollback_selection \
 		client::boot::tests::excluded_state_is_ineligible_even_when_its_canonical_path_exists \
@@ -352,8 +355,8 @@ forge-state-prune-test:
 		db::state::test::exact_archived_removal_rejects_an_empty_batch \
 		db::state::test::exact_archived_removal_rejects_duplicate_changed_and_transition_rows \
 		db::state::test::exact_archived_removal_reconciles_not_applied_applied_and_ambiguous_reports; do \
-		grep -Fqx "$$test: test" <<<"$$listed"; \
-		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+		timeout 10s grep -Fqx "$$test: test" "$$listed"; \
+		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
 forge-active-reblit-wrapper-test:
