@@ -71,6 +71,7 @@ help:
 	@timeout 10s echo "  forge-linux-gpt-partition-role-test  Run pure bounded GPT partition-role parser contracts"
 	@timeout 10s echo "  forge-linux-mount-attachment-test  Run exact synthetic mountinfo attachment-selection contracts"
 	@timeout 10s echo "  forge-linux-mount-boot-policy-test  Run exact synthetic vfat boot mount-policy contracts"
+	@timeout 10s echo "  forge-linux-mount-devtmpfs-policy-test  Run exact synthetic devtmpfs mount-policy contracts"
 	@timeout 10s echo "  forge-linux-mountinfo-parser-test  Run the bounded byte-preserving Linux mountinfo parser contracts"
 	@timeout 10s echo "  forge-linux-mount-namespace-test  Run retained synthetic namespace and task-root anchor contracts"
 	@timeout 10s echo "  forge-linux-authenticated-mountinfo-snapshot-test  Run authenticated current-thread mountinfo snapshot contracts"

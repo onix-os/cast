@@ -169,6 +169,9 @@ pub(crate) mod mountinfo_attachment;
 #[allow(dead_code)] // closed mount policy consumed by mounted boot topology
 pub(crate) mod mountinfo_boot_policy;
 
+#[allow(dead_code)] // pure closed policy for a future authenticated /dev reader
+pub(crate) mod mountinfo_devtmpfs_policy;
+
 #[allow(dead_code)] // retained foundation consumed by mounted boot topology
 pub(crate) mod mount_namespace;
 
