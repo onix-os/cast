@@ -3,8 +3,9 @@ use std::{ffi::CString, io};
 use super::{
     super::sysfs_block::{
         SYSFS_DEV_ATTRIBUTE_MAX_BYTES, SYSFS_LINK_TARGET_MAX_BYTES, SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES,
-        SYSFS_UEVENT_MAX_BYTES, SysfsBlockDeviceName, SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber,
-        SysfsPartitionUuid, normalize_sysfs_dev_block_target_until, parse_sysfs_disk_identity_until,
+        SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES, SYSFS_UEVENT_MAX_BYTES, SysfsBlockDeviceName, SysfsDeviceNumber,
+        SysfsDiskSequence, SysfsPartitionGeometry, SysfsPartitionNumber, SysfsPartitionUuid,
+        normalize_sysfs_dev_block_target_until, parse_sysfs_disk_identity_until, parse_sysfs_partition_geometry_until,
         parse_sysfs_partition_identity_until, parse_sysfs_subsystem_target_until, require_matching_disk_sequence_until,
     },
     filesystem::{
@@ -19,6 +20,7 @@ use super::{
 // than ignoring nested parser work.
 const LINK_PARSER_WORK_RESERVATION: usize = 64 * 1024;
 const IDENTITY_PARSER_WORK_RESERVATION: usize = 3 * 1024 * 1024;
+const GEOMETRY_PARSER_WORK_RESERVATION: usize = 4 * 1024;
 
 #[derive(PartialEq, Eq)]
 struct SubsystemEvidence {
@@ -46,6 +48,8 @@ struct Snapshot {
     parent_component_count: usize,
     partition_dev: AttributeEvidence,
     partition_number_attribute: AttributeEvidence,
+    partition_start_attribute: AttributeEvidence,
+    partition_size_attribute: AttributeEvidence,
     partition_uevent: AttributeEvidence,
     partition_subsystem: SubsystemEvidence,
     parent_dev: AttributeEvidence,
@@ -58,6 +62,7 @@ struct Snapshot {
     parent_device: SysfsDeviceNumber,
     partition_device_name: Vec<u8>,
     parent_device_name: Vec<u8>,
+    partition_geometry: SysfsPartitionGeometry,
 }
 
 pub(super) struct Capture {
@@ -97,6 +102,14 @@ impl Capture {
 
     pub(super) fn parent_device_name(&self) -> &[u8] {
         &self.snapshot.parent_device_name
+    }
+
+    pub(super) const fn partition_start_512_sectors(&self) -> u64 {
+        self.snapshot.partition_geometry.start_512_sectors()
+    }
+
+    pub(super) const fn partition_size_512_sectors(&self) -> u64 {
+        self.snapshot.partition_geometry.size_512_sectors()
     }
 
     pub(super) fn require_retained(&self, root: &RootHandle, operation: &mut Operation<'_>) -> io::Result<()> {
@@ -226,6 +239,34 @@ impl Capture {
             &self.snapshot.partition_number_attribute,
             &partition_number,
             "terminal partition number rebind",
+        )?;
+        let partition_start = read_attribute(
+            root,
+            &terminal.file,
+            c"start",
+            SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES,
+            CaptureNode::Partition,
+            CaptureAttribute::Start,
+            operation,
+        )?;
+        require_exact_evidence(
+            &self.snapshot.partition_start_attribute,
+            &partition_start,
+            "terminal partition start rebind",
+        )?;
+        let partition_size = read_attribute(
+            root,
+            &terminal.file,
+            c"size",
+            SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES,
+            CaptureNode::Partition,
+            CaptureAttribute::Size,
+            operation,
+        )?;
+        require_exact_evidence(
+            &self.snapshot.partition_size_attribute,
+            &partition_size,
+            "terminal partition size rebind",
         )?;
         let partition_uevent = read_attribute(
             root,
@@ -497,6 +538,24 @@ fn capture_once(
         CaptureAttribute::Partition,
         operation,
     )?;
+    let partition_start_attribute = read_attribute(
+        root,
+        &partition.file,
+        c"start",
+        SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES,
+        CaptureNode::Partition,
+        CaptureAttribute::Start,
+        operation,
+    )?;
+    let partition_size_attribute = read_attribute(
+        root,
+        &partition.file,
+        c"size",
+        SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES,
+        CaptureNode::Partition,
+        CaptureAttribute::Size,
+        operation,
+    )?;
     let partition_uevent = read_attribute(
         root,
         &partition.file,
@@ -514,6 +573,15 @@ fn capture_once(
         &partition_dev.bytes,
         &partition_number_attribute.bytes,
         &partition_uevent.bytes,
+        operation.deadline(),
+    )?;
+    operation.charge(
+        GEOMETRY_PARSER_WORK_RESERVATION,
+        "reserving sysfs partition-geometry parser work",
+    )?;
+    let partition_geometry = parse_sysfs_partition_geometry_until(
+        &partition_start_attribute.bytes,
+        &partition_size_attribute.bytes,
         operation.deadline(),
     )?;
     if partition_identity.device() != requested_device {
@@ -643,6 +711,8 @@ fn capture_once(
             parent_component_count,
             partition_dev,
             partition_number_attribute,
+            partition_start_attribute,
+            partition_size_attribute,
             partition_uevent,
             partition_subsystem,
             parent_dev,
@@ -655,6 +725,7 @@ fn capture_once(
             parent_device,
             partition_device_name,
             parent_device_name,
+            partition_geometry,
         },
         directories,
     })

@@ -126,6 +126,23 @@ fn partition_attribute_inode_and_content_races_fail_closed() {
         Ok(())
     });
     assert!(read);
+
+    let geometry = SyntheticSysfs::stable().unwrap();
+    let mut size_read = false;
+    assert_prepare_race(&geometry, |checkpoint| {
+        if checkpoint
+            == (FixtureCheckpoint::AttributeRead {
+                node: FixtureNode::Partition,
+                attribute: FixtureAttribute::Size,
+            })
+            && !size_read
+        {
+            size_read = true;
+            geometry.overwrite_regular(FixtureEntry::PartitionSize, b"1048575\n")?;
+        }
+        Ok(())
+    });
+    assert!(size_read);
 }
 
 #[test]

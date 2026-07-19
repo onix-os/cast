@@ -35,6 +35,8 @@ pub(super) enum CaptureNode {
 pub(super) enum CaptureAttribute {
     Dev,
     Partition,
+    Start,
+    Size,
     Uevent,
 }
 
@@ -241,6 +243,8 @@ impl From<CaptureAttribute> for super::FixtureAttribute {
         match attribute {
             CaptureAttribute::Dev => Self::Dev,
             CaptureAttribute::Partition => Self::Partition,
+            CaptureAttribute::Start => Self::Start,
+            CaptureAttribute::Size => Self::Size,
             CaptureAttribute::Uevent => Self::Uevent,
         }
     }

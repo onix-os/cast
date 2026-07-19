@@ -181,6 +181,8 @@ impl std::fmt::Debug for RevalidatedSysfsPartitionIdentity<'_> {
             .field("disk_sequence", &self.disk_sequence())
             .field("partition_device_name", &self.partition_device_name())
             .field("parent_device_name", &self.parent_device_name())
+            .field("partition_start_512_sectors", &self.partition_start_512_sectors())
+            .field("partition_size_512_sectors", &self.partition_size_512_sectors())
             .finish_non_exhaustive()
     }
 }
@@ -223,6 +225,20 @@ impl RevalidatedSysfsPartitionIdentity<'_> {
     /// descriptor, open, reopen, path-resolution, or mutation authority.
     pub(crate) fn parent_device_name(&self) -> &[u8] {
         self.current.parent_device_name()
+    }
+
+    /// Return the stable partition start reported by sysfs in 512-byte sectors.
+    ///
+    /// This does not prove a GPT role or the parent disk's logical block size.
+    pub(crate) const fn partition_start_512_sectors(&self) -> u64 {
+        self.current.partition_start_512_sectors()
+    }
+
+    /// Return the stable partition size reported by sysfs in 512-byte sectors.
+    ///
+    /// This does not prove a GPT role or the parent disk's logical block size.
+    pub(crate) const fn partition_size_512_sectors(&self) -> u64 {
+        self.current.partition_size_512_sectors()
     }
 
     /// Compare the authenticated block-parent evidence in two revalidated
@@ -292,6 +308,8 @@ pub(crate) enum FixtureNode {
 pub(crate) enum FixtureAttribute {
     Dev,
     Partition,
+    Start,
+    Size,
     Uevent,
 }
 

@@ -64,6 +64,8 @@ fn every_required_lookup_target_and_attribute_must_exist() {
         FixtureEntry::Lookup,
         FixtureEntry::PartitionDevice,
         FixtureEntry::PartitionNumber,
+        FixtureEntry::PartitionStart,
+        FixtureEntry::PartitionSize,
         FixtureEntry::PartitionEvent,
         FixtureEntry::PartitionSubsystem,
         FixtureEntry::DiskDevice,
@@ -104,6 +106,8 @@ fn target_and_attribute_entry_kinds_fail_closed_without_opening_special_files() 
     for entry in [
         FixtureEntry::PartitionDevice,
         FixtureEntry::PartitionNumber,
+        FixtureEntry::PartitionStart,
+        FixtureEntry::PartitionSize,
         FixtureEntry::PartitionEvent,
         FixtureEntry::DiskDevice,
         FixtureEntry::DiskEvent,
@@ -127,6 +131,8 @@ fn partition_attributes_reject_non_utf8_and_cross_file_disagreement() {
         ),
         (FixtureEntry::PartitionDevice, b"4294967295:4294967293\n".as_slice()),
         (FixtureEntry::PartitionNumber, b"8\n".as_slice()),
+        (FixtureEntry::PartitionStart, b"01\n".as_slice()),
+        (FixtureEntry::PartitionSize, b"0\n".as_slice()),
     ] {
         let fixture = SyntheticSysfs::stable().unwrap();
         fixture.replace_regular(entry, contents).unwrap();

@@ -15,6 +15,8 @@ pub(super) const DISK_MINOR: u32 = u32::MAX - 2;
 pub(super) const PARTITION_NUMBER: u32 = 7;
 pub(super) const SIBLING_PARTITION_NUMBER: u32 = 8;
 pub(super) const DISK_SEQUENCE: u64 = u64::MAX - 7;
+pub(super) const PARTITION_START_512_SECTORS: u64 = 2_048;
+pub(super) const PARTITION_SIZE_512_SECTORS: u64 = 1_048_576;
 pub(super) const PARTITION_UUID: &str = "5e85a94f-b115-41c5-9d72-9d23958b5edc";
 pub(super) const SIBLING_PARTITION_UUID: &str = "6e85a94f-b115-41c5-9d72-9d23958b5edc";
 
@@ -32,6 +34,8 @@ pub(super) enum FixtureEntry {
     PartitionDirectory,
     PartitionDevice,
     PartitionNumber,
+    PartitionStart,
+    PartitionSize,
     PartitionEvent,
     PartitionSubsystem,
     IntermediateSubsystem,
@@ -108,6 +112,8 @@ impl SyntheticSysfs {
             FixtureEntry::PartitionDirectory => self.partition.clone(),
             FixtureEntry::PartitionDevice => self.partition.join("dev"),
             FixtureEntry::PartitionNumber => self.partition.join("partition"),
+            FixtureEntry::PartitionStart => self.partition.join("start"),
+            FixtureEntry::PartitionSize => self.partition.join("size"),
             FixtureEntry::PartitionEvent => self.partition.join("uevent"),
             FixtureEntry::PartitionSubsystem => self.partition.join("subsystem"),
             FixtureEntry::IntermediateSubsystem => self.intermediate.join("subsystem"),
@@ -211,6 +217,8 @@ impl SyntheticSysfs {
             format!("{PARTITION_MAJOR}:{SIBLING_PARTITION_MINOR}\n"),
         )?;
         fs::write(sibling.join("partition"), format!("{SIBLING_PARTITION_NUMBER}\n"))?;
+        fs::write(sibling.join("start"), format!("{PARTITION_START_512_SECTORS}\n"))?;
+        fs::write(sibling.join("size"), format!("{PARTITION_SIZE_512_SECTORS}\n"))?;
         let mut event = format!(
             "MAJOR={PARTITION_MAJOR}\nMINOR={SIBLING_PARTITION_MINOR}\nDEVNAME={SIBLING_PARTITION_NAME}\nDEVTYPE=partition\nPARTN={SIBLING_PARTITION_NUMBER}\nPARTUUID={SIBLING_PARTITION_UUID}\n"
         )
@@ -263,6 +271,8 @@ impl SyntheticSysfs {
         fs::create_dir(&self.partition)?;
         fs::write(self.partition.join("dev"), self.partition_device_contents())?;
         fs::write(self.partition.join("partition"), format!("{PARTITION_NUMBER}\n"))?;
+        fs::write(self.partition.join("start"), format!("{PARTITION_START_512_SECTORS}\n"))?;
+        fs::write(self.partition.join("size"), format!("{PARTITION_SIZE_512_SECTORS}\n"))?;
         fs::write(self.partition.join("uevent"), self.partition_event_contents())?;
         symlink("../../../class/block", self.partition.join("subsystem"))
     }

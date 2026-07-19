@@ -5,7 +5,8 @@ use std::{
 
 use super::super::super::{
     sysfs_block::{
-        SYSFS_DEV_ATTRIBUTE_MAX_BYTES, SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES, SYSFS_UEVENT_MAX_BYTES, SysfsDeviceNumber,
+        SYSFS_DEV_ATTRIBUTE_MAX_BYTES, SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES,
+        SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES, SYSFS_UEVENT_MAX_BYTES, SysfsDeviceNumber,
     },
     sysfs_identity::{FixtureCheckpoint, FixtureSysfsIdentityLimits, FixtureSysfsTree, PreparedSysfsPartitionIdentity},
 };
@@ -272,6 +273,41 @@ fn attribute_read_ceilings_accept_exact_bytes_and_reject_one_more() {
         SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES
     );
     admitted(&exact_partition).unwrap().prepare(device()).unwrap();
+
+    let exact_geometry = SyntheticSysfs::stable().unwrap();
+    exact_geometry
+        .replace_regular(FixtureEntry::PartitionStart, b"18446744073709551615\n")
+        .unwrap();
+    exact_geometry
+        .replace_regular(FixtureEntry::PartitionSize, b"18446744073709551615\n")
+        .unwrap();
+    assert_eq!(
+        fs::read(exact_geometry.entry(FixtureEntry::PartitionStart))
+            .unwrap()
+            .len(),
+        SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES
+    );
+    admitted(&exact_geometry).unwrap().prepare(device()).unwrap();
+
+    let oversized_geometry = SyntheticSysfs::stable().unwrap();
+    oversized_geometry
+        .replace_regular(FixtureEntry::PartitionStart, b"018446744073709551615\n")
+        .unwrap();
+    assert_eq!(
+        fs::read(oversized_geometry.entry(FixtureEntry::PartitionStart))
+            .unwrap()
+            .len(),
+        SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES + 1
+    );
+    assert_eq!(
+        admitted(&oversized_geometry)
+            .unwrap()
+            .prepare(device())
+            .err()
+            .unwrap()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
 
     let oversized_partition = SyntheticSysfs::stable().unwrap();
     oversized_partition
