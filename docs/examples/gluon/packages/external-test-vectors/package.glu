@@ -1,0 +1,49 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let copy_test_vectors = b.step.shell_with {
+    interpreter = b.program.binary "bash",
+    declared_programs = [b.program.binary "cp"],
+    script = r#"test ! -e "${CAST_BUILDER_DIR}/external-test-vectors.json" && cp --preserve=mode,timestamps -- "${CAST_SOURCE_DIR}/frame-codec-conformance.json" "${CAST_BUILDER_DIR}/external-test-vectors.json" && test -s "${CAST_BUILDER_DIR}/external-test-vectors.json""#,
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Frame codec checked against an independently locked corpus",
+    paths = [b.path.exe "/usr/bin/frame-codec"],
+    .. b.output "out"
+}
+
+// The factory receives the complete source set explicitly. The separately
+// locked corpus is copied into CMake's private builder directory immediately
+// before CTest; it is neither bundled into the primary archive nor published.
+\sources ->
+    let base = b.mk_package (b.meta {
+        pname = "frame-codec",
+        version = "2.6.1",
+        release = 1,
+        homepage = "https://example.invalid/frame-codec",
+        license = ["BSD-2-Clause"],
+    })
+
+    {
+        builder = cmake.builder {
+            flags = [
+                "-DBUILD_TESTING=ON",
+                "-DFRAME_CODEC_EXTERNAL_VECTOR_FILE=external-test-vectors.json",
+            ],
+            run_tests = b.boolean.true,
+        },
+        hooks = b.hooks {
+            pre_check = [copy_test_vectors],
+            .. b.defaults.hooks
+        },
+        native_build_inputs = [b.dep.binary "cp"],
+        outputs = [root],
+        options = b.options {
+            networking = b.boolean.false,
+            .. b.defaults.options
+        },
+        sources = [sources.primary, sources.test_vectors],
+        architectures = ["x86_64", "aarch64"],
+        .. base
+    }

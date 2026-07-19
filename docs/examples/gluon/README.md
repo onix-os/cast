@@ -87,6 +87,7 @@ needed by a declarative userspace.
 | [`generated-schema-library`](packages/generated-schema-library/stone.glu) | C sources generated and compiled by a tool bound to one named dependency output. |
 | [`patch-series`](packages/patch-series/stone.glu) | An ordered typed patch series factored into a local Gluon module. |
 | [`external-patch-source`](packages/external-patch-source/stone.glu) | A separately locked raw patch applied to one structurally extracted primary source. |
+| [`external-test-vectors`](packages/external-test-vectors/stone.glu) | A CMake check graph that explicitly admits a separately locked raw corpus through a declared copy capability. |
 | [`pgo-workload`](packages/pgo-workload/stone.glu) | A structural offline training workload with multi-stage profile-guided optimization. |
 | [`nodejs-vendored-application`](packages/nodejs-vendored-application/stone.glu) | A Node.js application built against a fully materialized local dependency tree without npm or registry access. |
 | [`maven-application`](packages/maven-application/stone.glu) | A Java application built from an admitted Maven repository in strict offline mode. |

@@ -1,5 +1,8 @@
 use super::*;
-use stone_recipe::derivation::{LockedSource, StepPlan};
+use stone_recipe::derivation::{
+    CollectionRulePlan, InputOrigin, JobExecutableRole, JobStepSection, LockedSource, PackageInputSelection,
+    PathRuleKind, StepPlan,
+};
 
 pub(super) fn assert_semantics(name: &str, declaration: &PackageSpec, plan: &DerivationPlan) {
     match name {
@@ -7,6 +10,7 @@ pub(super) fn assert_semantics(name: &str, declaration: &PackageSpec, plan: &Der
         "custom-steps" => assert_custom_step_semantics(declaration, plan),
         "dependency-roles" => assert_dependency_role_semantics(declaration, plan),
         "external-patch-source" => assert_external_patch_source_semantics(declaration, plan),
+        "external-test-vectors" => assert_external_test_vector_semantics(declaration, plan),
         "header-only-library" => assert_header_only_semantics(declaration, plan),
         "multiple-sources" => assert_multiple_source_semantics(declaration, plan),
         "patch-series" => assert_patch_series_semantics(declaration, plan),
@@ -123,6 +127,172 @@ fn assert_external_patch_source_semantics(declaration: &PackageSpec, plan: &Deri
         extraction_steps(plan).as_slice(),
         [StepPlan::ExtractArchive { source: 0, .. }]
     ));
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
+}
+
+fn assert_external_test_vector_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    const COPY_SCRIPT: &str = r#"test ! -e "${CAST_BUILDER_DIR}/external-test-vectors.json" && cp --preserve=mode,timestamps -- "${CAST_SOURCE_DIR}/frame-codec-conformance.json" "${CAST_BUILDER_DIR}/external-test-vectors.json" && test -s "${CAST_BUILDER_DIR}/external-test-vectors.json""#;
+
+    assert_eq!(declaration.meta.pname, "frame-codec");
+    assert_eq!(declaration.architectures, ["x86_64", "aarch64"]);
+    assert!(!declaration.options.networking);
+    assert_eq!(dependency_names(&declaration.native_build_inputs), ["binary(cp)"]);
+    assert_eq!(
+        declaration.builder.phases.setup.steps,
+        [StepSpec::CMakeConfigure {
+            flags: vec![
+                "-DBUILD_TESTING=ON".to_owned(),
+                "-DFRAME_CODEC_EXTERNAL_VECTOR_FILE=external-test-vectors.json".to_owned(),
+            ],
+        }]
+    );
+    assert_eq!(declaration.builder.phases.check.steps, [StepSpec::CMakeTest]);
+
+    let [primary, vectors] = declaration.sources.as_slice() else {
+        panic!("external-test-vectors must retain one primary archive and one raw corpus");
+    };
+    assert!(matches!(
+        primary,
+        UpstreamSpec::Archive {
+            url,
+            hash,
+            rename: Some(rename),
+            strip_dirs: Some(1),
+            unpack: true,
+            unpack_dir: Some(directory),
+        } if url == "https://example.invalid/frame-codec-2.6.1.tar.xz"
+            && hash == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            && rename == "frame-codec.tar.xz"
+            && directory == "frame-codec"
+    ));
+    assert!(matches!(
+        vectors,
+        UpstreamSpec::Archive {
+            url,
+            hash,
+            rename: Some(rename),
+            strip_dirs: None,
+            unpack: false,
+            unpack_dir: None,
+        } if url == "https://example.invalid/frame-codec-conformance-2026-07.json"
+            && hash == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            && rename == "frame-codec-conformance.json"
+    ));
+
+    let [
+        StepSpec::Shell {
+            interpreter,
+            declared_programs,
+            script,
+        },
+    ] = declaration.hooks.pre_check.as_slice()
+    else {
+        panic!("external-test-vectors must admit its raw corpus through one pre-check copy");
+    };
+    assert_eq!(interpreter.path, "/usr/bin/bash");
+    assert!(matches!(declared_programs.as_slice(), [program] if program.path == "/usr/bin/cp"));
+    assert_eq!(script, COPY_SCRIPT);
+
+    assert!(matches!(
+        plan.sources.as_slice(),
+        [
+            LockedSource::Archive {
+                order: 0,
+                url,
+                sha256,
+                filename,
+                ..
+            },
+            LockedSource::Archive {
+                order: 1,
+                url: vector_url,
+                sha256: vector_sha256,
+                filename: vector_filename,
+                ..
+            },
+        ] if url == "https://example.invalid/frame-codec-2.6.1.tar.xz"
+            && sha256 == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            && filename == "frame-codec.tar.xz"
+            && vector_url == "https://example.invalid/frame-codec-conformance-2026-07.json"
+            && vector_sha256 == "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            && vector_filename == "frame-codec-conformance.json"
+    ));
+    assert!(matches!(
+        extraction_steps(plan).as_slice(),
+        [StepPlan::ExtractArchive {
+            source: 0,
+            destination,
+            strip_components: 1,
+        }] if destination == "frame-codec"
+    ));
+
+    let check = plan
+        .jobs
+        .iter()
+        .flat_map(|job| &job.phases)
+        .find(|phase| phase.name.eq_ignore_ascii_case("check"))
+        .expect("external-test-vectors frozen plan lost its check phase");
+    assert!(matches!(
+        check.pre.as_slice(),
+        [StepPlan::Shell {
+            interpreter,
+            declared_programs,
+            script,
+            ..
+        }] if interpreter.path == "/usr/bin/bash"
+            && matches!(declared_programs.as_slice(), [program] if program.path == "/usr/bin/cp")
+            && script == COPY_SCRIPT
+    ));
+    assert!(matches!(
+        check.steps.as_slice(),
+        [StepPlan::Run { program, .. }] if program.path == "/usr/bin/ctest"
+    ));
+
+    let copy_request = plan
+        .build_lock
+        .requests
+        .iter()
+        .find(|request| request.request == "binary(cp)")
+        .expect("external-test-vectors frozen closure lost binary(cp)");
+    assert_eq!(copy_request.origins.len(), 2);
+    assert!(matches!(
+        &copy_request.origins[0],
+        InputOrigin::NativeBuild {
+            selection: PackageInputSelection::Package,
+            index: 0,
+        }
+    ));
+    assert!(matches!(
+        &copy_request.origins[1],
+        InputOrigin::JobExecutable {
+            job: 0,
+            phase_name,
+            section: JobStepSection::Pre,
+            step: 0,
+            role: JobExecutableRole::ShellDeclaredProgram { index: 0 },
+            ..
+        } if phase_name.eq_ignore_ascii_case("check")
+    ));
+
+    let [output] = declaration.outputs.as_slice() else {
+        panic!("external-test-vectors must publish one exact output");
+    };
+    assert_eq!(output.name, "out");
+    assert!(matches!(
+        output.paths.as_slice(),
+        [stone_recipe::PathSpec::Exe { path }] if path == "/usr/bin/frame-codec"
+    ));
+    assert_eq!(plan.outputs.len(), 1);
+    assert_eq!(plan.outputs[0].name, "out");
+    assert_eq!(
+        plan.collection_rules,
+        [CollectionRulePlan {
+            output: "out".to_owned(),
+            kind: PathRuleKind::Executable,
+            pattern: "/usr/bin/frame-codec".to_owned(),
+        }]
+    );
     assert_eq!(plan.execution.network, NetworkMode::Disabled);
     assert_x86_64_platform(plan);
 }
