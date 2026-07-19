@@ -1,6 +1,8 @@
 use std::{
     io,
+    marker::PhantomData,
     os::fd::{AsRawFd as _, BorrowedFd},
+    rc::Rc,
     time::Instant,
 };
 
@@ -21,10 +23,13 @@ const MAX_POSITIONAL_READ_BYTES: usize = 64 * 1024;
 /// fresh fallible query or detect length drift within one parser pass. The
 /// composition layer must observation-sandwich each pass and treat that
 /// intra-pass limitation as unresolved rather than as continuous proof.
+/// The image is thread-bound so borrowed read authority cannot be detached
+/// from the namespace-scoped observer which authenticated its length.
 pub(in crate::linux_fs) struct RetainedReadOnlyBlockImage<'descriptor> {
     descriptor: BorrowedFd<'descriptor>,
     authenticated_byte_length: u64,
     deadline: Instant,
+    _thread_bound: PhantomData<Rc<()>>,
 }
 
 impl<'descriptor> RetainedReadOnlyBlockImage<'descriptor> {
@@ -45,6 +50,7 @@ impl<'descriptor> RetainedReadOnlyBlockImage<'descriptor> {
             descriptor,
             authenticated_byte_length,
             deadline,
+            _thread_bound: PhantomData,
         })
     }
 }

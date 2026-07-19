@@ -1,6 +1,8 @@
 use std::{
     io,
+    marker::PhantomData,
     os::fd::{AsRawFd as _, BorrowedFd, RawFd},
+    rc::Rc,
     time::Instant,
 };
 
@@ -15,11 +17,13 @@ use super::{
 ///
 /// Successful observation results contain only closed scalars. This temporary
 /// observer retains the borrow solely so the composition layer can sandwich
-/// GPT reads without reopening the node.
+/// GPT reads without reopening the node. It remains on the authenticating
+/// thread because its mount ID came from thread-relative namespace evidence.
 pub(in crate::linux_fs) struct RetainedBlockDeviceObserver<'descriptor> {
     descriptor: BorrowedFd<'descriptor>,
     authenticated_mount_id: u64,
     latest: Option<BlockDeviceObservation>,
+    _thread_bound: PhantomData<Rc<()>>,
 }
 
 impl<'descriptor> RetainedBlockDeviceObserver<'descriptor> {
@@ -39,6 +43,7 @@ impl<'descriptor> RetainedBlockDeviceObserver<'descriptor> {
             descriptor,
             authenticated_mount_id,
             latest: None,
+            _thread_bound: PhantomData,
         })
     }
 

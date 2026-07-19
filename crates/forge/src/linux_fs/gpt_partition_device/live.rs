@@ -21,6 +21,7 @@ mod abi;
 mod authentication;
 mod image;
 mod observation;
+mod retained_parent;
 mod syscalls;
 
 pub(in crate::linux_fs) use authentication::{
@@ -28,6 +29,9 @@ pub(in crate::linux_fs) use authentication::{
 };
 pub(in crate::linux_fs) use image::RetainedReadOnlyBlockImage;
 pub(in crate::linux_fs) use observation::RetainedBlockDeviceObserver;
+pub(in crate::linux_fs) use retained_parent::RetainedGptParentBlockDevice;
+
+pub(in crate::linux_fs) use retained_parent::retain_gpt_parent_block_device_until;
 
 #[cfg(test)]
 pub(in crate::linux_fs) use abi::fixture_block_ioctl_requests;
@@ -38,4 +42,10 @@ pub(in crate::linux_fs) use image::retained_read_only_block_image_fixture_until;
 #[cfg(test)]
 pub(in crate::linux_fs) use observation::{
     FixtureBlockDeviceSyscall, FixtureBlockDeviceSyscallResult, observe_retained_block_device_fixture_with_clock_until,
+};
+#[cfg(test)]
+pub(in crate::linux_fs) use retained_parent::{
+    FixtureRetainedParentProtocolCall, FixtureRetainedParentProtocolResult,
+    close_retained_gpt_parent_fixture_with_clock_until, rebind_retained_gpt_parent_fixture_with_clock_until,
+    retain_gpt_parent_block_device_fixture_with_clock_until, retain_gpt_parent_block_device_linux_fixture_until,
 };
