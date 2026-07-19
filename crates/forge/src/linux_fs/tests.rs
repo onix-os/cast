@@ -13,6 +13,7 @@ mod authenticated_mountinfo_snapshot;
 mod boot_mount_policy;
 mod chmod_once;
 mod descriptor_boot_filesystem;
+mod descriptor_boot_namespace;
 mod gpt_partition_role;
 mod mount_attachment;
 mod mount_namespace;

@@ -67,6 +67,7 @@ help:
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
 	@timeout 10s echo "  host-storage-safety-test  Audit local tests and harnesses for host-storage access"
 	@timeout 10s echo "  forge-linux-descriptor-boot-filesystem-test  Run pure descriptor-bound boot-filesystem authentication contracts"
+	@timeout 10s echo "  forge-linux-descriptor-boot-namespace-test  Run pure bounded boot-destination namespace assessment contracts"
 	@timeout 10s echo "  forge-linux-gpt-partition-role-test  Run pure bounded GPT partition-role parser contracts"
 	@timeout 10s echo "  forge-linux-mount-attachment-test  Run exact synthetic mountinfo attachment-selection contracts"
 	@timeout 10s echo "  forge-linux-mount-boot-policy-test  Run exact synthetic vfat boot mount-policy contracts"

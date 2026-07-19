@@ -151,6 +151,9 @@ include!("linux_fs/directory_security.rs");
 
 include!("linux_fs/descriptor_access.rs");
 
+#[allow(dead_code)] // pure injected foundation for destination namespace assessment
+pub(crate) mod descriptor_boot_namespace;
+
 #[allow(dead_code)] // standalone foundation for future mounted boot publication
 pub(crate) mod descriptor_boot_filesystem;
 
