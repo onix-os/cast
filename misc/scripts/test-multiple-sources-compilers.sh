@@ -12,6 +12,7 @@ readonly archive_sha256="35c3c296ce08dd0ae1ebf27c782acf77f0f577f080b5ebe467c6c64
 readonly raw_sha256="6c4caab665188429a1f0eda479c4aa11d1f61240f09ac0d201cf80d20fa5e330"
 readonly bundle_sha256="26531c6b1aa55b55c592f8f513f4e584c0c696a1888ef0f9948cfd265d57c5ed"
 readonly commit="4f124a6f438b061a836e332d67e803a69a7bf2d3"
+readonly branch="main"
 readonly identity="cast multiple sources fixture: archive-main+git-protocol-v2+raw-schema-v3"
 
 temporary="$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-multiple-sources-compilers.XXXXXXXX")"
@@ -38,14 +39,33 @@ readonly application="$temporary/application"
 readonly shared="$temporary/shared"
 readonly repository="$temporary/repository"
 readonly vendor="$temporary/vendor-protocol"
-timeout 10s install -d -m 700 "$application" "$shared" "$vendor"
+readonly git_home="$temporary/git-home"
+readonly -a git_environment=(
+    "GIT_ATTR_NOSYSTEM=1"
+    "GIT_CONFIG_GLOBAL=/dev/null"
+    "GIT_CONFIG_NOSYSTEM=1"
+    "HOME=$git_home"
+    "LC_ALL=C"
+    "PATH=$PATH"
+)
+timeout 10s install -d -m 700 "$application" "$shared" "$vendor" "$git_home"
 timeout 30s tar -xJf "$archive" --strip-components=1 -C "$application"
 timeout 10s cp --preserve=mode,timestamps -- "$raw" "$shared/protocol-schema.h"
 
-timeout 30s git -c protocol.file.allow=always clone --no-checkout --quiet "$bundle" "$repository"
-resolved_commit="$(timeout 10s git -C "$repository" rev-parse --verify HEAD)"
+# Bundles do not carry a symbolic HEAD. Select the pinned branch explicitly and
+# force a hostile default so this test cannot silently depend on host Git setup.
+timeout 30s env -i "${git_environment[@]}" git \
+    -c init.defaultBranch=fixture-unborn \
+    -c protocol.file.allow=always clone \
+    --no-checkout --quiet --branch "$branch" "$bundle" "$repository"
+resolved_commit="$(
+    timeout 10s env -i "${git_environment[@]}" git \
+        -C "$repository" rev-parse --verify HEAD
+)"
 timeout 10s test "$resolved_commit" = "$commit"
-timeout 30s git -C "$repository" archive --format=tar --output="$temporary/vendor.tar" "$commit"
+timeout 30s env -i "${git_environment[@]}" git \
+    -C "$repository" archive \
+    --format=tar --output="$temporary/vendor.tar" "$commit"
 timeout 30s tar -xf "$temporary/vendor.tar" -C "$vendor"
 timeout 10s test ! -e "$vendor/.git"
 
