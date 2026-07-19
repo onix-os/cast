@@ -3,9 +3,10 @@
 //! This module does not clone ambient host device nodes. The direct
 //! provisioner creates a fresh detached tmpfs, creates the three fixed Linux
 //! memory devices on it, clones each node into its own detached file mount,
-//! unlinks every source name, and drops the source mount. The returned
-//! capability therefore owns exactly three writable mounts backed by private,
-//! unlinked inodes.
+//! and drops the only descriptor for the detached source directory. The
+//! private inodes retain exactly one unreachable scratch link because Linux
+//! rejects moving an unlinked detached file mount. No scratch directory is
+//! ever attached to a namespace-reachable pathname or returned.
 
 use std::fmt;
 use std::io;
@@ -23,14 +24,16 @@ const FSMOUNT_CLOEXEC: libc::c_uint = 0x0000_0001;
 const OPEN_TREE_CLONE: libc::c_uint = 0x0000_0001;
 const OPEN_TREE_CLOEXEC: libc::c_uint = libc::O_CLOEXEC as libc::c_uint;
 const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
+const MOUNT_ATTR_NOSUID: u64 = 0x0000_0002;
 const MOUNT_ATTR_NODEV: u64 = 0x0000_0004;
+const MOUNT_ATTR_NOEXEC: u64 = 0x0000_0008;
 const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
 const DEVICE_PERMISSIONS: libc::mode_t = 0o666;
 
 pub(crate) const PRIVATE_DEVICE_COUNT: usize = 3;
 /// Fixed metadata/data ceiling for one provider-owned private-device tmpfs.
 pub(crate) const PRIVATE_DEVICE_TMPFS_SIZE_BYTES: u64 = 64 * 1024;
-/// One root directory inode plus exactly three unlinked device inodes.
+/// One root directory inode plus exactly three linked device inodes.
 pub(crate) const PRIVATE_DEVICE_TMPFS_INODES: u64 = 4;
 
 /// Stable order and Linux identity for the complete private-device contract.
@@ -158,7 +161,12 @@ pub(crate) fn provision_private_device_mounts() -> Result<PrivateDeviceMounts, P
     let null = scratch.clone_node(PrivateDevice::Null)?;
     let zero = scratch.clone_node(PrivateDevice::Zero)?;
     let full = scratch.clone_node(PrivateDevice::Full)?;
-    scratch.unlink_all()?;
+    scratch.seal_root()?;
+    // Keep each source inode linked inside this never-attached scratch root.
+    // Linux rejects move_mount from an unlinked detached file mount with
+    // ENOENT. Dropping the sole root descriptor makes the directory and its
+    // fixed names unreachable while the three cloned file mounts retain the
+    // filesystem and their single links for the bounded fixture's lifetime.
     drop(scratch);
 
     PrivateDeviceMounts::from_provisioned([null, zero, full])
@@ -214,10 +222,19 @@ pub(crate) enum PrivateDeviceError {
         actual_major: libc::c_uint,
         actual_minor: libc::c_uint,
     },
-    #[snafu(display("private {device} inode still has {actual} directory links; expected an unlinked inode"))]
-    LinkedSource {
+    #[snafu(display(
+        "private {device} inode has {actual} directory links; expected exactly one unreachable scratch link"
+    ))]
+    UnexpectedLinkCount {
         device: PrivateDevice,
         actual: libc::nlink_t,
+    },
+    #[snafu(display(
+        "private-device scratch root has mount flags {actual:#x}; required sealed flags are {required:#x}"
+    ))]
+    ScratchRootNotSealed {
+        required: libc::c_ulong,
+        actual: libc::c_ulong,
     },
     #[snafu(display("private {device} file mount is read-only"))]
     ReadOnlyMount { device: PrivateDevice },
@@ -257,21 +274,21 @@ pub(crate) enum PrivateDeviceError {
         expected: libc::c_long,
         actual: libc::c_long,
     },
+    #[snafu(display(
+        "private {device} tmpfs has {actual} free inodes; expected no headroom beyond its root and three fixed devices"
+    ))]
+    UnexpectedFreeInodes { device: PrivateDevice, actual: u64 },
 }
 
 struct ScratchDeviceMount {
     mount: OwnedFd,
-    linked: [bool; PRIVATE_DEVICE_COUNT],
 }
 
 impl ScratchDeviceMount {
     fn new() -> Result<Self, PrivateDeviceError> {
         let mount = detached_tmpfs()?;
         set_device_mount_writable(mount.as_raw_fd(), "scratch tmpfs")?;
-        Ok(Self {
-            mount,
-            linked: [false; PRIVATE_DEVICE_COUNT],
-        })
+        Ok(Self { mount })
     }
 
     fn create(&mut self, device: PrivateDevice) -> Result<(), PrivateDeviceError> {
@@ -288,8 +305,6 @@ impl ScratchDeviceMount {
         if created == -1 {
             return Err(syscall_error("mknodat", device_target(device)));
         }
-        self.linked[device.index()] = true;
-
         // mknodat applies the process umask. Descriptor-relative chmod makes
         // the final data-plane permissions exact without changing the
         // process-global umask.
@@ -318,41 +333,48 @@ impl ScratchDeviceMount {
         Ok(descriptor)
     }
 
-    fn unlink_all(&mut self) -> Result<(), PrivateDeviceError> {
-        let mut first_error = None;
-        for device in PRIVATE_DEVICE_ORDER {
-            if !self.linked[device.index()] {
-                continue;
-            }
-            // SAFETY: the fixed name is relative to the live private tmpfs.
-            let result = unsafe { libc::unlinkat(self.mount.as_raw_fd(), device.name().as_ptr(), 0) };
-            if result == -1 {
-                if first_error.is_none() {
-                    first_error = Some(syscall_error("unlinkat", device_target(device)));
-                }
-            } else {
-                self.linked[device.index()] = false;
-            }
-        }
-        match first_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        }
-    }
-}
+    fn seal_root(&self) -> Result<(), PrivateDeviceError> {
+        let required = MOUNT_ATTR_RDONLY | MOUNT_ATTR_NOSUID | MOUNT_ATTR_NODEV | MOUNT_ATTR_NOEXEC;
+        let attributes = mount_attr_t {
+            attr_set: required,
+            attr_clr: 0,
+            program: 0,
+            userns_fd: 0,
+        };
+        // Seal only the never-attached scratch-root mount. The already-cloned
+        // device file mounts remain separately writable and device-enabled.
+        // SAFETY: mount is live, the empty path is admitted explicitly, and
+        // attributes has the kernel UAPI layout supplied by nc.
+        let result = unsafe {
+            nc::syscalls::syscall5(
+                SYS_MOUNT_SETATTR,
+                self.mount.as_raw_fd() as usize,
+                c"".as_ptr() as usize,
+                AT_EMPTY_PATH as usize,
+                &attributes as *const mount_attr_t as usize,
+                size_of::<mount_attr_t>(),
+            )
+        };
+        result.map_err(|errno| PrivateDeviceError::Syscall {
+            operation: "mount_setattr(seal scratch root)",
+            target: "scratch tmpfs",
+            source: io::Error::from_raw_os_error(errno),
+        })?;
 
-impl Drop for ScratchDeviceMount {
-    fn drop(&mut self) {
-        for device in PRIVATE_DEVICE_ORDER {
-            if self.linked[device.index()] {
-                // Best-effort error-path cleanup. Dropping the detached root
-                // immediately afterwards is the final containment boundary.
-                // SAFETY: both descriptor and fixed name remain live here.
-                unsafe {
-                    libc::unlinkat(self.mount.as_raw_fd(), device.name().as_ptr(), 0);
-                }
-            }
+        // SAFETY: zero is valid initialization and the live descriptor remains
+        // borrowed for this read-only flags query.
+        let mut observation: libc::statvfs = unsafe { zeroed() };
+        if unsafe { libc::fstatvfs(self.mount.as_raw_fd(), &mut observation) } == -1 {
+            return Err(syscall_error("fstatvfs(sealed root)", "scratch tmpfs"));
         }
+        let required = libc::ST_RDONLY | libc::ST_NOSUID | libc::ST_NODEV | libc::ST_NOEXEC;
+        if observation.f_flag & required != required {
+            return Err(PrivateDeviceError::ScratchRootNotSealed {
+                required,
+                actual: observation.f_flag,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -538,6 +560,7 @@ struct PrivateDeviceObservation {
     status_flags: libc::c_int,
     tmpfs_size_bytes: u64,
     tmpfs_inodes: u64,
+    tmpfs_free_inodes: u64,
 }
 
 fn observe_private_device(
@@ -558,6 +581,10 @@ fn observe_private_device(
         return Err(syscall_error("fstatfs", device_target(device)));
     }
     let (tmpfs_size_bytes, tmpfs_inodes) = tmpfs_capacity(&filesystem, device_target(device))?;
+    let tmpfs_free_inodes = u64::try_from(filesystem.f_ffree)
+        .map_err(|_| PrivateDeviceError::InvalidTmpfsCapacityReadback {
+            target: device_target(device),
+        })?;
 
     // SAFETY: zero is valid initialization for statvfs and the live descriptor
     // remains borrowed exclusively for the output call.
@@ -593,6 +620,7 @@ fn observe_private_device(
         status_flags,
         tmpfs_size_bytes,
         tmpfs_inodes,
+        tmpfs_free_inodes,
     })
 }
 
@@ -678,8 +706,8 @@ fn validate_namespace_invariant_observation(
             actual_minor: observation.minor,
         });
     }
-    if observation.links != 0 {
-        return Err(PrivateDeviceError::LinkedSource {
+    if observation.links != 1 {
+        return Err(PrivateDeviceError::UnexpectedLinkCount {
             device,
             actual: observation.links,
         });
@@ -704,6 +732,12 @@ fn validate_namespace_invariant_observation(
         observation.tmpfs_size_bytes,
         observation.tmpfs_inodes,
     )?;
+    if observation.tmpfs_free_inodes != 0 {
+        return Err(PrivateDeviceError::UnexpectedFreeInodes {
+            device,
+            actual: observation.tmpfs_free_inodes,
+        });
+    }
     Ok(())
 }
 
@@ -720,7 +754,7 @@ mod tests {
             gid: 0,
             major: device.major(),
             minor: device.minor(),
-            links: 0,
+            links: 1,
             filesystem_device: 41,
             inode: 100 + device.index() as libc::ino_t,
             mount_flags: 0,
@@ -728,6 +762,7 @@ mod tests {
             status_flags: libc::O_PATH,
             tmpfs_size_bytes: PRIVATE_DEVICE_TMPFS_SIZE_BYTES,
             tmpfs_inodes: PRIVATE_DEVICE_TMPFS_INODES,
+            tmpfs_free_inodes: 0,
         }
     }
 
@@ -755,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_private_unlinked_tmpfs_set_is_accepted() {
+    fn exact_private_unreachable_scratch_link_set_is_accepted() {
         validate_private_device_observations(&exact_set()).unwrap();
     }
 
@@ -784,7 +819,7 @@ mod tests {
 
     #[test]
     fn device_metadata_contract_fails_closed() {
-        let cases: [(fn(&mut PrivateDeviceObservation), fn(&PrivateDeviceError) -> bool); 12] = [
+        let cases: [(fn(&mut PrivateDeviceObservation), fn(&PrivateDeviceError) -> bool); 13] = [
             (
                 |observation| observation.filesystem = 0,
                 |error| matches!(error, PrivateDeviceError::UnexpectedFilesystem { .. }),
@@ -810,8 +845,8 @@ mod tests {
                 |error| matches!(error, PrivateDeviceError::UnexpectedIdentity { .. }),
             ),
             (
-                |observation| observation.links = 1,
-                |error| matches!(error, PrivateDeviceError::LinkedSource { .. }),
+                |observation| observation.links = 2,
+                |error| matches!(error, PrivateDeviceError::UnexpectedLinkCount { .. }),
             ),
             (
                 |observation| observation.mount_flags = libc::ST_RDONLY,
@@ -833,6 +868,10 @@ mod tests {
                 |observation| observation.tmpfs_size_bytes *= 2,
                 |error| matches!(error, PrivateDeviceError::UnexpectedTmpfsCapacity { .. }),
             ),
+            (
+                |observation| observation.tmpfs_free_inodes = 1,
+                |error| matches!(error, PrivateDeviceError::UnexpectedFreeInodes { .. }),
+            ),
         ];
 
         for (mutate, expected) in cases {
@@ -841,6 +880,16 @@ mod tests {
             let error = validate_private_device_observations(&observations).unwrap_err();
             assert!(expected(&error), "unexpected validation error: {error}");
         }
+
+        let mut unlinked = exact_set();
+        unlinked[PrivateDevice::Zero.index()].links = 0;
+        assert!(matches!(
+            validate_private_device_observations(&unlinked),
+            Err(PrivateDeviceError::UnexpectedLinkCount {
+                device: PrivateDevice::Zero,
+                ..
+            })
+        ));
     }
 
     #[test]

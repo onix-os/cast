@@ -205,16 +205,16 @@ fn anchored_mount_topology_rejects_duplicate_and_nested_targets() {
     let source = tempfile::tempdir().unwrap();
     let mounts = |first: &str, second: &str| {
         vec![
-            PreparedAnchoredMount {
-                source_mount: open_path_directory(source.path()),
-                target: PathBuf::from(first),
-                target_kind: AnchoredMountTargetKind::Directory,
-            },
-            PreparedAnchoredMount {
-                source_mount: open_path_directory(source.path()),
-                target: PathBuf::from(second),
-                target_kind: AnchoredMountTargetKind::Directory,
-            },
+            PreparedAnchoredMount::detached(
+                open_path_directory(source.path()),
+                PathBuf::from(first),
+                AnchoredMountTargetKind::Directory,
+            ),
+            PreparedAnchoredMount::detached(
+                open_path_directory(source.path()),
+                PathBuf::from(second),
+                AnchoredMountTargetKind::Directory,
+            ),
         ]
     };
 

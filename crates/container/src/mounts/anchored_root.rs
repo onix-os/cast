@@ -1,5 +1,5 @@
 use std::io;
-use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd};
+use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 
@@ -16,14 +16,15 @@ use super::anchored_identity::open_current_namespace_root;
 #[cfg(test)]
 use super::pseudo_filesystems::detached_owned_nested_proc_fixture;
 use super::pseudo_filesystems::{
-    PseudoMountDecision, apply_pseudo_mount, apply_root_mount_policy, assemble_private_dev, mount_binds,
+    PseudoMountDecision, apply_pseudo_mount, apply_root_mount_policy, mount_binds,
     prepare_anchored_pseudo_mount, prepare_anchored_resolver_mount, prepare_pseudo_mount_targets,
-    pseudo_mount_decisions, set_mount_access_fd, setup_networking,
+    prepare_private_dev, pseudo_mount_decisions, set_mount_access_fd, setup_networking,
 };
 use super::syscalls::{add_mount, ensure_directory, set_current_dir, setup_localhost};
 use super::{Bind, BindSource};
 #[cfg(test)]
 use crate::OwnedNestedProcFixture;
+use crate::private_device_assembly::PreparedPrivateDev;
 use crate::private_devices::PrivateDeviceMounts;
 use crate::{
     ActivateAnchoredRootSnafu, CloneAnchoredBindSourceSnafu, Container, ContainerError, DevPolicy, FsErrSnafu,
@@ -141,7 +142,7 @@ fn pivot_anchored(
             target: container.root.clone(),
         })?;
     }
-    for prepared in &ready_mounts {
+    for prepared in ready_mounts {
         attach_ready_anchored_mount(prepared)?;
     }
 
@@ -238,13 +239,40 @@ pub(crate) enum AnchoredMountTargetKind {
 }
 
 pub(crate) struct PreparedAnchoredMount {
-    pub(crate) source_mount: OwnedFd,
+    source: PreparedAnchoredMountSource,
     pub(crate) target: PathBuf,
     pub(crate) target_kind: AnchoredMountTargetKind,
 }
 
+enum PreparedAnchoredMountSource {
+    Detached(OwnedFd),
+    PrivateDev(PreparedPrivateDev),
+}
+
+impl PreparedAnchoredMount {
+    pub(crate) fn detached(
+        source_mount: OwnedFd,
+        target: PathBuf,
+        target_kind: AnchoredMountTargetKind,
+    ) -> Self {
+        Self {
+            source: PreparedAnchoredMountSource::Detached(source_mount),
+            target,
+            target_kind,
+        }
+    }
+
+    pub(crate) fn private_dev(source: PreparedPrivateDev, target: PathBuf) -> Self {
+        Self {
+            source: PreparedAnchoredMountSource::PrivateDev(source),
+            target,
+            target_kind: AnchoredMountTargetKind::Directory,
+        }
+    }
+}
+
 struct ReadyAnchoredMount {
-    source_mount: OwnedFd,
+    source: PreparedAnchoredMountSource,
     target: PathBuf,
     target_descriptor: OwnedFd,
 }
@@ -378,11 +406,11 @@ fn prepare_anchored_binds(
                     target: bind.source_label.clone(),
                 })?;
             }
-            Ok(PreparedAnchoredMount {
+            Ok(PreparedAnchoredMount::detached(
                 source_mount,
-                target: bind.target.clone(),
-                target_kind: bind.target_kind,
-            })
+                bind.target.clone(),
+                bind.target_kind,
+            ))
         })
         .collect()
 }
@@ -478,7 +506,7 @@ fn pin_anchored_mount_targets(
         .map(|mount| {
             let target_descriptor = open_anchored_mount_target(root, &mount.target, mount.target_kind)?;
             Ok(ReadyAnchoredMount {
-                source_mount: mount.source_mount,
+                source: mount.source,
                 target: mount.target,
                 target_descriptor,
             })
@@ -486,14 +514,21 @@ fn pin_anchored_mount_targets(
         .collect()
 }
 
-fn attach_ready_anchored_mount(prepared: &ReadyAnchoredMount) -> Result<(), ContainerError> {
-    move_mount_empty(
-        prepared.source_mount.as_raw_fd(),
-        prepared.target_descriptor.as_raw_fd(),
-    )
-    .with_context(|_| MountSnafu {
-        target: prepared.target.clone(),
-    })
+fn attach_ready_anchored_mount(prepared: ReadyAnchoredMount) -> Result<(), ContainerError> {
+    match prepared.source {
+        PreparedAnchoredMountSource::Detached(source_mount) => move_mount_empty(
+            source_mount.as_raw_fd(),
+            prepared.target_descriptor.as_raw_fd(),
+        )
+        .with_context(|_| MountSnafu {
+            target: prepared.target,
+        }),
+        PreparedAnchoredMountSource::PrivateDev(private_dev) => private_dev
+            .attach_to_authenticated_target(prepared.target_descriptor.as_fd())
+            .map_err(|source| ContainerError::FsErr {
+                source: io::Error::other(source),
+            }),
+    }
 }
 
 pub(crate) fn open_anchored_mount_target(
@@ -649,10 +684,11 @@ fn pivot_mounted_root_with_sources(
 
     let old_root = root.join(OLD_PATH);
     let pseudo_mounts = pseudo_mount_decisions(pseudo_filesystems);
-    // This child already made mount propagation private in `pivot`. Assemble
-    // the complete detached directory before changing or entering the root so
-    // a partial device attachment can only exist in disposable child state.
-    let mut private_dev_mount = private_devices.map(assemble_private_dev).transpose()?;
+    // This child already made mount propagation private in `pivot`. Prepare
+    // the bounded parent before entering the root, but populate it only after
+    // attachment to the authenticated final /dev target. Any partial result
+    // remains disposable trusted-child state and the payload never runs.
+    let mut private_dev_mount = private_devices.map(prepare_private_dev).transpose()?;
 
     // A read-only root cannot acquire missing mountpoint directories after
     // its recursive mount policy is applied. Prepare every setup-owned target
@@ -713,7 +749,7 @@ fn require_capability_consumed(private_devices: Option<PrivateDeviceMounts>) -> 
     }
 }
 
-fn require_prepared_mount_consumed(private_dev_mount: Option<OwnedFd>) -> Result<(), ContainerError> {
+fn require_prepared_mount_consumed(private_dev_mount: Option<PreparedPrivateDev>) -> Result<(), ContainerError> {
     if private_dev_mount.is_none() {
         Ok(())
     } else {

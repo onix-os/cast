@@ -28,32 +28,85 @@ const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
 const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
 const PLACEHOLDER_PERMISSIONS: libc::mode_t = 0o600;
 
-/// Consume one validated private-device capability and return one complete,
-/// detached minimal `/dev` directory mount.
+/// Linear child-side authority to attach and finish one private minimal
+/// `/dev` tree.
 ///
-/// The parent tmpfs is sealed read-only without `AT_RECURSIVE`. The three
-/// nested private file mounts therefore retain their writable data and
-/// metadata semantics, including ordinary existing-file `O_CREAT` opens. On
-/// every failure, dropping the detached parent destroys all partial child
-/// attachments and dropping `devices` closes every remaining source mount.
-pub(crate) fn assemble_private_minimal_dev(
+/// The bounded parent remains detached only until
+/// [`Self::attach_to_authenticated_target`] moves it onto the already-pinned
+/// final `/dev` directory. Creating placeholders after that attachment keeps
+/// the lifecycle simple: every partial result is final-target setup state in
+/// the single disposable child namespace, never a second staging topology.
+#[derive(Debug)]
+pub(crate) struct PreparedPrivateDev {
+    parent: OwnedFd,
     devices: PrivateDeviceMounts,
-) -> Result<OwnedFd, PrivateDeviceAssemblyError> {
+}
+
+/// Validate one private-device capability and prepare its bounded parent.
+///
+/// This function deliberately creates no placeholder below the detached
+/// parent. The kernel ENOENT found during VM validation was caused by moving
+/// an unlinked source mount, not by a detached target; keeping construction at
+/// the final target is an explicit lifecycle choice rather than that diagnosis.
+pub(crate) fn prepare_private_minimal_dev(
+    devices: PrivateDeviceMounts,
+) -> Result<PreparedPrivateDev, PrivateDeviceAssemblyError> {
     devices
         .validate_namespace_invariants()
         .map_err(|source| PrivateDeviceAssemblyError::ValidateCapability { source })?;
 
-    let dev = detached_bounded_tmpfs()?;
-    for (device, source) in devices.ordered() {
-        let target = create_exact_placeholder(dev.as_raw_fd(), device)?;
-        attach_private_device(source, target.as_raw_fd(), device)?;
+    Ok(PreparedPrivateDev {
+        parent: detached_bounded_tmpfs()?,
+        devices,
+    })
+}
+
+impl PreparedPrivateDev {
+    /// Attach the bounded parent to an authenticated final `/dev` directory,
+    /// then populate and seal it before any payload code can run.
+    ///
+    /// A failure after the parent attachment leaves state only in the single
+    /// trusted setup child's private mount namespace. The child exits without
+    /// invoking the payload, and namespace teardown reclaims the partial tree.
+    pub(crate) fn attach_to_authenticated_target(
+        self,
+        target: BorrowedFd<'_>,
+    ) -> Result<(), PrivateDeviceAssemblyError> {
+        // SAFETY: parent is the fresh detached bounded tmpfs, target is an
+        // authenticated O_PATH directory in the current child mount
+        // namespace, and both empty paths are admitted explicitly.
+        unsafe {
+            move_mount(
+                self.parent.as_raw_fd(),
+                Path::new(""),
+                target.as_raw_fd(),
+                Path::new(""),
+                MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH,
+            )
+        }
+        .map_err(Errno::from_i32)
+        .map_err(|source| PrivateDeviceAssemblyError::Syscall {
+            operation: "move_mount parent onto authenticated final target",
+            target: "dev",
+            source: io::Error::from_raw_os_error(source as i32),
+        })?;
+
+        self.finish_attached()
     }
-    seal_parent_read_only(dev.as_raw_fd())?;
-    require_parent_read_only(dev.as_raw_fd())?;
-    devices
-        .validate_namespace_invariants()
-        .map_err(|source| PrivateDeviceAssemblyError::ValidateAttachedDevices { source })?;
-    Ok(dev)
+
+    fn finish_attached(self) -> Result<(), PrivateDeviceAssemblyError> {
+        for (device, source) in self.devices.ordered() {
+            create_exact_placeholder(self.parent.as_raw_fd(), device)?;
+            attach_private_device(source, self.parent.as_raw_fd(), device)?;
+        }
+        require_no_parent_inode_headroom(self.parent.as_raw_fd())?;
+        seal_parent_read_only(self.parent.as_raw_fd())?;
+        require_parent_read_only(self.parent.as_raw_fd())?;
+        self.devices
+            .validate_namespace_invariants()
+            .map_err(|source| PrivateDeviceAssemblyError::ValidateAttachedDevices { source })?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Snafu)]
@@ -101,6 +154,20 @@ pub(crate) enum PrivateDeviceAssemblyError {
         actual_size: libc::off_t,
         actual_links: libc::nlink_t,
     },
+    #[snafu(display(
+        "private minimal /dev target {device} exposes inode {actual_device}:{actual_inode}; expected moved private inode {expected_device}:{expected_inode}"
+    ))]
+    AttachedDeviceIdentityMismatch {
+        device: PrivateDevice,
+        expected_device: libc::dev_t,
+        expected_inode: libc::ino_t,
+        actual_device: libc::dev_t,
+        actual_inode: libc::ino_t,
+    },
+    #[snafu(display(
+        "private minimal /dev parent retains {actual} free inodes after its exact three placeholders"
+    ))]
+    UnexpectedParentFreeInodes { actual: libc::fsfilcnt_t },
     #[snafu(display("private minimal /dev parent tmpfs is not read-only after its nonrecursive seal"))]
     ParentNotReadOnly,
 }
@@ -166,9 +233,10 @@ fn configure_fscontext_string(
 fn create_exact_placeholder(
     parent: RawFd,
     device: PrivateDevice,
-) -> Result<OwnedFd, PrivateDeviceAssemblyError> {
-    // SAFETY: parent is the fresh detached tmpfs root and the fixed name is
-    // NUL-terminated. O_EXCL proves no prior object supplied the target.
+) -> Result<(), PrivateDeviceAssemblyError> {
+    // SAFETY: parent is the fresh tmpfs root after it was attached in this
+    // child mount namespace and the fixed name is NUL-terminated. O_EXCL
+    // proves no prior object supplied the target.
     let descriptor = unsafe {
         libc::openat(
             parent,
@@ -190,37 +258,24 @@ fn create_exact_placeholder(
         return Err(syscall_error("fchmod", device_target(device)));
     }
     validate_placeholder_observation(device, observe_placeholder(descriptor.as_raw_fd())?)?;
-
-    // Use an O_PATH descriptor as the empty-path move_mount target. The
-    // creator descriptor closes before attachment and cannot carry writable
-    // file authority beyond this helper.
-    drop(descriptor);
-    let target = unsafe {
-        libc::openat(
-            parent,
-            device.name().as_ptr(),
-            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            0,
-        )
-    };
-    owned_raw_descriptor(target, "openat(O_PATH)", device_target(device))
+    Ok(())
 }
 
 fn attach_private_device(
     source: BorrowedFd<'_>,
-    target: RawFd,
+    parent: RawFd,
     device: PrivateDevice,
 ) -> Result<(), PrivateDeviceAssemblyError> {
-    // SAFETY: source is a validated detached file mount, target is the exact
-    // O_PATH placeholder in the detached child tmpfs, and both empty paths are
-    // admitted explicitly.
+    // SAFETY: source is a validated detached file mount, parent is the
+    // now-attached bounded tmpfs, the fixed relative name denotes the exact
+    // placeholder created above, and the source empty path is admitted.
     unsafe {
         move_mount(
             source.as_raw_fd(),
             Path::new(""),
-            target,
-            Path::new(""),
-            MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_EMPTY_PATH,
+            parent,
+            device_path(device),
+            MOVE_MOUNT_F_EMPTY_PATH,
         )
     }
     .map_err(Errno::from_i32)
@@ -229,7 +284,71 @@ fn attach_private_device(
         target: device_target(device),
         source: io::Error::from_raw_os_error(source as i32),
     })?;
+
+    // Reopen the final visible name and prove that move_mount covered the
+    // placeholder with the exact already-validated private inode.
+    // SAFETY: parent remains live and the fixed name is NUL-terminated.
+    let attached = unsafe {
+        libc::openat(
+            parent,
+            device.name().as_ptr(),
+            libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0,
+        )
+    };
+    let attached = owned_raw_descriptor(attached, "openat(attached O_PATH)", device_target(device))?;
+    let expected = observe_inode_identity(source.as_raw_fd(), device)?;
+    let actual = observe_inode_identity(attached.as_raw_fd(), device)?;
+    validate_attached_inode_identity(device, expected, actual)?;
     Ok(())
+}
+
+fn validate_attached_inode_identity(
+    device: PrivateDevice,
+    expected: (libc::dev_t, libc::ino_t),
+    actual: (libc::dev_t, libc::ino_t),
+) -> Result<(), PrivateDeviceAssemblyError> {
+    if actual != expected {
+        return Err(PrivateDeviceAssemblyError::AttachedDeviceIdentityMismatch {
+            device,
+            expected_device: expected.0,
+            expected_inode: expected.1,
+            actual_device: actual.0,
+            actual_inode: actual.1,
+        });
+    }
+    Ok(())
+}
+
+fn observe_inode_identity(
+    descriptor: RawFd,
+    device: PrivateDevice,
+) -> Result<(libc::dev_t, libc::ino_t), PrivateDeviceAssemblyError> {
+    // SAFETY: zero is valid initialization and descriptor remains live for
+    // this read-only metadata query.
+    let mut stat: libc::stat = unsafe { zeroed() };
+    if unsafe { libc::fstat(descriptor, &mut stat) } == -1 {
+        return Err(syscall_error("fstat(attached identity)", device_target(device)));
+    }
+    Ok((stat.st_dev, stat.st_ino))
+}
+
+fn require_no_parent_inode_headroom(descriptor: RawFd) -> Result<(), PrivateDeviceAssemblyError> {
+    // SAFETY: zero is valid initialization and descriptor remains live for
+    // this read-only filesystem-statistics call.
+    let mut filesystem: libc::statfs = unsafe { zeroed() };
+    if unsafe { libc::fstatfs(descriptor, &mut filesystem) } == -1 {
+        return Err(syscall_error("fstatfs(free inodes)", "dev"));
+    }
+    validate_parent_free_inodes(filesystem.f_ffree)
+}
+
+fn validate_parent_free_inodes(free: libc::fsfilcnt_t) -> Result<(), PrivateDeviceAssemblyError> {
+    if free == 0 {
+        Ok(())
+    } else {
+        Err(PrivateDeviceAssemblyError::UnexpectedParentFreeInodes { actual: free })
+    }
 }
 
 fn seal_parent_read_only(descriptor: RawFd) -> Result<(), PrivateDeviceAssemblyError> {
@@ -409,6 +528,14 @@ const fn device_target(device: PrivateDevice) -> &'static str {
     }
 }
 
+fn device_path(device: PrivateDevice) -> &'static Path {
+    match device {
+        PrivateDevice::Null => Path::new("null"),
+        PrivateDevice::Zero => Path::new("zero"),
+        PrivateDevice::Full => Path::new("full"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,5 +630,30 @@ mod tests {
             [PrivateDevice::Null, PrivateDevice::Zero, PrivateDevice::Full].map(device_target),
             ["dev/null", "dev/zero", "dev/full"]
         );
+        assert_eq!(
+            [PrivateDevice::Null, PrivateDevice::Zero, PrivateDevice::Full].map(device_path),
+            [Path::new("null"), Path::new("zero"), Path::new("full")]
+        );
+    }
+
+    #[test]
+    fn attached_device_identity_must_match_the_validated_source() {
+        validate_attached_inode_identity(PrivateDevice::Null, (41, 7), (41, 7)).unwrap();
+        assert!(matches!(
+            validate_attached_inode_identity(PrivateDevice::Null, (41, 7), (41, 8)),
+            Err(PrivateDeviceAssemblyError::AttachedDeviceIdentityMismatch {
+                device: PrivateDevice::Null,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn attached_parent_requires_zero_free_inodes() {
+        validate_parent_free_inodes(0).unwrap();
+        assert!(matches!(
+            validate_parent_free_inodes(1),
+            Err(PrivateDeviceAssemblyError::UnexpectedParentFreeInodes { actual: 1 })
+        ));
     }
 }

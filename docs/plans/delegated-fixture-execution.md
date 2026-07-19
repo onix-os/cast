@@ -56,7 +56,7 @@ Making ambient host-device mounts writable was rejected. It would expose host
 inode metadata to a root-mapped payload and make frozen execution depend on
 undeclared ambient state. The required correction is the
 [private minimal-device boundary](../architecture/private-minimal-dev.md):
-three fresh unlinked device mounts per execution, provided through a narrow
+three fresh namespace-unreachable device mounts per execution, provided through a narrow
 initial-user-namespace privilege boundary and installed beneath an immutable
 three-name `/dev`.
 
