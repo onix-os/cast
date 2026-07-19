@@ -26,7 +26,10 @@ mod filesystem;
 mod mountinfo_snapshot;
 
 #[allow(unused_imports)] // named by the future owned mounted-topology aggregate
-pub(crate) use attachment::{PreparedTaskRootedAttachment, RevalidatedTaskRootedAttachment};
+pub(crate) use attachment::{
+    PreparedTaskRootedAttachment, RevalidatedTaskRootedAttachment, TaskRootBootNamespaceAssessmentError,
+    ValidatedTaskRootBootNamespaceAssessment,
+};
 #[allow(unused_imports)] // consumed by the authenticated mounted-topology aggregate
 pub(crate) use mountinfo_snapshot::AuthenticatedMountInfoSnapshot;
 

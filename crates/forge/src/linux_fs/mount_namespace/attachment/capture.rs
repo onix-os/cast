@@ -11,6 +11,11 @@ use crate::linux_fs::descriptor_boot_filesystem::{
     authenticate_boot_filesystem_directory_until,
 };
 use crate::linux_fs::{
+    descriptor_boot_namespace::{
+        BootNamespaceAssessmentLimits, BootNamespaceRequest, RetainedBootNamespaceAssessmentError,
+        RetainedBootNamespaceAssessmentLimits, ValidatedRetainedBootNamespaceAssessment,
+        assess_retained_boot_namespace_until,
+    },
     descriptor_devtmpfs_filesystem::{
         DevtmpfsDescriptorAuthenticationError, ValidatedDevtmpfsSameMountDescriptorEvidence,
         authenticate_devtmpfs_same_mount_directory_until,
@@ -58,6 +63,28 @@ impl AttachmentCapture {
             &destination.file,
             self.destination_witness.device,
             self.destination_witness.inode,
+            deadline,
+        )
+    }
+
+    pub(super) fn assess_retained_boot_namespace_until(
+        &self,
+        requests: &[BootNamespaceRequest<'_>],
+        expected: &[&[u8]],
+        namespace_limits: BootNamespaceAssessmentLimits,
+        live_limits: RetainedBootNamespaceAssessmentLimits,
+        deadline: std::time::Instant,
+    ) -> Result<ValidatedRetainedBootNamespaceAssessment, RetainedBootNamespaceAssessmentError> {
+        let destination = self
+            .components
+            .last()
+            .unwrap_or_else(|| unreachable!("validated attachment capture always retains one destination component"));
+        assess_retained_boot_namespace_until(
+            &destination.file,
+            requests,
+            expected,
+            namespace_limits,
+            live_limits,
             deadline,
         )
     }

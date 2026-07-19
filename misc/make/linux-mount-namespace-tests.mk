@@ -13,12 +13,24 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mount_namespace::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 54; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 66; \
 	for name in \
 		attachment::bounds::zero_limits_and_expired_deadline_fail_before_attachment_hooks \
 		attachment::bounds::attachment_hooks_are_finite_and_injected_failures_propagate \
 		attachment::bounds::preparation_work_and_descriptor_budgets_have_exact_adjacent_boundaries \
 		attachment::bounds::revalidation_budgets_cover_both_chain_passes_and_both_anchor_edges \
+		attachment::boot_namespace::success_orders_stages_and_retains_only_exact_scalars_and_states \
+		attachment::boot_namespace::opening_failure_skips_namespace_and_closing_without_a_result \
+		attachment::boot_namespace::namespace_failure_skips_closing_and_returns_no_result \
+		attachment::boot_namespace::closing_failure_discards_namespace_assessment \
+		attachment::boot_namespace::opening_and_closing_filesystem_drift_discards_namespace_assessment \
+		attachment::boot_namespace::identical_foreign_filesystem_identity_mismatches_discard_namespace_assessment \
+		attachment::boot_namespace::every_observed_root_scalar_mismatch_discards_namespace_assessment \
+		attachment::boot_namespace::missing_observed_root_discards_namespace_assessment \
+		attachment::boot_namespace::empty_request_set_is_rejected_before_clock_or_any_stage \
+		attachment::boot_namespace::expiry_after_opening_skips_namespace_and_closing \
+		attachment::boot_namespace::expiry_after_namespace_discards_assessment_and_skips_closing \
+		attachment::boot_namespace::terminal_deadline_expiry_discards_an_otherwise_complete_assessment \
 		attachment::deadline::fixture_clock_rejects_attachment_prepare_and_revalidation_at_entry \
 		attachment::deadline::fixture_clock_rejects_attachment_prepare_and_revalidation_at_final_checkpoint \
 		attachment::device::non_dev_selector_is_rejected_before_injected_descriptor_observation \
@@ -73,6 +85,8 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	done; \
 	root="$(MOUNT_NAMESPACE_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace.rs"; \
 	core="$(MOUNT_NAMESPACE_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace"; \
+	boot_composition="$$core/attachment/boot_namespace.rs"; \
+	capture="$$core/attachment/capture.rs"; \
 	runtime="$(MOUNT_NAMESPACE_TOP_DIR)/crates/forge/src/transition_journal/runtime_evidence.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare() -> io::Result<Self>' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare_until(deadline: Instant) -> io::Result<Self>' "$$root"; \
@@ -82,6 +96,28 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(crate) fn revalidate_against_until(' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn authenticate_boot_filesystem_until(' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'self.current.authenticate_boot_filesystem_until(deadline)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'mod boot_namespace;' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(crate) struct ValidatedTaskRootBootNamespaceAssessment' "$$boot_composition"; \
+	timeout 10s grep -Fq 'boot_filesystem: ValidatedBootFilesystemDescriptorEvidence,' "$$boot_composition"; \
+	timeout 10s grep -Fq 'destination_mount_id: u64,' "$$boot_composition"; \
+	timeout 10s grep -Fq 'namespace: ValidatedRetainedBootNamespaceAssessment,' "$$boot_composition"; \
+	timeout 10s grep -Fq 'pub(crate) fn assess_retained_boot_namespace_until(' "$$boot_composition"; \
+	timeout 10s rg --pcre2 -U -q '(?s)pub\(crate\) fn assess_retained_boot_namespace_until\([\s\S]{0,900}?if requests\.is_empty\(\)[\s\S]{0,500}?require_deadline\(deadline\)\?;[\s\S]{0,500}?let opening = self\s*\.current\s*\.authenticate_boot_filesystem_until\(deadline\)[\s\S]{0,500}?require_deadline\(deadline\)\?;[\s\S]{0,300}?let namespace = self\s*\.current\s*\.assess_retained_boot_namespace_until\([\s\S]{0,900}?require_deadline\(deadline\)\?;[\s\S]{0,300}?let closing = self\s*\.current\s*\.authenticate_boot_filesystem_until\(deadline\)[\s\S]{0,700}?close_assessment_until\(' "$$boot_composition"; \
+	timeout 10s grep -Fq 'fn close_assessment_until(' "$$boot_composition"; \
+	if timeout 10s rg -n 'pub(?:\([^)]*\))?[[:space:]]+fn close_assessment_until' "$$boot_composition"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'if opening != closing' "$$boot_composition"; \
+	timeout 10s grep -Fq 'opening.destination_device() != destination.device' "$$boot_composition"; \
+	timeout 10s grep -Fq 'opening.destination_inode() != destination.inode' "$$boot_composition"; \
+	timeout 10s grep -Fq 'let observed_root = namespace.observed_root_identity()' "$$boot_composition"; \
+	timeout 10s grep -Fq 'root.device != destination.device' "$$boot_composition"; \
+	timeout 10s grep -Fq 'root.inode != destination.inode' "$$boot_composition"; \
+	timeout 10s grep -Fq 'root.mount_id != destination.mount_id' "$$boot_composition"; \
+	timeout 10s rg --pcre2 -U -q '(?s)fn close_assessment_until\([\s\S]{0,1800}?validate_closed_evidence\([^;]+\)\?;[\s\S]{0,300}?require_deadline\(deadline\)\?;[\s\S]{0,300}?Ok\(ValidatedTaskRootBootNamespaceAssessment' "$$boot_composition"; \
+	timeout 10s test "$$( timeout 10s rg -c '\bValidatedTaskRootBootNamespaceAssessment \{' "$$boot_composition" )" = 3; \
+	timeout 10s test "$$( timeout 10s rg -c 'Ok\(ValidatedTaskRootBootNamespaceAssessment \{' "$$boot_composition" )" = 1; \
+	timeout 10s grep -Fq 'pub(crate) struct FixtureRetainedBootNamespaceAssessment' "$$boot_composition"; \
+	if timeout 10s awk '/pub\(crate\) struct FixtureRetainedBootNamespaceAssessment/ { exit } { print }' "$$boot_composition" | timeout 10s rg -n 'fn[[:space:]]+[[:alnum:]_]+[[:space:]]*<|impl[[:space:]]+Fn(?:Once|Mut)?|dyn[[:space:]]+Fn(?:Once|Mut)?|ClosedComposition|FixtureNamespacePayload|FixtureRetainedBootNamespaceAssessment<'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s awk '/pub\(crate\) struct ValidatedTaskRootBootNamespaceAssessment/ { emit=1 } emit { print } /^}/ && emit { exit }' "$$boot_composition" | timeout 10s rg -ni '\b(?:File|Path|OwnedFd|BorrowedFd|RawFd|fd|callback|reader|reopen)\b'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'pub(crate) fn authenticate_devtmpfs_attachment_until(' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'self.current.authenticate_devtmpfs_same_mount_until(policy, deadline)' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'pub(in crate::linux_fs) fn authenticate_devtmpfs_gpt_partition_device_until(' "$$core/attachment/gpt_device.rs"; \
@@ -91,6 +127,8 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(super) fn authenticate_boot_filesystem_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'authenticate_boot_filesystem_directory_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq '&destination.file,' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'pub(super) fn assess_retained_boot_namespace_until(' "$$capture"; \
+	timeout 10s rg --pcre2 -U -q '(?s)pub\(super\) fn assess_retained_boot_namespace_until\([\s\S]{0,1200}?assess_retained_boot_namespace_until\(\s*&destination\.file,\s*requests,\s*expected,\s*namespace_limits,\s*live_limits,\s*deadline,\s*\)' "$$capture"; \
 	timeout 10s grep -Fq 'self.destination_witness.device,' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'self.destination_witness.inode,' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'pub(super) fn authenticate_devtmpfs_same_mount_until(' "$$core/attachment/capture.rs"; \
