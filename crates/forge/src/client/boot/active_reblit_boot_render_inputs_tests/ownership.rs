@@ -1,6 +1,26 @@
 use std::ptr;
 
+use super::super::{BoundActiveReblitBootAsset, RevalidatedActiveReblitBootRenderInputs};
 use super::support::*;
+
+fn kernel_asset_from_temporary_view<'a, 'attempt, 'stone, 'roots>(
+    inputs: &'a RevalidatedActiveReblitBootRenderInputs<'attempt, 'stone, 'roots>,
+) -> BoundActiveReblitBootAsset<'a> {
+    inputs
+        .kernels()
+        .next()
+        .expect("fixture has one retained kernel")
+        .kernel_asset()
+}
+
+fn initrd_asset_from_temporary_views<'a, 'attempt, 'stone, 'roots>(
+    inputs: &'a RevalidatedActiveReblitBootRenderInputs<'attempt, 'stone, 'roots>,
+) -> BoundActiveReblitBootAsset<'a> {
+    inputs
+        .kernels()
+        .find_map(|kernel| kernel.initrds().next().map(|initrd| initrd.asset()))
+        .expect("fixture has one retained initrd")
+}
 
 #[test]
 fn exact_owners_coordinates_and_namespace_are_retained_without_mutation() {
@@ -47,6 +67,8 @@ fn exact_owners_coordinates_and_namespace_are_retained_without_mutation() {
     );
     assert_eq!(attempt.global_state(), fixture.head.id);
     assert_eq!(attempt.global_schema().os_id(), "head");
+    assert_eq!(kernel_asset_from_temporary_view(&attempt).state_id(), fixture.head.id);
+    assert_eq!(initrd_asset_from_temporary_views(&attempt).state_id(), fixture.head.id);
     assert_eq!(
         kernels.iter().map(|kernel| kernel.version()).collect::<Vec<_>>(),
         ["6.12", "6.6"]

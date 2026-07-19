@@ -185,7 +185,7 @@ impl<'stone, 'roots> PreparedActiveReblitBootRenderInputs<'stone, 'roots> {
     }
 }
 
-impl RevalidatedActiveReblitBootRenderInputs<'_, '_, '_> {
+impl<'attempt, 'stone, 'roots> RevalidatedActiveReblitBootRenderInputs<'attempt, 'stone, 'roots> {
     /// The caller-owned absolute deadline covering this complete attempt.
     /// Later pure rendering and planning layers must reuse it rather than
     /// minting a fresh timeout after authenticated input work has completed.
@@ -222,25 +222,25 @@ impl RevalidatedActiveReblitBootRenderInputs<'_, '_, '_> {
             .expect("retained systemd-boot coordinate remains bound to the immutable Stone owner")
     }
 
-    pub(in crate::client) fn kernels(&self) -> impl ExactSizeIterator<Item = BoundActiveReblitKernelRenderInput<'_>> {
-        debug_assert_eq!(self.prepared.kernels.len(), self.cmdlines.len());
-        self.prepared
-            .kernels
-            .iter()
-            .zip(self.cmdlines.iter())
-            .map(|(prepared, cmdline)| {
-                let schema = self
-                    .prepared
-                    .schemas
-                    .schema_for_state(prepared.state_id)
-                    .expect("every retained kernel remains joined to one owned schema");
-                BoundActiveReblitKernelRenderInput {
-                    source_owner: self.prepared.source_owner,
-                    prepared,
-                    schema,
-                    cmdline,
-                }
-            })
+    pub(in crate::client) fn kernels<'a>(
+        &'a self,
+    ) -> impl ExactSizeIterator<Item = BoundActiveReblitKernelRenderInput<'a>> + use<'a> {
+        let source_owner: &'a PreparedActiveReblitStoneBootInputs = self.prepared.source_owner;
+        let schemas: &'a PreparedActiveReblitBootSchemas = &self.prepared.schemas;
+        let kernels: &'a [PreparedActiveReblitKernelRenderInput] = &self.prepared.kernels;
+        let cmdlines: &'a [MaterializedActiveReblitKernelCmdline] = &self.cmdlines;
+        debug_assert_eq!(kernels.len(), cmdlines.len());
+        kernels.iter().zip(cmdlines.iter()).map(move |(prepared, cmdline)| {
+            let schema = schemas
+                .schema_for_state(prepared.state_id)
+                .expect("every retained kernel remains joined to one owned schema");
+            BoundActiveReblitKernelRenderInput {
+                source_owner,
+                prepared,
+                schema,
+                cmdline,
+            }
+        })
     }
 
     pub(in crate::client) fn kernel_count(&self) -> usize {
@@ -256,7 +256,7 @@ impl RevalidatedActiveReblitBootRenderInputs<'_, '_, '_> {
     }
 }
 
-impl BoundActiveReblitKernelRenderInput<'_> {
+impl<'a> BoundActiveReblitKernelRenderInput<'a> {
     pub(in crate::client) fn state_id(&self) -> state::Id {
         self.prepared.state_id
     }
@@ -285,7 +285,7 @@ impl BoundActiveReblitKernelRenderInput<'_> {
         self.prepared.kernel.length
     }
 
-    pub(in crate::client) fn kernel_asset(&self) -> BoundActiveReblitBootAsset<'_> {
+    pub(in crate::client) fn kernel_asset(&self) -> BoundActiveReblitBootAsset<'a> {
         kernel_join::bind_kernel_coordinate(
             self.source_owner,
             &self.prepared.kernel,
@@ -295,15 +295,19 @@ impl BoundActiveReblitKernelRenderInput<'_> {
         .expect("retained kernel coordinate remains bound to the immutable Stone owner")
     }
 
-    pub(in crate::client) fn initrds(&self) -> impl ExactSizeIterator<Item = BoundActiveReblitInitrdRenderInput<'_>> {
-        self.prepared
+    pub(in crate::client) fn initrds(
+        &self,
+    ) -> impl ExactSizeIterator<Item = BoundActiveReblitInitrdRenderInput<'a>> + use<'a> {
+        let source_owner = self.source_owner;
+        let prepared = self.prepared;
+        prepared
             .initrds
             .iter()
-            .map(|coordinate| BoundActiveReblitInitrdRenderInput {
-                source_owner: self.source_owner,
+            .map(move |coordinate| BoundActiveReblitInitrdRenderInput {
+                source_owner,
                 coordinate,
-                state_id: self.prepared.state_id,
-                version: &self.prepared.version,
+                state_id: prepared.state_id,
+                version: &prepared.version,
             })
     }
 
@@ -319,7 +323,7 @@ impl BoundActiveReblitKernelRenderInput<'_> {
     }
 }
 
-impl BoundActiveReblitInitrdRenderInput<'_> {
+impl<'a> BoundActiveReblitInitrdRenderInput<'a> {
     pub(in crate::client) fn state_id(&self) -> state::Id {
         self.state_id
     }
@@ -351,7 +355,7 @@ impl BoundActiveReblitInitrdRenderInput<'_> {
             .expect("authenticated initrd coordinate has a canonical basename")
     }
 
-    pub(in crate::client) fn asset(&self) -> BoundActiveReblitBootAsset<'_> {
+    pub(in crate::client) fn asset(&self) -> BoundActiveReblitBootAsset<'a> {
         kernel_join::bind_initrd_coordinate(self.source_owner, self.coordinate, self.state_id, self.version)
             .expect("retained initrd coordinate remains bound to the immutable Stone owner")
     }

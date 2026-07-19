@@ -37,6 +37,16 @@ forge-active-reblit-boot-render-input-test: host-storage-safety-test
 	timeout 10s grep -Fq "roots_owner: &'roots PreparedActiveReblitBootStateRoots" "$$root"; \
 	if timeout 10s rg -n 'fn (source_owner|roots_owner)\(' "$$root" "$$core"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq "struct RevalidatedActiveReblitBootRenderInputs<'attempt, 'stone, 'roots>" "$$root"; \
+	timeout 10s grep -Fq "impl<'attempt, 'stone, 'roots> RevalidatedActiveReblitBootRenderInputs<'attempt, 'stone, 'roots>" "$$root"; \
+	timeout 10s grep -Fq "pub(in crate::client) fn kernels<'a>(" "$$root"; \
+	timeout 10s grep -Fq "Item = BoundActiveReblitKernelRenderInput<'a>" "$$root"; \
+	timeout 10s grep -Fq "impl<'a> BoundActiveReblitKernelRenderInput<'a>" "$$root"; \
+	timeout 10s grep -Fq "fn kernel_asset(&self) -> BoundActiveReblitBootAsset<'a>" "$$root"; \
+	timeout 10s grep -Fq "Item = BoundActiveReblitInitrdRenderInput<'a>" "$$root"; \
+	timeout 10s grep -Fq "impl<'a> BoundActiveReblitInitrdRenderInput<'a>" "$$root"; \
+	timeout 10s grep -Fq "fn asset(&self) -> BoundActiveReblitBootAsset<'a>" "$$root"; \
+	timeout 10s grep -Fq "fn kernel_asset_from_temporary_view<'a, 'attempt, 'stone, 'roots>(" "$$test_core/ownership.rs"; \
+	timeout 10s grep -Fq "fn initrd_asset_from_temporary_views<'a, 'attempt, 'stone, 'roots>(" "$$test_core/ownership.rs"; \
 	timeout 10s grep -Fq 'deadline: Instant' "$$root"; \
 	timeout 10s grep -Fq 'pub(in crate::client) fn deadline(&self) -> Instant' "$$root"; \
 	timeout 10s grep -Fq "struct BoundActiveReblitInitrdRenderInput<'a>" "$$root"; \
