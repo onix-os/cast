@@ -80,6 +80,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
   to `BootRepairRequired`; a separately observed `BootRepairStarted` record is
   retained as terminal `BootRepairUnverified` without invoking boot again.
+  The v2 journal domain can now represent explicit `Applied` and
+  `AlreadySatisfied` repair completion, but no production path emits it.
   The complete ActivateArchived rollback suffix now reaches that same
   authenticated clean-startup handoff. Roll-forward execution, the actual boot
   repair effect and its durable publisher, and cleanup are not implemented.
@@ -406,7 +408,14 @@ exact ActiveReblit `CandidatePreserved` rollback sourced from
 admits an exact `BootRepairStarted` record on a later startup entry and advances
 it to terminal `BootRepairUnverified` while invoking boot zero times. There is
 still no production `BootRepairRequired` -> `BootRepairStarted` attempt,
-durable publisher, completion claim, or terminal deletion for that branch.
+durable publisher, successful completion dispatch, or terminal deletion for
+that branch. Commit `406cabe5` nevertheless closes the journal vocabulary: new
+records use payload v2, byte-canonical v1 remains readable and advances only
+through its old domain, and typed constructors distinguish Required -> Started,
+Started -> `BootRepairComplete { Applied | AlreadySatisfied }`, Started ->
+Unverified, and Complete -> `RollbackComplete`. The generic rollback successor
+cannot traverse those boot-specific edges, and `BootRepairComplete` remains
+nondeletable until its explicit terminal advance.
 
 The implemented preparation stack now carries one caller-owned absolute
 deadline, without resetting it, through the exact state/layout database and
@@ -450,7 +459,7 @@ FAT-safe relative paths, pre-materialization generated-byte limits, finite
 request/path/work limits, and terminal deadline checks. Synthetic topology
 fixtures exercise the production planning path without touching host storage.
 
-Physical GPT role, filesystem and disk admissibility,
+Physical GPT role, descriptor-cross-checked filesystem and disk admissibility,
 durable descriptor-rooted publisher, device-flush ordering, and restart
 reconciliation remain open. Default and focused tests are synthetic and do not
 inspect or mutate host ESP/BOOT storage; real publication, reboot, and

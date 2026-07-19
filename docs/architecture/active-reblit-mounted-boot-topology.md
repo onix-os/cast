@@ -144,15 +144,31 @@ under fixed byte, entry, work, descriptor, and time limits, then require:
 3. the selected entry's mount root is exactly `/`;
 4. the selected mount ID occurs exactly once in the snapshot;
 5. the entry's `major:minor` equals the final descriptor's device identity;
-   and
-6. descriptor revalidation still yields the same mount ID and attachment
+6. the selected filesystem type is exactly `vfat`;
+7. the selected per-mount options contain exactly one `rw`, no `ro`, and
+   exactly one each of `nosuid`, `nodev`, `noexec`, and `nosymfollow`, without
+   any positive inverse or duplicate required token;
+8. the selected superblock options contain exactly one `rw` and no `ro`; and
+9. descriptor revalidation still yields the same mount ID and attachment
    chain.
 
 The selector-wide uniqueness rule rejects stacked attachments with the same
 namespace-visible mount point; mount-ID uniqueness alone would not detect that
 ambiguity. The exact `/` root rule excludes a bind of a subdirectory as
-partition-root authority. A filesystem type or mount source string in
-mountinfo is descriptive input only; it is not trusted partition-role evidence.
+partition-root authority. Capture retains the admitted filesystem kind and
+required option facts as a closed policy value and compares that value across
+every observation. It does not retain the raw option lists or mount source as
+authority.
+
+This is exact **mountinfo policy evidence**, not independent filesystem
+authentication. It does not replace a retained destination-descriptor
+`fstatfs` check, prove a GPT partition type, authorize a write, or establish
+file, directory, filesystem, or device durability. Requiring `nosymfollow`
+also makes admission to the future boot publisher effectively Linux 5.10 or
+newer. The reusable `linux_fs` descriptor and mountinfo primitives keep their
+Linux 5.6 compatibility baseline; this stricter policy belongs only to mounted
+boot targets. This follows the [Boot Loader Specification](https://uapi-group.org/specifications/specs/boot_loader_specification/);
+the kernel-version boundary is documented by [`mount(2)`](https://man7.org/linux/man-pages/man2/mount.2.html).
 
 ### Sysfs partition identity
 
@@ -163,9 +179,11 @@ the kernel block identity and block-parent observations made during its
 authenticated capture and revalidation passes. It is not a continuously live
 view and does not claim call-time or simultaneous residency.
 
-It does not prove the GPT type GUID, ESP/XBOOTLDR role, filesystem type,
-physical-disk identity, flush behavior, or persistence across reboot. Those
-claims require later, separately retained evidence.
+It does not prove the GPT type GUID, ESP/XBOOTLDR role, a
+destination-descriptor-cross-checked filesystem identity, physical-disk
+identity, flush behavior, or persistence across reboot. Those claims require
+later, separately retained evidence. The selected mountinfo `vfat` policy is
+only one input to that later filesystem authentication.
 
 ## Topology invariants
 
@@ -311,7 +329,8 @@ Mounted topology is necessary but not sufficient for real boot publication.
 Later layers must independently authenticate:
 
 - the on-disk GPT partition type as ESP or XBOOTLDR;
-- the admitted filesystem type and required feature set;
+- the retained destination descriptor's filesystem identity against the
+  admitted mountinfo `vfat` policy and any required filesystem features;
 - the exact partition/disk relationship beyond the retained sysfs observations;
 - publication ordering, file replacement, directory synchronization, and
   device flush durability; and

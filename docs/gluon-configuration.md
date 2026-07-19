@@ -70,13 +70,24 @@ device discovery, a pathname fallback, or a mount operation. Before boot files
 can be changed, separate descriptor-retained evidence must prove the exact
 current task root and mount-namespace attachment, exactly one mountinfo entry
 with the selector's decoded bytes, the matching descriptor mount ID and
-major:minor device, and a matching sysfs PARTUUID. A distinct XBOOTLDR must
-also prove different attachments, mounts, devices, and PARTUUIDs. Its paired
-retained sysfs snapshots must report the same block-parent witness across both complete
-topology passes and the terminal revalidation. Those snapshots are bounded
-observations, not continuously live or simultaneous-residency claims. Sysfs
-evidence alone does not prove the on-disk GPT type GUIDs, filesystem types,
-physical-disk identity, or durability.
+major:minor device, and a matching sysfs PARTUUID. The selected mountinfo entry
+must report exactly `vfat`, include one unopposed `rw` and exactly one each of
+`nosuid`, `nodev`, `noexec`, and `nosymfollow` in its per-mount options, and
+include one unopposed `rw` in its superblock options. Duplicates of required
+tokens and their positive inverse flags are rejected. These admitted facts are
+retained as a closed policy and rechecked across every topology observation.
+
+A distinct XBOOTLDR must also prove different attachments, mounts, devices,
+and PARTUUIDs. Its paired retained sysfs snapshots must report the same
+block-parent witness across both complete topology passes and the terminal
+revalidation. Those snapshots are bounded observations, not continuously live
+or simultaneous-residency claims. The selected mountinfo policy is likewise
+only mountinfo evidence: it does not replace destination-descriptor `fstatfs`
+authentication, prove the on-disk GPT type GUIDs or physical-disk identity,
+authorize writes, or establish durability. Because `nosymfollow` was added in
+Linux 5.10, the future boot publisher has an effective Linux 5.10-or-newer
+admission boundary. Generic `linux_fs` facilities remain compatible with the
+project's Linux 5.6 baseline.
 
 `cast.boot_topology.v1` is rejected rather than upgraded automatically because
 it contains no mount-point selectors. Administrators must supply those paths

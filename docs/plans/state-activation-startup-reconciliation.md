@@ -36,7 +36,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   shared clean admission; the completion route never redispatches its successor. An exact `BootSyncStarted`
   rollback instead routes `CandidatePreserved` only to `BootRepairRequired`; the actual repair attempt remains
   unwired. A fresh startup observing `BootRepairStarted` invokes boot zero times and persists terminal
-  `BootRepairUnverified` for manual recovery rather than guessing whether an interrupted effect applied.
+  `BootRepairUnverified` rather than guessing whether an interrupted effect applied. Payload v2 can represent typed successful completion, but no production entry emits that domain.
   Each entry recaptures authority from the current canonical record and fresh
   database and namespace evidence, admits at most one preparation/effect
   checkpoint, at most one journal advance, or one terminal deletion, then
@@ -935,8 +935,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Commit `92fa7aa0` adds the disjoint production route for exact ActiveReblit `CandidatePreserved` evidence sourced from
   `BootSyncStarted`: it advances once to `BootRepairRequired`, reopens only the exact source or successor, invokes boot zero
   times, and returns. Commit `b5928340` separately admits exact `BootRepairStarted` on a fresh startup; operational capture
-  faults remain errors, structural incompatibility defers, and exact evidence advances once to terminal
-  `BootRepairUnverified` with zero boot calls. No production entry creates `BootRepairStarted` or performs the repair.
+  faults remain errors, structural incompatibility defers, and exact evidence advances once to terminal `BootRepairUnverified` with zero boot calls. Commit `406cabe5` adds immutable v1/v2 decoding and explicit Required -> Started,
+  Started -> Complete/Unverified, and Complete -> `RollbackComplete` edges; the generic successor refuses them. No production entry creates `BootRepairStarted`, performs the repair, or emits successful completion.
 
   Commit `cbe3679a` production-wires exactly one ActivateArchived
   `CandidatePreserveIntent` checkpoint per startup entry. Exact staged evidence

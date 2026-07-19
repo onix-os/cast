@@ -20,10 +20,16 @@ Mount points are untrusted lexical lookup hints, not storage authority. They
 have no defaults and do not enable discovery, fallback, or `canonicalize`.
 The descriptor-retained coordinator must still prove the exact namespace
 attachment, mountinfo entry, mounted device, matching sysfs PARTUUID, and the
-topology relationship. GPT role, filesystem type, and durability require
-additional evidence. `cast.boot_topology.v1` cannot be migrated automatically
-because it has no mount points; administrators must rewrite it explicitly
-rather than let Cast guess from the host.
+topology relationship. Its selected mountinfo entry must report `vfat`, the
+per-mount flags `rw`, `nosuid`, `nodev`, `noexec`, and `nosymfollow`, and a
+writable (`rw`) superblock. Those facts are retained and revalidated as closed
+mountinfo policy evidence only. They do not replace destination-descriptor
+`fstatfs` authentication, prove a GPT role, authorize writes, or establish
+durability. The `nosymfollow` requirement gives the future boot publisher an
+effective Linux 5.10-or-newer admission boundary without changing the generic
+`linux_fs` Linux 5.6 compatibility baseline. `cast.boot_topology.v1` cannot be
+migrated automatically because it has no mount points; administrators must
+rewrite it explicitly rather than let Cast guess from the host.
 
 The complete capture and future publication boundary is specified in
 [`active-reblit-mounted-boot-topology.md`](../../architecture/active-reblit-mounted-boot-topology.md).

@@ -318,7 +318,9 @@ closure remain authoritative in `PLAN.md`.
   trigger, wrapper, or cleanup effect. An exact `BootSyncStarted` rollback
   instead routes `CandidatePreserved` to `BootRepairRequired`; a later startup
   observing `BootRepairStarted` records terminal `BootRepairUnverified` without
-  invoking boot. The actual repair attempt remains unwired. ActivateArchived
+  invoking boot. The v2 journal model has typed Applied/AlreadySatisfied
+  completion edges, but the actual repair attempt and successful production
+  dispatch remain unwired. ActivateArchived
   preservation, completion, and terminal finalization now run as three separate
   bounded production entries with no same-entry successor redispatch.
   Commits
