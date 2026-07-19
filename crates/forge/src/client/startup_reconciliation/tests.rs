@@ -11,9 +11,10 @@ use crate::{
     state::{self, TransitionId},
     test_support::private_installation_tempdir,
     transition_journal::{
-        AbortDisposition, BootId, BootRollback, CandidateRollback, ForwardPhase, MountNamespaceIdentity, Operation,
-        Phase, Previous, PreviousOrigin, QuarantineName, RollbackAction, RollbackPlan, RuntimeEpoch,
-        RuntimeEvidenceError, RuntimeTreeIdentity, TransitionJournalStore, TransitionRecord, TreeToken,
+        AbortDisposition, BootId, BootRepairOutcome, BootRollback, CandidateRollback, ForwardPhase,
+        InitialRollbackAction, MountNamespaceIdentity, Operation, Phase, Previous, PreviousOrigin, QuarantineName,
+        RollbackAction, RollbackObservations, RollbackPlan, RuntimeEpoch, RuntimeEvidenceError, RuntimeTreeIdentity,
+        TransitionJournalStore, TransitionRecord, TreeToken,
     },
     tree_marker::{TreeMarkerError, TreeMarkerStore},
 };
@@ -43,7 +44,7 @@ const FORWARD_PHASES: [Phase; 19] = [
     Phase::Complete,
 ];
 
-const ROLLBACK_CASES: [(Phase, RollbackAction, FreshDatabaseExpectation); 13] = [
+const ROLLBACK_CASES: [(Phase, RollbackAction, FreshDatabaseExpectation); 14] = [
     (
         Phase::RollbackDecided,
         RollbackAction::Pending,
@@ -97,6 +98,11 @@ const ROLLBACK_CASES: [(Phase, RollbackAction, FreshDatabaseExpectation); 13] = 
     (
         Phase::BootRepairStarted,
         RollbackAction::Applied,
+        FreshDatabaseExpectation::Missing,
+    ),
+    (
+        Phase::BootRepairComplete,
+        RollbackAction::AlreadySatisfied,
         FreshDatabaseExpectation::Missing,
     ),
     (
@@ -249,6 +255,24 @@ fn rollback_record(phase: Phase, fresh_db: RollbackAction) -> TransitionRecord {
     record
 }
 
+fn boot_repair_complete_database_record() -> TransitionRecord {
+    let source = record_at(Phase::BootSyncStarted);
+    let decided = source
+        .rollback_decision(RollbackObservations {
+            allocated_candidate_id: None,
+            previous_archive: None,
+            usr_exchange: Some(InitialRollbackAction::AlreadySatisfied),
+            candidate: InitialRollbackAction::AlreadySatisfied,
+            fresh_db: Some(InitialRollbackAction::AlreadySatisfied),
+        })
+        .unwrap();
+    let required = decided.rollback_successor(None).unwrap();
+    let started = required.boot_repair_started_successor().unwrap();
+    started
+        .boot_repair_complete_successor(BootRepairOutcome::Applied)
+        .unwrap()
+}
+
 fn startup_metadata_provenance() -> db::state::MetadataProvenance {
     db::state::MetadataProvenance::from_outputs(b"NAME=startup\n", b"let startup = true\n")
 }
@@ -345,7 +369,14 @@ fn startup_reconciliation_database_phase_matrix_is_exact() {
     }
 
     for (phase, action, expected) in ROLLBACK_CASES {
-        let record = rollback_record(phase, action);
+        let record = if phase == Phase::BootRepairComplete {
+            let record = boot_repair_complete_database_record();
+            assert_eq!(record.rollback.as_ref().unwrap().fresh_db, action);
+            assert_eq!(record.rollback.as_ref().unwrap().boot, BootRollback::Applied);
+            record
+        } else {
+            rollback_record(phase, action)
+        };
         assert_eq!(fresh_database_expectation(&record), expected, "{phase:?}");
         for ownership in ownerships {
             assert_eq!(

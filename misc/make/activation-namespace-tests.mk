@@ -5,7 +5,7 @@ forge-startup-activation-namespace-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_reconciliation::activation_namespace::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 24; \
+	timeout 10s test "$$count" = 25; \
 	for test in \
 		client::startup_reconciliation::activation_namespace::tests::usr_xattrs::startup_activation_inventory_rejects_live_usr_extended_attributes \
 		client::startup_reconciliation::activation_namespace::tests::usr_xattrs::startup_activation_inventory_rejects_staged_usr_extended_attributes \
@@ -17,6 +17,7 @@ forge-startup-activation-namespace-test:
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_inventory_binds_slot_links_to_transition_role_and_state \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_inventory_active_reblit_previous_state_id_is_typed \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_inventory_active_reblit_preserve_accepts_only_paired_destinations \
+		client::startup_reconciliation::activation_namespace::tests::startup_activation_inventory_boot_repair_complete_outcomes_retain_exact_preserved_layout \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_policy_forward_layout_matrix_is_exact \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_policy_rollback_actions_override_source_ordinal \
 		client::startup_reconciliation::activation_namespace::tests::startup_activation_policy_cleanup_and_abi_matrix_is_exact \

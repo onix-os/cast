@@ -14,9 +14,9 @@ use crate::{
     state::TransitionId,
     test_support::private_installation_tempdir,
     transition_journal::{
-        AbortDisposition, BootRollback, CandidateRollback, ForwardPhase, Operation, Phase, Previous, PreviousOrigin,
-        QuarantineName, RollbackAction, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity, TransitionJournalStore,
-        TransitionRecord, TreeToken,
+        AbortDisposition, BootRepairOutcome, BootRollback, CandidateRollback, ForwardPhase, InitialRollbackAction,
+        Operation, Phase, Previous, PreviousOrigin, QuarantineName, RollbackAction, RollbackObservations, RollbackPlan,
+        RuntimeEpoch, RuntimeTreeIdentity, TransitionJournalStore, TransitionRecord, TreeToken,
     },
     tree_marker::TreeMarkerStore,
 };
@@ -189,6 +189,51 @@ fn active_reblit_wrapper_path(installation: &Installation, record: &TransitionRe
             .expect("active-reblit test record has a previous state ID"),
         record.previous.tree_token.as_str()
     ))
+}
+
+fn active_reblit_boot_repair_complete_fixture(outcome: BootRepairOutcome) -> (Fixture, TransitionJournalStore) {
+    let mut fixture = Fixture::active_reblit();
+    write_state_id(&fixture.installation.staging_path("usr"), b"42");
+    install_root_abi(&fixture);
+
+    let journal =
+        TransitionJournalStore::open_retained(fixture.installation.root_directory(), &fixture.installation.root)
+            .unwrap();
+    journal.create(&fixture.record).unwrap();
+
+    let mut current = fixture.record.clone();
+    for _ in 0..19 {
+        if current.phase == Phase::BootSyncStarted {
+            break;
+        }
+        let successor = current.forward_successor(None).unwrap();
+        journal.advance(&current, &successor).unwrap();
+        current = successor;
+    }
+    assert_eq!(current.phase, Phase::BootSyncStarted);
+
+    let decided = current
+        .rollback_decision(RollbackObservations {
+            allocated_candidate_id: None,
+            previous_archive: None,
+            usr_exchange: Some(InitialRollbackAction::AlreadySatisfied),
+            candidate: InitialRollbackAction::AlreadySatisfied,
+            fresh_db: None,
+        })
+        .unwrap();
+    journal.advance(&current, &decided).unwrap();
+    let required = decided.rollback_successor(None).unwrap();
+    journal.advance(&decided, &required).unwrap();
+    let started = required.boot_repair_started_successor().unwrap();
+    journal.advance(&required, &started).unwrap();
+    let complete = started.boot_repair_complete_successor(outcome).unwrap();
+    journal.advance(&started, &complete).unwrap();
+    fixture.record = complete;
+
+    let reserved = active_reblit_wrapper_path(&fixture.installation, &fixture.record);
+    create_private_directory(&reserved);
+    fs::rename(fixture.installation.staging_path("usr"), reserved.join("usr")).unwrap();
+    (fixture, journal)
 }
 
 fn archived_rearchive_fixture(phase: Phase, rearchived: bool, state_id: Option<&[u8]>) -> Fixture {
@@ -521,6 +566,29 @@ fn startup_activation_inventory_active_reblit_preserve_accepts_only_paired_desti
 
     create_private_directory(&reserved);
     assert_eq!(fixture.assess(), Err(NamespacePolicyConflict::ActiveReblitWrapper));
+}
+
+#[test]
+fn startup_activation_inventory_boot_repair_complete_outcomes_retain_exact_preserved_layout() {
+    for (outcome, status) in [
+        (BootRepairOutcome::Applied, BootRollback::Applied),
+        (BootRepairOutcome::AlreadySatisfied, BootRollback::AlreadySatisfied),
+    ] {
+        let (fixture, journal) = active_reblit_boot_repair_complete_fixture(outcome);
+        assert_eq!(fixture.record.rollback.as_ref().unwrap().boot, status);
+        assert_eq!(fixture.assess(), Ok(()), "{outcome:?}");
+
+        let inspection = ActivationNamespaceInspection::begin(&fixture.installation, &journal, &fixture.record);
+        let evidence = inspection.finish(&fixture.installation, &journal, &fixture.record);
+        assert_eq!(
+            evidence.stability(),
+            ActivationNamespaceStability::Stable,
+            "{outcome:?}"
+        );
+        assert!(evidence.journal_is_exact(), "{outcome:?}");
+        assert!(evidence.phase_layout_is_exact(), "{outcome:?}");
+        assert!(evidence.policy_was_assessed(), "{outcome:?}");
+    }
 }
 
 #[test]

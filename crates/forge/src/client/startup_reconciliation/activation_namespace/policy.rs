@@ -280,6 +280,7 @@ pub(super) fn rollback_layouts(
         | Phase::FreshDbInvalidated
         | Phase::BootRepairRequired
         | Phase::BootRepairStarted
+        | Phase::BootRepairComplete
         | Phase::BootRepairUnverified
         | Phase::RollbackComplete => vec![preserved],
         _ => Vec::new(),
