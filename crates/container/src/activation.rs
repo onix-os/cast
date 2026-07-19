@@ -16,6 +16,8 @@ use super::clone3::{Clone3Outcome, clone3_into_cgroup};
 use super::idmap::{idmap, validated_caller_identity};
 use super::mounts::{ReboundAnchoredBindSource, ReboundAnchoredInputs, authenticate_anchored_inputs};
 use super::payload::enter;
+use super::private_device_broker::request_private_device_mounts;
+use super::private_devices::PrivateDeviceMounts;
 #[cfg(test)]
 use super::process_runtime::LEGACY_TEST_ACTIVATION_LOCK;
 use super::process_runtime::{
@@ -25,7 +27,7 @@ use super::process_runtime::{
 use super::{
     CloseInheritedCgroupDescriptorSnafu, Container, ContainerError, Error, InvalidInheritedCgroupDescriptorsSnafu,
     MAX_CHILD_ERROR_BYTES, MAX_CONTROL_EINTR_RETRIES, Message, NixSnafu, RetainedInheritedCgroupDescriptorSnafu,
-    SysPolicy,
+    DevPolicy, PRIVATE_DEVICE_BROKER_TIMEOUT, SysPolicy,
 };
 
 impl Container {
@@ -92,6 +94,11 @@ impl Container {
                 }
             }
             drop(authenticated_inputs);
+
+            // Minimal `/dev` is an execution capability, not a pathname
+            // recipe. Acquire and authenticate it before clone so neither
+            // child setup path ever consults the ambient host `/dev` tree.
+            prepare_private_device_capability(&mut self)?;
 
             // clone(2) needs a caller-owned stack. Fork-like clone3 without
             // CLONE_VM must instead use stack=0/stack_size=0 and resumes on the
@@ -316,6 +323,11 @@ impl Container {
             }
         };
 
+        // The child inherited its own descriptor-table references at clone.
+        // Close the supervisor's copies immediately: only trusted child setup
+        // may retain and consume this one-shot mount authority from here.
+        drop(self.private_devices.take());
+
         if let Err(source) = sync.close_child_endpoint() {
             let failure = Err(child.cleanup_after_failure(Error::Nix { source }));
             return match cgroup_leaf.take() {
@@ -405,6 +417,50 @@ impl Container {
             None => result,
         }
     }
+}
+
+fn prepare_private_device_capability(container: &mut Container) -> Result<(), Error> {
+    if container.pseudo_filesystems.dev != DevPolicy::Minimal {
+        if container.private_devices.take().is_some() {
+            return Err(Error::PrivateDeviceAcquisitionRejected {
+                message: "private minimal-device authority exists without DevPolicy::Minimal".to_owned(),
+            });
+        }
+        return Ok(());
+    }
+
+    if container.private_devices.is_some() {
+        return Err(Error::PrivateDeviceAcquisitionRejected {
+            message: "private minimal-device authority was acquired more than once".to_owned(),
+        });
+    }
+
+    // Every activation crosses the same root-authenticated broker boundary.
+    // Effective UID zero alone does not prove initial-user-namespace mount and
+    // device authority, so there is deliberately no direct euid-based path.
+    let mounts = acquire_private_devices_from_broker()?;
+
+    mounts
+        .validate()
+        .map_err(|error| Error::PrivateDeviceAcquisitionRejected {
+            message: format_error(error),
+        })?;
+    container.private_devices = Some(mounts);
+    Ok(())
+}
+
+fn acquire_private_devices_from_broker() -> Result<PrivateDeviceMounts, Error> {
+    request_private_device_mounts(PRIVATE_DEVICE_BROKER_TIMEOUT).map_err(|error| {
+        if error.execution_capability_unavailable() {
+            Error::PrivateDeviceProviderUnavailable {
+                source: io::Error::other(error),
+            }
+        } else {
+            Error::PrivateDeviceAcquisitionRejected {
+                message: format_error(error),
+            }
+        }
+    })
 }
 
 const CGROUP_SUPER_MAGIC: nix::libc::c_long = 0x0027_e0eb;

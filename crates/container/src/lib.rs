@@ -15,6 +15,8 @@ mod credentials;
 mod idmap;
 mod mounts;
 mod payload;
+mod private_device_assembly;
+mod private_device_broker;
 mod private_devices;
 mod process_runtime;
 mod seccomp;
@@ -27,8 +29,7 @@ use self::mounts::{
     authenticate_anchored_inputs, descriptor_stat, open_anchored_mount_target, open_anchored_resolver_target,
     prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions, resolver_stat_stable,
     root_mount_decisions, sealed_resolver_file, set_mount_access, validate_anchored_bind_inputs,
-    validate_anchored_mount_topology, validate_minimal_device_source, validate_resolver_target,
-    validate_tmpfs_limit_readback, verify_tmpfs_limits,
+    validate_anchored_mount_topology, validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits,
 };
 
 #[cfg(test)]
@@ -58,6 +59,19 @@ const MAX_CONTROL_EINTR_RETRIES: usize = 3;
 const CLONE_STACK_BYTES: usize = 4 * 1024 * 1024;
 const PIDFD_REAP_TIMEOUT: Duration = Duration::from_secs(5);
 const PIDFD_REAP_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const PRIVATE_DEVICE_BROKER_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Serve one fixed private-device broker request on an already-connected
+/// systemd `Accept=yes` socket.
+///
+/// The protocol accepts no caller-selected device, path, mode, count, or
+/// timeout. The process must hold initial-user-namespace `CAP_SYS_ADMIN` and
+/// `CAP_MKNOD`; callers without those capabilities receive an error rather
+/// than an ambient-device fallback.
+pub fn serve_private_device_broker_connection(connection: OwnedFd) -> io::Result<()> {
+    private_device_broker::serve_private_device_connection(connection, PRIVATE_DEVICE_BROKER_TIMEOUT)
+        .map_err(io::Error::other)
+}
 
 /// Typed policy for pseudo-filesystems mounted while entering a container.
 ///
@@ -161,20 +175,18 @@ pub enum DevPolicy {
     HostReadOnly,
     #[default]
     HostReadWrite,
-    /// Mount a fresh tmpfs containing read-only host binds for exactly
-    /// `/dev/null`, `/dev/zero`, and `/dev/full`.
+    /// Mount a sealed three-name `/dev` containing fresh private `null`,
+    /// `zero`, and `full` character-device inodes.
+    ///
+    /// The directory itself is immutable, while each disposable device mount
+    /// retains ordinary Unix data-plane and existing-file `O_CREAT` behavior.
+    /// No ambient host device inode is mounted or exposed.
     Minimal,
 }
 
 /// Exact device-node names exposed by [`DevPolicy::Minimal`]. No optional
 /// nodes are added based on host state.
 pub const MINIMAL_DEV_NODES: &[&str] = &["null", "zero", "full"];
-
-// Linux's stable memory-device identities from include/uapi/linux/major.h and
-// drivers/char/mem.c. Keep the identity next to the declared name: accepting
-// an arbitrary character device under one of these names would let a hostile
-// host substitute an entropy, terminal, or otherwise privileged device.
-const MINIMAL_DEV_IDENTITIES: &[(&str, u64, u64)] = &[("null", 1, 3), ("zero", 1, 5), ("full", 1, 7)];
 
 /// Policy for changing the loopback interface before entering the root tree.
 ///
@@ -227,6 +239,7 @@ pub struct Container {
     pseudo_filesystems: PseudoFilesystemPolicy,
     loopback: LoopbackPolicy,
     root_filesystem: RootFilesystemPolicy,
+    private_devices: Option<private_devices::PrivateDeviceMounts>,
     #[cfg(test)]
     owned_nested_proc_fixture: Option<OwnedNestedProcFixture>,
 }
@@ -256,6 +269,7 @@ impl Container {
             pseudo_filesystems: PseudoFilesystemPolicy::default(),
             loopback: LoopbackPolicy::default(),
             root_filesystem: RootFilesystemPolicy::default(),
+            private_devices: None,
             #[cfg(test)]
             owned_nested_proc_fixture: None,
         }
@@ -290,6 +304,7 @@ impl Container {
             pseudo_filesystems: PseudoFilesystemPolicy::default(),
             loopback: LoopbackPolicy::default(),
             root_filesystem: RootFilesystemPolicy::default(),
+            private_devices: None,
             #[cfg(test)]
             owned_nested_proc_fixture: None,
         })
@@ -477,6 +492,10 @@ pub enum Error {
     UnknownExit,
     #[snafu(display("error setting up isolated-root credential map"))]
     Idmap { source: idmap::Error },
+    #[snafu(display("private minimal-device provider is unavailable"))]
+    PrivateDeviceProviderUnavailable { source: io::Error },
+    #[snafu(display("private minimal-device acquisition was rejected: {message}"))]
+    PrivateDeviceAcquisitionRejected { message: String },
     /// The host rejected creation of the container's mandatory namespaces.
     ///
     /// Keeping this operation separate from generic nix failures lets callers
@@ -554,9 +573,11 @@ impl Error {
                         || code == nix::libc::E2BIG
             ),
             Self::Idmap { source } => source.execution_capability_unavailable(),
+            Self::PrivateDeviceProviderUnavailable { .. } => true,
             Self::Failure { message } => setup_capability_denial(message),
             Self::Signaled { .. }
             | Self::UnknownExit
+            | Self::PrivateDeviceAcquisitionRejected { .. }
             | Self::AtomicCgroupRequiresAnchoredRoot
             | Self::InspectCgroupFilesystem { .. }
             | Self::UnsafeCgroupRootFilesystem { .. }
@@ -796,8 +817,6 @@ enum ContainerError {
         mode: nix::libc::mode_t,
         links: u64,
     },
-    #[snafu(display("open anchored mount source {}", path.display()))]
-    OpenAnchoredMountSource { path: PathBuf, source: io::Error },
     #[snafu(display(
         "anchored container rejects pathname bind source {}; use a locator-pinned or root-relative bind",
         path.display()
@@ -807,17 +826,6 @@ enum ContainerError {
     AnchoredBindOnPathContainer { path: PathBuf },
     #[snafu(display("unsupported anchored mount source {} with mode {mode:o}", path.display()))]
     UnsupportedAnchoredMountSource { path: PathBuf, mode: nix::libc::mode_t },
-    #[snafu(display(
-        "minimal device source {} has Linux device identity ({actual_major},{actual_minor}); expected ({expected_major},{expected_minor})",
-        path.display()
-    ))]
-    UnexpectedMinimalDeviceIdentity {
-        path: PathBuf,
-        expected_major: u64,
-        expected_minor: u64,
-        actual_major: u64,
-        actual_minor: u64,
-    },
     #[snafu(display("anchored container declares {actual} mounts; limit is {limit}"))]
     TooManyAnchoredMounts { actual: usize, limit: usize },
     #[snafu(display(

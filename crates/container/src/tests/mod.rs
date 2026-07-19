@@ -18,7 +18,7 @@ use super::{
     AnchoredLocator, AnchoredLocatorComponent, AnchoredLocatorError, AnchoredMountTargetKind, Bind, BindSource,
     BlockedSignalMask, CapabilityData, ChildLifecycle, ChildPidfdQuarantine, Container, ContainerError, DevPolicy,
     Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES, MAX_LINUX_CAPABILITY_NUMBER,
-    MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
+    MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
     PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
     RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TMPFS_MAGIC, TmpPolicy, TmpfsLimitReadback, TmpfsLimits,
     TmpfsLimitsError, authenticate_anchored_inputs, capability_is_set, checked_prctl_value, cleanup_pidfd_child,
@@ -28,8 +28,7 @@ use super::{
     require_atomic_cgroup_bind_policy, require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions,
     sealed_resolver_file, send_packet_no_signal, send_pidfd_signal, set_mount_access, standard_descriptor_is_unsafe,
     supported_capability_numbers, validate_anchored_bind_inputs, validate_anchored_mount_topology,
-    validate_minimal_device_source, validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits,
-    wait_for_pidfd, wait_for_pidfd_reap,
+    validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits, wait_for_pidfd, wait_for_pidfd_reap,
 };
 
 fn open_path_directory(path: &Path) -> OwnedFd {
@@ -195,6 +194,9 @@ fn classify_bounded_tmpfs_activation_unavailable(error: &ContainerRunError, root
 }
 
 fn classify_minimal_dev_activation_unavailable(error: &ContainerRunError, root: &Path) -> Option<&'static str> {
+    if matches!(error, ContainerRunError::PrivateDeviceProviderUnavailable { .. }) {
+        return Some("private minimal-device provider unavailable");
+    }
     if let Some(classification) = classify_bounded_tmpfs_activation_unavailable(error, root) {
         return Some(classification);
     }
@@ -209,13 +211,11 @@ fn classify_minimal_dev_activation_unavailable(error: &ContainerRunError, root: 
         if message == &format!("mount dev: {denied}") {
             return Some("minimal device tmpfs or mount attributes unavailable");
         }
-        for device in MINIMAL_DEV_NODES {
-            if message == &format!("mount /dev/{device}: {denied}")
-                || message == &format!("mount /old_root/dev/{device}: {denied}")
-                || message == &format!("open anchored mount source /old_root/dev/{device}: {denied}")
-            {
-                return Some("authenticated minimal device bind unavailable");
-            }
+        if message.starts_with("filesystem: ")
+            && message.contains("private minimal-device assembly target")
+            && message.ends_with(denied)
+        {
+            return Some("private minimal-device child assembly unavailable");
         }
     }
     None
@@ -297,7 +297,7 @@ fn exercise_bounded_tmpfs(size_bytes: u64, inode_limit: u64) -> io::Result<()> {
     require_errno(bytes.write_all(&[1]), Errno::ENOSPC, "allocate tmpfs byte N+1")
 }
 
-fn exercise_read_only_minimal_dev() -> io::Result<()> {
+fn exercise_private_minimal_dev() -> io::Result<()> {
     let mut actual = std::fs::read_dir("/dev")?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<io::Result<Vec<_>>>()?;

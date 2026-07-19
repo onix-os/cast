@@ -49,10 +49,12 @@ The returned inodes have no pathname and live only as long as their mount
 descriptors or attached child mounts. No cleanup pathname, shared device pool,
 or reusable inode remains after the execution.
 
-A caller already holding the required initial-namespace capabilities may run
-the same fixed provider directly. A rootless caller obtains the descriptors
-from the fixed Cast device broker. The broker accepts no device identity,
-path, mode, mount option, or count from the client.
+Every container activation obtains the descriptors from the fixed Cast device
+broker, including callers whose effective UID is zero. UID zero alone does not
+prove initial-user-namespace authority, so activation has no direct shortcut.
+The system service runs the fixed provider with the required authority and
+accepts no device identity, path, mode, mount option, or count from the client.
+The provider remains directly exercised only by its privileged VM test.
 
 ## Descriptor protocol
 
@@ -66,8 +68,8 @@ client requires:
 - distinct, unlinked, mode-`0666` character inodes with identities `1:3`,
   `1:5`, and `1:7` in canonical order;
 - tmpfs backing and writable detached file mounts; and
-- identities different from the current ambient `/dev/null`, `/dev/zero`, and
-  `/dev/full` inodes.
+- provider-created unlinked tmpfs provenance, which rules out an ambient
+  pathname alias without making execution depend on looking up host `/dev`.
 
 Every timeout, malformed response, missing broker, peer mismatch, validation
 failure, or unsupported kernel fails before the container is cloned. There is
@@ -87,6 +89,13 @@ only the parent tmpfs mount read-only, non-recursively. Consequently:
 - all setup descriptors are dropped before the payload descriptor table is
   sanitized and arbitrary code begins.
 
+Exact initial-namespace `0:0` ownership is authenticated by the supervisor
+before clone. Child-side revalidation deliberately checks only
+namespace-invariant facts: a root-owned inode appears under the kernel's
+overflow identity after a rootless `0 -> caller` ID map, while its type,
+device number, mode, links, backing tmpfs, mount flags, and descriptor flags
+remain stable.
+
 The capability is deliberately non-`Clone`. A setup error, supervisor death,
 broker death, or child exit closes the remaining descriptors and lets the
 kernel reclaim the private mounts.
@@ -97,7 +106,7 @@ Host-safe tests cover protocol framing and pure validation without mutating a
 device until private provenance has been established. Disposable-VM tests must
 also prove:
 
-1. direct privileged and ordinary-user broker acquisition;
+1. direct privileged provider execution and ordinary-user broker acquisition;
 2. attachment of initial-user-namespace-created detached mounts inside the
    mapped child namespace on the Linux 5.14 floor;
 3. pathname and descriptor-anchored container activation;

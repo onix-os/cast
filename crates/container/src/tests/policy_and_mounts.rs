@@ -267,7 +267,7 @@ fn policy_maps_to_ordered_mount_decisions() {
         vec![
             PseudoMountDecision::Proc { read_only: true },
             PseudoMountDecision::HostSys { read_only: true },
-            PseudoMountDecision::MinimalDevReadOnly,
+            PseudoMountDecision::PrivateMinimalDev,
         ]
     );
 }

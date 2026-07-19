@@ -21,8 +21,7 @@ pub(super) use pseudo_filesystems::set_mount_access;
 pub(super) use pseudo_filesystems::{
     PseudoMountDecision, RootMountDecision, TMPFS_MAGIC, TmpfsLimitReadback, open_anchored_resolver_target,
     prepare_pseudo_mount_targets, pseudo_mount_decisions, resolver_stat_stable, root_mount_decisions,
-    sealed_resolver_file, validate_minimal_device_source, validate_resolver_target, validate_tmpfs_limit_readback,
-    verify_tmpfs_limits,
+    sealed_resolver_file, validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits,
 };
 #[cfg(test)]
 pub(super) use syscalls::prepare_bind_target;

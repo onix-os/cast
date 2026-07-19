@@ -513,7 +513,7 @@ container-process-runtime-test:
 		timeout 120s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
 	done
 
-container-mount-boundary-test:
+container-mount-boundary-test: container-private-device-test
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p container --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
@@ -557,8 +557,8 @@ container-mount-boundary-test:
 		tests::anchored_bounded_tmpfs_enforces_the_same_exact_ceilings \
 		tests::non_page_aligned_bounded_tmpfs_is_rejected_on_path_activation \
 		tests::non_page_aligned_bounded_tmpfs_is_rejected_on_anchored_activation \
-		tests::minimal_dev_is_read_only_and_exact_on_the_path_activation \
-		tests::minimal_dev_is_read_only_and_exact_on_anchored_activation \
+		tests::private_minimal_dev_is_immutable_and_exact_on_the_path_activation \
+		tests::private_minimal_dev_is_immutable_and_exact_on_anchored_activation \
 		tests::read_only_root_is_enforced_by_the_live_kernel_mount_and_capability_paths \
 		tests::anchored_root_symlink_substitution_fails_before_payload_mutation \
 		tests::anchored_root_and_bind_locators_rebind_in_the_live_child_namespace \
@@ -568,7 +568,7 @@ container-mount-boundary-test:
 		tests::anchored_root_locked_host_nested_mount_fails_closed_or_is_excluded \
 		tests::anchored_directory_bind_locked_host_nested_mount_fails_closed_or_is_excluded \
 		tests::minimal_dev_has_an_exact_non_entropy_device_set \
-		tests::minimal_dev_accepts_only_exact_linux_character_device_identities \
+		tests::minimal_dev_private_contract_uses_exact_linux_character_device_identities \
 		tests::special_file_bind_gets_a_file_mountpoint; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 180s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \

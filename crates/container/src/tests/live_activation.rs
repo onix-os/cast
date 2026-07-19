@@ -137,7 +137,7 @@ fn non_page_aligned_bounded_tmpfs_is_rejected_on_anchored_activation() {
 }
 
 #[test]
-fn minimal_dev_is_read_only_and_exact_on_the_path_activation() {
+fn private_minimal_dev_is_immutable_and_exact_on_the_path_activation() {
     let root = tempfile::tempdir().unwrap();
     let result = Container::new(root.path())
         .root_filesystem(RootFilesystemPolicy::ReadOnly)
@@ -148,7 +148,7 @@ fn minimal_dev_is_read_only_and_exact_on_the_path_activation() {
             dev: DevPolicy::Minimal,
         })
         .loopback(LoopbackPolicy::KernelDefault)
-        .run::<io::Error>(exercise_read_only_minimal_dev);
+        .run::<io::Error>(exercise_private_minimal_dev);
 
     match result {
         Ok(()) => {
@@ -166,7 +166,7 @@ fn minimal_dev_is_read_only_and_exact_on_the_path_activation() {
 }
 
 #[test]
-fn minimal_dev_is_read_only_and_exact_on_anchored_activation() {
+fn private_minimal_dev_is_immutable_and_exact_on_anchored_activation() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("dev")).unwrap();
     let anchor = open_path_directory(root.path());
@@ -179,7 +179,7 @@ fn minimal_dev_is_read_only_and_exact_on_anchored_activation() {
             dev: DevPolicy::Minimal,
         })
         .loopback(LoopbackPolicy::KernelDefault)
-        .run::<io::Error>(exercise_read_only_minimal_dev);
+        .run::<io::Error>(exercise_private_minimal_dev);
 
     match result {
         Ok(()) => assert_eq!(std::fs::read_dir(root.path().join("dev")).unwrap().count(), 0),

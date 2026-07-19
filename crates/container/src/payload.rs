@@ -46,7 +46,8 @@ where
     // namespace-visible identity is the fixed root credential contract.
     isolate_payload_credentials()?;
 
-    setup(container)?;
+    let private_devices = container.private_devices.take();
+    setup(container, private_devices)?;
 
     // Locators retain setup-only witness descriptors. Clearing the child's
     // copy after pivot leaves the supervising parent's copy-on-write value

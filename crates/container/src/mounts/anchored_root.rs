@@ -16,24 +16,31 @@ use super::anchored_identity::open_current_namespace_root;
 #[cfg(test)]
 use super::pseudo_filesystems::detached_owned_nested_proc_fixture;
 use super::pseudo_filesystems::{
-    apply_pseudo_mount, apply_root_mount_policy, mount_binds, prepare_anchored_pseudo_mount,
-    prepare_anchored_resolver_mount, prepare_pseudo_mount_targets, pseudo_mount_decisions, set_mount_access_fd,
-    setup_networking,
+    PseudoMountDecision, apply_pseudo_mount, apply_root_mount_policy, assemble_private_dev, mount_binds,
+    prepare_anchored_pseudo_mount, prepare_anchored_resolver_mount, prepare_pseudo_mount_targets,
+    pseudo_mount_decisions, set_mount_access_fd, setup_networking,
 };
 use super::syscalls::{add_mount, ensure_directory, set_current_dir, setup_localhost};
 use super::{Bind, BindSource};
 #[cfg(test)]
 use crate::OwnedNestedProcFixture;
+use crate::private_devices::PrivateDeviceMounts;
 use crate::{
-    ActivateAnchoredRootSnafu, CloneAnchoredBindSourceSnafu, Container, ContainerError, FsErrSnafu, LoopbackPolicy,
-    MountSnafu, PivotRootSnafu, PseudoFilesystemPolicy, RootFilesystemPolicy, SetHostnameSnafu, UnmountOldRootSnafu,
+    ActivateAnchoredRootSnafu, CloneAnchoredBindSourceSnafu, Container, ContainerError, DevPolicy, FsErrSnafu,
+    LoopbackPolicy, MountSnafu, PivotRootSnafu, PseudoFilesystemPolicy, RootFilesystemPolicy, SetHostnameSnafu,
+    UnmountOldRootSnafu,
 };
 
 // linux/mount.h. nc 0.9 exposes only the source-empty-path flag.
 const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x0000_0040;
 
 /// Setup the container
-pub(crate) fn setup(container: &Container) -> Result<(), ContainerError> {
+pub(crate) fn setup(
+    container: &Container,
+    private_devices: Option<PrivateDeviceMounts>,
+) -> Result<(), ContainerError> {
+    let private_devices = require_private_device_policy(container.pseudo_filesystems.dev, private_devices)?;
+
     if container.networking && container.root_locator.is_none() {
         setup_networking(&container.root)?;
     }
@@ -43,13 +50,14 @@ pub(crate) fn setup(container: &Container) -> Result<(), ContainerError> {
     }
 
     if container.root_locator.is_some() {
-        pivot_anchored(container)?;
+        pivot_anchored(container, private_devices)?;
     } else {
         pivot(
             &container.root,
             &container.binds,
             container.pseudo_filesystems,
             container.root_filesystem,
+            private_devices,
         )?;
     }
 
@@ -70,16 +78,20 @@ fn pivot(
     binds: &[Bind],
     pseudo_filesystems: PseudoFilesystemPolicy,
     root_filesystem: RootFilesystemPolicy,
+    private_devices: Option<PrivateDeviceMounts>,
 ) -> Result<(), ContainerError> {
     add_mount(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE)?;
     add_mount(Some(root), root, None, MsFlags::MS_BIND)?;
 
-    pivot_mounted_root(root, binds, pseudo_filesystems, root_filesystem)
+    pivot_mounted_root(root, binds, pseudo_filesystems, root_filesystem, private_devices)
 }
 
 /// Reopen every anchored input inside the private child mount namespace, then
 /// clone and attach only those child-local descriptors.
-fn pivot_anchored(container: &Container) -> Result<(), ContainerError> {
+fn pivot_anchored(
+    container: &Container,
+    mut private_devices: Option<PrivateDeviceMounts>,
+) -> Result<(), ContainerError> {
     add_mount(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE)?;
 
     // Inherited O_PATH descriptors still carry paths from the supervisor's
@@ -102,8 +114,14 @@ fn pivot_anchored(container: &Container) -> Result<(), ContainerError> {
         prepared_mounts.push(prepare_anchored_resolver_mount()?);
     }
     for decision in pseudo_mount_decisions(container.pseudo_filesystems) {
-        prepared_mounts.push(prepare_anchored_pseudo_mount(decision)?);
+        let devices = if matches!(decision, PseudoMountDecision::PrivateMinimalDev) {
+            private_devices.take()
+        } else {
+            None
+        };
+        prepared_mounts.push(prepare_anchored_pseudo_mount(decision, devices)?);
     }
+    require_capability_consumed(private_devices)?;
     validate_anchored_mount_topology(&prepared_mounts)?;
 
     let root_mount = clone_anchored_root(&container.root, rebound.root.as_raw_fd())?;
@@ -606,9 +624,17 @@ fn pivot_mounted_root(
     binds: &[Bind],
     pseudo_filesystems: PseudoFilesystemPolicy,
     root_filesystem: RootFilesystemPolicy,
+    private_devices: Option<PrivateDeviceMounts>,
 ) -> Result<(), ContainerError> {
     let sources = canonical_bind_sources(binds)?;
-    pivot_mounted_root_with_sources(root, binds, &sources, pseudo_filesystems, root_filesystem)
+    pivot_mounted_root_with_sources(
+        root,
+        binds,
+        &sources,
+        pseudo_filesystems,
+        root_filesystem,
+        private_devices,
+    )
 }
 
 fn pivot_mounted_root_with_sources(
@@ -617,11 +643,16 @@ fn pivot_mounted_root_with_sources(
     sources: &[PathBuf],
     pseudo_filesystems: PseudoFilesystemPolicy,
     root_filesystem: RootFilesystemPolicy,
+    private_devices: Option<PrivateDeviceMounts>,
 ) -> Result<(), ContainerError> {
     const OLD_PATH: &str = "old_root";
 
     let old_root = root.join(OLD_PATH);
     let pseudo_mounts = pseudo_mount_decisions(pseudo_filesystems);
+    // This child already made mount propagation private in `pivot`. Assemble
+    // the complete detached directory before changing or entering the root so
+    // a partial device attachment can only exist in disposable child state.
+    let mut private_dev_mount = private_devices.map(assemble_private_dev).transpose()?;
 
     // A read-only root cannot acquire missing mountpoint directories after
     // its recursive mount policy is applied. Prepare every setup-owned target
@@ -637,8 +668,14 @@ fn pivot_mounted_root_with_sources(
     set_current_dir("/")?;
 
     for decision in pseudo_mounts {
-        apply_pseudo_mount(decision, OLD_PATH)?;
+        let dev_mount = if matches!(decision, PseudoMountDecision::PrivateMinimalDev) {
+            private_dev_mount.take()
+        } else {
+            None
+        };
+        apply_pseudo_mount(decision, OLD_PATH, dev_mount)?;
     }
+    require_prepared_mount_consumed(private_dev_mount)?;
 
     umount2(OLD_PATH, MntFlags::MNT_DETACH).context(UnmountOldRootSnafu)?;
     if matches!(root_filesystem, RootFilesystemPolicy::ReadWrite) {
@@ -648,4 +685,46 @@ fn pivot_mounted_root_with_sources(
     umask(Mode::S_IWGRP | Mode::S_IWOTH);
 
     Ok(())
+}
+
+fn require_private_device_policy(
+    policy: DevPolicy,
+    private_devices: Option<PrivateDeviceMounts>,
+) -> Result<Option<PrivateDeviceMounts>, ContainerError> {
+    match (policy, private_devices) {
+        (DevPolicy::Minimal, Some(devices)) => Ok(Some(devices)),
+        (DevPolicy::Minimal, None) => Err(private_device_invariant(
+            "minimal /dev requires one validated private-device capability",
+        )),
+        (_, None) => Ok(None),
+        (_, Some(_)) => Err(private_device_invariant(
+            "private-device capability supplied while minimal /dev is disabled",
+        )),
+    }
+}
+
+fn require_capability_consumed(private_devices: Option<PrivateDeviceMounts>) -> Result<(), ContainerError> {
+    if private_devices.is_none() {
+        Ok(())
+    } else {
+        Err(private_device_invariant(
+            "private-device capability remained after anchored pseudo-mount preparation",
+        ))
+    }
+}
+
+fn require_prepared_mount_consumed(private_dev_mount: Option<OwnedFd>) -> Result<(), ContainerError> {
+    if private_dev_mount.is_none() {
+        Ok(())
+    } else {
+        Err(private_device_invariant(
+            "private minimal /dev mount remained after pathname pseudo-mount attachment",
+        ))
+    }
+}
+
+fn private_device_invariant(message: &'static str) -> ContainerError {
+    ContainerError::FsErr {
+        source: io::Error::new(io::ErrorKind::InvalidInput, message),
+    }
 }

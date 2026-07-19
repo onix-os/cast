@@ -98,6 +98,11 @@ impl PrivateDeviceMounts {
         Ok(mounts)
     }
 
+    /// Admit exactly one authenticated broker response's fixed descriptor set.
+    pub(super) fn from_received(descriptors: [OwnedFd; PRIVATE_DEVICE_COUNT]) -> Result<Self, PrivateDeviceError> {
+        Self::from_provisioned(descriptors)
+    }
+
     /// Borrow all three detached file-mount descriptors in their fixed order.
     pub(crate) fn ordered(&self) -> [(PrivateDevice, BorrowedFd<'_>); PRIVATE_DEVICE_COUNT] {
         PRIVATE_DEVICE_ORDER.map(|device| (device, self.descriptors[device.index()].as_fd()))
@@ -105,7 +110,19 @@ impl PrivateDeviceMounts {
 
     /// Re-authenticate every descriptor and the relationships between them.
     pub(crate) fn validate(&self) -> Result<(), PrivateDeviceError> {
-        let observations = [
+        validate_private_device_observations(&self.observations()?)
+    }
+
+    /// Re-authenticate properties that remain stable after entering a user
+    /// namespace whose ID map may translate initial-namespace root ownership.
+    /// Exact `0:0` ownership is required by [`Self::validate`] before clone;
+    /// child setup must not mistake an unmapped owner for capability drift.
+    pub(crate) fn validate_namespace_invariants(&self) -> Result<(), PrivateDeviceError> {
+        validate_namespace_invariant_observations(&self.observations()?)
+    }
+
+    fn observations(&self) -> Result<[PrivateDeviceObservation; PRIVATE_DEVICE_COUNT], PrivateDeviceError> {
+        Ok([
             observe_private_device(
                 self.descriptors[PrivateDevice::Null.index()].as_fd(),
                 PrivateDevice::Null,
@@ -118,20 +135,20 @@ impl PrivateDeviceMounts {
                 self.descriptors[PrivateDevice::Full.index()].as_fd(),
                 PrivateDevice::Full,
             )?,
-        ];
-        validate_private_device_observations(&observations)
+        ])
     }
 }
 
 /// Provision exactly `/dev/null`, `/dev/zero`, and `/dev/full` as private,
 /// writable detached file mounts.
 ///
-/// This is the direct privileged implementation. The caller needs authority
-/// to create mounts and character devices in its current user and mount
-/// namespaces (normally `CAP_SYS_ADMIN` and `CAP_MKNOD`). There is no ambient
-/// `/dev` fallback: lack of that authority is returned as an error. A later
-/// broker may produce the same capability, but it must satisfy the validation
-/// contract enforced by [`PrivateDeviceMounts`].
+/// This is the direct privileged implementation. The process needs
+/// initial-user-namespace `CAP_SYS_ADMIN` and `CAP_MKNOD` to create these
+/// mounts and character devices. There is no ambient
+/// `/dev` fallback: lack of that authority is returned as an error. Production
+/// activation reaches this implementation only through the fixed broker; its
+/// result must satisfy the validation contract enforced by
+/// [`PrivateDeviceMounts`].
 pub(crate) fn provision_private_device_mounts() -> Result<PrivateDeviceMounts, PrivateDeviceError> {
     let mut scratch = ScratchDeviceMount::new()?;
     for device in PRIVATE_DEVICE_ORDER {
@@ -582,8 +599,25 @@ fn observe_private_device(
 fn validate_private_device_observations(
     observations: &[PrivateDeviceObservation; PRIVATE_DEVICE_COUNT],
 ) -> Result<(), PrivateDeviceError> {
+    validate_namespace_invariant_observations(observations)?;
     for (index, device) in PRIVATE_DEVICE_ORDER.into_iter().enumerate() {
-        validate_private_device_observation(device, observations[index])?;
+        let observation = observations[index];
+        if (observation.uid, observation.gid) != (0, 0) {
+            return Err(PrivateDeviceError::UnexpectedOwner {
+                device,
+                actual_uid: observation.uid,
+                actual_gid: observation.gid,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_namespace_invariant_observations(
+    observations: &[PrivateDeviceObservation; PRIVATE_DEVICE_COUNT],
+) -> Result<(), PrivateDeviceError> {
+    for (index, device) in PRIVATE_DEVICE_ORDER.into_iter().enumerate() {
+        validate_namespace_invariant_observation(device, observations[index])?;
     }
 
     let first_backing = observations[PrivateDevice::Null.index()].filesystem_device;
@@ -611,7 +645,7 @@ fn validate_private_device_observations(
     Ok(())
 }
 
-fn validate_private_device_observation(
+fn validate_namespace_invariant_observation(
     device: PrivateDevice,
     observation: PrivateDeviceObservation,
 ) -> Result<(), PrivateDeviceError> {
@@ -633,13 +667,6 @@ fn validate_private_device_observation(
             device,
             expected: DEVICE_PERMISSIONS,
             actual: observation.permissions,
-        });
-    }
-    if (observation.uid, observation.gid) != (0, 0) {
-        return Err(PrivateDeviceError::UnexpectedOwner {
-            device,
-            actual_uid: observation.uid,
-            actual_gid: observation.gid,
         });
     }
     if (observation.major, observation.minor) != (device.major(), device.minor()) {
@@ -730,6 +757,29 @@ mod tests {
     #[test]
     fn exact_private_unlinked_tmpfs_set_is_accepted() {
         validate_private_device_observations(&exact_set()).unwrap();
+    }
+
+    #[test]
+    fn namespace_invariant_validation_allows_only_owner_translation() {
+        let mut translated = exact_set();
+        for observation in &mut translated {
+            observation.uid = 65_534;
+            observation.gid = 65_534;
+        }
+        validate_namespace_invariant_observations(&translated).unwrap();
+        assert!(matches!(
+            validate_private_device_observations(&translated),
+            Err(PrivateDeviceError::UnexpectedOwner { .. })
+        ));
+
+        translated[PrivateDevice::Zero.index()].minor = 9;
+        assert!(matches!(
+            validate_namespace_invariant_observations(&translated),
+            Err(PrivateDeviceError::UnexpectedIdentity {
+                device: PrivateDevice::Zero,
+                ..
+            })
+        ));
     }
 
     #[test]

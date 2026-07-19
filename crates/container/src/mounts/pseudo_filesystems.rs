@@ -15,16 +15,17 @@ use nix::mount::MsFlags;
 use snafu::ResultExt as _;
 
 use super::Bind;
-use super::anchored_root::{
-    AnchoredMountTargetKind, PreparedAnchoredMount, descriptor_stat, move_mount_empty, openat2_anchored,
-};
+use super::anchored_root::{AnchoredMountTargetKind, PreparedAnchoredMount, descriptor_stat};
+#[cfg(test)]
+use super::anchored_root::openat2_anchored;
 use super::syscalls::{
-    add_mount, add_mount_with_data, bind_mount, ensure_directory, ensure_empty_file, errno_to_io, openat_anchored,
+    add_mount, add_mount_with_data, bind_mount, ensure_directory, errno_to_io, openat_anchored,
 };
+use crate::private_device_assembly::assemble_private_minimal_dev;
+use crate::private_devices::PrivateDeviceMounts;
 use crate::{
-    ConfigureAnchoredNetworkingSnafu, ContainerError, DevPolicy, FsErrSnafu, MINIMAL_DEV_IDENTITIES, MountSnafu,
-    OpenAnchoredMountTargetSnafu, ProcPolicy, PseudoFilesystemPolicy, RootFilesystemPolicy, SysPolicy, TmpPolicy,
-    TmpfsLimits,
+    ConfigureAnchoredNetworkingSnafu, ContainerError, DevPolicy, FsErrSnafu, MountSnafu, ProcPolicy,
+    PseudoFilesystemPolicy, RootFilesystemPolicy, SysPolicy, TmpPolicy, TmpfsLimits,
 };
 
 pub(crate) fn prepare_pseudo_mount_targets(
@@ -36,7 +37,7 @@ pub(crate) fn prepare_pseudo_mount_targets(
             PseudoMountDecision::Proc { .. } => "proc",
             PseudoMountDecision::Tmp { .. } => "tmp",
             PseudoMountDecision::HostSys { .. } => "sys",
-            PseudoMountDecision::HostDev { .. } | PseudoMountDecision::MinimalDevReadOnly => "dev",
+            PseudoMountDecision::HostDev { .. } | PseudoMountDecision::PrivateMinimalDev => "dev",
         };
         ensure_directory(root.join(target))?;
     }
@@ -93,7 +94,7 @@ pub(crate) enum PseudoMountDecision {
     Tmp { limits: Option<TmpfsLimits> },
     HostSys { read_only: bool },
     HostDev { read_only: bool },
-    MinimalDevReadOnly,
+    PrivateMinimalDev,
 }
 
 pub(crate) fn pseudo_mount_decisions(policy: PseudoFilesystemPolicy) -> Vec<PseudoMountDecision> {
@@ -117,12 +118,19 @@ pub(crate) fn pseudo_mount_decisions(policy: PseudoFilesystemPolicy) -> Vec<Pseu
         DevPolicy::None => {}
         DevPolicy::HostReadOnly => decisions.push(PseudoMountDecision::HostDev { read_only: true }),
         DevPolicy::HostReadWrite => decisions.push(PseudoMountDecision::HostDev { read_only: false }),
-        DevPolicy::Minimal => decisions.push(PseudoMountDecision::MinimalDevReadOnly),
+        DevPolicy::Minimal => decisions.push(PseudoMountDecision::PrivateMinimalDev),
     }
     decisions
 }
 
-pub(crate) fn apply_pseudo_mount(decision: PseudoMountDecision, old_path: &str) -> Result<(), ContainerError> {
+pub(crate) fn apply_pseudo_mount(
+    decision: PseudoMountDecision,
+    old_path: &str,
+    private_dev_mount: Option<OwnedFd>,
+) -> Result<(), ContainerError> {
+    if !matches!(decision, PseudoMountDecision::PrivateMinimalDev) && private_dev_mount.is_some() {
+        return Err(private_device_invariant("private minimal /dev mount supplied for a different pseudo mount"));
+    }
     match decision {
         PseudoMountDecision::Proc { read_only } => add_mount(
             Some(Path::new("proc")),
@@ -161,7 +169,10 @@ pub(crate) fn apply_pseudo_mount(decision: PseudoMountDecision, old_path: &str) 
         }
         PseudoMountDecision::HostSys { read_only } => mount_host_tree(old_path, "sys", read_only),
         PseudoMountDecision::HostDev { read_only } => mount_host_tree(old_path, "dev", read_only),
-        PseudoMountDecision::MinimalDevReadOnly => mount_minimal_dev(old_path),
+        PseudoMountDecision::PrivateMinimalDev => attach_private_minimal_dev(
+            private_dev_mount
+                .ok_or_else(|| private_device_invariant("private minimal /dev mount is missing during attachment"))?,
+        ),
     }
 }
 
@@ -169,7 +180,13 @@ pub(crate) fn apply_pseudo_mount(decision: PseudoMountDecision, old_path: &str) 
 /// opened later, as one batch against the untouched authenticated root.
 pub(crate) fn prepare_anchored_pseudo_mount(
     decision: PseudoMountDecision,
+    private_devices: Option<PrivateDeviceMounts>,
 ) -> Result<PreparedAnchoredMount, ContainerError> {
+    if !matches!(decision, PseudoMountDecision::PrivateMinimalDev) && private_devices.is_some() {
+        return Err(private_device_invariant(
+            "private minimal-device capability supplied for a different anchored pseudo mount",
+        ));
+    }
     let (source_mount, target) = match decision {
         PseudoMountDecision::Proc { read_only } => {
             let source = detached_filesystem_mount(c"proc", read_only, Path::new("proc"), &[])?;
@@ -187,13 +204,32 @@ pub(crate) fn prepare_anchored_pseudo_mount(
             let source = detached_host_mount(Path::new("/dev"), read_only)?;
             (source, PathBuf::from("dev"))
         }
-        PseudoMountDecision::MinimalDevReadOnly => (prepare_anchored_minimal_dev()?, PathBuf::from("dev")),
+        PseudoMountDecision::PrivateMinimalDev => (
+            assemble_private_dev(
+                private_devices.ok_or_else(|| {
+                    private_device_invariant("private minimal-device capability is missing during anchored assembly")
+                })?,
+            )?,
+            PathBuf::from("dev"),
+        ),
     };
     Ok(PreparedAnchoredMount {
         source_mount,
         target,
         target_kind: AnchoredMountTargetKind::Directory,
     })
+}
+
+pub(crate) fn assemble_private_dev(devices: PrivateDeviceMounts) -> Result<OwnedFd, ContainerError> {
+    assemble_private_minimal_dev(devices).map_err(|source| ContainerError::FsErr {
+        source: io::Error::other(source),
+    })
+}
+
+fn private_device_invariant(message: &'static str) -> ContainerError {
+    ContainerError::FsErr {
+        source: io::Error::new(io::ErrorKind::InvalidInput, message),
+    }
 }
 
 fn detached_filesystem_mount(
@@ -386,95 +422,6 @@ fn detached_host_mount(source: &Path, read_only: bool) -> Result<OwnedFd, Contai
     Ok(mount)
 }
 
-fn prepare_anchored_minimal_dev() -> Result<OwnedFd, ContainerError> {
-    let dev_mount = detached_filesystem_mount(c"tmpfs", false, Path::new("dev"), &[])?;
-    for &(device, expected_major, expected_minor) in MINIMAL_DEV_IDENTITIES {
-        let name = std::ffi::CString::new(device).expect("fixed device names contain no NUL");
-        let placeholder = openat_anchored(
-            dev_mount.as_raw_fd(),
-            &name,
-            nix::libc::O_WRONLY | nix::libc::O_CREAT | nix::libc::O_EXCL | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
-            0o600,
-        )
-        .map_err(|source| ContainerError::OpenAnchoredMountTarget {
-            path: PathBuf::from("dev").join(device),
-            source,
-        })?;
-        // SAFETY: placeholder is a live regular file descriptor.
-        if unsafe { nix::libc::fchmod(placeholder.as_raw_fd(), 0o600) } == -1 {
-            return Err(Errno::last()).context(MountSnafu {
-                target: PathBuf::from("dev").join(device),
-            });
-        }
-
-        let host_device = Path::new("/dev").join(device);
-        // SAFETY: host_device remains live and successful open_tree returns a
-        // fresh detached bind mount descriptor without opening device data.
-        let device_mount = unsafe { open_tree(AT_FDCWD, &host_device, OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC) }
-            .map_err(Errno::from_i32)
-            .with_context(|_| MountSnafu {
-                target: host_device.clone(),
-            })?;
-        // SAFETY: successful open_tree returned a fresh owned descriptor.
-        let device_mount = unsafe { OwnedFd::from_raw_fd(device_mount) };
-        validate_minimal_device_source(device_mount.as_raw_fd(), &host_device, expected_major, expected_minor)?;
-        set_mount_access_fd(device_mount.as_raw_fd(), true, false).with_context(|_| MountSnafu {
-            target: PathBuf::from("dev").join(device),
-        })?;
-        let target = openat2_anchored(
-            dev_mount.as_raw_fd(),
-            Path::new(device),
-            nix::libc::O_PATH | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
-            0,
-            nix::libc::RESOLVE_BENEATH
-                | nix::libc::RESOLVE_NO_XDEV
-                | nix::libc::RESOLVE_NO_MAGICLINKS
-                | nix::libc::RESOLVE_NO_SYMLINKS,
-        )
-        .with_context(|_| OpenAnchoredMountTargetSnafu {
-            path: PathBuf::from("dev").join(device),
-        })?;
-        move_mount_empty(device_mount.as_raw_fd(), target.as_raw_fd()).with_context(|_| MountSnafu {
-            target: PathBuf::from("dev").join(device),
-        })?;
-    }
-    // The tmpfs is setup scratch, not payload scratch. Seal the complete tree
-    // only after all three authenticated device mounts have been attached, so
-    // the payload cannot add, remove, or rename entries beneath `/dev`.
-    set_mount_access_fd(dev_mount.as_raw_fd(), true, true).with_context(|_| MountSnafu {
-        target: PathBuf::from("dev"),
-    })?;
-    Ok(dev_mount)
-}
-
-pub(crate) fn validate_minimal_device_source(
-    fd: RawFd,
-    label: &Path,
-    expected_major: u64,
-    expected_minor: u64,
-) -> Result<(), ContainerError> {
-    let stat = descriptor_stat(fd).context(FsErrSnafu)?;
-    let mode = stat.st_mode & nix::libc::S_IFMT;
-    if mode != nix::libc::S_IFCHR {
-        return Err(ContainerError::UnsupportedAnchoredMountSource {
-            path: label.to_owned(),
-            mode,
-        });
-    }
-    let actual_major = nix::libc::major(stat.st_rdev) as u64;
-    let actual_minor = nix::libc::minor(stat.st_rdev) as u64;
-    if (actual_major, actual_minor) != (expected_major, expected_minor) {
-        return Err(ContainerError::UnexpectedMinimalDeviceIdentity {
-            path: label.to_owned(),
-            expected_major,
-            expected_minor,
-            actual_major,
-            actual_minor,
-        });
-    }
-    Ok(())
-}
-
 fn mount_host_tree(old_path: &str, name: &str, read_only: bool) -> Result<(), ContainerError> {
     let source = Path::new("/").join(old_path).join(name);
     let target = Path::new(name);
@@ -490,72 +437,24 @@ fn mount_host_tree(old_path: &str, name: &str, read_only: bool) -> Result<(), Co
     Ok(())
 }
 
-fn mount_minimal_dev(old_path: &str) -> Result<(), ContainerError> {
-    add_mount(
-        Some(Path::new("tmpfs")),
-        Path::new("dev"),
-        Some("tmpfs"),
-        MsFlags::empty(),
-    )?;
-    for &(device, expected_major, expected_minor) in MINIMAL_DEV_IDENTITIES {
-        bind_minimal_device(old_path, device, expected_major, expected_minor)?;
-    }
-    set_mount_access(Path::new("dev"), true, true)?;
-    Ok(())
-}
-
-fn bind_minimal_device(
-    old_path: &str,
-    device: &str,
-    expected_major: u64,
-    expected_minor: u64,
-) -> Result<(), ContainerError> {
-    let source = Path::new("/").join(old_path).join("dev").join(device);
-    let target = Path::new("dev").join(device);
-    let source_name =
-        std::ffi::CString::new(source.as_os_str().as_bytes()).expect("constructed device path has no NUL");
-    let source_descriptor = openat_anchored(
-        AT_FDCWD,
-        &source_name,
-        nix::libc::O_PATH | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC,
-        0,
-    )
-    .map_err(|source_error| ContainerError::OpenAnchoredMountSource {
-        path: source.clone(),
-        source: source_error,
-    })?;
-    validate_minimal_device_source(source_descriptor.as_raw_fd(), &source, expected_major, expected_minor)?;
-
-    ensure_empty_file(&target)?;
-    // Clone from the identity-validated descriptor, not the pathname, so a
-    // concurrent host replacement cannot change the device that is attached.
-    // SAFETY: source_descriptor remains live, AT_EMPTY_PATH admits the empty
-    // path, and success returns a fresh detached mount descriptor.
-    let device_mount = unsafe {
-        open_tree(
-            source_descriptor.as_raw_fd(),
-            Path::new(""),
-            OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32,
-        )
-    }
-    .map_err(Errno::from_i32)
-    .with_context(|_| MountSnafu { target: source.clone() })?;
-    // SAFETY: successful open_tree returned a fresh owned descriptor.
-    let device_mount = unsafe { OwnedFd::from_raw_fd(device_mount) };
-    set_mount_access_fd(device_mount.as_raw_fd(), true, false).with_context(|_| MountSnafu { target: source })?;
-    // SAFETY: device_mount is a live detached mount descriptor and target is
-    // a controlled placeholder in the fresh minimal-dev tmpfs.
+fn attach_private_minimal_dev(dev_mount: OwnedFd) -> Result<(), ContainerError> {
+    let target = Path::new("dev");
+    // SAFETY: dev_mount is the complete validated detached directory mount,
+    // the source empty path is admitted explicitly, and target is the setup-
+    // owned directory prepared before the pathname root was sealed.
     unsafe {
         move_mount(
-            device_mount.as_raw_fd(),
+            dev_mount.as_raw_fd(),
             Path::new(""),
             AT_FDCWD,
-            &target,
+            target,
             MOVE_MOUNT_F_EMPTY_PATH,
         )
     }
     .map_err(Errno::from_i32)
-    .with_context(|_| MountSnafu { target })?;
+    .with_context(|_| MountSnafu {
+        target: target.to_owned(),
+    })?;
     Ok(())
 }
 
