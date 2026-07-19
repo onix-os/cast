@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use super::super::{ActiveReblitMountedBootTopologyError, BootTargetRole, ObservationPhase};
 use crate::client::active_reblit_boot_topology_intent::ActiveReblitBootTopologyIntentError;
+use crate::linux_fs::mountinfo_boot_policy::BootMountInfoPolicyError;
 
 /// Whether a retained domain failed while entering or closing one observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,6 +71,13 @@ pub(in crate::client) enum ActiveReblitMountedBootTopologyCaptureError {
         role: BootTargetRole,
         #[source]
         source: io::Error,
+    },
+    #[error("{phase:?} {role:?} selected mountinfo boot policy failed")]
+    MountInfoPolicy {
+        phase: ObservationPhase,
+        role: BootTargetRole,
+        #[source]
+        source: BootMountInfoPolicyError,
     },
     #[error("{phase:?} {role:?} retained sysfs partition identity failed at {boundary:?}")]
     Sysfs {

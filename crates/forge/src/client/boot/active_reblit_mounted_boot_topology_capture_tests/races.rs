@@ -1,6 +1,24 @@
 use super::super::capture::{ActiveReblitMountedBootTopologyCaptureError as Error, ObservationBoundary};
 use super::super::{BootTargetRole, ObservationPhase};
 use super::support::{AliasFixture, deadline};
+use crate::linux_fs::mountinfo_boot_policy::{BootMountInfoPolicyError, MountOptionDomain, RequiredBootMountFlag};
+
+#[test]
+fn bootstrap_rejects_an_unsupported_boot_filesystem_policy() {
+    let fixture = AliasFixture::stable().unwrap();
+    fixture.replace_mountinfo_policy("rw,nosuid,nodev,noexec,nosymfollow", "futurefs", "rw");
+
+    let error = fixture.prepare().unwrap_err();
+    assert!(matches!(
+        error,
+        Error::MountInfoPolicy {
+            phase: ObservationPhase::Bootstrap,
+            role: BootTargetRole::Esp,
+            source: BootMountInfoPolicyError::UnsupportedFilesystem,
+        }
+    ));
+    fixture.assert_outside_unchanged();
+}
 
 #[test]
 fn changed_declarative_intent_fails_at_the_opening_boundary() {
@@ -80,6 +98,116 @@ fn changed_mountinfo_identity_is_a_role_typed_selection_failure() {
             ..
         }
     ));
+    fixture.assert_outside_unchanged();
+}
+
+#[test]
+fn changed_mountinfo_filesystem_policy_is_role_typed_before_sysfs_use() {
+    let fixture = AliasFixture::stable().unwrap();
+    let prepared = fixture.prepare().unwrap();
+    fixture.replace_mountinfo_policy("rw,nosuid,nodev,noexec,nosymfollow", "futurefs", "rw");
+
+    let error = prepared
+        .revalidate_until(&fixture.installation, deadline())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::MountInfoPolicy {
+            phase: ObservationPhase::Pass1,
+            role: BootTargetRole::Esp,
+            source: BootMountInfoPolicyError::UnsupportedFilesystem,
+        }
+    ));
+    fixture.assert_outside_unchanged();
+}
+
+#[test]
+fn changed_mount_read_write_policy_is_role_typed() {
+    let fixture = AliasFixture::stable().unwrap();
+    let prepared = fixture.prepare().unwrap();
+    fixture.replace_mountinfo_policy("ro,nosuid,nodev,noexec,nosymfollow", "vfat", "rw");
+
+    let error = prepared
+        .revalidate_until(&fixture.installation, deadline())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::MountInfoPolicy {
+            phase: ObservationPhase::Pass1,
+            role: BootTargetRole::Esp,
+            source: BootMountInfoPolicyError::InvalidReadWriteState {
+                domain: MountOptionDomain::Mount,
+                rw_count: 0,
+                ro_count: 1,
+            },
+        }
+    ));
+    fixture.assert_outside_unchanged();
+}
+
+#[test]
+fn changed_superblock_read_write_policy_is_role_typed() {
+    let fixture = AliasFixture::stable().unwrap();
+    let prepared = fixture.prepare().unwrap();
+    fixture.replace_mountinfo_policy("rw,nosuid,nodev,noexec,nosymfollow", "vfat", "ro");
+
+    let error = prepared
+        .revalidate_until(&fixture.installation, deadline())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::MountInfoPolicy {
+            phase: ObservationPhase::Pass1,
+            role: BootTargetRole::Esp,
+            source: BootMountInfoPolicyError::InvalidReadWriteState {
+                domain: MountOptionDomain::Superblock,
+                rw_count: 0,
+                ro_count: 1,
+            },
+        }
+    ));
+    fixture.assert_outside_unchanged();
+}
+
+#[test]
+fn each_required_security_flag_drift_is_role_typed() {
+    let cases = [
+        ("rw,nodev,noexec,nosymfollow", RequiredBootMountFlag::Nosuid),
+        ("rw,nosuid,noexec,nosymfollow", RequiredBootMountFlag::Nodev),
+        ("rw,nosuid,nodev,nosymfollow", RequiredBootMountFlag::Noexec),
+        ("rw,nosuid,nodev,noexec", RequiredBootMountFlag::Nosymfollow),
+    ];
+    for (mount_options, expected_flag) in cases {
+        let fixture = AliasFixture::stable().unwrap();
+        let prepared = fixture.prepare().unwrap();
+        fixture.replace_mountinfo_policy(mount_options, "vfat", "rw");
+
+        let error = prepared
+            .revalidate_until(&fixture.installation, deadline())
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::MountInfoPolicy {
+                phase: ObservationPhase::Pass1,
+                role: BootTargetRole::Esp,
+                source: BootMountInfoPolicyError::InvalidSecurityFlagState {
+                    flag,
+                    required_count: 0,
+                    inverse_count: 0,
+                },
+            } if flag == expected_flag
+        ));
+        fixture.assert_outside_unchanged();
+    }
+}
+
+#[test]
+fn irrelevant_mountinfo_policy_churn_keeps_the_closed_facts_exact() {
+    let fixture = AliasFixture::stable().unwrap();
+    let prepared = fixture.prepare().unwrap();
+    fixture.replace_mountinfo_with_irrelevant_policy_churn();
+
+    prepared.revalidate_until(&fixture.installation, deadline()).unwrap();
     fixture.assert_outside_unchanged();
 }
 

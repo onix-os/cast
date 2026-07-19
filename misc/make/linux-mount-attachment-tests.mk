@@ -16,7 +16,7 @@ forge-linux-mount-attachment-test: host-storage-safety-test
 	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 17; \
 	for name in \
 		stable_snapshot_selects_only_exact_attachment_semantics \
-		filesystem_type_source_and_options_are_descriptive_only \
+		generic_selection_identity_ignores_filesystem_policy_and_source \
 		unrelated_mount_table_churn_does_not_change_the_selected_view \
 		escaped_mount_point_is_compared_as_exact_decoded_bytes \
 		invalid_utf8_mount_point_never_matches_or_gets_reinterpreted \
@@ -40,7 +40,10 @@ forge-linux-mount-attachment-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(crate) struct SelectedMountInfoAttachment' "$$module"; \
 	timeout 10s grep -Fq 'MOUNTINFO_LIMITS' "$$module"; \
 	timeout 10s grep -Fq 'expected_id_occurrences' "$$module"; \
-	if timeout 10s rg -n 'filesystem_type\(|mount_source\(|mount_options\(|optional_fields\(|super_options\(' "$$module"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'pub(super) fn policy_filesystem_type' "$$module"; \
+	timeout 10s grep -Fq 'pub(super) fn policy_mount_options' "$$module"; \
+	timeout 10s grep -Fq 'pub(super) fn policy_super_options' "$$module"; \
+	if timeout 10s rg -n 'mount_source\(|optional_fields\(|pub\(crate\).*policy_(filesystem_type|mount_options|super_options)|pub\(crate\).*selected_entry' "$$module"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n '/proc|/sys|/dev|File::open|OpenOptions|read_to_end|read_dir|canonicalize|std::env|std::process|process::Command|Command::new|nix::mount|setns|unshare|chroot|pivot_root|mount\(|umount' "$$module" "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in "$$module" "$$tests" "$(MOUNT_ATTACHMENT_TOP_DIR)/misc/make/linux-mount-attachment-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \

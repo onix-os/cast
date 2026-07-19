@@ -13,7 +13,9 @@ use crate::{
             MountedBootDestinationIdentity, MountedBootTargetObservation, ObservationPhase,
         },
     },
-    linux_fs::sysfs_block::parse_sysfs_partition_identity,
+    linux_fs::{
+        mountinfo_boot_policy::validated_boot_mount_policy_fixture, sysfs_block::parse_sysfs_partition_identity,
+    },
 };
 
 use super::*;
@@ -48,6 +50,7 @@ fn topology_target(
         },
         MountedBootDestinationIdentity::from_stat_device_and_inode(raw_device, inode),
         mount_id,
+        validated_boot_mount_policy_fixture(),
         identity.device(),
         identity.partition_number(),
         identity.partition_uuid(),

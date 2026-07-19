@@ -2,8 +2,11 @@
 //!
 //! This module receives only an already parsed, immutable mountinfo snapshot.
 //! It opens no path or descriptor, performs no discovery or mutation, and does
-//! not treat filesystem-type, source, or option strings as authority.  A
-//! successful value remains borrowed from the snapshot that was scanned.
+//! not itself treat filesystem-type, source, or option strings as authority.
+//! A successful value remains borrowed from the snapshot that was scanned. A
+//! separate boot-policy validator may inspect the selected record's
+//! filesystem type and option fields without changing this generic selector's
+//! identity-only equality contract.
 
 use std::{io, time::Instant};
 
@@ -38,18 +41,31 @@ pub(super) const MOUNTINFO_ATTACHMENT_LIMITS: MountInfoAttachmentLimits = MountI
 
 /// Selected attachment fields borrowed from one immutable mountinfo snapshot.
 ///
-/// The filesystem type, mount source, and option fields are intentionally not
-/// retained or exposed: they are descriptive kernel text, not partition-role
-/// or attachment authority.  Revalidation of any live descriptor or namespace
-/// is the responsibility of the descriptor-retaining aggregate.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Filesystem policy fields remain private to the Linux filesystem substrate.
+/// They do not participate in this generic value's equality and never expose
+/// the mount source. The boot-policy layer consumes only the selected
+/// filesystem type and the two option domains under the caller's deadline.
+#[derive(Clone, Copy)]
 pub(crate) struct SelectedMountInfoAttachment<'a> {
     mount_id: u64,
     device_major: u32,
     device_minor: u32,
     root: &'a [u8],
     mount_point: &'a [u8],
+    selected_entry: &'a MountInfoEntry,
 }
+
+impl PartialEq for SelectedMountInfoAttachment<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.mount_id == other.mount_id
+            && self.device_major == other.device_major
+            && self.device_minor == other.device_minor
+            && self.root == other.root
+            && self.mount_point == other.mount_point
+    }
+}
+
+impl Eq for SelectedMountInfoAttachment<'_> {}
 
 impl std::fmt::Debug for SelectedMountInfoAttachment<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -85,6 +101,18 @@ impl SelectedMountInfoAttachment<'_> {
     /// Exact decoded mount-point bytes borrowed from the parsed snapshot.
     pub(crate) const fn mount_point(&self) -> &[u8] {
         self.mount_point
+    }
+
+    pub(super) fn policy_filesystem_type(&self) -> &[u8] {
+        self.selected_entry.filesystem_type()
+    }
+
+    pub(super) fn policy_mount_options(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        self.selected_entry.mount_options()
+    }
+
+    pub(super) fn policy_super_options(&self) -> impl ExactSizeIterator<Item = &[u8]> {
+        self.selected_entry.super_options()
     }
 }
 
@@ -219,6 +247,7 @@ fn select_mountinfo_attachment_with_limits_and_clock<'a>(
             device_minor: device.minor(),
             root: selected.root(),
             mount_point: selected.mount_point(),
+            selected_entry: selected,
         },
         work,
     ))

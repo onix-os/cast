@@ -67,6 +67,7 @@ help:
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
 	@timeout 10s echo "  host-storage-safety-test  Audit local tests and harnesses for host-storage access"
 	@timeout 10s echo "  forge-linux-mount-attachment-test  Run exact synthetic mountinfo attachment-selection contracts"
+	@timeout 10s echo "  forge-linux-mount-boot-policy-test  Run exact synthetic vfat boot mount-policy contracts"
 	@timeout 10s echo "  forge-linux-mountinfo-parser-test  Run the bounded byte-preserving Linux mountinfo parser contracts"
 	@timeout 10s echo "  forge-linux-mount-namespace-test  Run retained synthetic namespace and task-root anchor contracts"
 	@timeout 10s echo "  forge-linux-authenticated-mountinfo-snapshot-test  Run authenticated current-thread mountinfo snapshot contracts"

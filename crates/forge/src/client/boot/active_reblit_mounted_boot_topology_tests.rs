@@ -7,7 +7,10 @@ use crate::{
             MountedBootDestinationIdentity, MountedBootTargetObservation, ObservationPhase,
         },
     },
-    linux_fs::sysfs_block::parse_sysfs_partition_identity,
+    linux_fs::{
+        mountinfo_boot_policy::{BootFilesystemKind, validated_boot_mount_policy_fixture},
+        sysfs_block::parse_sysfs_partition_identity,
+    },
 };
 
 const ESP_PARTUUID: &str = "11111111-2222-3333-4444-555555555555";
@@ -50,6 +53,7 @@ fn target(
         selector(partuuid, mount_point_hint),
         MountedBootDestinationIdentity::from_stat_device_and_inode(raw_device, inode),
         mount_id,
+        validated_boot_mount_policy_fixture(),
         identity.device(),
         identity.partition_number(),
         identity.partition_uuid(),
@@ -90,6 +94,13 @@ fn alias_is_structurally_one_target_and_exposes_only_closed_scalar_facts() {
     assert_eq!(bound_esp.selector, ESP_SELECTOR);
     assert_eq!(bound_esp.partuuid, ESP_PARTUUID);
     assert_eq!(bound_esp.mount_id, 11);
+    assert_eq!(bound_esp.mount_policy.filesystem(), BootFilesystemKind::Vfat);
+    assert!(bound_esp.mount_policy.mount_read_write());
+    assert!(bound_esp.mount_policy.superblock_read_write());
+    assert!(bound_esp.mount_policy.nosuid());
+    assert!(bound_esp.mount_policy.nodev());
+    assert!(bound_esp.mount_policy.noexec());
+    assert!(bound_esp.mount_policy.nosymfollow());
     assert_eq!(bound_esp.device_major(), 8);
     assert_eq!(bound_esp.device_minor(), 1);
     assert_eq!(bound_esp.partition_number.get(), 1);

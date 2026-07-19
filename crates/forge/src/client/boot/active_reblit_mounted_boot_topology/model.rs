@@ -2,7 +2,10 @@ use std::num::NonZeroU64;
 
 use crate::{
     client::active_reblit_boot_topology_intent::BoundActiveReblitBootPartitionSelector,
-    linux_fs::sysfs_block::{SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber, SysfsPartitionUuid},
+    linux_fs::{
+        mountinfo_boot_policy::ValidatedBootMountInfoPolicy,
+        sysfs_block::{SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber, SysfsPartitionUuid},
+    },
 };
 
 /// Declarative role assigned to one mounted target observation.
@@ -49,6 +52,7 @@ pub(in crate::client) struct MountedBootTargetObservation<'a> {
     pub(super) intent: BoundActiveReblitBootPartitionSelector<'a>,
     pub(super) destination: MountedBootDestinationIdentity,
     pub(super) mount_id: u64,
+    pub(super) mount_policy: ValidatedBootMountInfoPolicy,
     pub(super) device: SysfsDeviceNumber,
     pub(super) partition_number: SysfsPartitionNumber,
     pub(super) partition_uuid: SysfsPartitionUuid,
@@ -61,6 +65,7 @@ impl<'a> MountedBootTargetObservation<'a> {
         intent: BoundActiveReblitBootPartitionSelector<'a>,
         destination: MountedBootDestinationIdentity,
         mount_id: u64,
+        mount_policy: ValidatedBootMountInfoPolicy,
         device: SysfsDeviceNumber,
         partition_number: SysfsPartitionNumber,
         partition_uuid: SysfsPartitionUuid,
@@ -70,6 +75,7 @@ impl<'a> MountedBootTargetObservation<'a> {
             intent,
             destination,
             mount_id,
+            mount_policy,
             device,
             partition_number,
             partition_uuid,
@@ -98,6 +104,7 @@ pub(in crate::client) struct ActiveReblitMountedBootTargetFacts {
     pub(super) partuuid: Box<str>,
     pub(super) destination: MountedBootDestinationIdentity,
     pub(super) mount_id: NonZeroU64,
+    pub(super) mount_policy: ValidatedBootMountInfoPolicy,
     pub(super) device: SysfsDeviceNumber,
     pub(super) partition_number: SysfsPartitionNumber,
     pub(super) partition_uuid: SysfsPartitionUuid,
@@ -111,6 +118,7 @@ impl ActiveReblitMountedBootTargetFacts {
             partuuid: &self.partuuid,
             destination: self.destination,
             mount_id: self.mount_id.get(),
+            mount_policy: self.mount_policy,
             device: self.device,
             partition_number: self.partition_number,
             partition_uuid: self.partition_uuid,
@@ -151,6 +159,7 @@ pub(in crate::client) struct BoundActiveReblitMountedBootTarget<'a> {
     pub(in crate::client) partuuid: &'a str,
     pub(in crate::client) destination: MountedBootDestinationIdentity,
     pub(in crate::client) mount_id: u64,
+    pub(in crate::client) mount_policy: ValidatedBootMountInfoPolicy,
     pub(in crate::client) device: SysfsDeviceNumber,
     pub(in crate::client) partition_number: SysfsPartitionNumber,
     pub(in crate::client) partition_uuid: SysfsPartitionUuid,

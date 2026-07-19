@@ -2,15 +2,21 @@
 //!
 //! The descriptor-retained capture layer owns authenticated declarative
 //! intent, current-task mount context, task-rooted attachments, and sysfs
-//! partition identities.  It repeatedly observes those capabilities under one
+//! partition identities. It also retains a closed mountinfo policy requiring
+//! `vfat`, per-mount `rw,nosuid,nodev,noexec,nosymfollow`, and superblock `rw`.
+//! It repeatedly observes those capabilities and policy facts under one
 //! caller-owned deadline before exposing the separate closed scalar model.
-//! That scalar value owns no file, descriptor, path, mountinfo snapshot, sysfs
-//! bytes, or reopen authority and is the pure boundary for later rendering.
+//! That scalar value owns no file, descriptor, path, raw mountinfo options,
+//! sysfs bytes, or reopen authority and is the pure boundary for later
+//! rendering.
 //!
-//! Success records bounded consistency evidence only. It does not prove a GPT
-//! partition role, filesystem type, physical disk, persistence, ongoing mount
-//! currentness, durability, publication authority, or permission to mutate
-//! ESP or XBOOTLDR.
+//! Success records bounded consistency and mountinfo policy evidence only. It
+//! does not prove a GPT partition role, descriptor-cross-checked filesystem
+//! identity, physical disk, persistence, ongoing mount currentness,
+//! durability, publication authority, or permission to mutate ESP or
+//! XBOOTLDR. Requiring `nosymfollow` gives future boot publication an effective
+//! Linux 5.10-or-newer admission boundary without changing the generic
+//! `linux_fs` Linux 5.6 compatibility baseline.
 
 #[path = "active_reblit_mounted_boot_topology/capture.rs"]
 mod capture;

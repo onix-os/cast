@@ -9,6 +9,7 @@ use crate::{
     linux_fs::{
         mount_namespace::{PreparedMountNamespaceAnchor, RevalidatedTaskRootedAttachment},
         mountinfo_attachment::select_mountinfo_attachment_until,
+        mountinfo_boot_policy::{ValidatedBootMountInfoPolicy, validate_selected_boot_mount_policy_until},
         sysfs_identity::RevalidatedSysfsPartitionIdentity,
     },
 };
@@ -110,7 +111,7 @@ fn capture_alias<T>(
     let snapshot = mountinfo_source
         .read_until(anchor, deadline)
         .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::MountInfo { phase, source })?;
-    select_attachment(
+    let esp_mount_policy = select_attachment(
         phase,
         BootTargetRole::Esp,
         selector,
@@ -125,7 +126,7 @@ fn capture_alias<T>(
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
 
     let consumed = consume(ActiveReblitMountedBootTopologyObservation::BootAliasesEsp {
-        esp: target_observation(selector, &esp_attachment, &esp_sysfs),
+        esp: target_observation(selector, &esp_attachment, &esp_sysfs, esp_mount_policy),
     });
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
     consumed
@@ -151,7 +152,7 @@ fn capture_distinct<T>(
     let snapshot = mountinfo_source
         .read_until(anchor, deadline)
         .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::MountInfo { phase, source })?;
-    select_attachment(
+    let esp_mount_policy = select_attachment(
         phase,
         BootTargetRole::Esp,
         esp_selector,
@@ -159,7 +160,7 @@ fn capture_distinct<T>(
         &snapshot,
         deadline,
     )?;
-    select_attachment(
+    let xbootldr_mount_policy = select_attachment(
         phase,
         BootTargetRole::Xbootldr,
         xbootldr_selector,
@@ -177,8 +178,13 @@ fn capture_distinct<T>(
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
 
     let consumed = consume(ActiveReblitMountedBootTopologyObservation::DistinctXbootldr {
-        esp: target_observation(esp_selector, &esp_attachment, &esp_sysfs),
-        xbootldr: target_observation(xbootldr_selector, &xbootldr_attachment, &xbootldr_sysfs),
+        esp: target_observation(esp_selector, &esp_attachment, &esp_sysfs, esp_mount_policy),
+        xbootldr: target_observation(
+            xbootldr_selector,
+            &xbootldr_attachment,
+            &xbootldr_sysfs,
+            xbootldr_mount_policy,
+        ),
         same_revalidated_block_parent_snapshot: same_parent,
     });
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
@@ -246,7 +252,7 @@ fn select_attachment(
     attachment: &RevalidatedTaskRootedAttachment<'_>,
     snapshot: &crate::linux_fs::mount_namespace::AuthenticatedMountInfoSnapshot,
     deadline: Instant,
-) -> CaptureResult<()> {
+) -> CaptureResult<ValidatedBootMountInfoPolicy> {
     require_exact_attachment_selector(phase, role, selector.mount_point_hint, attachment.selector())?;
     let device = attachment.destination_sysfs_device_number().map_err(|source| {
         ActiveReblitMountedBootTopologyCaptureError::Attachment {
@@ -256,7 +262,7 @@ fn select_attachment(
             source,
         }
     })?;
-    select_mountinfo_attachment_until(
+    let selected = select_mountinfo_attachment_until(
         snapshot.mountinfo(),
         selector.mount_point_hint.as_bytes(),
         attachment.destination_mount_id(),
@@ -264,8 +270,9 @@ fn select_attachment(
         device.minor(),
         deadline,
     )
-    .map(drop)
-    .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::MountInfoSelection { phase, role, source })
+    .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::MountInfoSelection { phase, role, source })?;
+    validate_selected_boot_mount_policy_until(selected, deadline)
+        .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::MountInfoPolicy { phase, role, source })
 }
 
 fn require_exact_attachment_selector(
@@ -295,6 +302,7 @@ fn target_observation<'a>(
     selector: BoundActiveReblitBootPartitionSelector<'a>,
     attachment: &RevalidatedTaskRootedAttachment<'_>,
     sysfs: &RevalidatedSysfsPartitionIdentity<'_>,
+    mount_policy: ValidatedBootMountInfoPolicy,
 ) -> MountedBootTargetObservation<'a> {
     MountedBootTargetObservation::new(
         selector,
@@ -303,6 +311,7 @@ fn target_observation<'a>(
             attachment.destination_inode(),
         ),
         attachment.destination_mount_id(),
+        mount_policy,
         sysfs.device(),
         sysfs.partition_number(),
         sysfs.partition_uuid(),

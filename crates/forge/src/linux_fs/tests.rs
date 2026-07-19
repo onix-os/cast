@@ -9,6 +9,8 @@ use std::{
 use super::*;
 
 mod authenticated_mountinfo_snapshot;
+#[path = "tests/mountinfo_boot_policy.rs"]
+mod boot_mount_policy;
 mod chmod_once;
 mod mount_attachment;
 mod mount_namespace;

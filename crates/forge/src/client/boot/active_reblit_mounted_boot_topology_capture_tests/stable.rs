@@ -1,5 +1,6 @@
 use super::super::BoundActiveReblitMountedBootTopology;
 use super::support::{AliasFixture, DISK_SEQUENCE, MOUNT_POINT, PARTUUID};
+use crate::linux_fs::mountinfo_boot_policy::BootFilesystemKind;
 
 #[test]
 fn alias_fixture_retains_exact_descriptor_backed_scalar_facts() {
@@ -21,6 +22,13 @@ fn alias_fixture_retains_exact_descriptor_backed_scalar_facts() {
         fixture.destination_identity()
     );
     assert_eq!(esp.mount_id, fixture.destination_identity().1);
+    assert_eq!(esp.mount_policy.filesystem(), BootFilesystemKind::Vfat);
+    assert!(esp.mount_policy.mount_read_write());
+    assert!(esp.mount_policy.superblock_read_write());
+    assert!(esp.mount_policy.nosuid());
+    assert!(esp.mount_policy.nodev());
+    assert!(esp.mount_policy.noexec());
+    assert!(esp.mount_policy.nosymfollow());
     assert_eq!((esp.device_major(), esp.device_minor()), fixture.device());
     assert_eq!(esp.partition_number.get(), 1);
     assert_eq!(esp.partition_uuid.as_str(), PARTUUID);

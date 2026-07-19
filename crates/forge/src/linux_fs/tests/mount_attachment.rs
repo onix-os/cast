@@ -96,7 +96,7 @@ fn stable_snapshot_selects_only_exact_attachment_semantics() {
 }
 
 #[test]
-fn filesystem_type_source_and_options_are_descriptive_only() {
+fn generic_selection_identity_ignores_filesystem_policy_and_source() {
     let first = parsed(b"41 1 259:7 / /synthetic/esp-attachment rw,nosuid shared:8 - vfat source-a rw,flush\n");
     let second =
         parsed(b"41 99 259:7 / /synthetic/esp-attachment ro,nodev unbindable - futurefs source-b ro,opaque=value\n");

@@ -157,6 +157,9 @@ pub(crate) mod mountinfo;
 #[allow(dead_code)] // pure selector foundation consumed by mounted boot topology
 pub(crate) mod mountinfo_attachment;
 
+#[allow(dead_code)] // closed mount policy consumed by mounted boot topology
+pub(crate) mod mountinfo_boot_policy;
+
 #[allow(dead_code)] // retained foundation consumed by mounted boot topology
 pub(crate) mod mount_namespace;
 

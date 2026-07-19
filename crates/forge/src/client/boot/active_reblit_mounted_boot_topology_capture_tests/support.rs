@@ -179,6 +179,32 @@ impl AliasFixture {
         ));
     }
 
+    pub(super) fn replace_mountinfo_policy(&self, mount_options: &str, filesystem_type: &str, super_options: &str) {
+        self.feed.replace(mountinfo_record_with_policy(
+            self.destination_inode,
+            self.device_major,
+            self.device_minor,
+            mount_options,
+            "",
+            filesystem_type,
+            "ignored",
+            super_options,
+        ));
+    }
+
+    pub(super) fn replace_mountinfo_with_irrelevant_policy_churn(&self) {
+        self.feed.replace(mountinfo_record_with_policy(
+            self.destination_inode,
+            self.device_major,
+            self.device_minor,
+            "rw,nosuid,nodev,noexec,nosymfollow,noatime",
+            "shared:19",
+            "vfat",
+            "changed-source",
+            "rw,flush",
+        ));
+    }
+
     pub(in crate::client) fn assert_outside_unchanged(&self) {
         assert_eq!(fs::read(&self.outside).unwrap(), OUTSIDE_BYTES);
     }
@@ -263,5 +289,36 @@ fn distinct_parent_device(major: u32, minor: u32) -> (u32, u32) {
 }
 
 fn mountinfo_record(mount_id: u64, major: u32, minor: u32) -> Vec<u8> {
-    format!("{mount_id} 1 {major}:{minor} / {MOUNT_POINT} rw,nosuid - vfat ignored rw\n").into_bytes()
+    mountinfo_record_with_policy(
+        mount_id,
+        major,
+        minor,
+        "rw,nosuid,nodev,noexec,nosymfollow",
+        "",
+        "vfat",
+        "ignored",
+        "rw",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn mountinfo_record_with_policy(
+    mount_id: u64,
+    major: u32,
+    minor: u32,
+    mount_options: &str,
+    optional_fields: &str,
+    filesystem_type: &str,
+    source: &str,
+    super_options: &str,
+) -> Vec<u8> {
+    let optional = if optional_fields.is_empty() {
+        String::new()
+    } else {
+        format!(" {optional_fields}")
+    };
+    format!(
+        "{mount_id} 1 {major}:{minor} / {MOUNT_POINT} {mount_options}{optional} - {filesystem_type} {source} {super_options}\n"
+    )
+    .into_bytes()
 }

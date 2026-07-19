@@ -68,6 +68,7 @@ fn validate_target(
         partuuid: observation.intent.partuuid.into(),
         destination: observation.destination,
         mount_id,
+        mount_policy: observation.mount_policy,
         device: observation.device,
         partition_number: observation.partition_number,
         partition_uuid: observation.partition_uuid,

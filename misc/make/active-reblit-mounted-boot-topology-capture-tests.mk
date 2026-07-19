@@ -5,7 +5,7 @@ CARGO ?= cargo
 
 .PHONY: forge-active-reblit-mounted-boot-topology-capture-test
 
-forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
+forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test forge-linux-mount-boot-policy-test
 	@set -euo pipefail; \
 	timeout 10s mkdir -p "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/target/active-reblit-mounted-boot-capture-list.XXXXXXXXXXXX" )"; \
@@ -13,14 +13,20 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_mounted_boot_topology::capture_tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 11; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 17; \
 	for name in \
 		stable::alias_fixture_retains_exact_descriptor_backed_scalar_facts \
 		stable::repeated_revalidation_keeps_the_bootstrap_topology_exact \
+		races::bootstrap_rejects_an_unsupported_boot_filesystem_policy \
 		races::changed_declarative_intent_fails_at_the_opening_boundary \
 		races::changed_mount_namespace_identity_fails_before_attachment_use \
 		races::changed_attachment_identity_fails_before_mountinfo_selection \
 		races::changed_mountinfo_identity_is_a_role_typed_selection_failure \
+		races::changed_mountinfo_filesystem_policy_is_role_typed_before_sysfs_use \
+		races::changed_mount_read_write_policy_is_role_typed \
+		races::changed_superblock_read_write_policy_is_role_typed \
+		races::each_required_security_flag_drift_is_role_typed \
+		races::irrelevant_mountinfo_policy_churn_keeps_the_closed_facts_exact \
 		races::changed_sysfs_identity_fails_after_exact_mountinfo_selection \
 		races::attachment_selector_mismatch_is_role_typed_before_mountinfo_use \
 		deadlines::expired_caller_deadline_is_rejected_at_coordinator_entry \
@@ -47,6 +53,9 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	for phase in Pass1 Pass2 Terminal; do timeout 10s grep -Fq "ObservationPhase::$$phase" "$$core/preparation.rs"; done; \
 	timeout 10s grep -Fq 'same_revalidated_block_parent_snapshot(&xbootldr_sysfs)' "$$core/observation.rs"; \
 	timeout 10s grep -Fq 'intent_selector == attachment_selector' "$$core/observation.rs"; \
+	timeout 10s grep -Fq 'validate_selected_boot_mount_policy_until(selected, deadline)' "$$core/observation.rs"; \
+	timeout 10s grep -Fq 'MountInfoPolicy {' "$$core/error.rs"; \
+	timeout 10s grep -Fq 'rw,nosuid,nodev,noexec,nosymfollow' "$$test_core/support.rs"; \
 	timeout 10s grep -Fq 'read_count(), 4' "$$test_core/stable.rs"; \
 	timeout 10s grep -Fq 'read_count(), 7' "$$test_core/stable.rs"; \
 	if timeout 10s rg -n 'impl Clone for PreparedActiveReblitMountedBootTopology|std::process|process::Command|Command::new|nix::mount|libc::mount|mount_partitions|setns|unshare|chroot|pivot_root|open_tree|move_mount|canonicalize\(|(?:fs::|std::fs::|File::)?(?:create_dir(?:_all)?|rename|remove_file|write)\(|BLK[A-Z_]+|/dev/(disk|sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)' "$$capture" "$$core"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
