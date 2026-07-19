@@ -161,9 +161,12 @@ every observation. It does not retain the raw option lists or mount source as
 authority.
 
 This is exact **mountinfo policy evidence**, not independent filesystem
-authentication. It does not replace a retained destination-descriptor
-`fstatfs` check, prove a GPT partition type, authorize a write, or establish
-file, directory, filesystem, or device durability. Requiring `nosymfollow`
+authentication. Commit `b8acd3d4` provides a separate bounded retained-
+descriptor `fstat`/`fstatfs` sandwich which proves stable directory identity
+and the Linux MSDOS magic family without claiming that magic alone is exact
+`vfat`. The two foundations are not yet composed; neither proves a GPT
+partition type, authorizes a write, or establishes file, directory,
+filesystem, or device durability. Requiring `nosymfollow`
 also makes admission to the future boot publisher effectively Linux 5.10 or
 newer. The reusable `linux_fs` descriptor and mountinfo primitives keep their
 Linux 5.6 compatibility baseline; this stricter policy belongs only to mounted
@@ -179,11 +182,11 @@ the kernel block identity and block-parent observations made during its
 authenticated capture and revalidation passes. It is not a continuously live
 view and does not claim call-time or simultaneous residency.
 
-It does not prove the GPT type GUID, ESP/XBOOTLDR role, a
-destination-descriptor-cross-checked filesystem identity, physical-disk
-identity, flush behavior, or persistence across reboot. Those claims require
-later, separately retained evidence. The selected mountinfo `vfat` policy is
-only one input to that later filesystem authentication.
+It does not prove the GPT type GUID, ESP/XBOOTLDR role, composition with the
+standalone destination-descriptor filesystem evidence, physical-disk identity,
+flush behavior, or persistence across reboot. Those claims require later,
+separately retained evidence. The selected mountinfo `vfat` policy and Linux
+MSDOS-family descriptor witness are separate inputs to that later composition.
 
 ## Topology invariants
 
@@ -329,8 +332,8 @@ Mounted topology is necessary but not sufficient for real boot publication.
 Later layers must independently authenticate:
 
 - the on-disk GPT partition type as ESP or XBOOTLDR;
-- the retained destination descriptor's filesystem identity against the
-  admitted mountinfo `vfat` policy and any required filesystem features;
+- composition of the retained destination descriptor's Linux MSDOS-family
+  evidence with the admitted mountinfo `vfat` policy and required features;
 - the exact partition/disk relationship beyond the retained sysfs observations;
 - publication ordering, file replacement, directory synchronization, and
   device flush durability; and

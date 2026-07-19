@@ -82,9 +82,11 @@ and PARTUUIDs. Its paired retained sysfs snapshots must report the same
 block-parent witness across both complete topology passes and the terminal
 revalidation. Those snapshots are bounded observations, not continuously live
 or simultaneous-residency claims. The selected mountinfo policy is likewise
-only mountinfo evidence: it does not replace destination-descriptor `fstatfs`
-authentication, prove the on-disk GPT type GUIDs or physical-disk identity,
-authorize writes, or establish durability. Because `nosymfollow` was added in
+only mountinfo evidence. A separate descriptor `fstat`/`fstatfs` foundation
+now authenticates stable directory identity and the Linux MSDOS magic family,
+but it is not yet composed here and does not by itself prove exact `vfat`, the
+on-disk GPT type GUIDs, or physical-disk identity, authorize writes, or
+establish durability. Because `nosymfollow` was added in
 Linux 5.10, the future boot publisher has an effective Linux 5.10-or-newer
 admission boundary. Generic `linux_fs` facilities remain compatible with the
 project's Linux 5.6 baseline.
