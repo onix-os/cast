@@ -9,6 +9,9 @@ use std::{
 
 use tempfile::TempDir;
 
+#[path = "gluon_examples/process_supervision.rs"]
+mod process_supervision;
+
 const RECIPE_FILE_NAME: &str = "stone.glu";
 
 #[test]
@@ -312,7 +315,8 @@ impl Isolation {
 }
 
 fn run_cast(isolation: &Isolation, operation: &str, recipe: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cast"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cast"));
+    command
         .arg("--directory")
         .arg(isolation.root.join("system-root"))
         .arg("--package-cache-dir")
@@ -336,8 +340,8 @@ fn run_cast(isolation: &Isolation, operation: &str, recipe: &Path) -> Output {
         .env("XDG_STATE_HOME", isolation.root.join("xdg/state"))
         .env("LANG", "C")
         .env("LC_ALL", "C")
-        .env("TZ", "UTC")
-        .output()
+        .env("TZ", "UTC");
+    process_supervision::output(&mut command, process_supervision::Limits::cast_child())
         .unwrap_or_else(|error| panic!("execute `cast recipe {operation}` for {}: {error}", recipe.display()))
 }
 

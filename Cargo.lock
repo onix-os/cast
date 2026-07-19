@@ -382,6 +382,7 @@ dependencies = [
  "clap_mangen",
  "forge",
  "fs-err",
+ "libc",
  "mason",
  "tempfile",
  "thiserror 2.0.18",

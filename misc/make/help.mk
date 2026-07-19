@@ -128,6 +128,7 @@ help:
 	@echo "  forge-previous-tree-move-test  Run retained previous-tree archive and restore tests"
 	@echo "  forge-archived-candidate-move-test  Run retained archived-candidate move and recovery tests"
 	@echo "  examples      Check, evaluate, freeze, and fail-close the Gluon examples"
+	@echo "  cast-example-process-supervision-test  Prove bounded Cast example child cleanup"
 	@echo "  examples-gate-test  Test example discovery and failure propagation"
 	@echo "  execution-fixtures  Verify real offline source archives and Gluon locks"
 	@echo "  execution-capability-preflight-test  Test optional/required preflight policy and classification"

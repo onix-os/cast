@@ -40,6 +40,14 @@ if test "$listing" -eq 1; then
         success | execution-failure)
             cat <<'TESTS'
 every_gluon_package_example_passes_the_public_cast_cli: test
+process_supervision::bounded_cast_child_supervisor_drop_kills_and_reaps_group: test
+process_supervision::bounded_cast_child_supervisor_escalates_ignored_term_to_kill: test
+process_supervision::bounded_cast_child_supervisor_kills_and_reaps_descendant_tree: test
+process_supervision::bounded_cast_child_supervisor_rejects_exited_leader_with_descendant: test
+process_supervision::bounded_cast_child_supervisor_rejects_stdout_overflow_and_reaps_group: test
+process_supervision::bounded_cast_child_supervisor_reuses_one_cleanup_deadline: test
+process_supervision::bounded_cast_child_supervisor_times_out_and_reaps_group: test
+process_supervision::cast_child_supervisor_helper: test
 planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks: test
 planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution: test
 TESTS
@@ -91,8 +99,8 @@ timeout 30s env \
     make --no-print-directory -C "$root" CARGO="$fake_cargo" examples >"$work/success.log" 2>&1
 
 call_count=$(wc -l <"$calls")
-if test "$call_count" -ne 6; then
-    echo "FAIL: successful examples gate made $call_count fake cargo calls instead of 6" >&2
+if test "$call_count" -ne 7; then
+    echo "FAIL: successful examples gate made $call_count fake cargo calls instead of 7" >&2
     cat "$calls" >&2
     exit 1
 fi
