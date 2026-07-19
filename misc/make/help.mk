@@ -101,6 +101,7 @@ help:
 	@echo "  container-cgroup-test  Run all extracted cgroup lifecycle and parser tests"
 	@echo "  container-process-runtime-test  Run host-safe process-runtime, pidfd, and signal tests"
 	@echo "  container-mount-boundary-test  Run anchored root and pseudo-filesystem mount tests"
+	@echo "  container-private-device-test Run private minimal-device provider contract tests"
 	@echo "  container-root-host-safe-test  Run every direct container test except five sandbox-denied socket diagnostics"
 	@echo "  mason-package-collect-test  Run bounded collection filesystem and inventory tests"
 	@echo "  mason-package-collect-transaction-test  Run transactional mutation and publication tests"

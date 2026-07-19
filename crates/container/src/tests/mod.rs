@@ -322,8 +322,18 @@ fn exercise_read_only_minimal_dev() -> io::Result<()> {
         "create undeclared minimal /dev entry",
     )?;
 
-    let mut null = std::fs::OpenOptions::new().read(true).write(true).open("/dev/null")?;
+    // Match Python's `Path(os.devnull).open("wb")`: its create-and-truncate
+    // flags must retain ordinary character-device data semantics even though
+    // the bind mount itself is read-only against inode metadata mutation.
+    let mut null = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open("/dev/null")?;
     null.write_all(b"discarded")?;
+    drop(null);
+
+    let mut null = std::fs::File::open("/dev/null")?;
     let mut byte = [0_u8; 1];
     if null.read(&mut byte)? != 0 {
         return Err(io::Error::other("/dev/null did not return EOF"));

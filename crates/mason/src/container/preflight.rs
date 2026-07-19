@@ -6,6 +6,9 @@ use std::{
 };
 
 #[cfg(feature = "delegated-fixture-test-support")]
+use std::io::{Read as _, Write as _};
+
+#[cfg(feature = "delegated-fixture-test-support")]
 use ::container::RootFilesystemPolicy;
 use ::container::{AnchoredLocator, Container};
 #[cfg(feature = "delegated-fixture-test-support")]
@@ -70,6 +73,7 @@ pub(crate) fn preflight_delegated_execution_capability() -> Result<(), Error> {
         .map_err(Error::CreateDerivationCgroup)?;
 
     container.run_in_cgroup::<io::Error>(leaf, || {
+        verify_execution_device_contract()?;
         std::fs::write("/preflight-root-target/witness", b"root-relative")?;
         std::fs::write("workdir-witness", b"descriptor-pinned-workdir")
     })?;
@@ -92,6 +96,71 @@ pub(crate) fn preflight_delegated_execution_capability() -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "delegated-fixture-test-support")]
+fn verify_execution_device_contract() -> io::Result<()> {
+    let mut found = std::fs::read_dir("/dev")?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<Vec<_>>>()?;
+    found.sort();
+    let mut expected = ::container::MINIMAL_DEV_NODES
+        .iter()
+        .map(std::ffi::OsString::from)
+        .collect::<Vec<_>>();
+    expected.sort();
+    if found != expected {
+        return Err(io::Error::other(format!(
+            "minimal /dev entries differ: expected {expected:?}, found {found:?}"
+        )));
+    }
+
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open("/dev/cast-preflight-extra")
+    {
+        Err(source) if source.raw_os_error() == Some(nix::libc::EROFS) => {}
+        Err(source) => return Err(source),
+        Ok(_) => return Err(io::Error::other("minimal /dev accepted an undeclared entry")),
+    }
+
+    verify_null_open("write-only", false, false)?;
+    verify_null_open("write-and-truncate", false, true)?;
+    verify_null_open("write-and-create", true, false)?;
+    let mut null = verify_null_open("python write-create-truncate", true, true)?;
+    null.write_all(b"discarded")?;
+    drop(null);
+
+    let mut null = std::fs::File::open("/dev/null")?;
+    let mut byte = [0_u8; 1];
+    if null.read(&mut byte)? != 0 {
+        return Err(io::Error::other("/dev/null did not return EOF"));
+    }
+
+    let mut zero = std::fs::File::open("/dev/zero")?;
+    let mut zeros = [1_u8; 16];
+    zero.read_exact(&mut zeros)?;
+    if zeros != [0_u8; 16] {
+        return Err(io::Error::other("/dev/zero returned non-zero bytes"));
+    }
+
+    let mut full = std::fs::OpenOptions::new().write(true).open("/dev/full")?;
+    match full.write_all(&[1]) {
+        Err(source) if source.raw_os_error() == Some(nix::libc::ENOSPC) => Ok(()),
+        Err(source) => Err(source),
+        Ok(()) => Err(io::Error::other("/dev/full accepted a byte")),
+    }
+}
+
+#[cfg(feature = "delegated-fixture-test-support")]
+fn verify_null_open(label: &str, create: bool, truncate: bool) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(create)
+        .truncate(truncate)
+        .open("/dev/null")
+        .map_err(|source| io::Error::new(source.kind(), format!("minimal /dev/null {label} open failed: {source}")))
 }
 
 fn open_execution_preflight_root(path: &Path) -> io::Result<std::fs::File> {

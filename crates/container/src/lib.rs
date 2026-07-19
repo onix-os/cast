@@ -15,6 +15,7 @@ mod credentials;
 mod idmap;
 mod mounts;
 mod payload;
+mod private_devices;
 mod process_runtime;
 mod seccomp;
 
