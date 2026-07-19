@@ -18,6 +18,8 @@ mod live;
 mod model;
 #[path = "production/parser.rs"]
 mod parser;
+#[path = "production/retained.rs"]
+mod retained;
 #[path = "production/source.rs"]
 mod source;
 
@@ -36,3 +38,13 @@ pub(crate) use source::{ProductionRawDirectorySource, ProductionRawDirectorySour
 pub(crate) use model::ProductionRawDirectoryInventoryUsage;
 #[allow(unused_imports)] // aggregate accounting for the future retained observer
 pub(crate) use parser::parse_production_raw_directory_inventory_with_usage_until;
+
+#[cfg(test)]
+pub(crate) use retained::{
+    FixtureFailedOpenDescriptorSlotUsage, FixtureRetainedBootNamespaceProtocolEvent,
+    assess_retained_boot_namespace_with_hook_until, probe_failed_open_descriptor_slot_until,
+};
+pub(crate) use retained::{
+    RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits,
+    ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
+};

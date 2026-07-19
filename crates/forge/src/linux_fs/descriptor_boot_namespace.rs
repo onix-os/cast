@@ -50,7 +50,17 @@ pub(crate) use observer::{
 };
 #[cfg(test)]
 pub(crate) use production::{
+    FixtureFailedOpenDescriptorSlotUsage, FixtureRetainedBootNamespaceProtocolEvent,
+    assess_retained_boot_namespace_with_hook_until, probe_failed_open_descriptor_slot_until,
+};
+#[cfg(test)]
+pub(crate) use production::{
     ProductionRawDirectoryInventory, ProductionRawDirectoryInventoryError, ProductionRawDirectoryInventoryLimits,
     ProductionRawDirectoryInventoryUsage, ProductionRawDirectorySource, ProductionRawDirectorySourceError,
     parse_production_raw_directory_inventory_until, parse_production_raw_directory_inventory_with_usage_until,
+};
+#[allow(unused_imports)] // consumed by the retained attachment aggregate
+pub(crate) use production::{
+    RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits,
+    ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
 };
