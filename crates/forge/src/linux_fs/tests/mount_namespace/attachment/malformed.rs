@@ -1,6 +1,8 @@
 use std::io;
 
-use super::super::super::super::mount_namespace::{FixtureMountNamespaceTree, PreparedMountNamespaceAnchor};
+use super::super::super::super::mount_namespace::{
+    FixtureMountNamespaceTree, PreparedMountNamespaceAnchor, validate_fixture_attachment_st_dev,
+};
 use super::super::support::SyntheticMountNamespace;
 
 const COMPONENTS: &[&str] = &["alpha", "bravo", "charlie"];
@@ -113,4 +115,28 @@ fn missing_symlink_fifo_and_non_directory_components_are_rejected() {
         assert!(attempt(&regular, &selector(COMPONENTS)).is_err());
         regular.assert_outside_unchanged();
     }
+}
+
+#[test]
+fn st_dev_classifier_accepts_canonical_boundaries_and_rejects_unrepresentable_values() {
+    for (major, minor) in [(0, 0), (u32::MAX, u32::MAX)] {
+        let raw = nix::libc::makedev(major, minor);
+        let raw_u64 = u64::from(raw);
+        let device = validate_fixture_attachment_st_dev(u128::from(raw_u64)).unwrap();
+        assert_eq!(device.major(), major);
+        assert_eq!(device.minor(), minor);
+    }
+
+    let largest_st_dev = u128::from(nix::libc::makedev(u32::MAX, u32::MAX));
+    validate_fixture_attachment_st_dev(largest_st_dev).unwrap();
+    assert_eq!(
+        validate_fixture_attachment_st_dev(largest_st_dev + 1)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(
+        validate_fixture_attachment_st_dev(u128::MAX).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
 }

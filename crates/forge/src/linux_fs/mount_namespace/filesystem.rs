@@ -45,6 +45,7 @@ pub(super) enum CaptureCheckpoint {
     TerminalTaskRootRebind,
     TerminalTaskRootRecheck,
     TerminalNamespaceRecheck,
+    OperationComplete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,6 +257,7 @@ impl From<CaptureCheckpoint> for super::FixtureMountNamespaceCheckpoint {
             CaptureCheckpoint::TerminalTaskRootRebind => Self::TerminalTaskRootRebind,
             CaptureCheckpoint::TerminalTaskRootRecheck => Self::TerminalTaskRootRecheck,
             CaptureCheckpoint::TerminalNamespaceRecheck => Self::TerminalNamespaceRecheck,
+            CaptureCheckpoint::OperationComplete => Self::MountContextComplete,
         }
     }
 }

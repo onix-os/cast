@@ -37,6 +37,7 @@ use super::{
     capture::{Snapshot, require_snapshot_matches},
     filesystem::{DESCRIPTOR_MOUNT_ID_DESCRIPTOR_BOUND, DESCRIPTOR_MOUNT_ID_WORK_BOUND, Operation},
 };
+use crate::linux_fs::sysfs_block::SysfsDeviceNumber;
 
 const PRODUCTION_TIMEOUT: Duration = Duration::from_secs(30);
 const PRODUCTION_MAX_WORK: usize = 512 * 1024 * 1024;
@@ -68,6 +69,7 @@ pub(super) enum AttachmentCheckpoint {
     TerminalParent,
     TerminalName,
     BeforeClosingAnchor,
+    Complete,
 }
 
 #[cfg(test)]
@@ -81,6 +83,7 @@ impl From<AttachmentCheckpoint> for super::FixtureMountNamespaceCheckpoint {
             AttachmentCheckpoint::TerminalParent => Self::AttachmentTerminalParent,
             AttachmentCheckpoint::TerminalName => Self::AttachmentTerminalName,
             AttachmentCheckpoint::BeforeClosingAnchor => Self::AttachmentBeforeClosingAnchor,
+            AttachmentCheckpoint::Complete => Self::AttachmentComplete,
         }
     }
 }
@@ -112,6 +115,15 @@ impl std::fmt::Debug for PreparedTaskRootedAttachment {
 impl RevalidatedMountNamespaceAnchor<'_> {
     pub(crate) fn prepare_task_rooted_attachment(&self, selector: &str) -> io::Result<PreparedTaskRootedAttachment> {
         let deadline = deadline_after(PRODUCTION_TIMEOUT)?;
+        self.prepare_task_rooted_attachment_until(selector, deadline)
+    }
+
+    /// Prepare without replacing the caller-owned absolute deadline.
+    pub(crate) fn prepare_task_rooted_attachment_until(
+        &self,
+        selector: &str,
+        deadline: Instant,
+    ) -> io::Result<PreparedTaskRootedAttachment> {
         #[cfg(test)]
         let mut operation = if self._prepared.locator.is_fixture() {
             Operation::fixture_without_hook(PRODUCTION_LIMITS, deadline)?
@@ -159,6 +171,8 @@ impl RevalidatedMountNamespaceAnchor<'_> {
         closing.current.require_retained(operation)?;
         self.current.require_retained(operation)?;
         capture.require_retained(&root, operation)?;
+        operation.emit_attachment(AttachmentCheckpoint::Complete)?;
+        operation.checkpoint()?;
 
         Ok(PreparedTaskRootedAttachment {
             root,
@@ -186,6 +200,25 @@ impl RevalidatedMountNamespaceAnchor<'_> {
         let mut operation = Operation::fixture(limits.into(), deadline, hook)?;
         self.prepare_task_rooted_attachment_with_operation(selector, &mut operation)
     }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_task_rooted_attachment_with_clock(
+        &self,
+        selector: &str,
+        limits: FixtureTaskRootedAttachmentLimits,
+        deadline: Instant,
+        hook: &mut impl FnMut(super::FixtureMountNamespaceCheckpoint) -> io::Result<()>,
+        clock: &mut impl FnMut() -> Instant,
+    ) -> io::Result<PreparedTaskRootedAttachment> {
+        if !self._prepared.locator.is_fixture() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "attachment fixture operation requires a fixture-backed namespace anchor",
+            ));
+        }
+        let mut operation = Operation::fixture_with_clock(limits.into(), deadline, hook, clock)?;
+        self.prepare_task_rooted_attachment_with_operation(selector, &mut operation)
+    }
 }
 
 impl PreparedTaskRootedAttachment {
@@ -195,6 +228,15 @@ impl PreparedTaskRootedAttachment {
         anchor: &PreparedMountNamespaceAnchor,
     ) -> io::Result<RevalidatedTaskRootedAttachment<'_>> {
         let deadline = deadline_after(PRODUCTION_TIMEOUT)?;
+        self.revalidate_against_until(anchor, deadline)
+    }
+
+    /// Revalidate without replacing the caller-owned absolute deadline.
+    pub(crate) fn revalidate_against_until(
+        &self,
+        anchor: &PreparedMountNamespaceAnchor,
+        deadline: Instant,
+    ) -> io::Result<RevalidatedTaskRootedAttachment<'_>> {
         #[cfg(test)]
         let mut operation = if anchor.locator.is_fixture() {
             Operation::fixture_without_hook(PRODUCTION_LIMITS, deadline)?
@@ -240,6 +282,8 @@ impl PreparedTaskRootedAttachment {
         closing.current.require_retained(operation)?;
         self.capture.require_retained(&self.root, operation)?;
         current.require_retained(&self.root, operation)?;
+        operation.emit_attachment(AttachmentCheckpoint::Complete)?;
+        operation.checkpoint()?;
 
         Ok(RevalidatedTaskRootedAttachment {
             _prepared: self,
@@ -262,6 +306,25 @@ impl PreparedTaskRootedAttachment {
             ));
         }
         let mut operation = Operation::fixture(limits.into(), deadline, hook)?;
+        self.revalidate_against_with_operation(anchor, &mut operation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn revalidate_against_with_clock(
+        &self,
+        anchor: &PreparedMountNamespaceAnchor,
+        limits: FixtureTaskRootedAttachmentLimits,
+        deadline: Instant,
+        hook: &mut impl FnMut(super::FixtureMountNamespaceCheckpoint) -> io::Result<()>,
+        clock: &mut impl FnMut() -> Instant,
+    ) -> io::Result<RevalidatedTaskRootedAttachment<'_>> {
+        if !anchor.locator.is_fixture() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "attachment fixture operation requires a fixture-backed namespace anchor",
+            ));
+        }
+        let mut operation = Operation::fixture_with_clock(limits.into(), deadline, hook, clock)?;
         self.revalidate_against_with_operation(anchor, &mut operation)
     }
 }
@@ -301,12 +364,42 @@ impl RevalidatedTaskRootedAttachment<'_> {
         self.current.destination_witness().mount_id
     }
 
+    /// Convert the destination `st_dev` into one exact sysfs device number.
+    pub(crate) fn destination_sysfs_device_number(&self) -> io::Result<SysfsDeviceNumber> {
+        sysfs_device_number_from_raw(u128::from(self.destination_device()))
+    }
+
     #[cfg(test)]
     pub(crate) fn fixture_component_witness(&self, index: usize) -> Option<(u64, u64, u32, u64)> {
         self.current
             .component_witness(index)
             .map(|witness| (witness.device, witness.inode, witness.kind, witness.mount_id))
     }
+}
+
+fn sysfs_device_number_from_raw(device: u128) -> io::Result<SysfsDeviceNumber> {
+    let raw_device: nix::libc::dev_t = device.try_into().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "attachment st_dev cannot be represented as Linux dev_t",
+        )
+    })?;
+    let major: u32 = nix::libc::major(raw_device);
+    let minor: u32 = nix::libc::minor(raw_device);
+    let rebuilt = nix::libc::makedev(major, minor);
+    let rebuilt_u128 = u128::from(rebuilt);
+    if rebuilt != raw_device || rebuilt_u128 != device {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "attachment st_dev is not a canonical Linux major/minor encoding",
+        ));
+    }
+    Ok(SysfsDeviceNumber::from_major_minor(major, minor))
+}
+
+#[cfg(test)]
+pub(crate) fn validate_fixture_attachment_st_dev(device: u128) -> io::Result<SysfsDeviceNumber> {
+    sysfs_device_number_from_raw(device)
 }
 
 impl std::fmt::Debug for RevalidatedTaskRootedAttachment<'_> {

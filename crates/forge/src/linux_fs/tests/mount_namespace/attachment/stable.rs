@@ -4,7 +4,7 @@ use super::super::super::super::mount_namespace::{FixtureMountNamespaceTree, Pre
 use super::super::support::{FixtureEntry, SyntheticMountNamespace};
 
 const NESTED_COMPONENTS: &[&str] = &["alpha", "bravo", "charlie"];
-const SINGLE_COMPONENT: &str = concat!("bo", "ot");
+const SINGLE_COMPONENT: &str = "firmware";
 
 fn selector(components: &[&str]) -> String {
     format!("/{}", components.join("/"))
@@ -100,5 +100,24 @@ fn independently_prepared_anchor_with_the_same_authenticated_snapshot_is_accepte
     let view = attachment.revalidate_against(&equivalent_anchor).unwrap();
     assert_eq!(view.selector(), authored);
     assert_eq!(view.component_count(), NESTED_COMPONENTS.len());
+    fixture.assert_outside_unchanged();
+}
+
+#[test]
+fn destination_st_dev_converts_to_exact_sysfs_major_and_minor() {
+    let fixture = SyntheticMountNamespace::with_attachment(NESTED_COMPONENTS).unwrap();
+    let anchor = prepared_anchor(&fixture).unwrap();
+    let attachment = anchor
+        .revalidate()
+        .unwrap()
+        .prepare_task_rooted_attachment(&selector(NESTED_COMPONENTS))
+        .unwrap();
+    let view = attachment.revalidate_against(&anchor).unwrap();
+    let raw: nix::libc::dev_t = view.destination_device();
+    let device = view.destination_sysfs_device_number().unwrap();
+
+    assert_eq!(device.major(), nix::libc::major(raw));
+    assert_eq!(device.minor(), nix::libc::minor(raw));
+    assert_eq!(nix::libc::makedev(device.major(), device.minor()), raw);
     fixture.assert_outside_unchanged();
 }

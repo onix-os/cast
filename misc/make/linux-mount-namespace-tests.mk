@@ -13,15 +13,18 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mount_namespace::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 34; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 40; \
 	for name in \
 		attachment::bounds::zero_limits_and_expired_deadline_fail_before_attachment_hooks \
 		attachment::bounds::attachment_hooks_are_finite_and_injected_failures_propagate \
 		attachment::bounds::preparation_work_and_descriptor_budgets_have_exact_adjacent_boundaries \
 		attachment::bounds::revalidation_budgets_cover_both_chain_passes_and_both_anchor_edges \
+		attachment::deadline::fixture_clock_rejects_attachment_prepare_and_revalidation_at_entry \
+		attachment::deadline::fixture_clock_rejects_attachment_prepare_and_revalidation_at_final_checkpoint \
 		attachment::malformed::malformed_absolute_lexical_selectors_fail_before_resolution \
 		attachment::malformed::selector_byte_component_and_depth_ceilings_are_exact \
 		attachment::malformed::missing_symlink_fifo_and_non_directory_components_are_rejected \
+		attachment::malformed::st_dev_classifier_accepts_canonical_boundaries_and_rejects_unrepresentable_values \
 		attachment::races::every_component_replacement_in_either_complete_pass_fails_closed \
 		attachment::races::public_task_root_replacement_is_rejected_by_both_anchor_sandwich_edges \
 		attachment::races::mount_namespace_replacement_is_rejected_by_both_anchor_sandwich_edges \
@@ -32,10 +35,13 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 		attachment::stable::one_component_selector_uses_task_root_as_its_final_parent \
 		attachment::stable::attachment_revalidation_rejects_a_different_mount_context_anchor \
 		attachment::stable::independently_prepared_anchor_with_the_same_authenticated_snapshot_is_accepted \
+		attachment::stable::destination_st_dev_converts_to_exact_sysfs_major_and_minor \
 		bounds::zero_limits_and_expired_deadline_fail_before_fixture_hooks \
 		bounds::checkpoint_hooks_are_finite_and_injected_failure_is_propagated \
 		bounds::preparation_work_and_descriptor_budgets_have_exact_boundaries \
 		bounds::revalidation_budgets_are_global_across_both_passes_and_terminal_checks \
+		deadline::fixture_clock_rejects_prepare_and_revalidate_at_entry \
+		deadline::fixture_clock_rejects_prepare_and_revalidate_at_explicit_final_checkpoint \
 		malformed::fixture_admission_requires_one_safe_named_ordinary_tree \
 		malformed::namespace_authentication_rejects_wrong_filesystem_magic_and_namespace_type \
 		malformed::every_required_fixture_entry_must_exist \
@@ -55,7 +61,19 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	core="$(MOUNT_NAMESPACE_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace"; \
 	runtime="$(MOUNT_NAMESPACE_TOP_DIR)/crates/forge/src/transition_journal/runtime_evidence.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare() -> io::Result<Self>' "$$root"; \
+	timeout 10s grep -Fq 'pub(crate) fn prepare_until(deadline: Instant) -> io::Result<Self>' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) fn revalidate(&self) -> io::Result<RevalidatedMountNamespaceAnchor<' "$$root"; \
+	timeout 10s grep -Fq 'pub(crate) fn revalidate_until(&self, deadline: Instant)' "$$root"; \
+	timeout 10s grep -Fq 'pub(crate) fn prepare_task_rooted_attachment_until(' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(crate) fn revalidate_against_until(' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(crate) fn destination_sysfs_device_number(&self)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'nix::libc::major(raw_device)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'nix::libc::minor(raw_device)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'nix::libc::makedev(major, minor)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'rebuilt != raw_device || rebuilt_u128 != device' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'operation.emit(CaptureCheckpoint::OperationComplete)?' "$$root"; \
+	timeout 10s grep -Fq 'operation.emit_attachment(AttachmentCheckpoint::Complete)?' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(super) fn fixture_with_clock(' "$$core/filesystem.rs"; \
 	timeout 10s grep -Fq 'NS_GET_NSTYPE' "$$root"; \
 	timeout 10s grep -Fq 'CLONE_NEWNS' "$$root"; \
 	timeout 10s grep -Fq 'NSFS_MAGIC' "$$root"; \

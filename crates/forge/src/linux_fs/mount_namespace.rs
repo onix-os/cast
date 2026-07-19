@@ -35,6 +35,9 @@ pub(crate) use mountinfo_snapshot::AuthenticatedMountInfoSnapshot;
 pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
 
 #[cfg(test)]
+pub(crate) use attachment::validate_fixture_attachment_st_dev;
+
+#[cfg(test)]
 #[allow(unused_imports)] // consumed by the dedicated mountinfo snapshot test slice
 pub(crate) use mountinfo_snapshot::{
     FIXTURE_MOUNTINFO_PROCFS_MAGIC, FixtureMountInfoSnapshotLimits, FixtureMountInfoSnapshotUsage,
@@ -42,7 +45,7 @@ pub(crate) use mountinfo_snapshot::{
 };
 
 use capture::{Capture, capture_twice, require_snapshot_matches};
-use filesystem::{Locator, MountNamespaceLimits, Operation};
+use filesystem::{CaptureCheckpoint, Locator, MountNamespaceLimits, Operation};
 
 const PRODUCTION_TIMEOUT: Duration = Duration::from_secs(30);
 const PRODUCTION_MAX_WORK: usize = 16 * 1024 * 1024;
@@ -91,6 +94,11 @@ impl PreparedMountNamespaceAnchor {
     /// environment override, path discovery, or fallback.
     pub(crate) fn prepare() -> io::Result<Self> {
         let deadline = deadline_after(PRODUCTION_TIMEOUT)?;
+        Self::prepare_until(deadline)
+    }
+
+    /// Prepare without replacing the caller-owned absolute deadline.
+    pub(crate) fn prepare_until(deadline: Instant) -> io::Result<Self> {
         let mut operation = Operation::production(PRODUCTION_LIMITS, deadline);
         Self::prepare_from_locator(Locator::production(), &mut operation)
     }
@@ -99,6 +107,8 @@ impl PreparedMountNamespaceAnchor {
         let capture = capture_twice(&locator, operation)?;
         locator.require_terminal_names(capture.snapshot(), operation)?;
         capture.require_retained(operation)?;
+        operation.emit(CaptureCheckpoint::OperationComplete)?;
+        operation.checkpoint()?;
         Ok(Self {
             locator,
             capture,
@@ -113,6 +123,11 @@ impl PreparedMountNamespaceAnchor {
     /// still become stale; the borrow is not an ongoing-currentness guarantee.
     pub(crate) fn revalidate(&self) -> io::Result<RevalidatedMountNamespaceAnchor<'_>> {
         let deadline = deadline_after(PRODUCTION_TIMEOUT)?;
+        self.revalidate_until(deadline)
+    }
+
+    /// Revalidate without replacing the caller-owned absolute deadline.
+    pub(crate) fn revalidate_until(&self, deadline: Instant) -> io::Result<RevalidatedMountNamespaceAnchor<'_>> {
         #[cfg(test)]
         let mut operation = if self.locator.is_fixture() {
             Operation::fixture_without_hook(PRODUCTION_LIMITS, deadline)?
@@ -134,6 +149,8 @@ impl PreparedMountNamespaceAnchor {
         self.locator.require_terminal_names(current.snapshot(), operation)?;
         self.capture.require_retained(operation)?;
         current.require_retained(operation)?;
+        operation.emit(CaptureCheckpoint::OperationComplete)?;
+        operation.checkpoint()?;
         Ok(RevalidatedMountNamespaceAnchor {
             _prepared: self,
             current,
@@ -148,6 +165,18 @@ impl PreparedMountNamespaceAnchor {
         hook: &mut impl FnMut(FixtureMountNamespaceCheckpoint) -> io::Result<()>,
     ) -> io::Result<RevalidatedMountNamespaceAnchor<'_>> {
         let mut operation = Operation::fixture(limits.into(), deadline, hook)?;
+        self.revalidate_with_operation(&mut operation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn revalidate_with_clock(
+        &self,
+        limits: FixtureMountNamespaceLimits,
+        deadline: Instant,
+        hook: &mut impl FnMut(FixtureMountNamespaceCheckpoint) -> io::Result<()>,
+        clock: &mut impl FnMut() -> Instant,
+    ) -> io::Result<RevalidatedMountNamespaceAnchor<'_>> {
+        let mut operation = Operation::fixture_with_clock(limits.into(), deadline, hook, clock)?;
         self.revalidate_with_operation(&mut operation)
     }
 }
@@ -291,6 +320,7 @@ pub(crate) enum FixtureMountNamespaceCheckpoint {
     AttachmentTerminalParent,
     AttachmentTerminalName,
     AttachmentBeforeClosingAnchor,
+    AttachmentComplete,
     MountInfoSnapshotBeforeExactThread,
     MountInfoSnapshotThreadOpened,
     MountInfoSnapshotNamespacePinned,
@@ -303,6 +333,7 @@ pub(crate) enum FixtureMountNamespaceCheckpoint {
     MountInfoSnapshotNamespaceRechecked,
     MountInfoSnapshotBeforeClosingAnchor,
     MountInfoSnapshotComplete,
+    MountContextComplete,
 }
 
 /// Test-only admission of an ordinary, named synthetic task tree.
@@ -343,6 +374,18 @@ impl FixtureMountNamespaceTree {
         hook: &mut impl FnMut(FixtureMountNamespaceCheckpoint) -> io::Result<()>,
     ) -> io::Result<PreparedMountNamespaceAnchor> {
         let mut operation = Operation::fixture(limits.into(), deadline, hook)?;
+        let locator = self.locator.reopen_owned(&mut operation)?;
+        PreparedMountNamespaceAnchor::prepare_from_locator(locator, &mut operation)
+    }
+
+    pub(crate) fn prepare_with_clock(
+        &self,
+        limits: FixtureMountNamespaceLimits,
+        deadline: Instant,
+        hook: &mut impl FnMut(FixtureMountNamespaceCheckpoint) -> io::Result<()>,
+        clock: &mut impl FnMut() -> Instant,
+    ) -> io::Result<PreparedMountNamespaceAnchor> {
+        let mut operation = Operation::fixture_with_clock(limits.into(), deadline, hook, clock)?;
         let locator = self.locator.reopen_owned(&mut operation)?;
         PreparedMountNamespaceAnchor::prepare_from_locator(locator, &mut operation)
     }
