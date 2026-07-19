@@ -1,13 +1,15 @@
 use std::{io, time::Instant};
 
 use super::{
-    SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber, SysfsPartitionUuid, SysfsUevent, invalid_data,
+    SysfsBlockDeviceName, SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber, SysfsPartitionUuid, SysfsUevent,
+    invalid_data,
     numeric::{
         canonical_positive_u32, canonical_positive_u32_until, canonical_positive_u64, canonical_positive_u64_until,
         canonical_u32, canonical_u32_until,
     },
-    parse_sysfs_dev, parse_sysfs_dev_until, parse_sysfs_partition_number, parse_sysfs_partition_number_until,
-    parse_sysfs_uevent, parse_sysfs_uevent_until, require_deadline,
+    parse_sysfs_block_device_name, parse_sysfs_block_device_name_until, parse_sysfs_dev, parse_sysfs_dev_until,
+    parse_sysfs_partition_number, parse_sysfs_partition_number_until, parse_sysfs_uevent, parse_sysfs_uevent_until,
+    require_deadline,
     uuid::{canonical_partition_uuid, canonical_partition_uuid_until},
 };
 
@@ -17,6 +19,7 @@ pub(crate) struct SysfsPartitionIdentity {
     partition_number: SysfsPartitionNumber,
     partition_uuid: SysfsPartitionUuid,
     disk_sequence: Option<SysfsDiskSequence>,
+    device_name: SysfsBlockDeviceName,
     uevent: SysfsUevent,
 }
 
@@ -37,6 +40,10 @@ impl SysfsPartitionIdentity {
         self.disk_sequence
     }
 
+    pub(crate) const fn device_name(&self) -> &SysfsBlockDeviceName {
+        &self.device_name
+    }
+
     pub(crate) const fn uevent(&self) -> &SysfsUevent {
         &self.uevent
     }
@@ -46,6 +53,7 @@ impl SysfsPartitionIdentity {
 pub(crate) struct SysfsDiskIdentity {
     device: SysfsDeviceNumber,
     disk_sequence: Option<SysfsDiskSequence>,
+    device_name: SysfsBlockDeviceName,
     uevent: SysfsUevent,
 }
 
@@ -56,6 +64,10 @@ impl SysfsDiskIdentity {
 
     pub(crate) const fn disk_sequence(&self) -> Option<SysfsDiskSequence> {
         self.disk_sequence
+    }
+
+    pub(crate) const fn device_name(&self) -> &SysfsBlockDeviceName {
+        &self.device_name
     }
 
     pub(crate) const fn uevent(&self) -> &SysfsUevent {
@@ -109,12 +121,14 @@ fn parse_sysfs_partition_identity_with_deadline(
 
     let partition_uuid = partition_uuid(required(&uevent, b"PARTUUID", deadline)?, deadline)?;
     let disk_sequence = optional_disk_sequence(&uevent, deadline)?;
+    let device_name = device_name(required(&uevent, b"DEVNAME", deadline)?, deadline)?;
     require_deadline(deadline)?;
     Ok(SysfsPartitionIdentity {
         device,
         partition_number,
         partition_uuid,
         disk_sequence,
+        device_name,
         uevent,
     })
 }
@@ -157,10 +171,12 @@ fn parse_sysfs_disk_identity_with_deadline(
     }
 
     let disk_sequence = optional_disk_sequence(&uevent, deadline)?;
+    let device_name = device_name(required(&uevent, b"DEVNAME", deadline)?, deadline)?;
     require_deadline(deadline)?;
     Ok(SysfsDiskIdentity {
         device,
         disk_sequence,
+        device_name,
         uevent,
     })
 }
@@ -299,5 +315,12 @@ fn partition_uuid(bytes: &[u8], deadline: Option<Instant>) -> io::Result<SysfsPa
     match deadline {
         Some(deadline) => canonical_partition_uuid_until(bytes, deadline),
         None => canonical_partition_uuid(bytes),
+    }
+}
+
+fn device_name(bytes: &[u8], deadline: Option<Instant>) -> io::Result<SysfsBlockDeviceName> {
+    match deadline {
+        Some(deadline) => parse_sysfs_block_device_name_until(bytes, deadline),
+        None => parse_sysfs_block_device_name(bytes),
     }
 }

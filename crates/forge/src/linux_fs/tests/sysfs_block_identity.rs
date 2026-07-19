@@ -4,8 +4,9 @@ use std::{
 };
 
 use super::super::sysfs_block::{
-    parse_sysfs_disk_identity, parse_sysfs_disk_identity_until, parse_sysfs_partition_identity,
-    parse_sysfs_partition_identity_until, require_matching_disk_sequence, require_matching_disk_sequence_until,
+    parse_sysfs_block_device_name, parse_sysfs_block_device_name_until, parse_sysfs_disk_identity,
+    parse_sysfs_disk_identity_until, parse_sysfs_partition_identity, parse_sysfs_partition_identity_until,
+    require_matching_disk_sequence, require_matching_disk_sequence_until,
 };
 
 const PARTUUID: &str = "5e85a94f-b115-41c5-9d72-9d23958b5edc";
@@ -48,6 +49,7 @@ fn partition_identity_cross_checks_all_required_attributes_and_retains_event() {
     assert_eq!(identity.partition_uuid().as_str(), PARTUUID);
     assert_eq!(identity.partition_uuid().as_bytes(), PARTUUID.as_bytes());
     assert_eq!(identity.disk_sequence().unwrap().get(), 9);
+    assert_eq!(identity.device_name().as_bytes(), b"nvme1n1p1");
     assert_eq!(identity.uevent().value(b"FUTURE"), Some(b"retained=exactly".as_slice()));
 }
 
@@ -91,6 +93,7 @@ fn disk_identity_requires_disk_type_and_matching_device_number() {
     let identity = parse_sysfs_disk_identity(b"259:0\n", &disk_event("259", "0", Some("9"))).unwrap();
     assert_eq!((identity.device().major(), identity.device().minor()), (259, 0));
     assert_eq!(identity.disk_sequence().unwrap().get(), 9);
+    assert_eq!(identity.device_name().as_bytes(), b"nvme1n1");
     assert_eq!(identity.uevent().value(b"DEVTYPE"), Some(b"disk".as_slice()));
 
     invalid_data(parse_sysfs_disk_identity(
@@ -104,6 +107,52 @@ fn disk_identity_requires_disk_type_and_matching_device_number() {
 
     let partition_field_on_disk = b"MAJOR=259\nMINOR=0\nDEVTYPE=disk\nPARTN=1\n";
     invalid_data(parse_sysfs_disk_identity(b"259:0\n", partition_field_on_disk));
+}
+
+#[test]
+fn device_name_retains_opaque_bounded_relative_components() {
+    let name = parse_sysfs_block_device_name(b"mapper/opaque-\xff").unwrap();
+    assert_eq!(name.as_bytes(), b"mapper/opaque-\xff");
+
+    let live = Instant::now() + Duration::from_secs(1);
+    assert_eq!(
+        parse_sysfs_block_device_name_until(b"nvme1n1p1", live)
+            .unwrap()
+            .as_bytes(),
+        b"nvme1n1p1"
+    );
+}
+
+#[test]
+fn device_name_rejects_missing_absolute_ambiguous_and_overbound_forms() {
+    for bytes in [
+        b"".as_slice(),
+        b"/nvme1n1".as_slice(),
+        b"nvme1n1/".as_slice(),
+        b"nvme1n1//partition".as_slice(),
+        b".".as_slice(),
+        b"..".as_slice(),
+        b"mapper/./device".as_slice(),
+        b"mapper/../device".as_slice(),
+        b"nvme\0device".as_slice(),
+    ] {
+        invalid_data(parse_sysfs_block_device_name(bytes));
+    }
+
+    let long_component = vec![b'x'; 256];
+    invalid_data(parse_sysfs_block_device_name(&long_component));
+    let too_many_components = std::iter::repeat("x").take(129).collect::<Vec<_>>().join("/");
+    invalid_data(parse_sysfs_block_device_name(too_many_components.as_bytes()));
+    let missing_name = b"MAJOR=259\nMINOR=0\nDEVTYPE=disk\n";
+    invalid_data(parse_sysfs_disk_identity(b"259:0\n", missing_name));
+
+    let expired = Instant::now() - Duration::from_millis(1);
+    assert_eq!(
+        parse_sysfs_block_device_name_until(b"nvme1n1", expired)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
 }
 
 #[test]

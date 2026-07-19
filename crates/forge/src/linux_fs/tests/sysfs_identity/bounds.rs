@@ -10,7 +10,8 @@ use super::super::super::{
     sysfs_identity::{FixtureCheckpoint, FixtureSysfsIdentityLimits, FixtureSysfsTree, PreparedSysfsPartitionIdentity},
 };
 use super::support::{
-    DISK_SEQUENCE, FixtureEntry, PARTITION_MAJOR, PARTITION_MINOR, PARTITION_NUMBER, PARTITION_UUID, SyntheticSysfs,
+    DISK_SEQUENCE, FixtureEntry, PARTITION_MAJOR, PARTITION_MINOR, PARTITION_NAME, PARTITION_NUMBER, PARTITION_UUID,
+    SyntheticSysfs,
 };
 
 #[derive(Clone, Copy)]
@@ -73,7 +74,7 @@ fn minimum_accepting(upper: usize, mut attempt: impl FnMut(usize) -> io::Result<
 
 fn partition_event(partition_number: u32) -> Vec<u8> {
     format!(
-        "MAJOR={PARTITION_MAJOR}\nMINOR={PARTITION_MINOR}\nDEVTYPE=partition\nPARTN={partition_number}\nPARTUUID={PARTITION_UUID}\nDISKSEQ={DISK_SEQUENCE}\n"
+        "MAJOR={PARTITION_MAJOR}\nMINOR={PARTITION_MINOR}\nDEVNAME={PARTITION_NAME}\nDEVTYPE=partition\nPARTN={partition_number}\nPARTUUID={PARTITION_UUID}\nDISKSEQ={DISK_SEQUENCE}\n"
     )
     .into_bytes()
 }
