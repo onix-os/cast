@@ -1,9 +1,9 @@
 use gluon_config::{Evaluator, Source, SourceRoot};
 use stone_recipe::build_policy::{
     AnalyzerKind, BUILD_POLICY_ABI_VERSION, BuildPolicyConversionError, BuildPolicySpec, BuildToolSpec, ContextValue,
-    EnvironmentBindingSpec, EnvironmentCondition, SandboxCredentialPolicySpec, SandboxDevPolicySpec,
-    SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec, TextSpec, evaluate_gluon, evaluate_gluon_with,
-    evaluate_gluon_with_inputs,
+    EnvironmentBindingSpec, EnvironmentCondition, GLUON_BUILD_POLICY_ABI, SandboxCredentialPolicySpec,
+    SandboxDevPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec, TextSpec, evaluate_gluon,
+    evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
 fn repository_policy() -> (Evaluator, Source) {
@@ -107,6 +107,16 @@ fn repository_policy_relative_modules_require_an_explicit_source_root() {
 #[test]
 fn build_policy_v5_is_a_hard_abi_boundary_and_v4_is_retired() {
     assert_eq!(BUILD_POLICY_ABI_VERSION, 5);
+    let advertised_marker = format!("abi_version = {BUILD_POLICY_ABI_VERSION},");
+    assert_eq!(
+        GLUON_BUILD_POLICY_ABI
+            .lines()
+            .filter(|line| line.trim_start().starts_with("abi_version ="))
+            .map(str::trim)
+            .collect::<Vec<_>>(),
+        [advertised_marker.as_str()],
+        "cast.build_policy.v5 must advertise exactly the Rust ABI version",
+    );
     for retired in [
         "cast.build_policy.v4",
         "boulder.build_policy.v3",

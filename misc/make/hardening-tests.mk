@@ -452,6 +452,7 @@ stone-recipe-build-policy-contract-test:
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^[^:][^:]*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$count" = 32; \
+	timeout 10s grep -Fqx 'build_policy_v5_is_a_hard_abi_boundary_and_v4_is_retired: test' <<<"$$listed"; \
 	timeout 900s $(CARGO) test -p stone_recipe --test build_policy -- --test-threads=1
 
 stone-recipe-build-policy-patch-test:

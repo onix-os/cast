@@ -497,7 +497,7 @@ let empty_policy_patch: BuildPolicyPatchSpec = {
 }
 
 {
-    abi_version = 4,
+    abi_version = 5,
     policy,
     policy_patch,
     text = {
