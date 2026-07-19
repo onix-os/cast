@@ -31,6 +31,7 @@ fn execution_capability_classifier_accepts_only_known_host_admission_denials() {
         "normalize payload real, effective, and saved-set GIDs",
         "normalize payload real, effective, and saved-set UIDs",
         "clone descriptor-backed root mount for anchored root /tmp/root",
+        "clone descriptor-backed bind mount for anchored source /tmp/source",
         "attach descriptor-backed root mount for anchored root /tmp/root",
         "mount /",
         "pivot_root",
@@ -151,5 +152,3 @@ fn minimal_dev_accepts_only_exact_linux_character_device_identities() {
         ));
     }
 }
-
-
