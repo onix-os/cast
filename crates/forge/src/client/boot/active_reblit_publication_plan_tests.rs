@@ -11,6 +11,7 @@ use crate::{
         active_reblit_mounted_boot_topology::{
             ActiveReblitMountedBootTopology, ActiveReblitMountedBootTopologyObservation,
             MountedBootDestinationIdentity, MountedBootTargetObservation, ObservationPhase,
+            validated_boot_filesystem_evidence_fixture,
         },
     },
     linux_fs::{
@@ -49,6 +50,7 @@ fn topology_target(
             mount_point_hint: selector,
         },
         MountedBootDestinationIdentity::from_stat_device_and_inode(raw_device, inode),
+        validated_boot_filesystem_evidence_fixture(raw_device, inode),
         mount_id,
         validated_boot_mount_policy_fixture(),
         identity.device(),

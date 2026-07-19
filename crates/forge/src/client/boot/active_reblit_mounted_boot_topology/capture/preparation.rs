@@ -23,14 +23,14 @@ use super::super::{ActiveReblitMountedBootTopology, BootTargetRole, ObservationP
 use super::{
     error::{ActiveReblitMountedBootTopologyCaptureError, ObservationBoundary},
     model::{
-        MountInfoSource, PreparedActiveReblitMountedBootTopology, PreparedMountedBootTarget,
-        PreparedMountedBootTargets, RevalidatedActiveReblitMountedBootTopology,
+        BootFilesystemEvidenceSource, MountInfoSource, PreparedActiveReblitMountedBootTopology,
+        PreparedMountedBootTarget, PreparedMountedBootTargets, RevalidatedActiveReblitMountedBootTopology,
     },
     observation::{capture_observation_until, require_deadline},
 };
 
 #[cfg(test)]
-use super::model::FixtureMountInfoFeed;
+use super::model::{FixtureBootFilesystemEvidenceFeeds, FixtureMountInfoFeed};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -68,6 +68,7 @@ impl PreparedActiveReblitMountedBootTopology {
                 source,
             }
         })?;
+        let mut prepare_boot_filesystem = |_role| Ok(BootFilesystemEvidenceSource::Production);
         let mut prepare_sysfs = |device, _role| PreparedSysfsPartitionIdentity::prepare_until(device, deadline);
         prepare_from_capabilities_until(
             installation,
@@ -76,6 +77,7 @@ impl PreparedActiveReblitMountedBootTopology {
             MountInfoSource::Production,
             deadline,
             &mut now,
+            &mut prepare_boot_filesystem,
             &mut prepare_sysfs,
         )
     }
@@ -150,6 +152,7 @@ impl PreparedActiveReblitMountedBootTopology {
         anchor: PreparedMountNamespaceAnchor,
         sysfs_tree: &FixtureSysfsTree,
         mountinfo: FixtureMountInfoFeed,
+        boot_filesystems: FixtureBootFilesystemEvidenceFeeds,
         deadline: Instant,
     ) -> CaptureResult<Self> {
         let mut now = Instant::now;
@@ -171,6 +174,13 @@ impl PreparedActiveReblitMountedBootTopology {
             let mut hook = |_| Ok(());
             sysfs_tree.prepare_with(device, FixtureSysfsIdentityLimits::default(), deadline, &mut hook)
         };
+        let mut prepare_boot_filesystem = |role| {
+            boot_filesystems
+                .source_for(role)
+                .ok_or(ActiveReblitMountedBootTopologyCaptureError::TopologyFormChanged {
+                    phase: ObservationPhase::Bootstrap,
+                })
+        };
         prepare_from_capabilities_until(
             installation,
             intent,
@@ -178,6 +188,7 @@ impl PreparedActiveReblitMountedBootTopology {
             MountInfoSource::Fixture(mountinfo),
             deadline,
             &mut now,
+            &mut prepare_boot_filesystem,
             &mut prepare_sysfs,
         )
     }
@@ -191,9 +202,17 @@ fn prepare_from_capabilities_until(
     mountinfo_source: MountInfoSource,
     deadline: Instant,
     now: &mut impl FnMut() -> Instant,
+    prepare_boot_filesystem: &mut impl FnMut(BootTargetRole) -> CaptureResult<BootFilesystemEvidenceSource>,
     prepare_sysfs: &mut impl FnMut(SysfsDeviceNumber, BootTargetRole) -> io::Result<PreparedSysfsPartitionIdentity>,
 ) -> CaptureResult<PreparedActiveReblitMountedBootTopology> {
-    let targets = prepare_targets_until(installation, &intent, &anchor, deadline, prepare_sysfs)?;
+    let targets = prepare_targets_until(
+        installation,
+        &intent,
+        &anchor,
+        deadline,
+        prepare_boot_filesystem,
+        prepare_sysfs,
+    )?;
     let facts = capture_observation_until(
         installation,
         &intent,
@@ -230,6 +249,7 @@ fn prepare_targets_until(
     intent: &PreparedActiveReblitBootTopologyIntent,
     anchor: &PreparedMountNamespaceAnchor,
     deadline: Instant,
+    prepare_boot_filesystem: &mut impl FnMut(BootTargetRole) -> CaptureResult<BootFilesystemEvidenceSource>,
     prepare_sysfs: &mut impl FnMut(SysfsDeviceNumber, BootTargetRole) -> io::Result<PreparedSysfsPartitionIdentity>,
 ) -> CaptureResult<PreparedMountedBootTargets> {
     let intent_view = intent.revalidate_until(installation, deadline).map_err(|source| {
@@ -254,6 +274,7 @@ fn prepare_targets_until(
                 esp.mount_point_hint,
                 BootTargetRole::Esp,
                 deadline,
+                prepare_boot_filesystem,
                 prepare_sysfs,
             )?,
         }),
@@ -265,6 +286,7 @@ fn prepare_targets_until(
                     esp.mount_point_hint,
                     BootTargetRole::Esp,
                     deadline,
+                    prepare_boot_filesystem,
                     prepare_sysfs,
                 )?,
                 xbootldr: prepare_target_until(
@@ -273,6 +295,7 @@ fn prepare_targets_until(
                     xbootldr.mount_point_hint,
                     BootTargetRole::Xbootldr,
                     deadline,
+                    prepare_boot_filesystem,
                     prepare_sysfs,
                 )?,
             })
@@ -286,8 +309,10 @@ fn prepare_target_until(
     selector: &str,
     role: BootTargetRole,
     deadline: Instant,
+    prepare_boot_filesystem: &mut impl FnMut(BootTargetRole) -> CaptureResult<BootFilesystemEvidenceSource>,
     prepare_sysfs: &mut impl FnMut(SysfsDeviceNumber, BootTargetRole) -> io::Result<PreparedSysfsPartitionIdentity>,
 ) -> CaptureResult<PreparedMountedBootTarget> {
+    let boot_filesystem_source = prepare_boot_filesystem(role)?;
     let attachment = anchor_view
         .prepare_task_rooted_attachment_until(selector, deadline)
         .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::Attachment {
@@ -311,7 +336,11 @@ fn prepare_target_until(
         boundary: ObservationBoundary::Preparation,
         source,
     })?;
-    Ok(PreparedMountedBootTarget { attachment, sysfs })
+    Ok(PreparedMountedBootTarget {
+        attachment,
+        sysfs,
+        boot_filesystem_source,
+    })
 }
 
 fn deadline_after(timeout: Duration) -> CaptureResult<Instant> {

@@ -1,11 +1,21 @@
 use std::num::NonZeroU64;
 
+#[cfg(test)]
+use std::time::{Duration, Instant};
+
 use crate::{
     client::active_reblit_boot_topology_intent::BoundActiveReblitBootPartitionSelector,
     linux_fs::{
+        descriptor_boot_filesystem::ValidatedBootFilesystemDescriptorEvidence,
         mountinfo_boot_policy::ValidatedBootMountInfoPolicy,
         sysfs_block::{SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber, SysfsPartitionUuid},
     },
+};
+
+#[cfg(test)]
+use crate::linux_fs::descriptor_boot_filesystem::{
+    BootFilesystemObservationPhase, FIXTURE_MSDOS_SUPER_MAGIC, FixtureBootFilesystemIdentity,
+    FixtureBootFilesystemLimits, FixtureBootFilesystemObservations, validate_fixture_boot_filesystem_authentication,
 };
 
 /// Declarative role assigned to one mounted target observation.
@@ -41,6 +51,38 @@ impl MountedBootDestinationIdentity {
     }
 }
 
+#[cfg(test)]
+pub(in crate::client) fn validated_boot_filesystem_evidence_fixture(
+    device: u64,
+    inode: u64,
+) -> ValidatedBootFilesystemDescriptorEvidence {
+    let identity = FixtureBootFilesystemIdentity {
+        device,
+        inode,
+        kind: nix::libc::S_IFDIR,
+    };
+    let observations = FixtureBootFilesystemObservations {
+        opening_identity: identity,
+        opening_magic: FIXTURE_MSDOS_SUPER_MAGIC,
+        closing_magic: FIXTURE_MSDOS_SUPER_MAGIC,
+        closing_identity: identity,
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut clock = Instant::now;
+    let mut hook = |_phase: BootFilesystemObservationPhase| Ok(());
+    validate_fixture_boot_filesystem_authentication(
+        observations,
+        device,
+        inode,
+        FixtureBootFilesystemLimits::default(),
+        deadline,
+        &mut clock,
+        &mut hook,
+    )
+    .expect("synthetic MSDOS-family evidence must validate")
+    .0
+}
+
 /// Borrowed input facts for one target in one complete observation pass.
 ///
 /// The declarative selector has already crossed the restricted Gluon intent
@@ -51,6 +93,7 @@ impl MountedBootDestinationIdentity {
 pub(in crate::client) struct MountedBootTargetObservation<'a> {
     pub(super) intent: BoundActiveReblitBootPartitionSelector<'a>,
     pub(super) destination: MountedBootDestinationIdentity,
+    pub(super) boot_filesystem: ValidatedBootFilesystemDescriptorEvidence,
     pub(super) mount_id: u64,
     pub(super) mount_policy: ValidatedBootMountInfoPolicy,
     pub(super) device: SysfsDeviceNumber,
@@ -64,6 +107,7 @@ impl<'a> MountedBootTargetObservation<'a> {
     pub(in crate::client) const fn new(
         intent: BoundActiveReblitBootPartitionSelector<'a>,
         destination: MountedBootDestinationIdentity,
+        boot_filesystem: ValidatedBootFilesystemDescriptorEvidence,
         mount_id: u64,
         mount_policy: ValidatedBootMountInfoPolicy,
         device: SysfsDeviceNumber,
@@ -74,6 +118,7 @@ impl<'a> MountedBootTargetObservation<'a> {
         Self {
             intent,
             destination,
+            boot_filesystem,
             mount_id,
             mount_policy,
             device,
@@ -103,6 +148,7 @@ pub(in crate::client) struct ActiveReblitMountedBootTargetFacts {
     pub(super) selector: Box<str>,
     pub(super) partuuid: Box<str>,
     pub(super) destination: MountedBootDestinationIdentity,
+    pub(super) boot_filesystem: ValidatedBootFilesystemDescriptorEvidence,
     pub(super) mount_id: NonZeroU64,
     pub(super) mount_policy: ValidatedBootMountInfoPolicy,
     pub(super) device: SysfsDeviceNumber,
@@ -117,6 +163,7 @@ impl ActiveReblitMountedBootTargetFacts {
             selector: &self.selector,
             partuuid: &self.partuuid,
             destination: self.destination,
+            boot_filesystem: self.boot_filesystem,
             mount_id: self.mount_id.get(),
             mount_policy: self.mount_policy,
             device: self.device,
@@ -158,6 +205,7 @@ pub(in crate::client) struct BoundActiveReblitMountedBootTarget<'a> {
     pub(in crate::client) selector: &'a str,
     pub(in crate::client) partuuid: &'a str,
     pub(in crate::client) destination: MountedBootDestinationIdentity,
+    pub(in crate::client) boot_filesystem: ValidatedBootFilesystemDescriptorEvidence,
     pub(in crate::client) mount_id: u64,
     pub(in crate::client) mount_policy: ValidatedBootMountInfoPolicy,
     pub(in crate::client) device: SysfsDeviceNumber,

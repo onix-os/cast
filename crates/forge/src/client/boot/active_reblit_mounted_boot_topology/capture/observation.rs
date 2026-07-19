@@ -7,6 +7,7 @@ use crate::{
         PreparedActiveReblitBootTopologyIntent,
     },
     linux_fs::{
+        descriptor_boot_filesystem::ValidatedBootFilesystemDescriptorEvidence,
         mount_namespace::{PreparedMountNamespaceAnchor, RevalidatedTaskRootedAttachment},
         mountinfo_attachment::select_mountinfo_attachment_until,
         mountinfo_boot_policy::{ValidatedBootMountInfoPolicy, validate_selected_boot_mount_policy_until},
@@ -20,7 +21,7 @@ use super::super::{
 };
 use super::{
     error::{ActiveReblitMountedBootTopologyCaptureError, ObservationBoundary},
-    model::{MountInfoSource, PreparedMountedBootTarget, PreparedMountedBootTargets},
+    model::{BootFilesystemEvidenceSource, MountInfoSource, PreparedMountedBootTarget, PreparedMountedBootTargets},
 };
 
 type CaptureResult<T> = Result<T, ActiveReblitMountedBootTopologyCaptureError>;
@@ -108,6 +109,7 @@ fn capture_alias<T>(
     consume: impl FnOnce(ActiveReblitMountedBootTopologyObservation<'_>) -> CaptureResult<T>,
 ) -> CaptureResult<T> {
     let esp_attachment = revalidate_attachment(phase, BootTargetRole::Esp, esp, anchor, deadline)?;
+    let esp_boot_filesystem = authenticate_boot_filesystem(phase, BootTargetRole::Esp, esp, &esp_attachment, deadline)?;
     let snapshot = mountinfo_source
         .read_until(anchor, deadline)
         .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::MountInfo { phase, source })?;
@@ -126,7 +128,13 @@ fn capture_alias<T>(
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
 
     let consumed = consume(ActiveReblitMountedBootTopologyObservation::BootAliasesEsp {
-        esp: target_observation(selector, &esp_attachment, &esp_sysfs, esp_mount_policy),
+        esp: target_observation(
+            selector,
+            &esp_attachment,
+            esp_boot_filesystem,
+            &esp_sysfs,
+            esp_mount_policy,
+        ),
     });
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
     consumed
@@ -148,7 +156,15 @@ fn capture_distinct<T>(
     consume: impl FnOnce(ActiveReblitMountedBootTopologyObservation<'_>) -> CaptureResult<T>,
 ) -> CaptureResult<T> {
     let esp_attachment = revalidate_attachment(phase, BootTargetRole::Esp, esp, anchor, deadline)?;
+    let esp_boot_filesystem = authenticate_boot_filesystem(phase, BootTargetRole::Esp, esp, &esp_attachment, deadline)?;
     let xbootldr_attachment = revalidate_attachment(phase, BootTargetRole::Xbootldr, xbootldr, anchor, deadline)?;
+    let xbootldr_boot_filesystem = authenticate_boot_filesystem(
+        phase,
+        BootTargetRole::Xbootldr,
+        xbootldr,
+        &xbootldr_attachment,
+        deadline,
+    )?;
     let snapshot = mountinfo_source
         .read_until(anchor, deadline)
         .map_err(|source| ActiveReblitMountedBootTopologyCaptureError::MountInfo { phase, source })?;
@@ -178,10 +194,17 @@ fn capture_distinct<T>(
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
 
     let consumed = consume(ActiveReblitMountedBootTopologyObservation::DistinctXbootldr {
-        esp: target_observation(esp_selector, &esp_attachment, &esp_sysfs, esp_mount_policy),
+        esp: target_observation(
+            esp_selector,
+            &esp_attachment,
+            esp_boot_filesystem,
+            &esp_sysfs,
+            esp_mount_policy,
+        ),
         xbootldr: target_observation(
             xbootldr_selector,
             &xbootldr_attachment,
+            xbootldr_boot_filesystem,
             &xbootldr_sysfs,
             xbootldr_mount_policy,
         ),
@@ -189,6 +212,25 @@ fn capture_distinct<T>(
     });
     require_deadline(phase, ObservationBoundary::Terminal, deadline, now)?;
     consumed
+}
+
+fn authenticate_boot_filesystem(
+    phase: ObservationPhase,
+    role: BootTargetRole,
+    target: &PreparedMountedBootTarget,
+    attachment: &RevalidatedTaskRootedAttachment<'_>,
+    deadline: Instant,
+) -> CaptureResult<ValidatedBootFilesystemDescriptorEvidence> {
+    let result = match &target.boot_filesystem_source {
+        BootFilesystemEvidenceSource::Production => attachment.authenticate_boot_filesystem_until(deadline),
+        #[cfg(test)]
+        BootFilesystemEvidenceSource::Fixture(feed) => feed.authenticate_until(
+            attachment.destination_device(),
+            attachment.destination_inode(),
+            deadline,
+        ),
+    };
+    result.map_err(|source| ActiveReblitMountedBootTopologyCaptureError::BootFilesystem { phase, role, source })
 }
 
 fn revalidate_attachment<'a>(
@@ -301,6 +343,7 @@ pub(in crate::client) fn validate_fixture_attachment_selector(
 fn target_observation<'a>(
     selector: BoundActiveReblitBootPartitionSelector<'a>,
     attachment: &RevalidatedTaskRootedAttachment<'_>,
+    boot_filesystem: ValidatedBootFilesystemDescriptorEvidence,
     sysfs: &RevalidatedSysfsPartitionIdentity<'_>,
     mount_policy: ValidatedBootMountInfoPolicy,
 ) -> MountedBootTargetObservation<'a> {
@@ -310,6 +353,7 @@ fn target_observation<'a>(
             attachment.destination_device(),
             attachment.destination_inode(),
         ),
+        boot_filesystem,
         attachment.destination_mount_id(),
         mount_policy,
         sysfs.device(),

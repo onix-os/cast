@@ -21,6 +21,11 @@ pub(in crate::client) enum ActiveReblitMountedBootTopologyError {
         phase: ObservationPhase,
         role: BootTargetRole,
     },
+    #[error("{phase:?} {role:?} descriptor filesystem evidence disagrees with the destination identity")]
+    BootFilesystemIdentityMismatch {
+        phase: ObservationPhase,
+        role: BootTargetRole,
+    },
     #[error("{phase:?} {role:?} declarative PARTUUID disagrees with authenticated partition identity")]
     PartitionUuidMismatch {
         phase: ObservationPhase,

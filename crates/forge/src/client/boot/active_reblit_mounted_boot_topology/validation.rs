@@ -59,6 +59,7 @@ fn validate_target(
     let mount_id = NonZeroU64::new(observation.mount_id)
         .ok_or(ActiveReblitMountedBootTopologyError::InvalidMountId { phase, role })?;
     require_destination_device(phase, role, observation)?;
+    require_boot_filesystem_identity(phase, role, observation)?;
     if observation.intent.partuuid != observation.partition_uuid.as_str() {
         return Err(ActiveReblitMountedBootTopologyError::PartitionUuidMismatch { phase, role });
     }
@@ -67,6 +68,7 @@ fn validate_target(
         selector: observation.intent.mount_point_hint.into(),
         partuuid: observation.intent.partuuid.into(),
         destination: observation.destination,
+        boot_filesystem: observation.boot_filesystem,
         mount_id,
         mount_policy: observation.mount_policy,
         device: observation.device,
@@ -74,6 +76,20 @@ fn validate_target(
         partition_uuid: observation.partition_uuid,
         disk_sequence: observation.disk_sequence,
     })
+}
+
+fn require_boot_filesystem_identity(
+    phase: ObservationPhase,
+    role: BootTargetRole,
+    observation: MountedBootTargetObservation<'_>,
+) -> Result<(), ActiveReblitMountedBootTopologyError> {
+    if observation.boot_filesystem.destination_device() != observation.destination.raw_device
+        || observation.boot_filesystem.destination_inode() != observation.destination.inode
+    {
+        Err(ActiveReblitMountedBootTopologyError::BootFilesystemIdentityMismatch { phase, role })
+    } else {
+        Ok(())
+    }
 }
 
 fn require_destination_device(

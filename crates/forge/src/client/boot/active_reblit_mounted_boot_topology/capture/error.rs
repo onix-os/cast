@@ -7,7 +7,9 @@ use thiserror::Error;
 
 use super::super::{ActiveReblitMountedBootTopologyError, BootTargetRole, ObservationPhase};
 use crate::client::active_reblit_boot_topology_intent::ActiveReblitBootTopologyIntentError;
-use crate::linux_fs::mountinfo_boot_policy::BootMountInfoPolicyError;
+use crate::linux_fs::{
+    descriptor_boot_filesystem::BootFilesystemAuthenticationError, mountinfo_boot_policy::BootMountInfoPolicyError,
+};
 
 /// Whether a retained domain failed while entering or closing one observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +60,13 @@ pub(in crate::client) enum ActiveReblitMountedBootTopologyCaptureError {
     AttachmentSelectorMismatch {
         phase: ObservationPhase,
         role: BootTargetRole,
+    },
+    #[error("{phase:?} {role:?} retained boot-filesystem authentication failed")]
+    BootFilesystem {
+        phase: ObservationPhase,
+        role: BootTargetRole,
+        #[source]
+        source: BootFilesystemAuthenticationError,
     },
     #[error("{phase:?} authenticated mountinfo snapshot failed")]
     MountInfo {

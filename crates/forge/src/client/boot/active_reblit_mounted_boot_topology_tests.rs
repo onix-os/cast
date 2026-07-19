@@ -5,9 +5,11 @@ use crate::{
             ActiveReblitMountedBootTopology, ActiveReblitMountedBootTopologyError,
             ActiveReblitMountedBootTopologyObservation, BootTargetRole, BoundActiveReblitMountedBootTopology,
             MountedBootDestinationIdentity, MountedBootTargetObservation, ObservationPhase,
+            validated_boot_filesystem_evidence_fixture,
         },
     },
     linux_fs::{
+        descriptor_boot_filesystem::BootFilesystemMagicFamily,
         mountinfo_boot_policy::{BootFilesystemKind, validated_boot_mount_policy_fixture},
         sysfs_block::parse_sysfs_partition_identity,
     },
@@ -52,6 +54,7 @@ fn target(
     MountedBootTargetObservation::new(
         selector(partuuid, mount_point_hint),
         MountedBootDestinationIdentity::from_stat_device_and_inode(raw_device, inode),
+        validated_boot_filesystem_evidence_fixture(raw_device, inode),
         mount_id,
         validated_boot_mount_policy_fixture(),
         identity.device(),
@@ -93,6 +96,18 @@ fn alias_is_structurally_one_target_and_exposes_only_closed_scalar_facts() {
     };
     assert_eq!(bound_esp.selector, ESP_SELECTOR);
     assert_eq!(bound_esp.partuuid, ESP_PARTUUID);
+    assert_eq!(
+        bound_esp.boot_filesystem.destination_device(),
+        bound_esp.destination.raw_device
+    );
+    assert_eq!(
+        bound_esp.boot_filesystem.destination_inode(),
+        bound_esp.destination.inode
+    );
+    assert_eq!(
+        bound_esp.boot_filesystem.magic_family(),
+        BootFilesystemMagicFamily::LinuxMsdos
+    );
     assert_eq!(bound_esp.mount_id, 11);
     assert_eq!(bound_esp.mount_policy.filesystem(), BootFilesystemKind::Vfat);
     assert!(bound_esp.mount_policy.mount_read_write());
@@ -107,6 +122,20 @@ fn alias_is_structurally_one_target_and_exposes_only_closed_scalar_facts() {
     assert_eq!(bound_esp.partition_uuid.as_str(), ESP_PARTUUID);
     assert_eq!(bound_esp.disk_sequence.map(|sequence| sequence.get()), Some(77));
     assert_eq!(bound_esp.destination, esp().destination);
+}
+
+#[test]
+fn target_requires_descriptor_filesystem_evidence_for_the_exact_destination() {
+    let mut observation = esp();
+    observation.boot_filesystem = validated_boot_filesystem_evidence_fixture(observation.destination.raw_device, 999);
+
+    assert_eq!(
+        ActiveReblitMountedBootTopology::from_observation(ObservationPhase::Pass2, alias(observation)),
+        Err(ActiveReblitMountedBootTopologyError::BootFilesystemIdentityMismatch {
+            phase: ObservationPhase::Pass2,
+            role: BootTargetRole::Esp,
+        })
+    );
 }
 
 #[test]

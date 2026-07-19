@@ -11,7 +11,10 @@ use tempfile::TempDir;
 
 use super::super::{
     PreparedActiveReblitMountedBootTopology,
-    capture::{ActiveReblitMountedBootTopologyCaptureError, FixtureMountInfoFeed},
+    capture::{
+        ActiveReblitMountedBootTopologyCaptureError, FixtureBootFilesystemEvidenceFeed,
+        FixtureBootFilesystemEvidenceFeeds, FixtureMountInfoFeed,
+    },
 };
 use crate::{
     Installation,
@@ -24,6 +27,8 @@ use crate::{
 pub(super) const PARTUUID: &str = "5e85a94f-b115-41c5-9d72-9d23958b5edc";
 pub(super) const CHANGED_PARTUUID: &str = "6e85a94f-b115-41c5-9d72-9d23958b5edc";
 pub(super) const MOUNT_POINT: &str = "/firmware";
+pub(super) const XBOOTLDR_PARTUUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+pub(super) const XBOOTLDR_MOUNT_POINT: &str = "/boot";
 pub(super) const DISK_SEQUENCE: u64 = 712_345;
 
 const CONTEXT_NAME: &str = "fixture-mount-context";
@@ -45,6 +50,7 @@ pub(in crate::client) struct AliasFixture {
     partition_uevent: PathBuf,
     outside: PathBuf,
     feed: FixtureMountInfoFeed,
+    boot_filesystem_feed: FixtureBootFilesystemEvidenceFeed,
     destination_device: u64,
     destination_inode: u64,
     device_major: u32,
@@ -68,7 +74,7 @@ impl AliasFixture {
             fs::set_permissions(directory, fs::Permissions::from_mode(0o755))?;
         }
         let source = installation_root.join("etc/cast/boot-topology.glu");
-        write_source(&source, PARTUUID)?;
+        write_alias_source(&source, PARTUUID)?;
 
         let context_parent = temporary.path().join("context-parent");
         let context = context_parent.join(CONTEXT_NAME);
@@ -94,6 +100,8 @@ impl AliasFixture {
         let (sysfs_tree, partition_uevent) = build_sysfs_fixture(&sysfs_parent, device_major, device_minor, PARTUUID)?;
         let mountinfo = mountinfo_record(destination_inode, device_major, device_minor);
         let feed = FixtureMountInfoFeed::new(mountinfo);
+        let boot_filesystem_feed =
+            FixtureBootFilesystemEvidenceFeed::stable_msdos(destination_device, destination_inode);
 
         Ok(Self {
             _temporary: temporary,
@@ -106,6 +114,7 @@ impl AliasFixture {
             partition_uevent,
             outside,
             feed,
+            boot_filesystem_feed,
             destination_device,
             destination_inode,
             device_major,
@@ -128,6 +137,7 @@ impl AliasFixture {
             self.prepared_anchor().expect("fixture anchor preparation must succeed"),
             &self.sysfs_tree,
             self.feed.clone(),
+            FixtureBootFilesystemEvidenceFeeds::aliases_esp(self.boot_filesystem_feed.clone()),
             deadline,
         )
     }
@@ -144,12 +154,20 @@ impl AliasFixture {
         (self.destination_device, self.destination_inode)
     }
 
+    pub(super) fn boot_filesystem_feed(&self) -> FixtureBootFilesystemEvidenceFeed {
+        self.boot_filesystem_feed.clone()
+    }
+
+    pub(super) fn replace_boot_filesystem_evidence(&self, device: u64, inode: u64, magic: nix::libc::c_long) {
+        self.boot_filesystem_feed.replace_stable(device, inode, magic);
+    }
+
     pub(super) fn device(&self) -> (u32, u32) {
         (self.device_major, self.device_minor)
     }
 
     pub(super) fn change_intent_source(&self) -> io::Result<()> {
-        write_source(&self.source, CHANGED_PARTUUID)
+        write_alias_source(&self.source, CHANGED_PARTUUID)
     }
 
     pub(super) fn replace_attachment_identity(&self) -> io::Result<()> {
@@ -218,11 +236,94 @@ impl AliasFixture {
     }
 }
 
-fn write_source(path: &PathBuf, partuuid: &str) -> io::Result<()> {
+/// Bootstrap-only distinct-target fixture.
+///
+/// Both selectors are ordinary directories on the same temporary filesystem,
+/// so a completely successful distinct topology would correctly fail its
+/// different-device invariant. Filesystem-authentication failures happen
+/// earlier and therefore let tests prove independent ESP/XBOOTLDR feed routing
+/// without creating or mounting another filesystem.
+pub(super) struct DistinctBootstrapFixture {
+    base: AliasFixture,
+    xbootldr_feed: FixtureBootFilesystemEvidenceFeed,
+    xbootldr_device: u64,
+    xbootldr_inode: u64,
+}
+
+impl DistinctBootstrapFixture {
+    pub(super) fn stable() -> io::Result<Self> {
+        let base = AliasFixture::stable()?;
+        write_distinct_source(&base.source)?;
+        let xbootldr_attachment = base.context.join("root/boot");
+        fs::create_dir(&xbootldr_attachment)?;
+        let metadata = fs::symlink_metadata(&xbootldr_attachment)?;
+        let xbootldr_device = metadata.dev();
+        let xbootldr_inode = metadata.ino();
+        if xbootldr_device == 0 || xbootldr_inode == 0 || xbootldr_inode == base.destination_inode {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fixture XBOOTLDR lacks a distinct nonzero directory identity",
+            ));
+        }
+        let xbootldr_feed = FixtureBootFilesystemEvidenceFeed::stable_msdos(xbootldr_device, xbootldr_inode);
+        Ok(Self {
+            base,
+            xbootldr_feed,
+            xbootldr_device,
+            xbootldr_inode,
+        })
+    }
+
+    pub(super) fn prepare(
+        &self,
+    ) -> Result<PreparedActiveReblitMountedBootTopology, ActiveReblitMountedBootTopologyCaptureError> {
+        PreparedActiveReblitMountedBootTopology::prepare_fixture_until(
+            &self.base.installation,
+            self.base
+                .prepared_anchor()
+                .expect("fixture anchor preparation must succeed"),
+            &self.base.sysfs_tree,
+            self.base.feed.clone(),
+            FixtureBootFilesystemEvidenceFeeds::distinct(
+                self.base.boot_filesystem_feed.clone(),
+                self.xbootldr_feed.clone(),
+            ),
+            deadline(),
+        )
+    }
+
+    pub(super) fn filesystem_feeds(&self) -> (FixtureBootFilesystemEvidenceFeed, FixtureBootFilesystemEvidenceFeed) {
+        (self.base.boot_filesystem_feed.clone(), self.xbootldr_feed.clone())
+    }
+
+    pub(super) fn xbootldr_identity(&self) -> (u64, u64) {
+        (self.xbootldr_device, self.xbootldr_inode)
+    }
+
+    pub(super) fn replace_xbootldr_evidence(&self, device: u64, inode: u64, magic: nix::libc::c_long) {
+        self.xbootldr_feed.replace_stable(device, inode, magic);
+    }
+
+    pub(super) fn assert_outside_unchanged(&self) {
+        self.base.assert_outside_unchanged();
+    }
+}
+
+fn write_alias_source(path: &PathBuf, partuuid: &str) -> io::Result<()> {
     fs::write(
         path,
         format!(
             "let cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {{ partuuid = \"{partuuid}\", mount_point = \"{MOUNT_POINT}\" }}\n"
+        ),
+    )?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o644))
+}
+
+fn write_distinct_source(path: &PathBuf) -> io::Result<()> {
+    fs::write(
+        path,
+        format!(
+            "let cast = import! cast.boot_topology.v2\ncast.boot_topology.distinct {{ partuuid = \"{PARTUUID}\", mount_point = \"{MOUNT_POINT}\" }} {{ partuuid = \"{XBOOTLDR_PARTUUID}\", mount_point = \"{XBOOTLDR_MOUNT_POINT}\" }}\n"
         ),
     )?;
     fs::set_permissions(path, fs::Permissions::from_mode(0o644))
