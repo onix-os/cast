@@ -16,8 +16,11 @@ use std::{
     },
     path::{Path, PathBuf},
     rc::Rc,
-    time::{Duration, Instant},
+    time::Instant,
 };
+
+#[cfg(test)]
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -50,11 +53,13 @@ pub(crate) const MAX_ACTIVE_REBLIT_ARCHIVED_BOOT_STATE_ROOTS: usize = 4;
 const MAX_STATE_ROOT_WORK: usize = 128;
 const MAX_STATE_ROOT_PATH_BYTES: usize = nix::libc::PATH_MAX as usize - 1;
 const MAX_STATE_ROOT_PATH_COMPONENTS: usize = 128;
+#[cfg(test)]
 const STATE_ROOT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy)]
 struct StateRootPolicy {
     max_work: usize,
+    #[cfg(test)]
     timeout: Duration,
 }
 
@@ -62,6 +67,7 @@ impl StateRootPolicy {
     const fn production() -> Self {
         Self {
             max_work: MAX_STATE_ROOT_WORK,
+            #[cfg(test)]
             timeout: STATE_ROOT_TIMEOUT,
         }
     }
@@ -162,37 +168,87 @@ impl ArchivedBootStateRootExclusion {
 }
 
 impl PreparedActiveReblitBootStateRoots {
+    #[cfg(test)]
     pub(crate) fn prepare(
         installation: &Installation,
         selected_head_usr: &std::fs::File,
         expected_head: state::Id,
         projected_state_ids: &[state::Id],
     ) -> Result<Self, ActiveReblitBootStateRootsError> {
-        Self::prepare_with_policy(
+        let policy = StateRootPolicy::production();
+        let deadline = state_root_deadline(policy.timeout, &installation.root)?;
+        Self::prepare_with_policy_until_and_checkpoint(
+            installation,
+            selected_head_usr,
+            expected_head,
+            projected_state_ids,
+            policy,
+            deadline,
+            || {},
+        )
+    }
+
+    /// Prepare without replacing the caller-owned absolute deadline.
+    pub(crate) fn prepare_until(
+        installation: &Installation,
+        selected_head_usr: &std::fs::File,
+        expected_head: state::Id,
+        projected_state_ids: &[state::Id],
+        deadline: Instant,
+    ) -> Result<Self, ActiveReblitBootStateRootsError> {
+        Self::prepare_with_policy_until_and_checkpoint(
             installation,
             selected_head_usr,
             expected_head,
             projected_state_ids,
             StateRootPolicy::production(),
+            deadline,
+            || {},
         )
     }
 
-    fn prepare_with_policy(
+    fn prepare_with_policy_until_and_checkpoint<F>(
         installation: &Installation,
         selected_head_usr: &std::fs::File,
         expected_head: state::Id,
         projected_state_ids: &[state::Id],
         policy: StateRootPolicy,
-    ) -> Result<Self, ActiveReblitBootStateRootsError> {
+        deadline: Instant,
+        before_terminal_deadline: F,
+    ) -> Result<Self, ActiveReblitBootStateRootsError>
+    where
+        F: FnOnce(),
+    {
+        let budget = StateRootBudget::new_until(policy, deadline, &installation.root)?;
+        Self::prepare_with_budget_and_checkpoint(
+            installation,
+            selected_head_usr,
+            expected_head,
+            projected_state_ids,
+            budget,
+            before_terminal_deadline,
+        )
+    }
+
+    fn prepare_with_budget_and_checkpoint<F>(
+        installation: &Installation,
+        selected_head_usr: &std::fs::File,
+        expected_head: state::Id,
+        projected_state_ids: &[state::Id],
+        mut budget: StateRootBudget,
+        before_terminal_deadline: F,
+    ) -> Result<Self, ActiveReblitBootStateRootsError>
+    where
+        F: FnOnce(),
+    {
         validate_projection(expected_head, projected_state_ids)?;
-        let mut budget = StateRootBudget::new(policy, &installation.root)?;
         let head_path = installation.root.join("usr");
         let roots_path = installation.root_path("");
         validate_diagnostic_path(&head_path)?;
         validate_diagnostic_path(&roots_path)?;
 
         budget.step(&installation.root)?;
-        installation.revalidate_root_directory()?;
+        installation.revalidate_root_directory_until(budget.deadline)?;
         let epoch = capture_runtime_epoch(&installation.root, &mut budget)?;
         let head = retain_head(selected_head_usr, expected_head, &head_path, &mut budget)?;
 
@@ -261,20 +317,49 @@ impl PreparedActiveReblitBootStateRoots {
             exclusions,
         };
         prepared.revalidate_with_budget(installation, &mut budget)?;
+        before_terminal_deadline();
+        budget.require_deadline(&installation.root)?;
         Ok(prepared)
     }
 
+    #[cfg(test)]
     pub(crate) fn revalidate<'authority>(
         &'authority self,
         installation: &'authority Installation,
     ) -> Result<RevalidatedActiveReblitBootStateRoots<'authority>, ActiveReblitBootStateRootsError> {
-        let mut budget = StateRootBudget::new(StateRootPolicy::production(), &installation.root)?;
+        let policy = StateRootPolicy::production();
+        let deadline = state_root_deadline(policy.timeout, &installation.root)?;
+        self.revalidate_until(installation, deadline)
+    }
+
+    /// Revalidate without replacing the caller-owned absolute deadline.
+    pub(crate) fn revalidate_until<'authority>(
+        &'authority self,
+        installation: &'authority Installation,
+        deadline: Instant,
+    ) -> Result<RevalidatedActiveReblitBootStateRoots<'authority>, ActiveReblitBootStateRootsError> {
+        let budget = StateRootBudget::new_until(StateRootPolicy::production(), deadline, &installation.root)?;
+        self.revalidate_with_budget_and_checkpoint(installation, budget, || {})
+    }
+
+    fn revalidate_with_budget_and_checkpoint<'authority, F>(
+        &'authority self,
+        installation: &'authority Installation,
+        mut budget: StateRootBudget,
+        before_terminal_deadline: F,
+    ) -> Result<RevalidatedActiveReblitBootStateRoots<'authority>, ActiveReblitBootStateRootsError>
+    where
+        F: FnOnce(),
+    {
         self.revalidate_with_budget(installation, &mut budget)?;
-        Ok(RevalidatedActiveReblitBootStateRoots {
+        let view = RevalidatedActiveReblitBootStateRoots {
             authority: self,
             _installation: installation,
             _same_thread: PhantomData,
-        })
+        };
+        before_terminal_deadline();
+        budget.require_deadline(&installation.root)?;
+        Ok(view)
     }
 
     fn revalidate_with_budget(
@@ -305,7 +390,7 @@ impl PreparedActiveReblitBootStateRoots {
         let roots_path = installation.root_path("");
 
         budget.step(&installation.root)?;
-        installation.revalidate_root_directory()?;
+        installation.revalidate_root_directory_until(budget.deadline)?;
         budget.step(&head_path)?;
         let named_head = open_named_head(installation, self.head.state, &head_path)?;
         budget.require_deadline(&head_path)?;
@@ -352,7 +437,7 @@ impl PreparedActiveReblitBootStateRoots {
             budget.require_deadline(&archived.identity.wrapper.path)?;
         }
         budget.step(&installation.root)?;
-        installation.revalidate_root_directory()?;
+        installation.revalidate_root_directory_until(budget.deadline)?;
         budget.step(&roots_path)?;
         self.roots
             .revalidate_beneath(installation.root_directory(), ROOTS_RELATIVE)
@@ -380,12 +465,16 @@ impl PreparedActiveReblitBootStateRoots {
         max_work: usize,
         timeout: Duration,
     ) -> Result<Self, ActiveReblitBootStateRootsError> {
-        Self::prepare_with_policy(
+        let policy = StateRootPolicy { max_work, timeout };
+        let deadline = state_root_deadline(policy.timeout, &installation.root)?;
+        Self::prepare_with_policy_until_and_checkpoint(
             installation,
             selected_head_usr,
             expected_head,
             projected_state_ids,
-            StateRootPolicy { max_work, timeout },
+            policy,
+            deadline,
+            || {},
         )
     }
 }
@@ -684,18 +773,47 @@ struct StateRootBudget {
     max_work: usize,
     work: usize,
     deadline: Instant,
+    #[cfg(test)]
+    clock: Option<Box<dyn Fn() -> Instant>>,
 }
 
 impl StateRootBudget {
-    fn new(policy: StateRootPolicy, path: &Path) -> Result<Self, ActiveReblitBootStateRootsError> {
-        let deadline = Instant::now()
-            .checked_add(policy.timeout)
-            .ok_or_else(|| ActiveReblitBootStateRootsError::Deadline { path: path.to_owned() })?;
-        Ok(Self {
+    fn new_until(
+        policy: StateRootPolicy,
+        deadline: Instant,
+        path: &Path,
+    ) -> Result<Self, ActiveReblitBootStateRootsError> {
+        Self::new_until_at(policy, deadline, path, Instant::now())
+    }
+
+    fn new_until_at(
+        policy: StateRootPolicy,
+        deadline: Instant,
+        path: &Path,
+        admitted_at: Instant,
+    ) -> Result<Self, ActiveReblitBootStateRootsError> {
+        let budget = Self {
             max_work: policy.max_work,
             work: 0,
             deadline,
-        })
+            #[cfg(test)]
+            clock: None,
+        };
+        budget.require_deadline_at(path, admitted_at)?;
+        Ok(budget)
+    }
+
+    #[cfg(test)]
+    fn new_until_with_clock(
+        policy: StateRootPolicy,
+        deadline: Instant,
+        path: &Path,
+        clock: impl Fn() -> Instant + 'static,
+    ) -> Result<Self, ActiveReblitBootStateRootsError> {
+        let admitted_at = clock();
+        let mut budget = Self::new_until_at(policy, deadline, path, admitted_at)?;
+        budget.clock = Some(Box::new(clock));
+        Ok(budget)
     }
 
     fn step(&mut self, path: &Path) -> Result<(), ActiveReblitBootStateRootsError> {
@@ -717,12 +835,31 @@ impl StateRootBudget {
     }
 
     fn require_deadline(&self, path: &Path) -> Result<(), ActiveReblitBootStateRootsError> {
-        if Instant::now() >= self.deadline {
+        self.require_deadline_at(path, self.now())
+    }
+
+    fn require_deadline_at(&self, path: &Path, now: Instant) -> Result<(), ActiveReblitBootStateRootsError> {
+        if now >= self.deadline {
             Err(ActiveReblitBootStateRootsError::Deadline { path: path.to_owned() })
         } else {
             Ok(())
         }
     }
+
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(clock) = &self.clock {
+            return clock();
+        }
+        Instant::now()
+    }
+}
+
+#[cfg(test)]
+fn state_root_deadline(timeout: Duration, path: &Path) -> Result<Instant, ActiveReblitBootStateRootsError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| ActiveReblitBootStateRootsError::Deadline { path: path.to_owned() })
 }
 
 #[derive(Debug, Error)]

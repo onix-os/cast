@@ -1,9 +1,11 @@
 use std::{
+    cell::Cell,
     ffi::OsString,
     fs,
     os::{fd::AsRawFd as _, unix::ffi::OsStringExt as _},
     path::PathBuf,
-    time::Duration,
+    rc::Rc,
+    time::{Duration, Instant},
 };
 
 use super::*;
@@ -84,6 +86,84 @@ fn expired_deadline_fails_before_state_root_admission() {
         fixture.prepare_with_policy(&[head_state()], usize::MAX, Duration::ZERO),
         Err(ActiveReblitBootStateRootsError::Deadline { .. })
     ));
+}
+
+#[test]
+fn caller_owned_deadline_is_rejected_at_prepare_and_revalidate_entry() {
+    let fixture = Fixture::new();
+    let deadline = Instant::now() - Duration::from_nanos(1);
+
+    assert!(matches!(
+        PreparedActiveReblitBootStateRoots::prepare_until(
+            &fixture.installation,
+            &fixture.head_usr,
+            head_state(),
+            &[head_state()],
+            deadline,
+        ),
+        Err(ActiveReblitBootStateRootsError::Deadline { path })
+            if path == fixture.installation.root
+    ));
+
+    let prepared = fixture.prepare(&[head_state()]).unwrap();
+    assert!(matches!(
+        prepared.revalidate_until(&fixture.installation, deadline),
+        Err(ActiveReblitBootStateRootsError::Deadline { path })
+            if path == fixture.installation.root
+    ));
+}
+
+#[test]
+fn caller_owned_deadline_is_rechecked_after_prepared_and_view_materialization() {
+    let fixture = Fixture::new();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let admitted_at = deadline - Duration::from_secs(60);
+    let policy = StateRootPolicy::production();
+
+    let prepare_complete = Rc::new(Cell::new(false));
+    let prepare_clock_state = Rc::clone(&prepare_complete);
+    let prepare_budget =
+        StateRootBudget::new_until_with_clock(policy, deadline, &fixture.installation.root, move || {
+            terminal_deadline_time(&prepare_clock_state, admitted_at, deadline)
+        })
+        .unwrap();
+    let prepare_checkpoint = Rc::clone(&prepare_complete);
+    assert!(matches!(
+        PreparedActiveReblitBootStateRoots::prepare_with_budget_and_checkpoint(
+            &fixture.installation,
+            &fixture.head_usr,
+            head_state(),
+            &[head_state()],
+            prepare_budget,
+            move || prepare_checkpoint.set(true),
+        ),
+        Err(ActiveReblitBootStateRootsError::Deadline { path })
+            if path == fixture.installation.root
+    ));
+    assert!(prepare_complete.get());
+
+    let prepared = fixture.prepare(&[head_state()]).unwrap();
+    let view_complete = Rc::new(Cell::new(false));
+    let view_clock_state = Rc::clone(&view_complete);
+    let view_budget = StateRootBudget::new_until_with_clock(policy, deadline, &fixture.installation.root, move || {
+        terminal_deadline_time(&view_clock_state, admitted_at, deadline)
+    })
+    .unwrap();
+    let view_checkpoint = Rc::clone(&view_complete);
+    assert!(matches!(
+        prepared.revalidate_with_budget_and_checkpoint(
+            &fixture.installation,
+            view_budget,
+            move || view_checkpoint.set(true),
+        ),
+        Err(ActiveReblitBootStateRootsError::Deadline { path })
+            if path == fixture.installation.root
+    ));
+    assert!(view_complete.get());
+}
+
+fn terminal_deadline_time(complete: &Cell<bool>, admitted_at: Instant, deadline: Instant) -> Instant {
+    if complete.get() { deadline } else { admitted_at }
 }
 
 #[test]

@@ -8,12 +8,14 @@ forge-active-reblit-boot-state-root-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='transition_identity::active_reblit_boot_state_roots::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 18; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 20; \
 	for name in \
 		bounds_and_read_only::projection_count_head_order_duplicate_and_positive_id_bounds_are_typed \
 		bounds_and_read_only::diagnostic_path_byte_and_component_bounds_admit_n_and_reject_n_plus_one \
 		bounds_and_read_only::exact_head_work_boundary_admits_n_and_rejects_n_minus_one \
 		bounds_and_read_only::expired_deadline_fails_before_state_root_admission \
+		bounds_and_read_only::caller_owned_deadline_is_rejected_at_prepare_and_revalidate_entry \
+		bounds_and_read_only::caller_owned_deadline_is_rechecked_after_prepared_and_view_materialization \
 		bounds_and_read_only::preparation_revalidation_and_bound_views_are_read_only \
 		exclusions_and_revalidation::absent_archive_remains_excluded_when_an_exact_wrapper_appears_later \
 		exclusions_and_revalidation::inexact_archive_remains_excluded_after_its_layout_is_repaired \
