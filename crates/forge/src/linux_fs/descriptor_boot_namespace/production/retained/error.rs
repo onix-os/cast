@@ -15,7 +15,7 @@ pub(crate) enum RetainedBootNamespaceAssessmentError {
     ExpectedLengthMismatch {
         request_index: usize,
         expected: u64,
-        found: usize,
+        found: u64,
     },
     #[error("retained boot namespace expected stream {request_index} does not match its declared digest")]
     ExpectedDigestMismatch { request_index: usize },

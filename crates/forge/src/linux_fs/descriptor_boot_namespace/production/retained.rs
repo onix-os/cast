@@ -26,6 +26,8 @@ use super::super::{
 mod content;
 #[path = "retained/error.rs"]
 mod error;
+#[path = "retained/expected.rs"]
+mod expected;
 #[path = "retained/hook.rs"]
 mod hook;
 #[path = "retained/inventory.rs"]
@@ -40,6 +42,7 @@ mod observer;
 mod syscall;
 
 pub(crate) use error::RetainedBootNamespaceAssessmentError;
+pub(crate) use expected::RetainedBootNamespaceExpectedSource;
 pub(crate) use limits::RetainedBootNamespaceAssessmentLimits;
 
 #[cfg(test)]
@@ -94,10 +97,10 @@ impl ValidatedRetainedBootNamespaceAssessment {
 /// descriptor borrowed from the attachment aggregate. The adapter verifies
 /// its scalar identity again, but does not independently establish the
 /// caller's mountinfo or attachment authority.
-pub(crate) fn assess_retained_boot_namespace_until<'request, 'expected>(
+pub(crate) fn assess_retained_boot_namespace_until<'request, 'expected, 'source>(
     retained_root: &File,
     requests: &'request [BootNamespaceRequest<'request>],
-    expected: &'expected [&'expected [u8]],
+    expected: &'expected [RetainedBootNamespaceExpectedSource<'source>],
     namespace_limits: BootNamespaceAssessmentLimits,
     live_limits: RetainedBootNamespaceAssessmentLimits,
     deadline: Instant,
@@ -114,10 +117,10 @@ pub(crate) fn assess_retained_boot_namespace_until<'request, 'expected>(
 }
 
 #[cfg(test)]
-pub(crate) fn assess_retained_boot_namespace_with_hook_until<'request, 'expected>(
+pub(crate) fn assess_retained_boot_namespace_with_hook_until<'request, 'expected, 'source>(
     retained_root: &File,
     requests: &'request [BootNamespaceRequest<'request>],
-    expected: &'expected [&'expected [u8]],
+    expected: &'expected [RetainedBootNamespaceExpectedSource<'source>],
     namespace_limits: BootNamespaceAssessmentLimits,
     live_limits: RetainedBootNamespaceAssessmentLimits,
     deadline: Instant,
@@ -175,10 +178,10 @@ pub(crate) fn probe_failed_open_descriptor_slot_until(
     })
 }
 
-fn assess_with_hook<'root, 'request, 'expected, Hook: hook::RetainedBootNamespaceHook>(
+fn assess_with_hook<'root, 'request, 'expected, 'source, Hook: hook::RetainedBootNamespaceHook>(
     retained_root: &'root File,
     requests: &'request [BootNamespaceRequest<'request>],
-    expected: &'expected [&'expected [u8]],
+    expected: &'expected [RetainedBootNamespaceExpectedSource<'source>],
     namespace_limits: BootNamespaceAssessmentLimits,
     live_limits: RetainedBootNamespaceAssessmentLimits,
     deadline: Instant,

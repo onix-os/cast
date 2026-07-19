@@ -16,6 +16,29 @@ pub(super) fn descriptor_flags_once(descriptor: BorrowedFd<'_>) -> io::Result<i3
     }
 }
 
+/// Performs exactly one `fcntl(F_GETFD)` attempt. `EINTR` is failed closed.
+pub(super) fn descriptor_cloexec_flags_once(descriptor: BorrowedFd<'_>) -> io::Result<i32> {
+    // SAFETY: F_GETFD reads descriptor flags from the live borrowed descriptor.
+    let found = unsafe { nix::libc::fcntl(descriptor.as_raw_fd(), nix::libc::F_GETFD) };
+    if found >= 0 {
+        Ok(found)
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+/// Performs exactly one `fcntl(F_GET_SEALS)` attempt. `EINTR` is failed closed.
+pub(super) fn descriptor_seals_once(descriptor: BorrowedFd<'_>) -> io::Result<i32> {
+    // SAFETY: F_GET_SEALS reads immutable seal state from the live borrowed
+    // descriptor and retains neither the descriptor nor any userspace pointer.
+    let found = unsafe { nix::libc::fcntl(descriptor.as_raw_fd(), nix::libc::F_GET_SEALS) };
+    if found >= 0 {
+        Ok(found)
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Performs exactly one `fstat` attempt. `EINTR` is failed closed.
 pub(super) fn fstat_once(descriptor: BorrowedFd<'_>) -> io::Result<nix::libc::stat> {
     let mut status = MaybeUninit::<nix::libc::stat>::uninit();

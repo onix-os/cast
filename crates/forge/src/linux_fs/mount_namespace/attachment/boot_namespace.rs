@@ -14,13 +14,12 @@ use thiserror::Error;
 use super::RevalidatedTaskRootedAttachment;
 use crate::linux_fs::{
     descriptor_boot_filesystem::{
-        BootFilesystemAuthenticationError, BootFilesystemMagicFamily,
-        ValidatedBootFilesystemDescriptorEvidence,
+        BootFilesystemAuthenticationError, BootFilesystemMagicFamily, ValidatedBootFilesystemDescriptorEvidence,
     },
     descriptor_boot_namespace::{
         BootNamespaceAssessmentLimits, BootNamespaceDestinationState, BootNamespaceRequest,
         RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits,
-        ValidatedRetainedBootNamespaceAssessment,
+        RetainedBootNamespaceExpectedSource, ValidatedRetainedBootNamespaceAssessment,
     },
 };
 
@@ -130,7 +129,7 @@ impl RevalidatedTaskRootedAttachment<'_> {
     pub(crate) fn assess_retained_boot_namespace_until(
         &self,
         requests: &[BootNamespaceRequest<'_>],
-        expected: &[&[u8]],
+        expected: &[RetainedBootNamespaceExpectedSource<'_>],
         namespace_limits: BootNamespaceAssessmentLimits,
         live_limits: RetainedBootNamespaceAssessmentLimits,
         deadline: Instant,
@@ -146,13 +145,7 @@ impl RevalidatedTaskRootedAttachment<'_> {
         require_deadline(deadline)?;
         let namespace = self
             .current
-            .assess_retained_boot_namespace_until(
-                requests,
-                expected,
-                namespace_limits,
-                live_limits,
-                deadline,
-            )
+            .assess_retained_boot_namespace_until(requests, expected, namespace_limits, live_limits, deadline)
             .map_err(|source| TaskRootBootNamespaceAssessmentError::NamespaceAssessment { source })?;
         require_deadline(deadline)?;
         let closing = self
@@ -291,7 +284,7 @@ impl RevalidatedTaskRootedAttachment<'_> {
     pub(crate) fn validate_fixture_retained_boot_namespace_with<Payload>(
         &self,
         requests: &[BootNamespaceRequest<'_>],
-        expected: &[&[u8]],
+        expected: &[RetainedBootNamespaceExpectedSource<'_>],
         namespace_limits: BootNamespaceAssessmentLimits,
         live_limits: RetainedBootNamespaceAssessmentLimits,
         deadline: Instant,
@@ -299,19 +292,28 @@ impl RevalidatedTaskRootedAttachment<'_> {
             u64,
             u64,
             Instant,
-        ) -> Result<ValidatedBootFilesystemDescriptorEvidence, BootFilesystemAuthenticationError>,
+        ) -> Result<
+            ValidatedBootFilesystemDescriptorEvidence,
+            BootFilesystemAuthenticationError,
+        >,
         assess_namespace: impl FnOnce(
             &[BootNamespaceRequest<'_>],
-            &[&[u8]],
+            &[RetainedBootNamespaceExpectedSource<'_>],
             BootNamespaceAssessmentLimits,
             RetainedBootNamespaceAssessmentLimits,
             Instant,
-        ) -> Result<FixtureRetainedBootNamespaceAssessment<Payload>, RetainedBootNamespaceAssessmentError>,
+        ) -> Result<
+            FixtureRetainedBootNamespaceAssessment<Payload>,
+            RetainedBootNamespaceAssessmentError,
+        >,
         authenticate_closing: impl FnOnce(
             u64,
             u64,
             Instant,
-        ) -> Result<ValidatedBootFilesystemDescriptorEvidence, BootFilesystemAuthenticationError>,
+        ) -> Result<
+            ValidatedBootFilesystemDescriptorEvidence,
+            BootFilesystemAuthenticationError,
+        >,
         clock: &mut impl FnMut() -> Instant,
     ) -> Result<FixtureValidatedTaskRootBootNamespaceAssessment<Payload>, TaskRootBootNamespaceAssessmentError> {
         if requests.is_empty() {

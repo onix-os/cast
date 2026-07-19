@@ -16,3 +16,4 @@ mod live;
 mod records;
 // Syscall-backed retained-capability and truthful live-ledger regressions.
 mod retained;
+mod retained_expected;

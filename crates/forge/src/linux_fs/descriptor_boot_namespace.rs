@@ -61,6 +61,6 @@ pub(crate) use production::{
 };
 #[allow(unused_imports)] // consumed by the retained attachment aggregate
 pub(crate) use production::{
-    RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits,
+    RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits, RetainedBootNamespaceExpectedSource,
     ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
 };

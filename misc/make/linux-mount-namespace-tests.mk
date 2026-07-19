@@ -102,6 +102,9 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'destination_mount_id: u64,' "$$boot_composition"; \
 	timeout 10s grep -Fq 'namespace: ValidatedRetainedBootNamespaceAssessment,' "$$boot_composition"; \
 	timeout 10s grep -Fq 'pub(crate) fn assess_retained_boot_namespace_until(' "$$boot_composition"; \
+	timeout 10s grep -Fq 'expected: &[RetainedBootNamespaceExpectedSource<' "$$boot_composition"; \
+	timeout 10s grep -Fq 'expected: &[RetainedBootNamespaceExpectedSource<' "$$capture"; \
+	if timeout 10s rg -n '&\[&\[u8\]\]' "$$boot_composition" "$$capture"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s rg --pcre2 -U -q '(?s)pub\(crate\) fn assess_retained_boot_namespace_until\([\s\S]{0,900}?if requests\.is_empty\(\)[\s\S]{0,500}?require_deadline\(deadline\)\?;[\s\S]{0,500}?let opening = self\s*\.current\s*\.authenticate_boot_filesystem_until\(deadline\)[\s\S]{0,500}?require_deadline\(deadline\)\?;[\s\S]{0,300}?let namespace = self\s*\.current\s*\.assess_retained_boot_namespace_until\([\s\S]{0,900}?require_deadline\(deadline\)\?;[\s\S]{0,300}?let closing = self\s*\.current\s*\.authenticate_boot_filesystem_until\(deadline\)[\s\S]{0,700}?close_assessment_until\(' "$$boot_composition"; \
 	timeout 10s grep -Fq 'fn close_assessment_until(' "$$boot_composition"; \
 	if timeout 10s rg -n 'pub(?:\([^)]*\))?[[:space:]]+fn close_assessment_until' "$$boot_composition"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \

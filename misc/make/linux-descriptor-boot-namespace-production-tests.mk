@@ -13,7 +13,7 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::descriptor_boot_namespace_production::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 34; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 40; \
 	for test_case in \
 		records:valid_inventory_filters_dot_entries_and_ignores_kernel_identity_hints \
 		records:complete_syscall_chunks_preserve_raw_record_order \
@@ -48,7 +48,13 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 		retained:hook_failure_after_child_open_is_not_masked_by_cleanup \
 		retained:size_mismatch_skips_all_content_hashes_and_actual_reads \
 		retained:expected_digest_mismatch_fails_before_root_observation \
-		retained:non_opath_root_is_rejected_without_fallback; do \
+		retained:non_opath_root_is_rejected_without_fallback \
+		retained_expected:sealed_source_larger_than_one_chunk_streams_exactly_with_physical_usage \
+		retained_expected:generated_source_uses_no_physical_expected_source_io \
+		retained_expected:sealed_source_capability_failures_precede_root_observation \
+		retained_expected:sealed_source_length_and_digest_mismatch_precede_root_observation \
+		retained_expected:sealed_source_read_budgets_accept_exact_usage_and_reject_n_minus_one \
+		retained_expected:terminal_source_revalidation_rejects_descriptor_flag_drift; do \
 		timeout 10s grep -Fqx "$$prefix$${test_case/:/::}: test" "$$listed"; \
 	done; \
 	module_root="$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/crates/forge/src/linux_fs/descriptor_boot_namespace/production.rs"; \
@@ -69,6 +75,7 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 		"$$module_dir/retained.rs" \
 		"$$module_dir/retained/content.rs" \
 		"$$module_dir/retained/error.rs" \
+		"$$module_dir/retained/expected.rs" \
 		"$$module_dir/retained/hook.rs" \
 		"$$module_dir/retained/inventory.rs" \
 		"$$module_dir/retained/limits.rs" \
@@ -88,6 +95,7 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	); \
 	retained_test_files=( \
 		"$$test_dir/retained.rs" \
+		"$$test_dir/retained_expected.rs" \
 	); \
 	test_files=( "$${pure_test_files[@]}" "$${live_test_files[@]}" "$${retained_test_files[@]}" ); \
 	files=( "$${production_files[@]}" "$${test_files[@]}" ); \
@@ -107,12 +115,16 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	timeout 10s grep -Fq 'RETAINED_LOOKUP_RESOLUTION & nix::libc::RESOLVE_NO_XDEV as u64 == 0' "$$module_dir/retained/node.rs"; \
 	timeout 10s grep -Fq 'open_relative(directory, c".", DIRECTORY_READ_FLAGS' "$$module_dir/retained/node.rs"; \
 	timeout 10s grep -Fq 'nix::libc::O_NOATIME' "$$module_dir/retained/node.rs"; \
-	timeout 10s grep -Fq 'nix::libc::pread(' "$$module_dir/retained/syscall.rs"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'nix::libc::pread(' "$$module_dir/retained/syscall.rs" )" = 1; \
 	timeout 10s grep -Fq 'nix::libc::SYS_statx' "$$module_dir/retained/syscall.rs"; \
 	timeout 10s grep -Fq 'nix::libc::AT_EMPTY_PATH' "$$module_dir/retained/syscall.rs"; \
 	timeout 10s grep -Fq 'status.stx_mask & nix::libc::STATX_MNT_ID == 0' "$$module_dir/retained/syscall.rs"; \
 	timeout 10s grep -Fq 'pub(crate) max_observation_io_attempts: usize' "$$module_dir/retained/limits.rs"; \
 	timeout 10s grep -Fq 'pub(crate) observation_io_attempts: usize' "$$module_dir/retained/limits.rs"; \
+	timeout 10s grep -Fq 'pub(crate) max_expected_source_read_bytes: u64' "$$module_dir/retained/limits.rs"; \
+	timeout 10s grep -Fq 'pub(crate) max_expected_source_read_calls: usize' "$$module_dir/retained/limits.rs"; \
+	timeout 10s grep -Fq 'pub(crate) expected_source_read_bytes: u64' "$$module_dir/retained/limits.rs"; \
+	timeout 10s grep -Fq 'pub(crate) expected_source_read_calls: usize' "$$module_dir/retained/limits.rs"; \
 	timeout 10s grep -Fq 'pub(crate) max_descriptor_slots: usize' "$$module_dir/retained/limits.rs"; \
 	timeout 10s grep -Fq 'pub(crate) peak_descriptor_slots: usize' "$$module_dir/retained/limits.rs"; \
 	timeout 10s grep -Fq 'eof_probe_capacity_bytes' "$$module_dir/retained/limits.rs"; \
@@ -120,6 +132,34 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	timeout 10s grep -Fq 'observed_root_identity: Option<BootNamespaceNodeIdentity>' "$$module_dir/retained.rs"; \
 	timeout 10s grep -Fq 'successful nonempty classification omitted retained-root evidence' "$$module_dir/retained.rs"; \
 	timeout 10s grep -Fq 'self.observed_root_identity = Some(identity);' "$$module_dir/retained/observer.rs"; \
+	timeout 10s grep -Fq 'pub(crate) struct RetainedBootNamespaceExpectedSource' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'pub(crate) const fn generated(' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'pub(crate) const fn sealed_descriptor(' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'const REQUIRED_SEALS: i32 =' "$$module_dir/retained/expected.rs"; \
+	for seal in F_SEAL_WRITE F_SEAL_GROW F_SEAL_SHRINK F_SEAL_SEAL; do timeout 10s grep -Fq "nix::libc::$$seal" "$$module_dir/retained/expected.rs"; done; \
+	timeout 10s grep -Fq 'mode & nix::libc::S_IFMT != nix::libc::S_IFREG || mode & 0o7777 != 0o400' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'descriptor_flags & nix::libc::FD_CLOEXEC == 0' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'seals & REQUIRED_SEALS != REQUIRED_SEALS' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'let opening = observe_sealed_descriptor(descriptor, expected_length, ledger)?;' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'let digest = hash_sealed_descriptor(descriptor, expected_length, ledger)?;' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'let closing = observe_sealed_descriptor(descriptor, expected_length, ledger)?;' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'if closing != opening {' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'terminally_revalidate_expected_streams(' "$$module_dir/retained/observer.rs"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'nix::libc::fcntl(descriptor.as_raw_fd(), nix::libc::F_GETFD)' "$$module_dir/retained/syscall.rs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'nix::libc::fcntl(descriptor.as_raw_fd(), nix::libc::F_GET_SEALS)' "$$module_dir/retained/syscall.rs" )" = 1; \
+	timeout 10s grep -Fq 'while offset < length {' "$$module_dir/retained/expected.rs"; \
+	timeout 10s grep -Fq 'offset.checked_add(found as u64)' "$$module_dir/retained/expected.rs"; \
+	timeout 10s rg --pcre2 -U -q 'admit_observation_io_attempt\("observing sealed expected-source metadata"\)\?;\s*let status = fstat_once\(descriptor\)' "$$module_dir/retained/expected.rs"; \
+	timeout 10s rg --pcre2 -U -q 'admit_observation_io_attempt\("observing sealed expected-source descriptor flags"\)\?;\s*let descriptor_flags\s*=\s*descriptor_cloexec_flags_once\(descriptor\)' "$$module_dir/retained/expected.rs"; \
+	timeout 10s rg --pcre2 -U -q 'admit_observation_io_attempt\("observing sealed expected-source seals"\)\?;\s*let seals = descriptor_seals_once\(descriptor\)' "$$module_dir/retained/expected.rs"; \
+	timeout 10s rg --pcre2 -U -q 'charge_expected_source_read\(output\.len\(\), action\)\?;\s*ledger\.admit_observation_io_attempt\(action\)\?;\s*let found = pread_once\(descriptor, offset, output\)' "$$module_dir/retained/expected.rs"; \
+	if timeout 10s rg -n '&\[&\[u8\]\]' "$$module_dir/retained.rs" "$$module_dir/retained"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'impl fmt::Debug for RetainedBootNamespaceExpectedSource' "$$module_dir/retained/expected.rs"; \
+	if timeout 10s rg -n '#\[derive\(Debug\)\]|field\("descriptor"|field\("raw_fd"' "$$module_dir/retained/expected.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg --pcre2 -U -n '#\[derive\([^\)]*(?:Clone|Copy)[^\)]*\)\]\s*pub\(crate\) struct RetainedBootNamespaceExpectedSource|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+RetainedBootNamespaceExpectedSource' "$$module_dir/retained/expected.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n '\b(?:impl|dyn) Fn|^\s*(?:pub(?:\([^\)]*\))?\s+)?trait\s|O_RDONLY|read_to_end|to_vec\(|Vec<u8>' "$$module_dir/retained/expected.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s rg --pcre2 -U -q 'terminally_revalidate_expected_streams\([\s\S]*?\)\?;\s*self\.hook\s*\.emit\(FixtureRetainedBootNamespaceProtocolEvent::Complete\)' "$$module_dir/retained/observer.rs"; \
+	if timeout 10s rg -n 'pub\(crate\)[^;{]*fn[[:space:]]+(?:descriptor|raw_fd|as_raw_fd|reader|callback|reopen|into_[[:alnum:]_]*)[[:space:]]*\(' "$$module_dir/retained/expected.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'F_DUPFD|dup3?\(|try_clone\(' "$$module_dir/retained.rs" "$$module_dir/retained"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'descriptor_mount_id_until|retry_interrupted|openat2_file_until|AT_FDCWD|/proc/' "$$module_dir/retained.rs" "$$module_dir/retained"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'max_syscalls|\bsyscalls\b|max_descriptors|peak_descriptors|physical descriptor' "$$module_dir/retained.rs" "$$module_dir/retained" "$$test_dir/retained.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \

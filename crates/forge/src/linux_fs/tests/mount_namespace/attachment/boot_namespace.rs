@@ -15,8 +15,9 @@ use crate::linux_fs::{
         validate_fixture_boot_filesystem_authentication,
     },
     descriptor_boot_namespace::{
-        BootNamespaceAssessmentLimits, BootNamespaceDestinationState, BootNamespaceNodeIdentity,
-        BootNamespaceRequest, RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits,
+        BootNamespaceAssessmentLimits, BootNamespaceDestinationState, BootNamespaceNodeIdentity, BootNamespaceRequest,
+        RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits,
+        RetainedBootNamespaceExpectedSource,
     },
     mount_namespace::{
         FixtureMountNamespaceTree, PreparedMountNamespaceAnchor, RevalidatedTaskRootedAttachment,
@@ -59,9 +60,7 @@ fn prepared_anchor(fixture: &SyntheticMountNamespace) -> io::Result<PreparedMoun
 fn prepared_attachment(
     anchor: &PreparedMountNamespaceAnchor,
 ) -> io::Result<crate::linux_fs::mount_namespace::PreparedTaskRootedAttachment> {
-    anchor
-        .revalidate()?
-        .prepare_task_rooted_attachment("/firmware")
+    anchor.revalidate()?.prepare_task_rooted_attachment("/firmware")
 }
 
 fn request() -> BootNamespaceRequest<'static> {
@@ -120,7 +119,7 @@ fn success_orders_stages_and_retains_only_exact_scalars_and_states() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let namespace_limits = BootNamespaceAssessmentLimits::default();
     let live_limits = RetainedBootNamespaceAssessmentLimits::default();
     let deadline = deadline();
@@ -145,18 +144,24 @@ fn success_orders_stages_and_retains_only_exact_scalars_and_states() {
                 assert_eq!(received_deadline, deadline);
                 filesystem_evidence(device, inode, received_deadline)
             },
-            |received_requests, received_expected, received_namespace_limits, received_live_limits, received_deadline| {
+            |received_requests,
+             received_expected,
+             received_namespace_limits,
+             received_live_limits,
+             received_deadline| {
                 assert_eq!(*events.borrow(), vec![Event::OpeningFilesystem]);
                 events.borrow_mut().push(Event::Namespace);
                 assert_eq!(received_requests, &requests);
-                assert_eq!(received_expected, &expected);
+                assert!(std::ptr::eq(received_expected, expected.as_slice()));
                 assert_eq!(received_namespace_limits, namespace_limits);
                 assert_eq!(received_live_limits, live_limits);
                 assert_eq!(received_deadline, deadline);
-                Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                    Some(observed_root(&view)),
-                    payload(&drops, vec![BootNamespaceDestinationState::Exact]),
-                ))
+                Ok(
+                    RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                        Some(observed_root(&view)),
+                        payload(&drops, vec![BootNamespaceDestinationState::Exact]),
+                    ),
+                )
             },
             |device, inode, received_deadline| {
                 assert_eq!(*events.borrow(), vec![Event::OpeningFilesystem, Event::Namespace]);
@@ -195,7 +200,7 @@ fn opening_failure_skips_namespace_and_closing_without_a_result() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let calls = Cell::new(0usize);
     let deadline = deadline();
     let mut clock = || deadline;
@@ -232,7 +237,7 @@ fn namespace_failure_skips_closing_and_returns_no_result() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let closing_calls = Cell::new(0usize);
     let deadline = deadline();
     let mut clock = || deadline;
@@ -245,12 +250,7 @@ fn namespace_failure_skips_closing_and_returns_no_result() {
             RetainedBootNamespaceAssessmentLimits::default(),
             deadline,
             filesystem_evidence,
-            |_, _, _, _, _| {
-                Err(RetainedBootNamespaceAssessmentError::ExpectedCountMismatch {
-                    expected: 1,
-                    found: 0,
-                })
-            },
+            |_, _, _, _, _| Err(RetainedBootNamespaceAssessmentError::ExpectedCountMismatch { expected: 1, found: 0 }),
             |_, _, _| {
                 closing_calls.set(closing_calls.get() + 1);
                 unreachable!("closing authentication must not run after namespace failure")
@@ -274,7 +274,7 @@ fn closing_failure_discards_namespace_assessment() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let drops = Rc::new(Cell::new(0usize));
     let deadline = deadline();
     let mut clock = || deadline;
@@ -288,10 +288,12 @@ fn closing_failure_discards_namespace_assessment() {
             deadline,
             filesystem_evidence,
             |_, _, _, _, _| {
-                Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                    Some(observed_root(&view)),
-                    payload(&drops, vec![BootNamespaceDestinationState::Absent]),
-                ))
+                Ok(
+                    RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                        Some(observed_root(&view)),
+                        payload(&drops, vec![BootNamespaceDestinationState::Absent]),
+                    ),
+                )
             },
             |_, _, _| Err(BootFilesystemAuthenticationError::DeadlineExceeded { deadline }),
             &mut clock,
@@ -313,7 +315,7 @@ fn opening_and_closing_filesystem_drift_discards_namespace_assessment() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let drops = Rc::new(Cell::new(0usize));
     let deadline = deadline();
     let mut clock = || deadline;
@@ -327,10 +329,12 @@ fn opening_and_closing_filesystem_drift_discards_namespace_assessment() {
             deadline,
             filesystem_evidence,
             |_, _, _, _, _| {
-                Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                    Some(observed_root(&view)),
-                    payload(&drops, vec![BootNamespaceDestinationState::Different]),
-                ))
+                Ok(
+                    RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                        Some(observed_root(&view)),
+                        payload(&drops, vec![BootNamespaceDestinationState::Different]),
+                    ),
+                )
             },
             |device, inode, deadline| filesystem_evidence(device, inode + 1, deadline),
             &mut clock,
@@ -352,7 +356,7 @@ fn identical_foreign_filesystem_identity_mismatches_discard_namespace_assessment
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let foreign_identities = [
         (view.destination_device() + 1, view.destination_inode()),
         (view.destination_device(), view.destination_inode() + 1),
@@ -371,10 +375,12 @@ fn identical_foreign_filesystem_identity_mismatches_discard_namespace_assessment
                 deadline,
                 |_, _, deadline| filesystem_evidence(foreign_device, foreign_inode, deadline),
                 |_, _, _, _, _| {
-                    Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                        Some(observed_root(&view)),
-                        payload(&drops, vec![BootNamespaceDestinationState::Exact]),
-                    ))
+                    Ok(
+                        RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                            Some(observed_root(&view)),
+                            payload(&drops, vec![BootNamespaceDestinationState::Exact]),
+                        ),
+                    )
                 },
                 |_, _, deadline| filesystem_evidence(foreign_device, foreign_inode, deadline),
                 &mut clock,
@@ -407,7 +413,7 @@ fn every_observed_root_scalar_mismatch_discards_namespace_assessment() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let roots = [
         BootNamespaceNodeIdentity::new(
             view.destination_device() + 1,
@@ -439,10 +445,12 @@ fn every_observed_root_scalar_mismatch_discards_namespace_assessment() {
                 deadline,
                 filesystem_evidence,
                 |_, _, _, _, _| {
-                    Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                        Some(root),
-                        payload(&drops, vec![BootNamespaceDestinationState::Exact]),
-                    ))
+                    Ok(
+                        RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                            Some(root),
+                            payload(&drops, vec![BootNamespaceDestinationState::Exact]),
+                        ),
+                    )
                 },
                 filesystem_evidence,
                 &mut clock,
@@ -464,7 +472,7 @@ fn missing_observed_root_discards_namespace_assessment() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let drops = Rc::new(Cell::new(0usize));
     let deadline = deadline();
     let mut clock = || deadline;
@@ -478,10 +486,12 @@ fn missing_observed_root_discards_namespace_assessment() {
             deadline,
             filesystem_evidence,
             |_, _, _, _, _| {
-                Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                    None,
-                    payload(&drops, vec![BootNamespaceDestinationState::Exact]),
-                ))
+                Ok(
+                    RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                        None,
+                        payload(&drops, vec![BootNamespaceDestinationState::Exact]),
+                    ),
+                )
             },
             filesystem_evidence,
             &mut clock,
@@ -503,7 +513,7 @@ fn empty_request_set_is_rejected_before_clock_or_any_stage() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests: [BootNamespaceRequest<'static>; 0] = [];
-    let expected: [&[u8]; 0] = [];
+    let expected: [RetainedBootNamespaceExpectedSource<'static>; 0] = [];
     let calls = Cell::new(0usize);
     let mut clock = || {
         calls.set(calls.get() + 1);
@@ -524,10 +534,7 @@ fn empty_request_set_is_rejected_before_clock_or_any_stage() {
         )
         .unwrap_err();
 
-    assert!(matches!(
-        error,
-        TaskRootBootNamespaceAssessmentError::EmptyRequestSet
-    ));
+    assert!(matches!(error, TaskRootBootNamespaceAssessmentError::EmptyRequestSet));
     assert_eq!(calls.get(), 0);
     fixture.assert_outside_unchanged();
 }
@@ -539,7 +546,7 @@ fn expiry_after_opening_skips_namespace_and_closing() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let deadline = deadline();
     let clock_calls = Cell::new(0usize);
     let events = RefCell::new(Vec::new());
@@ -586,7 +593,7 @@ fn expiry_after_namespace_discards_assessment_and_skips_closing() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let drops = Rc::new(Cell::new(0usize));
     let deadline = deadline();
     let clock_calls = Cell::new(0usize);
@@ -610,10 +617,12 @@ fn expiry_after_namespace_discards_assessment_and_skips_closing() {
             deadline,
             filesystem_evidence,
             |_, _, _, _, _| {
-                Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                    Some(observed_root(&view)),
-                    payload(&drops, vec![BootNamespaceDestinationState::Exact]),
-                ))
+                Ok(
+                    RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                        Some(observed_root(&view)),
+                        payload(&drops, vec![BootNamespaceDestinationState::Exact]),
+                    ),
+                )
             },
             |_, _, _| {
                 closing_calls.set(closing_calls.get() + 1);
@@ -640,7 +649,7 @@ fn terminal_deadline_expiry_discards_an_otherwise_complete_assessment() {
     let attachment = prepared_attachment(&anchor).unwrap();
     let view = attachment.revalidate_against(&anchor).unwrap();
     let requests = [request()];
-    let expected = [EXPECTED];
+    let expected = [RetainedBootNamespaceExpectedSource::generated(EXPECTED)];
     let drops = Rc::new(Cell::new(0usize));
     let deadline = deadline();
     let clock_calls = Cell::new(0usize);
@@ -663,10 +672,12 @@ fn terminal_deadline_expiry_discards_an_otherwise_complete_assessment() {
             deadline,
             filesystem_evidence,
             |_, _, _, _, _| {
-                Ok(RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
-                    Some(observed_root(&view)),
-                    payload(&drops, vec![BootNamespaceDestinationState::Exact]),
-                ))
+                Ok(
+                    RevalidatedTaskRootedAttachment::fixture_retained_boot_namespace_assessment(
+                        Some(observed_root(&view)),
+                        payload(&drops, vec![BootNamespaceDestinationState::Exact]),
+                    ),
+                )
             },
             filesystem_evidence,
             &mut clock,

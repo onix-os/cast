@@ -11,6 +11,7 @@ use std::{
 use xxhash_rust::xxh3::xxh3_128;
 
 use super::*;
+use crate::linux_fs::descriptor_boot_namespace::RetainedBootNamespaceExpectedSource;
 
 fn target_temporary(prefix: &str) -> tempfile::TempDir {
     let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target");
@@ -58,10 +59,10 @@ fn request<'a>(name: &'a str, expected: &[u8]) -> BootNamespaceRequest<'a> {
     BootNamespaceRequest::new(name, expected.len() as u64, xxh3_128(expected))
 }
 
-fn assess<'request, 'expected>(
+fn assess<'request, 'expected, 'source>(
     root: &File,
     requests: &'request [BootNamespaceRequest<'request>],
-    expected: &'expected [&'expected [u8]],
+    expected: &'expected [RetainedBootNamespaceExpectedSource<'source>],
 ) -> Result<ValidatedRetainedBootNamespaceAssessment, RetainedBootNamespaceAssessmentError> {
     assess_retained_boot_namespace_until(
         root,
@@ -87,7 +88,11 @@ fn ordinary_target_fixture_classifies_exact_different_and_absent() {
         request("different", expected_different),
         request("absent", expected_absent),
     ];
-    let streams = [expected_exact, expected_different, expected_absent];
+    let streams = [
+        RetainedBootNamespaceExpectedSource::generated(expected_exact),
+        RetainedBootNamespaceExpectedSource::generated(expected_different),
+        RetainedBootNamespaceExpectedSource::generated(expected_absent),
+    ];
 
     let assessment = assess(&root, &requests, &streams).unwrap();
 
@@ -111,7 +116,7 @@ fn nonempty_result_exposes_exact_retained_root_identity() {
     let expected_identity = retained_descriptor_identity(&root);
     let expected = b"".as_slice();
     let requests = [request("missing", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
 
     let assessment = assess(&root, &requests, &streams).unwrap();
     let observed = assessment
@@ -119,10 +124,7 @@ fn nonempty_result_exposes_exact_retained_root_identity() {
         .expect("nonempty successful assessment must retain observed-root evidence");
 
     assert_eq!(assessment.states(), &[BootNamespaceDestinationState::Absent]);
-    assert_eq!(
-        (observed.device, observed.inode, observed.mount_id),
-        expected_identity
-    );
+    assert_eq!((observed.device, observed.inode, observed.mount_id), expected_identity);
 }
 
 #[test]
@@ -130,7 +132,7 @@ fn empty_result_has_no_observed_root_identity() {
     let temporary = target_temporary("forge-retained-empty-root-evidence-");
     let root = retained_root(temporary.path());
     let requests: [BootNamespaceRequest<'static>; 0] = [];
-    let streams: [&[u8]; 0] = [];
+    let streams: [RetainedBootNamespaceExpectedSource<'static>; 0] = [];
 
     let assessment = assess(&root, &requests, &streams).unwrap();
 
@@ -144,7 +146,7 @@ fn root_protocol_failure_cannot_emit_validated_result() {
     let root = retained_root(temporary.path());
     let expected = b"".as_slice();
     let requests = [request("missing", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let root_event = Cell::new(false);
     let complete_event = Cell::new(false);
     let mut hook = |event| match event {
@@ -188,7 +190,7 @@ fn every_inventory_pass_starts_from_a_fresh_offset_zero_description() {
     let root = retained_root(temporary.path());
     let expected = b"a".as_slice();
     let requests = [request("alpha", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let mut parsed = Vec::new();
     let mut hook = |event| {
         if let FixtureRetainedBootNamespaceProtocolEvent::InventoryParsed { boundary, entries } = event {
@@ -224,7 +226,7 @@ fn nested_nodes_release_in_strict_lifo_order_before_completion() {
     let root = retained_root(temporary.path());
     let expected = b"loader".as_slice();
     let requests = [request("EFI/BOOT/loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let mut events = Vec::new();
     let mut hook = |event| {
         events.push(event);
@@ -269,7 +271,7 @@ fn injected_change_after_opening_hash_is_failed_closed() {
     let root = retained_root(temporary.path());
     let expected = b"before".as_slice();
     let requests = [request("loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let changed = Cell::new(false);
     let mut hook = |event| {
         if matches!(
@@ -307,7 +309,7 @@ fn aggregate_inventory_pass_budget_accepts_n_and_rejects_n_minus_one() {
     let root = retained_root(temporary.path());
     let expected = b"data".as_slice();
     let requests = [request("loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let baseline = assess(&root, &requests, &streams).unwrap();
     let required = baseline.fixture_usage().inventory_passes;
     assert_eq!(required, 2);
@@ -351,7 +353,7 @@ fn live_observation_io_attempt_budget_accepts_exact_n_and_rejects_n_minus_one() 
     let root = retained_root(temporary.path());
     let expected = b"data".as_slice();
     let requests = [request("loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let baseline = assess(&root, &requests, &streams).unwrap();
     let required = baseline.fixture_usage().observation_io_attempts;
     assert!(required > 1);
@@ -397,7 +399,7 @@ fn descriptor_slot_budget_accepts_exact_peak_and_rejects_one_less() {
     let root = retained_root(temporary.path());
     let expected = b"loader".as_slice();
     let requests = [request("EFI/BOOT/loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let baseline = assess(&root, &requests, &streams).unwrap();
     let required = baseline.fixture_usage().peak_descriptor_slots;
     assert!(required > baseline.fixture_usage().peak_retained_nodes);
@@ -471,7 +473,7 @@ fn failed_open_reserves_and_releases_one_descriptor_slot() {
 
     let expected = b"".as_slice();
     let requests = [request("missing", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let assessment = assess(&root, &requests, &streams).unwrap();
     assert_eq!(assessment.states(), &[BootNamespaceDestinationState::Absent]);
 }
@@ -481,7 +483,7 @@ fn empty_request_uses_no_descriptor_slots() {
     let temporary = target_temporary("forge-retained-empty-request-slots-");
     let root = retained_root(temporary.path());
     let requests: [BootNamespaceRequest<'static>; 0] = [];
-    let streams: [&[u8]; 0] = [];
+    let streams: [RetainedBootNamespaceExpectedSource<'static>; 0] = [];
 
     let assessment = assess(&root, &requests, &streams).unwrap();
 
@@ -501,7 +503,7 @@ fn logical_node_budget_remains_separate_from_descriptor_slots() {
     let root = retained_root(temporary.path());
     let expected = b"loader".as_slice();
     let requests = [request("EFI/BOOT/loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let baseline = assess(&root, &requests, &streams).unwrap();
     let required = baseline.fixture_usage().peak_retained_nodes;
     assert!(required > 1);
@@ -545,7 +547,7 @@ fn late_deadline_after_opening_lookup_releases_retained_descriptors() {
     let root = retained_root(temporary.path());
     let expected = b"data".as_slice();
     let requests = [request("loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let deadline = Instant::now() + Duration::from_secs(1);
     let expired_lookup = Cell::new(false);
     let releases = Cell::new(0usize);
@@ -593,7 +595,7 @@ fn hook_failure_after_child_open_is_not_masked_by_cleanup() {
     let root = retained_root(temporary.path());
     let expected = b"data".as_slice();
     let requests = [request("loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let failed = Cell::new(false);
     let mut hook = |event| {
         if matches!(
@@ -638,7 +640,7 @@ fn size_mismatch_skips_all_content_hashes_and_actual_reads() {
     let root = retained_root(temporary.path());
     let expected = b"four".as_slice();
     let requests = [request("loader", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
     let hash_events = Cell::new(0usize);
     let read_events = Cell::new(0usize);
     let mut hook = |event| {
@@ -674,7 +676,7 @@ fn expected_digest_mismatch_fails_before_root_observation() {
     let root = retained_root(temporary.path());
     let requests = [BootNamespaceRequest::new("loader", 4, xxh3_128(b"good"))];
     let bad = b"evil".as_slice();
-    let streams = [bad];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(bad)];
     let events = Cell::new(0usize);
     let mut hook = |_event| {
         events.set(events.get() + 1);
@@ -705,7 +707,7 @@ fn non_opath_root_is_rejected_without_fallback() {
     let root = File::open(temporary.path()).unwrap();
     let expected = b"".as_slice();
     let requests = [request("absent", expected)];
-    let streams = [expected];
+    let streams = [RetainedBootNamespaceExpectedSource::generated(expected)];
 
     let error = assess(&root, &requests, &streams).unwrap_err();
 

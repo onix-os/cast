@@ -9,8 +9,12 @@ use super::super::super::{
     },
 };
 use super::{
-    content::{bind_expected_streams, capture_regular_witness, pread_actual},
+    content::{capture_regular_witness, pread_actual},
     error::RetainedBootNamespaceAssessmentError,
+    expected::{
+        BoundExpectedSourceEvidence, RetainedBootNamespaceExpectedSource, bind_expected_streams, read_expected,
+        terminally_revalidate_expected_streams,
+    },
     hook::{FixtureRetainedBootNamespaceProtocolEvent, RetainedBootNamespaceHook},
     inventory::{CachedInventory, capture_inventory},
     limits::{FixtureRetainedBootNamespaceUsage, LiveLedger},
@@ -62,10 +66,11 @@ impl RetainedNode<'_> {
     }
 }
 
-pub(super) struct RetainedBootNamespaceObserver<'root, 'request, 'expected, Hook> {
+pub(super) struct RetainedBootNamespaceObserver<'root, 'request, 'expected, 'source, Hook> {
     retained_root: &'root File,
     requests: &'request [BootNamespaceRequest<'request>],
-    expected: &'expected [&'expected [u8]],
+    expected: &'expected [RetainedBootNamespaceExpectedSource<'source>],
+    bound_expected: Vec<BoundExpectedSourceEvidence>,
     ledger: LiveLedger,
     nodes: Vec<RetainedNode<'root>>,
     inventory: Option<CachedInventory>,
@@ -74,23 +79,24 @@ pub(super) struct RetainedBootNamespaceObserver<'root, 'request, 'expected, Hook
     hook: Hook,
 }
 
-impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
-    RetainedBootNamespaceObserver<'root, 'request, 'expected, Hook>
+impl<'root, 'request, 'expected, 'source, Hook: RetainedBootNamespaceHook>
+    RetainedBootNamespaceObserver<'root, 'request, 'expected, 'source, Hook>
 {
     pub(super) fn new(
         retained_root: &'root File,
         requests: &'request [BootNamespaceRequest<'request>],
-        expected: &'expected [&'expected [u8]],
+        expected: &'expected [RetainedBootNamespaceExpectedSource<'source>],
         limits: super::limits::RetainedBootNamespaceAssessmentLimits,
         deadline: Instant,
         hook: Hook,
     ) -> Result<Self, RetainedBootNamespaceAssessmentError> {
         let mut ledger = LiveLedger::new(limits, deadline)?;
-        bind_expected_streams(requests, expected, &mut ledger)?;
+        let bound_expected = bind_expected_streams(requests, expected, &mut ledger)?;
         Ok(Self {
             retained_root,
             requests,
             expected,
+            bound_expected,
             ledger,
             nodes: Vec::new(),
             inventory: None,
@@ -141,6 +147,7 @@ impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
         if self.failure.is_some() || !classified {
             return Ok(self.ledger.usage());
         }
+        terminally_revalidate_expected_streams(self.requests, self.expected, &self.bound_expected, &mut self.ledger)?;
         self.hook
             .emit(FixtureRetainedBootNamespaceProtocolEvent::Complete)
             .map_err(|source| RetainedBootNamespaceAssessmentError::Filesystem {
@@ -528,22 +535,26 @@ impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
         output: &mut [u8],
     ) -> Result<usize, RetainedBootNamespaceAssessmentError> {
         self.require_healthy()?;
-        let bytes = self
-            .expected
+        let source =
+            self.expected
+                .get(request_index)
+                .ok_or(RetainedBootNamespaceAssessmentError::ObserverProtocol {
+                    reason: "classifier requested an out-of-range expected stream",
+                })?;
+        let evidence = self.bound_expected.get(request_index).copied().ok_or(
+            RetainedBootNamespaceAssessmentError::ObserverProtocol {
+                reason: "classifier requested expected evidence outside the prebound range",
+            },
+        )?;
+        let expected_length = self
+            .requests
             .get(request_index)
+            .copied()
             .ok_or(RetainedBootNamespaceAssessmentError::ObserverProtocol {
-                reason: "classifier requested an out-of-range expected stream",
-            })?;
-        let start = usize::try_from(offset).map_err(|_| RetainedBootNamespaceAssessmentError::ObserverProtocol {
-            reason: "classifier supplied an oversized expected-stream offset",
-        })?;
-        if start >= bytes.len() {
-            return Ok(0);
-        }
-        let found = output.len().min(bytes.len() - start);
-        output[..found].copy_from_slice(&bytes[start..start + found]);
-        self.ledger.checkpoint()?;
-        Ok(found)
+                reason: "classifier requested expected bytes outside the request range",
+            })?
+            .expected_length();
+        read_expected(source, evidence, expected_length, offset, output, &mut self.ledger)
     }
 }
 
@@ -564,7 +575,7 @@ fn top_node<'nodes, 'root>(
     Ok(node)
 }
 
-impl<Hook: RetainedBootNamespaceHook> BootNamespaceObserver for RetainedBootNamespaceObserver<'_, '_, '_, Hook> {
+impl<Hook: RetainedBootNamespaceHook> BootNamespaceObserver for RetainedBootNamespaceObserver<'_, '_, '_, '_, Hook> {
     fn now(&mut self) -> Instant {
         Instant::now()
     }

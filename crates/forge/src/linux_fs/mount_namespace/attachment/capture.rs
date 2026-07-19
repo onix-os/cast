@@ -13,8 +13,8 @@ use crate::linux_fs::descriptor_boot_filesystem::{
 use crate::linux_fs::{
     descriptor_boot_namespace::{
         BootNamespaceAssessmentLimits, BootNamespaceRequest, RetainedBootNamespaceAssessmentError,
-        RetainedBootNamespaceAssessmentLimits, ValidatedRetainedBootNamespaceAssessment,
-        assess_retained_boot_namespace_until,
+        RetainedBootNamespaceAssessmentLimits, RetainedBootNamespaceExpectedSource,
+        ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
     },
     descriptor_devtmpfs_filesystem::{
         DevtmpfsDescriptorAuthenticationError, ValidatedDevtmpfsSameMountDescriptorEvidence,
@@ -70,7 +70,7 @@ impl AttachmentCapture {
     pub(super) fn assess_retained_boot_namespace_until(
         &self,
         requests: &[BootNamespaceRequest<'_>],
-        expected: &[&[u8]],
+        expected: &[RetainedBootNamespaceExpectedSource<'_>],
         namespace_limits: BootNamespaceAssessmentLimits,
         live_limits: RetainedBootNamespaceAssessmentLimits,
         deadline: std::time::Instant,

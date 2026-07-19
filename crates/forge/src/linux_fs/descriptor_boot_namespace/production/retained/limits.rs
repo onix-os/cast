@@ -1,5 +1,6 @@
 use std::{mem::size_of, time::Instant};
 
+use super::super::super::model::HARD_MAX_REQUESTS;
 use super::super::model::*;
 use super::error::RetainedBootNamespaceAssessmentError;
 
@@ -9,6 +10,14 @@ const HARD_MAX_LIVE_CONTENT_READ_BYTES: u64 = 32 * 1024 * 1024 * 1024;
 const HARD_MAX_LIVE_CONTENT_READ_CALLS: usize = 16 * 1024 * 1024;
 const HARD_MAX_LIVE_EXPECTED_HASH_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const HARD_MAX_LIVE_EXPECTED_HASH_CHUNKS: usize = 16 * 1024 * 1024;
+// Physical expected descriptors can be streamed once while binding their
+// declared digest and once again during an equal-length comparison. Each pass
+// reserves one additional offered byte per possible terminal EOF probe.
+const HARD_MAX_LIVE_EXPECTED_SOURCE_READ_BYTES: u64 = 2 * (16 * 1024 * 1024 * 1024 + HARD_MAX_REQUESTS as u64);
+// Every physical expected-source pread is also admitted by the stricter
+// operation-wide I/O-attempt ledger, so this independent subset ceiling never
+// needs to exceed that global ceiling.
+const HARD_MAX_LIVE_EXPECTED_SOURCE_READ_CALLS: usize = HARD_MAX_LIVE_OBSERVATION_IO_ATTEMPTS;
 const HARD_MAX_LIVE_RETAINED_NODES: usize = 32;
 const HARD_MAX_LIVE_DESCRIPTOR_SLOTS: usize = 128;
 const HARD_MAX_LIVE_ALLOCATION_ATTEMPTS: usize = 1_000_000;
@@ -21,9 +30,15 @@ const HARD_MAX_LIVE_ALLOCATION_BYTES: usize = 256 * 1024 * 1024;
 /// reported terminal EOF-probe capacity.
 ///
 /// `max_observation_io_attempts` admits exactly the adapter's one-shot
-/// `fcntl(F_GETFL)`, `fstat`, `statx`, `openat2`, `pread`, and `getdents64`
-/// attempts. It deliberately excludes mandatory descriptor closes, clock
-/// reads, allocator/runtime internals, and injected protocol hooks.
+/// `fcntl(F_GETFL)`, `fcntl(F_GETFD)`, `fcntl(F_GET_SEALS)`, `fstat`, `statx`,
+/// `openat2`, `pread`, and `getdents64` attempts. It deliberately excludes
+/// mandatory descriptor closes, clock reads, allocator/runtime internals, and
+/// injected protocol hooks.
+///
+/// `max_expected_source_read_bytes` charges the complete offered capacity, not
+/// only bytes returned, before each physical expected-source `pread`. Together
+/// with `max_expected_source_read_calls`, it covers both pre-binding and
+/// comparison passes while excluding in-memory generated-source copies.
 ///
 /// `max_descriptor_slots` is conservative pre-open admission capacity. A slot
 /// is reserved before an open attempt and released if that attempt fails, so
@@ -43,6 +58,8 @@ pub(crate) struct RetainedBootNamespaceAssessmentLimits {
     pub(crate) max_content_read_calls: usize,
     pub(crate) max_expected_hash_bytes: u64,
     pub(crate) max_expected_hash_chunks: usize,
+    pub(crate) max_expected_source_read_bytes: u64,
+    pub(crate) max_expected_source_read_calls: usize,
     pub(crate) max_retained_nodes: usize,
     pub(crate) max_descriptor_slots: usize,
     pub(crate) max_allocation_attempts: usize,
@@ -65,6 +82,8 @@ impl Default for RetainedBootNamespaceAssessmentLimits {
             max_content_read_calls: HARD_MAX_LIVE_CONTENT_READ_CALLS,
             max_expected_hash_bytes: HARD_MAX_LIVE_EXPECTED_HASH_BYTES,
             max_expected_hash_chunks: HARD_MAX_LIVE_EXPECTED_HASH_CHUNKS,
+            max_expected_source_read_bytes: HARD_MAX_LIVE_EXPECTED_SOURCE_READ_BYTES,
+            max_expected_source_read_calls: HARD_MAX_LIVE_EXPECTED_SOURCE_READ_CALLS,
             max_retained_nodes: HARD_MAX_LIVE_RETAINED_NODES,
             max_descriptor_slots: HARD_MAX_LIVE_DESCRIPTOR_SLOTS,
             max_allocation_attempts: HARD_MAX_LIVE_ALLOCATION_ATTEMPTS,
@@ -89,6 +108,8 @@ pub(crate) struct FixtureRetainedBootNamespaceUsage {
     pub(crate) content_read_calls: usize,
     pub(crate) expected_hash_bytes: u64,
     pub(crate) expected_hash_chunks: usize,
+    pub(crate) expected_source_read_bytes: u64,
+    pub(crate) expected_source_read_calls: usize,
     pub(crate) peak_retained_nodes: usize,
     pub(crate) peak_descriptor_slots: usize,
     pub(crate) allocation_attempts: usize,
@@ -364,6 +385,37 @@ impl LiveLedger {
         self.checkpoint()
     }
 
+    /// Admit the offered capacity for one physical expected-source `pread`.
+    ///
+    /// Charging before the syscall bounds short reads and failures as attempts;
+    /// in-memory generated-source copies do not use this ledger.
+    pub(super) fn charge_expected_source_read(
+        &mut self,
+        offered: usize,
+        action: &'static str,
+    ) -> Result<(), RetainedBootNamespaceAssessmentError> {
+        let offered = u64::try_from(offered).map_err(|_| RetainedBootNamespaceAssessmentError::LiveBudgetExceeded {
+            field: "expected source read bytes",
+            limit: self.limits.max_expected_source_read_bytes,
+            action,
+        })?;
+        charge_u64(
+            &mut self.usage.expected_source_read_bytes,
+            offered,
+            self.limits.max_expected_source_read_bytes,
+            "expected source read bytes",
+            action,
+        )?;
+        charge_usize(
+            &mut self.usage.expected_source_read_calls,
+            1,
+            self.limits.max_expected_source_read_calls,
+            "expected source read calls",
+            action,
+        )?;
+        self.checkpoint()
+    }
+
     pub(super) fn acquire_node(&mut self) -> Result<(), RetainedBootNamespaceAssessmentError> {
         let next =
             self.retained_nodes
@@ -527,6 +579,11 @@ fn validate_limits(limits: RetainedBootNamespaceAssessmentLimits) -> Result<(), 
             HARD_MAX_LIVE_EXPECTED_HASH_CHUNKS,
         ),
         (
+            "max_expected_source_read_calls",
+            limits.max_expected_source_read_calls,
+            HARD_MAX_LIVE_EXPECTED_SOURCE_READ_CALLS,
+        ),
+        (
             "max_retained_nodes",
             limits.max_retained_nodes,
             HARD_MAX_LIVE_RETAINED_NODES,
@@ -562,6 +619,11 @@ fn validate_limits(limits: RetainedBootNamespaceAssessmentLimits) -> Result<(), 
             "max_expected_hash_bytes",
             limits.max_expected_hash_bytes,
             HARD_MAX_LIVE_EXPECTED_HASH_BYTES,
+        ),
+        (
+            "max_expected_source_read_bytes",
+            limits.max_expected_source_read_bytes,
+            HARD_MAX_LIVE_EXPECTED_SOURCE_READ_BYTES,
         ),
     ];
     for (field, value, ceiling) in u64_values {

@@ -2,9 +2,8 @@ use std::{fs::File, os::fd::AsFd as _};
 
 use xxhash_rust::xxh3::Xxh3;
 
-use super::super::super::{
-    model::BootNamespaceRequest,
-    observer::{BootNamespaceNodeIdentity, BootNamespaceObservationBoundary, BootNamespaceRegularWitness},
+use super::super::super::observer::{
+    BootNamespaceNodeIdentity, BootNamespaceObservationBoundary, BootNamespaceRegularWitness,
 };
 use super::{
     error::RetainedBootNamespaceAssessmentError,
@@ -15,38 +14,6 @@ use super::{
 };
 
 const HASH_BUFFER_BYTES: usize = 4 * 1024;
-
-pub(super) fn bind_expected_streams(
-    requests: &[BootNamespaceRequest<'_>],
-    expected: &[&[u8]],
-    ledger: &mut LiveLedger,
-) -> Result<(), RetainedBootNamespaceAssessmentError> {
-    if expected.len() != requests.len() {
-        return Err(RetainedBootNamespaceAssessmentError::ExpectedCountMismatch {
-            expected: requests.len(),
-            found: expected.len(),
-        });
-    }
-    for (request_index, (request, bytes)) in requests.iter().copied().zip(expected).enumerate() {
-        if u64::try_from(bytes.len()).ok() != Some(request.expected_length()) {
-            return Err(RetainedBootNamespaceAssessmentError::ExpectedLengthMismatch {
-                request_index,
-                expected: request.expected_length(),
-                found: bytes.len(),
-            });
-        }
-        let mut digest = Xxh3::new();
-        for chunk in bytes.chunks(HASH_BUFFER_BYTES) {
-            ledger.charge_expected_hash_chunk(chunk.len())?;
-            digest.update(chunk);
-        }
-        ledger.checkpoint()?;
-        if digest.digest128() != request.expected_digest() {
-            return Err(RetainedBootNamespaceAssessmentError::ExpectedDigestMismatch { request_index });
-        }
-    }
-    ledger.checkpoint()
-}
 
 pub(super) fn capture_regular_witness<Hook: RetainedBootNamespaceHook>(
     retained: &File,

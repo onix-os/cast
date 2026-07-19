@@ -45,6 +45,6 @@ pub(crate) use retained::{
     assess_retained_boot_namespace_with_hook_until, probe_failed_open_descriptor_slot_until,
 };
 pub(crate) use retained::{
-    RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits,
+    RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits, RetainedBootNamespaceExpectedSource,
     ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
 };
