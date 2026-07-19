@@ -10,7 +10,7 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s mkdir -p "$(MOUNT_NAMESPACE_TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(MOUNT_NAMESPACE_TOP_DIR)/target/linux-mount-namespace-test-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test --manifest-path "$(MOUNT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test --manifest-path "$(MOUNT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mount_namespace::'; \
 	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 17; \

@@ -6,7 +6,7 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/activate-archived-complete-route-list.XXXXXXXXXXXX" )"; \
 	production_code="$$( timeout 10s mktemp "$(TOP_DIR)/target/activate-archived-complete-route-code.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed" "$$production_code"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_activate_archived::tests::'; \
 	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'.*: test$$' "$$listed" )" = 39; \

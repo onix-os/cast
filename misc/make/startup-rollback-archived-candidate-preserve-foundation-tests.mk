@@ -5,7 +5,7 @@ forge-startup-usr-rollback-archived-candidate-preserve-foundation-test:
 	timeout 10s mkdir -p "$(TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/archived-candidate-preserve-foundation-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	prefix='client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::archived_effect::'; \
 	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 12; \
 	for name in \

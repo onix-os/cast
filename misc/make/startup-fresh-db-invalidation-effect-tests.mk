@@ -9,7 +9,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	apply_body="$$( timeout 10s mktemp "$(TOP_DIR)/target/fresh-db-invalidation-apply.XXXXXXXXXXXX" )"; \
 	finish_body="$$( timeout 10s mktemp "$(TOP_DIR)/target/fresh-db-invalidation-finish.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed" "$$bare_calls" "$$production_code" "$$apply_body" "$$finish_body"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_reconciliation::usr_rollback_fresh_db_invalidation_authority::tests::'; \
 	count="$$( timeout 10s awk -v prefix="$$prefix" 'index($$0, prefix) == 1 && $$0 ~ /: test$$/ { count += 1 } END { print count + 0 }' "$$listed" )"; \

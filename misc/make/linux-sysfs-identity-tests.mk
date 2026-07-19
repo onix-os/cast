@@ -10,7 +10,7 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 	timeout 10s mkdir -p "$(SYSFS_IDENTITY_TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(SYSFS_IDENTITY_TOP_DIR)/target/linux-sysfs-identity-test-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test --manifest-path "$(SYSFS_IDENTITY_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test --manifest-path "$(SYSFS_IDENTITY_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::sysfs_identity::'; \
 	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 25; \

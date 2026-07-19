@@ -5,7 +5,7 @@ forge-exact-fresh-transition-removal-test:
 	timeout 10s mkdir -p "$(TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/exact-fresh-transition-removal-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='db::state::exact_fresh_transition_removal::tests::'; \
 	count="$$( timeout 10s awk -v prefix="$$prefix" 'index($$0, prefix) == 1 && $$0 ~ /: test$$/ { count += 1 } END { print count + 0 }' "$$listed" )"; \

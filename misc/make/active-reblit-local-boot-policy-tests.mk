@@ -5,7 +5,7 @@ forge-active-reblit-local-boot-policy-test:
 	timeout 10s mkdir -p "$(TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/active-reblit-local-boot-policy-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_local_boot_policy::tests::'; \
 	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 17; \

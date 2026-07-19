@@ -5,7 +5,7 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	timeout 10s mkdir -p "$(TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/activate-archived-candidate-dispatch-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	persistence_prefix='client::startup_recovery::usr_rollback_activate_archived_candidate_preserve_persistence::tests::'; \
 	startup_prefix='client::startup_gate::usr_rollback_activate_archived::tests::'; \
 	timeout 10s test "$$( timeout 10s grep -c "^$$persistence_prefix"'.*: test$$' "$$listed" )" = 11; \

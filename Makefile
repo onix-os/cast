@@ -329,7 +329,7 @@ forge-state-prune-test:
 	timeout 10s mkdir -p "$(TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/state-prune-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	for test in \
 		client::boot::tests::prune_exclusions_are_applied_before_bounded_rollback_selection \

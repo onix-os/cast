@@ -10,7 +10,7 @@ forge-linux-mountinfo-parser-test:
 	timeout 10s mkdir -p "$(MOUNTINFO_TOP_DIR)/target"; \
 	listed="$$( timeout 10s mktemp "$(MOUNTINFO_TOP_DIR)/target/linux-mountinfo-test-list.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed"' EXIT; \
-	timeout 300s $(CARGO) test --manifest-path "$(MOUNTINFO_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test --manifest-path "$(MOUNTINFO_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mountinfo_'; \
 	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 22; \

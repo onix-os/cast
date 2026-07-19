@@ -7,7 +7,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	production="$$( timeout 10s mktemp "$(TOP_DIR)/target/new-state-suffix-production.XXXXXXXXXXXX" )"; \
 	inventory="$$( timeout 10s mktemp "$(TOP_DIR)/target/new-state-suffix-inventory.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed" "$$production" "$$inventory"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_new_state::tests::'; \
 	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 35; \

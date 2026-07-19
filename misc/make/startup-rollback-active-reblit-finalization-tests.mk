@@ -7,7 +7,7 @@ forge-startup-usr-rollback-active-reblit-finalization-test:
 	refs="$$( timeout 10s mktemp "$(TOP_DIR)/target/active-reblit-finalization-refs.XXXXXXXXXXXX" )"; \
 	executor_code="$$( timeout 10s mktemp "$(TOP_DIR)/target/active-reblit-finalization-code.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed" "$$refs" "$$executor_code"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	gate_prefix='client::startup_gate::usr_rollback_active_reblit::tests::finalization_'; \
 	timeout 10s test "$$( timeout 10s grep -c "^$$gate_prefix.*: test$$" "$$listed" )" = 17; \

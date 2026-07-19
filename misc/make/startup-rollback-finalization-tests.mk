@@ -9,7 +9,7 @@ forge-startup-usr-rollback-finalization-test:
 	store_read_code="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-finalization-store-read.XXXXXXXXXXXX" )"; \
 	store_delete_code="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-finalization-store-delete.XXXXXXXXXXXX" )"; \
 	trap 'timeout 10s rm -f "$$listed" "$$refs" "$$executor_code" "$$store_read_code" "$$store_delete_code"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 30s tee "$$listed" >/dev/null; \
+	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	authority_prefix='client::startup_reconciliation::usr_rollback_finalization_authority::tests::'; \
 	timeout 10s test "$$( timeout 10s grep -c "^$$authority_prefix.*: test$$" "$$listed" )" = 5; \
