@@ -17,10 +17,12 @@ use std::{
 /// These are crate-internal parser contracts, not a public configuration API.
 pub(crate) const SYSFS_DEV_ATTRIBUTE_MAX_BYTES: usize = 22;
 pub(crate) const SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES: usize = 11;
+pub(crate) const SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES: usize = 21;
 pub(crate) const SYSFS_UEVENT_MAX_BYTES: usize = 64 * 1024;
 pub(crate) const SYSFS_LINK_TARGET_MAX_BYTES: usize = 4 * 1024;
 
 mod device_name;
+mod geometry;
 mod identity;
 mod links;
 mod numeric;
@@ -30,6 +32,10 @@ mod uuid;
 #[allow(unused_imports)] // retained by the descriptor-authenticated identity layer
 pub(crate) use device_name::{
     SysfsBlockDeviceName, parse_sysfs_block_device_name, parse_sysfs_block_device_name_until,
+};
+#[allow(unused_imports)] // retained by the descriptor-authenticated identity layer
+pub(crate) use geometry::{
+    SysfsPartitionGeometry, parse_sysfs_partition_geometry, parse_sysfs_partition_geometry_until,
 };
 #[allow(unused_imports)] // named surface for the later descriptor-retaining layer
 pub(crate) use identity::{SysfsDiskIdentity, SysfsPartitionIdentity};

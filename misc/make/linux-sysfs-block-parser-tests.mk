@@ -13,7 +13,7 @@ forge-linux-sysfs-block-parser-test:
 	timeout 300s $(CARGO) test --manifest-path "$(SYSFS_BLOCK_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::sysfs_block_'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 30; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 33; \
 	for name in \
 		identity::partition_identity_cross_checks_all_required_attributes_and_retains_event \
 		identity::partition_identity_rejects_cross_file_disagreement \
@@ -38,6 +38,9 @@ forge-linux-sysfs-block-parser-test:
 		numeric::partition_attribute_accepts_only_positive_canonical_u32 \
 		numeric::partition_attribute_enforces_the_exact_maximum_length_boundary \
 		numeric::numeric_deadline_entrypoints_reject_expired_work_and_expose_exact_read_ceilings \
+		numeric::partition_geometry_retains_canonical_512_byte_sector_units \
+		numeric::partition_geometry_rejects_noncanonical_zero_size_and_overflow \
+		numeric::partition_geometry_deadline_and_attribute_ceiling_are_exact \
 		uevent::uevent_retains_order_unknown_keys_empty_values_and_opaque_value_bytes \
 		uevent::uevent_rejects_duplicate_keys_and_noncanonical_line_grammar \
 		uevent::uevent_byte_and_line_bounds_accept_n_and_reject_n_plus_one \
@@ -58,8 +61,10 @@ forge-linux-sysfs-block-parser-test:
 	timeout 10s grep -Fq 'pub(crate) fn parse_sysfs_disk_identity_until(' "$(SYSFS_BLOCK_TOP_DIR)/crates/forge/src/linux_fs/sysfs_block/identity.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn require_matching_disk_sequence_until(' "$(SYSFS_BLOCK_TOP_DIR)/crates/forge/src/linux_fs/sysfs_block/identity.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn parse_sysfs_block_device_name_until(' "$(SYSFS_BLOCK_TOP_DIR)/crates/forge/src/linux_fs/sysfs_block/device_name.rs"; \
+	timeout 10s grep -Fq 'pub(crate) fn parse_sysfs_partition_geometry_until(' "$(SYSFS_BLOCK_TOP_DIR)/crates/forge/src/linux_fs/sysfs_block/geometry.rs"; \
 	timeout 10s grep -Fq 'pub(crate) const SYSFS_DEV_ATTRIBUTE_MAX_BYTES: usize = 22;' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) const SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES: usize = 11;' "$$root"; \
+	timeout 10s grep -Fq 'pub(crate) const SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES: usize = 21;' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) const SYSFS_UEVENT_MAX_BYTES: usize = 64 * 1024;' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) const SYSFS_LINK_TARGET_MAX_BYTES: usize = 4 * 1024;' "$$root"; \
 	timeout 10s grep -Fq 'deadline: Option<Instant>' "$$root"; \

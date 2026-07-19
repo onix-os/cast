@@ -4,7 +4,8 @@ use std::{
 };
 
 use super::super::sysfs_block::{
-    SYSFS_DEV_ATTRIBUTE_MAX_BYTES, SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES, parse_sysfs_dev, parse_sysfs_dev_until,
+    SYSFS_DEV_ATTRIBUTE_MAX_BYTES, SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES, SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES,
+    parse_sysfs_dev, parse_sysfs_dev_until, parse_sysfs_partition_geometry, parse_sysfs_partition_geometry_until,
     parse_sysfs_partition_number, parse_sysfs_partition_number_until,
 };
 
@@ -110,6 +111,80 @@ fn numeric_deadline_entrypoints_reject_expired_work_and_expose_exact_read_ceilin
     );
     assert_eq!(
         parse_sysfs_partition_number_until(b"1\n", expired).unwrap_err().kind(),
+        io::ErrorKind::TimedOut
+    );
+}
+
+#[test]
+fn partition_geometry_retains_canonical_512_byte_sector_units() {
+    let ordinary = parse_sysfs_partition_geometry(b"2048\n", b"1048576\n").unwrap();
+    assert_eq!(ordinary.start_512_sectors(), 2_048);
+    assert_eq!(ordinary.size_512_sectors(), 1_048_576);
+
+    let boundary = parse_sysfs_partition_geometry(b"0\n", b"18446744073709551615\n").unwrap();
+    assert_eq!(boundary.start_512_sectors(), 0);
+    assert_eq!(boundary.size_512_sectors(), u64::MAX);
+}
+
+#[test]
+fn partition_geometry_rejects_noncanonical_zero_size_and_overflow() {
+    for start in [
+        b"".as_slice(),
+        b"00\n",
+        b"01\n",
+        b"+1\n",
+        b"-1\n",
+        b"1 \n",
+        b"18446744073709551616\n",
+    ] {
+        let result = parse_sysfs_partition_geometry(start, b"1\n");
+        assert!(matches!(
+            result.unwrap_err().kind(),
+            io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
+        ));
+    }
+    for size in [
+        b"0\n".as_slice(),
+        b"00\n",
+        b"01\n",
+        b"+1\n",
+        b"-1\n",
+        b"1 \n",
+        b"18446744073709551616\n",
+    ] {
+        invalid_data(parse_sysfs_partition_geometry(b"0\n", size));
+    }
+    assert_eq!(
+        parse_sysfs_partition_geometry(b"0", b"1\n").unwrap_err().kind(),
+        io::ErrorKind::UnexpectedEof
+    );
+    assert_eq!(
+        parse_sysfs_partition_geometry(b"0\n", b"1").unwrap_err().kind(),
+        io::ErrorKind::UnexpectedEof
+    );
+}
+
+#[test]
+fn partition_geometry_deadline_and_attribute_ceiling_are_exact() {
+    assert_eq!(SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES, 21);
+    let maximum = b"18446744073709551615\n";
+    assert_eq!(maximum.len(), SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES);
+    let live = Instant::now() + Duration::from_secs(1);
+    assert_eq!(
+        parse_sysfs_partition_geometry_until(maximum, maximum, live)
+            .unwrap()
+            .size_512_sectors(),
+        u64::MAX
+    );
+
+    let overbound = b"018446744073709551615\n";
+    assert_eq!(overbound.len(), SYSFS_PARTITION_GEOMETRY_ATTRIBUTE_MAX_BYTES + 1);
+    invalid_data(parse_sysfs_partition_geometry(overbound, b"1\n"));
+    let expired = Instant::now() - Duration::from_millis(1);
+    assert_eq!(
+        parse_sysfs_partition_geometry_until(b"0\n", b"1\n", expired)
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::TimedOut
     );
 }
