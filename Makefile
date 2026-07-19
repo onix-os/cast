@@ -713,31 +713,28 @@ cache-clean-test:
 examples:
 	@echo "Checking every Gluon package example through the public Cast CLI..."
 	@set -eu; \
-	listed="$$( $(CARGO) test -p cast --test gluon_examples -- --list )"; \
-	printf '%s\n' "$$listed" | \
-		grep -Fqx 'every_gluon_package_example_passes_the_public_cast_cli: test'
-	@$(CARGO) test -p cast --test gluon_examples \
+	listed="$$( timeout 300s $(CARGO) test -p cast --test gluon_examples -- --list )"; \
+	timeout 10s grep -Fqx 'every_gluon_package_example_passes_the_public_cast_cli: test' <<<"$$listed"
+	@timeout 1200s $(CARGO) test -p cast --test gluon_examples \
 		every_gluon_package_example_passes_the_public_cast_cli -- \
 		--exact --nocapture
 	@echo "Freezing every Gluon package example through the hermetic planner..."
 	@set -eu; \
-	listed="$$( $(CARGO) test -p mason --lib -- --list )"; \
-	printf '%s\n' "$$listed" | \
-		grep -Fqx 'planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks: test'
-	@$(CARGO) test -p mason --lib \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s grep -Fqx 'planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks: test' <<<"$$listed"
+	@timeout 1200s $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks -- \
 		--exact --nocapture
 	@echo "Proving metadata-only providers fail before frozen execution..."
 	@set -eu; \
-	listed="$$( $(CARGO) test -p mason --lib -- --list )"; \
-	printf '%s\n' "$$listed" | \
-		grep -Fqx 'planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution: test'
-	@$(CARGO) test -p mason --lib \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s grep -Fqx 'planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution: test' <<<"$$listed"
+	@timeout 1200s $(CARGO) test -p mason --lib \
 		planner::hermetic_tests::checked_in_metadata_only_example_fails_closed_before_execution -- \
 		--exact --nocapture
 
 examples-gate-test:
-	@"$(TOP_DIR)/misc/scripts/test-examples-gate.sh"
+	@timeout 180s "$(TOP_DIR)/misc/scripts/test-examples-gate.sh"
 
 fixture-sources:
 	@"$(TOP_DIR)/misc/scripts/build-execution-fixtures.sh"
