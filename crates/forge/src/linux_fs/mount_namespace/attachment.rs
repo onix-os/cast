@@ -25,10 +25,12 @@ use std::{
 };
 
 mod capture;
+mod device;
 mod filesystem;
 mod selector;
 
 use capture::{AttachmentCapture, capture_twice, require_capture_matches};
+pub(crate) use device::{TaskRootDevtmpfsAttachmentAuthenticationError, ValidatedTaskRootDevtmpfsAttachmentEvidence};
 use filesystem::{AttachmentLimits, directory_witness, duplicate_directory, require_same_directory};
 use selector::{AttachmentSelector, MAX_SELECTOR_COMPONENTS};
 
@@ -37,8 +39,13 @@ use super::{
     capture::{Snapshot, require_snapshot_matches},
     filesystem::{DESCRIPTOR_MOUNT_ID_DESCRIPTOR_BOUND, DESCRIPTOR_MOUNT_ID_WORK_BOUND, Operation},
 };
+#[cfg(test)]
+use crate::linux_fs::descriptor_devtmpfs_filesystem::{
+    DevtmpfsDescriptorAuthenticationError, ValidatedDevtmpfsSameMountDescriptorEvidence,
+};
 use crate::linux_fs::{
     descriptor_boot_filesystem::{BootFilesystemAuthenticationError, ValidatedBootFilesystemDescriptorEvidence},
+    mountinfo_devtmpfs_policy::ValidatedDevtmpfsMountInfoPolicy,
     sysfs_block::SysfsDeviceNumber,
 };
 
@@ -376,6 +383,58 @@ impl RevalidatedTaskRootedAttachment<'_> {
         deadline: Instant,
     ) -> Result<ValidatedBootFilesystemDescriptorEvidence, BootFilesystemAuthenticationError> {
         self.current.authenticate_boot_filesystem_until(deadline)
+    }
+
+    /// Bind the retained exact task-root `/dev` destination to independently
+    /// authenticated devtmpfs mountinfo and same-mount descriptor evidence.
+    ///
+    /// The destination descriptor remains private to the retained capture.
+    /// Success contains scalars only and proves neither whole-root bind
+    /// provenance nor ongoing currentness.
+    pub(crate) fn authenticate_devtmpfs_attachment_until(
+        &self,
+        policy: ValidatedDevtmpfsMountInfoPolicy,
+        deadline: Instant,
+    ) -> Result<ValidatedTaskRootDevtmpfsAttachmentEvidence, TaskRootDevtmpfsAttachmentAuthenticationError> {
+        device::bind_task_root_devtmpfs_attachment_until(
+            self.selector(),
+            self.destination_device(),
+            self.destination_inode(),
+            self.destination_mount_id(),
+            policy,
+            deadline,
+            |_device, _inode, _mount_id, policy, deadline| {
+                self.current.authenticate_devtmpfs_same_mount_until(policy, deadline)
+            },
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn validate_fixture_devtmpfs_attachment_with(
+        &self,
+        policy: ValidatedDevtmpfsMountInfoPolicy,
+        deadline: Instant,
+        authenticate: impl FnOnce(
+            u64,
+            u64,
+            u64,
+            ValidatedDevtmpfsMountInfoPolicy,
+            Instant,
+        ) -> Result<
+            ValidatedDevtmpfsSameMountDescriptorEvidence,
+            DevtmpfsDescriptorAuthenticationError,
+        >,
+    ) -> Result<ValidatedTaskRootDevtmpfsAttachmentEvidence, TaskRootDevtmpfsAttachmentAuthenticationError> {
+        device::bind_task_root_devtmpfs_attachment_until(
+            self.selector(),
+            self.destination_device(),
+            self.destination_inode(),
+            self.destination_mount_id(),
+            policy,
+            deadline,
+            authenticate,
+        )
     }
 
     /// Convert the destination `st_dev` into one exact sysfs device number.

@@ -10,6 +10,13 @@ use crate::linux_fs::descriptor_boot_filesystem::{
     BootFilesystemAuthenticationError, ValidatedBootFilesystemDescriptorEvidence,
     authenticate_boot_filesystem_directory_until,
 };
+use crate::linux_fs::{
+    descriptor_devtmpfs_filesystem::{
+        DevtmpfsDescriptorAuthenticationError, ValidatedDevtmpfsSameMountDescriptorEvidence,
+        authenticate_devtmpfs_same_mount_directory_until,
+    },
+    mountinfo_devtmpfs_policy::ValidatedDevtmpfsMountInfoPolicy,
+};
 
 struct PinnedComponent {
     name: std::ffi::CString,
@@ -46,6 +53,25 @@ impl AttachmentCapture {
             &destination.file,
             self.destination_witness.device,
             self.destination_witness.inode,
+            deadline,
+        )
+    }
+
+    pub(super) fn authenticate_devtmpfs_same_mount_until(
+        &self,
+        policy: ValidatedDevtmpfsMountInfoPolicy,
+        deadline: std::time::Instant,
+    ) -> Result<ValidatedDevtmpfsSameMountDescriptorEvidence, DevtmpfsDescriptorAuthenticationError> {
+        let destination = self
+            .components
+            .last()
+            .unwrap_or_else(|| unreachable!("validated attachment capture always retains one destination component"));
+        authenticate_devtmpfs_same_mount_directory_until(
+            &destination.file,
+            self.destination_witness.device,
+            self.destination_witness.inode,
+            self.destination_witness.mount_id,
+            policy,
             deadline,
         )
     }

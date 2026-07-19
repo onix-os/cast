@@ -13,7 +13,7 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mount_namespace::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 40; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 45; \
 	for name in \
 		attachment::bounds::zero_limits_and_expired_deadline_fail_before_attachment_hooks \
 		attachment::bounds::attachment_hooks_are_finite_and_injected_failures_propagate \
@@ -21,6 +21,11 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 		attachment::bounds::revalidation_budgets_cover_both_chain_passes_and_both_anchor_edges \
 		attachment::deadline::fixture_clock_rejects_attachment_prepare_and_revalidation_at_entry \
 		attachment::deadline::fixture_clock_rejects_attachment_prepare_and_revalidation_at_final_checkpoint \
+		attachment::device::non_dev_selector_is_rejected_before_injected_descriptor_observation \
+		attachment::device::exact_dev_selector_retains_attachment_and_policy_scalars_in_closed_evidence \
+		attachment::device::expired_deadline_rejects_exact_dev_before_injected_descriptor_observation \
+		attachment::device::injected_descriptor_error_is_preserved_as_the_composition_source \
+		attachment::device::injected_descriptor_identity_mismatch_fails_closed \
 		attachment::malformed::malformed_absolute_lexical_selectors_fail_before_resolution \
 		attachment::malformed::selector_byte_component_and_depth_ceilings_are_exact \
 		attachment::malformed::missing_symlink_fifo_and_non_directory_components_are_rejected \
@@ -68,11 +73,18 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(crate) fn revalidate_against_until(' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn authenticate_boot_filesystem_until(' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'self.current.authenticate_boot_filesystem_until(deadline)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(crate) fn authenticate_devtmpfs_attachment_until(' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'self.current.authenticate_devtmpfs_same_mount_until(policy, deadline)' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'pub(super) fn authenticate_boot_filesystem_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'authenticate_boot_filesystem_directory_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq '&destination.file,' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'self.destination_witness.device,' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'self.destination_witness.inode,' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'pub(super) fn authenticate_devtmpfs_same_mount_until(' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'authenticate_devtmpfs_same_mount_directory_until(' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'self.destination_witness.mount_id,' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'const EXACT_TASK_ROOT_DEVICE_SELECTOR: &str = "/dev";' "$$core/attachment/device.rs"; \
+	timeout 10s grep -Fq 'if selector != EXACT_TASK_ROOT_DEVICE_SELECTOR' "$$core/attachment/device.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn destination_sysfs_device_number(&self)' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'nix::libc::major(raw_device)' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'nix::libc::minor(raw_device)' "$$core/attachment.rs"; \
