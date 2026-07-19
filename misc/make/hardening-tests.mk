@@ -235,6 +235,10 @@ forge-cache-test:
 		timeout 300s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
 
+# Kept in its own fragment so the pure mounted-topology foundation can be
+# validated independently of descriptor and storage integration work.
+include misc/make/active-reblit-mounted-boot-topology-tests.mk
+
 forge-client-direct-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
