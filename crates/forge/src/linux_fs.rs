@@ -157,6 +157,9 @@ pub(crate) mod descriptor_boot_namespace;
 #[allow(dead_code)] // standalone foundation for future mounted boot publication
 pub(crate) mod descriptor_boot_filesystem;
 
+#[allow(dead_code)] // closed same-mount evidence for future authenticated /dev composition
+pub(crate) mod descriptor_devtmpfs_filesystem;
+
 #[allow(dead_code)] // strict image parser foundation for future boot role authentication
 pub(crate) mod gpt_partition_role;
 

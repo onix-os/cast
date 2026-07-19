@@ -15,6 +15,7 @@ mod chmod_once;
 mod descriptor_boot_filesystem;
 mod descriptor_boot_namespace;
 mod descriptor_boot_namespace_production;
+mod descriptor_devtmpfs_filesystem;
 #[path = "tests/mountinfo_devtmpfs_policy.rs"]
 mod devtmpfs_mount_policy;
 mod gpt_partition_device;

@@ -30,6 +30,7 @@ include misc/make/host-storage-safety-tests.mk
 include misc/make/linux-descriptor-boot-filesystem-tests.mk
 include misc/make/linux-descriptor-boot-namespace-tests.mk
 include misc/make/linux-descriptor-boot-namespace-production-tests.mk
+include misc/make/linux-descriptor-devtmpfs-filesystem-tests.mk
 include misc/make/linux-gpt-partition-role-tests.mk
 include misc/make/linux-gpt-partition-device-tests.mk
 include misc/make/linux-mount-attachment-tests.mk
