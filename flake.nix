@@ -19,6 +19,12 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rustfmt" "clippy" ];
         };
+        python =
+          assert pkgs.python314.version == "3.14.3";
+          pkgs.python314;
+        pythonPackaging =
+          assert pkgs.python314Packages.packaging.version == "25.0";
+          pkgs.python314Packages.packaging;
         pythonSetuptools = pkgs.python314Packages.setuptools.overridePythonAttrs (_: rec {
           pname = "setuptools";
           version = "82.0.1";
@@ -34,12 +40,12 @@
             inherit pname version;
             hash = "sha256-zHK9EAm6DPY5IuKPlNnYO5IKorso95ijHQaRsC+jybM=";
           };
-          dependencies = (old.dependencies or [ ]) ++ [ pkgs.python314Packages.packaging ];
+          dependencies = (old.dependencies or [ ]) ++ [ pythonPackaging ];
         });
         pythonTypingExtensions =
           assert pkgs.python314Packages.typing-extensions.version == "4.15.0";
           pkgs.python314Packages.typing-extensions;
-        pythonToolchain = pkgs.python314.withPackages (_: [
+        pythonToolchain = python.withPackages (_: [
           pythonSetuptools
           pythonTypingExtensions
           pythonWheel
