@@ -91,6 +91,14 @@ reopened and required to expose the exact validated private inode, and the
 parent must have no remaining inode headroom. The child then marks only the
 parent tmpfs mount read-only, non-recursively. Consequently:
 
+The parent is created and validated as a child-root-owned `0755` directory,
+rather than retaining tmpfs's sticky world-writable default. Besides matching
+normal `/dev` traversal semantics, this matters for an ordinary mapped user:
+Linux applies its sticky-directory creation guard to `O_CREAT` even when the
+existing final object is a mounted character device owned outside the child
+user namespace. The same root metadata is revalidated after attachment and
+sealing.
+
 - the payload cannot create, remove, rename, or replace device names;
 - `O_WRONLY | O_CREAT | O_TRUNC` retains normal device behavior;
 - metadata changes affect only disposable private inodes;

@@ -298,9 +298,10 @@ fn exercise_bounded_tmpfs(size_bytes: u64, inode_limit: u64) -> io::Result<()> {
 }
 
 fn exercise_private_minimal_dev() -> io::Result<()> {
-    let mut actual = std::fs::read_dir("/dev")?
+    let mut actual = private_dev_operation("read /dev directory", std::fs::read_dir("/dev"))?
         .map(|entry| entry.map(|entry| entry.file_name()))
-        .collect::<io::Result<Vec<_>>>()?;
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| private_dev_error("read /dev directory entry", error))?;
     actual.sort();
     let mut expected = MINIMAL_DEV_NODES
         .iter()
@@ -329,25 +330,98 @@ fn exercise_private_minimal_dev() -> io::Result<()> {
         .write(true)
         .create(true)
         .truncate(true)
-        .open("/dev/null")?;
-    null.write_all(b"discarded")?;
+        .open("/dev/null")
+        .map_err(|error| {
+            private_dev_path_error(
+                "open /dev/null with create and truncate",
+                Path::new("/dev/null"),
+                error,
+            )
+        })?;
+    null.write_all(b"discarded")
+        .map_err(|error| private_dev_error("write /dev/null", error))?;
     drop(null);
 
-    let mut null = std::fs::File::open("/dev/null")?;
+    let mut null = private_dev_operation("open /dev/null for reading", std::fs::File::open("/dev/null"))?;
     let mut byte = [0_u8; 1];
-    if null.read(&mut byte)? != 0 {
+    if null
+        .read(&mut byte)
+        .map_err(|error| private_dev_error("read /dev/null", error))?
+        != 0
+    {
         return Err(io::Error::other("/dev/null did not return EOF"));
     }
 
-    let mut zero = std::fs::File::open("/dev/zero")?;
+    let mut zero = private_dev_operation("open /dev/zero", std::fs::File::open("/dev/zero"))?;
     let mut zeros = [1_u8; 16];
-    zero.read_exact(&mut zeros)?;
+    zero.read_exact(&mut zeros)
+        .map_err(|error| private_dev_error("read /dev/zero", error))?;
     if zeros != [0_u8; 16] {
         return Err(io::Error::other("/dev/zero returned non-zero bytes"));
     }
 
-    let mut full = std::fs::OpenOptions::new().write(true).open("/dev/full")?;
+    let mut full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .map_err(|error| private_dev_error("open /dev/full", error))?;
     require_errno(full.write_all(&[1]), Errno::ENOSPC, "write /dev/full")
+}
+
+fn private_dev_operation<T>(operation: &str, result: io::Result<T>) -> io::Result<T> {
+    result.map_err(|error| private_dev_error(operation, error))
+}
+
+fn private_dev_error(operation: &str, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{operation}: {error}"))
+}
+
+fn private_dev_path_error(operation: &str, path: &Path, error: io::Error) -> io::Error {
+    let metadata = std::fs::symlink_metadata(path)
+        .map(|metadata| {
+            format!(
+                "mode={:o} uid={} gid={} device={}:{}",
+                metadata.mode(),
+                metadata.uid(),
+                metadata.gid(),
+                nix::libc::major(metadata.rdev()),
+                nix::libc::minor(metadata.rdev())
+            )
+        })
+        .unwrap_or_else(|metadata_error| format!("metadata unavailable: {metadata_error}"));
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("fixed path contains no NUL");
+    let mut mount: nix::libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: path is NUL-terminated and mount is valid writable output.
+    let flags = if unsafe { nix::libc::statvfs(path.as_ptr(), &mut mount) } == -1 {
+        format!("mount flags unavailable: {}", io::Error::last_os_error())
+    } else {
+        format!("mount_flags={:#x}", mount.f_flag)
+    };
+    let plain_read = std::fs::File::open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    let plain_write = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    let create_write = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    let truncate_write = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    io::Error::new(
+        error.kind(),
+        format!(
+            "{operation}: {error}; {metadata}; {flags}; plain_read={plain_read}; plain_write={plain_write}; create_write={create_write}; truncate_write={truncate_write}"
+        ),
+    )
 }
 
 fn require_payload_security_boundary() -> io::Result<()> {

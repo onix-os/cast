@@ -13,7 +13,7 @@ container-private-device-test:
 	assembly_count="$$( timeout 10s grep -c '^private_device_assembly::tests::.*: test$$' <<<"$$listed" )"; \
 	timeout 10s test "$$provider_count" = 8; \
 	timeout 10s test "$$broker_count" = 9; \
-	timeout 10s test "$$assembly_count" = 7; \
+	timeout 10s test "$$assembly_count" = 8; \
 	for prefix in \
 		private_devices::tests:: \
 		private_device_assembly::tests:: \
@@ -31,6 +31,7 @@ container-private-device-test:
 	timeout 10s grep -Fq 'mount_setattr(read-only, nonrecursive)' "$$assembly"; \
 	timeout 10s grep -Fq 'self.finish_attached()' "$$assembly"; \
 	timeout 10s grep -Fq 'move_mount parent onto authenticated final target' "$$assembly"; \
+	timeout 10s grep -Fq 'c"mode", c"0755"' "$$assembly"; \
 	timeout 10s grep -Fq 'device_path(device)' "$$assembly"; \
 	timeout 10s grep -Fq 'require_no_parent_inode_headroom(self.parent.as_raw_fd())?;' "$$assembly"; \
 	seal="$$( timeout 10s sed -n '/^fn seal_parent_read_only(/,/^}/p' "$$assembly" )"; \

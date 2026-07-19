@@ -26,6 +26,7 @@ const FSMOUNT_CLOEXEC: libc::c_uint = 0x0000_0001;
 const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x0000_0040;
 const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
 const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
+const PARENT_PERMISSIONS: libc::mode_t = 0o755;
 const PLACEHOLDER_PERMISSIONS: libc::mode_t = 0o600;
 
 /// Linear child-side authority to attach and finish one private minimal
@@ -102,6 +103,7 @@ impl PreparedPrivateDev {
         require_no_parent_inode_headroom(self.parent.as_raw_fd())?;
         seal_parent_read_only(self.parent.as_raw_fd())?;
         require_parent_read_only(self.parent.as_raw_fd())?;
+        validate_tmpfs_observation(observe_tmpfs(self.parent.as_raw_fd())?)?;
         self.devices
             .validate_namespace_invariants()
             .map_err(|source| PrivateDeviceAssemblyError::ValidateAttachedDevices { source })?;
@@ -145,6 +147,15 @@ pub(crate) enum PrivateDeviceAssemblyError {
         actual_inodes: u64,
     },
     #[snafu(display(
+        "private minimal /dev tmpfs root has type {actual_type:o}, permissions {actual_permissions:o}, and owner {actual_uid}:{actual_gid}; expected a 0755 directory owned by child root"
+    ))]
+    UnexpectedTmpfsRoot {
+        actual_type: libc::mode_t,
+        actual_permissions: libc::mode_t,
+        actual_uid: libc::uid_t,
+        actual_gid: libc::gid_t,
+    },
+    #[snafu(display(
         "private minimal /dev placeholder {device} has type {actual_type:o}, permissions {actual_permissions:o}, size {actual_size}, and {actual_links} links"
     ))]
     InvalidPlaceholder {
@@ -180,6 +191,7 @@ fn detached_bounded_tmpfs() -> Result<OwnedFd, PrivateDeviceAssemblyError> {
 
     configure_fscontext_string(context.as_raw_fd(), c"size", c"65536", "dev tmpfs size")?;
     configure_fscontext_string(context.as_raw_fd(), c"nr_inodes", c"4", "dev tmpfs inode ceiling")?;
+    configure_fscontext_string(context.as_raw_fd(), c"mode", c"0755", "dev tmpfs root mode")?;
 
     // SAFETY: CREATE accepts null key/value pointers and borrows only the live
     // context for the duration of this call.
@@ -397,6 +409,10 @@ struct TmpfsObservation {
     block_size: libc::c_long,
     blocks: libc::fsblkcnt_t,
     inodes: libc::fsfilcnt_t,
+    root_type: libc::mode_t,
+    root_permissions: libc::mode_t,
+    root_uid: libc::uid_t,
+    root_gid: libc::gid_t,
 }
 
 fn observe_tmpfs(descriptor: RawFd) -> Result<TmpfsObservation, PrivateDeviceAssemblyError> {
@@ -406,11 +422,21 @@ fn observe_tmpfs(descriptor: RawFd) -> Result<TmpfsObservation, PrivateDeviceAss
     if unsafe { libc::fstatfs(descriptor, &mut filesystem) } == -1 {
         return Err(syscall_error("fstatfs", "dev"));
     }
+    // SAFETY: zero is valid initialization and descriptor remains live for the
+    // read-only root-inode metadata query.
+    let mut root: libc::stat = unsafe { zeroed() };
+    if unsafe { libc::fstat(descriptor, &mut root) } == -1 {
+        return Err(syscall_error("fstat(root metadata)", "dev"));
+    }
     Ok(TmpfsObservation {
         filesystem: filesystem.f_type,
         block_size: filesystem.f_bsize,
         blocks: filesystem.f_blocks,
         inodes: filesystem.f_files,
+        root_type: root.st_mode & libc::S_IFMT,
+        root_permissions: root.st_mode & 0o7777,
+        root_uid: root.st_uid,
+        root_gid: root.st_gid,
     })
 }
 
@@ -419,6 +445,20 @@ fn validate_tmpfs_observation(observation: TmpfsObservation) -> Result<(), Priva
         return Err(PrivateDeviceAssemblyError::UnexpectedTmpfsFilesystem {
             expected: TMPFS_MAGIC,
             actual: observation.filesystem,
+        });
+    }
+    if (
+        observation.root_type,
+        observation.root_permissions,
+        observation.root_uid,
+        observation.root_gid,
+    ) != (libc::S_IFDIR, PARENT_PERMISSIONS, 0, 0)
+    {
+        return Err(PrivateDeviceAssemblyError::UnexpectedTmpfsRoot {
+            actual_type: observation.root_type,
+            actual_permissions: observation.root_permissions,
+            actual_uid: observation.root_uid,
+            actual_gid: observation.root_gid,
         });
     }
     let block_size = u64::try_from(observation.block_size)
@@ -545,6 +585,10 @@ mod tests {
         block_size: 4096,
         blocks: PRIVATE_DEVICE_TMPFS_SIZE_BYTES / 4096,
         inodes: PRIVATE_DEVICE_TMPFS_INODES,
+        root_type: libc::S_IFDIR,
+        root_permissions: PARENT_PERMISSIONS,
+        root_uid: 0,
+        root_gid: 0,
     };
 
     const EXACT_PLACEHOLDER: PlaceholderObservation = PlaceholderObservation {
@@ -583,6 +627,33 @@ mod tests {
             assert!(matches!(
                 validate_tmpfs_observation(observation),
                 Err(PrivateDeviceAssemblyError::UnexpectedTmpfsCapacity { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn child_dev_tmpfs_rejects_noncanonical_root_metadata() {
+        for observation in [
+            TmpfsObservation {
+                root_type: libc::S_IFREG,
+                ..EXACT_TMPFS
+            },
+            TmpfsObservation {
+                root_permissions: 0o1777,
+                ..EXACT_TMPFS
+            },
+            TmpfsObservation {
+                root_uid: 1,
+                ..EXACT_TMPFS
+            },
+            TmpfsObservation {
+                root_gid: 1,
+                ..EXACT_TMPFS
+            },
+        ] {
+            assert!(matches!(
+                validate_tmpfs_observation(observation),
+                Err(PrivateDeviceAssemblyError::UnexpectedTmpfsRoot { .. })
             ));
         }
     }
