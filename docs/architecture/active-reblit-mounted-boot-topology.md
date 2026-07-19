@@ -313,6 +313,17 @@ match with its input aggregate. The plan performs a terminal deadline check
 after complete materialization, but neither authorizes a target identity nor
 grants a destination descriptor or mutation capability.
 
+Commit `9ac34286` adds the separate pure destination-namespace classifier. It
+keeps request order and returns only `Absent`, `Exact`, or `Different`; complete
+opening and closing inventories bind kernel lookups to raw names so ASCII case
+aliases, FAT short-name aliases, cross-mount entries, type changes, and content
+races fail closed. Independent hard ceilings cover requests, 4095-byte paths,
+8 MiB aggregate path bytes, directory entries, raw names, reads, allocations,
+descriptors, sort work, and the caller-owned deadline. This is still an
+injected model. The production observer must make every observation through
+the private retained destination descriptor before it can authorize a durable
+publisher.
+
 A separate durable publisher combines:
 
 - the frozen render plan and its identity;

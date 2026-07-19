@@ -459,6 +459,13 @@ FAT-safe relative paths, pre-materialization generated-byte limits, finite
 request/path/work limits, and terminal deadline checks. Synthetic topology
 fixtures exercise the production planning path without touching host storage.
 
+Commit `9ac34286` adds a pure bounded destination-namespace assessment for the
+rendered requests. It preserves request order, admits only stable `Absent`,
+`Exact`, or `Different` states, and rejects raw/kernel-name disagreement, FAT
+aliases, cross mounts, wrong node kinds, inventory and lookup races, content
+drift, deadline expiry, and resource overruns. No production descriptor
+observer or mutation authority is part of that foundation.
+
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`
 keeps its final descriptor inside retained attachment authority, and commit

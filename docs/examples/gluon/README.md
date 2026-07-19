@@ -29,7 +29,10 @@ identity and the Linux MSDOS magic family. Retained sysfs snapshots now include
 bounded kernel device names and fixed-512-sector partition geometry, while a
 separate strict pure parser authenticates caller-owned GPT images and exact
 ESP/XBOOTLDR roles. The production read-only block-device binding, write
-authority, and durability remain open. The `nosymfollow` requirement gives
+authority, and durability remain open. A pure bounded destination classifier
+can now distinguish stable absence, exact bytes, and different bytes while
+rejecting FAT aliases and namespace/content races, but its retained-descriptor
+production observer is not wired yet. The `nosymfollow` requirement gives
 the future boot publisher an effective Linux 5.10-or-newer admission boundary
 without changing the generic `linux_fs` Linux 5.6 compatibility baseline.
 `cast.boot_topology.v1` cannot be
