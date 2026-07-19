@@ -27,11 +27,16 @@ use std::{
 mod capture;
 mod device;
 mod filesystem;
+mod gpt_device;
 mod selector;
 
 use capture::{AttachmentCapture, capture_twice, require_capture_matches};
 pub(crate) use device::{TaskRootDevtmpfsAttachmentAuthenticationError, ValidatedTaskRootDevtmpfsAttachmentEvidence};
 use filesystem::{AttachmentLimits, directory_witness, duplicate_directory, require_same_directory};
+#[allow(unused_imports)] // named by the future owned mounted-topology aggregate
+pub(in crate::linux_fs) use gpt_device::{
+    TaskRootDevtmpfsGptPartitionDeviceAuthenticationError, ValidatedTaskRootDevtmpfsGptPartitionDeviceEvidence,
+};
 use selector::{AttachmentSelector, MAX_SELECTOR_COMPONENTS};
 
 use super::{
@@ -45,6 +50,7 @@ use crate::linux_fs::descriptor_devtmpfs_filesystem::{
 };
 use crate::linux_fs::{
     descriptor_boot_filesystem::{BootFilesystemAuthenticationError, ValidatedBootFilesystemDescriptorEvidence},
+    gpt_partition_role::GptPartitionRole,
     mountinfo_devtmpfs_policy::ValidatedDevtmpfsMountInfoPolicy,
     sysfs_block::SysfsDeviceNumber,
 };
@@ -435,6 +441,67 @@ impl RevalidatedTaskRootedAttachment<'_> {
             deadline,
             authenticate,
         )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::linux_fs) fn validate_fixture_devtmpfs_gpt_partition_device_with<Expectation, GptEvidence>(
+        &self,
+        policy: ValidatedDevtmpfsMountInfoPolicy,
+        expected: &Expectation,
+        expected_role: GptPartitionRole,
+        deadline: Instant,
+        authenticate_devtmpfs: impl FnOnce(
+            u64,
+            u64,
+            u64,
+            ValidatedDevtmpfsMountInfoPolicy,
+            Instant,
+        ) -> Result<
+            ValidatedDevtmpfsSameMountDescriptorEvidence,
+            DevtmpfsDescriptorAuthenticationError,
+        >,
+        authenticate_gpt: impl FnOnce(
+            u64,
+            &Expectation,
+            GptPartitionRole,
+            Instant,
+        ) -> io::Result<gpt_device::FixtureGptPartitionDeviceEvidence<GptEvidence>>,
+        clock: &mut impl FnMut() -> Instant,
+    ) -> Result<
+        gpt_device::FixtureValidatedTaskRootDevtmpfsGptPartitionDeviceEvidence<GptEvidence>,
+        TaskRootDevtmpfsGptPartitionDeviceAuthenticationError,
+    > {
+        gpt_device::authenticate_fixture_until(
+            self.selector(),
+            self.destination_device(),
+            self.destination_inode(),
+            self.destination_mount_id(),
+            policy,
+            expected,
+            expected_role,
+            deadline,
+            authenticate_devtmpfs,
+            authenticate_gpt,
+            clock,
+        )
+    }
+
+    #[cfg(test)]
+    pub(in crate::linux_fs) fn fixture_gpt_partition_device_evidence<GptEvidence>(
+        mount_id: u64,
+        evidence: GptEvidence,
+    ) -> gpt_device::FixtureGptPartitionDeviceEvidence<GptEvidence> {
+        gpt_device::FixtureGptPartitionDeviceEvidence::new(mount_id, evidence)
+    }
+
+    #[cfg(test)]
+    pub(in crate::linux_fs) fn validate_fixture_gpt_root_mount_id(
+        &self,
+        authenticated_root_mount_id: u64,
+    ) -> io::Result<()> {
+        self.current
+            .validate_fixture_gpt_root_mount_id(authenticated_root_mount_id)
     }
 
     /// Convert the destination `st_dev` into one exact sysfs device number.

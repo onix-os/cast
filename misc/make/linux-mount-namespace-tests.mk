@@ -13,7 +13,7 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mount_namespace::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 45; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 54; \
 	for name in \
 		attachment::bounds::zero_limits_and_expired_deadline_fail_before_attachment_hooks \
 		attachment::bounds::attachment_hooks_are_finite_and_injected_failures_propagate \
@@ -26,6 +26,15 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 		attachment::device::expired_deadline_rejects_exact_dev_before_injected_descriptor_observation \
 		attachment::device::injected_descriptor_error_is_preserved_as_the_composition_source \
 		attachment::device::injected_descriptor_identity_mismatch_fails_closed \
+		attachment::gpt_device::exact_dev_authenticates_first_then_passes_unchanged_gpt_inputs_into_closed_result \
+		attachment::gpt_device::non_dev_selector_rejects_before_either_authentication_layer \
+		attachment::gpt_device::cross_wired_devtmpfs_identity_withholds_result_and_skips_gpt \
+		attachment::gpt_device::injected_gpt_failure_is_preserved_and_withholds_closed_result \
+		attachment::gpt_device::foreign_gpt_payload_claim_cannot_override_structural_mount_id \
+		attachment::gpt_device::capture_rejects_a_foreign_gpt_root_mount_id_before_authentication \
+		attachment::gpt_device::expiry_after_devtmpfs_withholds_result_before_gpt_authentication \
+		attachment::gpt_device::expiry_after_gpt_discards_evidence_and_withholds_result \
+		attachment::gpt_device::expiry_at_terminal_checkpoint_discards_matching_evidence_and_withholds_result \
 		attachment::malformed::malformed_absolute_lexical_selectors_fail_before_resolution \
 		attachment::malformed::selector_byte_component_and_depth_ceilings_are_exact \
 		attachment::malformed::missing_symlink_fifo_and_non_directory_components_are_rejected \
@@ -75,6 +84,10 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'self.current.authenticate_boot_filesystem_until(deadline)' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn authenticate_devtmpfs_attachment_until(' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'self.current.authenticate_devtmpfs_same_mount_until(policy, deadline)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(in crate::linux_fs) fn authenticate_devtmpfs_gpt_partition_device_until(' "$$core/attachment/gpt_device.rs"; \
+	timeout 10s grep -Fq '.authenticate_devtmpfs_attachment_until(policy, deadline)' "$$core/attachment/gpt_device.rs"; \
+	timeout 10s grep -Fq '.authenticate_gpt_parent_until(devtmpfs_attachment.mount_id(), expected, expected_role, deadline)' "$$core/attachment/gpt_device.rs"; \
+	timeout 10s grep -Fq 'bind_authenticated_evidence_until(devtmpfs_attachment, gpt_partition_device, deadline)' "$$core/attachment/gpt_device.rs"; \
 	timeout 10s grep -Fq 'pub(super) fn authenticate_boot_filesystem_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'authenticate_boot_filesystem_directory_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq '&destination.file,' "$$core/attachment/capture.rs"; \
@@ -83,6 +96,17 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(super) fn authenticate_devtmpfs_same_mount_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'authenticate_devtmpfs_same_mount_directory_until(' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'self.destination_witness.mount_id,' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'pub(super) fn authenticate_gpt_parent_until(' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'self.require_gpt_root_mount_id(authenticated_root_mount_id)?' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'authenticate_retained_devtmpfs_gpt_partition_device_until(' "$$core/attachment/capture.rs"; \
+	timeout 10s rg --pcre2 -U -q '(?s)pub\(super\) fn authenticate_gpt_parent_until\([\s\S]{0,1800}?authenticate_retained_devtmpfs_gpt_partition_device_until\(\s*&destination\.file,\s*authenticated_root_mount_id,\s*expected,\s*expected_role,\s*deadline,\s*\)' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'fn bind_authenticated_evidence_until(' "$$core/attachment/gpt_device.rs"; \
+	if timeout 10s rg -n 'pub[^[:space:]]*[[:space:]]+fn bind_authenticated_evidence_until|authenticate_task_root_devtmpfs_gpt_partition_device_until|ClosedComposition|io::Result<\(u64, GptEvidence\)>' "$$core/attachment.rs" "$$core/attachment"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'pub(crate) struct FixtureGptPartitionDeviceEvidence' "$$core/attachment/gpt_device.rs"; \
+	if timeout 10s awk '/pub\(crate\) struct FixtureGptPartitionDeviceEvidence/ { exit } { print }' "$$core/attachment/gpt_device.rs" | timeout 10s rg -n 'fn[[:space:]]+[[:alnum:]_]+[[:space:]]*<|impl[[:space:]]+Fn(?:Once|Mut)?|dyn[[:space:]]+Fn(?:Once|Mut)?|ClosedComposition|io::Result<[[:space:]]*\('; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'let gpt_mount_id = gpt_partition_device.mount_id();' "$$core/attachment/gpt_device.rs"; \
+	timeout 10s grep -Fq 'if gpt_mount_id != devtmpfs_mount_id' "$$core/attachment/gpt_device.rs"; \
+	timeout 10s grep -Fq 'does not prevent `setns(2)` on the same thread' "$$core/attachment/gpt_device.rs"; \
 	timeout 10s grep -Fq 'const EXACT_TASK_ROOT_DEVICE_SELECTOR: &str = "/dev";' "$$core/attachment/device.rs"; \
 	timeout 10s grep -Fq 'if selector != EXACT_TASK_ROOT_DEVICE_SELECTOR' "$$core/attachment/device.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn destination_sysfs_device_number(&self)' "$$core/attachment.rs"; \
@@ -102,7 +126,7 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	if timeout 10s rg -n 'mount_namespace_mount_id' "$$root" "$(MOUNT_NAMESPACE_TOP_DIR)/crates/forge/src/linux_fs/tests/mount_namespace"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'unsafe[[:space:]]+impl[[:space:]]+(Send|Sync)' "$$root"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'unsafe[[:space:]]+impl[[:space:]]+(Send|Sync)' "$$core/attachment.rs" "$$core/attachment"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'pub\(crate\).*(File|OwnedFd|RawFd|AsRawFd|raw_fd|as_raw_fd)' "$$core/attachment.rs" "$$core/attachment"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg --pcre2 -U -n '(?s)pub(?:\(crate\)|\(in crate::linux_fs\))[^;{]{0,512}\b(?:File|OwnedFd|BorrowedFd|RawFd|AsRawFd|raw_fd|as_raw_fd)\b[^;{]*[;{]' "$$core/attachment.rs" "$$core/attachment"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'RESOLVE_BENEATH' "$$core/attachment/filesystem.rs"; \
 	timeout 10s grep -Fq 'RESOLVE_NO_MAGICLINKS' "$$core/attachment/filesystem.rs"; \
 	timeout 10s grep -Fq 'RESOLVE_NO_SYMLINKS' "$$core/attachment/filesystem.rs"; \

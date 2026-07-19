@@ -15,7 +15,12 @@ use crate::linux_fs::{
         DevtmpfsDescriptorAuthenticationError, ValidatedDevtmpfsSameMountDescriptorEvidence,
         authenticate_devtmpfs_same_mount_directory_until,
     },
+    gpt_partition_device::{
+        LiveAuthenticatedGptPartitionDeviceEvidence, authenticate_retained_devtmpfs_gpt_partition_device_until,
+    },
+    gpt_partition_role::GptPartitionRole,
     mountinfo_devtmpfs_policy::ValidatedDevtmpfsMountInfoPolicy,
+    sysfs_identity::SysfsGptDeviceExpectation,
 };
 
 struct PinnedComponent {
@@ -74,6 +79,44 @@ impl AttachmentCapture {
             policy,
             deadline,
         )
+    }
+
+    /// Authenticate a sysfs-selected GPT parent below the same retained
+    /// destination descriptor used by the devtmpfs attachment binding.
+    pub(super) fn authenticate_gpt_parent_until(
+        &self,
+        authenticated_root_mount_id: u64,
+        expected: &SysfsGptDeviceExpectation<'_>,
+        expected_role: GptPartitionRole,
+        deadline: std::time::Instant,
+    ) -> io::Result<LiveAuthenticatedGptPartitionDeviceEvidence> {
+        self.require_gpt_root_mount_id(authenticated_root_mount_id)?;
+        let destination = self
+            .components
+            .last()
+            .unwrap_or_else(|| unreachable!("validated attachment capture always retains one destination component"));
+        authenticate_retained_devtmpfs_gpt_partition_device_until(
+            &destination.file,
+            authenticated_root_mount_id,
+            expected,
+            expected_role,
+            deadline,
+        )
+    }
+
+    fn require_gpt_root_mount_id(&self, authenticated_root_mount_id: u64) -> io::Result<()> {
+        if authenticated_root_mount_id != self.destination_witness.mount_id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "GPT authentication received a mount ID from a different attachment",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn validate_fixture_gpt_root_mount_id(&self, authenticated_root_mount_id: u64) -> io::Result<()> {
+        self.require_gpt_root_mount_id(authenticated_root_mount_id)
     }
 
     #[cfg(test)]
