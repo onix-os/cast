@@ -4,9 +4,9 @@ fn canonical_order_is_typed_phase_then_root_then_precomputed_folded_path() {
     let loader_bytes = b"default @saved\n";
     let plan = prepare_alias([
         systemd_bootloader(9, 90, 50),
-        payload("EFI/Aeryn/6.2/zeta.initrd", 2, 20, 20),
+        addressed_payload("Aeryn", "zeta.initrd", 2, 20, 20),
         loader_control(loader_bytes),
-        payload("EFI/Aeryn/6.1/vmlinuz", 1, 10, 10),
+        addressed_payload("Aeryn", "vmlinuz", 1, 10, 10),
         entry("loader/entries/10-6.1.conf", entry_bytes),
         fallback_bootloader(9, 90, 50),
     ])
@@ -31,13 +31,13 @@ fn canonical_order_is_typed_phase_then_root_then_precomputed_folded_path() {
                 ActiveReblitBootPublicationRole::Payload,
                 ActiveReblitBootPublicationPhase::Payload,
                 ActiveReblitBootDestinationRoot::Boot,
-                PathBuf::from("EFI/Aeryn/6.1/vmlinuz"),
+                checksum_payload_path("Aeryn", "vmlinuz", 10, 10),
             ),
             (
                 ActiveReblitBootPublicationRole::Payload,
                 ActiveReblitBootPublicationPhase::Payload,
                 ActiveReblitBootDestinationRoot::Boot,
-                PathBuf::from("EFI/Aeryn/6.2/zeta.initrd"),
+                checksum_payload_path("Aeryn", "zeta.initrd", 20, 20),
             ),
             (
                 ActiveReblitBootPublicationRole::Entry,
@@ -111,18 +111,17 @@ fn both_bootloader_roles_bind_exact_esp_paths_and_carry_one_binding_coordinate()
 
 #[test]
 fn generated_digest_is_derived_from_owned_bytes() {
-    let bytes = b"title AerynOS\nlinux /EFI/Aeryn/6.1/vmlinuz\n";
+    let bytes = b"title AerynOS\noptions test.generated=1\n";
     let plan = prepare_alias([entry("loader/entries/a.conf", bytes)]).unwrap();
     let source = plan.outputs()[0].source();
     assert_eq!(source.generated_bytes(), Some(bytes.as_slice()));
     assert_eq!(source.binding_index(), None);
     assert_eq!(source.digest(), xxhash_rust::xxh3::xxh3_128(bytes));
-
 }
 
 #[test]
 fn raw_role_root_phase_source_and_path_mismatches_are_rejected() {
-    let path = PathBuf::from("EFI/Aeryn/6.1/vmlinuz");
+    let path = checksum_payload_path("Aeryn", "vmlinuz", 1, 1);
     let root = ActiveReblitBootPublicationRequest::raw(
         ActiveReblitBootPublicationRole::Payload,
         ActiveReblitBootDestinationRoot::Esp,
@@ -164,7 +163,7 @@ fn raw_role_root_phase_source_and_path_mismatches_are_rejected() {
         ActiveReblitBootPublicationRole::Entry,
         ActiveReblitBootDestinationRoot::Boot,
         ActiveReblitBootPublicationPhase::Entry,
-        PathBuf::from("EFI/Aeryn/6.1/vmlinuz"),
+        checksum_payload_path("Aeryn", "vmlinuz", 1, 1),
         generated_source(b"entry"),
     );
     assert!(matches!(
@@ -176,8 +175,8 @@ fn raw_role_root_phase_source_and_path_mismatches_are_rejected() {
 #[test]
 fn only_identical_typed_requests_including_binding_are_deduplicated() {
     let plan = prepare_alias([
-        payload("EFI/Aeryn/6.1/vmlinuz", 3, 7, 11),
-        payload("EFI/Aeryn/6.1/vmlinuz", 3, 7, 11),
+        addressed_payload("Aeryn", "vmlinuz", 3, 7, 11),
+        addressed_payload("Aeryn", "vmlinuz", 3, 7, 11),
         entry("loader/entries/a.conf", b"same"),
         entry("loader/entries/a.conf", b"same"),
     ])
@@ -187,8 +186,8 @@ fn only_identical_typed_requests_including_binding_are_deduplicated() {
     assert_eq!(plan.generated_bytes(), 4);
 
     let different_binding = prepare_alias([
-        payload("EFI/Aeryn/6.1/vmlinuz", 3, 7, 11),
-        payload("EFI/Aeryn/6.1/vmlinuz", 4, 7, 11),
+        addressed_payload("Aeryn", "vmlinuz", 3, 7, 11),
+        addressed_payload("Aeryn", "vmlinuz", 4, 7, 11),
     ]);
     assert!(matches!(
         different_binding,
@@ -218,6 +217,15 @@ fn same_destination_with_different_content_or_invalid_role_is_rejected() {
         prepare_alias([entry("loader/entries/a.conf", b"entry"), role_conflict,]),
         Err(ActiveReblitBootPublicationPlanError::RolePathMismatch { .. })
     ));
+
+    let case_alias = prepare_alias([
+        addressed_payload("Aeryn", "Shared.initrd", 3, 7, 11),
+        addressed_payload("aeryn", "shared.initrd", 3, 7, 11),
+    ]);
+    assert!(matches!(
+        case_alias,
+        Err(ActiveReblitBootPublicationPlanError::CaseInsensitiveCollision { .. })
+    ));
 }
 
 #[test]
@@ -226,12 +234,10 @@ fn raw_cross_root_request_is_rejected_before_collision_planning() {
         ActiveReblitBootPublicationRole::Payload,
         ActiveReblitBootDestinationRoot::Esp,
         ActiveReblitBootPublicationPhase::Payload,
-        PathBuf::from("efi/aeryn/6.1/VMLINUZ"),
+        checksum_payload_path("aeryn", "VMLINUZ", 2, 2),
         sealed_source(2, 2, 2),
     );
-    let error =
-        prepare_alias([payload("EFI/Aeryn/6.1/vmlinuz", 1, 1, 1), esp_alias])
-            .unwrap_err();
+    let error = prepare_alias([addressed_payload("Aeryn", "vmlinuz", 1, 1, 1), esp_alias]).unwrap_err();
     assert!(matches!(
         error,
         ActiveReblitBootPublicationPlanError::RoleRootMismatch { .. }
@@ -239,53 +245,48 @@ fn raw_cross_root_request_is_rejected_before_collision_planning() {
 }
 
 #[test]
-fn aliased_topology_rejects_cross_root_file_directory_hierarchy_in_both_orders() {
-    let descendant = "EFI/Boot/bootx64.efi/vmlinuz";
-    for requests in [
-        [fallback_bootloader(0, 1, 1), payload(descendant, 1, 2, 2)],
-        [payload(descendant, 1, 2, 2), fallback_bootloader(0, 1, 1)],
-    ] {
-        let error = prepare_alias(requests).unwrap_err();
-        assert!(matches!(
-            error,
-            ActiveReblitBootPublicationPlanError::PublicationHierarchyCollision {
-                ancestor_root: ActiveReblitBootDestinationRoot::Esp,
-                descendant_root: ActiveReblitBootDestinationRoot::Boot,
-                ref ancestor,
-                ref descendant,
-            } if ancestor == Path::new("EFI/Boot/BOOTX64.EFI")
-                && descendant == Path::new("EFI/Boot/bootx64.efi/vmlinuz")
-        ));
-    }
+fn case_folded_hierarchy_helpers_detect_ancestors_and_descendants_in_both_orders() {
+    let ancestor = case_folded_path(Path::new("EFI/Boot/BOOTX64.EFI"));
+    let descendant = case_folded_path(Path::new("efi/boot/bootx64.efi/payload"));
+    let mut policy = PublicationPlanPolicy::production();
+    policy.max_work = 100;
+    let mut budget = PublicationPlanBudget::new_until(policy, Instant::now() + Duration::from_secs(1)).unwrap();
+
+    let ancestors = BTreeMap::from([(ancestor.clone(), 7)]);
+    assert_eq!(
+        existing_ancestor_index(&ancestors, &descendant, &mut budget).unwrap(),
+        Some(7)
+    );
+
+    let descendants = BTreeMap::from([(descendant, 9)]);
+    assert_eq!(
+        existing_descendant_index(&descendants, &ancestor, &mut budget).unwrap(),
+        Some(9)
+    );
 }
 
 #[test]
-fn distinct_topology_keeps_esp_and_xbootldr_collision_domains_separate() {
-    let descendant = "EFI/Boot/bootx64.efi/vmlinuz";
-    for requests in [
-        [fallback_bootloader(0, 1, 1), payload(descendant, 1, 2, 2)],
-        [payload(descendant, 1, 2, 2), fallback_bootloader(0, 1, 1)],
-    ] {
-        let plan = prepare_distinct(requests).expect("distinct destinations must not falsely collide");
-        assert_eq!(plan.outputs().len(), 2);
-        assert_eq!(
-            plan.outputs()
-                .iter()
-                .map(PlannedActiveReblitBootPublication::root)
-                .collect::<Vec<_>>(),
-            [
-                ActiveReblitBootDestinationRoot::Boot,
-                ActiveReblitBootDestinationRoot::Esp,
-            ]
-        );
-    }
+fn alias_and_distinct_layouts_route_roots_to_expected_collision_domains() {
+    let alias_topology = alias_topology();
+    let alias = ActiveReblitBootDestinationCollisionDomains::from_topology(alias_topology.bound());
+    assert_eq!(
+        alias.for_root(ActiveReblitBootDestinationRoot::Esp),
+        alias.for_root(ActiveReblitBootDestinationRoot::Boot)
+    );
+
+    let distinct_topology = distinct_topology();
+    let distinct = ActiveReblitBootDestinationCollisionDomains::from_topology(distinct_topology.bound());
+    assert_ne!(
+        distinct.for_root(ActiveReblitBootDestinationRoot::Esp),
+        distinct.for_root(ActiveReblitBootDestinationRoot::Boot)
+    );
 }
 
 #[test]
 fn plan_retains_the_topology_collision_layout_for_later_revalidation() {
     let plan = prepare_distinct([
         fallback_bootloader(0, 1, 1),
-        payload("EFI/Boot/bootx64.efi/vmlinuz", 1, 2, 2),
+        addressed_payload("Boot", "vmlinuz", 1, 2, 2),
     ])
     .unwrap();
     let distinct = distinct_topology();

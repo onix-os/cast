@@ -7,7 +7,7 @@ fn publication_and_aggregate_path_bounds_admit_n_and_reject_n_plus_one() {
         [
             fallback_bootloader(0, 1, 1),
             systemd_bootloader(0, 1, 1),
-            payload("EFI/Aeryn/6.1/vmlinuz", 1, 2, 1),
+            addressed_payload("Aeryn", "vmlinuz", 1, 2, 1),
         ],
         policy,
     )
@@ -33,15 +33,15 @@ fn publication_and_aggregate_path_bounds_admit_n_and_reject_n_plus_one() {
 
 #[test]
 fn single_path_and_component_count_bounds_admit_n_and_reject_n_plus_one() {
-    let path = "EFI/Aeryn/6.1/vmlinuz";
+    let path = checksum_payload_path("Aeryn", "vmlinuz", 1, 1);
     let mut policy = PublicationPlanPolicy::production();
-    policy.max_single_path_bytes = path.len();
+    policy.max_single_path_bytes = path.as_os_str().as_bytes().len();
     policy.max_components = 4;
-    prepare_with_policy([payload(path, 0, 1, 1)], policy).unwrap();
+    prepare_with_policy([payload(path.clone(), 0, 1, 1)], policy).unwrap();
 
-    policy.max_single_path_bytes = path.len() - 1;
+    policy.max_single_path_bytes = path.as_os_str().as_bytes().len() - 1;
     assert!(matches!(
-        prepare_with_policy([payload(path, 0, 1, 1)], policy),
+        prepare_with_policy([payload(path.clone(), 0, 1, 1)], policy),
         Err(ActiveReblitBootPublicationPlanError::SinglePathByteLimit { .. })
     ));
     policy.max_single_path_bytes = 100;
@@ -58,7 +58,7 @@ fn logical_byte_limit_counts_each_canonical_output_including_generated_bytes() {
     policy.max_logical_bytes = 10;
     let plan = prepare_with_policy(
         [
-            payload("EFI/Aeryn/6.1/vmlinuz", 0, 1, 6),
+            addressed_payload("Aeryn", "vmlinuz", 0, 1, 6),
             entry("loader/entries/a.conf", b"1234"),
         ],
         policy,
@@ -68,7 +68,7 @@ fn logical_byte_limit_counts_each_canonical_output_including_generated_bytes() {
 
     let error = prepare_with_policy(
         [
-            payload("EFI/Aeryn/6.1/vmlinuz", 0, 1, 7),
+            addressed_payload("Aeryn", "vmlinuz", 0, 1, 7),
             entry("loader/entries/a.conf", b"1234"),
         ],
         policy,
@@ -120,11 +120,12 @@ fn sealed_snapshot_file_bound_admits_n_and_rejects_n_plus_one() {
     let mut policy = PublicationPlanPolicy::production();
     policy.max_sealed_file_bytes = 8;
     policy.max_logical_bytes = 100;
-    prepare_with_policy([payload("EFI/Aeryn/6.1/vmlinuz", 0, 1, 8)], policy).unwrap();
+    prepare_with_policy([addressed_payload("Aeryn", "vmlinuz", 0, 1, 8)], policy).unwrap();
+    let rejected_path = checksum_payload_path("Aeryn", "vmlinuz", 1, 9);
     assert_eq!(
-        prepare_with_policy([payload("EFI/Aeryn/6.1/vmlinuz", 0, 1, 9)], policy).unwrap_err(),
+        prepare_with_policy([payload(rejected_path.clone(), 0, 1, 9)], policy).unwrap_err(),
         ActiveReblitBootPublicationPlanError::SealedSnapshotFileByteLimit {
-            path: PathBuf::from("EFI/Aeryn/6.1/vmlinuz"),
+            path: rejected_path,
             limit: 8,
             actual: 9,
         }

@@ -9,15 +9,26 @@ const MAX_FAT_COMPONENT_BYTES: usize = 255;
 
 pub(super) fn payload_path(
     namespace: &str,
-    version: &str,
+    digest: u128,
+    length: u64,
     leaf: &str,
     leaf_kind: ActiveReblitBlsComponentKind,
     budget: &mut RenderBudget,
 ) -> Result<PathBuf, ActiveReblitBlsRendererError> {
     require_component(namespace, ActiveReblitBlsComponentKind::Namespace)?;
-    require_component(version, ActiveReblitBlsComponentKind::KernelVersion)?;
     require_component(leaf, leaf_kind)?;
-    build_relative_path(&["EFI", namespace, version, leaf], budget)
+    let token = checksum_identity_token(digest, length)?;
+    build_relative_path(&["EFI", namespace, &token, leaf], budget)
+}
+
+fn checksum_identity_token(digest: u128, length: u64) -> Result<String, ActiveReblitBlsRendererError> {
+    let mut token = String::new();
+    token
+        .try_reserve_exact("xxh3-".len() + 32 + "-l".len() + 16)
+        .map_err(|source| allocation("BLS checksum identity component", source))?;
+    write!(&mut token, "xxh3-{digest:032x}-l{length:016x}")
+        .expect("writing fixed-width integers into a String cannot fail");
+    Ok(token)
 }
 
 pub(super) fn entry_path(

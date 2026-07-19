@@ -11,7 +11,7 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -Ec '^client::active_reblit_publication_plan::tests::[^:]+: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 25; \
+	timeout 10s test "$$count" = 26; \
 	for test in \
 		client::active_reblit_publication_plan::tests::canonical_order_is_typed_phase_then_root_then_precomputed_folded_path \
 		client::active_reblit_publication_plan::tests::both_bootloader_roles_bind_exact_esp_paths_and_carry_one_binding_coordinate \
@@ -20,14 +20,15 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 		client::active_reblit_publication_plan::tests::only_identical_typed_requests_including_binding_are_deduplicated \
 		client::active_reblit_publication_plan::tests::same_destination_with_different_content_or_invalid_role_is_rejected \
 		client::active_reblit_publication_plan::tests::raw_cross_root_request_is_rejected_before_collision_planning \
-		client::active_reblit_publication_plan::tests::aliased_topology_rejects_cross_root_file_directory_hierarchy_in_both_orders \
-		client::active_reblit_publication_plan::tests::distinct_topology_keeps_esp_and_xbootldr_collision_domains_separate \
+		client::active_reblit_publication_plan::tests::case_folded_hierarchy_helpers_detect_ancestors_and_descendants_in_both_orders \
+		client::active_reblit_publication_plan::tests::alias_and_distinct_layouts_route_roots_to_expected_collision_domains \
 		client::active_reblit_publication_plan::tests::plan_retains_the_topology_collision_layout_for_later_revalidation \
 		client::active_reblit_publication_plan::tests::unsafe_relative_paths_are_rejected_instead_of_normalized \
 		client::active_reblit_publication_plan::tests::non_utf8_and_non_ascii_paths_fail_closed \
 		client::active_reblit_publication_plan::tests::fat_forbidden_trailing_reserved_and_short_name_components_are_rejected \
 		client::active_reblit_publication_plan::tests::fat_component_byte_bound_admits_n_and_rejects_n_plus_one \
 		client::active_reblit_publication_plan::tests::role_specific_payload_and_entry_path_shapes_are_enforced \
+		client::active_reblit_publication_plan::tests::checksum_payload_token_grammar_and_source_binding_are_exact \
 		client::active_reblit_publication_plan::tests::publication_and_aggregate_path_bounds_admit_n_and_reject_n_plus_one \
 		client::active_reblit_publication_plan::tests::single_path_and_component_count_bounds_admit_n_and_reject_n_plus_one \
 		client::active_reblit_publication_plan::tests::logical_byte_limit_counts_each_canonical_output_including_generated_bytes \
@@ -40,6 +41,20 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 		client::active_reblit_publication_plan::tests::production_contract_constants_match_the_publication_limits; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
+	plan="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan.rs"; \
+	role_binding="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan/role_binding.rs"; \
+	timeout 10s grep -Fq 'role_binding::require_role_binding(&request, &relative_path)?;' "$$plan"; \
+	timeout 10s grep -Fq 'const CHECKSUM_PREFIX: &str = "xxh3-";' "$$role_binding"; \
+	timeout 10s grep -Fq 'const LENGTH_SEPARATOR: &str = "-l";' "$$role_binding"; \
+	timeout 10s grep -Fq '(Some("EFI"), Some(namespace), Some(identity), Some(leaf), None)' "$$role_binding"; \
+	timeout 10s grep -Fq 'const DIGEST_HEX_WIDTH: usize = 32;' "$$role_binding"; \
+	timeout 10s grep -Fq 'const LENGTH_HEX_WIDTH: usize = 16;' "$$role_binding"; \
+	timeout 10s grep -Fq 'digest.bytes().all(is_lower_hex)' "$$role_binding"; \
+	timeout 10s grep -Fq 'length.bytes().all(is_lower_hex)' "$$role_binding"; \
+	timeout 10s grep -Fq 'u128::from_str_radix(digest, 16) == Ok(expected_digest)' "$$role_binding"; \
+	timeout 10s grep -Fq 'u64::from_str_radix(length, 16) == Ok(expected_length)' "$$role_binding"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$plan" )" -le 1000; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$role_binding" )" -le 1000; \
 	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_publication_plan::tests::" -- --test-threads=1
 
 forge-active-reblit-stone-boot-input-test:

@@ -389,6 +389,9 @@ where
         let schema = kernel.schema();
         validate_schema_components(schema)?;
         paths::require_component(kernel.version(), ActiveReblitBlsComponentKind::KernelVersion)?;
+        let kernel_binding_index = kernel.kernel_binding_index();
+        let kernel_digest = kernel.kernel_digest();
+        let kernel_length = kernel.kernel_length();
         let entry_path = paths::entry_path(
             schema.os_id(),
             kernel.version(),
@@ -397,7 +400,8 @@ where
         )?;
         let kernel_path = paths::payload_path(
             schema.namespace(),
-            kernel.version(),
+            kernel_digest,
+            kernel_length,
             "vmlinuz",
             ActiveReblitBlsComponentKind::InitrdBasename,
             &mut budget,
@@ -416,6 +420,9 @@ where
             .map_err(|source| allocation("per-kernel BLS initrds", source))?;
         for initrd in kernel.initrds() {
             budget.step()?;
+            let binding_index = initrd.binding_index();
+            let digest = initrd.digest();
+            let length = initrd.length();
             let basename =
                 initrd
                     .logical_basename()
@@ -427,7 +434,8 @@ where
             paths::require_component(basename, ActiveReblitBlsComponentKind::InitrdBasename)?;
             let path = paths::payload_path(
                 schema.namespace(),
-                kernel.version(),
+                digest,
+                length,
                 basename,
                 ActiveReblitBlsComponentKind::InitrdBasename,
                 &mut budget,
@@ -435,9 +443,9 @@ where
             initrds.push(RenderedInitrdCandidate {
                 path,
                 basename: clone_boxed(basename, "BLS initrd basename")?,
-                binding_index: initrd.binding_index(),
-                digest: initrd.digest(),
-                length: initrd.length(),
+                binding_index,
+                digest,
+                length,
                 asset: initrd.asset(),
             });
         }
@@ -465,9 +473,9 @@ where
         ));
         payload_candidates.push(PayloadCandidate {
             path: kernel_path,
-            binding_index: kernel.kernel_binding_index(),
-            digest: kernel.kernel_digest(),
-            length: kernel.kernel_length(),
+            binding_index: kernel_binding_index,
+            digest: kernel_digest,
+            length: kernel_length,
             asset: Some(kernel.kernel_asset()),
         });
         for initrd in initrds {

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     ffi::OsString,
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
@@ -109,6 +110,25 @@ fn payload(
     length: u64,
 ) -> ActiveReblitBootPublicationRequest {
     ActiveReblitBootPublicationRequest::sealed_payload(path.into(), binding_index, digest, length)
+}
+
+fn checksum_payload_path(namespace: &str, leaf: &str, digest: u128, length: u64) -> PathBuf {
+    PathBuf::from(format!("EFI/{namespace}/xxh3-{digest:032x}-l{length:016x}/{leaf}"))
+}
+
+fn addressed_payload(
+    namespace: &str,
+    leaf: &str,
+    binding_index: u16,
+    digest: u128,
+    length: u64,
+) -> ActiveReblitBootPublicationRequest {
+    payload(
+        checksum_payload_path(namespace, leaf, digest, length),
+        binding_index,
+        digest,
+        length,
+    )
 }
 
 fn entry(path: impl Into<PathBuf>, bytes: &[u8]) -> ActiveReblitBootPublicationRequest {

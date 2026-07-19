@@ -83,7 +83,8 @@ fn historical_local_schema_is_used_and_unavailable_history_uses_sticky_global_fa
         }));
         let fallback_path = format!("loader/entries/head-6.8-{fallback_state}.conf");
         let fallback = std::str::from_utf8(generated_at(&plan, &fallback_path)).unwrap();
-        assert!(fallback.starts_with("title Render Head (6.8)\nlinux /EFI/head/6.8/vmlinuz\n"));
+        let kernel = checksum_payload_path("head", "vmlinuz", b"render kernel 6.8");
+        assert!(fallback.starts_with(&format!("title Render Head (6.8)\nlinux /{kernel}\n")));
     });
 }
 

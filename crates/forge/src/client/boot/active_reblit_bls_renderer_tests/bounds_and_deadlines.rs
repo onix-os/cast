@@ -58,6 +58,61 @@ fn fat_unsafe_version_initrd_and_entry_components_fail_closed() {
 }
 
 #[test]
+fn checksum_identity_has_fixed_lowercase_widths_and_no_version_or_state_component() {
+    let mut budget = RenderBudget::new(BLS_POLICY, support::future_deadline()).unwrap();
+    let path = paths::payload_path(
+        "head",
+        0xabcdef,
+        0x12,
+        "vmlinuz",
+        ActiveReblitBlsComponentKind::InitrdBasename,
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(
+        path,
+        Path::new("EFI/head/xxh3-00000000000000000000000000abcdef-l0000000000000012/vmlinuz")
+    );
+    let identity = path.to_str().unwrap().split('/').nth(2).unwrap();
+    assert_eq!(identity.len(), 55);
+    assert!(identity.bytes().all(|byte| !byte.is_ascii_uppercase()));
+    assert_eq!(path.components().count(), 4);
+}
+
+#[test]
+fn initrd_leaf_fat_limit_admits_255_bytes_and_rejects_256() {
+    let deadline = support::future_deadline();
+    let admitted = format!("{}.initrd", "a".repeat(248));
+    assert_eq!(admitted.len(), 255);
+    let spec = support::StateSpec::one_kernel("6.12")
+        .with_kernel(support::KernelSpec::new("6.13").with_initrd(admitted.clone(), b"at-limit".as_slice()));
+    with_render_inputs!(
+        support::RenderFixture::new(spec, Vec::new()),
+        deadline,
+        |_fixture, inputs| {
+            let rendered = RenderedActiveReblitBlsRequests::render(&inputs).unwrap();
+            let topology = topology::alias_topology();
+            let (plan, _) = fixture_plan(rendered, &topology);
+            assert!(
+                plan.outputs()
+                    .iter()
+                    .any(|output| output.relative_path().ends_with(&admitted))
+            );
+        }
+    );
+
+    let rejected = format!("{}.initrd", "a".repeat(249));
+    assert_eq!(rejected.len(), 256);
+    assert!(matches!(
+        paths::require_component(&rejected, ActiveReblitBlsComponentKind::InitrdBasename),
+        Err(ActiveReblitBlsRendererError::InvalidComponent {
+            kind: ActiveReblitBlsComponentKind::InitrdBasename,
+            reason: ActiveReblitBlsComponentReason::TooLong,
+        })
+    ));
+}
+
+#[test]
 fn generated_file_and_total_byte_bounds_admit_n_and_reject_n_plus_one_before_materialization() {
     let deadline = support::future_deadline();
     with_render_inputs!(support::simple_fixture(), deadline, |_fixture, inputs| {

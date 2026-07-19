@@ -21,6 +21,8 @@ use crate::client::active_reblit_mounted_boot_topology::BoundActiveReblitMounted
 
 #[path = "active_reblit_publication_plan/error.rs"]
 mod error;
+#[path = "active_reblit_publication_plan/role_binding.rs"]
+mod role_binding;
 
 pub(in crate::client) use error::ActiveReblitBootPublicationPlanError;
 
@@ -630,7 +632,7 @@ fn prepare_publication_plan_until_with_checkpoints(
     for request in requests {
         budget.admit_request(&request.relative_path)?;
         let relative_path = require_normalized_relative_path(&request.relative_path, &mut budget)?;
-        require_role_binding(&request, &relative_path)?;
+        role_binding::require_role_binding(&request, &relative_path)?;
         let source = prepare_source(&relative_path, request.source, &mut budget)?;
         budget.step()?;
 
@@ -875,65 +877,6 @@ fn is_dos_reserved_component(component: &str) -> bool {
     }
     let bytes = stem.as_bytes();
     bytes.len() == 4 && (&bytes[..3] == b"COM" || &bytes[..3] == b"LPT") && matches!(bytes[3], b'1'..=b'9')
-}
-
-fn require_role_binding(
-    request: &ActiveReblitBootPublicationRequest,
-    path: &Path,
-) -> Result<(), ActiveReblitBootPublicationPlanError> {
-    let expected_root = request.role.root();
-    if request.root != expected_root {
-        return Err(ActiveReblitBootPublicationPlanError::RoleRootMismatch {
-            role: request.role,
-            expected: expected_root,
-            actual: request.root,
-        });
-    }
-    let expected_phase = request.role.phase();
-    if request.phase != expected_phase {
-        return Err(ActiveReblitBootPublicationPlanError::RolePhaseMismatch {
-            role: request.role,
-            expected: expected_phase,
-            actual: request.phase,
-        });
-    }
-    if request.source.is_sealed() != request.role.requires_sealed_source() {
-        return Err(ActiveReblitBootPublicationPlanError::RoleSourceMismatch { role: request.role });
-    }
-    if !role_path_matches(request.role, path) {
-        return Err(ActiveReblitBootPublicationPlanError::RolePathMismatch {
-            role: request.role,
-            path: path.to_owned(),
-        });
-    }
-    Ok(())
-}
-
-fn role_path_matches(role: ActiveReblitBootPublicationRole, path: &Path) -> bool {
-    let Some(text) = path.to_str() else {
-        return false;
-    };
-    match role {
-        ActiveReblitBootPublicationRole::Payload => {
-            let components = text.split('/').collect::<Vec<_>>();
-            components.len() == 4
-                && components[0] == "EFI"
-                && !components[1].is_empty()
-                && !components[2].is_empty()
-                && (components[3] == "vmlinuz" || components[3].ends_with(".initrd"))
-        }
-        ActiveReblitBootPublicationRole::Entry => {
-            let components = text.split('/').collect::<Vec<_>>();
-            components.len() == 3
-                && components[0] == "loader"
-                && components[1] == "entries"
-                && components[2].len() > ".conf".len()
-                && components[2].ends_with(".conf")
-        }
-        ActiveReblitBootPublicationRole::LoaderControl => text == ACTIVE_REBLIT_LOADER_CONTROL_PATH,
-        ActiveReblitBootPublicationRole::FallbackBootloader => text == ACTIVE_REBLIT_FALLBACK_BOOTLOADER_PATH,
-        ActiveReblitBootPublicationRole::SystemdBootloader => text == ACTIVE_REBLIT_SYSTEMD_BOOTLOADER_PATH,
-    }
 }
 
 fn prepare_source(

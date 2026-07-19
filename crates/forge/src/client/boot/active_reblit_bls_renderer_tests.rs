@@ -67,3 +67,9 @@ fn generated_at<'a>(plan: &'a PreparedActiveReblitBootPublicationPlan, path: &st
         .and_then(|output| output.source().generated_bytes())
         .unwrap()
 }
+
+fn checksum_payload_path(namespace: &str, leaf: &str, bytes: &[u8]) -> String {
+    let digest = xxhash_rust::xxh3::xxh3_128(bytes);
+    let length = u64::try_from(bytes.len()).expect("fixture byte length fits u64");
+    format!("EFI/{namespace}/xxh3-{digest:032x}-l{length:016x}/{leaf}")
+}
