@@ -13,8 +13,25 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mount_namespace::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 17; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 34; \
 	for name in \
+		attachment::bounds::zero_limits_and_expired_deadline_fail_before_attachment_hooks \
+		attachment::bounds::attachment_hooks_are_finite_and_injected_failures_propagate \
+		attachment::bounds::preparation_work_and_descriptor_budgets_have_exact_adjacent_boundaries \
+		attachment::bounds::revalidation_budgets_cover_both_chain_passes_and_both_anchor_edges \
+		attachment::malformed::malformed_absolute_lexical_selectors_fail_before_resolution \
+		attachment::malformed::selector_byte_component_and_depth_ceilings_are_exact \
+		attachment::malformed::missing_symlink_fifo_and_non_directory_components_are_rejected \
+		attachment::races::every_component_replacement_in_either_complete_pass_fails_closed \
+		attachment::races::public_task_root_replacement_is_rejected_by_both_anchor_sandwich_edges \
+		attachment::races::mount_namespace_replacement_is_rejected_by_both_anchor_sandwich_edges \
+		attachment::races::terminal_parent_final_name_and_late_full_chain_replacements_fail_closed \
+		attachment::races::prepared_attachment_rejects_across_call_component_and_root_replacements \
+		attachment::races::revalidation_repeats_second_pass_and_closing_anchor_checks \
+		attachment::stable::stable_nested_selector_retains_exact_raw_chain_and_destination_identity \
+		attachment::stable::one_component_selector_uses_task_root_as_its_final_parent \
+		attachment::stable::attachment_revalidation_rejects_a_different_mount_context_anchor \
+		attachment::stable::independently_prepared_anchor_with_the_same_authenticated_snapshot_is_accepted \
 		bounds::zero_limits_and_expired_deadline_fail_before_fixture_hooks \
 		bounds::checkpoint_hooks_are_finite_and_injected_failure_is_propagated \
 		bounds::preparation_work_and_descriptor_budgets_have_exact_boundaries \
@@ -44,8 +61,15 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'NSFS_MAGIC' "$$root"; \
 	timeout 10s grep -Fq 'validate_fixture_namespace_authentication' "$$root"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'PhantomData<Rc<()>>' "$$root" )" -ge 2; \
+	timeout 10s grep -Fq 'PhantomData<Rc<()>>' "$$core/attachment.rs"; \
 	if timeout 10s rg -n 'mount_namespace_mount_id' "$$root" "$(MOUNT_NAMESPACE_TOP_DIR)/crates/forge/src/linux_fs/tests/mount_namespace"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'unsafe[[:space:]]+impl[[:space:]]+(Send|Sync)' "$$root"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'unsafe[[:space:]]+impl[[:space:]]+(Send|Sync)' "$$core/attachment.rs" "$$core/attachment"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'pub\(crate\).*(File|OwnedFd|RawFd|AsRawFd|raw_fd|as_raw_fd)' "$$core/attachment.rs" "$$core/attachment"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'RESOLVE_BENEATH' "$$core/attachment/filesystem.rs"; \
+	timeout 10s grep -Fq 'RESOLVE_NO_MAGICLINKS' "$$core/attachment/filesystem.rs"; \
+	timeout 10s grep -Fq 'RESOLVE_NO_SYMLINKS' "$$core/attachment/filesystem.rs"; \
+	timeout 10s grep -Fq 'ATTACHMENT_RESOLUTION & nix::libc::RESOLVE_NO_XDEV' "$$core/attachment/filesystem.rs"; \
 	timeout 10s grep -Fq 'validate_namespace_authentication(filesystem_magic, namespace_type)' "$$root"; \
 	timeout 10s grep -Fq 'validate_namespace_authentication(status.f_type, namespace_type)' "$$core/filesystem.rs"; \
 	timeout 10s grep -Fq 'nix::libc::ioctl(namespace.as_raw_fd(), NS_GET_NSTYPE)' "$$core/filesystem.rs"; \
@@ -59,8 +83,10 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	for file in \
 		"$$root" \
 		"$$core"/*.rs \
+		"$$core"/attachment/*.rs \
 		"$$tests" \
 		"$(MOUNT_NAMESPACE_TOP_DIR)"/crates/forge/src/linux_fs/tests/mount_namespace/*.rs \
+		"$(MOUNT_NAMESPACE_TOP_DIR)"/crates/forge/src/linux_fs/tests/mount_namespace/attachment/*.rs \
 		"$(MOUNT_NAMESPACE_TOP_DIR)/misc/make/linux-mount-namespace-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

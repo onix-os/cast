@@ -22,8 +22,8 @@ const NSIO: nix::libc::c_ulong = 0xb7;
 const NS_GET_NSTYPE: nix::libc::c_ulong = (NSIO << 8) | 0x3;
 const _: () = assert!(NS_GET_NSTYPE == 0xb703);
 const AUTHENTICATED_THREAD_PROC_DESCRIPTOR_BOUND: usize = 5;
-const DESCRIPTOR_MOUNT_ID_DESCRIPTOR_BOUND: usize = 24;
-const DESCRIPTOR_MOUNT_ID_WORK_BOUND: usize = 64 * 1024;
+pub(super) const DESCRIPTOR_MOUNT_ID_DESCRIPTOR_BOUND: usize = 24;
+pub(super) const DESCRIPTOR_MOUNT_ID_WORK_BOUND: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct MountNamespaceLimits {
@@ -168,6 +168,17 @@ impl<'a> Operation<'a> {
     }
 
     pub(super) fn emit(&mut self, checkpoint: CaptureCheckpoint) -> io::Result<()> {
+        self.checkpoint()?;
+        #[cfg(test)]
+        if let Some(hook) = self.hook.as_mut() {
+            hook(checkpoint.into())?;
+        }
+        #[cfg(not(test))]
+        let _ = checkpoint;
+        self.checkpoint()
+    }
+
+    pub(super) fn emit_attachment(&mut self, checkpoint: super::attachment::AttachmentCheckpoint) -> io::Result<()> {
         self.checkpoint()?;
         #[cfg(test)]
         if let Some(hook) = self.hook.as_mut() {
@@ -467,34 +478,40 @@ pub(super) fn task_root_witness(
     task_root: &std::fs::File,
     operation: &mut Operation<'_>,
 ) -> io::Result<TaskRootWitness> {
+    mounted_directory_witness(task_root, operation, "current task root")
+}
+
+pub(super) fn mounted_directory_witness(
+    directory: &std::fs::File,
+    operation: &mut Operation<'_>,
+    action: &'static str,
+) -> io::Result<TaskRootWitness> {
     #[cfg(test)]
     if !operation.is_production() {
-        reject_kernel_pseudo_fixture(task_root, operation, "fixture task root")?;
+        reject_kernel_pseudo_fixture(directory, operation, "fixture mounted directory")?;
     }
-    let before = raw_witness(task_root, operation, "current task root")?
-        .require_kind(nix::libc::S_IFDIR, "current task root")?;
+    let before = raw_witness(directory, operation, action)?.require_kind(nix::libc::S_IFDIR, action)?;
     operation.charge_descriptors(
         DESCRIPTOR_MOUNT_ID_DESCRIPTOR_BOUND,
-        "reserving authenticated task-root mount-ID descriptor work",
+        "reserving authenticated mounted-directory mount-ID descriptor work",
     )?;
     operation.charge(
         DESCRIPTOR_MOUNT_ID_WORK_BOUND,
-        "reserving authenticated task-root mount-ID parser work",
+        "reserving authenticated mounted-directory mount-ID parser work",
     )?;
     let mount_id = if operation.is_production() {
-        descriptor_mount_id_until(task_root, operation.deadline())?
+        descriptor_mount_id_until(directory, operation.deadline())?
     } else {
         // Fixture mount identity is deliberately synthetic and procfs-free.
         // Replacement is still detected by the independent dev/inode fields.
         before.inode
     };
-    let after = raw_witness(task_root, operation, "revalidating current task root")?
-        .require_kind(nix::libc::S_IFDIR, "revalidated current task root")?;
-    require_same_raw(before, after, "task root around mount-ID capture")?;
+    let after = raw_witness(directory, operation, action)?.require_kind(nix::libc::S_IFDIR, action)?;
+    require_same_raw(before, after, "mounted directory around mount-ID capture")?;
     if mount_id == 0 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "current task root has a zero mount ID",
+            "mounted directory has a zero mount ID",
         ));
     }
     Ok(TaskRootWitness {

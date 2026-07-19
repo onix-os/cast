@@ -22,6 +22,10 @@ impl Capture {
         self.snapshot
     }
 
+    pub(super) const fn task_root_file(&self) -> &std::fs::File {
+        &self.task_root
+    }
+
     pub(super) fn require_retained(&self, operation: &mut Operation<'_>) -> io::Result<()> {
         require_same_task_root(
             self.snapshot.task_root,

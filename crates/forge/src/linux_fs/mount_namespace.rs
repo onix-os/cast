@@ -20,8 +20,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod attachment;
 mod capture;
 mod filesystem;
+
+#[allow(unused_imports)] // named by the future owned mounted-topology aggregate
+pub(crate) use attachment::{PreparedTaskRootedAttachment, RevalidatedTaskRootedAttachment};
+
+#[cfg(test)]
+#[allow(unused_imports)] // consumed by the synthetic attachment test slice
+pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
 
 use capture::{Capture, capture_twice, require_snapshot_matches};
 use filesystem::{Locator, MountNamespaceLimits, Operation};
@@ -266,6 +274,13 @@ pub(crate) enum FixtureMountNamespaceCheckpoint {
     TerminalTaskRootRebind,
     TerminalTaskRootRecheck,
     TerminalNamespaceRecheck,
+    AttachmentAnchorOpened,
+    AttachmentComponentPinned { pass: usize, index: usize },
+    AttachmentPassComplete { pass: usize },
+    AttachmentTerminalFullChain { round: usize },
+    AttachmentTerminalParent,
+    AttachmentTerminalName,
+    AttachmentBeforeClosingAnchor,
 }
 
 /// Test-only admission of an ordinary, named synthetic task tree.
