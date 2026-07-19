@@ -13,7 +13,7 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_mounted_boot_topology::capture_tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 10; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 11; \
 	for name in \
 		stable::alias_fixture_retains_exact_descriptor_backed_scalar_facts \
 		stable::repeated_revalidation_keeps_the_bootstrap_topology_exact \
@@ -24,6 +24,7 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 		races::changed_sysfs_identity_fails_after_exact_mountinfo_selection \
 		races::attachment_selector_mismatch_is_role_typed_before_mountinfo_use \
 		deadlines::expired_caller_deadline_is_rejected_at_coordinator_entry \
+		deadlines::successful_fixture_revalidation_retains_exact_caller_deadline \
 		deadlines::expiry_at_the_final_terminal_checkpoint_cannot_return_a_view; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
@@ -39,6 +40,10 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	timeout 10s grep -Fq 'DistinctXbootldr {' "$$core/model.rs"; \
 	timeout 10s grep -Fq 'attachment: PreparedTaskRootedAttachment' "$$core/model.rs"; \
 	timeout 10s grep -Fq 'sysfs: PreparedSysfsPartitionIdentity' "$$core/model.rs"; \
+	timeout 10s grep -Fq 'deadline: Instant' "$$core/model.rs"; \
+	timeout 10s grep -Fq 'pub(in crate::client) fn deadline(&self) -> Instant' "$$core/model.rs"; \
+	timeout 10s grep -Fq 'deadline,' "$$core/preparation.rs"; \
+	timeout 10s grep -Fq 'assert_eq!(view.deadline(), operation_deadline);' "$$test_core/deadlines.rs"; \
 	for phase in Pass1 Pass2 Terminal; do timeout 10s grep -Fq "ObservationPhase::$$phase" "$$core/preparation.rs"; done; \
 	timeout 10s grep -Fq 'same_revalidated_block_parent_snapshot(&xbootldr_sysfs)' "$$core/observation.rs"; \
 	timeout 10s grep -Fq 'intent_selector == attachment_selector' "$$core/observation.rs"; \

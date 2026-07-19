@@ -112,6 +112,7 @@ impl std::fmt::Debug for PreparedActiveReblitMountedBootTopology {
 pub(in crate::client) struct RevalidatedActiveReblitMountedBootTopology<'a> {
     pub(super) prepared: &'a PreparedActiveReblitMountedBootTopology,
     pub(super) _installation: &'a Installation,
+    pub(super) deadline: Instant,
     pub(super) _same_thread: PhantomData<Rc<()>>,
 }
 
@@ -127,5 +128,9 @@ impl std::fmt::Debug for RevalidatedActiveReblitMountedBootTopology<'_> {
 impl RevalidatedActiveReblitMountedBootTopology<'_> {
     pub(in crate::client) fn topology(&self) -> BoundActiveReblitMountedBootTopology<'_> {
         self.prepared.facts.bound()
+    }
+
+    pub(in crate::client) fn deadline(&self) -> Instant {
+        self.deadline
     }
 }

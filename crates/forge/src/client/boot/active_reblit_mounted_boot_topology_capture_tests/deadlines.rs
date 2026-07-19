@@ -24,6 +24,22 @@ fn expired_caller_deadline_is_rejected_at_coordinator_entry() {
 }
 
 #[test]
+fn successful_fixture_revalidation_retains_exact_caller_deadline() {
+    let fixture = AliasFixture::stable().unwrap();
+    let prepared = fixture.prepare().unwrap();
+    let operation_deadline = deadline();
+    let admitted = Instant::now();
+    let mut clock = || admitted;
+
+    let view = prepared
+        .revalidate_fixture_until_with_clock(&fixture.installation, operation_deadline, &mut clock)
+        .unwrap();
+
+    assert_eq!(view.deadline(), operation_deadline);
+    fixture.assert_outside_unchanged();
+}
+
+#[test]
 fn expiry_at_the_final_terminal_checkpoint_cannot_return_a_view() {
     let fixture = AliasFixture::stable().unwrap();
     let prepared = fixture.prepare().unwrap();

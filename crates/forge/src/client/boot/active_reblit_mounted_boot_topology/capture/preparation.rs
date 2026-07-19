@@ -129,6 +129,7 @@ impl PreparedActiveReblitMountedBootTopology {
         Ok(RevalidatedActiveReblitMountedBootTopology {
             prepared: self,
             _installation: installation,
+            deadline,
             _same_thread: PhantomData::<Rc<()>>,
         })
     }
