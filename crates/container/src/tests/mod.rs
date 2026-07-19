@@ -218,7 +218,7 @@ fn classify_minimal_dev_activation_unavailable(error: &ContainerRunError, root: 
 
 fn require_errno<T>(result: io::Result<T>, expected: Errno, operation: &str) -> io::Result<()> {
     match result {
-        Err(error) if error.raw_os_error() == Some(expected as i32) => Ok(()),
+        Err(error) if io_error_matches_errno(&error, expected) => Ok(()),
         Err(error) => Err(io::Error::other(format!(
             "{operation} failed with {error}, expected {expected}"
         ))),
@@ -226,6 +226,18 @@ fn require_errno<T>(result: io::Result<T>, expected: Errno, operation: &str) -> 
             "{operation} unexpectedly succeeded, expected {expected}"
         ))),
     }
+}
+
+fn io_error_matches_errno(error: &io::Error, expected: Errno) -> bool {
+    if error.raw_os_error() == Some(expected as i32) {
+        return true;
+    }
+
+    // fs_err preserves ErrorKind while wrapping the original OS error with
+    // path context, so raw_os_error() is deliberately unavailable. EROFS has
+    // its own exact ErrorKind and is the only contextualized error admitted by
+    // this helper's callers; do not soften EPERM/EACCES or other errno pairs.
+    expected == Errno::EROFS && error.kind() == io::ErrorKind::ReadOnlyFilesystem
 }
 
 fn exercise_bounded_tmpfs(size_bytes: u64, inode_limit: u64) -> io::Result<()> {
