@@ -39,7 +39,7 @@ fn assert_locked_template_substitution_semantics(declaration: &PackageSpec, plan
     let [StepSpec::Run { program, args }] = declaration.builder.phases.setup.steps.as_slice() else {
         panic!("locked-template-substitution must retain one structural substitution step");
     };
-    assert_eq!(program.path, "sed");
+    assert_eq!(program.path, "/usr/bin/sed");
     assert_eq!(
         args.as_slice(),
         [
@@ -67,7 +67,7 @@ fn assert_locked_template_substitution_semantics(declaration: &PackageSpec, plan
         let StepSpec::Run { program, args } = step else {
             panic!("locked-template-substitution checks must remain structural Run steps");
         };
-        assert_eq!(program.path, "grep");
+        assert_eq!(program.path, "/usr/bin/grep");
         assert_eq!(
             args.as_slice(),
             ["-Fqx", expected_line, "config/session-index.conf.in"]
@@ -82,10 +82,10 @@ fn assert_locked_template_substitution_semantics(declaration: &PackageSpec, plan
     else {
         panic!("locked-template-substitution must retain one explicit install step");
     };
-    assert_eq!(interpreter.path, "bash");
+    assert_eq!(interpreter.path, "/usr/bin/bash");
     assert_eq!(
         declared_programs.iter().map(|program| program.path.as_str()).collect::<Vec<_>>(),
-        ["install"]
+        ["/usr/bin/install"]
     );
     assert!(script.contains("${CAST_INSTALL_ROOT}${CAST_DATADIR}/session-index/session-index.conf"));
     assert!(declaration.outputs[0].paths.iter().any(|path| {
