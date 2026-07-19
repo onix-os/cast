@@ -86,6 +86,9 @@ mod active_reblit_boot_inputs;
 #[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
 #[path = "boot/active_reblit_projection.rs"]
 pub(crate) mod active_reblit_boot_projection;
+#[allow(dead_code)] // pure authenticated semantic aggregate for the later BLS renderer
+#[path = "boot/active_reblit_boot_render_inputs.rs"]
+mod active_reblit_boot_render_inputs;
 #[allow(dead_code)] // authenticated schemas prepared before descriptor-safe rendering
 #[path = "boot/active_reblit_boot_schema_inputs.rs"]
 mod active_reblit_boot_schema_inputs;
