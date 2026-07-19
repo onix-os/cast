@@ -8,12 +8,13 @@ forge-active-reblit-boot-schema-input-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_boot_schema_inputs::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 27; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 28; \
 	for name in \
 		bounds_and_errors::per_source_byte_policy_admits_n_and_rejects_n_plus_one \
 		bounds_and_errors::aggregate_byte_policy_accounts_for_each_authenticated_local_source \
 		bounds_and_errors::work_policy_admits_observed_n_and_rejects_n_minus_one \
 		bounds_and_errors::unrepresentable_deadline_is_rejected_before_source_work \
+		bounds_and_errors::caller_owned_deadline_is_not_replaced_during_prepare_or_revalidation \
 		bounds_and_errors::os_release_parser_rejects_duplicate_keys_and_fat_unsafe_ids \
 		bounds_and_errors::os_info_parser_rejects_duplicate_or_current_former_identity \
 		fallback_semantics::absent_historical_os_release_selects_the_authenticated_head_schema \
@@ -43,6 +44,8 @@ forge-active-reblit-boot-schema-input-test:
 	generated=crates/forge/src/client/boot/active_reblit_boot_schema_inputs/generated_os_release.rs; \
 	validation=crates/forge/src/client/boot/active_reblit_boot_schema_inputs/schema_validation.rs; \
 	timeout 10s grep -Fq 'PreparedActiveReblitBootSchemas' "$$module"; \
+	timeout 10s grep -Fq 'fn prepare_until(' "$$module"; \
+	timeout 10s grep -Fq 'fn revalidate_sources_until(' "$$module"; \
 	timeout 10s grep -Fq 'RevalidatedActiveReblitBootStateRoots' "$$module"; \
 	timeout 10s grep -Fq 'openat2_file_until' "$$generated"; \
 	if timeout 10s rg -q 'blsforme|read_dir\(|\.exists\(|std::fs::read' "$$module" "$$generated" "$$validation"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \

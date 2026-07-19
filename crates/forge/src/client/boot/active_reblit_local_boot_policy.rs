@@ -124,17 +124,38 @@ impl RetainedLocalCmdlineEntry {
 }
 
 impl PreparedActiveReblitLocalBootPolicy {
+    #[cfg(test)]
     pub(in crate::client) fn prepare(installation: &Installation) -> Result<Self, ActiveReblitLocalBootPolicyError> {
-        prepare_with_policy_and_checkpoint(installation, LocalBootPolicy::production(), |_| {})
+        let deadline = deadline_after(LocalBootPolicy::production().timeout)?;
+        Self::prepare_until(installation, deadline)
+    }
+
+    /// Prepare without replacing the caller-owned absolute deadline.
+    pub(in crate::client) fn prepare_until(
+        installation: &Installation,
+        deadline: Instant,
+    ) -> Result<Self, ActiveReblitLocalBootPolicyError> {
+        prepare_with_policy_until_and_checkpoint(installation, LocalBootPolicy::production(), deadline, |_| {})
     }
 
     /// Revalidate the exact retained absence or directory, both sorted name
     /// inventories, every relevant inode, and every regular-file byte.
+    #[cfg(test)]
     pub(in crate::client) fn revalidate<'a>(
         &'a self,
         installation: &'a Installation,
     ) -> Result<RevalidatedActiveReblitLocalBootPolicy<'a>, ActiveReblitLocalBootPolicyError> {
-        let mut budget = LocalBootPolicyBudget::new(LocalBootPolicy::production())?;
+        let deadline = deadline_after(LocalBootPolicy::production().timeout)?;
+        self.revalidate_until(installation, deadline)
+    }
+
+    /// Revalidate without replacing the caller-owned absolute deadline.
+    pub(in crate::client) fn revalidate_until<'a>(
+        &'a self,
+        installation: &'a Installation,
+        deadline: Instant,
+    ) -> Result<RevalidatedActiveReblitLocalBootPolicy<'a>, ActiveReblitLocalBootPolicyError> {
+        let mut budget = LocalBootPolicyBudget::new_until(LocalBootPolicy::production(), deadline)?;
         self.revalidate_with_budget(installation, &mut budget)?;
         Ok(RevalidatedActiveReblitLocalBootPolicy {
             policy: self,
@@ -286,18 +307,20 @@ struct LocalBootPolicyBudget {
 }
 
 impl LocalBootPolicyBudget {
+    #[cfg(test)]
     fn new(policy: LocalBootPolicy) -> Result<Self, ActiveReblitLocalBootPolicyError> {
-        let deadline =
-            Instant::now()
-                .checked_add(policy.timeout)
-                .ok_or(ActiveReblitLocalBootPolicyError::InvalidDeadline {
-                    timeout: policy.timeout,
-                })?;
-        Ok(Self {
+        let deadline = deadline_after(policy.timeout)?;
+        Self::new_until(policy, deadline)
+    }
+
+    fn new_until(policy: LocalBootPolicy, deadline: Instant) -> Result<Self, ActiveReblitLocalBootPolicyError> {
+        let budget = Self {
             policy,
             deadline,
             work: 0,
-        })
+        };
+        budget.require_deadline(Path::new("local boot policy admission"))?;
+        Ok(budget)
     }
 
     fn step(&mut self, path: &Path) -> Result<(), ActiveReblitLocalBootPolicyError> {
@@ -335,6 +358,7 @@ fn revalidate_installation_root(
     budget.require_deadline(&installation.root)
 }
 
+#[cfg(test)]
 fn prepare_with_policy_and_checkpoint<F>(
     installation: &Installation,
     policy: LocalBootPolicy,
@@ -343,7 +367,20 @@ fn prepare_with_policy_and_checkpoint<F>(
 where
     F: FnOnce(&PreparedActiveReblitLocalBootPolicy),
 {
-    let mut budget = LocalBootPolicyBudget::new(policy)?;
+    let deadline = deadline_after(policy.timeout)?;
+    prepare_with_policy_until_and_checkpoint(installation, policy, deadline, before_final_revalidation)
+}
+
+fn prepare_with_policy_until_and_checkpoint<F>(
+    installation: &Installation,
+    policy: LocalBootPolicy,
+    deadline: Instant,
+    before_final_revalidation: F,
+) -> Result<PreparedActiveReblitLocalBootPolicy, ActiveReblitLocalBootPolicyError>
+where
+    F: FnOnce(&PreparedActiveReblitLocalBootPolicy),
+{
+    let mut budget = LocalBootPolicyBudget::new_until(policy, deadline)?;
     revalidate_installation_root(installation, &mut budget)?;
     let location = capture_location(installation, &mut budget)?;
     let (inventory, entries, total_file_bytes) = if let Some(directory) = location.present_directory() {
@@ -411,6 +448,13 @@ where
         ..prepared
     };
     Ok(prepared)
+}
+
+#[cfg(test)]
+fn deadline_after(timeout: Duration) -> Result<Instant, ActiveReblitLocalBootPolicyError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(ActiveReblitLocalBootPolicyError::InvalidDeadline { timeout })
 }
 
 fn require_same_inventory(

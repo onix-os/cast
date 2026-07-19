@@ -8,7 +8,7 @@ use std::{
         fs::{MetadataExt as _, PermissionsExt as _, symlink},
     },
     path::{Path, PathBuf},
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use tempfile::TempDir;
@@ -69,6 +69,22 @@ fn absent_local_policy_is_retained_and_revalidated_without_entries() {
     let revalidated = prepared.revalidate(&fixture.installation).unwrap();
     assert!(revalidated.is_absent());
     assert_eq!(revalidated.entries().len(), 0);
+}
+
+#[test]
+fn caller_owned_deadline_is_not_replaced_during_prepare_or_revalidation() {
+    let fixture = Fixture::new();
+    let expired = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        PreparedActiveReblitLocalBootPolicy::prepare_until(&fixture.installation, expired),
+        Err(ActiveReblitLocalBootPolicyError::DeadlineExceeded { .. })
+    ));
+
+    let prepared = fixture.prepare().unwrap();
+    assert!(matches!(
+        prepared.revalidate_until(&fixture.installation, expired),
+        Err(ActiveReblitLocalBootPolicyError::DeadlineExceeded { .. })
+    ));
 }
 
 #[test]

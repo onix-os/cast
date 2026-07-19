@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::*;
 
@@ -70,6 +70,28 @@ fn unrepresentable_deadline_is_rejected_before_source_work() {
         fixture.prepare_with_schema_policy(policy),
         Err(ActiveReblitBootSchemaInputsError::InvalidDeadline { timeout })
             if timeout == Duration::MAX
+    ));
+}
+
+#[test]
+fn caller_owned_deadline_is_not_replaced_during_prepare_or_revalidation() {
+    let fixture = Fixture::new(
+        FixtureSchemaSource::OsInfo(valid_os_info("head-os", "Head OS", &[])),
+        Vec::new(),
+    );
+    let prepared = fixture.prepare().unwrap();
+    let roots = prepared.roots.revalidate(&fixture.installation).unwrap();
+    let expired = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+
+    assert!(matches!(
+        PreparedActiveReblitBootSchemas::prepare_until(&prepared.stone, &roots, expired),
+        Err(ActiveReblitBootSchemaInputsError::DeadlineExceeded { .. })
+    ));
+    assert!(matches!(
+        prepared
+            .schemas
+            .revalidate_sources_until(&prepared.stone, &roots, expired),
+        Err(ActiveReblitBootSchemaInputsError::DeadlineExceeded { .. })
     ));
 }
 

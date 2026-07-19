@@ -8,9 +8,10 @@ forge-active-reblit-local-boot-policy-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_local_boot_policy::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 17; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 18; \
 	for name in \
 		absent_local_policy_is_retained_and_revalidated_without_entries \
+		caller_owned_deadline_is_not_replaced_during_prepare_or_revalidation \
 		exact_cmdline_files_and_dev_null_masks_are_sorted_and_normalized \
 		non_cmdline_entries_are_inventoried_but_not_interpreted \
 		a_non_dev_null_cmdline_symlink_is_a_hard_failure \
@@ -33,6 +34,8 @@ forge-active-reblit-local-boot-policy-test:
 	filesystem=crates/forge/src/client/boot/active_reblit_local_boot_policy/filesystem.rs; \
 	tests=crates/forge/src/client/boot/active_reblit_local_boot_policy_tests.rs; \
 	timeout 10s grep -Fq 'PreparedActiveReblitLocalBootPolicy' "$$module"; \
+	timeout 10s grep -Fq 'fn prepare_until(' "$$module"; \
+	timeout 10s grep -Fq 'fn revalidate_until' "$$module"; \
 	timeout 10s grep -Fq 'RetainedLocalPolicyLocation' "$$filesystem"; \
 	timeout 10s grep -Fq 'revalidate_root_directory_until(budget.deadline)' "$$module"; \
 	timeout 10s grep -Fq 'readlinkat(' "$$filesystem"; \

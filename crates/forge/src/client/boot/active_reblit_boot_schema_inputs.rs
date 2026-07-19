@@ -188,11 +188,22 @@ pub(in crate::client) struct PreparedActiveReblitBootSchemas {
 }
 
 impl PreparedActiveReblitBootSchemas {
+    #[cfg(test)]
     pub(in crate::client) fn prepare(
         stone: &PreparedActiveReblitStoneBootInputs,
         roots: &RevalidatedActiveReblitBootStateRoots<'_>,
     ) -> Result<Self, ActiveReblitBootSchemaInputsError> {
-        prepare_with_policy(stone, roots, BootSchemaInputPolicy::production())
+        let deadline = deadline_after(BootSchemaInputPolicy::production().timeout)?;
+        Self::prepare_until(stone, roots, deadline)
+    }
+
+    /// Prepare without replacing the caller-owned absolute deadline.
+    pub(in crate::client) fn prepare_until(
+        stone: &PreparedActiveReblitStoneBootInputs,
+        roots: &RevalidatedActiveReblitBootStateRoots<'_>,
+        deadline: Instant,
+    ) -> Result<Self, ActiveReblitBootSchemaInputsError> {
+        prepare_with_policy_until(stone, roots, BootSchemaInputPolicy::production(), deadline)
     }
 
     pub(in crate::client) fn global_state(&self) -> state::Id {
@@ -221,11 +232,25 @@ impl PreparedActiveReblitBootSchemas {
     /// Rebind every selected source to the same Stone owner and a fresh
     /// epoch-sandwiched state-root view. Sticky fallbacks are deliberately not
     /// promoted even if a formerly absent historical file appears.
+    #[cfg(test)]
     pub(in crate::client) fn revalidate_sources(
         &self,
         stone: &PreparedActiveReblitStoneBootInputs,
         roots: &RevalidatedActiveReblitBootStateRoots<'_>,
     ) -> Result<(), ActiveReblitBootSchemaInputsError> {
+        let deadline = deadline_after(BootSchemaInputPolicy::production().timeout)?;
+        self.revalidate_sources_until(stone, roots, deadline)
+    }
+
+    /// Revalidate every retained source without replacing the caller-owned
+    /// absolute deadline.
+    pub(in crate::client) fn revalidate_sources_until(
+        &self,
+        stone: &PreparedActiveReblitStoneBootInputs,
+        roots: &RevalidatedActiveReblitBootStateRoots<'_>,
+        deadline: Instant,
+    ) -> Result<(), ActiveReblitBootSchemaInputsError> {
+        let mut budget = SchemaBudget::new_until(BootSchemaInputPolicy::production(), deadline)?;
         if stone.state_ids() != self.projected_state_ids.as_ref() {
             return Err(ActiveReblitBootSchemaInputsError::StateProjectionChanged);
         }
@@ -235,7 +260,6 @@ impl PreparedActiveReblitBootSchemas {
         if roots.eligible_state_ids() != self.eligible_state_ids.as_ref() {
             return Err(ActiveReblitBootSchemaInputsError::EligibleStateProjectionChanged);
         }
-        let mut budget = SchemaBudget::new(BootSchemaInputPolicy::production())?;
         for prepared in &self.schemas {
             budget.step()?;
             match prepared.source {
@@ -287,19 +311,21 @@ struct SchemaBudget {
 }
 
 impl SchemaBudget {
+    #[cfg(test)]
     fn new(policy: BootSchemaInputPolicy) -> Result<Self, ActiveReblitBootSchemaInputsError> {
-        let deadline =
-            Instant::now()
-                .checked_add(policy.timeout)
-                .ok_or(ActiveReblitBootSchemaInputsError::InvalidDeadline {
-                    timeout: policy.timeout,
-                })?;
-        Ok(Self {
+        let deadline = deadline_after(policy.timeout)?;
+        Self::new_until(policy, deadline)
+    }
+
+    fn new_until(policy: BootSchemaInputPolicy, deadline: Instant) -> Result<Self, ActiveReblitBootSchemaInputsError> {
+        let budget = Self {
             policy,
             deadline,
             work: 0,
             source_bytes: 0,
-        })
+        };
+        budget.require_deadline()?;
+        Ok(budget)
     }
 
     fn step(&mut self) -> Result<(), ActiveReblitBootSchemaInputsError> {
@@ -344,11 +370,23 @@ impl SchemaBudget {
     }
 }
 
+#[cfg(test)]
 fn prepare_with_policy(
     stone: &PreparedActiveReblitStoneBootInputs,
     roots: &RevalidatedActiveReblitBootStateRoots<'_>,
     policy: BootSchemaInputPolicy,
 ) -> Result<PreparedActiveReblitBootSchemas, ActiveReblitBootSchemaInputsError> {
+    let deadline = deadline_after(policy.timeout)?;
+    prepare_with_policy_until(stone, roots, policy, deadline)
+}
+
+fn prepare_with_policy_until(
+    stone: &PreparedActiveReblitStoneBootInputs,
+    roots: &RevalidatedActiveReblitBootStateRoots<'_>,
+    policy: BootSchemaInputPolicy,
+    deadline: Instant,
+) -> Result<PreparedActiveReblitBootSchemas, ActiveReblitBootSchemaInputsError> {
+    let mut budget = SchemaBudget::new_until(policy, deadline)?;
     validate_correlated_inputs(stone, roots)?;
     let requirements = stone.schema_requirements();
     let global_requirement = requirements
@@ -356,7 +394,6 @@ fn prepare_with_policy(
         .copied()
         .ok_or(ActiveReblitBootSchemaInputsError::MissingGlobalRequirement)?;
     let global_state = global_requirement.state_id();
-    let mut budget = SchemaBudget::new(policy)?;
     let mut schemas: Vec<PreparedActiveReblitStateBootSchema> = Vec::with_capacity(requirements.len());
 
     for requirement in requirements.iter().copied() {
@@ -409,7 +446,7 @@ fn prepare_with_policy(
             state: i32::from(global_state),
         });
     }
-    Ok(PreparedActiveReblitBootSchemas {
+    let prepared = PreparedActiveReblitBootSchemas {
         projected_state_ids: stone.state_ids().to_vec().into_boxed_slice(),
         projected_requirements: requirements.to_vec().into_boxed_slice(),
         eligible_state_ids: roots.eligible_state_ids().to_vec().into_boxed_slice(),
@@ -417,7 +454,16 @@ fn prepare_with_policy(
         schemas: schemas.into_boxed_slice(),
         total_source_bytes: budget.source_bytes,
         preparation_work: budget.work,
-    })
+    };
+    budget.require_deadline()?;
+    Ok(prepared)
+}
+
+#[cfg(test)]
+fn deadline_after(timeout: Duration) -> Result<Instant, ActiveReblitBootSchemaInputsError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(ActiveReblitBootSchemaInputsError::InvalidDeadline { timeout })
 }
 
 fn validate_correlated_inputs(
