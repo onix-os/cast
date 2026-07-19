@@ -13,14 +13,16 @@ use super::{
         input::{ExpectedPartition, ValidatedPartition},
         stable,
     },
-    RetainedBlockDeviceObserver,
+    observation::RetainedBlockDeviceObserver,
+    retained_parent::CanonicalRetainedParentOpening,
 };
 
 /// Closed read-provenance evidence from one retained read-only block device.
 ///
-/// Construction requires an opening observation, two exact GPT passes with a
-/// caller-owned name rebind and a same-descriptor observation between them, a
-/// closing observation, and pure reconciliation with one authenticated sysfs
+/// Construction requires an opening observation exactly equal to the retained
+/// parent's canonical opening, two exact GPT passes with a caller-owned name
+/// rebind and a same-descriptor observation between them, a closing
+/// observation, and pure reconciliation with one authenticated sysfs
 /// expectation. No descriptor, path, image, buffer, observer, callback, or
 /// reusable operation authority survives.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,9 +90,12 @@ impl LiveAuthenticatedGptPartitionDeviceEvidence {
 /// the authenticated relative device name under its retained `/dev` owner. It
 /// runs once with the original deadline after pass one and before the
 /// same-descriptor inter-pass observation. Failure prevents every pass-two
+/// read. The opening must equal the sealed opening from the owner which
+/// retained this descriptor; disagreement fails before an image is created or
 /// read. This function itself accepts no path and performs no discovery.
-pub(in crate::linux_fs) fn authenticate_retained_gpt_partition_device_with_interpass_until(
+pub(super) fn authenticate_retained_gpt_partition_device_with_interpass_until(
     observer: &mut RetainedBlockDeviceObserver<'_>,
+    retained_opening: CanonicalRetainedParentOpening,
     expected: &SysfsGptDeviceExpectation<'_>,
     expected_role: GptPartitionRole,
     deadline: Instant,
@@ -99,6 +104,7 @@ pub(in crate::linux_fs) fn authenticate_retained_gpt_partition_device_with_inter
     checkpoint(deadline)?;
     let opening = observer.observe_until(deadline)?;
     checkpoint(deadline)?;
+    require_retained_opening_until(opening, retained_opening, deadline)?;
 
     let parent = expected.parent_device();
     let partition_uuid = expected.partition_uuid();
@@ -123,6 +129,20 @@ pub(in crate::linux_fs) fn authenticate_retained_gpt_partition_device_with_inter
         deadline,
         rebind_parent_name,
     )
+}
+
+fn require_retained_opening_until(
+    observed: BlockDeviceObservation,
+    retained: CanonicalRetainedParentOpening,
+    deadline: Instant,
+) -> io::Result<()> {
+    checkpoint(deadline)?;
+    if observed != retained.observation() {
+        return Err(invalid(
+            "GPT coordinator opening disagrees with the retained parent's canonical opening",
+        ));
+    }
+    checkpoint(deadline)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -211,6 +231,7 @@ pub(in crate::linux_fs) fn authenticate_retained_gpt_partition_device_sources_fi
     observer: &mut impl BlockDeviceObserver,
     first_source: &mut impl GptPartitionRoleImage,
     second_source: &mut impl GptPartitionRoleImage,
+    retained_opening: BlockDeviceObservation,
     parent_major: u32,
     parent_minor: u32,
     partition_number: u32,
@@ -224,6 +245,11 @@ pub(in crate::linux_fs) fn authenticate_retained_gpt_partition_device_sources_fi
     checkpoint(deadline)?;
     let opening = observer.observe_until(deadline)?;
     checkpoint(deadline)?;
+    require_retained_opening_until(
+        opening,
+        CanonicalRetainedParentOpening::fixture(retained_opening),
+        deadline,
+    )?;
     let expected = ExpectedPartition {
         parent_major,
         parent_minor,

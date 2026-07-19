@@ -34,12 +34,8 @@ use super::{
 };
 #[allow(unused_imports)] // consumed by the retained attachment composition layer
 pub(in crate::linux_fs) use live::{
-    LiveAuthenticatedGptPartitionDeviceEvidence, authenticate_retained_gpt_partition_device_with_interpass_until,
+    LiveAuthenticatedGptPartitionDeviceEvidence, authenticate_retained_devtmpfs_gpt_partition_device_until,
 };
-#[allow(unused_imports)] // retained syscall/image foundations for the production composition adapter
-pub(in crate::linux_fs) use live::{RetainedBlockDeviceObserver, RetainedReadOnlyBlockImage};
-#[allow(unused_imports)] // consumed by the retained devtmpfs/GPT composition layer
-pub(in crate::linux_fs) use live::{RetainedGptParentBlockDevice, retain_gpt_parent_block_device_until};
 pub(in crate::linux_fs) use observation::BlockDeviceObserver;
 #[allow(unused_imports)] // sealed vocabulary for the later descriptor/syscall adapter
 pub(in crate::linux_fs) use observation::{BlockDeviceObservation, ObservedDeviceAccess, ObservedNodeKind};
@@ -47,7 +43,8 @@ pub(in crate::linux_fs) use observation::{BlockDeviceObservation, ObservedDevice
 #[cfg(test)]
 pub(in crate::linux_fs) use live::{
     FixtureBlockDeviceSyscall, FixtureBlockDeviceSyscallResult, FixtureRetainedParentProtocolCall,
-    FixtureRetainedParentProtocolResult,
+    FixtureRetainedParentProtocolResult, RetainedBlockDeviceObserver, RetainedGptParentBlockDevice,
+    authenticate_owned_gpt_parent_fixture_until,
     authenticate_retained_gpt_partition_device_sources_fixture_with_interpass_until,
     close_retained_gpt_parent_fixture_with_clock_until, fixture_block_ioctl_requests,
     observe_retained_block_device_fixture_with_clock_until, rebind_retained_gpt_parent_fixture_with_clock_until,

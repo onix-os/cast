@@ -21,17 +21,12 @@ mod abi;
 mod authentication;
 mod image;
 mod observation;
+mod owned_authentication;
 mod retained_parent;
 mod syscalls;
 
-pub(in crate::linux_fs) use authentication::{
-    LiveAuthenticatedGptPartitionDeviceEvidence, authenticate_retained_gpt_partition_device_with_interpass_until,
-};
-pub(in crate::linux_fs) use image::RetainedReadOnlyBlockImage;
-pub(in crate::linux_fs) use observation::RetainedBlockDeviceObserver;
-pub(in crate::linux_fs) use retained_parent::RetainedGptParentBlockDevice;
-
-pub(in crate::linux_fs) use retained_parent::retain_gpt_parent_block_device_until;
+pub(in crate::linux_fs) use authentication::LiveAuthenticatedGptPartitionDeviceEvidence;
+pub(in crate::linux_fs) use owned_authentication::authenticate_retained_devtmpfs_gpt_partition_device_until;
 
 #[cfg(test)]
 pub(in crate::linux_fs) use abi::fixture_block_ioctl_requests;
@@ -41,11 +36,14 @@ pub(in crate::linux_fs) use authentication::authenticate_retained_gpt_partition_
 pub(in crate::linux_fs) use image::retained_read_only_block_image_fixture_until;
 #[cfg(test)]
 pub(in crate::linux_fs) use observation::{
-    FixtureBlockDeviceSyscall, FixtureBlockDeviceSyscallResult, observe_retained_block_device_fixture_with_clock_until,
+    FixtureBlockDeviceSyscall, FixtureBlockDeviceSyscallResult, RetainedBlockDeviceObserver,
+    observe_retained_block_device_fixture_with_clock_until,
 };
 #[cfg(test)]
+pub(in crate::linux_fs) use owned_authentication::authenticate_owned_gpt_parent_fixture_until;
+#[cfg(test)]
 pub(in crate::linux_fs) use retained_parent::{
-    FixtureRetainedParentProtocolCall, FixtureRetainedParentProtocolResult,
+    FixtureRetainedParentProtocolCall, FixtureRetainedParentProtocolResult, RetainedGptParentBlockDevice,
     close_retained_gpt_parent_fixture_with_clock_until, rebind_retained_gpt_parent_fixture_with_clock_until,
     retain_gpt_parent_block_device_fixture_with_clock_until, retain_gpt_parent_block_device_linux_fixture_until,
 };

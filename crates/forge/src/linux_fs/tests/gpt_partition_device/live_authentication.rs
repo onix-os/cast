@@ -204,7 +204,52 @@ fn wrong_sysfs_parent_is_rejected_before_any_gpt_source_read() {
         &mut observer,
         &mut first_source,
         &mut second_source,
+        observation(&fixture, INODE),
         PARENT_MAJOR + 1,
+        PARENT_MINOR,
+        1,
+        fixture.selected_uuid,
+        fixture.selected_start_lba,
+        fixture.selected_size_lba,
+        fixture.selected_role,
+        live_deadline(),
+        &mut rebind,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(observer.calls, 1);
+    assert_eq!(&*events.borrow(), &[Event::Observation(1)]);
+}
+
+#[test]
+fn retained_parent_opening_mismatch_is_rejected_before_every_gpt_read() {
+    let fixture = gpt_fixture::Fixture::esp(512);
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let retained_opening = observation(&fixture, INODE);
+    let coordinator_opening = observation(&fixture, INODE + 1);
+    let mut observer = EventObserver::stable(events.clone(), coordinator_opening);
+    let mut rebind = |_deadline| {
+        events.borrow_mut().push(Event::ParentNameRebind);
+        Ok(())
+    };
+    let mut first_source = EventImage {
+        bytes: &fixture.bytes,
+        event: Event::FirstPassRead,
+        events: events.clone(),
+    };
+    let mut second_source = EventImage {
+        bytes: &fixture.bytes,
+        event: Event::SecondPassRead,
+        events: events.clone(),
+    };
+
+    let error = authenticate_retained_gpt_partition_device_sources_fixture_with_interpass_until(
+        &mut observer,
+        &mut first_source,
+        &mut second_source,
+        retained_opening,
+        PARENT_MAJOR,
         PARENT_MINOR,
         1,
         fixture.selected_uuid,
@@ -361,6 +406,7 @@ fn authenticate(
         observer,
         &mut first_source,
         &mut second_source,
+        observation(fixture, INODE),
         PARENT_MAJOR,
         PARENT_MINOR,
         1,

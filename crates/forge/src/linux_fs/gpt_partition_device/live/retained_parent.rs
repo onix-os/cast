@@ -20,7 +20,7 @@ use crate::linux_fs::{descriptor_mount_id_until, openat2_file_until};
 
 use super::{
     super::{BlockDeviceObservation, BlockDeviceObserver, ObservedDeviceAccess, ObservedNodeKind},
-    RetainedBlockDeviceObserver,
+    observation::RetainedBlockDeviceObserver,
 };
 use crate::linux_fs::sysfs_identity::SysfsGptDeviceExpectation;
 
@@ -36,6 +36,24 @@ const MAX_LOGICAL_BLOCK_SIZE: u32 = 65_536;
 const MAX_DEVICE_NAME_BYTES: usize = 4 * 1024 - 1;
 const MAX_DEVICE_NAME_COMPONENTS: usize = 128;
 const MAX_DEVICE_NAME_COMPONENT_BYTES: usize = 255;
+
+/// Sealed scalar snapshot of the exact opening retained by the parent owner.
+///
+/// The tuple field is private so sibling modules can compare against this
+/// opening but cannot construct a production token from unrelated evidence.
+#[derive(Clone, Copy)]
+pub(super) struct CanonicalRetainedParentOpening(BlockDeviceObservation);
+
+impl CanonicalRetainedParentOpening {
+    pub(super) const fn observation(self) -> BlockDeviceObservation {
+        self.0
+    }
+
+    #[cfg(test)]
+    pub(super) const fn fixture(observation: BlockDeviceObservation) -> Self {
+        Self(observation)
+    }
+}
 
 /// Private operation authority over one retained read-only parent block node.
 ///
@@ -53,6 +71,11 @@ pub(in crate::linux_fs) struct RetainedGptParentBlockDevice<'root, 'expectation>
 }
 
 impl RetainedGptParentBlockDevice<'_, '_> {
+    /// Return the sealed scalar opening captured while this owner was retained.
+    pub(super) const fn canonical_opening(&self) -> CanonicalRetainedParentOpening {
+        CanonicalRetainedParentOpening(self.opening)
+    }
+
     /// Borrow an observer over the exact retained descriptor.
     ///
     /// No descriptor, path, or device name crosses this private seam.
@@ -99,7 +122,7 @@ impl RetainedGptParentBlockDevice<'_, '_> {
 }
 
 /// Retain one exact sysfs-selected parent block node below authenticated devtmpfs.
-pub(in crate::linux_fs) fn retain_gpt_parent_block_device_until<'root, 'expectation>(
+pub(super) fn retain_gpt_parent_block_device_until<'root, 'expectation>(
     devtmpfs_root: &'root File,
     authenticated_root_mount_id: u64,
     expected: &SysfsGptDeviceExpectation<'expectation>,
