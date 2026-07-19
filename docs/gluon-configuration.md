@@ -94,13 +94,17 @@ length, and one private same-deadline inter-pass hook runs before the second
 source observation. A sealed
 expectation binds the parent device name, identity, partition number, PARTUUID,
 geometry, and optional disk sequence to one freshly revalidated sysfs view.
-Exact `/dev` `devtmpfs` mountinfo policy is validated separately, but no
-production adapter yet turns it into retained descriptor authority or owns the
-complete two-pass read schedule. A bounded pure reconciliation now rejects any
-disagreement among exact injected opening/closing block-node observations, GPT
-byte geometry, and the sealed sysfs view, but deliberately proves no descriptor
-or read provenance.
-This does not authorize writes or establish durability. Because
+Exact `/dev` `devtmpfs` mountinfo policy is validated separately. A borrowed
+directory can now be authenticated through stable `fstat`, mount-ID, and
+`fstatfs` observations which agree with that policy. This is only same-mount
+descriptor evidence: shared `TMPFS_MAGIC` does not prove the exact `/dev` root
+or exclude whole-root bind provenance. Read-only retained block observations
+and bounded positional reads are also available. A live coordinator places two
+complete GPT passes between opening, inter-pass, and closing block observations,
+with a caller-owned same-deadline name-rebind seam, and returns distinct closed
+read-provenance evidence after exact reconciliation. Binding that evidence to a
+retained exact `/dev` attachment and opening the sealed parent `DEVNAME` beneath
+it remain open. This does not authorize writes or establish durability. Because
 `nosymfollow` was added in
 Linux 5.10, the future boot publisher has an effective Linux 5.10-or-newer
 admission boundary. Generic `linux_fs` facilities remain compatible with the

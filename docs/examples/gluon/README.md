@@ -33,17 +33,23 @@ GPT table passes and returns exact ESP/XBOOTLDR geometry plus a role-independent
 table fingerprint without table bytes or read authority. It also retains the
 selected partition number, logical-block size, and image length and exposes one
 private same-deadline inter-pass checkpoint for a future live descriptor owner.
-Exact `/dev` `devtmpfs` mountinfo policy is also available. Pure reconciliation
-can reject disagreement between sealed sysfs/GPT facts and exact opening and
-closing injected block-node observations, but it is intentionally not live
-descriptor or read-provenance authority. The production retained block-device
-binding, write authority, and durability remain open. A pure bounded
+Exact `/dev` `devtmpfs` mountinfo policy is also available. Stable borrowed
+directory identity, authenticated mount ID, and shared `TMPFS_MAGIC` can now be
+matched to that policy, but this proves only same-mount descriptor evidence and
+not the exact `/dev` root or non-bind provenance. Read-only retained block
+observations and positional reads are implemented, and a live coordinator now
+places both GPT passes between opening, inter-pass, and closing observations
+with a caller-owned same-deadline name-rebind seam. Opening the sealed parent
+`DEVNAME` beneath the retained `/dev` attachment is still open, as are write
+authority and durability. A pure bounded
 destination classifier can now distinguish stable absence, exact bytes, and
 different bytes while
 rejecting FAT aliases and namespace/content races, but its retained-descriptor
 production observer is not wired yet. Its strict bounded raw `getdents64` parser
-is implemented without syscalls; actual fresh directory descriptions and
-descriptor-rooted reads remain open. The `nosymfollow` requirement gives
+now has a path-free one-shot syscall source for a caller-owned fresh directory
+description, plus bounded ownership/release callbacks; acquisition from the
+private retained destination and descriptor-rooted content reads remain open.
+The `nosymfollow` requirement gives
 the future boot publisher an effective Linux 5.10-or-newer admission boundary
 without changing the generic `linux_fs` Linux 5.6 compatibility baseline.
 `cast.boot_topology.v1` cannot be

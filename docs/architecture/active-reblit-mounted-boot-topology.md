@@ -199,6 +199,14 @@ hook runs exactly once after the first stable table pass and before any second
 source observation, under the original deadline, so a future descriptor owner
 can rebind live identity without weakening the two-pass schedule.
 
+Commit `f8a5da34` adds path-free read-only block-descriptor observations and a
+bounded positional image over a caller-retained descriptor. Commit `1f9d578a`
+then orders opening sysfs-parent preflight, GPT pass one, a caller-owned
+same-deadline name rebind, exact inter-pass descriptor re-observation, GPT pass
+two, closing observation, and pure reconciliation. Its distinct closed result
+therefore proves that both GPT passes used the retained descriptor; it carries
+no descriptor or reusable read capability.
+
 Commit `24d82abf` seals the parent `DEVNAME`, device number, partition number,
 PARTUUID, fixed-512-sector geometry, and optional disk sequence to one freshly
 revalidated sysfs view. Commit `78b87df9` separately validates only an exact
@@ -209,12 +217,17 @@ bounded pure reconciliation of exact opening and closing block-node identity,
 access, geometry, and capacity observations with the GPT role and sealed sysfs
 expectation. It rejects geometry overflow and disagreement, but is explicitly
 non-authoritative because injected observations prove neither a live descriptor
-nor the provenance of GPT reads. No production adapter yet owns that complete
-opening, inter-pass rebind, second-pass, and closing schedule beneath retained
-`/dev`. Physical-disk read authority, flush behavior, and persistence across
-reboot therefore remain separate open claims. The selected mountinfo `vfat`
-policy and Linux MSDOS-family descriptor witness are jointly retained per
-topology pass.
+nor the provenance of GPT reads. Commit `dceab6cc` separately sandwiches
+`fstat`, authenticated mount-ID, and `fstatfs` observations for a borrowed
+directory and requires stable `TMPFS_MAGIC` evidence to agree with the exact
+devtmpfs mountinfo policy. Because tmpfs shares that magic, this proves only
+same-mount descriptor evidence: it does not establish that the descriptor is
+the exact `/dev` root or exclude whole-root bind provenance. The production
+block-node opener and retained-attachment composition must still bind the
+sealed `DEVNAME` and supply the live coordinator's name rebind. Physical-disk
+flush behavior and persistence across reboot therefore remain separate open
+claims. The selected mountinfo `vfat` policy and Linux MSDOS-family descriptor
+witness are jointly retained per topology pass.
 
 ## Topology invariants
 
@@ -344,10 +357,14 @@ descriptors, sort work, and the caller-owned deadline. This is still an
 injected model. Commit `2eeaa22c` adds its bounded syscall-free raw
 `getdents64` chunk parser, including strict record and name validation,
 dot-entry filtering, and an explicitly budgeted terminal EOF probe. It returns
-only a closed raw-name inventory and does not trust inode or type hints. The
-production observer must still acquire fresh directory descriptions and make
-every observation through the private retained destination descriptor before
-it can authorize a durable publisher.
+only a closed raw-name inventory and does not trust inode or type hints. Commit
+`f8a5da34` supplies one syscall adapter which consumes a caller-owned fresh,
+offset-zero directory description without paths or offset reset. Commit
+`71ee5e95` reserves descriptor capacity before ownership-transfer callbacks and
+guarantees LIFO release on success and failure. The full production observer
+must still acquire those fresh descriptions from the private retained
+destination, bind every raw name to kernel lookup identity, and bracket content
+reads before it can authorize a durable publisher.
 
 A separate durable publisher combines:
 

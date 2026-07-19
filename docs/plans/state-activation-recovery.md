@@ -468,7 +468,12 @@ syscall-free bounded parser for complete raw `getdents64` chunks, with strict
 record/name validation and a separately charged terminal EOF probe. It
 produces only a closed raw-name inventory; fresh directory descriptions,
 actual syscalls, a retained-descriptor observer, and mutation authority are not
-part of that foundation.
+part of that foundation. Commit `f8a5da34` adds the actual one-shot
+`getdents64` source for one caller-owned fresh, offset-zero directory
+description, and commit `71ee5e95` makes the classifier reserve descriptor
+capacity before ownership transfers and unwind retained nodes in bounded LIFO
+order. Acquiring every fresh description and content reader beneath the private
+retained destination remains open.
 
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`
@@ -489,9 +494,17 @@ hook before any second-pass source observation. Commit `2eeaa22c` then provides
 bounded pure reconciliation of exact opening and closing injected block-node
 observations with those GPT scalars and the sealed sysfs expectation. That
 result is deliberately non-authoritative: it owns no descriptor and cannot
-prove GPT read provenance. The production read-only parent-device binding and
-full live observation schedule, disk admissibility, durable descriptor-rooted
-publisher, device-flush ordering, and restart reconciliation remain open.
+prove GPT read provenance. Commit `f8a5da34` adds read-only retained block
+observations and bounded positional reads. Commit `1f9d578a` composes them into
+an opening sysfs-parent preflight, two GPT passes separated by a caller-owned
+name rebind and exact descriptor re-observation, a closing observation, and
+reconciliation, returning distinct closed live read-provenance evidence.
+Commit `dceab6cc` independently binds stable directory identity, authenticated
+mount ID, and shared `TMPFS_MAGIC` to the exact devtmpfs mountinfo policy; it
+proves same-mount descriptor evidence, not the exact `/dev` root or non-bind
+provenance. The production retained `/dev` attachment and sealed-`DEVNAME`
+block-node opener, disk admissibility, durable descriptor-rooted publisher,
+device-flush ordering, and restart reconciliation remain open.
 Default and focused tests do not inspect or mutate host ESP/BOOT storage; real
 publication, reboot, and power-loss evidence requires the user-supplied
 disposable VM.
