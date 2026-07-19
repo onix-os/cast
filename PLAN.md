@@ -665,10 +665,10 @@ An optional live run classified supplementary-group `setgroups` `EPERM` before p
   bounds, and ledger-framing changes; a direct producer/validator test still
   does not substitute for live execution. The three items above therefore
   remain open pending one non-skipped `make fixtures-ci` run attached to the
-  accepted commit. The disposable NixOS host reaches the real delegated unit
-  but fails closed before materialization when descriptor-backed `open_tree`
-  crosses the cloned mount namespace; no build or publication is misreported. CI also covers `develop`, matching
-  the required untouched-`main` integration workflow.
+  accepted commit. Exact commit `887aecf5` passes the strict anchored kernel
+  mount boundary and production delegated preflight on disposable NixOS 6.18;
+  no build matrix has yet emitted, decoded, or reproduced a Stone. CI covers
+  `develop`, matching the required untouched-`main` integration workflow.
 
 **Exit gate:** every example is checked and frozen through public production
 boundaries; all four standard builders plus the custom and split-output cases
