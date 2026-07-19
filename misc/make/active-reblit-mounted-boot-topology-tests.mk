@@ -46,7 +46,7 @@ forge-active-reblit-mounted-boot-topology-test: host-storage-safety-test
 	timeout 10s grep -Fq 'esp.destination == xbootldr.destination' "$$core/validation.rs"; \
 	timeout 10s grep -Fq 'esp.device == xbootldr.device' "$$core/validation.rs"; \
 	timeout 10s grep -Fq 'esp.disk_sequence != xbootldr.disk_sequence' "$$core/validation.rs"; \
-	if timeout 10s rg -n 'std::fs|File|OwnedFd|BorrowedFd|RawFd|PathBuf|Path[<>,)]|MountInfo|AuthenticatedMountInfoSnapshot|PreparedMountNamespaceAnchor|PreparedTaskRootedAttachment|PreparedSysfsPartitionIdentity|std::process|process::Command|Command::new|nix::mount|libc::mount|setns|unshare|chroot|pivot_root|open_tree|move_mount|/dev/disk|/dev/(sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)' "$$root" "$$core" "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'std::fs|File|OwnedFd|BorrowedFd|RawFd|PathBuf|Path[<>,)]|MountInfo|AuthenticatedMountInfoSnapshot|PreparedMountNamespaceAnchor|PreparedTaskRootedAttachment|PreparedSysfsPartitionIdentity|std::process|process::Command|Command::new|nix::mount|libc::mount|setns|unshare|chroot|pivot_root|open_tree|move_mount|/dev/disk|/dev/(sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)' "$$root" "$$core/error.rs" "$$core/model.rs" "$$core/validation.rs" "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in "$$root" "$$core"/*.rs "$$tests" "$(MOUNTED_BOOT_TOPOLOGY_TOP_DIR)/misc/make/active-reblit-mounted-boot-topology-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

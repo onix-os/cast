@@ -2,11 +2,11 @@
 
 ## Status and purpose
 
-This document defines the intended authority boundary for publishing
+This document defines the authority boundary for publishing
 ActiveReblit boot assets to an already-mounted EFI System Partition (ESP) and,
 when present, an already-mounted XBOOTLDR partition. It is an architecture
-contract for the next implementation slice, not a claim that real ESP/BOOT
-publication is currently enabled.
+contract for the implemented descriptor-retained capture foundation and the
+later publisher, not a claim that real ESP/BOOT publication is enabled.
 
 The design keeps two kinds of information separate:
 
@@ -85,7 +85,7 @@ storage authority.
 
 ## Retained authority acquisition
 
-The future production aggregate must authenticate an already-mounted topology
+The production capture aggregate authenticates an already-mounted topology
 without mounting, unmounting, creating, formatting, or partitioning anything.
 It owns the following non-cloneable, lifetime-bound evidence.
 
@@ -188,11 +188,12 @@ only PARTUUIDs or only device numbers is not enough.
 - the paired sysfs snapshots in each topology pass reporting the same retained
   authenticated block-parent witness.
 
-The two complete topology passes must agree on that paired comparison, and the
-terminal sandwich must revalidate and compare both snapshots again. The result
-is an observation over those bounded passes, not a continuously live or
-simultaneous-residency claim. It is not a general proof that firmware,
-multipath, or storage hardware will preserve the relationship.
+Bootstrap, Pass1, Pass2, and Terminal must agree on that paired comparison.
+Each pass revalidates and compares both snapshots under the same caller-owned
+absolute deadline. The result is an observation over those bounded passes,
+not a continuously live or simultaneous-residency claim. It is not a general
+proof that firmware, multipath, or storage hardware will preserve the
+relationship.
 
 ## Repeated capture and terminal rebind
 
@@ -211,15 +212,21 @@ mount namespace
   -> mount namespace again
 ```
 
-Run two complete passes and require exact agreement of all semantic witnesses.
-Immediately before the first publication effect, perform a terminal rebind of
-the namespace, current task root, each attachment chain, final parent/name,
-selected mountinfo entries, and sysfs snapshots. Any replacement,
-disappearance, ambiguity, namespace or task-root mismatch, identity mismatch,
-or limit exhaustion observed at one of these checks invalidates the entire
-aggregate. These endpoint sandwiches deliberately do not claim to detect a
-transient change that returns to the exact retained identity between checks.
-The same attempt must not recapture a new authority and continue.
+Preparation records one Bootstrap observation, then requires exact Pass1,
+Pass2, and Terminal observations before returning the retained aggregate.
+Every later revalidation repeats Pass1, Pass2, and Terminal against the exact
+Bootstrap facts. Each pass opens the retained intent and mount context, reads
+exactly one authenticated mountinfo snapshot for all targets, derives any
+distinct-target paired sysfs comparison directly, reverse-checks the
+attachments, closes the mount context and intent, and checks the same absolute
+deadline both before and after scalar validation. Immediately before a future publication effect,
+the publisher must require another successful aggregate revalidation rather
+than treating preparation as a lasting lease. Any replacement, disappearance,
+ambiguity, namespace or task-root mismatch, identity mismatch, or limit
+exhaustion observed at one of these checks invalidates the entire aggregate.
+These endpoint sandwiches deliberately do not claim to detect a transient
+change that returns to the exact retained identity between checks. The same
+attempt must not recapture a new authority and continue.
 
 ## Rendering and publication boundary
 

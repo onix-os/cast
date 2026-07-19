@@ -239,6 +239,10 @@ forge-cache-test:
 # validated independently of descriptor and storage integration work.
 include misc/make/active-reblit-mounted-boot-topology-tests.mk
 
+# Descriptor-retained mounted boot capture has a separate safety/inventory
+# gate so the pure scalar foundation remains independently enforceable.
+include misc/make/active-reblit-mounted-boot-topology-capture-tests.mk
+
 forge-client-direct-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \

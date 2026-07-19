@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use super::model::{BootTargetRole, ObservationPhase};
 
-/// Pure topology-invariant failures. Domain capture errors are deliberately
-/// outside this type until the descriptor-retained coordinator is implemented.
+/// Pure topology-invariant failures. Domain capture failures deliberately stay
+/// in the separate descriptor-retained coordinator error type.
 #[derive(Debug, Eq, Error, PartialEq)]
 pub(in crate::client) enum ActiveReblitMountedBootTopologyError {
     #[error("{phase:?} {role:?} observation has a zero mount ID")]

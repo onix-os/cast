@@ -12,7 +12,7 @@ pub(in crate::client) enum BootTargetRole {
     Xbootldr,
 }
 
-/// One complete observation in the future coordinator's consistency schedule.
+/// One complete observation in the coordinator's consistency schedule.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::client) enum ObservationPhase {
     Bootstrap,
@@ -41,9 +41,9 @@ impl MountedBootDestinationIdentity {
 /// Borrowed input facts for one target in one complete observation pass.
 ///
 /// The declarative selector has already crossed the restricted Gluon intent
-/// boundary. The remaining scalars must come from one future authenticated
-/// attachment/sysfs observation; this pure type does not establish that
-/// provenance itself.
+/// boundary. The descriptor-retained coordinator supplies the remaining
+/// scalars from one authenticated attachment/sysfs observation; this pure type
+/// does not establish that provenance itself.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) struct MountedBootTargetObservation<'a> {
     pub(super) intent: BoundActiveReblitBootPartitionSelector<'a>,
