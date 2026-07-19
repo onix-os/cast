@@ -13,6 +13,7 @@ name = "cast"
 path = "src/main.rs"
 
 [dependencies]
+container = { path = "../../crates/container" }
 forge = { path = "../../crates/forge" }
 mason = { path = "../../crates/mason" }
 tools_buildinfo = { path = "../../crates/tools_buildinfo" }

@@ -102,6 +102,7 @@ help:
 	@echo "  container-process-runtime-test  Run host-safe process-runtime, pidfd, and signal tests"
 	@echo "  container-mount-boundary-test  Run anchored root and pseudo-filesystem mount tests"
 	@echo "  container-private-device-test Run private minimal-device provider contract tests"
+	@echo "  private-device-service-test  Check the hidden Cast broker entrypoint and systemd units"
 	@echo "  container-root-host-safe-test  Run every direct container test except five sandbox-denied socket diagnostics"
 	@echo "  mason-package-collect-test  Run bounded collection filesystem and inventory tests"
 	@echo "  mason-package-collect-transaction-test  Run transactional mutation and publication tests"

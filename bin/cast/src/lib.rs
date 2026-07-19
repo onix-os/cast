@@ -2,7 +2,13 @@
 
 //! The sole external command surface for OS Tools.
 
-use std::{ffi::OsString, io, path::Path, path::PathBuf};
+use std::{
+    ffi::OsString,
+    io,
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
+    path::Path,
+    path::PathBuf,
+};
 
 use clap::{Arg, ArgAction, ArgMatches, Command, value_parser};
 use clap_complete::{
@@ -108,6 +114,14 @@ pub fn command() -> Command {
                 .value_parser(value_parser!(PathBuf))
                 .hide(true),
         )
+        .arg(
+            Arg::new("private_device_broker")
+                .long("private-device-broker")
+                .global(true)
+                .exclusive(true)
+                .hide(true)
+                .action(ArgAction::SetTrue),
+        )
         .subcommand(cache)
         .subcommand(
             Command::new("version").about("Display Cast version information").arg(
@@ -139,6 +153,12 @@ where
 
     if let Some(log) = matches.get_one::<LogConfig>("log") {
         init_log_with_config(log.clone());
+    }
+
+    if matches.get_flag("private_device_broker") {
+        let connection = duplicate_cloexec(io::stdin().as_fd())?;
+        container::serve_private_device_broker_connection(connection)?;
+        return Ok(());
     }
 
     if let Some(directory) = matches.get_one::<PathBuf>("generate_manpages") {
@@ -178,6 +198,10 @@ where
             }
         }
     }
+}
+
+fn duplicate_cloexec(descriptor: BorrowedFd<'_>) -> io::Result<OwnedFd> {
+    descriptor.try_clone_to_owned()
 }
 
 fn dispatch_cache(root: &ArgMatches, cache: &ArgMatches) -> Result<(), Error> {
@@ -299,5 +323,38 @@ mod tests {
         assert!(temporary.path().join("cast-build.1").is_file());
         assert!(!temporary.path().join("boulder.1").exists());
         assert!(!temporary.path().join("moss.1").exists());
+    }
+
+    #[test]
+    fn private_device_broker_mode_is_hidden_and_not_a_subcommand() {
+        let mut command = command();
+        let subcommands = command.get_subcommands().map(Command::get_name).collect::<Vec<_>>();
+        assert!(!subcommands.contains(&"private-device-broker"));
+
+        let mut help = Vec::new();
+        command.write_long_help(&mut help).unwrap();
+        assert!(!String::from_utf8(help).unwrap().contains("private-device-broker"));
+
+        let mut manpage = Vec::new();
+        Man::new(command.clone()).render(&mut manpage).unwrap();
+        assert!(!String::from_utf8(manpage).unwrap().contains("private-device-broker"));
+
+        let matches = command.try_get_matches_from(["cast", "--private-device-broker"]).unwrap();
+        assert!(matches.get_flag("private_device_broker"));
+        assert!(matches.subcommand().is_none());
+    }
+
+    #[test]
+    fn broker_standard_input_duplicate_is_owned_and_close_on_exec() {
+        use std::os::fd::AsRawFd as _;
+
+        let input = tempfile::tempfile().unwrap();
+        let duplicate = duplicate_cloexec(input.as_fd()).unwrap();
+        assert_ne!(duplicate.as_raw_fd(), input.as_raw_fd());
+
+        // SAFETY: the duplicate remains owned and live for this query.
+        let flags = unsafe { libc::fcntl(duplicate.as_raw_fd(), libc::F_GETFD) };
+        assert_ne!(flags, -1);
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
     }
 }
