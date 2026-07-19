@@ -34,7 +34,7 @@ pub(super) fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(30)
 }
 
-pub(super) struct AliasFixture {
+pub(in crate::client) struct AliasFixture {
     _temporary: TempDir,
     pub(super) installation: Installation,
     source: PathBuf,
@@ -52,7 +52,7 @@ pub(super) struct AliasFixture {
 }
 
 impl AliasFixture {
-    pub(super) fn stable() -> io::Result<Self> {
+    pub(in crate::client) fn stable() -> io::Result<Self> {
         let temporary = tempfile::tempdir()?;
         let outside = temporary.path().join("outside-sentinel");
         fs::write(&outside, OUTSIDE_BYTES)?;
@@ -119,7 +119,7 @@ impl AliasFixture {
         self.prepare_until(deadline())
     }
 
-    pub(super) fn prepare_until(
+    pub(in crate::client) fn prepare_until(
         &self,
         deadline: Instant,
     ) -> Result<PreparedActiveReblitMountedBootTopology, ActiveReblitMountedBootTopologyCaptureError> {
@@ -130,6 +130,10 @@ impl AliasFixture {
             self.feed.clone(),
             deadline,
         )
+    }
+
+    pub(in crate::client) fn installation(&self) -> &Installation {
+        &self.installation
     }
 
     pub(super) fn feed(&self) -> FixtureMountInfoFeed {
@@ -175,7 +179,7 @@ impl AliasFixture {
         ));
     }
 
-    pub(super) fn assert_outside_unchanged(&self) {
+    pub(in crate::client) fn assert_outside_unchanged(&self) {
         assert_eq!(fs::read(&self.outside).unwrap(), OUTSIDE_BYTES);
     }
 

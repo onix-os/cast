@@ -43,3 +43,6 @@ mod tests;
 #[cfg(test)]
 #[path = "active_reblit_mounted_boot_topology_capture_tests.rs"]
 mod capture_tests;
+
+#[cfg(test)]
+pub(in crate::client) use capture_tests::AliasFixture;

@@ -80,6 +80,9 @@ pub use self::read_only::{ReadOnlyClient, ReadOnlyClientError};
 pub use self::resolve::{AvailableClosure, Error as ResolveError, ResolvedPackage, ResolvedRequest};
 pub use self::self_upgrade::self_upgrade;
 
+#[allow(dead_code)] // pure lifetime-bound BLS requests for the later durable publisher
+#[path = "boot/active_reblit_bls_renderer.rs"]
+mod active_reblit_bls_renderer;
 #[allow(dead_code)] // pre-claim substrate; wired only with the descriptor-safe output plan
 #[path = "boot/active_reblit_boot_inputs.rs"]
 mod active_reblit_boot_inputs;

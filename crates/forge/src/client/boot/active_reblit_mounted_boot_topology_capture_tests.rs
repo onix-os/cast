@@ -6,3 +6,5 @@ mod races;
 mod stable;
 #[path = "active_reblit_mounted_boot_topology_capture_tests/support.rs"]
 mod support;
+
+pub(in crate::client) use support::AliasFixture;
