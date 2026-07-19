@@ -13,7 +13,7 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::descriptor_boot_namespace_production::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 12; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 16; \
 	for test_case in \
 		records:valid_inventory_filters_dot_entries_and_ignores_kernel_identity_hints \
 		records:complete_syscall_chunks_preserve_raw_record_order \
@@ -26,26 +26,41 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 		bounds_and_deadlines:read_byte_and_call_ledgers_include_the_terminal_eof_call \
 		bounds_and_deadlines:work_ledger_accepts_exact_n_and_rejects_n_minus_one \
 		bounds_and_deadlines:allocation_ledgers_and_injected_failure_are_fail_closed \
-		bounds_and_deadlines:deadline_equality_is_admitted_and_expiry_is_checked_around_source_calls; do \
+		bounds_and_deadlines:deadline_equality_is_admitted_and_expiry_is_checked_around_source_calls \
+		live:injected_driver_receives_one_bounded_call_per_source_call \
+		live:interrupted_syscall_is_failed_closed_without_retry \
+		live:deadline_expiry_during_call_is_detected_immediately_after_return \
+		live:native_getdents64_reads_only_an_ordinary_target_fixture; do \
 		timeout 10s grep -Fqx "$$prefix$${test_case/:/::}: test" "$$listed"; \
 	done; \
 	module_root="$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/crates/forge/src/linux_fs/descriptor_boot_namespace/production.rs"; \
 	module_dir="$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/crates/forge/src/linux_fs/descriptor_boot_namespace/production"; \
 	test_root="$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/crates/forge/src/linux_fs/tests/descriptor_boot_namespace_production.rs"; \
 	test_dir="$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/crates/forge/src/linux_fs/tests/descriptor_boot_namespace_production"; \
-	files=( \
+	production_files=( \
 		"$$module_root" \
 		"$$module_dir/budget.rs" \
 		"$$module_dir/error.rs" \
 		"$$module_dir/inventory.rs" \
+		"$$module_dir/live.rs" \
+		"$$module_dir/live/abi.rs" \
+		"$$module_dir/live/source.rs" \
+		"$$module_dir/live/syscall.rs" \
 		"$$module_dir/model.rs" \
 		"$$module_dir/parser.rs" \
 		"$$module_dir/source.rs" \
+	); \
+	pure_test_files=( \
 		"$$test_root" \
 		"$$test_dir/support.rs" \
 		"$$test_dir/records.rs" \
 		"$$test_dir/bounds_and_deadlines.rs" \
 	); \
+	live_test_files=( \
+		"$$test_dir/live.rs" \
+	); \
+	test_files=( "$${pure_test_files[@]}" "$${live_test_files[@]}" ); \
+	files=( "$${production_files[@]}" "$${test_files[@]}" ); \
 	timeout 10s grep -Fq 'const RECORD_LENGTH_OFFSET: usize = 16;' "$$module_dir/parser.rs"; \
 	timeout 10s grep -Fq 'const RAW_NAME_OFFSET: usize = 19;' "$$module_dir/parser.rs"; \
 	timeout 10s grep -Fq 'const RAW_DIRECTORY_RECORD_ALIGNMENT_BYTES: usize = size_of::<usize>();' "$$module_dir/model.rs"; \
@@ -55,7 +70,13 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	timeout 10s grep -Fq '.read_chunk(&mut output[..offered])' "$$module_dir/budget.rs"; \
 	timeout 10s grep -Fq '.probe_end(&mut output[..offered])' "$$module_dir/budget.rs"; \
 	timeout 10s grep -Fq 'pub(crate) struct ProductionRawDirectoryInventory' "$$module_dir/inventory.rs"; \
-	if timeout 10s rg -n 'std::fs|tempfile|OpenOptions|File::open|Path::|AT_FDCWD|openat|openat2|read_dir|canonicalize|create_dir|write_all|set_len|remove_(file|dir)|rename\(|mount\(|setns|unshare|chroot|pivot_root|umount|/dev/|/(boot|efi|esp)(/|`)' "$${files[@]}"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'nix::libc::SYS_getdents64' "$$module_dir/live/syscall.rs"; \
+	timeout 10s grep -Fq 'offset_of!(NativeLinuxDirent64Prefix, name) == 19' "$$module_dir/live/abi.rs"; \
+	timeout 10s grep -Fq 'tempdir_in(&target)' "$$test_dir/live.rs"; \
+	if timeout 10s rg -n 'retry_interrupted|std::fs|tempfile|OpenOptions|File::open|Path::|AT_FDCWD|openat|openat2|read_dir|canonicalize|create_dir|write_all|set_len|remove_(file|dir)|rename\(|mount\(|setns|unshare|chroot|pivot_root|umount|/dev/|/(boot|efi|esp)(/|`)' "$${production_files[@]}"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'std::fs|tempfile|OpenOptions|File::open|Path::|AT_FDCWD|openat|openat2|read_dir|canonicalize|create_dir|write_all|set_len|remove_(file|dir)|rename\(|mount\(|setns|unshare|chroot|pivot_root|umount|/dev/|/(boot|efi|esp)(/|`)' "$${pure_test_files[@]}"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'tempdir\(|OpenOptions|AT_FDCWD|openat|openat2|read_dir|canonicalize|write_all|set_len|remove_(file|dir)|rename\(|mount\(|setns|unshare|chroot|pivot_root|umount|/dev/|/(boot|efi|esp)(/|`)' "$${live_test_files[@]}"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n '/dev/|/(boot|efi|esp)(/|`)|mount\(|setns|unshare|chroot|pivot_root|umount' "$${test_files[@]}"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in "$${files[@]}" "$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/misc/make/linux-descriptor-boot-namespace-production-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

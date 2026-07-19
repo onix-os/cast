@@ -7,4 +7,5 @@ use super::super::descriptor_boot_namespace::{
 mod support;
 
 mod bounds_and_deadlines;
+mod live;
 mod records;

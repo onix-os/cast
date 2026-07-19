@@ -1,9 +1,10 @@
 //! Bounded raw-directory inventory foundation for a retained descriptor adapter.
 //!
 //! The source protocol is deliberately private and capability-free: callers
-//! cannot provide a path, reopen closure, or mutation authority. A later Linux
-//! adapter can issue `getdents64` against an already-retained directory and
-//! feed each complete syscall result into this parser.
+//! cannot provide a path, reopen closure, or mutation authority. The Linux
+//! adapter consumes one already-owned, fresh directory description and feeds
+//! each complete `getdents64` result into this parser without returning the
+//! descriptor.
 
 #[path = "production/budget.rs"]
 mod budget;
@@ -11,6 +12,8 @@ mod budget;
 mod error;
 #[path = "production/inventory.rs"]
 mod inventory;
+#[path = "production/live.rs"]
+mod live;
 #[path = "production/model.rs"]
 mod model;
 #[path = "production/parser.rs"]

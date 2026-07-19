@@ -22,6 +22,7 @@ use std::{io, time::Instant};
 mod budget;
 mod geometry;
 mod input;
+mod live;
 mod observation;
 mod stable;
 
@@ -29,9 +30,17 @@ use super::{
     gpt_partition_role::{GptPartitionRole, ValidatedGptPartitionRole},
     sysfs_identity::SysfsGptDeviceExpectation,
 };
+#[allow(unused_imports)] // retained syscall/image foundations for the production composition adapter
+pub(in crate::linux_fs) use live::{RetainedBlockDeviceObserver, RetainedReadOnlyBlockImage};
 pub(in crate::linux_fs) use observation::BlockDeviceObserver;
 #[allow(unused_imports)] // sealed vocabulary for the later descriptor/syscall adapter
 pub(in crate::linux_fs) use observation::{BlockDeviceObservation, ObservedDeviceAccess, ObservedNodeKind};
+
+#[cfg(test)]
+pub(in crate::linux_fs) use live::{
+    FixtureBlockDeviceSyscall, FixtureBlockDeviceSyscallResult, fixture_block_ioctl_requests,
+    observe_retained_block_device_fixture_with_clock_until, retained_read_only_block_image_fixture_until,
+};
 
 /// Closed scalar evidence for one stable read-only parent and GPT partition.
 ///
