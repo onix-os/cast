@@ -30,6 +30,7 @@ include misc/make/host-storage-safety-tests.mk
 include misc/make/linux-mount-attachment-tests.mk
 include misc/make/linux-mountinfo-parser-tests.mk
 include misc/make/linux-mount-namespace-tests.mk
+include misc/make/linux-authenticated-mountinfo-snapshot-tests.mk
 include misc/make/linux-sysfs-block-parser-tests.mk
 include misc/make/linux-sysfs-identity-tests.mk
 include misc/make/draft-hardening-tests.mk

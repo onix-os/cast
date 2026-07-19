@@ -63,6 +63,8 @@ pub(super) struct Operation<'a> {
     admission: Admission,
     #[cfg(test)]
     hook: Option<&'a mut dyn FnMut(super::FixtureMountNamespaceCheckpoint) -> io::Result<()>>,
+    #[cfg(test)]
+    clock: Option<&'a mut dyn FnMut() -> Instant>,
     #[cfg(not(test))]
     _lifetime: std::marker::PhantomData<&'a mut ()>,
 }
@@ -82,6 +84,8 @@ impl<'a> Operation<'a> {
             admission,
             #[cfg(test)]
             hook: None,
+            #[cfg(test)]
+            clock: None,
             #[cfg(not(test))]
             _lifetime: std::marker::PhantomData,
         }
@@ -95,6 +99,20 @@ impl<'a> Operation<'a> {
     ) -> io::Result<Self> {
         let mut operation = Self::validate_fixture_limits(limits, deadline)?;
         operation.hook = Some(hook);
+        Ok(operation)
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_with_clock(
+        limits: MountNamespaceLimits,
+        deadline: Instant,
+        hook: &'a mut impl FnMut(super::FixtureMountNamespaceCheckpoint) -> io::Result<()>,
+        clock: &'a mut impl FnMut() -> Instant,
+    ) -> io::Result<Self> {
+        let mut operation = Self::validate_fixture_limits(limits, deadline)?;
+        operation.hook = Some(hook);
+        operation.clock = Some(clock);
+        operation.checkpoint()?;
         Ok(operation)
     }
 
@@ -124,8 +142,26 @@ impl<'a> Operation<'a> {
         matches!(self.admission, Admission::Production)
     }
 
+    #[cfg(test)]
+    pub(super) const fn consumed_work(&self) -> usize {
+        self.initial_work - self.remaining_work
+    }
+
+    #[cfg(test)]
+    pub(super) const fn consumed_descriptors(&self) -> usize {
+        self.initial_descriptors - self.remaining_descriptors
+    }
+
     pub(super) fn checkpoint(&mut self) -> io::Result<()> {
-        if Instant::now() > self.deadline {
+        #[cfg(test)]
+        let now = if let Some(clock) = self.clock.as_mut() {
+            clock()
+        } else {
+            Instant::now()
+        };
+        #[cfg(not(test))]
+        let now = Instant::now();
+        if now > self.deadline {
             Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "mount-context operation exceeded its deadline",
@@ -179,6 +215,20 @@ impl<'a> Operation<'a> {
     }
 
     pub(super) fn emit_attachment(&mut self, checkpoint: super::attachment::AttachmentCheckpoint) -> io::Result<()> {
+        self.checkpoint()?;
+        #[cfg(test)]
+        if let Some(hook) = self.hook.as_mut() {
+            hook(checkpoint.into())?;
+        }
+        #[cfg(not(test))]
+        let _ = checkpoint;
+        self.checkpoint()
+    }
+
+    pub(super) fn emit_mountinfo_snapshot(
+        &mut self,
+        checkpoint: super::mountinfo_snapshot::MountInfoSnapshotCheckpoint,
+    ) -> io::Result<()> {
         self.checkpoint()?;
         #[cfg(test)]
         if let Some(hook) = self.hook.as_mut() {

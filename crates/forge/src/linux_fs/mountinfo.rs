@@ -136,8 +136,9 @@ pub(crate) fn read_mountinfo_bounded(reader: &mut impl io::Read) -> io::Result<M
 /// Read one exact mountinfo byte snapshot and parse it under the production
 /// byte, grammar, work, retry, and deadline bounds.
 ///
-/// Retaining the bytes gives a descriptor-backed authority exact snapshot
-/// provenance and bounded diagnostics. A later topology must compare its
+/// Retaining the bytes lets an already-authenticated caller preserve its exact
+/// snapshot provenance and bounded diagnostics. This generic reader grants no
+/// descriptor-backed authority by itself. A later topology must compare its
 /// selected parsed entries and their uniqueness predicates, not require whole
 /// snapshot equality: unrelated mount-table activity is not a topology change.
 pub(crate) fn read_mountinfo_snapshot_bounded_until(

@@ -8,6 +8,7 @@ use std::{
 
 use super::*;
 
+mod authenticated_mountinfo_snapshot;
 mod chmod_once;
 mod mount_attachment;
 mod mount_namespace;

@@ -23,13 +23,23 @@ use std::{
 mod attachment;
 mod capture;
 mod filesystem;
+mod mountinfo_snapshot;
 
 #[allow(unused_imports)] // named by the future owned mounted-topology aggregate
 pub(crate) use attachment::{PreparedTaskRootedAttachment, RevalidatedTaskRootedAttachment};
+#[allow(unused_imports)] // consumed by the authenticated mounted-topology aggregate
+pub(crate) use mountinfo_snapshot::AuthenticatedMountInfoSnapshot;
 
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by the synthetic attachment test slice
 pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
+
+#[cfg(test)]
+#[allow(unused_imports)] // consumed by the dedicated mountinfo snapshot test slice
+pub(crate) use mountinfo_snapshot::{
+    FIXTURE_MOUNTINFO_PROCFS_MAGIC, FixtureMountInfoSnapshotLimits, FixtureMountInfoSnapshotUsage,
+    validate_fixture_mountinfo_file_authentication,
+};
 
 use capture::{Capture, capture_twice, require_snapshot_matches};
 use filesystem::{Locator, MountNamespaceLimits, Operation};
@@ -281,6 +291,18 @@ pub(crate) enum FixtureMountNamespaceCheckpoint {
     AttachmentTerminalParent,
     AttachmentTerminalName,
     AttachmentBeforeClosingAnchor,
+    MountInfoSnapshotBeforeExactThread,
+    MountInfoSnapshotThreadOpened,
+    MountInfoSnapshotNamespacePinned,
+    MountInfoSnapshotTaskRootPinned,
+    MountInfoSnapshotFileOpened,
+    MountInfoSnapshotBeforeRead,
+    MountInfoSnapshotAfterRead,
+    MountInfoSnapshotFileRebound,
+    MountInfoSnapshotTaskRootRechecked,
+    MountInfoSnapshotNamespaceRechecked,
+    MountInfoSnapshotBeforeClosingAnchor,
+    MountInfoSnapshotComplete,
 }
 
 /// Test-only admission of an ordinary, named synthetic task tree.
