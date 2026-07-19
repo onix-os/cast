@@ -4,7 +4,8 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use super::model::{
-    AbortDisposition, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin, RollbackAction, TransitionRecord,
+    AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin, RollbackAction,
+    TransitionRecord,
 };
 
 pub(super) const MAX_QUARANTINE_NAME_BYTES: usize = 128;
@@ -12,7 +13,11 @@ pub(super) const MAX_QUARANTINE_NAME_BYTES: usize = 128;
 pub(super) const MAGIC: &[u8; 8] = b"CASTSTJ\0";
 pub(super) const FRAME_VERSION: u16 = 1;
 pub(super) const PAYLOAD_FORMAT: &str = "cast-state-transition";
-pub(super) const PAYLOAD_VERSION: u16 = 1;
+/// Legacy payloads remain byte-canonically readable and may advance only
+/// through transitions representable by their original domain.
+pub(super) const PAYLOAD_VERSION_V1: u16 = 1;
+/// Current write version used for every newly prepared transition.
+pub(super) const PAYLOAD_VERSION: u16 = 2;
 pub(super) const MAGIC_END: usize = MAGIC.len();
 pub(super) const VERSION_END: usize = MAGIC_END + size_of::<u16>();
 const LENGTH_END: usize = VERSION_END + size_of::<u32>();
@@ -44,6 +49,10 @@ pub(crate) enum CodecError {
     UnsupportedPayloadFormat(String),
     #[error("unsupported journal payload version {0}")]
     UnsupportedPayloadVersion(u16),
+    #[error("journal payload version {version} cannot encode phase {phase:?}")]
+    PayloadVersionPhaseMismatch { version: u16, phase: Phase },
+    #[error("journal payload version {version} cannot encode boot rollback status {status:?}")]
+    PayloadVersionBootRollbackMismatch { version: u16, status: BootRollback },
     #[error("journal generation must be nonzero")]
     ZeroGeneration,
     #[error("journal generation counter is exhausted")]
@@ -147,6 +156,8 @@ pub(crate) enum CodecError {
     RollbackPlanChangedIllegally,
     #[error("rollback successor requires exactly one outcome for its current recovery action")]
     RollbackActionOutcomeMismatch,
+    #[error("boot-repair phase {0:?} requires an explicit typed successor")]
+    ExplicitBootRepairSuccessorRequired(Phase),
     #[error("candidate state ID changed outside fresh allocation")]
     CandidateStateChangedIllegally,
 }

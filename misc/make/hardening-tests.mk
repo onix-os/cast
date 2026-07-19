@@ -322,6 +322,7 @@ forge-transition-journal-contract-test:
 		transition_journal::tests::exact_record_limit_and_n_plus_one_are_distinguished \
 		transition_journal::tests::checksum_covers_header_fields_and_payload \
 		transition_journal::tests::unknown_frame_and_payload_versions_are_rejected \
+		transition_journal::tests::payload_v1_remains_decodable_but_cannot_enter_v2_boot_success_domain \
 		transition_journal::tests::unknown_phase_field_and_duplicate_field_are_rejected \
 		transition_journal::tests::reboot_identity_schema_is_required_strict_and_has_no_v1_aliases \
 		transition_journal::tests::record_trailing_bytes_and_noncanonical_json_are_rejected \
@@ -373,7 +374,7 @@ forge-transition-journal-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 76; \
+	timeout 10s test "$$count" = 78; \
 	timeout 900s $(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
 
 stone-read-test:

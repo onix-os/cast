@@ -61,6 +61,7 @@ fn recovery_classifier_resumes_or_finalizes_persisted_rollback_without_guessing(
         Phase::FreshDbInvalidated,
         Phase::BootRepairRequired,
         Phase::BootRepairStarted,
+        Phase::BootRepairComplete,
     ] {
         assert_eq!(
             phase.recovery_disposition(),

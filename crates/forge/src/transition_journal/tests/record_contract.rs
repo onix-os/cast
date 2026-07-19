@@ -31,6 +31,7 @@ fn canonical_round_trip_covers_every_phase() {
         Phase::FreshDbInvalidated,
         Phase::BootRepairRequired,
         Phase::BootRepairStarted,
+        Phase::BootRepairComplete,
         Phase::BootRepairUnverified,
         Phase::RollbackComplete,
     ];
@@ -61,10 +62,13 @@ fn canonical_v1_full_frame_and_json_order_are_locked_by_golden_bytes() {
     }
     assert!(pairs.remainder().is_empty());
 
-    let value = rollback_decided(&new_state_record(Phase::BootSyncStarted));
+    let mut source = new_state_record(Phase::BootSyncStarted);
+    source.version = PAYLOAD_VERSION_V1;
+    let value = rollback_decided(&source);
     assert_eq!(encode(&value).unwrap(), golden_frame);
     assert_eq!(&golden_frame[HEADER_SIZE..], golden_json);
     assert_eq!(decode(&golden_frame).unwrap(), value);
+    assert_eq!(encode(&decode(&golden_frame).unwrap()).unwrap(), golden_frame);
 }
 
 #[test]
@@ -101,11 +105,70 @@ fn unknown_frame_and_payload_versions_are_rejected() {
     assert!(matches!(decode(&frame), Err(CodecError::UnsupportedFrameVersion(2))));
 
     let valid = encode(&record(Phase::Preparing)).unwrap();
-    let unknown = replace_payload(&valid, |payload| payload.replacen("\"version\":1", "\"version\":2", 1));
+    let unknown_version = PAYLOAD_VERSION + 1;
+    let unknown = replace_payload(&valid, |payload| {
+        payload.replacen(
+            &format!("\"version\":{PAYLOAD_VERSION}"),
+            &format!("\"version\":{unknown_version}"),
+            1,
+        )
+    });
     assert!(matches!(
         decode(&unknown),
-        Err(CodecError::UnsupportedPayloadVersion(2))
+        Err(CodecError::UnsupportedPayloadVersion(version)) if version == unknown_version
     ));
+}
+
+#[test]
+fn payload_v1_remains_decodable_but_cannot_enter_v2_boot_success_domain() {
+    let current = encode(&record(Phase::Preparing)).unwrap();
+    let v1 = replace_payload(&current, |payload| {
+        payload.replacen(
+            &format!("\"version\":{PAYLOAD_VERSION}"),
+            &format!("\"version\":{PAYLOAD_VERSION_V1}"),
+            1,
+        )
+    });
+    let decoded_v1 = decode(&v1).unwrap();
+    assert_eq!(decoded_v1.version, PAYLOAD_VERSION_V1);
+    assert_eq!(encode(&decoded_v1).unwrap(), v1);
+    let mut silent_upgrade = decoded_v1.forward_successor(None).unwrap();
+    silent_upgrade.version = PAYLOAD_VERSION;
+    assert!(matches!(
+        validate_advance(&decoded_v1, &silent_upgrade),
+        Err(CodecError::ImmutableTransitionDataChanged)
+    ));
+
+    let mut v1_complete = record(Phase::BootRepairComplete);
+    v1_complete.version = PAYLOAD_VERSION_V1;
+    assert!(matches!(
+        encode(&v1_complete),
+        Err(CodecError::PayloadVersionPhaseMismatch {
+            version: PAYLOAD_VERSION_V1,
+            phase: Phase::BootRepairComplete,
+        })
+    ));
+
+    let started = valid_rollback_record(Phase::BootRepairStarted);
+    for (outcome, status) in [
+        (BootRepairOutcome::Applied, BootRollback::Applied),
+        (
+            BootRepairOutcome::AlreadySatisfied,
+            BootRollback::AlreadySatisfied,
+        ),
+    ] {
+        let v2_complete = started.boot_repair_complete_successor(outcome).unwrap();
+        let mut v1_resolved = v2_complete.boot_repair_rollback_complete_successor().unwrap();
+        assert_eq!(v1_resolved.phase, Phase::RollbackComplete);
+        v1_resolved.version = PAYLOAD_VERSION_V1;
+        assert!(matches!(
+            encode(&v1_resolved),
+            Err(CodecError::PayloadVersionBootRollbackMismatch {
+                version: PAYLOAD_VERSION_V1,
+                status: actual,
+            }) if actual == status
+        ));
+    }
 }
 
 #[test]

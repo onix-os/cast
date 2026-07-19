@@ -502,6 +502,47 @@ fn ambiguous_boot_repair_is_terminal_unverified_and_nondeletable() {
     assert!(matches!(store.delete(terminal), Err(StorageError::DeleteNonterminal)));
     assert!(!terminal.phase.deletable());
     assert!(record(Phase::RollbackComplete).phase.deletable());
+
+    let started = sequence
+        .iter()
+        .find(|record| record.phase == Phase::BootRepairStarted)
+        .unwrap();
+    for (outcome, status) in [
+        (BootRepairOutcome::Applied, BootRollback::Applied),
+        (
+            BootRepairOutcome::AlreadySatisfied,
+            BootRollback::AlreadySatisfied,
+        ),
+    ] {
+        let complete = started.boot_repair_complete_successor(outcome).unwrap();
+        assert_eq!(complete.phase, Phase::BootRepairComplete);
+        assert_eq!(complete.rollback.as_ref().unwrap().boot, status);
+        assert!(!complete.phase.blocks_advance());
+        assert!(!complete.phase.deletable());
+
+        assert!(matches!(
+            complete.rollback_successor(None),
+            Err(CodecError::ExplicitBootRepairSuccessorRequired(
+                Phase::BootRepairComplete
+            ))
+        ));
+        let finalized = complete.boot_repair_rollback_complete_successor().unwrap();
+        assert_eq!(finalized.phase, Phase::RollbackComplete);
+        assert_eq!(finalized.rollback.as_ref().unwrap().boot, status);
+        assert!(finalized.phase.deletable());
+    }
+
+    let mut skipped_completion = started.clone();
+    skipped_completion.generation += 1;
+    skipped_completion.phase = Phase::RollbackComplete;
+    skipped_completion.rollback.as_mut().unwrap().boot = BootRollback::Applied;
+    assert!(matches!(
+        validate_advance(started, &skipped_completion),
+        Err(CodecError::IllegalPhaseAdvance {
+            current: Phase::BootRepairStarted,
+            next: Phase::RollbackComplete,
+        })
+    ));
 }
 
 #[test]

@@ -59,7 +59,8 @@ impl Phase {
             | Self::FreshDbInvalidationIntent
             | Self::FreshDbInvalidated
             | Self::BootRepairRequired
-            | Self::BootRepairStarted => RecoveryDisposition::ResumeRollback { phase: self },
+            | Self::BootRepairStarted
+            | Self::BootRepairComplete => RecoveryDisposition::ResumeRollback { phase: self },
             Self::BootRepairUnverified => RecoveryDisposition::ManualBootRepair,
             Self::RollbackComplete => RecoveryDisposition::FinalizeRollback,
         }

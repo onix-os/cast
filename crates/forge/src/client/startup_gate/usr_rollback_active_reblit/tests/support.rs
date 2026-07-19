@@ -193,13 +193,13 @@ pub(super) fn expected_boot_repair_required(candidate_preserved: &TransitionReco
 }
 
 pub(super) fn expected_boot_repair_started(boot_repair_required: &TransitionRecord) -> TransitionRecord {
-    let successor = boot_repair_required.rollback_successor(None).unwrap();
+    let successor = boot_repair_required.boot_repair_started_successor().unwrap();
     assert_eq!(successor.phase, Phase::BootRepairStarted);
     successor
 }
 
 pub(super) fn expected_boot_repair_unverified(boot_repair_started: &TransitionRecord) -> TransitionRecord {
-    let successor = boot_repair_started.rollback_successor(None).unwrap();
+    let successor = boot_repair_started.boot_repair_unverified_successor().unwrap();
     assert_eq!(successor.phase, Phase::BootRepairUnverified);
     assert_eq!(successor.rollback.as_ref().unwrap().boot, BootRollback::Unverified);
     successor

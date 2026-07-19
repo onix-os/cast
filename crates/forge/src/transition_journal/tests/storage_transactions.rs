@@ -43,11 +43,13 @@ fn atomic_initial_update_and_delete_round_trip() {
     let (temporary, store) = fixture();
     assert!(store.load().unwrap().is_none());
     let mut first = archived_record(Phase::Preparing);
+    first.version = PAYLOAD_VERSION_V1;
     first.generation = 1;
     store.create(&first).unwrap();
     assert_eq!(store.load().unwrap(), Some(first.clone()));
 
     let rollback = satisfied_preparing_rollback(&first);
+    assert_eq!(rollback.version, PAYLOAD_VERSION_V1);
     store.advance(&first, &rollback).unwrap();
     let complete = advance_record(&rollback, Phase::RollbackComplete);
     store.advance(&rollback, &complete).unwrap();

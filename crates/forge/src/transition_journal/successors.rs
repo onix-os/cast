@@ -60,6 +60,29 @@ impl From<RollbackActionOutcome> for RollbackAction {
     }
 }
 
+/// Exact result of a separately authorized boot-repair invocation.
+///
+/// As with ordinary rollback outcomes, this records what the completing
+/// invocation did. It does not infer success from the historical journal
+/// phase or from a best-effort inspection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BootRepairOutcome {
+    /// This reconciliation invocation applied the authorized repair.
+    Applied,
+    /// Exact admission evidence proved that the repair was already complete,
+    /// so this reconciliation invocation performed no action.
+    AlreadySatisfied,
+}
+
+impl From<BootRepairOutcome> for BootRollback {
+    fn from(value: BootRepairOutcome) -> Self {
+        match value {
+            BootRepairOutcome::Applied => Self::Applied,
+            BootRepairOutcome::AlreadySatisfied => Self::AlreadySatisfied,
+        }
+    }
+}
+
 impl TransitionRecord {
     /// Construct the only legal forward successor without exposing mutable
     /// record fields to the coordinator. A candidate ID is accepted only for
@@ -143,11 +166,18 @@ impl TransitionRecord {
         Ok(next)
     }
 
-    /// Construct the only legal rollback successor. Exactly one explicit
+    /// Construct the legal ordinary rollback successor. Exactly one explicit
     /// outcome is required when completing an ordinary persisted intent;
-    /// routing phases and the terminal unverified boot transition accept none.
+    /// ordinary routing phases accept none. Every boot-repair edge is excluded
+    /// and must use its exact typed constructor.
     pub(crate) fn rollback_successor(&self, outcome: Option<RollbackActionOutcome>) -> Result<Self, CodecError> {
         self.validate()?;
+        if matches!(
+            self.phase,
+            Phase::BootRepairRequired | Phase::BootRepairStarted | Phase::BootRepairComplete
+        ) {
+            return Err(CodecError::ExplicitBootRepairSuccessorRequired(self.phase));
+        }
         let plan = self.rollback.as_ref().ok_or(CodecError::MissingRollbackPlan)?;
         let next_phase = next_rollback_phase(plan, self.phase).ok_or_else(|| {
             if self.phase.blocks_advance() {
@@ -180,9 +210,82 @@ impl TransitionRecord {
                 (Phase::FreshDbInvalidationIntent, Phase::FreshDbInvalidated) => next_plan.fresh_db = status,
                 _ => return Err(CodecError::RollbackActionOutcomeMismatch),
             }
-        } else if (self.phase, next_phase) == (Phase::BootRepairStarted, Phase::BootRepairUnverified) {
-            next_plan.boot = BootRollback::Unverified;
         }
+        validate_advance(self, &next)?;
+        Ok(next)
+    }
+
+    /// Persist the exact routing edge into the boot-repair intent.
+    pub(crate) fn boot_repair_started_successor(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != Phase::BootRepairRequired {
+            return Err(CodecError::IllegalPhaseAdvance {
+                current: self.phase,
+                next: Phase::BootRepairStarted,
+            });
+        }
+
+        let mut next = self.clone();
+        next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
+        next.phase = Phase::BootRepairStarted;
+        validate_advance(self, &next)?;
+        Ok(next)
+    }
+
+    /// Persist a verified boot-repair result from the exact started intent.
+    ///
+    /// This successor belongs only to the v2 payload domain. A v1 record is
+    /// kept immutable and fails validation rather than being rewritten or
+    /// silently upgraded.
+    pub(crate) fn boot_repair_complete_successor(&self, outcome: BootRepairOutcome) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != Phase::BootRepairStarted {
+            return Err(CodecError::IllegalPhaseAdvance {
+                current: self.phase,
+                next: Phase::BootRepairComplete,
+            });
+        }
+
+        let mut next = self.clone();
+        next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
+        next.phase = Phase::BootRepairComplete;
+        next.rollback.as_mut().ok_or(CodecError::MissingRollbackPlan)?.boot = outcome.into();
+        validate_advance(self, &next)?;
+        Ok(next)
+    }
+
+    /// Persist that a started boot repair cannot be verified automatically.
+    /// This is the conservative successor for both supported payload versions.
+    pub(crate) fn boot_repair_unverified_successor(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != Phase::BootRepairStarted {
+            return Err(CodecError::IllegalPhaseAdvance {
+                current: self.phase,
+                next: Phase::BootRepairUnverified,
+            });
+        }
+
+        let mut next = self.clone();
+        next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
+        next.phase = Phase::BootRepairUnverified;
+        next.rollback.as_mut().ok_or(CodecError::MissingRollbackPlan)?.boot = BootRollback::Unverified;
+        validate_advance(self, &next)?;
+        Ok(next)
+    }
+
+    /// Persist terminal rollback completion after a verified boot repair.
+    pub(crate) fn boot_repair_rollback_complete_successor(&self) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.phase != Phase::BootRepairComplete {
+            return Err(CodecError::IllegalPhaseAdvance {
+                current: self.phase,
+                next: Phase::RollbackComplete,
+            });
+        }
+
+        let mut next = self.clone();
+        next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
+        next.phase = Phase::RollbackComplete;
         validate_advance(self, &next)?;
         Ok(next)
     }

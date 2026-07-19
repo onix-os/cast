@@ -159,7 +159,7 @@ impl<'system, 'reservation> UsrRollbackActiveReblitBootRepairUnverifiedAuthority
     /// Derive the sole Started -> Unverified successor. Transition-journal
     /// validation fixes both its phase and `BootRollback::Unverified` update.
     pub(in crate::client) fn boot_repair_unverified_successor(&self) -> Result<TransitionRecord, CodecError> {
-        self.record.rollback_successor(None)
+        self.record.boot_repair_unverified_successor()
     }
 }
 

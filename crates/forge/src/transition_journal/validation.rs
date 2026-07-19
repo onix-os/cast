@@ -1,5 +1,5 @@
 use super::{
-    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION},
+    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION, PAYLOAD_VERSION_V1},
     model::{
         AbortDisposition, BootRollback, ForwardPhase, MountNamespaceIdentity, Operation, Phase, PreviousOrigin,
         RollbackAction, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity, TransitionRecord,
@@ -91,6 +91,7 @@ impl Phase {
             | Self::FreshDbInvalidated
             | Self::BootRepairRequired
             | Self::BootRepairStarted
+            | Self::BootRepairComplete
             | Self::BootRepairUnverified
             | Self::RollbackComplete => return None,
         })
@@ -123,8 +124,24 @@ impl TransitionRecord {
         if self.format != PAYLOAD_FORMAT {
             return Err(CodecError::UnsupportedPayloadFormat(self.format.clone()));
         }
-        if self.version != PAYLOAD_VERSION {
+        if !matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION) {
             return Err(CodecError::UnsupportedPayloadVersion(self.version));
+        }
+        if self.version == PAYLOAD_VERSION_V1 {
+            if self.phase == Phase::BootRepairComplete {
+                return Err(CodecError::PayloadVersionPhaseMismatch {
+                    version: self.version,
+                    phase: self.phase,
+                });
+            }
+            if let Some(status @ (BootRollback::Applied | BootRollback::AlreadySatisfied)) =
+                self.rollback.as_ref().map(|rollback| rollback.boot)
+            {
+                return Err(CodecError::PayloadVersionBootRollbackMismatch {
+                    version: self.version,
+                    status,
+                });
+            }
         }
         if self.generation == 0 {
             return Err(CodecError::ZeroGeneration);
@@ -372,7 +389,13 @@ impl TransitionRecord {
         let boot_possible = rollback.source == ForwardPhase::BootSyncStarted;
         match (boot_possible, rollback.boot) {
             (false, BootRollback::NotRequired)
-            | (true, BootRollback::PendingUnverifiable | BootRollback::Unverified) => {}
+            | (
+                true,
+                BootRollback::PendingUnverifiable
+                | BootRollback::Applied
+                | BootRollback::AlreadySatisfied
+                | BootRollback::Unverified,
+            ) => {}
             _ => return Err(CodecError::InvalidBootRollbackRequirement),
         }
 
@@ -537,13 +560,24 @@ fn validate_rollback_phase(phase: Phase, plan: &RollbackPlan) -> Result<(), Code
     let actions = rollback_actions(plan);
     let matches_phase = match phase {
         Phase::RollbackDecided => {
-            actions.into_iter().all(|action| action != RollbackAction::Applied) && plan.boot != BootRollback::Unverified
+            actions.into_iter().all(|action| action != RollbackAction::Applied)
+                && matches!(plan.boot, BootRollback::NotRequired | BootRollback::PendingUnverifiable)
         }
         Phase::BootRepairRequired | Phase::BootRepairStarted => {
             ordinary_actions_resolved(plan) && plan.boot == BootRollback::PendingUnverifiable
         }
+        Phase::BootRepairComplete => {
+            ordinary_actions_resolved(plan)
+                && matches!(plan.boot, BootRollback::Applied | BootRollback::AlreadySatisfied)
+        }
         Phase::BootRepairUnverified => ordinary_actions_resolved(plan) && plan.boot == BootRollback::Unverified,
-        Phase::RollbackComplete => ordinary_actions_resolved(plan) && plan.boot == BootRollback::NotRequired,
+        Phase::RollbackComplete => {
+            ordinary_actions_resolved(plan)
+                && matches!(
+                    plan.boot,
+                    BootRollback::NotRequired | BootRollback::Applied | BootRollback::AlreadySatisfied
+                )
+        }
         _ => {
             let Some((current, completed)) = rollback_action_phase(phase) else {
                 return Err(CodecError::RollbackPlanOnForwardPhase);
@@ -559,7 +593,10 @@ fn validate_rollback_phase(phase: Phase, plan: &RollbackPlan) -> Result<(), Code
             let later_unapplied = actions[current + 1..]
                 .iter()
                 .all(|action| *action != RollbackAction::Applied);
-            prior_resolved && current_matches && later_unapplied && plan.boot != BootRollback::Unverified
+            prior_resolved
+                && current_matches
+                && later_unapplied
+                && matches!(plan.boot, BootRollback::NotRequired | BootRollback::PendingUnverifiable)
         }
     };
     if matches_phase {
@@ -577,6 +614,7 @@ pub(super) fn next_rollback_phase(plan: &RollbackPlan, current: Phase) -> Option
         Phase::FreshDbInvalidationIntent => return Some(Phase::FreshDbInvalidated),
         Phase::BootRepairRequired => return Some(Phase::BootRepairStarted),
         Phase::BootRepairStarted => return Some(Phase::BootRepairUnverified),
+        Phase::BootRepairComplete => return Some(Phase::RollbackComplete),
         Phase::BootRepairUnverified | Phase::RollbackComplete => return None,
         Phase::RollbackDecided
         | Phase::PreviousRestoredToStaging
@@ -599,7 +637,7 @@ pub(super) fn next_rollback_phase(plan: &RollbackPlan, current: Phase) -> Option
     match plan.boot {
         BootRollback::PendingUnverifiable => Some(Phase::BootRepairRequired),
         BootRollback::NotRequired => Some(Phase::RollbackComplete),
-        BootRollback::Unverified => None,
+        BootRollback::Applied | BootRollback::AlreadySatisfied | BootRollback::Unverified => None,
     }
 }
 
@@ -637,12 +675,14 @@ fn validate_rollback_plan_advance(
         }
     }
 
-    if (current_phase, next_phase) == (Phase::BootRepairStarted, Phase::BootRepairUnverified) {
-        if expected.boot != BootRollback::PendingUnverifiable || next.boot != BootRollback::Unverified {
-            return Err(CodecError::RollbackPlanChangedIllegally);
-        }
-    } else if expected.boot != next.boot {
-        return Err(CodecError::RollbackPlanChangedIllegally);
+    match (current_phase, next_phase) {
+        (Phase::BootRepairStarted, Phase::BootRepairUnverified)
+            if expected.boot == BootRollback::PendingUnverifiable && next.boot == BootRollback::Unverified => {}
+        (Phase::BootRepairStarted, Phase::BootRepairComplete)
+            if expected.boot == BootRollback::PendingUnverifiable
+                && matches!(next.boot, BootRollback::Applied | BootRollback::AlreadySatisfied) => {}
+        _ if expected.boot == next.boot => {}
+        _ => return Err(CodecError::RollbackPlanChangedIllegally),
     }
     Ok(())
 }
@@ -713,7 +753,9 @@ pub(super) fn validate_advance(expected: &TransitionRecord, next: &TransitionRec
         (None, None) => {
             let expected_plan = expected.rollback.as_ref().expect("validated rollback plan");
             let next_plan = next.rollback.as_ref().expect("validated rollback plan");
-            if next_rollback_phase(expected_plan, expected.phase) != Some(next.phase) {
+            let boot_repair_completed =
+                (expected.phase, next.phase) == (Phase::BootRepairStarted, Phase::BootRepairComplete);
+            if !boot_repair_completed && next_rollback_phase(expected_plan, expected.phase) != Some(next.phase) {
                 return Err(CodecError::IllegalPhaseAdvance {
                     current: expected.phase,
                     next: next.phase,

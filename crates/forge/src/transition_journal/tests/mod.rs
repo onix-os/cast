@@ -216,6 +216,9 @@ fn advance_record(current: &TransitionRecord, phase: Phase) -> TransitionRecord 
             (Phase::BootRepairStarted, Phase::BootRepairUnverified) => {
                 plan.boot = BootRollback::Unverified;
             }
+            (Phase::BootRepairStarted, Phase::BootRepairComplete) => {
+                plan.boot = BootRollback::Applied;
+            }
             _ => {}
         }
     }
@@ -249,7 +252,10 @@ fn rollback_sequence(source: &TransitionRecord) -> Vec<TransitionRecord> {
 fn valid_rollback_record(phase: Phase) -> TransitionRecord {
     let source = if matches!(
         phase,
-        Phase::BootRepairRequired | Phase::BootRepairStarted | Phase::BootRepairUnverified
+        Phase::BootRepairRequired
+            | Phase::BootRepairStarted
+            | Phase::BootRepairComplete
+            | Phase::BootRepairUnverified
     ) {
         new_state_record(Phase::BootSyncStarted)
     } else {
@@ -257,7 +263,16 @@ fn valid_rollback_record(phase: Phase) -> TransitionRecord {
         source.options.run_boot_sync = false;
         source
     };
-    rollback_sequence(&source)
+    let sequence = rollback_sequence(&source);
+    if phase == Phase::BootRepairComplete {
+        return sequence
+            .into_iter()
+            .find(|record| record.phase == Phase::BootRepairStarted)
+            .expect("boot-repair started phase is reachable")
+            .boot_repair_complete_successor(BootRepairOutcome::Applied)
+            .unwrap();
+    }
+    sequence
         .into_iter()
         .find(|record| record.phase == phase)
         .expect("requested rollback phase is reachable")

@@ -143,13 +143,75 @@ fn production_rollback_successor_requires_one_exact_action_outcome_and_persists_
         })
         .unwrap();
     let required = boot_decided.rollback_successor(None).unwrap();
-    let started = required.rollback_successor(None).unwrap();
-    let unverified = started.rollback_successor(None).unwrap();
+    assert!(matches!(
+        required.rollback_successor(None),
+        Err(CodecError::ExplicitBootRepairSuccessorRequired(
+            Phase::BootRepairRequired
+        ))
+    ));
+    let started = required.boot_repair_started_successor().unwrap();
+    let unverified = started.boot_repair_unverified_successor().unwrap();
     assert_eq!(unverified.phase, Phase::BootRepairUnverified);
     assert_eq!(unverified.rollback.as_ref().unwrap().boot, BootRollback::Unverified);
     assert!(matches!(
+        started.rollback_successor(None),
+        Err(CodecError::ExplicitBootRepairSuccessorRequired(
+            Phase::BootRepairStarted
+        ))
+    ));
+    assert!(matches!(
         unverified.rollback_successor(None),
         Err(CodecError::TerminalPhaseAdvance)
+    ));
+
+    for (outcome, status) in [
+        (BootRepairOutcome::Applied, BootRollback::Applied),
+        (
+            BootRepairOutcome::AlreadySatisfied,
+            BootRollback::AlreadySatisfied,
+        ),
+    ] {
+        let complete = started.boot_repair_complete_successor(outcome).unwrap();
+        assert_eq!(complete.phase, Phase::BootRepairComplete);
+        assert_eq!(complete.rollback.as_ref().unwrap().boot, status);
+        validate_advance(&started, &complete).unwrap();
+        assert_eq!(decode(&encode(&complete).unwrap()).unwrap(), complete);
+
+        assert!(matches!(
+            complete.rollback_successor(None),
+            Err(CodecError::ExplicitBootRepairSuccessorRequired(
+                Phase::BootRepairComplete
+            ))
+        ));
+        let rollback_complete = complete.boot_repair_rollback_complete_successor().unwrap();
+        assert_eq!(rollback_complete.phase, Phase::RollbackComplete);
+        assert_eq!(rollback_complete.rollback.as_ref().unwrap().boot, status);
+        validate_advance(&complete, &rollback_complete).unwrap();
+    }
+
+    let mut v1_required = required.clone();
+    v1_required.version = PAYLOAD_VERSION_V1;
+    encode(&v1_required).unwrap();
+    let v1_started = v1_required.boot_repair_started_successor().unwrap();
+    assert_eq!(v1_started.version, PAYLOAD_VERSION_V1);
+    encode(&v1_started).unwrap();
+    assert!(matches!(
+        v1_started.boot_repair_complete_successor(BootRepairOutcome::Applied),
+        Err(CodecError::PayloadVersionPhaseMismatch {
+            version: PAYLOAD_VERSION_V1,
+            phase: Phase::BootRepairComplete,
+        })
+    ));
+    let v1_unverified = v1_started.boot_repair_unverified_successor().unwrap();
+    assert_eq!(v1_unverified.version, PAYLOAD_VERSION_V1);
+    assert_eq!(v1_unverified.phase, Phase::BootRepairUnverified);
+
+    assert!(matches!(
+        required.boot_repair_complete_successor(BootRepairOutcome::Applied),
+        Err(CodecError::IllegalPhaseAdvance {
+            current: Phase::BootRepairRequired,
+            next: Phase::BootRepairComplete,
+        })
     ));
 
     // The reverse-exchange outcome describes this reconciliation invocation,
@@ -211,12 +273,27 @@ fn production_rollback_successor_executes_every_pending_effect_in_fixed_order() 
             Some(RollbackActionOutcome::Applied),
         ),
         (Phase::BootRepairRequired, None),
-        (Phase::BootRepairStarted, None),
-        (Phase::BootRepairUnverified, None),
     ] {
         current = current.rollback_successor(outcome).unwrap();
         assert_eq!(current.phase, expected);
     }
+
+    assert!(matches!(
+        current.rollback_successor(None),
+        Err(CodecError::ExplicitBootRepairSuccessorRequired(
+            Phase::BootRepairRequired
+        ))
+    ));
+    current = current.boot_repair_started_successor().unwrap();
+    assert_eq!(current.phase, Phase::BootRepairStarted);
+    assert!(matches!(
+        current.rollback_successor(None),
+        Err(CodecError::ExplicitBootRepairSuccessorRequired(
+            Phase::BootRepairStarted
+        ))
+    ));
+    current = current.boot_repair_unverified_successor().unwrap();
+    assert_eq!(current.phase, Phase::BootRepairUnverified);
 
     let plan = current.rollback.as_ref().unwrap();
     assert_eq!(plan.previous_archive, RollbackAction::Applied);

@@ -114,6 +114,7 @@ pub(crate) enum Phase {
     FreshDbInvalidated,
     BootRepairRequired,
     BootRepairStarted,
+    BootRepairComplete,
     BootRepairUnverified,
     RollbackComplete,
 }
@@ -355,6 +356,8 @@ pub(crate) enum RollbackAction {
 pub(crate) enum BootRollback {
     NotRequired,
     PendingUnverifiable,
+    Applied,
+    AlreadySatisfied,
     Unverified,
 }
 
