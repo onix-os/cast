@@ -26,10 +26,14 @@ writable (`rw`) superblock. Those facts are retained and revalidated as closed
 mountinfo policy evidence. Every topology pass now composes it with a private
 destination-descriptor `fstat`/`fstatfs` sandwich proving stable directory
 identity and the Linux MSDOS magic family. Retained sysfs snapshots now include
-bounded kernel device names and fixed-512-sector partition geometry, while a
-separate strict pure parser authenticates caller-owned GPT images and exact
-ESP/XBOOTLDR roles. The production read-only block-device binding, write
-authority, and durability remain open. A pure bounded destination classifier
+bounded kernel device names and fixed-512-sector partition geometry, and a
+sealed expectation binds the parent-disk facts to one freshly revalidated view.
+A separate strict pure parser now authenticates two complete, exactly matching
+GPT table passes and returns exact ESP/XBOOTLDR geometry plus a role-independent
+table fingerprint without table bytes or read authority. Exact `/dev`
+`devtmpfs` mountinfo policy is also available, but the production retained
+block-device binding, write authority, and durability remain open. A pure
+bounded destination classifier
 can now distinguish stable absence, exact bytes, and different bytes while
 rejecting FAT aliases and namespace/content races, but its retained-descriptor
 production observer is not wired yet. The `nosymfollow` requirement gives

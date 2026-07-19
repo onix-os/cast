@@ -471,11 +471,17 @@ stable directory identity and the Linux MSDOS magic family; commit `029f0590`
 keeps its final descriptor inside retained attachment authority, and commit
 `a93efe70` composes it with exact mountinfo `vfat` evidence in every topology
 pass. Commits `9c688dc6` through `28c4735b` retain bounded kernel device names
-and fixed-512-sector partition geometry. Commit `5ed70923` authenticates strict
-caller-owned GPT images and exact ESP/XBOOTLDR roles without opening a device.
-The production read-only parent-device binding and geometry composition, disk
-admissibility, durable descriptor-rooted publisher, device-flush ordering, and
-restart reconciliation remain open.
+and fixed-512-sector partition geometry; commit `24d82abf` seals the parent-disk
+expectation to one freshly revalidated sysfs view. Commit `78b87df9` admits only
+an exact `/dev` root attachment reported by mountinfo as `devtmpfs`, without
+claiming that policy is descriptor authority. Commit `5ed70923` authenticates
+strict caller-owned GPT images and exact ESP/XBOOTLDR roles without opening a
+device. Commit `c2539d7f` strengthens that parser to require two complete,
+exactly matching table passes under one cumulative ledger and deadline and
+returns a role-independent table fingerprint without raw bytes or reusable read
+authority. The production read-only parent-device binding and geometry
+composition, disk admissibility, durable descriptor-rooted publisher,
+device-flush ordering, and restart reconciliation remain open.
 Default and focused tests do not inspect or mutate host ESP/BOOT storage; real
 publication, reboot, and power-loss evidence requires the user-supplied
 disposable VM.

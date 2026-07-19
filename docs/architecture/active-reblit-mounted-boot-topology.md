@@ -187,13 +187,26 @@ continuously live view and does not claim call-time or simultaneous residency.
 
 Commit `5ed70923` separately provides a strict bounded pure parser for mirrored
 GPT headers and entry arrays, a non-hybrid protective MBR, and an exact expected
-ESP or XBOOTLDR partition role. It consumes only caller-owned bytes. No
-production adapter yet authenticates a parent block-device descriptor, feeds
-its bytes to that parser, or proves that the selected GPT range equals the
-retained sysfs geometry. Physical-disk read authority, flush behavior, and
-persistence across reboot therefore remain separate open claims. The selected
-mountinfo `vfat` policy and Linux MSDOS-family descriptor witness are jointly
-retained per topology pass.
+ESP or XBOOTLDR partition role. Commit `c2539d7f` makes that authentication two
+complete passes under one cumulative ledger and deadline. The passes must agree
+on image length, logical block size, the full protective-MBR block, both full
+header blocks, the already mirrored entry array, and selected semantics. The
+returned closed evidence adds one role-independent, domain-separated table
+fingerprint; it retains no table bytes, image, descriptor, path, or reusable
+read authority.
+
+Commit `24d82abf` seals the parent `DEVNAME`, device number, partition number,
+PARTUUID, fixed-512-sector geometry, and optional disk sequence to one freshly
+revalidated sysfs view. Commit `78b87df9` separately validates only an exact
+`/dev` root attachment reported as `devtmpfs`, including consistent access and
+device-option semantics. That mountinfo policy is not descriptor authority and
+cannot alone prove whole-filesystem bind provenance. No production adapter yet
+opens the expected parent block node beneath a retained `/dev`, proves its
+descriptor identity and capacity, feeds two observations to the pure parser, or
+reconciles GPT byte geometry with the sysfs view. Physical-disk read authority,
+flush behavior, and persistence across reboot therefore remain separate open
+claims. The selected mountinfo `vfat` policy and Linux MSDOS-family descriptor
+witness are jointly retained per topology pass.
 
 ## Topology invariants
 
@@ -350,7 +363,8 @@ Mounted topology is necessary but not sufficient for real boot publication.
 Later layers must independently authenticate:
 
 - a read-only parent block-device capability and composition of the strict pure
-  GPT role with retained sysfs identity and fixed-512-sector geometry;
+  two-pass GPT table identity with retained sysfs identity and fixed-512-sector
+  geometry;
 - the exact partition/disk relationship beyond the retained observations;
 - publication ordering, file replacement, directory synchronization, and
   device flush durability; and
