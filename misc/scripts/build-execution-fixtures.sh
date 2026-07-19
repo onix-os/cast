@@ -9,7 +9,7 @@ case "${1-}" in
     *) printf 'usage: %s [--check]\n' "$0" >&2; exit 2 ;;
 esac
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
 package_root="$fixture_root/packages"
 source_root="$fixture_root/source-trees"
@@ -25,13 +25,13 @@ git_work=
 
 cleanup() {
     if [ -n "$temporary" ]; then
-        rm -f "$temporary"
+        timeout 30s rm -f "$temporary"
     fi
     if [ -n "$uncompressed" ]; then
-        rm -f "$uncompressed"
+        timeout 30s rm -f "$uncompressed"
     fi
     if [ -n "$check_root" ]; then
-        rm -rf "$check_root"
+        timeout 30s rm -rf "$check_root"
     fi
     if [ -n "$git_work" ]; then
         timeout 30s rm -rf "$git_work"
@@ -54,7 +54,7 @@ for entry in "$package_root"/*; do
         printf 'unexpected non-directory execution fixture package entry: %s\n' "$entry" >&2
         exit 1
     }
-    fixture=$(basename "$entry")
+    fixture=$(timeout 10s basename -- "$entry")
     case "$fixture" in
         autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|external-test-vectors|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|python-module|split|system-integration-assets) ;;
         *) printf 'unexpected execution fixture package: %s\n' "$entry" >&2; exit 1 ;;
@@ -111,7 +111,7 @@ for entry in "$source_root"/*; do
         printf 'unexpected non-directory execution source-tree entry: %s\n' "$entry" >&2
         exit 1
     }
-    case "$(basename "$entry")" in
+    case "$(timeout 10s basename -- "$entry")" in
         cast-autotools-fixture-1.0.0|\
         cast-autotools-options-fixture-1.0.0|\
         cast-cargo-features-fixture-1.0.0|\
@@ -151,7 +151,7 @@ for entry in "$source_file_root"/*; do
         printf 'unexpected non-regular execution source-file entry: %s\n' "$entry" >&2
         exit 1
     }
-    case "$(basename "$entry")" in
+    case "$(timeout 10s basename -- "$entry")" in
         cast-external-test-vectors-fixture-1.0.0-vectors.json|\
         cast-hooks-fixture-1.0.0-pre-setup.patch|\
         cast-multiple-sources-schema-1.0.0.h) ;;
@@ -171,7 +171,7 @@ for entry in "$git_source_root"/*; do
         printf 'unexpected non-directory execution Git source-tree entry: %s\n' "$entry" >&2
         exit 1
     }
-    case "$(basename "$entry")" in
+    case "$(timeout 10s basename -- "$entry")" in
         cast-multiple-sources-protocol-1.0.0) ;;
         *) printf 'unexpected execution Git source tree: %s\n' "$entry" >&2; exit 1 ;;
     esac
@@ -184,7 +184,7 @@ test "$git_source_tree_count" -eq 1 || {
 }
 
 if [ "$mode" = check ]; then
-    check_root=$(mktemp -d "${TMPDIR:-/tmp}/cast-execution-fixtures.XXXXXX")
+    check_root=$(timeout 30s mktemp -d "${TMPDIR:-/tmp}/cast-execution-fixtures.XXXXXX")
 fi
 
 for fixture in \
@@ -241,9 +241,9 @@ do
     fi
 
     test -d "$source"
-    rm -f "$temporary"
-    rm -f "$uncompressed"
-    tar \
+    timeout 30s rm -f "$temporary"
+    timeout 30s rm -f "$uncompressed"
+    timeout 120s tar \
         --format=ustar \
         --sort=name \
         --mtime=@1700000000 \
@@ -256,17 +256,17 @@ do
         "$fixture"
     case "$compression" in
         none)
-            mv -f "$uncompressed" "$temporary"
+            timeout 30s mv -f "$uncompressed" "$temporary"
             uncompressed=
             ;;
         gzip)
-            gzip --no-name --best --stdout "$uncompressed" > "$temporary"
+            timeout 120s gzip --no-name --best --stdout "$uncompressed" > "$temporary"
             ;;
         xz)
-            xz --threads=1 --check=crc64 --best --stdout "$uncompressed" > "$temporary"
+            timeout 120s xz --threads=1 --check=crc64 --best --stdout "$uncompressed" > "$temporary"
             ;;
         zstd)
-            zstd --quiet --no-progress --single-thread -19 --check --stdout "$uncompressed" > "$temporary"
+            timeout 120s zstd --quiet --no-progress --single-thread -19 --check --stdout "$uncompressed" > "$temporary"
             ;;
         *)
             printf 'unsupported execution fixture compression: %s\n' "$compression" >&2
@@ -274,20 +274,20 @@ do
             ;;
     esac
     if [ -n "$uncompressed" ]; then
-        rm -f "$uncompressed"
+        timeout 30s rm -f "$uncompressed"
         uncompressed=
     fi
-    chmod 0644 "$temporary"
+    timeout 30s chmod 0644 "$temporary"
     if [ "$mode" = check ]; then
         test -f "$output"
         test ! -L "$output"
-        if ! cmp -s "$temporary" "$output"; then
+        if ! timeout 30s cmp -s "$temporary" "$output"; then
             printf 'execution fixture archive is stale: %s\n' "$output" >&2
             exit 1
         fi
-        rm -f "$temporary"
+        timeout 30s rm -f "$temporary"
     else
-        mv -f "$temporary" "$output"
+        timeout 30s mv -f "$temporary" "$output"
     fi
     temporary=
 done
@@ -455,7 +455,7 @@ for entry in "$archive_root"/*; do
         printf 'unexpected non-regular execution fixture archive entry: %s\n' "$entry" >&2
         exit 1
     }
-    case "$(basename "$entry")" in
+    case "$(timeout 10s basename -- "$entry")" in
         cast-autotools-fixture-1.0.0.tar|\
         cast-autotools-options-fixture-1.0.0.tar|\
         cast-cargo-features-fixture-1.0.0.tar|\
@@ -498,7 +498,7 @@ for entry in "$git_bundle_root"/*; do
         printf 'unexpected non-regular execution Git bundle entry: %s\n' "$entry" >&2
         exit 1
     }
-    case "$(basename "$entry")" in
+    case "$(timeout 10s basename -- "$entry")" in
         cast-multiple-sources-protocol-1.0.0.bundle) ;;
         *) printf 'unexpected execution fixture Git bundle: %s\n' "$entry" >&2; exit 1 ;;
     esac

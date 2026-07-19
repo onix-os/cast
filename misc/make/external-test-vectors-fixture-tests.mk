@@ -16,7 +16,21 @@ external-test-vectors-contract-test:
 	done
 
 external-test-vectors-supplemental-host-test:
-	@timeout 180s dash "$(TOP_DIR)/misc/scripts/test-external-test-vectors-host.sh"
+	@timeout 180s env \
+		AR=/ambient/toolchain/ar \
+		CC=/ambient/toolchain/cc \
+		CFLAGS="-include /ambient/toolchain/poison.h" \
+		CMAKE_BUILD_PARALLEL_LEVEL=not-a-number \
+		CMAKE_FIND_ROOT_PATH=/ambient/cmake/root \
+		CMAKE_GENERATOR="Unix Makefiles" \
+		CMAKE_PROJECT_INCLUDE_BEFORE=/ambient/cmake/poison.cmake \
+		CMAKE_SYSROOT=/ambient/toolchain/sysroot \
+		CMAKE_TOOLCHAIN_FILE=/ambient/cmake/toolchain.cmake \
+		CTEST_CONFIGURATION_TYPE=AmbientPoison \
+		CTEST_PARALLEL_LEVEL=not-a-number \
+		DESTDIR=/ambient/stage \
+		MAKEFLAGS=--ambient-poison \
+		dash "$(TOP_DIR)/misc/scripts/test-external-test-vectors-host.sh"
 
 external-test-vectors-fixture-test: external-test-vectors-contract-test \
 	external-test-vectors-supplemental-host-test
