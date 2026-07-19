@@ -30,7 +30,7 @@ pub(in crate::client) use model::{
     MountedBootTargetObservation, ObservationPhase,
 };
 
-#[allow(unused_imports)] // consumed by the later boot renderer/publisher slice
+#[allow(unused_imports)] // consumed by the pure renderer and later durable publisher
 pub(in crate::client) use capture::{
     ActiveReblitMountedBootTopologyCaptureError, PreparedActiveReblitMountedBootTopology,
     RevalidatedActiveReblitMountedBootTopology,

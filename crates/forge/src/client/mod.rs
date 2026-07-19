@@ -89,7 +89,7 @@ mod active_reblit_boot_inputs;
 #[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
 #[path = "boot/active_reblit_projection.rs"]
 pub(crate) mod active_reblit_boot_projection;
-#[allow(dead_code)] // pure authenticated semantic aggregate for the later BLS renderer
+#[allow(dead_code)] // lifetime-bound semantic aggregate consumed by the pure BLS renderer
 #[path = "boot/active_reblit_boot_render_inputs.rs"]
 mod active_reblit_boot_render_inputs;
 #[allow(dead_code)] // authenticated schemas prepared before descriptor-safe rendering
@@ -104,13 +104,13 @@ mod active_reblit_local_boot_policy;
 #[allow(dead_code)] // descriptor-retained mounted facts; consumed by the later durable publisher
 #[path = "boot/active_reblit_mounted_boot_topology.rs"]
 mod active_reblit_mounted_boot_topology;
-#[allow(dead_code)] // authenticated scalar package cmdlines for the later pure boot renderer
+#[allow(dead_code)] // authenticated package cmdlines consumed by the render-input aggregate
 #[path = "boot/active_reblit_package_cmdline_inputs.rs"]
 mod active_reblit_package_cmdline_inputs;
 #[allow(dead_code)] // pre-claim pure output plan; consumed by the descriptor-safe publisher
 #[path = "boot/active_reblit_publication_plan.rs"]
 mod active_reblit_publication_plan;
-#[allow(dead_code)] // authenticated machine-local root locator; renderer remains deliberately unwired
+#[allow(dead_code)] // authenticated root locator consumed by the render-input aggregate
 #[path = "boot/active_reblit_root_filesystem_intent.rs"]
 mod active_reblit_root_filesystem_intent;
 #[cfg(test)]
