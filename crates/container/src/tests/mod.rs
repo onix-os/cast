@@ -298,6 +298,26 @@ fn exercise_bounded_tmpfs(size_bytes: u64, inode_limit: u64) -> io::Result<()> {
 }
 
 fn exercise_private_minimal_dev() -> io::Result<()> {
+    let parent = private_dev_operation("inspect /dev parent", std::fs::symlink_metadata("/dev"))?;
+    if !parent.file_type().is_dir()
+        || parent.mode() & 0o7777 != 0o755
+        || parent.uid() != 0
+        || parent.gid() != 0
+    {
+        return Err(io::Error::other(format!(
+            "minimal /dev parent is not an exact child-root-owned 0755 directory: mode={:o} uid={} gid={}",
+            parent.mode(),
+            parent.uid(),
+            parent.gid()
+        )));
+    }
+    let parent_flags = private_dev_mount_flags(Path::new("/dev"))?;
+    if parent_flags & nix::libc::ST_RDONLY == 0 {
+        return Err(io::Error::other(format!(
+            "minimal /dev parent is not read-only: mount_flags={parent_flags:#x}"
+        )));
+    }
+
     let mut actual = private_dev_operation("read /dev directory", std::fs::read_dir("/dev"))?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<io::Result<Vec<_>>>()
@@ -314,6 +334,30 @@ fn exercise_private_minimal_dev() -> io::Result<()> {
         )));
     }
 
+    for (name, expected_major, expected_minor) in [("null", 1, 3), ("zero", 1, 5), ("full", 1, 7)] {
+        let path = format!("/dev/{name}");
+        let metadata = private_dev_operation("inspect private device", std::fs::symlink_metadata(&path))?;
+        let actual_major = nix::libc::major(metadata.rdev());
+        let actual_minor = nix::libc::minor(metadata.rdev());
+        if !metadata.file_type().is_char_device()
+            || metadata.mode() & 0o7777 != 0o666
+            || metadata.nlink() != 1
+            || (actual_major, actual_minor) != (expected_major, expected_minor)
+        {
+            return Err(io::Error::other(format!(
+                "private {name} contract differs: mode={:o} links={} device={actual_major}:{actual_minor}",
+                metadata.mode(),
+                metadata.nlink()
+            )));
+        }
+        let flags = private_dev_mount_flags(Path::new(&path))?;
+        if flags & (nix::libc::ST_RDONLY | nix::libc::ST_NODEV) != 0 {
+            return Err(io::Error::other(format!(
+                "private {name} mount is read-only or nodev: mount_flags={flags:#x}"
+            )));
+        }
+    }
+
     require_errno(
         std::fs::OpenOptions::new()
             .write(true)
@@ -323,24 +367,26 @@ fn exercise_private_minimal_dev() -> io::Result<()> {
         "create undeclared minimal /dev entry",
     )?;
 
+    require_errno(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open("/dev/null"),
+        Errno::EEXIST,
+        "exclusively create existing /dev/null",
+    )?;
+
     // Match Python's `Path(os.devnull).open("wb")`: its create-and-truncate
-    // flags must retain ordinary character-device data semantics even though
-    // the bind mount itself is read-only against inode metadata mutation.
-    let mut null = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open("/dev/null")
-        .map_err(|error| {
-            private_dev_path_error(
-                "open /dev/null with create and truncate",
-                Path::new("/dev/null"),
-                error,
-            )
-        })?;
-    null.write_all(b"discarded")
-        .map_err(|error| private_dev_error("write /dev/null", error))?;
-    drop(null);
+    // flags and every strict subset must retain ordinary character-device
+    // data semantics while the parent stays sealed against metadata changes.
+    for (create, truncate, operation) in [
+        (false, false, "open /dev/null for writing"),
+        (false, true, "open /dev/null with truncate"),
+        (true, false, "open /dev/null with create"),
+        (true, true, "open /dev/null with create and truncate"),
+    ] {
+        write_private_null(create, truncate, operation)?;
+    }
 
     let mut null = private_dev_operation("open /dev/null for reading", std::fs::File::open("/dev/null"))?;
     let mut byte = [0_u8; 1];
@@ -367,6 +413,17 @@ fn exercise_private_minimal_dev() -> io::Result<()> {
     require_errno(full.write_all(&[1]), Errno::ENOSPC, "write /dev/full")
 }
 
+fn write_private_null(create: bool, truncate: bool, operation: &str) -> io::Result<()> {
+    let mut null = std::fs::OpenOptions::new()
+        .write(true)
+        .create(create)
+        .truncate(truncate)
+        .open("/dev/null")
+        .map_err(|error| private_dev_path_error(operation, Path::new("/dev/null"), error))?;
+    null.write_all(b"discarded")
+        .map_err(|error| private_dev_error("write /dev/null", error))
+}
+
 fn private_dev_operation<T>(operation: &str, result: io::Result<T>) -> io::Result<T> {
     result.map_err(|error| private_dev_error(operation, error))
 }
@@ -388,14 +445,9 @@ fn private_dev_path_error(operation: &str, path: &Path, error: io::Error) -> io:
             )
         })
         .unwrap_or_else(|metadata_error| format!("metadata unavailable: {metadata_error}"));
-    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("fixed path contains no NUL");
-    let mut mount: nix::libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: path is NUL-terminated and mount is valid writable output.
-    let flags = if unsafe { nix::libc::statvfs(path.as_ptr(), &mut mount) } == -1 {
-        format!("mount flags unavailable: {}", io::Error::last_os_error())
-    } else {
-        format!("mount_flags={:#x}", mount.f_flag)
-    };
+    let flags = private_dev_mount_flags(path)
+        .map(|flags| format!("mount_flags={flags:#x}"))
+        .unwrap_or_else(|mount_error| format!("mount flags unavailable: {mount_error}"));
     let plain_read = std::fs::File::open("/dev/null")
         .map(|_| "ok".to_owned())
         .unwrap_or_else(|plain_error| plain_error.to_string());
@@ -422,6 +474,18 @@ fn private_dev_path_error(operation: &str, path: &Path, error: io::Error) -> io:
             "{operation}: {error}; {metadata}; {flags}; plain_read={plain_read}; plain_write={plain_write}; create_write={create_write}; truncate_write={truncate_write}"
         ),
     )
+}
+
+fn private_dev_mount_flags(path: &Path) -> io::Result<nix::libc::c_ulong> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "private device path contains NUL"))?;
+    let mut mount: nix::libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: path is NUL-terminated and mount is valid writable output.
+    if unsafe { nix::libc::statvfs(path.as_ptr(), &mut mount) } == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(mount.f_flag)
+    }
 }
 
 fn require_payload_security_boundary() -> io::Result<()> {
