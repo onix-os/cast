@@ -43,15 +43,22 @@ impl GptPartitionRole {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedGptPartitionRole {
     role: GptPartitionRole,
+    partition_number: u32,
     partition_uuid: [u8; 36],
     start_lba: u64,
     size_lba: u64,
+    logical_block_size: u32,
+    image_bytes: u64,
     table_sha256: [u8; 32],
 }
 
 impl ValidatedGptPartitionRole {
     pub(crate) const fn role(&self) -> GptPartitionRole {
         self.role
+    }
+
+    pub(crate) const fn partition_number(&self) -> u32 {
+        self.partition_number
     }
 
     pub(crate) fn partition_uuid(&self) -> &str {
@@ -64,6 +71,14 @@ impl ValidatedGptPartitionRole {
 
     pub(crate) const fn size_lba(&self) -> u64 {
         self.size_lba
+    }
+
+    pub(crate) const fn logical_block_size(&self) -> u32 {
+        self.logical_block_size
+    }
+
+    pub(crate) const fn image_bytes(&self) -> u64 {
+        self.image_bytes
     }
 
     /// Domain-separated SHA-256 of the complete accepted GPT table.
@@ -126,6 +141,40 @@ pub(in crate::linux_fs) fn authenticate_gpt_partition_role_sources_until(
         expected_role,
         reader::Limits::production(),
         deadline,
+    )?;
+    Ok(validated_from_stable(stable))
+}
+
+/// Two-pass seam with one mandatory caller-owned revalidation boundary.
+///
+/// The callback runs exactly once after the first complete snapshot and before
+/// any second-pass read. It receives the unchanged absolute deadline and must
+/// perform its own bounded descriptor, name, and device-metadata work. Snapshot
+/// bytes remain private, callback errors propagate unchanged, and a terminal parser
+/// checkpoint rejects deadline expiry before the second pass begins.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::linux_fs) fn authenticate_gpt_partition_role_sources_with_interpass_until(
+    first_source: &mut impl GptPartitionRoleImage,
+    second_source: &mut impl GptPartitionRoleImage,
+    logical_block_size: u32,
+    expected_partition_number: u32,
+    expected_partition_uuid: &str,
+    expected_role: GptPartitionRole,
+    deadline: Instant,
+    interpass: &mut impl FnMut(Instant) -> io::Result<()>,
+) -> io::Result<ValidatedGptPartitionRole> {
+    let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
+    let stable = stable::authenticate_with_interpass_until(
+        first_source,
+        second_source,
+        logical_block_size,
+        expected_partition_number,
+        expected_uuid,
+        expected_role,
+        reader::Limits::production(),
+        deadline,
+        interpass,
     )?;
     Ok(validated_from_stable(stable))
 }
@@ -217,6 +266,36 @@ pub(in crate::linux_fs) fn authenticate_gpt_partition_role_two_sources_fixture_w
 
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
+pub(in crate::linux_fs) fn authenticate_gpt_partition_role_two_sources_fixture_with_interpass_and_clock_until(
+    first_source: &mut impl GptPartitionRoleImage,
+    second_source: &mut impl GptPartitionRoleImage,
+    logical_block_size: u32,
+    expected_partition_number: u32,
+    expected_partition_uuid: &str,
+    expected_role: GptPartitionRole,
+    limits: FixtureGptPartitionRoleLimits,
+    deadline: Instant,
+    interpass: &mut impl FnMut(Instant) -> io::Result<()>,
+    clock: &mut impl FnMut() -> Instant,
+) -> io::Result<ValidatedGptPartitionRole> {
+    let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
+    let stable = stable::authenticate_with_interpass_and_clock_until(
+        first_source,
+        second_source,
+        logical_block_size,
+        expected_partition_number,
+        expected_uuid,
+        expected_role,
+        limits.into(),
+        deadline,
+        interpass,
+        Some(clock),
+    )?;
+    Ok(validated_from_stable(stable))
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn authenticate_gpt_partition_role_chunked_fixture_until(
     image: &[u8],
     logical_block_size: u32,
@@ -276,9 +355,12 @@ fn validated_from_stable(stable: stable::StableSelectedEntry) -> ValidatedGptPar
     let selected = stable.selected;
     ValidatedGptPartitionRole {
         role: selected.role,
+        partition_number: selected.partition_number,
         partition_uuid: selected.partition_uuid.canonical_bytes(),
         start_lba: selected.start_lba,
         size_lba: selected.size_lba,
+        logical_block_size: stable.logical_block_size,
+        image_bytes: stable.image_bytes,
         table_sha256: stable.table_sha256,
     }
 }

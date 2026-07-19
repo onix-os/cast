@@ -111,5 +111,7 @@ fn one_exact_table_has_one_fingerprint_independent_of_selected_role() {
         live_deadline(),
     )
     .unwrap();
+    assert_eq!(esp.partition_number(), 1);
+    assert_eq!(xbootldr.partition_number(), 2);
     assert_eq!(esp.table_sha256(), xbootldr.table_sha256());
 }

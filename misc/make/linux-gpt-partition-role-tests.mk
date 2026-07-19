@@ -13,7 +13,7 @@ forge-linux-gpt-partition-role-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(GPT_PARTITION_ROLE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::gpt_partition_role::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 31; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 34; \
 	for name in \
 		stable::esp_guid_constant_uses_uefi_mixed_endian_disk_bytes \
 		stable::xbootldr_guid_constant_uses_uefi_mixed_endian_disk_bytes \
@@ -28,6 +28,9 @@ forge-linux-gpt-partition-role-test: host-storage-safety-test
 		snapshot_stability::one_exact_table_has_one_fingerprint_independent_of_selected_role \
 		snapshot_bounds::two_pass_snapshot_authentication_shares_one_absolute_deadline \
 		snapshot_bounds::deadline_expiry_during_the_second_source_fails_before_returning_evidence \
+		snapshot_bounds::interpass_revalidation_runs_exactly_once_before_second_pass_reads \
+		snapshot_bounds::interpass_revalidation_failure_prevents_second_pass_and_result \
+		snapshot_bounds::deadline_expiry_after_interpass_revalidation_prevents_second_pass \
 		snapshot_bounds::fixture_limits_cannot_raise_any_hard_production_ceiling \
 		snapshot_bounds::complete_stable_ledger_accepts_exact_n_and_rejects_every_n_minus_one \
 		malformed::logical_block_size_and_image_length_are_strict \
@@ -64,8 +67,12 @@ forge-linux-gpt-partition-role-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(crate) struct ValidatedGptPartitionRole {' "$$module"; \
 	timeout 10s grep -Fq 'pub(crate) fn authenticate_gpt_partition_role_image_until(' "$$module"; \
 	timeout 10s grep -Fq 'pub(in crate::linux_fs) fn authenticate_gpt_partition_role_sources_until(' "$$module"; \
+	timeout 10s grep -Fq 'pub(in crate::linux_fs) fn authenticate_gpt_partition_role_sources_with_interpass_until(' "$$module"; \
 	timeout 10s grep -Fq 'pub(in crate::linux_fs) use reader::Image as GptPartitionRoleImage;' "$$module"; \
 	timeout 10s grep -Fq 'pub(crate) const fn table_sha256(&self) -> &[u8; 32]' "$$module"; \
+	timeout 10s grep -Fq 'pub(crate) const fn partition_number(&self) -> u32' "$$module"; \
+	timeout 10s grep -Fq 'pub(crate) const fn logical_block_size(&self) -> u32' "$$module"; \
+	timeout 10s grep -Fq 'pub(crate) const fn image_bytes(&self) -> u64' "$$module"; \
 	timeout 10s grep -Fq 'image: &[u8],' "$$module"; \
 	timeout 10s grep -Fq 'pub(in crate::linux_fs) trait Image {' "$$module_dir/reader.rs"; \
 	timeout 10s grep -Fq 'pub(super) struct SliceImage<' "$$module_dir/reader.rs"; \

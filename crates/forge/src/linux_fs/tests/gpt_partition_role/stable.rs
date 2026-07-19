@@ -20,9 +20,12 @@ fn stable_512_byte_esp_image_returns_selected_semantics_and_table_identity() {
     let fixture = Fixture::esp(512);
     let selected = fixture.authenticate().unwrap();
     assert_eq!(selected.role(), GptPartitionRole::Esp);
+    assert_eq!(selected.partition_number(), 1);
     assert_eq!(selected.partition_uuid(), ESP_UUID);
     assert_eq!(selected.start_lba(), fixture.selected_start_lba);
     assert_eq!(selected.size_lba(), fixture.selected_size_lba);
+    assert_eq!(selected.logical_block_size(), fixture.block_size);
+    assert_eq!(selected.image_bytes(), fixture.bytes.len() as u64);
     assert_ne!(selected.table_sha256(), &[0; 32]);
 }
 
@@ -31,9 +34,12 @@ fn stable_4096_byte_xbootldr_image_returns_selected_semantics_and_table_identity
     let fixture = Fixture::xbootldr(4_096);
     let selected = fixture.authenticate().unwrap();
     assert_eq!(selected.role(), GptPartitionRole::Xbootldr);
+    assert_eq!(selected.partition_number(), 1);
     assert_eq!(selected.partition_uuid(), XBOOTLDR_UUID);
     assert_eq!(selected.start_lba(), fixture.selected_start_lba);
     assert_eq!(selected.size_lba(), fixture.selected_size_lba);
+    assert_eq!(selected.logical_block_size(), fixture.block_size);
+    assert_eq!(selected.image_bytes(), fixture.bytes.len() as u64);
     assert_ne!(selected.table_sha256(), &[0; 32]);
 }
 

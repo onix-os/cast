@@ -151,7 +151,7 @@ forge-linux-fs-test: forge-linux-descriptor-boot-filesystem-test forge-linux-des
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^linux_fs::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 301; \
+	timeout 10s test "$$count" = 304; \
 	for test in \
 		linux_fs::tests::xattrs::no_xattr_probe_classifies_empty_positive_unsupported_and_indeterminate_results \
 		linux_fs::tests::xattrs::no_xattr_probe_bounds_interrupted_retries_and_obeys_its_deadline \
