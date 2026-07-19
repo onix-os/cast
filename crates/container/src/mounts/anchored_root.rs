@@ -13,6 +13,8 @@ use nix::unistd::{fchdir, pivot_root, sethostname};
 use snafu::ResultExt as _;
 
 use super::anchored_identity::open_current_namespace_root;
+#[cfg(test)]
+use super::pseudo_filesystems::detached_owned_nested_proc_fixture;
 use super::pseudo_filesystems::{
     apply_pseudo_mount, apply_root_mount_policy, mount_binds, prepare_anchored_pseudo_mount,
     prepare_anchored_resolver_mount, prepare_pseudo_mount_targets, pseudo_mount_decisions, set_mount_access_fd,
@@ -20,9 +22,11 @@ use super::pseudo_filesystems::{
 };
 use super::syscalls::{add_mount, ensure_directory, set_current_dir, setup_localhost};
 use super::{Bind, BindSource};
+#[cfg(test)]
+use crate::OwnedNestedProcFixture;
 use crate::{
-    ActivateAnchoredRootSnafu, Container, ContainerError, FsErrSnafu, LoopbackPolicy, MountSnafu, PivotRootSnafu,
-    PseudoFilesystemPolicy, RootFilesystemPolicy, SetHostnameSnafu, UnmountOldRootSnafu,
+    ActivateAnchoredRootSnafu, CloneAnchoredBindSourceSnafu, Container, ContainerError, FsErrSnafu, LoopbackPolicy,
+    MountSnafu, PivotRootSnafu, PseudoFilesystemPolicy, RootFilesystemPolicy, SetHostnameSnafu, UnmountOldRootSnafu,
 };
 
 // linux/mount.h. nc 0.9 exposes only the source-empty-path flag.
@@ -88,6 +92,9 @@ fn pivot_anchored(container: &Container) -> Result<(), ContainerError> {
     })?;
     let rebound = rebind_anchored_inputs(container, namespace_root.as_raw_fd())?;
 
+    #[cfg(test)]
+    attach_owned_nested_proc_fixture(container, &rebound)?;
+
     // Prepare every source as a detached mount before entering the root. Only
     // child-local rebound descriptors are admitted to open_tree.
     let mut prepared_mounts = prepare_anchored_binds(&rebound.bind_sources)?;
@@ -130,6 +137,30 @@ fn pivot_anchored(container: &Container) -> Result<(), ContainerError> {
     set_current_dir("/")?;
     umask(Mode::S_IWGRP | Mode::S_IWOTH);
     Ok(())
+}
+
+#[cfg(test)]
+fn attach_owned_nested_proc_fixture(
+    container: &Container,
+    rebound: &ReboundAnchoredInputs,
+) -> Result<(), ContainerError> {
+    let Some(fixture) = container.owned_nested_proc_fixture else {
+        return Ok(());
+    };
+    let source = match fixture {
+        OwnedNestedProcFixture::Root => rebound.root.as_raw_fd(),
+        OwnedNestedProcFixture::FirstAnchoredBind => rebound
+            .bind_sources
+            .first()
+            .expect("owned nested proc bind fixture requires one anchored bind")
+            .source
+            .as_raw_fd(),
+    };
+    let target = open_anchored_mount_target(source, Path::new("nested"), AnchoredMountTargetKind::Directory)?;
+    let proc_mount = detached_owned_nested_proc_fixture()?;
+    move_mount_empty(proc_mount.as_raw_fd(), target.as_raw_fd()).with_context(|_| MountSnafu {
+        target: PathBuf::from("nested"),
+    })
 }
 
 fn clone_anchored_root(label: &Path, anchor: RawFd) -> Result<OwnedFd, ContainerError> {
@@ -319,8 +350,8 @@ fn prepare_anchored_binds(
             // and successful open_tree returns a detached mount descriptor.
             let descriptor = unsafe { open_tree(bind.source.as_raw_fd(), Path::new(""), flags) }
                 .map_err(Errno::from_i32)
-                .with_context(|_| MountSnafu {
-                    target: bind.source_label.clone(),
+                .with_context(|_| CloneAnchoredBindSourceSnafu {
+                    path: bind.source_label.clone(),
                 })?;
             // SAFETY: successful open_tree returned a fresh owned descriptor.
             let source_mount = unsafe { OwnedFd::from_raw_fd(descriptor) };

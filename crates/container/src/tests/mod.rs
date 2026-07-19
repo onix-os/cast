@@ -143,6 +143,11 @@ fn classify_anchored_activation_unavailable(error: &ContainerRunError, label: &P
     if message.starts_with("attach sealed resolver mount through anchored root descriptor:") && capability_denial {
         return Some("resolver mount attachment unavailable");
     }
+    if message.starts_with("clone descriptor-backed bind mount for anchored source ")
+        && unavailable.iter().any(|denied| message.ends_with(denied))
+    {
+        return Some("open_tree unavailable");
+    }
     for denied in unavailable {
         if message
             == &format!(

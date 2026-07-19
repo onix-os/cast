@@ -563,8 +563,10 @@ container-mount-boundary-test:
 		tests::anchored_root_symlink_substitution_fails_before_payload_mutation \
 		tests::anchored_root_and_bind_locators_rebind_in_the_live_child_namespace \
 		tests::anchored_payload_error_transport_is_bounded_and_completes \
-		tests::anchored_root_clone_excludes_undeclared_nested_mounts \
-		tests::anchored_directory_bind_excludes_undeclared_nested_mounts \
+		tests::anchored_root_clone_excludes_owned_undeclared_nested_mount \
+		tests::anchored_directory_bind_excludes_owned_undeclared_nested_mount \
+		tests::anchored_root_locked_host_nested_mount_fails_closed_or_is_excluded \
+		tests::anchored_directory_bind_locked_host_nested_mount_fails_closed_or_is_excluded \
 		tests::minimal_dev_has_an_exact_non_entropy_device_set \
 		tests::minimal_dev_accepts_only_exact_linux_character_device_identities \
 		tests::special_file_bind_gets_a_file_mountpoint; do \
@@ -598,7 +600,7 @@ container-root-host-safe-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p container --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 75; \
+	timeout 10s test "$$count" = 77; \
 	ran=0; \
 	for test in $$( timeout 10s grep '^tests::.*: test$$' <<<"$$listed" | timeout 10s sed 's/: test$$//' ); do \
 		case "$$test" in \
@@ -611,7 +613,7 @@ container-root-host-safe-test:
 		timeout 180s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
 		ran=$$((ran + 1)); \
 	done; \
-	timeout 10s test "$$ran" = 70
+	timeout 10s test "$$ran" = 72
 
 mason-package-collect-test:
 	@set -eu; \

@@ -276,6 +276,11 @@ fn detached_filesystem_mount(
     Ok(mount)
 }
 
+#[cfg(test)]
+pub(crate) fn detached_owned_nested_proc_fixture() -> Result<OwnedFd, ContainerError> {
+    detached_filesystem_mount(c"proc", false, Path::new("owned nested proc fixture"), &[])
+}
+
 fn detached_tmpfs_mount(limits: Option<TmpfsLimits>, label: &Path) -> Result<OwnedFd, ContainerError> {
     let mount = if let Some(limits) = limits {
         let options = limits.fsconfig_options();

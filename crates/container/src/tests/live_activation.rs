@@ -401,70 +401,159 @@ fn anchored_payload_error_transport_is_bounded_and_completes() {
     }
 }
 
-#[test]
-fn anchored_root_clone_excludes_undeclared_nested_mounts() {
-    const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+const NESTED_BACKING_MARKER: &[u8] = b"authenticated backing directory\n";
 
-    let anchor = open_path_directory(Path::new("/"));
-    let label = PathBuf::from("/");
-    let container = anchored_container(&label, &anchor)
+fn require_nested_proc_excluded(path: &Path, backing_marker: Option<&[u8]>) -> io::Result<()> {
+    let descriptor = fs::File::open(path)?;
+    // SAFETY: descriptor is live and statfs points to initialized writable
+    // storage for the duration of the call.
+    let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { nix::libc::fstatfs(descriptor.as_raw_fd(), &mut stat) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if stat.f_type == PROC_SUPER_MAGIC {
+        return Err(io::Error::other(format!(
+            "undeclared nested proc mount was imported at {}: filesystem magic={:#x}",
+            path.display(),
+            stat.f_type
+        )));
+    }
+    match fs::metadata(path.join("self/stat")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+        Ok(_) => {
+            return Err(io::Error::other(format!(
+                "undeclared nested proc contents were imported at {}",
+                path.display()
+            )));
+        }
+    }
+    if let Some(expected) = backing_marker {
+        let actual = fs::read(path.join("backing-marker"))?;
+        if actual != expected {
+            return Err(io::Error::other(format!(
+                "nested mount exclusion exposed the wrong backing marker at {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn anchored_root_clone_excludes_owned_undeclared_nested_mount() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    fs::write(root.path().join("nested/backing-marker"), NESTED_BACKING_MARKER).unwrap();
+    let anchor = open_path_directory(root.path());
+    let result = anchored_container(root.path(), &anchor)
+        .with_owned_nested_proc_beneath_root_for_test()
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
             tmp: TmpPolicy::Disabled,
             sys: SysPolicy::None,
             dev: DevPolicy::None,
         })
-        .loopback(LoopbackPolicy::KernelDefault);
-    drop(anchor);
-
-    let result = container.run::<io::Error>(|| {
-        // SAFETY: the path is static and NUL terminated; statfs points to
-        // a fully initialized output object for the duration of the call.
-        let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
-        if unsafe { nix::libc::statfs(c"/proc".as_ptr(), &mut stat) } == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        if stat.f_type == PROC_SUPER_MAGIC {
-            return Err(io::Error::other(format!(
-                "undeclared nested /proc mount was imported: filesystem magic={:#x}",
-                stat.f_type
-            )));
-        }
-        match fs::metadata("/proc/self/stat") {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error),
-            Ok(_) => return Err(io::Error::other("undeclared nested /proc contents were imported")),
-        }
-        Ok(())
-    });
+        .loopback(LoopbackPolicy::KernelDefault)
+        .run::<io::Error>(|| require_nested_proc_excluded(Path::new("/nested"), Some(NESTED_BACKING_MARKER)));
 
     match result {
         Ok(()) => {}
         Err(error) => {
-            let classification = classify_anchored_activation_unavailable(&error, &label);
-            if let Some(classification) = classification
-                && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
-                    != Some(std::ffi::OsStr::new("1"))
-            {
-                eprintln!(
-                    "SKIP anchored root nested-mount exclusion test: required host capability unavailable: {classification}: {error}"
-                );
+            let classification = classify_anchored_activation_unavailable(&error, root.path());
+            if skip_activation_capability_denial(
+                "owned anchored-root nested-mount exclusion test",
+                classification,
+                &error,
+            ) {
                 return;
             }
-            panic!("anchored root nested-mount exclusion test failed: {error}");
+            panic!("owned anchored-root nested-mount exclusion test failed: {error}");
         }
     }
 }
 
 #[test]
-fn anchored_directory_bind_excludes_undeclared_nested_mounts() {
-    const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
+fn anchored_directory_bind_excludes_owned_undeclared_nested_mount() {
+    let root = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("import")).unwrap();
+    fs::create_dir(source.path().join("nested")).unwrap();
+    fs::write(source.path().join("nested/backing-marker"), NESTED_BACKING_MARKER).unwrap();
+    let root_anchor = open_path_directory(root.path());
+    let source_anchor = open_path_directory(source.path());
+    let result = anchored_container(root.path(), &root_anchor)
+        .bind_ro_pinned(exact_locator(source.path(), &source_anchor), "/import")
+        .unwrap()
+        .with_owned_nested_proc_beneath_first_bind_for_test()
+        .pseudo_filesystems(PseudoFilesystemPolicy {
+            proc: ProcPolicy::None,
+            tmp: TmpPolicy::Disabled,
+            sys: SysPolicy::None,
+            dev: DevPolicy::None,
+        })
+        .loopback(LoopbackPolicy::KernelDefault)
+        .run::<io::Error>(|| require_nested_proc_excluded(Path::new("/import/nested"), Some(NESTED_BACKING_MARKER)));
 
+    match result {
+        Ok(()) => {}
+        Err(error) => {
+            let classification = classify_anchored_activation_unavailable(&error, root.path());
+            if skip_activation_capability_denial(
+                "owned anchored-bind nested-mount exclusion test",
+                classification,
+                &error,
+            ) {
+                return;
+            }
+            panic!("owned anchored-bind nested-mount exclusion test failed: {error}");
+        }
+    }
+}
+
+#[test]
+fn anchored_root_locked_host_nested_mount_fails_closed_or_is_excluded() {
+    let anchor = open_path_directory(Path::new("/"));
+    let label = PathBuf::from("/");
+    let result = anchored_container(&label, &anchor)
+        .pseudo_filesystems(PseudoFilesystemPolicy {
+            proc: ProcPolicy::None,
+            tmp: TmpPolicy::Disabled,
+            sys: SysPolicy::None,
+            dev: DevPolicy::None,
+        })
+        .loopback(LoopbackPolicy::KernelDefault)
+        .run::<io::Error>(|| require_nested_proc_excluded(Path::new("/proc"), None));
+
+    match result {
+        Ok(()) => {}
+        Err(ContainerRunError::Failure { message })
+            if message == "clone descriptor-backed root mount for anchored root /: EINVAL: Invalid argument" =>
+        {
+            eprintln!("PASS kernel rejected a locked nested-root topology before payload execution");
+        }
+        Err(error) => {
+            let classification = classify_anchored_activation_unavailable(&error, &label);
+            if skip_activation_capability_denial(
+                "locked host root nested-mount fail-closed test",
+                classification,
+                &error,
+            ) {
+                return;
+            }
+            panic!("locked host root nested-mount fail-closed test failed: {error}");
+        }
+    }
+}
+
+#[test]
+fn anchored_directory_bind_locked_host_nested_mount_fails_closed_or_is_excluded() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("import")).unwrap();
     let root_anchor = open_path_directory(root.path());
     let host_root = open_path_directory(Path::new("/"));
-    let container = anchored_container(root.path(), &root_anchor)
+    let result = anchored_container(root.path(), &root_anchor)
         .bind_ro_pinned(exact_locator(Path::new("/"), &host_root), "/import")
         .unwrap()
         .pseudo_filesystems(PseudoFilesystemPolicy {
@@ -473,44 +562,26 @@ fn anchored_directory_bind_excludes_undeclared_nested_mounts() {
             sys: SysPolicy::None,
             dev: DevPolicy::None,
         })
-        .loopback(LoopbackPolicy::KernelDefault);
-
-    let result = container.run::<io::Error>(|| {
-        // SAFETY: the path is static and NUL terminated; statfs points to
-        // a fully initialized output object for the duration of the call.
-        let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
-        if unsafe { nix::libc::statfs(c"/import/proc".as_ptr(), &mut stat) } == -1 {
-            return Err(io::Error::last_os_error());
-        }
-        if stat.f_type == PROC_SUPER_MAGIC {
-            return Err(io::Error::other(format!(
-                "directory bind imported nested /proc mount: filesystem magic={:#x}",
-                stat.f_type
-            )));
-        }
-        match fs::metadata("/import/proc/self/stat") {
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-            Ok(_) => Err(io::Error::other(
-                "directory bind imported undeclared nested /proc contents",
-            )),
-        }
-    });
+        .loopback(LoopbackPolicy::KernelDefault)
+        .run::<io::Error>(|| require_nested_proc_excluded(Path::new("/import/proc"), None));
 
     match result {
         Ok(()) => {}
+        Err(ContainerRunError::Failure { message })
+            if message == "clone descriptor-backed bind mount for anchored source /: EINVAL: Invalid argument" =>
+        {
+            eprintln!("PASS kernel rejected a locked nested-bind topology before payload execution");
+        }
         Err(error) => {
             let classification = classify_anchored_activation_unavailable(&error, root.path());
-            if let Some(classification) = classification
-                && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
-                    != Some(std::ffi::OsStr::new("1"))
-            {
-                eprintln!(
-                    "SKIP anchored bind nested-mount exclusion test: required host capability unavailable: {classification}: {error}"
-                );
+            if skip_activation_capability_denial(
+                "locked host bind nested-mount fail-closed test",
+                classification,
+                &error,
+            ) {
                 return;
             }
-            panic!("anchored bind nested-mount exclusion test failed: {error}");
+            panic!("locked host bind nested-mount fail-closed test failed: {error}");
         }
     }
 }

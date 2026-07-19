@@ -208,6 +208,13 @@ pub enum RootFilesystemPolicy {
     ReadWrite,
 }
 
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnedNestedProcFixture {
+    Root,
+    FirstAnchoredBind,
+}
+
 pub struct Container {
     root: PathBuf,
     root_locator: Option<AnchoredLocator>,
@@ -219,6 +226,8 @@ pub struct Container {
     pseudo_filesystems: PseudoFilesystemPolicy,
     loopback: LoopbackPolicy,
     root_filesystem: RootFilesystemPolicy,
+    #[cfg(test)]
+    owned_nested_proc_fixture: Option<OwnedNestedProcFixture>,
 }
 
 fn duplicate_cloexec(fd: RawFd) -> io::Result<OwnedFd> {
@@ -246,6 +255,8 @@ impl Container {
             pseudo_filesystems: PseudoFilesystemPolicy::default(),
             loopback: LoopbackPolicy::default(),
             root_filesystem: RootFilesystemPolicy::default(),
+            #[cfg(test)]
+            owned_nested_proc_fixture: None,
         }
     }
 
@@ -278,7 +289,21 @@ impl Container {
             pseudo_filesystems: PseudoFilesystemPolicy::default(),
             loopback: LoopbackPolicy::default(),
             root_filesystem: RootFilesystemPolicy::default(),
+            #[cfg(test)]
+            owned_nested_proc_fixture: None,
         })
+    }
+
+    #[cfg(test)]
+    fn with_owned_nested_proc_beneath_root_for_test(mut self) -> Self {
+        self.owned_nested_proc_fixture = Some(OwnedNestedProcFixture::Root);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_owned_nested_proc_beneath_first_bind_for_test(mut self) -> Self {
+        self.owned_nested_proc_fixture = Some(OwnedNestedProcFixture::FirstAnchoredBind);
+        self
     }
 
     /// Override the working directory
@@ -607,6 +632,7 @@ fn setup_capability_denial(message: &str) -> bool {
         "normalize payload real, effective, and saved-set GIDs",
         "normalize payload real, effective, and saved-set UIDs",
         "clone descriptor-backed root mount",
+        "clone descriptor-backed bind mount",
         "attach descriptor-backed root mount",
         "mount ",
         "pivot_root",
@@ -740,6 +766,8 @@ enum ContainerError {
         path: PathBuf,
         source: AnchoredLocatorError,
     },
+    #[snafu(display("clone descriptor-backed bind mount for anchored source {}", path.display()))]
+    CloneAnchoredBindSource { path: PathBuf, source: nix::Error },
     #[snafu(display("{operation} through anchored root descriptor"))]
     ConfigureAnchoredNetworking { operation: &'static str, source: io::Error },
     #[snafu(display("unsafe host resolver source with mode {mode:o} and {links} links"))]
