@@ -427,7 +427,7 @@ forge-archived-repair-test:
 		client::postblit::retained_trigger_discovery::tests::transaction_codec_loads_from_retained_descriptor_after_public_path_substitution \
 		client::postblit::retained_trigger_discovery::tests::system_codec_loads_from_retained_descriptor_after_public_path_substitution \
 		client::postblit::retained_transaction::tests::container_rejects_an_isolation_root_replacement_after_abi_provisioning \
-		client::postblit::retained_transaction::tests::writable_bind_ignores_fixed_staging_substitution \
+		client::postblit::retained_transaction::tests::writable_bind_substitution_fails_closed_before_payload \
 		client::archived_repair_tests::archived_repair_replaces_the_whole_wrapper_and_preserves_old_payload_opaquely \
 		client::archived_repair_tests::archived_repair_publishes_missing_wrapper_directly_and_restores_empty_staging \
 		client::archived_repair_tests::archived_repair_runs_only_transaction_scope_and_never_mutates_live_namespaces \
@@ -496,6 +496,7 @@ forge-stateful-candidate-metadata-test:
 		client::tests::stateful_candidate_metadata::candidate_usr_clone_failure_precedes_all_metadata_decoration \
 		client::tests::stateful_candidate_metadata::owned_metadata_proof_outlives_source_identity_and_rejects_named_substitution \
 		client::tests::stateful_candidate_metadata::candidate_usr_substitution_before_metadata_never_decorates_replacement \
+		client::postblit::system_trigger_container::tests::non_live_system_root_and_source_substitutions_fail_before_payload_mutation \
 		client::tests::stateful_candidate_metadata::successful_stateful_metadata_is_sealed_and_rollback_capable; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
@@ -517,13 +518,13 @@ forge-ephemeral-candidate-metadata-test:
 		client::postblit::retained_ephemeral::tests::retained_ephemeral_phase_policies_keep_transaction_etc_read_only \
 		client::postblit::retained_ephemeral::tests::transaction_container_mounts_usr_read_write_and_etc_read_only \
 		client::postblit::retained_ephemeral::tests::system_container_mounts_usr_and_etc_read_write \
-		client::postblit::retained_ephemeral::tests::public_root_usr_and_etc_substitution_cannot_redirect_pinned_system_binds \
+		client::postblit::retained_ephemeral::tests::public_root_usr_and_etc_substitution_fails_closed_before_payload \
 		client::postblit::retained_ephemeral::tests::container_rejects_an_isolation_root_substitution \
 		client::postblit::retained_ephemeral::tests::retained_ephemeral_system_scope_never_uses_live_root_direct_execution \
 		client::tests::external_materialization::ephemeral_trigger_view_retains_exact_usr_and_publishes_exact_etc \
 		client::tests::external_materialization::ephemeral_trigger_etc_publication_never_adopts_a_racing_occupant \
 		client::tests::external_materialization::ephemeral_trigger_view_rejects_named_etc_replacement \
-		client::tests::external_materialization::retained_root_abi_publication_never_writes_through_a_replaced_target_name \
+		client::tests::external_materialization::retained_root_abi_replacement_fails_before_any_name_mutation \
 		client::tests::ephemeral_candidate_metadata::successful_ephemeral_metadata_is_exact_evaluable_and_root_abi_complete; do \
 		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \

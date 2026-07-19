@@ -527,9 +527,11 @@ container-mount-boundary-test:
 		tests::anchored_exact_locator_rejects_replacement_but_accepts_same_inode_hardlink \
 		tests::anchored_beneath_locator_authenticates_base_and_leaf_independently \
 		tests::anchored_beneath_locator_rejects_leaf_replacement_symlinks_and_mount_crossing \
-		tests::anchored_constructor_owns_a_cloexec_opath_directory_duplicate \
-		tests::anchored_constructor_rejects_every_non_opath_or_non_directory_descriptor \
-		tests::anchored_bind_source_is_pinned_before_clone_and_survives_path_substitution \
+		tests::anchored_constructor_owns_the_locator_cloexec_opath_witness \
+		tests::anchored_constructor_rejects_non_opath_and_regular_file_locators \
+		tests::anchored_bind_replacement_fails_before_clone_and_payload_mutation \
+		tests::anchored_missing_bind_source_fails_before_clone_and_payload_mutation \
+		tests::root_relative_bind_rejects_child_mount_crossing_at_the_api_boundary \
 		tests::anchored_mount_targets_must_preexist_and_reject_symlink_traversal \
 		tests::anchored_mount_target_normalization_rejects_escape_and_root_aliases \
 		tests::anchored_mount_topology_rejects_duplicate_and_nested_targets \
@@ -558,8 +560,8 @@ container-mount-boundary-test:
 		tests::minimal_dev_is_read_only_and_exact_on_the_path_activation \
 		tests::minimal_dev_is_read_only_and_exact_on_anchored_activation \
 		tests::read_only_root_is_enforced_by_the_live_kernel_mount_and_capability_paths \
-		tests::anchored_root_path_substitution_cannot_redirect_payload \
-		tests::anchored_root_relative_install_is_exact_writable_exception_after_label_substitution \
+		tests::anchored_root_symlink_substitution_fails_before_payload_mutation \
+		tests::anchored_root_and_bind_locators_rebind_in_the_live_child_namespace \
 		tests::anchored_payload_error_transport_is_bounded_and_completes \
 		tests::anchored_root_clone_excludes_undeclared_nested_mounts \
 		tests::anchored_directory_bind_excludes_undeclared_nested_mounts \
@@ -577,7 +579,16 @@ container-mount-boundary-test:
 	timeout 10s grep -Fq 'nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS' "$$identity"; \
 	timeout 10s grep -Fq 'nix::libc::RESOLVE_NO_XDEV' "$$identity"; \
 	timeout 10s grep -Fq 'actual == expected' "$$identity"; \
-	if timeout 10s rg -n '/proc/self/fd|canonicalize\(|read_link\(|RESOLVE_IN_ROOT|std::fs|fs_err|std::process|process::Command|Command::new' "$$identity"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi
+	if timeout 10s rg -n '/proc/self/fd|canonicalize\(|read_link\(|RESOLVE_IN_ROOT|std::fs|fs_err|std::process|process::Command|Command::new' "$$identity"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	anchored_root="$(TOP_DIR)/crates/container/src/mounts/anchored_root.rs"; \
+	activation="$(TOP_DIR)/crates/container/src/activation.rs"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$anchored_root" )" -le 1000; \
+	timeout 10s awk '/^fn pivot_anchored/ { active = 1 } active && /add_mount\(None, "\/", None, MsFlags::MS_REC \| MsFlags::MS_PRIVATE\)/ { private_root = NR } active && /open_current_namespace_root\(\)/ { namespace_root = NR; exit } END { exit !(private_root && namespace_root && private_root < namespace_root) }' "$$anchored_root"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.reopen_from_namespace_root(namespace_root)' "$$anchored_root" )" = 2; \
+	timeout 10s grep -Fq 'clone_anchored_root(&container.root, rebound.root.as_raw_fd())?' "$$anchored_root"; \
+	timeout 10s grep -Fq 'attach_anchored_root(&container.root, rebound.root.as_raw_fd(), &root_mount)?' "$$anchored_root"; \
+	timeout 10s awk '/authenticate_anchored_inputs\(&self\)/ { authenticate = NR } /drop\(authenticated_inputs\)/ { dropped = NR } /CloneStack::new\(\)/ { stack = NR } /SyncSocket::new\(\)/ { socket = NR; exit } END { exit !(authenticate && dropped && stack && socket && authenticate < dropped && dropped < stack && stack < socket) }' "$$activation"; \
+	if timeout 10s rg -n 'root_anchor|PinnedAnchoredBindSource|pin_anchored_bind_sources|BindSource::Pinned|BindSource::RootRelative' "$(TOP_DIR)/crates/container/src/lib.rs" "$(TOP_DIR)/crates/container/src/activation.rs" "$(TOP_DIR)/crates/container/src/payload.rs" "$(TOP_DIR)/crates/container/src/mounts"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi
 
 # The complete lane intentionally retains five socket-diagnostic tests which
 # this local sandbox denies with EPERM. Run every other direct root test here,
@@ -587,7 +598,7 @@ container-root-host-safe-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p container --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 73; \
+	timeout 10s test "$$count" = 75; \
 	ran=0; \
 	for test in $$( timeout 10s grep '^tests::.*: test$$' <<<"$$listed" | timeout 10s sed 's/: test$$//' ); do \
 		case "$$test" in \
@@ -600,7 +611,7 @@ container-root-host-safe-test:
 		timeout 180s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
 		ran=$$((ran + 1)); \
 	done; \
-	timeout 10s test "$$ran" = 68
+	timeout 10s test "$$ran" = 70
 
 mason-package-collect-test:
 	@set -eu; \

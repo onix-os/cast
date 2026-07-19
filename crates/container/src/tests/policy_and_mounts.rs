@@ -191,19 +191,20 @@ fn pseudo_mount_targets_are_prepared_before_a_root_can_be_sealed() {
 fn atomic_cgroup_execution_never_exposes_writable_host_sysfs() {
     let root = tempfile::tempdir().unwrap();
     let root_anchor = open_path_directory(root.path());
-    let mut container = Container::new_anchored(root.path(), &root_anchor).unwrap();
+    let mut container = anchored_container(root.path(), &root_anchor);
+    let authenticated = authenticate_anchored_inputs(&container).unwrap().unwrap();
     assert!(matches!(
-        require_atomic_cgroup_policy(&container),
+        require_atomic_cgroup_policy(&container, Some(&authenticated)),
         Err(ContainerRunError::UnsafeCgroupSysPolicy)
     ));
 
     container.pseudo_filesystems.sys = SysPolicy::HostReadOnly;
-    require_atomic_cgroup_policy(&container).unwrap();
+    require_atomic_cgroup_policy(&container, Some(&authenticated)).unwrap();
     container.pseudo_filesystems.sys = SysPolicy::None;
-    require_atomic_cgroup_policy(&container).unwrap();
+    require_atomic_cgroup_policy(&container, Some(&authenticated)).unwrap();
 
     assert!(matches!(
-        require_atomic_cgroup_policy(&Container::new(root.path())),
+        require_atomic_cgroup_policy(&Container::new(root.path()), None),
         Err(ContainerRunError::AtomicCgroupRequiresAnchoredRoot)
     ));
 }
@@ -211,34 +212,31 @@ fn atomic_cgroup_execution_never_exposes_writable_host_sysfs() {
 #[test]
 fn atomic_cgroup_execution_rejects_direct_cgroup_filesystem_authority() {
     let cgroup_anchor = open_path_directory(Path::new("/sys/fs/cgroup"));
-    let mut cgroup_root = Container::new_anchored("/sys/fs/cgroup", &cgroup_anchor).unwrap();
+    let mut cgroup_root = anchored_container(Path::new("/sys/fs/cgroup"), &cgroup_anchor);
     cgroup_root.pseudo_filesystems.sys = SysPolicy::None;
+    let cgroup_inputs = authenticate_anchored_inputs(&cgroup_root).unwrap().unwrap();
     assert!(matches!(
-        require_atomic_cgroup_policy(&cgroup_root),
+        require_atomic_cgroup_policy(&cgroup_root, Some(&cgroup_inputs)),
         Err(ContainerRunError::UnsafeCgroupRootFilesystem { .. })
     ));
 
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("work")).unwrap();
     let root_anchor = open_path_directory(root.path());
-    let writable = Container::new_anchored(root.path(), &root_anchor)
-        .unwrap()
-        .bind_rw_pinned(&cgroup_anchor, "/sys/fs/cgroup", "/work")
+    let writable = anchored_container(root.path(), &root_anchor)
+        .bind_rw_pinned(exact_locator(Path::new("/sys/fs/cgroup"), &cgroup_anchor), "/work")
         .unwrap();
-    let writable_sources =
-        pin_anchored_bind_sources(writable.root_anchor.as_ref().unwrap().as_raw_fd(), &writable.binds).unwrap();
+    let writable_inputs = authenticate_anchored_inputs(&writable).unwrap().unwrap();
     assert!(matches!(
-        require_atomic_cgroup_bind_policy(&writable_sources),
+        require_atomic_cgroup_bind_policy(&writable_inputs.bind_sources),
         Err(ContainerRunError::UnsafeCgroupBindSource { .. })
     ));
 
-    let read_only = Container::new_anchored(root.path(), &root_anchor)
-        .unwrap()
-        .bind_ro_pinned(&cgroup_anchor, "/sys/fs/cgroup", "/work")
+    let read_only = anchored_container(root.path(), &root_anchor)
+        .bind_ro_pinned(exact_locator(Path::new("/sys/fs/cgroup"), &cgroup_anchor), "/work")
         .unwrap();
-    let read_only_sources =
-        pin_anchored_bind_sources(read_only.root_anchor.as_ref().unwrap().as_raw_fd(), &read_only.binds).unwrap();
-    require_atomic_cgroup_bind_policy(&read_only_sources).unwrap();
+    let read_only_inputs = authenticate_anchored_inputs(&read_only).unwrap().unwrap();
+    require_atomic_cgroup_bind_policy(&read_only_inputs.bind_sources).unwrap();
 }
 
 #[test]
@@ -357,4 +355,3 @@ fn special_file_bind_gets_a_file_mountpoint() {
     assert!(target_metadata.is_file());
     assert_eq!(target_metadata.len(), 0);
 }
-

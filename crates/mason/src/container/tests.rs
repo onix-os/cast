@@ -1,5 +1,8 @@
 use std::{
-    os::unix::fs::{PermissionsExt, symlink},
+    os::{
+        fd::AsRawFd as _,
+        unix::fs::{PermissionsExt, symlink},
+    },
     path::Path,
 };
 
@@ -11,6 +14,14 @@ use crate::{BuildPolicy, Recipe, package};
 fn create_production_frozen_root(path: &Path) {
     std::fs::create_dir(path).unwrap();
     std::fs::set_permissions(path, Permissions::from_mode(0o755)).unwrap();
+}
+
+fn assert_opath_directory(file: &File) {
+    // SAFETY: F_GETFL only inspects the status flags of a live descriptor.
+    let flags = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETFL) };
+    assert_ne!(flags, -1);
+    assert_eq!(flags & nix::libc::O_PATH, nix::libc::O_PATH);
+    assert!(file.metadata().unwrap().is_dir());
 }
 
 #[test]
@@ -358,6 +369,113 @@ fn frozen_container_excludes_recipe_and_disabled_global_caches() {
         )
     }));
     assert!(!enabled.iter().any(|mount| mount.host == enabled_paths.recipe().host));
+}
+
+#[test]
+fn frozen_sandbox_retains_parallel_opath_identity_witnesses() {
+    let recipe =
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+    let runtime = crate::private_tempdir();
+    let output = tempfile::tempdir().unwrap();
+    let plan = package::test_derivation_plan();
+    let mut paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+    paths.bind_to_plan(&plan).unwrap();
+
+    let sandbox = prepare_frozen_sandbox(&paths, &plan).unwrap();
+    assert_opath_directory(&sandbox.workspace.path_anchor);
+    assert_eq!(
+        DirectoryWitness::for_file(&sandbox.workspace.path_anchor).unwrap(),
+        sandbox.workspace.witness
+    );
+    assert_eq!(
+        DirectoryWitness::for_file(&sandbox.workspace.file).unwrap(),
+        sandbox.workspace.witness
+    );
+
+    let mut pinned = 0;
+    for mount in &sandbox.mounts {
+        let FrozenMountSource::Pinned(source) = &mount.source else {
+            continue;
+        };
+        pinned += 1;
+        assert_opath_directory(&source.path_anchor);
+        assert_eq!(DirectoryWitness::for_file(&source.path_anchor).unwrap(), source.witness);
+        assert_eq!(DirectoryWitness::for_file(&source.file).unwrap(), source.witness);
+    }
+    assert_eq!(pinned, 2);
+}
+
+#[test]
+fn frozen_bind_locator_rejects_replacement_without_touching_either_directory() {
+    let recipe =
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+    let runtime = crate::private_tempdir();
+    let output = tempfile::tempdir().unwrap();
+    let plan = package::test_derivation_plan();
+    let mut paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+    paths.bind_to_plan(&plan).unwrap();
+    let sandbox = prepare_frozen_sandbox(&paths, &plan).unwrap();
+
+    let mount = sandbox
+        .mounts
+        .iter()
+        .find(|mount| mount.role == FrozenMountRole::Build)
+        .unwrap();
+    let FrozenMountSource::Pinned(source) = &mount.source else {
+        panic!("the frozen build mount must have an external pinned source");
+    };
+    sandbox.pinned_source_locator(source, &mount.host).unwrap();
+    std::fs::write(mount.host.join("original"), b"keep original").unwrap();
+    let displaced = mount.host.with_file_name("displaced-build");
+    std::fs::rename(&mount.host, &displaced).unwrap();
+    std::fs::create_dir(&mount.host).unwrap();
+    std::fs::set_permissions(&mount.host, Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(mount.host.join("replacement"), b"keep replacement").unwrap();
+
+    assert!(matches!(
+        sandbox.pinned_source_locator(source, &mount.host),
+        Err(Error::FrozenBindSourceLocator { .. })
+    ));
+    assert!(matches!(
+        sandbox.revalidate(),
+        Err(Error::FrozenBindSourceReplaced(path)) if path == mount.host
+    ));
+    assert_eq!(std::fs::read(displaced.join("original")).unwrap(), b"keep original");
+    assert_eq!(
+        std::fs::read(mount.host.join("replacement")).unwrap(),
+        b"keep replacement"
+    );
+}
+
+#[test]
+fn frozen_root_locator_rejects_replacement_without_touching_either_directory() {
+    let recipe =
+        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
+    let runtime = crate::private_tempdir();
+    let output = tempfile::tempdir().unwrap();
+    let plan = package::test_derivation_plan();
+    let mut paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+    paths.bind_to_plan(&plan).unwrap();
+    let sandbox = prepare_frozen_sandbox(&paths, &plan).unwrap();
+    let root = paths.rootfs().host;
+    paths.prepare_private_host_directory(&root).unwrap();
+    let relative = workspace_relative(&sandbox.workspace.path, &root).unwrap();
+    let root_anchor = anchored_locators::open_workspace_path_anchor(&sandbox.workspace.path_anchor, &relative).unwrap();
+    sandbox.root_locator(&root, &root_anchor).unwrap();
+
+    std::fs::write(root.join("original"), b"keep original").unwrap();
+    let displaced = root.with_file_name("displaced-root");
+    std::fs::rename(&root, &displaced).unwrap();
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(root.join("replacement"), b"keep replacement").unwrap();
+
+    assert!(matches!(
+        sandbox.root_locator(&root, &root_anchor),
+        Err(Error::FrozenRootLocator(_))
+    ));
+    assert_eq!(std::fs::read(displaced.join("original")).unwrap(), b"keep original");
+    assert_eq!(std::fs::read(root.join("replacement")).unwrap(), b"keep replacement");
 }
 
 #[test]

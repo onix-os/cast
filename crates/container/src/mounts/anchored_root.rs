@@ -12,6 +12,7 @@ use nix::sys::stat::{Mode, umask};
 use nix::unistd::{fchdir, pivot_root, sethostname};
 use snafu::ResultExt as _;
 
+use super::anchored_identity::open_current_namespace_root;
 use super::pseudo_filesystems::{
     apply_pseudo_mount, apply_root_mount_policy, mount_binds, prepare_anchored_pseudo_mount,
     prepare_anchored_resolver_mount, prepare_pseudo_mount_targets, pseudo_mount_decisions, set_mount_access_fd,
@@ -21,18 +22,15 @@ use super::syscalls::{add_mount, ensure_directory, set_current_dir, setup_localh
 use super::{Bind, BindSource};
 use crate::{
     ActivateAnchoredRootSnafu, Container, ContainerError, FsErrSnafu, LoopbackPolicy, MountSnafu, PivotRootSnafu,
-    PseudoFilesystemPolicy, RootFilesystemPolicy, SetHostnameSnafu, UnmountOldRootSnafu, duplicate_cloexec,
+    PseudoFilesystemPolicy, RootFilesystemPolicy, SetHostnameSnafu, UnmountOldRootSnafu,
 };
 
 // linux/mount.h. nc 0.9 exposes only the source-empty-path flag.
 const MOVE_MOUNT_T_EMPTY_PATH: u32 = 0x0000_0040;
 
 /// Setup the container
-pub(crate) fn setup(
-    container: &Container,
-    anchored_bind_sources: &[PinnedAnchoredBindSource],
-) -> Result<(), ContainerError> {
-    if container.networking && container.root_anchor.is_none() {
+pub(crate) fn setup(container: &Container) -> Result<(), ContainerError> {
+    if container.networking && container.root_locator.is_none() {
         setup_networking(&container.root)?;
     }
 
@@ -40,15 +38,8 @@ pub(crate) fn setup(
         setup_localhost()?;
     }
 
-    if let Some(anchor) = &container.root_anchor {
-        pivot_anchored(
-            &container.root,
-            anchor.as_raw_fd(),
-            anchored_bind_sources,
-            container.networking,
-            container.pseudo_filesystems,
-            container.root_filesystem,
-        )?;
+    if container.root_locator.is_some() {
+        pivot_anchored(container)?;
     } else {
         pivot(
             &container.root,
@@ -82,36 +73,36 @@ fn pivot(
     pivot_mounted_root(root, binds, pseudo_filesystems, root_filesystem)
 }
 
-/// Clone and attach the exact mount referenced by `anchor`, then pivot through
-/// the retained mount descriptor. `label` is diagnostic-only: even if another
-/// process removes or replaces it, both sides of activation remain anchored by
-/// descriptor-empty paths.
-fn pivot_anchored(
-    label: &Path,
-    anchor: RawFd,
-    bind_sources: &[PinnedAnchoredBindSource],
-    networking: bool,
-    pseudo_filesystems: PseudoFilesystemPolicy,
-    root_filesystem: RootFilesystemPolicy,
-) -> Result<(), ContainerError> {
+/// Reopen every anchored input inside the private child mount namespace, then
+/// clone and attach only those child-local descriptors.
+fn pivot_anchored(container: &Container) -> Result<(), ContainerError> {
     add_mount(None, "/", None, MsFlags::MS_REC | MsFlags::MS_PRIVATE)?;
 
-    // Prepare every source as a detached mount before entering the root. This
-    // does not modify the authenticated tree and ensures later setup never
-    // reopens a source pathname.
-    let mut prepared_mounts = prepare_anchored_binds(bind_sources)?;
-    if networking {
+    // Inherited O_PATH descriptors still carry paths from the supervisor's
+    // mount namespace. Open the child namespace root only after propagation is
+    // private, then authenticate every locator against it before any mount is
+    // cloned or attached.
+    let namespace_root = open_current_namespace_root().map_err(|source| ContainerError::ReopenAnchoredRoot {
+        path: container.root.clone(),
+        source,
+    })?;
+    let rebound = rebind_anchored_inputs(container, namespace_root.as_raw_fd())?;
+
+    // Prepare every source as a detached mount before entering the root. Only
+    // child-local rebound descriptors are admitted to open_tree.
+    let mut prepared_mounts = prepare_anchored_binds(&rebound.bind_sources)?;
+    if container.networking {
         prepared_mounts.push(prepare_anchored_resolver_mount()?);
     }
-    for decision in pseudo_mount_decisions(pseudo_filesystems) {
+    for decision in pseudo_mount_decisions(container.pseudo_filesystems) {
         prepared_mounts.push(prepare_anchored_pseudo_mount(decision)?);
     }
     validate_anchored_mount_topology(&prepared_mounts)?;
 
-    let root_mount = clone_anchored_root(label, anchor)?;
-    attach_anchored_root(label, anchor, &root_mount)?;
+    let root_mount = clone_anchored_root(&container.root, rebound.root.as_raw_fd())?;
+    attach_anchored_root(&container.root, rebound.root.as_raw_fd(), &root_mount)?;
     fchdir(root_mount.as_raw_fd()).with_context(|_| ActivateAnchoredRootSnafu {
-        label: label.to_owned(),
+        label: container.root.clone(),
         operation: "enter attached root mount",
     })?;
 
@@ -120,9 +111,9 @@ fn pivot_anchored(
     // target, even if a caller accidentally declares overlapping paths.
     let ready_mounts = pin_anchored_mount_targets(root_mount.as_raw_fd(), prepared_mounts)?;
 
-    if matches!(root_filesystem, RootFilesystemPolicy::ReadOnly) {
+    if matches!(container.root_filesystem, RootFilesystemPolicy::ReadOnly) {
         set_mount_access_fd(root_mount.as_raw_fd(), true, true).with_context(|_| MountSnafu {
-            target: label.to_owned(),
+            target: container.root.clone(),
         })?;
     }
     for prepared in &ready_mounts {
@@ -142,11 +133,11 @@ fn pivot_anchored(
 }
 
 fn clone_anchored_root(label: &Path, anchor: RawFd) -> Result<OwnedFd, ContainerError> {
-    // SAFETY: `anchor` is the live duplicate owned by Container and an empty
-    // path is explicitly admitted by AT_EMPTY_PATH. Deliberately omitting
-    // AT_RECURSIVE clones only the authenticated root mount, so undeclared
-    // nested mounts cannot enter the frozen root. A successful call returns a
-    // fresh detached mount descriptor.
+    // SAFETY: `anchor` is the child-local descriptor reopened from the fresh
+    // private-namespace root and an empty path is explicitly admitted by
+    // AT_EMPTY_PATH. Deliberately omitting AT_RECURSIVE clones only the
+    // authenticated root mount, so undeclared nested mounts cannot enter the
+    // frozen root. A successful call returns a fresh detached mount descriptor.
     let descriptor = unsafe {
         open_tree(
             anchor,
@@ -165,8 +156,9 @@ fn clone_anchored_root(label: &Path, anchor: RawFd) -> Result<OwnedFd, Container
 
 fn attach_anchored_root(label: &Path, anchor: RawFd, root_mount: &OwnedFd) -> Result<(), ContainerError> {
     // SAFETY: root_mount is a live detached mount descriptor, anchor is the
-    // duplicated O_PATH directory descriptor, and both remain owned until
-    // after pivot_root. The flags explicitly admit both empty paths.
+    // child-local authenticated O_PATH directory descriptor, and both remain
+    // owned until after pivot_root. The flags explicitly admit both empty
+    // paths.
     unsafe {
         move_mount(
             root_mount.as_raw_fd(),
@@ -208,7 +200,12 @@ struct ReadyAnchoredMount {
     target_descriptor: OwnedFd,
 }
 
-pub(crate) struct PinnedAnchoredBindSource {
+pub(crate) struct ReboundAnchoredInputs {
+    pub(crate) root: OwnedFd,
+    pub(crate) bind_sources: Vec<ReboundAnchoredBindSource>,
+}
+
+pub(crate) struct ReboundAnchoredBindSource {
     pub(crate) source: OwnedFd,
     pub(crate) source_label: PathBuf,
     pub(crate) target: PathBuf,
@@ -216,52 +213,85 @@ pub(crate) struct PinnedAnchoredBindSource {
     pub(crate) read_only: bool,
 }
 
-pub(crate) fn pin_anchored_bind_sources(
-    root: RawFd,
-    binds: &[Bind],
-) -> Result<Vec<PinnedAnchoredBindSource>, ContainerError> {
+pub(crate) fn validate_anchored_bind_inputs(binds: &[Bind]) -> Result<(), ContainerError> {
     if binds.len() > MAX_ANCHORED_MOUNTS {
         return Err(ContainerError::TooManyAnchoredMounts {
             actual: binds.len(),
             limit: MAX_ANCHORED_MOUNTS,
         });
     }
-    binds
+    for bind in binds {
+        if let BindSource::Path(path) = &bind.source {
+            return Err(ContainerError::UnpinnedAnchoredMountSource { path: path.clone() });
+        }
+        normalized_anchored_mount_target(&bind.target)?;
+    }
+    Ok(())
+}
+
+/// Authenticate every anchored input in the supervisor namespace.
+///
+/// The returned descriptors exist only so pre-clone policy can inspect them;
+/// activation drops them before clone and the child reopens every locator
+/// again from its own fresh namespace-root descriptor.
+pub(crate) fn authenticate_anchored_inputs(
+    container: &Container,
+) -> Result<Option<ReboundAnchoredInputs>, ContainerError> {
+    if container.root_locator.is_none() {
+        return Ok(None);
+    }
+    validate_anchored_bind_inputs(&container.binds)?;
+    let namespace_root = open_current_namespace_root().map_err(|source| ContainerError::ReopenAnchoredRoot {
+        path: container.root.clone(),
+        source,
+    })?;
+    rebind_anchored_inputs(container, namespace_root.as_raw_fd()).map(Some)
+}
+
+fn rebind_anchored_inputs(
+    container: &Container,
+    namespace_root: RawFd,
+) -> Result<ReboundAnchoredInputs, ContainerError> {
+    let root_locator = container
+        .root_locator
+        .as_ref()
+        .expect("anchored rebind requires a root locator");
+    let root = root_locator
+        .reopen_from_namespace_root(namespace_root)
+        .map_err(|source| ContainerError::ReopenAnchoredRoot {
+            path: container.root.clone(),
+            source,
+        })?;
+    let root_stat = descriptor_stat(root.as_raw_fd()).context(FsErrSnafu)?;
+    let root_file_type = root_stat.st_mode & nix::libc::S_IFMT;
+    if root_file_type != nix::libc::S_IFDIR {
+        return Err(ContainerError::AnchoredRootNotDirectory {
+            path: container.root.clone(),
+            file_type: root_file_type,
+        });
+    }
+
+    let bind_sources = container
+        .binds
         .iter()
         .map(|bind| {
             let (source, source_label) = match &bind.source {
                 BindSource::Path(path) => {
                     return Err(ContainerError::UnpinnedAnchoredMountSource { path: path.clone() });
                 }
-                BindSource::RootRelative(path) => {
-                    let source = openat2_anchored(
-                        root,
-                        path,
-                        nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-                        0,
-                        nix::libc::RESOLVE_BENEATH
-                            | nix::libc::RESOLVE_NO_XDEV
-                            | nix::libc::RESOLVE_NO_MAGICLINKS
-                            | nix::libc::RESOLVE_NO_SYMLINKS,
-                    )
-                    .map_err(|source| ContainerError::OpenAnchoredMountSource {
-                        path: path.clone(),
-                        source,
-                    })?;
-                    (source, path.clone())
-                }
-                BindSource::Pinned { descriptor, label } => {
-                    let source = duplicate_cloexec(descriptor.as_raw_fd()).map_err(|source| {
-                        ContainerError::OpenAnchoredMountSource {
-                            path: label.clone(),
+                BindSource::Anchored(locator) => {
+                    let source_label = locator.resolved_absolute_path();
+                    let source = locator.reopen_from_namespace_root(namespace_root).map_err(|source| {
+                        ContainerError::ReopenAnchoredBindSource {
+                            path: source_label.clone(),
                             source,
                         }
                     })?;
-                    (source, label.clone())
+                    (source, source_label)
                 }
             };
             let target_kind = descriptor_target_kind(source.as_raw_fd(), &source_label)?;
-            Ok(PinnedAnchoredBindSource {
+            Ok(ReboundAnchoredBindSource {
                 source,
                 source_label,
                 target: normalized_anchored_mount_target(&bind.target)?,
@@ -269,11 +299,12 @@ pub(crate) fn pin_anchored_bind_sources(
                 read_only: bind.read_only,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ReboundAnchoredInputs { root, bind_sources })
 }
 
 fn prepare_anchored_binds(
-    bind_sources: &[PinnedAnchoredBindSource],
+    bind_sources: &[ReboundAnchoredBindSource],
 ) -> Result<Vec<PreparedAnchoredMount>, ContainerError> {
     bind_sources
         .iter()
@@ -283,9 +314,9 @@ fn prepare_anchored_binds(
             // it on the host; pseudo-filesystem trees are the only explicitly
             // recursive anchored imports.
             let flags = OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC | AT_EMPTY_PATH as u32;
-            // SAFETY: source is the live O_PATH descriptor pinned before
-            // clone(2), the empty path is admitted explicitly, and a
-            // successful open_tree returns a fresh detached mount descriptor.
+            // SAFETY: source is a live O_PATH descriptor reopened in this
+            // child mount namespace, the empty path is admitted explicitly,
+            // and successful open_tree returns a detached mount descriptor.
             let descriptor = unsafe { open_tree(bind.source.as_raw_fd(), Path::new(""), flags) }
                 .map_err(Errno::from_i32)
                 .with_context(|_| MountSnafu {
@@ -532,9 +563,9 @@ pub(crate) fn canonical_bind_sources(binds: &[Bind]) -> Result<Vec<PathBuf>, Con
         .iter()
         .map(|bind| match &bind.source {
             BindSource::Path(path) => path.fs_err_canonicalize().context(FsErrSnafu),
-            BindSource::RootRelative(path) | BindSource::Pinned { label: path, .. } => {
-                Err(ContainerError::AnchoredBindOnPathContainer { path: path.clone() })
-            }
+            BindSource::Anchored(locator) => Err(ContainerError::AnchoredBindOnPathContainer {
+                path: locator.resolved_absolute_path(),
+            }),
         })
         .collect()
 }

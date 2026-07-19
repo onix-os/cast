@@ -3,7 +3,7 @@
 use std::{fs::File, io, os::unix::fs::PermissionsExt as _, path::Path};
 
 use clap::{Args, Parser};
-use container::Container;
+use container::{AnchoredLocator, Container};
 use forge::util;
 use humansize::BINARY;
 use rayon::iter::{ParallelBridge, ParallelIterator};
@@ -61,9 +61,9 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
 
 fn clean(env: Env, build_cache: bool, package_cache: bool) -> Result<(), Error> {
     for cache in selected_caches(&env, build_cache, package_cache) {
-        // The path is only a name witness. The retained descriptor selected by
-        // Env remains the destructive authority even if the name is changed
-        // after this check.
+        // The retained policy descriptor and parallel O_PATH descriptor pin
+        // one cache identity. The latter authenticates the namespace-local
+        // mount source, so a name change fails closed before deletion.
         crate::paths::require_workspace_root_path(cache.anchor, cache.path)?;
 
         let tmpdir = tempfile::Builder::new()
@@ -80,8 +80,10 @@ fn clean(env: Env, build_cache: bool, package_cache: bool) -> Result<(), Error> 
 
         println!("Deleting {} directory: {}", cache.name, cache.path.display());
 
-        Container::new_anchored(tmpdir.path(), &container_root)?
-            .bind_rw_pinned(cache.anchor, cache.path, Path::new("/remove"))?
+        let root_locator = AnchoredLocator::exact(tmpdir.path(), &container_root)?;
+        let cache_locator = AnchoredLocator::exact(cache.path, cache.path_anchor)?;
+        Container::new_anchored(root_locator)?
+            .bind_rw_pinned(cache_locator, Path::new("/remove"))?
             .run(|| util::par_remove_dir_contents(Path::new("/remove")))?;
 
         // Keep the authenticated target inode pinned through activation and
@@ -120,6 +122,7 @@ struct SelectedCache<'a> {
     name: &'static str,
     path: &'a Path,
     anchor: &'a File,
+    path_anchor: &'a File,
 }
 
 fn selected_caches(env: &Env, build_cache: bool, package_cache: bool) -> Vec<SelectedCache<'_>> {
@@ -130,6 +133,7 @@ fn selected_caches(env: &Env, build_cache: bool, package_cache: bool) -> Vec<Sel
             name: "build cache",
             path: &env.cache_dir,
             anchor: env.cache_dir_anchor.as_ref(),
+            path_anchor: env.cache_dir_path_anchor.as_ref(),
         });
     }
     if select_all || package_cache {
@@ -137,6 +141,7 @@ fn selected_caches(env: &Env, build_cache: bool, package_cache: bool) -> Vec<Sel
             name: "package cache",
             path: &env.forge_dir,
             anchor: env.forge_dir_anchor.as_ref(),
+            path_anchor: env.forge_dir_path_anchor.as_ref(),
         });
     }
     v
@@ -146,6 +151,8 @@ fn selected_caches(env: &Env, build_cache: bool, package_cache: bool) -> Vec<Sel
 pub enum Error {
     #[error("cache container operation: {0}")]
     Container(#[from] container::Error),
+    #[error("authenticate cache container locator: {0}")]
+    Locator(#[from] container::AnchoredLocatorError),
     #[error("cache filesystem operation: {0}")]
     Io(#[from] io::Error),
 }
@@ -239,9 +246,36 @@ pub(crate) fn run_harness_free_test() {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    use std::os::{
+        fd::AsRawFd as _,
+        unix::fs::{PermissionsExt as _, symlink},
+    };
 
     use super::*;
+
+    #[test]
+    fn environment_caches_retain_parallel_opath_locator_witnesses() {
+        let root = crate::private_tempdir();
+        let env = Env::new(
+            Some(root.path().join("build")),
+            Some(root.path().join("config")),
+            Some(root.path().join("data")),
+            Some(root.path().join("forge")),
+        )
+        .unwrap();
+
+        for cache in selected_caches(&env, false, false) {
+            // SAFETY: F_GETFL only inspects flags on live descriptors.
+            let locator_flags = unsafe { nix::libc::fcntl(cache.path_anchor.as_raw_fd(), nix::libc::F_GETFL) };
+            assert_ne!(locator_flags, -1);
+            assert_eq!(locator_flags & nix::libc::O_PATH, nix::libc::O_PATH);
+            let ordinary = cache.anchor.metadata().unwrap();
+            let locator = cache.path_anchor.metadata().unwrap();
+            use std::os::unix::fs::MetadataExt as _;
+            assert_eq!((ordinary.dev(), ordinary.ino()), (locator.dev(), locator.ino()));
+            AnchoredLocator::exact(cache.path, cache.path_anchor).unwrap();
+        }
+    }
 
     #[test]
     fn package_cache_clean_rejects_post_environment_symlink_without_touching_either_directory() {

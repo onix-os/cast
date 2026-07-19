@@ -217,6 +217,48 @@ impl AnchoredLocator {
         }
     }
 
+    /// Return the absolute namespace path represented by this locator.
+    pub(crate) fn resolved_absolute_path(&self) -> PathBuf {
+        match &self.kind {
+            AnchoredLocatorKind::Exact { absolute_path, .. } => absolute_path.clone(),
+            AnchoredLocatorKind::Beneath {
+                absolute_base_path,
+                relative_path,
+                ..
+            } => absolute_base_path.join(relative_path),
+        }
+    }
+
+    pub(crate) fn file_type(&self) -> nix::libc::mode_t {
+        match &self.kind {
+            AnchoredLocatorKind::Exact { witness, .. } => witness.identity.file_type,
+            AnchoredLocatorKind::Beneath { leaf_witness, .. } => leaf_witness.identity.file_type,
+        }
+    }
+
+    /// Authenticate and retain one normalized child below this locator.
+    pub(crate) fn child(&self, relative_path: PathBuf) -> Result<Self, AnchoredLocatorError> {
+        let relative_path = require_normalized_relative(relative_path)?;
+        let base_path = self.resolved_absolute_path();
+        let base = self.reopen_current_namespace()?;
+        let leaf = openat2_anchored(
+            base.as_raw_fd(),
+            &relative_path,
+            nix::libc::O_PATH | nix::libc::O_CLOEXEC,
+            0,
+            nix::libc::RESOLVE_BENEATH
+                | nix::libc::RESOLVE_NO_XDEV
+                | nix::libc::RESOLVE_NO_MAGICLINKS
+                | nix::libc::RESOLVE_NO_SYMLINKS,
+        )
+        .map_err(|source| AnchoredLocatorError::Reopen {
+            component: AnchoredLocatorComponent::BeneathLeaf,
+            path: relative_path.clone(),
+            source,
+        })?;
+        Self::beneath(base_path, &base, relative_path, &leaf)
+    }
+
     #[cfg(test)]
     pub(crate) fn retained_descriptors(&self) -> (RawFd, Option<RawFd>) {
         match &self.kind {
@@ -256,14 +298,18 @@ impl AnchoredLocator {
         }
     }
 
-    fn authenticate_current_namespace(&self) -> Result<(), AnchoredLocatorError> {
+    pub(crate) fn reopen_current_namespace(&self) -> Result<OwnedFd, AnchoredLocatorError> {
         let namespace_root = open_current_namespace_root()?;
-        self.reopen_from_namespace_root(namespace_root.as_raw_fd())?;
+        self.reopen_from_namespace_root(namespace_root.as_raw_fd())
+    }
+
+    fn authenticate_current_namespace(&self) -> Result<(), AnchoredLocatorError> {
+        self.reopen_current_namespace()?;
         Ok(())
     }
 }
 
-fn open_current_namespace_root() -> Result<OwnedFd, AnchoredLocatorError> {
+pub(crate) fn open_current_namespace_root() -> Result<OwnedFd, AnchoredLocatorError> {
     // SAFETY: the static C string is terminated, open borrows it only for the
     // call, and successful open returns one fresh descriptor.
     let descriptor = unsafe {

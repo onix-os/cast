@@ -47,7 +47,8 @@ fn frozen_blit_returns_an_opath_guard_accepted_by_anchored_container() {
     let descriptor_flags = unsafe { nix::libc::fcntl(anchor.as_raw_fd(), nix::libc::F_GETFD) };
     assert_ne!(descriptor_flags, -1);
     assert_ne!(descriptor_flags & nix::libc::FD_CLOEXEC, 0);
-    let _container = container::Container::new_anchored(guard.root_path(), &anchor).unwrap();
+    let root_locator = container::AnchoredLocator::exact(guard.root_path(), &anchor).unwrap();
+    let _container = container::Container::new_anchored(root_locator).unwrap();
 
     let displaced = temporary.path().join("displaced-frozen-root");
     fs::rename(&frozen_root, &displaced).unwrap();

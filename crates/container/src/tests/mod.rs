@@ -1,6 +1,6 @@
 use std::io::{self, Read as _, Write as _};
 use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
-use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _, PermissionsExt as _};
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
 use std::os::unix::process::ExitStatusExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -21,15 +21,15 @@ use super::{
     MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
     PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
     RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TMPFS_MAGIC, TmpPolicy, TmpfsLimitReadback, TmpfsLimits,
-    TmpfsLimitsError, capability_is_set, checked_prctl_value, cleanup_pidfd_child, close_sync_endpoint,
-    contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec, namespace_flags,
-    normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
-    pin_anchored_bind_sources, prctl, prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions,
-    read_capabilities, read_child_error, reopen_pinned_readonly, require_atomic_cgroup_bind_policy,
-    require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
-    send_packet_no_signal, send_pidfd_signal, set_mount_access, standard_descriptor_is_unsafe,
-    supported_capability_numbers, validate_anchored_mount_topology, validate_minimal_device_source,
-    validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits, wait_for_pidfd, wait_for_pidfd_reap,
+    TmpfsLimitsError, authenticate_anchored_inputs, capability_is_set, checked_prctl_value, cleanup_pidfd_child,
+    close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec, namespace_flags,
+    normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target, prctl,
+    prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions, read_capabilities, read_child_error,
+    require_atomic_cgroup_bind_policy, require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions,
+    sealed_resolver_file, send_packet_no_signal, send_pidfd_signal, set_mount_access, standard_descriptor_is_unsafe,
+    supported_capability_numbers, validate_anchored_bind_inputs, validate_anchored_mount_topology,
+    validate_minimal_device_source, validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits,
+    wait_for_pidfd, wait_for_pidfd_reap,
 };
 
 fn open_path_directory(path: &Path) -> OwnedFd {
@@ -47,6 +47,14 @@ fn open_path_file(path: &Path) -> OwnedFd {
     let descriptor = open(path, OFlag::O_PATH | OFlag::O_CLOEXEC, Mode::empty()).unwrap();
     // SAFETY: successful open returned a fresh owned descriptor.
     unsafe { OwnedFd::from_raw_fd(descriptor) }
+}
+
+fn exact_locator(path: &Path, witness: &impl std::os::fd::AsRawFd) -> AnchoredLocator {
+    AnchoredLocator::exact(path, witness).unwrap()
+}
+
+fn anchored_container(path: &Path, witness: &impl std::os::fd::AsRawFd) -> Container {
+    Container::new_anchored(exact_locator(path, witness)).unwrap()
 }
 
 fn open_test_pidfd(pid: nix::unistd::Pid) -> OwnedFd {
@@ -112,57 +120,46 @@ fn classify_anchored_activation_unavailable(error: &ContainerRunError, label: &P
     let ContainerRunError::Failure { message } = error else {
         return None;
     };
-    let permission_denied = "EPERM: Operation not permitted";
-    let syscall_missing = "ENOSYS: Function not implemented";
-    if message == &format!("mount /: {permission_denied}") {
-        return Some("private mount namespace denied");
-    }
-    if message.starts_with("clone sealed resolver mount through anchored root descriptor:")
-        && (message.contains("Operation not permitted") || message.contains("Function not implemented"))
+    let unavailable = [
+        "EPERM: Operation not permitted",
+        "EACCES: Permission denied",
+        "ENOSYS: Function not implemented",
+    ];
+    if unavailable
+        .iter()
+        .any(|denied| message == &format!("mount /: {denied}"))
     {
+        return Some("private mount namespace unavailable");
+    }
+    let capability_denial = unavailable.iter().any(|denied| message.contains(denied));
+    if message.starts_with("clone sealed resolver mount through anchored root descriptor:") && capability_denial {
         return Some("detached resolver mounts unavailable");
     }
     if message.starts_with("make sealed resolver mount read-only through anchored root descriptor:")
-        && (message.contains("Operation not permitted") || message.contains("Function not implemented"))
+        && capability_denial
     {
         return Some("resolver mount attributes unavailable");
     }
-    if message.starts_with("attach sealed resolver mount through anchored root descriptor:")
-        && (message.contains("Operation not permitted") || message.contains("Function not implemented"))
-    {
+    if message.starts_with("attach sealed resolver mount through anchored root descriptor:") && capability_denial {
         return Some("resolver mount attachment unavailable");
     }
-    if message
-        == &format!(
-            "clone descriptor-backed root mount for anchored root {}: {permission_denied}",
-            label.display()
-        )
-    {
-        return Some("open_tree denied");
-    }
-    if message
-        == &format!(
-            "clone descriptor-backed root mount for anchored root {}: {syscall_missing}",
-            label.display()
-        )
-    {
-        return Some("open_tree unavailable");
-    }
-    if message
-        == &format!(
-            "attach descriptor-backed root mount for anchored root {}: {permission_denied}",
-            label.display()
-        )
-    {
-        return Some("move_mount denied");
-    }
-    if message
-        == &format!(
-            "attach descriptor-backed root mount for anchored root {}: {syscall_missing}",
-            label.display()
-        )
-    {
-        return Some("move_mount unavailable");
+    for denied in unavailable {
+        if message
+            == &format!(
+                "clone descriptor-backed root mount for anchored root {}: {denied}",
+                label.display()
+            )
+        {
+            return Some("open_tree unavailable");
+        }
+        if message
+            == &format!(
+                "attach descriptor-backed root mount for anchored root {}: {denied}",
+                label.display()
+            )
+        {
+            return Some("move_mount unavailable");
+        }
     }
     None
 }

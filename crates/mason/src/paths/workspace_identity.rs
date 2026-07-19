@@ -60,9 +60,20 @@ pub(crate) fn pin_workspace_root(path: &Path) -> io::Result<StdFile> {
 /// continue using `expected` as their authority so a substitution after this
 /// check can never redirect a destructive operation to the replacement.
 pub(crate) fn require_workspace_root_path(expected: &StdFile, path: &Path) -> io::Result<()> {
+    pin_matching_workspace_root(expected, path).map(drop)
+}
+
+/// Pin the current workspace name as an `O_PATH` capability and prove that it
+/// still denotes the already-retained directory.
+///
+/// Callers which also need ordinary read access retain their existing handle
+/// in parallel. The returned descriptor is the namespace-reopen witness used
+/// by descriptor-authenticated container locators.
+pub(crate) fn pin_matching_workspace_root(expected: &StdFile, path: &Path) -> io::Result<StdFile> {
     require_workspace_root_directory(expected, path)?;
     let reopened = pin_workspace_root(path)?;
-    require_same_directory(expected, &reopened, path)
+    require_same_directory(expected, &reopened, path)?;
+    Ok(reopened)
 }
 
 fn open_private_child(parent: &StdFile, name: &CStr) -> io::Result<StdFile> {

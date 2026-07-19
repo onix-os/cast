@@ -33,6 +33,19 @@ fn open_defers_canonical_authored_system_intent_to_the_client_gate() {
 }
 
 #[test]
+fn open_records_the_authenticated_lexically_normalized_absolute_root() {
+    let temporary = private_installation_tempdir();
+    let traversal = temporary.path().join("traversal");
+    fs::create_dir(&traversal).unwrap();
+    let requested = traversal.join("..");
+
+    let installation = Installation::open(&requested, None).unwrap();
+
+    assert_eq!(installation.root, temporary.path());
+    installation.revalidate_root_directory().unwrap();
+}
+
+#[test]
 fn both_open_modes_defer_invalid_system_intent_but_frozen_skips_active_state() {
     let temporary = private_installation_tempdir();
     let intent_path = system_model::intent_path(temporary.path());

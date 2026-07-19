@@ -182,21 +182,38 @@ impl RootAbiPreflight {
     where
         C: FnMut(RootAbiLinkCheckpoint),
     {
-        let root = absolute_root_abi_path(root)?;
+        let requested = absolute_root_abi_path(root)?;
+        let requested_directory = open_root_abi_directory(&requested).map_err(|source| Error::OpenRootAbiDirectory {
+            root: requested.clone(),
+            source,
+        })?;
+        let root = normalized_root_abi_path(&requested)?;
         let directory = open_root_abi_directory(&root).map_err(|source| Error::OpenRootAbiDirectory {
             root: root.clone(),
             source,
         })?;
+        require_same_root_abi_directory(&requested_directory, &directory, &root)?;
         Self::open_directory_with(root, directory, checkpoint)
     }
 
     fn open_retained(root: &Path, retained: &std::fs::File) -> Result<Self, Error> {
-        let root = absolute_root_abi_path(root)?;
+        let requested = absolute_root_abi_path(root)?;
+        let root = normalized_root_abi_path(&requested)?;
         let retained = retained.try_clone().map_err(|source| Error::OpenRootAbiDirectory {
             root: root.clone(),
             source,
         })?;
         let directory = fs::File::from_parts(retained, root.clone());
+        let requested_directory = open_root_abi_directory(&requested).map_err(|source| Error::OpenRootAbiDirectory {
+            root: requested,
+            source,
+        })?;
+        let normalized_directory = open_root_abi_directory(&root).map_err(|source| Error::OpenRootAbiDirectory {
+            root: root.clone(),
+            source,
+        })?;
+        require_same_root_abi_directory(&directory, &requested_directory, &root)?;
+        require_same_root_abi_directory(&directory, &normalized_directory, &root)?;
         Self::open_directory_with(root, directory, &mut |_| {})
     }
 
@@ -338,6 +355,44 @@ fn absolute_root_abi_path(root: &Path) -> Result<PathBuf, Error> {
                 source,
             })
             .map(|current| current.join(root))
+    }
+}
+
+fn normalized_root_abi_path(absolute: &Path) -> Result<PathBuf, Error> {
+    let mut normalized = PathBuf::from("/");
+    for component in absolute.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if normalized != Path::new("/") {
+                    normalized.pop();
+                }
+            }
+            std::path::Component::Normal(component) => normalized.push(component),
+            std::path::Component::Prefix(_) => {
+                return Err(Error::OpenRootAbiDirectory {
+                    root: absolute.to_owned(),
+                    source: io::Error::new(io::ErrorKind::InvalidInput, "root ABI has a non-Unix path prefix"),
+                });
+            }
+        }
+    }
+    Ok(normalized)
+}
+
+fn require_same_root_abi_directory(first: &fs::File, second: &fs::File, root: &Path) -> Result<(), Error> {
+    let first = root_abi_directory_identity(first).map_err(|source| Error::StatRootAbiDirectory {
+        root: root.to_owned(),
+        source,
+    })?;
+    let second = root_abi_directory_identity(second).map_err(|source| Error::StatRootAbiDirectory {
+        root: root.to_owned(),
+        source,
+    })?;
+    if first == second {
+        Ok(())
+    } else {
+        Err(Error::RootAbiDirectoryReplaced(root.to_owned()))
     }
 }
 

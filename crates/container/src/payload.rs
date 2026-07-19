@@ -9,7 +9,7 @@ use nix::unistd::{close, read};
 use snafu::ResultExt;
 
 use super::activation::{descriptor_filesystem_magic, is_cgroup_filesystem};
-use super::mounts::{PinnedAnchoredBindSource, setup};
+use super::mounts::setup;
 use super::process_runtime::BlockedSignalMask;
 use super::{
     Container, ContainerError, DropPayloadCapabilitiesSnafu, InspectPayloadStandardDescriptorSnafu,
@@ -22,7 +22,6 @@ use super::{
 /// Reenter the container
 pub(super) fn enter<E>(
     container: &mut Container,
-    anchored_bind_sources: &mut Vec<PinnedAnchoredBindSource>,
     sync: RawFd,
     mut signal_mask: Option<BlockedSignalMask>,
     mut f: impl FnMut() -> Result<(), E>,
@@ -47,17 +46,12 @@ where
     // namespace-visible identity is the fixed root credential contract.
     isolate_payload_credentials()?;
 
-    setup(container, anchored_bind_sources)?;
+    setup(container)?;
 
-    // Root and bind-source descriptors are setup capabilities, not payload
-    // capabilities. The clone child has a private descriptor table, so
-    // dropping its copies leaves the supervising parent's copies intact while
-    // ensuring Rust payload code cannot inspect authenticated host objects.
-    anchored_bind_sources.clear();
-    drop(container.root_anchor.take());
-    // Descriptor-pinned bind handles stored by Container are setup-only too.
-    // Clearing the child copy does not affect the supervising parent's
-    // copy-on-write Container value.
+    // Locators retain setup-only witness descriptors. Clearing the child's
+    // copy after pivot leaves the supervising parent's copy-on-write value
+    // intact and prevents payload code from inspecting host objects.
+    drop(container.root_locator.take());
     container.binds.clear();
 
     // Descriptor and privilege confinement are container invariants, not

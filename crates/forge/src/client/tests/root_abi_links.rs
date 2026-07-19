@@ -376,3 +376,18 @@ fn root_abi_links_reject_terminal_and_intermediate_root_symlinks_before_mutation
     ));
     assert_root_abi_absent(&child.join("bin"));
 }
+
+#[test]
+fn retained_root_abi_records_one_normalized_absolute_locator_path() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    fs::create_dir(&root).unwrap();
+    fs::create_dir(root.join("traversal")).unwrap();
+    let requested = root.join("traversal/..");
+
+    let retained = create_root_links(&requested).unwrap();
+
+    assert_eq!(retained.path(), root);
+    let locator = container::AnchoredLocator::exact(retained.path(), retained.directory()).unwrap();
+    container::Container::new_anchored(locator).unwrap();
+}

@@ -240,6 +240,42 @@ fn require_same_directory(first: &std::fs::File, second: &std::fs::File, path: &
     Ok(())
 }
 
+/// Capture the installation root's stable absolute spelling while its
+/// originally requested name and retained descriptor are both authenticated.
+/// This is lexical normalization only: it never follows a link or reacquires
+/// authority through `canonicalize`.
+fn authenticated_absolute_installation_root_path(
+    requested: &Path,
+    retained: &std::fs::File,
+) -> io::Result<PathBuf> {
+    let absolute = if requested.is_absolute() {
+        requested.to_owned()
+    } else {
+        std::env::current_dir()?.join(requested)
+    };
+    let mut normalized = PathBuf::from("/");
+    for component in absolute.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if normalized != Path::new("/") {
+                    normalized.pop();
+                }
+            }
+            std::path::Component::Normal(component) => normalized.push(component),
+            std::path::Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "installation root has a non-Unix path prefix",
+                ));
+            }
+        }
+    }
+    let named = open_installation_root_path(&normalized)?;
+    require_same_directory(retained, &named, &normalized)?;
+    Ok(normalized)
+}
+
 fn open_directory_path(path: &Path) -> io::Result<std::fs::File> {
     let path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "directory path contains NUL"))?;

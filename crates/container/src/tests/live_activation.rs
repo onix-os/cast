@@ -46,8 +46,7 @@ fn anchored_bounded_tmpfs_enforces_the_same_exact_ceilings() {
     fs::create_dir(root.path().join("tmp")).unwrap();
     let anchor = open_path_directory(root.path());
 
-    let result = Container::new_anchored(root.path(), &anchor)
-        .unwrap()
+    let result = anchored_container(root.path(), &anchor)
         .root_filesystem(RootFilesystemPolicy::ReadOnly)
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
@@ -115,8 +114,7 @@ fn non_page_aligned_bounded_tmpfs_is_rejected_on_anchored_activation() {
     fs::create_dir(root.path().join("tmp")).unwrap();
     let anchor = open_path_directory(root.path());
 
-    let result = Container::new_anchored(root.path(), &anchor)
-        .unwrap()
+    let result = anchored_container(root.path(), &anchor)
         .root_filesystem(RootFilesystemPolicy::ReadOnly)
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
@@ -172,8 +170,7 @@ fn minimal_dev_is_read_only_and_exact_on_anchored_activation() {
     let root = tempfile::tempdir().unwrap();
     fs::create_dir(root.path().join("dev")).unwrap();
     let anchor = open_path_directory(root.path());
-    let result = Container::new_anchored(root.path(), &anchor)
-        .unwrap()
+    let result = anchored_container(root.path(), &anchor)
         .root_filesystem(RootFilesystemPolicy::ReadOnly)
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
@@ -273,111 +270,46 @@ fn read_only_root_is_enforced_by_the_live_kernel_mount_and_capability_paths() {
 }
 
 #[test]
-fn anchored_root_path_substitution_cannot_redirect_payload() {
+fn anchored_root_symlink_substitution_fails_before_payload_mutation() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("root");
-    let pinned = temporary.path().join("pinned-root");
+    let original = temporary.path().join("original-root");
     let replacement = temporary.path().join("replacement-root");
+    let payload_marker = temporary.path().join("payload-ran");
     fs::create_dir(&root).unwrap();
-    fs::create_dir(root.join("etc")).unwrap();
-    fs::write(root.join("etc/resolv.conf"), b"verified placeholder").unwrap();
-    fs::write(root.join("identity"), b"descriptor-root").unwrap();
+    fs::write(root.join("identity"), b"authenticated-root").unwrap();
 
     let anchor = open_path_directory(&root);
-    let caller_anchor_descriptor = anchor.as_raw_fd();
-    let sentinel = open_path_file(Path::new("/dev/null"));
-    let sentinel_descriptor = sentinel.as_raw_fd();
-    let container = Container::new_anchored(&root, &anchor)
-        .unwrap()
+    let container = anchored_container(&root, &anchor)
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
             tmp: TmpPolicy::Disabled,
             sys: SysPolicy::None,
             dev: DevPolicy::None,
         })
-        .loopback(LoopbackPolicy::KernelDefault)
-        .networking(true);
-    let child_anchor_descriptor = container.root_anchor.as_ref().unwrap().as_raw_fd();
+        .loopback(LoopbackPolicy::KernelDefault);
 
-    // Substitute the complete label after construction. The O_PATH
-    // duplicate retained by Container still denotes the renamed tree. A
-    // symlink is deliberately stronger than an ordinary directory swap:
-    // descriptor-only attachment must not resolve the label at all.
-    fs::rename(&root, &pinned).unwrap();
+    fs::rename(&root, &original).unwrap();
     fs::create_dir(&replacement).unwrap();
     fs::write(replacement.join("identity"), b"replacement-root").unwrap();
     std::os::unix::fs::symlink(&replacement, &root).unwrap();
 
-    let result = container.run::<io::Error>(|| {
-        for (name, fd) in [
-            ("container root duplicate", child_anchor_descriptor),
-            ("caller root anchor", caller_anchor_descriptor),
-            ("unrelated sentinel", sentinel_descriptor),
-        ] {
-            if fcntl(fd, FcntlArg::F_GETFD) != Err(Errno::EBADF) {
-                return Err(io::Error::other(format!("{name} descriptor {fd} leaked into payload")));
-            }
-        }
-        let identity = fs::read("/identity")?;
-        if identity != b"descriptor-root" {
-            return Err(io::Error::other(format!(
-                "payload entered substituted root: {}",
-                String::from_utf8_lossy(&identity)
-            )));
-        }
-        let resolver = fs::metadata("/etc/resolv.conf")?;
-        if !resolver.is_file() || resolver.permissions().mode() & 0o777 != 0o644 {
-            return Err(io::Error::other(format!(
-                "resolver mount has nondeterministic type/mode {:o}",
-                resolver.permissions().mode()
-            )));
-        }
-        require_errno(
-            fs::write("/etc/resolv.conf", b"payload mutation"),
-            Errno::EROFS,
-            "mutate sealed resolver mount",
-        )?;
-        fs::write("/payload-witness", b"anchored")
-    });
-
-    match result {
-        Ok(()) => {
-            assert!(fcntl(caller_anchor_descriptor, FcntlArg::F_GETFD).is_ok());
-            assert!(fcntl(sentinel_descriptor, FcntlArg::F_GETFD).is_ok());
-            assert_eq!(fs::read(pinned.join("payload-witness")).unwrap(), b"anchored");
-            assert!(!root.join("payload-witness").exists());
-            assert_eq!(fs::read(root.join("identity")).unwrap(), b"replacement-root");
-            assert_eq!(
-                fs::read(pinned.join("etc/resolv.conf")).unwrap(),
-                b"verified placeholder",
-                "resolver publication must not mutate the authenticated backing tree"
-            );
-            assert!(
-                !pinned.join("old_root").exists(),
-                "anchored pivot must not create put_old inside the authenticated backing tree"
-            );
-        }
-        Err(error) => {
-            let classification = classify_anchored_activation_unavailable(&error, &root);
-            if let Some(classification) = classification
-                && std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()
-                    != Some(std::ffi::OsStr::new("1"))
-            {
-                eprintln!(
-                    "SKIP anchored-root substitution test: required host capability unavailable: {classification}: {error}"
-                );
-                return;
-            }
-            panic!("anchored-root substitution test failed: {error}");
-        }
-    }
+    let result = container.run::<io::Error>(|| fs::write(&payload_marker, b"payload ran"));
+    assert!(matches!(
+        result,
+        Err(ContainerRunError::Failure { message })
+            if message.contains("reopen anchored container root")
+                && message.contains("Too many levels of symbolic links")
+    ));
+    assert!(!payload_marker.exists());
+    assert_eq!(fs::read(original.join("identity")).unwrap(), b"authenticated-root");
+    assert_eq!(fs::read(replacement.join("identity")).unwrap(), b"replacement-root");
 }
 
 #[test]
-fn anchored_root_relative_install_is_exact_writable_exception_after_label_substitution() {
+fn anchored_root_and_bind_locators_rebind_in_the_live_child_namespace() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("root");
-    let authenticated = temporary.path().join("authenticated-root");
     let external_work = temporary.path().join("external-work");
     fs::create_dir_all(root.join("install")).unwrap();
     fs::create_dir(root.join("work")).unwrap();
@@ -387,11 +319,10 @@ fn anchored_root_relative_install_is_exact_writable_exception_after_label_substi
 
     let anchor = open_path_directory(&root);
     let work = open_path_directory(&external_work);
-    let container = Container::new_anchored(&root, &anchor)
-        .unwrap()
+    let container = anchored_container(&root, &anchor)
         .bind_rw_from_root("/install", "/install")
         .unwrap()
-        .bind_rw_pinned(&work, &external_work, "/work")
+        .bind_rw_pinned(exact_locator(&external_work, &work), "/work")
         .unwrap()
         .root_filesystem(RootFilesystemPolicy::ReadOnly)
         .pseudo_filesystems(PseudoFilesystemPolicy {
@@ -401,10 +332,6 @@ fn anchored_root_relative_install_is_exact_writable_exception_after_label_substi
             dev: DevPolicy::None,
         })
         .loopback(LoopbackPolicy::KernelDefault);
-
-    fs::rename(&root, &authenticated).unwrap();
-    fs::create_dir_all(root.join("install")).unwrap();
-    fs::write(root.join("install/replacement"), b"must stay hidden").unwrap();
 
     let result = container.run::<io::Error>(|| {
         fs::write("/install/result", b"authenticated install")?;
@@ -419,14 +346,9 @@ fn anchored_root_relative_install_is_exact_writable_exception_after_label_substi
 
     match result {
         Ok(()) => {
-            assert_eq!(
-                fs::read(authenticated.join("install/result")).unwrap(),
-                b"authenticated install"
-            );
-            assert!(!root.join("install/result").exists());
-            assert_eq!(fs::read(root.join("install/replacement")).unwrap(), b"must stay hidden");
+            assert_eq!(fs::read(root.join("install/result")).unwrap(), b"authenticated install");
             assert_eq!(fs::read(external_work.join("result")).unwrap(), b"external work");
-            assert!(!authenticated.join("locked/mutation").exists());
+            assert!(!root.join("locked/mutation").exists());
         }
         Err(error) => {
             let classification = classify_anchored_activation_unavailable(&error, &root);
@@ -435,11 +357,11 @@ fn anchored_root_relative_install_is_exact_writable_exception_after_label_substi
                     != Some(std::ffi::OsStr::new("1"))
             {
                 eprintln!(
-                    "SKIP anchored install-bind test: required host capability unavailable: {classification}: {error}"
+                    "SKIP anchored child-namespace rebind test: required host capability unavailable: {classification}: {error}"
                 );
                 return;
             }
-            panic!("anchored install-bind test failed: {error}");
+            panic!("anchored child-namespace rebind test failed: {error}");
         }
     }
 }
@@ -448,8 +370,7 @@ fn anchored_root_relative_install_is_exact_writable_exception_after_label_substi
 fn anchored_payload_error_transport_is_bounded_and_completes() {
     let root = tempfile::tempdir().unwrap();
     let anchor = open_path_directory(root.path());
-    let container = Container::new_anchored(root.path(), &anchor)
-        .unwrap()
+    let container = anchored_container(root.path(), &anchor)
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
             tmp: TmpPolicy::Disabled,
@@ -485,9 +406,8 @@ fn anchored_root_clone_excludes_undeclared_nested_mounts() {
     const PROC_SUPER_MAGIC: nix::libc::c_long = 0x0000_9fa0;
 
     let anchor = open_path_directory(Path::new("/"));
-    let label = PathBuf::from("/diagnostic-only/host-root");
-    let container = Container::new_anchored(&label, &anchor)
-        .unwrap()
+    let label = PathBuf::from("/");
+    let container = anchored_container(&label, &anchor)
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
             tmp: TmpPolicy::Disabled,
@@ -544,9 +464,8 @@ fn anchored_directory_bind_excludes_undeclared_nested_mounts() {
     fs::create_dir(root.path().join("import")).unwrap();
     let root_anchor = open_path_directory(root.path());
     let host_root = open_path_directory(Path::new("/"));
-    let container = Container::new_anchored(root.path(), &root_anchor)
-        .unwrap()
-        .bind_ro_pinned(&host_root, "/", "/import")
+    let container = anchored_container(root.path(), &root_anchor)
+        .bind_ro_pinned(exact_locator(Path::new("/"), &host_root), "/import")
         .unwrap()
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,
@@ -595,5 +514,3 @@ fn anchored_directory_bind_excludes_undeclared_nested_mounts() {
         }
     }
 }
-
-

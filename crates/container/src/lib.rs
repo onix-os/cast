@@ -1,6 +1,6 @@
 use std::io;
 use std::num::NonZeroU64;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -19,16 +19,15 @@ mod process_runtime;
 mod seccomp;
 
 pub use self::mounts::{AnchoredLocator, AnchoredLocatorComponent, AnchoredLocatorError};
-use self::mounts::{
-    AnchoredMountTargetKind, Bind, BindSource, descriptor_target_kind, normalized_anchored_mount_target,
-};
+use self::mounts::{AnchoredMountTargetKind, Bind, BindSource, normalized_anchored_mount_target};
 #[cfg(test)]
 use self::mounts::{
-    PreparedAnchoredMount, PseudoMountDecision, RootMountDecision, TMPFS_MAGIC, TmpfsLimitReadback, descriptor_stat,
-    open_anchored_mount_target, open_anchored_resolver_target, pin_anchored_bind_sources, prepare_bind_target,
-    prepare_pseudo_mount_targets, pseudo_mount_decisions, reopen_pinned_readonly, resolver_stat_stable,
-    root_mount_decisions, sealed_resolver_file, set_mount_access, validate_anchored_mount_topology,
-    validate_minimal_device_source, validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits,
+    PreparedAnchoredMount, PseudoMountDecision, RootMountDecision, TMPFS_MAGIC, TmpfsLimitReadback,
+    authenticate_anchored_inputs, descriptor_stat, open_anchored_mount_target, open_anchored_resolver_target,
+    prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions, resolver_stat_stable,
+    root_mount_decisions, sealed_resolver_file, set_mount_access, validate_anchored_bind_inputs,
+    validate_anchored_mount_topology, validate_minimal_device_source, validate_resolver_target,
+    validate_tmpfs_limit_readback, verify_tmpfs_limits,
 };
 
 #[cfg(test)]
@@ -211,7 +210,7 @@ pub enum RootFilesystemPolicy {
 
 pub struct Container {
     root: PathBuf,
-    root_anchor: Option<OwnedFd>,
+    root_locator: Option<AnchoredLocator>,
     work_dir: Option<PathBuf>,
     binds: Vec<Bind>,
     networking: bool,
@@ -220,53 +219,6 @@ pub struct Container {
     pseudo_filesystems: PseudoFilesystemPolicy,
     loopback: LoopbackPolicy,
     root_filesystem: RootFilesystemPolicy,
-}
-
-fn duplicate_root_anchor(anchor: RawFd) -> io::Result<OwnedFd> {
-    let duplicated = duplicate_cloexec(anchor)?;
-
-    // F_DUPFD_CLOEXEC preserves the open-file status flags. Requiring O_PATH
-    // makes descriptor-based open_tree activation an explicit API contract,
-    // rather than silently accepting a descriptor with different semantics.
-    // SAFETY: `duplicated` is live for the duration of each fcntl call.
-    let status_flags = unsafe { nix::libc::fcntl(duplicated.as_raw_fd(), nix::libc::F_GETFL) };
-    if status_flags == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    if status_flags & nix::libc::O_PATH != nix::libc::O_PATH {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "anchored container root descriptor must be opened with O_PATH",
-        ));
-    }
-
-    // SAFETY: zero is valid initialization for stat and the descriptor and
-    // output pointer remain live for the call.
-    let mut stat: nix::libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { nix::libc::fstat(duplicated.as_raw_fd(), &mut stat) } == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    if stat.st_mode & nix::libc::S_IFMT != nix::libc::S_IFDIR {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "anchored container root descriptor must reference a directory",
-        ));
-    }
-
-    // The kernel promises this for F_DUPFD_CLOEXEC; retaining the check makes
-    // descriptor inheritance fail closed even on an unexpected platform ABI.
-    // SAFETY: `duplicated` is live for the fcntl call.
-    let descriptor_flags = unsafe { nix::libc::fcntl(duplicated.as_raw_fd(), nix::libc::F_GETFD) };
-    if descriptor_flags == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    if descriptor_flags & nix::libc::FD_CLOEXEC == 0 {
-        return Err(io::Error::other(
-            "anchored container root descriptor duplicate is not close-on-exec",
-        ));
-    }
-
-    Ok(duplicated)
 }
 
 fn duplicate_cloexec(fd: RawFd) -> io::Result<OwnedFd> {
@@ -285,7 +237,7 @@ impl Container {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
-            root_anchor: None,
+            root_locator: None,
             work_dir: None,
             binds: vec![],
             networking: false,
@@ -297,21 +249,27 @@ impl Container {
         }
     }
 
-    /// Create a container whose root is pinned by an already authenticated
-    /// directory descriptor.
+    /// Create a container whose root has an authenticated namespace locator.
     ///
-    /// `label` is retained only for diagnostics. Container activation clones
-    /// and attaches the mount referenced by `anchor` through descriptor-empty
-    /// paths; it never resolves `label`. Only the referenced mount is cloned:
-    /// nested mounts present below the directory are deliberately excluded and
-    /// must be requested through [`PseudoFilesystemPolicy`] or an explicit
-    /// bind. The descriptor is duplicated immediately, so the caller may close
-    /// its copy after this function returns.
-    pub fn new_anchored(label: impl Into<PathBuf>, anchor: &impl AsRawFd) -> io::Result<Self> {
-        let root_anchor = duplicate_root_anchor(anchor.as_raw_fd())?;
+    /// Activation reopens and authenticates the locator after entering the
+    /// child's private mount namespace. Only that child-local descriptor is
+    /// used to clone and attach the root mount. Nested mounts are deliberately
+    /// excluded and must be declared explicitly.
+    pub fn new_anchored(root: AnchoredLocator) -> io::Result<Self> {
+        let root_path = root.resolved_absolute_path();
+        let file_type = root.file_type();
+        if file_type != nix::libc::S_IFDIR {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "anchored container root {} has file type {file_type:o}; expected a directory",
+                    root_path.display()
+                ),
+            ));
+        }
         Ok(Self {
-            root: label.into(),
-            root_anchor: Some(root_anchor),
+            root: root_path,
+            root_locator: Some(root),
             work_dir: None,
             binds: vec![],
             networking: false,
@@ -369,78 +327,54 @@ impl Container {
     /// Expose a writable subtree of the authenticated root as an exact
     /// writable bind mount.
     ///
-    /// The source is resolved beneath the retained root descriptor, never
-    /// through the diagnostic root pathname. This is the correct operation for
-    /// a writable install directory that otherwise lives inside a recursively
-    /// read-only frozen root. The exact directory mount is cloned without any
-    /// nested mounts that may have been injected below it. Both source and
-    /// guest paths must be absolute.
+    /// The source is authenticated beneath the root locator before clone and
+    /// reopened again inside the child's private mount namespace. This is the
+    /// correct operation for a writable install directory that otherwise lives
+    /// inside a recursively read-only frozen root. The exact directory mount
+    /// is cloned without nested mounts. Both paths must be absolute.
     pub fn bind_rw_from_root(mut self, source: impl Into<PathBuf>, guest: impl Into<PathBuf>) -> io::Result<Self> {
-        if self.root_anchor.is_none() {
+        let Some(root) = self.root_locator.as_ref() else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "root-relative binds require an anchored container",
             ));
-        }
+        };
         let source = normalized_anchored_mount_target(&source.into()).map_err(container_error_to_invalid_input)?;
         let guest = guest.into();
         normalized_anchored_mount_target(&guest).map_err(container_error_to_invalid_input)?;
+        let source = root.child(source).map_err(locator_error_to_invalid_input)?;
         self.binds.push(Bind {
-            source: BindSource::RootRelative(source),
+            source: BindSource::Anchored(source),
             target: guest,
             read_only: false,
         });
         Ok(self)
     }
 
-    /// Add a read-write bind whose source object is already descriptor-pinned.
+    /// Add a read-write bind whose source has an authenticated locator.
     ///
-    /// The descriptor is duplicated immediately. Anchored containers reject
-    /// ordinary pathname binds at execution time, so external build, artifact,
-    /// and cache directories must be opened by the supervising runtime and
-    /// supplied through this API. Directory binds clone only the referenced
-    /// mount and never import nested mounts from the host. The guest path must
-    /// be absolute.
-    pub fn bind_rw_pinned(
-        self,
-        source: &impl AsRawFd,
-        source_label: impl Into<PathBuf>,
-        guest: impl Into<PathBuf>,
-    ) -> io::Result<Self> {
-        self.bind_pinned(source, source_label.into(), guest.into(), false)
+    /// The child reopens and authenticates the source inside its private mount
+    /// namespace before cloning the referenced mount. Directory binds never
+    /// import nested mounts from the host. The guest path must be absolute.
+    pub fn bind_rw_pinned(self, source: AnchoredLocator, guest: impl Into<PathBuf>) -> io::Result<Self> {
+        self.bind_pinned(source, guest.into(), false)
     }
 
-    /// Add a read-only bind whose source object is already descriptor-pinned.
-    pub fn bind_ro_pinned(
-        self,
-        source: &impl AsRawFd,
-        source_label: impl Into<PathBuf>,
-        guest: impl Into<PathBuf>,
-    ) -> io::Result<Self> {
-        self.bind_pinned(source, source_label.into(), guest.into(), true)
+    /// Add a read-only bind whose source has an authenticated locator.
+    pub fn bind_ro_pinned(self, source: AnchoredLocator, guest: impl Into<PathBuf>) -> io::Result<Self> {
+        self.bind_pinned(source, guest.into(), true)
     }
 
-    fn bind_pinned(
-        mut self,
-        source: &impl AsRawFd,
-        source_label: PathBuf,
-        guest: PathBuf,
-        read_only: bool,
-    ) -> io::Result<Self> {
-        if self.root_anchor.is_none() {
+    fn bind_pinned(mut self, source: AnchoredLocator, guest: PathBuf, read_only: bool) -> io::Result<Self> {
+        if self.root_locator.is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "descriptor-pinned binds require an anchored container",
+                "locator-pinned binds require an anchored container",
             ));
         }
         normalized_anchored_mount_target(&guest).map_err(container_error_to_invalid_input)?;
-        let source = duplicate_cloexec(source.as_raw_fd())?;
-        descriptor_target_kind(source.as_raw_fd(), &source_label).map_err(container_error_to_invalid_input)?;
         self.binds.push(Bind {
-            source: BindSource::Pinned {
-                descriptor: source,
-                label: source_label,
-            },
+            source: BindSource::Anchored(source),
             target: guest,
             read_only,
         });
@@ -501,6 +435,10 @@ impl Container {
 
 fn container_error_to_invalid_input(error: ContainerError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, format_error(error))
+}
+
+fn locator_error_to_invalid_input(error: AnchoredLocatorError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, error)
 }
 
 #[derive(Debug, Snafu)]
@@ -787,6 +725,21 @@ enum ContainerError {
         label: PathBuf,
         source: nix::Error,
     },
+    #[snafu(display("reopen anchored container root {} in the active mount namespace", path.display()))]
+    ReopenAnchoredRoot {
+        path: PathBuf,
+        source: AnchoredLocatorError,
+    },
+    #[snafu(display("anchored container root {} has file type {file_type:o}; expected a directory", path.display()))]
+    AnchoredRootNotDirectory {
+        path: PathBuf,
+        file_type: nix::libc::mode_t,
+    },
+    #[snafu(display("reopen anchored bind source {} in the active mount namespace", path.display()))]
+    ReopenAnchoredBindSource {
+        path: PathBuf,
+        source: AnchoredLocatorError,
+    },
     #[snafu(display("{operation} through anchored root descriptor"))]
     ConfigureAnchoredNetworking { operation: &'static str, source: io::Error },
     #[snafu(display("unsafe host resolver source with mode {mode:o} and {links} links"))]
@@ -817,7 +770,7 @@ enum ContainerError {
     #[snafu(display("open anchored mount source {}", path.display()))]
     OpenAnchoredMountSource { path: PathBuf, source: io::Error },
     #[snafu(display(
-        "anchored container rejects pathname bind source {}; use a descriptor-pinned or root-relative bind",
+        "anchored container rejects pathname bind source {}; use a locator-pinned or root-relative bind",
         path.display()
     ))]
     UnpinnedAnchoredMountSource { path: PathBuf },

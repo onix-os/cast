@@ -56,6 +56,7 @@ pub struct Paths {
     id: Id,
     host_root: PathBuf,
     host_root_anchor: Arc<StdFile>,
+    host_root_path_anchor: Arc<StdFile>,
     layout: BuilderLayout,
     recipe_dir: PathBuf,
     output_dir: PathBuf,
@@ -79,11 +80,13 @@ impl Paths {
         let host_root = host_root.into().canonicalize()?;
         let host_root_anchor = Arc::new(open_directory_nofollow(&host_root)?);
         require_controlled_directory(&host_root_anchor, &host_root, false)?;
+        let host_root_path_anchor = Arc::new(pin_matching_workspace_root(&host_root_anchor, &host_root)?);
 
         let job = Self {
             id,
             host_root,
             host_root_anchor,
+            host_root_path_anchor,
             layout,
             recipe_dir,
             output_dir: output_dir.into(),
@@ -292,14 +295,19 @@ impl Paths {
         &self.host_root
     }
 
-    /// Clone the workspace descriptor retained since path construction.
+    /// Clone the workspace descriptors retained since path construction.
     ///
-    /// The returned descriptor is authoritative. The pathname is reopened and
-    /// compared first so a renamed or substituted cache root cannot silently
-    /// redirect later frozen setup.
-    pub(crate) fn frozen_workspace_anchor(&self) -> io::Result<(PathBuf, StdFile)> {
+    /// The ordinary directory handle remains available for policy checks and
+    /// traversal. Its parallel `O_PATH` handle is the identity witness for
+    /// child-namespace reopening. Both are revalidated against the public name
+    /// before they are returned.
+    pub(crate) fn frozen_workspace_anchor(&self) -> io::Result<(PathBuf, StdFile, StdFile)> {
         self.revalidate_host_root()?;
-        Ok((self.host_root.clone(), self.host_root_anchor.try_clone()?))
+        Ok((
+            self.host_root.clone(),
+            self.host_root_anchor.try_clone()?,
+            self.host_root_path_anchor.try_clone()?,
+        ))
     }
 
     /// Create or reopen one host path beneath the retained workspace anchor.
@@ -396,6 +404,7 @@ impl Paths {
 
     fn revalidate_host_root(&self) -> io::Result<()> {
         require_controlled_directory(&self.host_root_anchor, &self.host_root, false)?;
+        require_same_directory(&self.host_root_anchor, &self.host_root_path_anchor, &self.host_root)?;
         let reopened = open_directory_nofollow(&self.host_root)?;
         require_controlled_directory(&reopened, &self.host_root, false)?;
         require_same_directory(&self.host_root_anchor, &reopened, &self.host_root)

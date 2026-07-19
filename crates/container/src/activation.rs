@@ -14,7 +14,7 @@ use super::cgroup;
 use super::clone3;
 use super::clone3::{Clone3Outcome, clone3_into_cgroup};
 use super::idmap::{idmap, validated_caller_identity};
-use super::mounts::{PinnedAnchoredBindSource, pin_anchored_bind_sources};
+use super::mounts::{ReboundAnchoredBindSource, ReboundAnchoredInputs, authenticate_anchored_inputs};
 use super::payload::enter;
 #[cfg(test)]
 use super::process_runtime::LEGACY_TEST_ACTIVATION_LOCK;
@@ -78,24 +78,20 @@ impl Container {
             None
         };
 
-        // Pin every anchored bind source in the supervising process. The
-        // child later clones mounts from these descriptors through an empty
-        // path, so neither a pathname substitution after `run` starts nor a
-        // cwd change during setup can redirect a declared source.
+        // Authenticate every locator in the supervisor before allocating
+        // clone resources. These descriptors are policy witnesses only and
+        // are dropped before clone; the child must reopen every input again.
         let preparation = (|| {
+            let authenticated_inputs = authenticate_anchored_inputs(&self).map_err(|error| Error::Failure {
+                message: format_error(error),
+            })?;
             if cgroup_leaf.is_some() {
-                require_atomic_cgroup_policy(&self)?;
+                require_atomic_cgroup_policy(&self, authenticated_inputs.as_ref())?;
+                if let Some(inputs) = authenticated_inputs.as_ref() {
+                    require_atomic_cgroup_bind_policy(&inputs.bind_sources)?;
+                }
             }
-            let anchored_bind_sources = if let Some(root_anchor) = &self.root_anchor {
-                pin_anchored_bind_sources(root_anchor.as_raw_fd(), &self.binds).map_err(|error| Error::Failure {
-                    message: format_error(error),
-                })?
-            } else {
-                Vec::new()
-            };
-            if cgroup_leaf.is_some() {
-                require_atomic_cgroup_bind_policy(&anchored_bind_sources)?;
-            }
+            drop(authenticated_inputs);
 
             // clone(2) needs a caller-owned stack. Fork-like clone3 without
             // CLONE_VM must instead use stack=0/stack_size=0 and resumes on the
@@ -111,9 +107,9 @@ impl Container {
             // Both ends are close-on-exec. The child retains the writer only
             // long enough to return one bounded setup/payload diagnostic.
             let sync = SyncSocket::new()?;
-            Ok::<_, Error>((anchored_bind_sources, stack, sync))
+            Ok::<_, Error>((stack, sync))
         })();
-        let (mut anchored_bind_sources, mut stack, mut sync) = match preparation {
+        let (mut stack, mut sync) = match preparation {
             Ok(prepared) => prepared,
             Err(failure) => {
                 return Err(match cgroup_leaf.take() {
@@ -191,13 +187,7 @@ impl Container {
                     signal_mask.retain_blocked_on_drop();
                     let exit_code = contain_raw_clone_child_panic(child_sync.1, || {
                         match close_inherited_cgroup_descriptors(inherited) {
-                            Ok(()) => child_exit_code(
-                                &mut self,
-                                &mut anchored_bind_sources,
-                                child_sync,
-                                Some(signal_mask),
-                                &mut f,
-                            ),
+                            Ok(()) => child_exit_code(&mut self, child_sync, Some(signal_mask), &mut f),
                             Err(error) => report_child_error(child_sync.1, error),
                         }
                     });
@@ -273,13 +263,7 @@ impl Container {
                         let exit_code = if let Some(mut signal_mask) = child_signal_mask.take() {
                             signal_mask.retain_blocked_on_drop();
                             contain_raw_clone_child_panic(child_sync.1, || {
-                                child_exit_code(
-                                    &mut self,
-                                    &mut anchored_bind_sources,
-                                    child_sync,
-                                    Some(signal_mask),
-                                    &mut f,
-                                )
+                                child_exit_code(&mut self, child_sync, Some(signal_mask), &mut f)
                             })
                         } else {
                             report_child_error_bytes(
@@ -426,12 +410,15 @@ impl Container {
 const CGROUP_SUPER_MAGIC: nix::libc::c_long = 0x0027_e0eb;
 const CGROUP2_SUPER_MAGIC: nix::libc::c_long = 0x6367_7270;
 
-pub(super) fn require_atomic_cgroup_policy(container: &Container) -> Result<(), Error> {
-    let Some(root) = container.root_anchor.as_ref() else {
+pub(super) fn require_atomic_cgroup_policy(
+    container: &Container,
+    authenticated_inputs: Option<&ReboundAnchoredInputs>,
+) -> Result<(), Error> {
+    let Some(inputs) = authenticated_inputs else {
         return Err(Error::AtomicCgroupRequiresAnchoredRoot);
     };
     let filesystem =
-        descriptor_filesystem_magic(root.as_raw_fd()).map_err(|source| Error::InspectCgroupFilesystem {
+        descriptor_filesystem_magic(inputs.root.as_raw_fd()).map_err(|source| Error::InspectCgroupFilesystem {
             label: container.root.clone(),
             source,
         })?;
@@ -446,7 +433,7 @@ pub(super) fn require_atomic_cgroup_policy(container: &Container) -> Result<(), 
     Ok(())
 }
 
-pub(super) fn require_atomic_cgroup_bind_policy(bind_sources: &[PinnedAnchoredBindSource]) -> Result<(), Error> {
+pub(super) fn require_atomic_cgroup_bind_policy(bind_sources: &[ReboundAnchoredBindSource]) -> Result<(), Error> {
     for bind in bind_sources.iter().filter(|bind| !bind.read_only) {
         let filesystem =
             descriptor_filesystem_magic(bind.source.as_raw_fd()).map_err(|source| Error::InspectCgroupFilesystem {
@@ -478,7 +465,6 @@ pub(super) fn is_cgroup_filesystem(filesystem: nix::libc::c_long) -> bool {
 
 fn child_exit_code<E>(
     container: &mut Container,
-    anchored_bind_sources: &mut Vec<PinnedAnchoredBindSource>,
     sync: (RawFd, RawFd),
     signal_mask: Option<BlockedSignalMask>,
     f: &mut impl FnMut() -> Result<(), E>,
@@ -492,7 +478,7 @@ where
             return report_child_error(sync.1, ContainerError::CloseSupervisorSync { source });
         }
     }
-    match enter(container, anchored_bind_sources, sync.1, signal_mask, f) {
+    match enter(container, sync.1, signal_mask, f) {
         Ok(()) => 0,
         Err(error) => report_child_error(sync.1, error),
     }

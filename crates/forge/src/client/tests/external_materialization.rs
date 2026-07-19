@@ -364,7 +364,7 @@ fn ephemeral_trigger_view_rejects_named_etc_replacement() {
 }
 
 #[test]
-fn retained_root_abi_publication_never_writes_through_a_replaced_target_name() {
+fn retained_root_abi_replacement_fails_before_any_name_mutation() {
     let fixture = ExternalFixture::new();
     let mut target =
         RetainedExternalMaterializationTarget::prepare(&fixture.client.installation, &fixture.target).unwrap();
@@ -393,7 +393,10 @@ fn retained_root_abi_publication_never_writes_through_a_replaced_target_name() {
         "unexpected retained root-ABI race result: {result:#?}"
     );
     assert_eq!(directory_identity(&detached), retained_root);
-    assert_root_abi_links(&detached);
+    for (_, target) in ROOT_ABI_LINKS {
+        assert_root_abi_absent(&detached.join(target));
+        assert_root_abi_absent(&fixture.target.join(target));
+    }
     assert!(fs::read_dir(&fixture.target).unwrap().next().is_none());
     assert!(!fixture.target.join("usr/lib/os-release").exists());
     assert!(!fixture.target.join("usr/lib/system-model.glu").exists());

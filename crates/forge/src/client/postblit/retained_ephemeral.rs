@@ -7,9 +7,12 @@ use std::{
     path::Path,
 };
 
-use container::Container;
+use container::{AnchoredLocator, Container};
 
-use super::{Error, RetainedEphemeralPhase, TRANSACTION_PSEUDO_FILESYSTEMS, TRANSACTION_ROOT_FILESYSTEM};
+use super::{
+    Error, RetainedEphemeralPhase, TRANSACTION_PSEUDO_FILESYSTEMS, TRANSACTION_ROOT_FILESYSTEM,
+    anchored_locators::{beneath_directory, exact_directory},
+};
 use crate::{
     Installation,
     client::{RetainedRootAbi, external_materialization::RetainedEphemeralTriggerView},
@@ -56,8 +59,15 @@ pub(super) fn container(
 
     let (usr, usr_path) = view.usr();
     let (etc, etc_path) = view.etc();
+    let (candidate_root, candidate_root_path) = view.root();
     let policy = candidate_bind_policy(phase);
-    let base = Container::new_anchored(isolation_path, isolation_root.directory())
+    let root_locator = exact_directory(isolation_path, isolation_root.directory())
+        .map_err(|source| pin_error("container root", isolation_path, source))?;
+    let etc_locator = beneath_directory(candidate_root_path, candidate_root, Path::new("etc"), etc)
+        .map_err(|source| pin_error("external candidate /etc", etc_path, source))?;
+    let usr_locator = beneath_directory(candidate_root_path, candidate_root, Path::new("usr"), usr)
+        .map_err(|source| pin_error("external candidate /usr", usr_path, source))?;
+    let base = Container::new_anchored(root_locator)
         .map_err(|source| pin_error("container root", isolation_path, source))?
         .networking(false);
     let base = match phase {
@@ -66,9 +76,9 @@ pub(super) fn container(
             .pseudo_filesystems(TRANSACTION_PSEUDO_FILESYSTEMS),
         RetainedEphemeralPhase::System => base,
     };
-    let base = bind_pinned(base, etc, etc_path, "/etc", policy.etc_read_only)
+    let base = bind_pinned(base, etc_locator, "/etc", policy.etc_read_only)
         .map_err(|source| pin_error("external candidate /etc", etc_path, source))?;
-    let container = bind_pinned(base, usr, usr_path, "/usr", policy.usr_read_only)
+    let container = bind_pinned(base, usr_locator, "/usr", policy.usr_read_only)
         .map_err(|source| pin_error("external candidate /usr", usr_path, source))?;
 
     revalidate(installation, isolation_root, view)?;
@@ -138,17 +148,11 @@ fn pin_error(role: &'static str, path: &Path, source: io::Error) -> Error {
     }
 }
 
-fn bind_pinned(
-    container: Container,
-    source: &std::fs::File,
-    source_path: &Path,
-    guest: &str,
-    read_only: bool,
-) -> io::Result<Container> {
+fn bind_pinned(container: Container, source: AnchoredLocator, guest: &str, read_only: bool) -> io::Result<Container> {
     if read_only {
-        container.bind_ro_pinned(source, source_path, guest)
+        container.bind_ro_pinned(source, guest)
     } else {
-        container.bind_rw_pinned(source, source_path, guest)
+        container.bind_rw_pinned(source, guest)
     }
 }
 
@@ -263,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn public_root_usr_and_etc_substitution_cannot_redirect_pinned_system_binds() {
+    fn public_root_usr_and_etc_substitution_fails_closed_before_payload() {
         let mut fixture = EphemeralContainerFixture::new();
         fs::write(fixture.root.join("usr/source-witness"), b"retained usr").unwrap();
         fs::write(fixture.root.join("etc/source-witness"), b"retained etc").unwrap();
@@ -318,16 +322,9 @@ mod tests {
             Ok::<(), io::Error>(())
         });
 
-        if activation_completed(result, "retained ephemeral substitution") {
-            assert_eq!(
-                fs::read(detached_root.join("retained-usr/pinned-write")).unwrap(),
-                b"pinned usr"
-            );
-            assert_eq!(
-                fs::read(detached_root.join("retained-etc/pinned-write")).unwrap(),
-                b"pinned etc"
-            );
-        }
+        assert!(result.is_err(), "substituted source locators reached the payload");
+        assert!(!detached_root.join("retained-usr/pinned-write").exists());
+        assert!(!detached_root.join("retained-etc/pinned-write").exists());
         assert!(!root.join("usr/pinned-write").exists());
         assert!(!root.join("etc/pinned-write").exists());
         assert_eq!(

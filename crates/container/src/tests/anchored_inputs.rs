@@ -1,13 +1,14 @@
 #[test]
-fn anchored_constructor_owns_a_cloexec_opath_directory_duplicate() {
+fn anchored_constructor_owns_the_locator_cloexec_opath_witness() {
     let root = tempfile::tempdir().unwrap();
     let anchor = open_path_directory(root.path());
     let caller_descriptor = anchor.as_raw_fd();
-    let container = Container::new_anchored("diagnostic-root", &anchor).unwrap();
-    let retained = container.root_anchor.as_ref().unwrap().as_raw_fd();
+    let locator = exact_locator(root.path(), &anchor);
+    let retained = locator.retained_descriptors().0;
+    let container = Container::new_anchored(locator).unwrap();
 
     assert_ne!(retained, caller_descriptor);
-    assert_eq!(container.root, Path::new("diagnostic-root"));
+    assert_eq!(container.root, root.path());
     let status = fcntl(retained, FcntlArg::F_GETFL).unwrap();
     assert_eq!(status & nix::libc::O_PATH, nix::libc::O_PATH);
     let descriptor = FdFlag::from_bits_truncate(fcntl(retained, FcntlArg::F_GETFD).unwrap());
@@ -18,25 +19,22 @@ fn anchored_constructor_owns_a_cloexec_opath_directory_duplicate() {
 }
 
 #[test]
-fn anchored_constructor_rejects_every_non_opath_or_non_directory_descriptor() {
+fn anchored_constructor_rejects_non_opath_and_regular_file_locators() {
     let root = tempfile::tempdir().unwrap();
     let ordinary_directory = std::fs::File::open(root.path()).unwrap();
-    let error = Container::new_anchored(root.path(), &ordinary_directory).err().unwrap();
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        "anchored container root descriptor must be opened with O_PATH"
-    );
+    assert!(matches!(
+        AnchoredLocator::exact(root.path(), &ordinary_directory),
+        Err(AnchoredLocatorError::WitnessNotPath { .. })
+    ));
 
     let regular_path = root.path().join("regular");
     fs::write(&regular_path, b"not a directory").unwrap();
-    let ordinary_file = open_path_file(&regular_path);
-    let error = Container::new_anchored(root.path(), &ordinary_file).err().unwrap();
+    let regular_file = open_path_file(&regular_path);
+    let error = Container::new_anchored(exact_locator(&regular_path, &regular_file))
+        .err()
+        .unwrap();
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        "anchored container root descriptor must reference a directory"
-    );
+    assert!(error.to_string().contains("expected a directory"));
 
     struct InvalidDescriptor;
     impl std::os::fd::AsRawFd for InvalidDescriptor {
@@ -44,44 +42,83 @@ fn anchored_constructor_rejects_every_non_opath_or_non_directory_descriptor() {
             -1
         }
     }
-    let error = Container::new_anchored(root.path(), &InvalidDescriptor).err().unwrap();
-    assert_eq!(error.raw_os_error(), Some(nix::libc::EBADF));
+    assert!(matches!(
+        AnchoredLocator::exact(root.path(), &InvalidDescriptor),
+        Err(AnchoredLocatorError::DuplicateWitness { source, .. })
+            if source.raw_os_error() == Some(nix::libc::EBADF)
+    ));
 }
 
 #[test]
-fn anchored_bind_source_is_pinned_before_clone_and_survives_path_substitution() {
+fn anchored_bind_replacement_fails_before_clone_and_payload_mutation() {
     let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
     let source = temporary.path().join("source");
-    let pinned_name = temporary.path().join("pinned-source");
+    let original = temporary.path().join("original-source");
+    let payload_marker = temporary.path().join("payload-ran");
+    fs::create_dir(&root).unwrap();
     fs::write(&source, b"authenticated source").unwrap();
-    let expected = fs::metadata(&source).unwrap();
 
-    let root_anchor = open_path_directory(temporary.path());
-    let pinned = pin_anchored_bind_sources(
-        root_anchor.as_raw_fd(),
-        &[Bind {
-            source: BindSource::RootRelative(PathBuf::from("source")),
-            target: PathBuf::from("/payload/source"),
-            read_only: true,
-        }],
-    )
-    .unwrap();
+    let root_witness = open_path_directory(&root);
+    let source_witness = open_path_file(&source);
+    let container = anchored_container(&root, &root_witness)
+        .bind_ro_pinned(exact_locator(&source, &source_witness), "/payload/source")
+        .unwrap();
 
-    // This is the adversarial checkpoint: after the supervising process
-    // has pinned the source but before the child clones its mount, replace
-    // the complete pathname with a different object.
-    fs::rename(&source, &pinned_name).unwrap();
+    fs::rename(&source, &original).unwrap();
     fs::write(&source, b"replacement source").unwrap();
 
-    let retained = descriptor_stat(pinned[0].source.as_raw_fd()).unwrap();
-    assert_eq!(retained.st_dev as u64, expected.dev());
-    assert_eq!(retained.st_ino as u64, expected.ino());
-    let mut retained_reader = reopen_pinned_readonly(pinned[0].source.as_raw_fd()).unwrap();
-    let mut retained_bytes = Vec::new();
-    retained_reader.read_to_end(&mut retained_bytes).unwrap();
-    assert_eq!(retained_bytes, b"authenticated source");
+    let result = container.run::<io::Error>(|| fs::write(&payload_marker, b"payload ran"));
+    assert!(matches!(
+        result,
+        Err(ContainerRunError::Failure { message })
+            if message.contains("reopen anchored bind source") && message.contains("expected")
+    ));
+    assert!(!payload_marker.exists());
+    assert_eq!(fs::read(&original).unwrap(), b"authenticated source");
     assert_eq!(fs::read(&source).unwrap(), b"replacement source");
-    assert_eq!(pinned[0].target, Path::new("payload/source"));
+}
+
+#[test]
+fn anchored_missing_bind_source_fails_before_clone_and_payload_mutation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    let source = temporary.path().join("source");
+    let payload_marker = temporary.path().join("payload-ran");
+    fs::create_dir(&root).unwrap();
+    fs::write(&source, b"authenticated source").unwrap();
+
+    let root_witness = open_path_directory(&root);
+    let source_witness = open_path_file(&source);
+    let container = anchored_container(&root, &root_witness)
+        .bind_ro_pinned(exact_locator(&source, &source_witness), "/payload/source")
+        .unwrap();
+    fs::remove_file(&source).unwrap();
+
+    let result = container.run::<io::Error>(|| fs::write(&payload_marker, b"payload ran"));
+    assert!(matches!(
+        result,
+        Err(ContainerRunError::Failure { message })
+            if message.contains("reopen anchored bind source")
+                && message.contains("No such file or directory")
+    ));
+    assert!(!payload_marker.exists());
+}
+
+#[test]
+fn root_relative_bind_rejects_child_mount_crossing_at_the_api_boundary() {
+    let root_witness = open_path_directory(Path::new("/"));
+    let error = anchored_container(Path::new("/"), &root_witness)
+        .bind_rw_from_root("/proc/self", "/import")
+        .err()
+        .unwrap();
+
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    assert!(matches!(
+        error.get_ref().and_then(|source| source.downcast_ref::<AnchoredLocatorError>()),
+        Some(AnchoredLocatorError::Reopen { source, .. })
+            if source.raw_os_error() == Some(nix::libc::EXDEV)
+    ));
 }
 
 #[test]
@@ -192,17 +229,12 @@ fn anchored_mount_topology_rejects_duplicate_and_nested_targets() {
 
 #[test]
 fn anchored_execution_rejects_pathname_and_special_file_bind_sources_before_clone() {
-    let root = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();
-    let anchor = open_path_directory(root.path());
-    let path_error = pin_anchored_bind_sources(
-        anchor.as_raw_fd(),
-        &[Bind {
-            source: BindSource::Path(source.path().to_owned()),
-            target: PathBuf::from("work"),
-            read_only: false,
-        }],
-    )
+    let path_error = validate_anchored_bind_inputs(&[Bind {
+        source: BindSource::Path(source.path().to_owned()),
+        target: PathBuf::from("/work"),
+        read_only: false,
+    }])
     .err()
     .unwrap();
     assert!(matches!(path_error, ContainerError::UnpinnedAnchoredMountSource { .. }));
@@ -210,13 +242,10 @@ fn anchored_execution_rejects_pathname_and_special_file_bind_sources_before_clon
     let fifo_path = source.path().join("fifo");
     mkfifo(&fifo_path, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
     let fifo = open_path_file(&fifo_path);
-    let error = Container::new_anchored(root.path(), &anchor)
-        .unwrap()
-        .bind_rw_pinned(&fifo, &fifo_path, "/work")
-        .err()
-        .unwrap();
-    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-    assert!(error.to_string().contains("unsupported anchored mount source"));
+    assert!(matches!(
+        AnchoredLocator::exact(&fifo_path, &fifo),
+        Err(AnchoredLocatorError::UnsupportedWitnessType { .. })
+    ));
 }
 
 #[test]
@@ -225,17 +254,12 @@ fn anchored_bind_apis_require_absolute_source_and_guest_paths() {
     let source = tempfile::tempdir().unwrap();
     let anchor = open_path_directory(root.path());
     let pinned = open_path_directory(source.path());
+    fs::create_dir(root.path().join("install")).unwrap();
 
     for result in [
-        Container::new_anchored(root.path(), &anchor)
-            .unwrap()
-            .bind_rw_from_root("install", "/install"),
-        Container::new_anchored(root.path(), &anchor)
-            .unwrap()
-            .bind_rw_from_root("/install", "install"),
-        Container::new_anchored(root.path(), &anchor)
-            .unwrap()
-            .bind_rw_pinned(&pinned, source.path(), "work"),
+        anchored_container(root.path(), &anchor).bind_rw_from_root("install", "/install"),
+        anchored_container(root.path(), &anchor).bind_rw_from_root("/install", "install"),
+        anchored_container(root.path(), &anchor).bind_rw_pinned(exact_locator(source.path(), &pinned), "work"),
     ] {
         let error = result.err().expect("relative anchored path must fail");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
@@ -253,8 +277,7 @@ fn sealed_resolver_file_has_exact_metadata_seals_and_cleanup() {
     assert_eq!(stat.st_size, b"nameserver 192.0.2.1\n".len() as i64);
     // SAFETY: fd is a live memfd and F_GET_SEALS takes no third argument.
     let seals = unsafe { nix::libc::fcntl(fd, nix::libc::F_GET_SEALS) };
-    let required =
-        nix::libc::F_SEAL_WRITE | nix::libc::F_SEAL_GROW | nix::libc::F_SEAL_SHRINK | nix::libc::F_SEAL_SEAL;
+    let required = nix::libc::F_SEAL_WRITE | nix::libc::F_SEAL_GROW | nix::libc::F_SEAL_SHRINK | nix::libc::F_SEAL_SEAL;
     assert_eq!(seals & required, required);
     let mutation = b"mutation";
     // SAFETY: mutation is live for the write and fd denotes the sealed
@@ -364,5 +387,3 @@ fn anchored_resolver_rejects_fifo_and_device_targets_without_opening_data() {
     assert_eq!(fs::read(&target).unwrap(), b"do not mutate");
     assert_eq!(fs::read(&alias).unwrap(), b"do not mutate");
 }
-
-

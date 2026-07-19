@@ -16,7 +16,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use container::{
-    Container, DevPolicy, Error, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy, TmpPolicy,
+    AnchoredLocator, Container, DevPolicy, Error, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, SysPolicy,
+    TmpPolicy,
 };
 use nix::libc;
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
@@ -325,7 +326,8 @@ fn prove_parked_task_is_rejected() {
 }
 
 fn minimal_container(root: &Path, anchor: &OwnedFd) -> Container {
-    Container::new_anchored(root, anchor)
+    let locator = AnchoredLocator::exact(root, anchor).expect("construct exact root locator");
+    Container::new_anchored(locator)
         .expect("construct anchored container")
         .pseudo_filesystems(PseudoFilesystemPolicy {
             proc: ProcPolicy::None,

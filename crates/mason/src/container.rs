@@ -26,7 +26,9 @@ use stone_recipe::derivation::{
     TmpFilesystem,
 };
 
+mod anchored_locators;
 mod error;
+mod frozen_revalidation;
 pub use error::Error;
 
 const CGROUP2_MOUNT_PATH: &str = "/sys/fs/cgroup";
@@ -88,7 +90,8 @@ where
     }
     sandbox.revalidate()?;
     let anchor = guard.revalidated_anchor()?;
-    let mut container = Container::new_anchored(guard.root_path(), &anchor)
+    let root_locator = sandbox.root_locator(guard.root_path(), &anchor)?;
+    let mut container = Container::new_anchored(root_locator)
         .map_err(Error::AnchorFrozenRoot)?
         .hostname(&sandbox.hostname)
         .networking(matches!(plan.execution.network, NetworkMode::Enabled))
@@ -100,7 +103,10 @@ where
 
     for mount in &sandbox.mounts {
         container = match &mount.source {
-            FrozenMountSource::Pinned(source) => container.bind_rw_pinned(&source.file, &mount.host, &mount.guest)?,
+            FrozenMountSource::Pinned(source) => {
+                let locator = sandbox.pinned_source_locator(source, &mount.host)?;
+                container.bind_rw_pinned(locator, &mount.guest)?
+            }
             FrozenMountSource::RootRelative(source) => container.bind_rw_from_root(source, &mount.guest)?,
         };
     }
@@ -296,6 +302,7 @@ enum FrozenMountSource {
 #[derive(Debug)]
 struct PinnedFrozenMountSource {
     file: File,
+    path_anchor: File,
     relative: PathBuf,
     witness: DirectoryWitness,
 }
@@ -320,6 +327,7 @@ impl DirectoryWitness {
 struct FrozenWorkspace {
     path: PathBuf,
     file: File,
+    path_anchor: File,
     witness: DirectoryWitness,
 }
 
@@ -349,80 +357,6 @@ pub(crate) struct FrozenSandbox {
     mounts: Vec<FrozenMount>,
 }
 
-impl FrozenSandbox {
-    fn revalidate(&self) -> Result<(), Error> {
-        require_owned_directory(
-            &self.workspace.file,
-            &self.workspace.path,
-            false,
-            DirectoryRole::Workspace,
-        )?;
-        if DirectoryWitness::for_file(&self.workspace.file).map_err(|source| Error::OpenFrozenWorkspace {
-            path: self.workspace.path.clone(),
-            source,
-        })? != self.workspace.witness
-        {
-            return Err(Error::FrozenWorkspaceReplaced(self.workspace.path.clone()));
-        }
-
-        let reopened = open_mount_directory(&self.workspace.path).map_err(|source| Error::OpenFrozenWorkspace {
-            path: self.workspace.path.clone(),
-            source,
-        })?;
-        require_owned_directory(&reopened, &self.workspace.path, false, DirectoryRole::Workspace)?;
-        if DirectoryWitness::for_file(&reopened).map_err(|source| Error::OpenFrozenWorkspace {
-            path: self.workspace.path.clone(),
-            source,
-        })? != self.workspace.witness
-        {
-            return Err(Error::FrozenWorkspaceReplaced(self.workspace.path.clone()));
-        }
-
-        for mount in &self.mounts {
-            let FrozenMountSource::Pinned(source) = &mount.source else {
-                continue;
-            };
-            require_owned_directory(&source.file, &mount.host, true, DirectoryRole::BindSource)?;
-            if DirectoryWitness::for_file(&source.file).map_err(|io| Error::PrepareFrozenBindSource {
-                path: mount.host.clone(),
-                source: io,
-            })? != source.witness
-            {
-                return Err(Error::FrozenBindSourceReplaced(mount.host.clone()));
-            }
-            let reopened = open_workspace_directory(&self.workspace, &source.relative, &mount.host, true)?;
-            if DirectoryWitness::for_file(&reopened).map_err(|io| Error::PrepareFrozenBindSource {
-                path: mount.host.clone(),
-                source: io,
-            })? != source.witness
-            {
-                return Err(Error::FrozenBindSourceReplaced(mount.host.clone()));
-            }
-        }
-        Ok(())
-    }
-
-    /// Revalidate the complete external sandbox and borrow the exact artefact
-    /// directory which was mounted into the container.
-    ///
-    /// Host publication must consume this descriptor rather than reopening
-    /// `Paths::artefacts()` after the payload exits. Otherwise a pathname
-    /// replacement could make the publisher consume bytes which the frozen
-    /// build never produced.
-    pub(crate) fn revalidated_artefacts(&self) -> Result<&File, Error> {
-        self.revalidate()?;
-        let mount = self
-            .mounts
-            .iter()
-            .find(|mount| mount.role == FrozenMountRole::Artefacts)
-            .ok_or(Error::MissingFrozenArtefactMount)?;
-        let FrozenMountSource::Pinned(source) = &mount.source else {
-            return Err(Error::MissingFrozenArtefactMount);
-        };
-        Ok(&source.file)
-    }
-}
-
 pub(crate) fn prepare_frozen_sandbox(paths: &Paths, plan: &DerivationPlan) -> Result<FrozenSandbox, Error> {
     if !matches!(plan.execution.credentials, ExecutionCredentials::IsolatedRoot) {
         return Err(Error::FrozenCredentialPolicyMismatch {
@@ -436,7 +370,7 @@ pub(crate) fn prepare_frozen_sandbox(paths: &Paths, plan: &DerivationPlan) -> Re
         return Err(Error::FrozenNetworkPolicyMismatch);
     }
     paths.require_plan(plan).map_err(Error::InvalidFrozenPaths)?;
-    let (workspace_path, workspace_file) =
+    let (workspace_path, workspace_file, workspace_path_anchor) =
         paths
             .frozen_workspace_anchor()
             .map_err(|source| Error::OpenFrozenWorkspace {
@@ -451,6 +385,7 @@ pub(crate) fn prepare_frozen_sandbox(paths: &Paths, plan: &DerivationPlan) -> Re
         })?,
         path: workspace_path,
         file: workspace_file,
+        path_anchor: workspace_path_anchor,
     };
     let sandbox = FrozenSandbox {
         mounts: frozen_mounts(
@@ -543,6 +478,20 @@ fn frozen_host_mount(
         path: host.clone(),
         source,
     })?;
+    let path_anchor =
+        anchored_locators::open_workspace_path_anchor(&workspace.path_anchor, &relative).map_err(|source| {
+            Error::PrepareFrozenBindSource {
+                path: host.clone(),
+                source,
+            }
+        })?;
+    if DirectoryWitness::for_file(&path_anchor).map_err(|source| Error::PrepareFrozenBindSource {
+        path: host.clone(),
+        source,
+    })? != witness
+    {
+        return Err(Error::FrozenBindSourceReplaced(host));
+    }
     let reopened = open_workspace_directory(workspace, &relative, &host, true)?;
     if DirectoryWitness::for_file(&reopened).map_err(|source| Error::PrepareFrozenBindSource {
         path: host.clone(),
@@ -557,6 +506,7 @@ fn frozen_host_mount(
         guest,
         source: FrozenMountSource::Pinned(PinnedFrozenMountSource {
             file: source,
+            path_anchor,
             relative,
             witness,
         }),

@@ -9,7 +9,10 @@ use std::{
 
 use container::Container;
 
-use super::{Error, TRANSACTION_PSEUDO_FILESYSTEMS, TRANSACTION_ROOT_FILESYSTEM};
+use super::{
+    Error, TRANSACTION_PSEUDO_FILESYSTEMS, TRANSACTION_ROOT_FILESYSTEM,
+    anchored_locators::{beneath_installation_directory, exact_directory},
+};
 use crate::Installation;
 
 const MOUNT_TARGETS: [&CStr; 5] = [c"etc", c"usr", c"proc", c"tmp", c"dev"];
@@ -18,9 +21,9 @@ const MAX_INTERRUPTS: usize = 1_024;
 /// Prepare an inactive repair trigger container without resolving any bind
 /// source through a mutable pathname.
 ///
-/// `Container` duplicates all three capabilities while this function runs.
-/// A later fixed-staging or isolation-name substitution therefore cannot
-/// redirect the writable `/usr` bind or either read-only execution source.
+/// `Container` retains authenticated reopen locators for all three sources.
+/// A later fixed-staging or isolation-name substitution therefore fails
+/// before payload execution instead of continuing on a detached old name.
 pub(super) fn container(
     installation: &Installation,
     isolation_root: &crate::client::RetainedRootAbi,
@@ -43,7 +46,26 @@ pub(super) fn container(
             source: io::Error::other(source),
         })?;
 
-    let container = Container::new_anchored(isolation_path, isolation)
+    let root_locator =
+        exact_directory(isolation_path, isolation).map_err(|source| Error::PinRetainedTransactionSource {
+            role: "container root",
+            path: isolation_path.to_owned(),
+            source,
+        })?;
+    let local_etc_locator = beneath_installation_directory(installation, local_etc.path(), local_etc.directory())
+        .map_err(|source| Error::PinRetainedTransactionSource {
+            role: "installation /etc",
+            path: local_etc.path().to_owned(),
+            source,
+        })?;
+    let candidate_usr_locator = beneath_installation_directory(installation, candidate_usr_path, candidate_usr)
+        .map_err(|source| Error::PinRetainedTransactionSource {
+            role: "candidate /usr",
+            path: candidate_usr_path.to_owned(),
+            source,
+        })?;
+
+    let container = Container::new_anchored(root_locator)
         .map_err(|source| Error::PinRetainedTransactionSource {
             role: "container root",
             path: isolation_path.to_owned(),
@@ -52,23 +74,22 @@ pub(super) fn container(
         .networking(false)
         .root_filesystem(TRANSACTION_ROOT_FILESYSTEM)
         .pseudo_filesystems(TRANSACTION_PSEUDO_FILESYSTEMS)
-        .bind_ro_pinned(local_etc.directory(), local_etc.path(), "/etc")
+        .bind_ro_pinned(local_etc_locator, "/etc")
         .map_err(|source| Error::PinRetainedTransactionSource {
             role: "installation /etc",
             path: local_etc.path().to_owned(),
             source,
         })?
-        .bind_rw_pinned(candidate_usr, candidate_usr_path, "/usr")
+        .bind_rw_pinned(candidate_usr_locator, "/usr")
         .map_err(|source| Error::PinRetainedTransactionSource {
             role: "candidate /usr",
             path: candidate_usr_path.to_owned(),
             source,
         })?;
 
-    // Sandwich construction between exact name proofs. Descriptor-pinned
-    // activation would remain confined after a name race, but inactive repair
-    // should fail closed rather than execute against an already-detached
-    // scratch root or local configuration tree.
+    // Sandwich construction between exact name proofs. Child-namespace
+    // activation authenticates these names again and fails closed rather than
+    // executing against an already-detached scratch or configuration tree.
     revalidate_isolation_root(isolation_root)?;
     local_etc
         .revalidate(installation)
@@ -215,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn writable_bind_ignores_fixed_staging_substitution() {
+    fn writable_bind_substitution_fails_closed_before_payload() {
         let temporary = tempfile::tempdir().unwrap();
         crate::test_support::prepare_private_installation_root(temporary.path());
         let installation = Installation::open(temporary.path(), None).unwrap();
@@ -313,32 +334,11 @@ mod tests {
             "the replacement local /etc must remain a distinct inode"
         );
 
-        match result {
-            Ok(()) => assert!(
-                !detached.join("usr/candidate-witness").exists(),
-                "the delete handler must have mutated the descriptor-pinned candidate"
-            ),
-            Err(Error::Container(container::Error::CloneNamespaces {
-                source: nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS,
-            })) => {
-                eprintln!("SKIP retained transaction activation: host denied mandatory namespaces")
-            }
-            Err(Error::Container(container::Error::Failure { message }))
-                if message.starts_with("legacy clone requires an authenticated single-task supervisor:") =>
-            {
-                // Forge's libtest process deliberately has a harness task and
-                // a test task, while production legacy activation rejects
-                // fork-after-threads. The assertions above still prove that
-                // this post-pin/pre-activation hook cannot redirect the bind;
-                // Container's own cfg(test) source-pin test covers the final
-                // descriptor handoff without weakening the production audit.
-                assert_eq!(
-                    fs_err::read(detached.join("usr/candidate-witness")).unwrap(),
-                    b"retained candidate"
-                );
-                eprintln!("SKIP retained transaction payload: {message}");
-            }
-            Err(error) => panic!("retained transaction activation failed: {error:?}"),
-        }
+        assert!(result.is_err(), "a substituted locator reached the payload");
+        assert_eq!(
+            fs_err::read(detached.join("usr/candidate-witness")).unwrap(),
+            b"retained candidate",
+            "the retained candidate must remain unchanged when rebinding fails"
+        );
     }
 }

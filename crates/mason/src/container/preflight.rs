@@ -5,9 +5,9 @@ use std::{
     path::Path,
 };
 
-use ::container::Container;
 #[cfg(feature = "delegated-fixture-test-support")]
 use ::container::RootFilesystemPolicy;
+use ::container::{AnchoredLocator, Container};
 #[cfg(feature = "delegated-fixture-test-support")]
 use stone_recipe::derivation::FilesystemPolicy;
 
@@ -49,7 +49,10 @@ pub(crate) fn preflight_delegated_execution_capability() -> Result<(), Error> {
             path: pinned.path().to_owned(),
             source,
         })?;
-    let container = Container::new_anchored(root.path(), &anchor)
+    let root_locator = AnchoredLocator::exact(root.path(), &anchor).map_err(Error::LocateExecutionPreflightRoot)?;
+    let pinned_locator =
+        AnchoredLocator::exact(pinned.path(), &pinned_anchor).map_err(Error::AnchorExecutionPreflightBindSource)?;
+    let container = Container::new_anchored(root_locator)
         .map_err(Error::AnchorExecutionPreflightRoot)?
         .hostname("cast-execution-preflight")
         .networking(false)
@@ -59,7 +62,7 @@ pub(crate) fn preflight_delegated_execution_capability() -> Result<(), Error> {
         .loopback(frozen_loopback_policy())
         .root_filesystem(RootFilesystemPolicy::ReadOnly)
         .bind_rw_from_root("/preflight-root-source", "/preflight-root-target")?
-        .bind_rw_pinned(&pinned_anchor, pinned.path(), "/preflight-pinned-target")?;
+        .bind_rw_pinned(pinned_locator, "/preflight-pinned-target")?;
     let limits = frozen_cgroup_limits(1)?;
     let delegated = discover_delegated_cgroup()?;
     let leaf = delegated
@@ -127,7 +130,8 @@ mod tests {
         let flags = unsafe { nix::libc::fcntl(anchor.as_raw_fd(), nix::libc::F_GETFL) };
         assert_ne!(flags, -1);
         assert_eq!(flags & nix::libc::O_PATH, nix::libc::O_PATH);
-        Container::new_anchored(root.path(), &anchor).unwrap();
+        let locator = AnchoredLocator::exact(root.path(), &anchor).unwrap();
+        Container::new_anchored(locator).unwrap();
     }
 
     #[test]

@@ -6,10 +6,12 @@
 //!
 //! Trigger intent is loaded from `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu`
 //! and do not yet support local triggers
+mod anchored_locators;
 mod process;
 mod retained_ephemeral;
 mod retained_transaction;
 mod retained_trigger_discovery;
+mod system_trigger_container;
 
 use std::{
     io,
@@ -339,11 +341,8 @@ impl TriggerRunner<'_> {
                 if trigger_scope_may_execute_directly(self.scope) {
                     Ok(execute_trigger_directly(&self.trigger)?)
                 } else {
-                    let isolation = Container::new(install.isolation_dir())
-                        .networking(false)
-                        .bind_rw(install.root.join("etc"), "/etc")
-                        .bind_rw(install.root.join("usr"), "/usr")
-                        .work_dir("/");
+                    let isolation = system_trigger_container::container(install)?;
+                    system_trigger_container::before_activation();
 
                     Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
                 }
@@ -587,6 +586,21 @@ pub enum Error {
 
     #[error("pin retained ephemeral trigger {role} source `{}`", path.display())]
     PinRetainedEphemeralSource {
+        role: &'static str,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("prepare system trigger container mount target `{}`", path.display())]
+    PrepareSystemTriggerMountTarget {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("pin system trigger {role} source `{}`", path.display())]
+    PinSystemTriggerSource {
         role: &'static str,
         path: PathBuf,
         #[source]

@@ -24,6 +24,10 @@ pub struct Env {
     /// every clone retains the same kernel-pinned directory identity.
     pub(crate) cache_dir_anchor: Arc<File>,
     pub(crate) forge_dir_anchor: Arc<File>,
+    /// Parallel `O_PATH` witnesses used to authenticate child-namespace
+    /// reopening without discarding the retained policy handles above.
+    pub(crate) cache_dir_path_anchor: Arc<File>,
+    pub(crate) forge_dir_path_anchor: Arc<File>,
 }
 
 impl Env {
@@ -54,6 +58,8 @@ impl Env {
         // for Forge's broader root-owned/read-only policy to validate later.
         let (cache_dir, cache_dir_anchor) = crate::paths::prepare_private_workspace_root_pinned(&cache_dir)?;
         let (forge_dir, forge_dir_anchor) = crate::paths::prepare_missing_private_workspace_root_pinned(&forge_dir)?;
+        let cache_dir_path_anchor = crate::paths::pin_matching_workspace_root(&cache_dir_anchor, &cache_dir)?;
+        let forge_dir_path_anchor = crate::paths::pin_matching_workspace_root(&forge_dir_anchor, &forge_dir)?;
         util::ensure_dir_exists(&data_dir)?;
 
         Ok(Self {
@@ -63,6 +69,8 @@ impl Env {
             forge_dir,
             cache_dir_anchor: Arc::new(cache_dir_anchor),
             forge_dir_anchor: Arc::new(forge_dir_anchor),
+            cache_dir_path_anchor: Arc::new(cache_dir_path_anchor),
+            forge_dir_path_anchor: Arc::new(forge_dir_path_anchor),
         })
     }
 }

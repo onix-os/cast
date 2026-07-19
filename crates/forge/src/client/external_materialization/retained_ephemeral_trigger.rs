@@ -92,6 +92,10 @@ impl<'candidate> RetainedEphemeralTriggerView<'candidate> {
         (&self.etc.directory, &self.etc.path)
     }
 
+    pub(in crate::client) fn root(self) -> (&'candidate std::fs::File, &'candidate Path) {
+        (self.target.target.file(), self.target.path())
+    }
+
     pub(in crate::client) fn root_path(self) -> &'candidate Path {
         self.target.path()
     }

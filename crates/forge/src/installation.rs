@@ -144,6 +144,12 @@ impl Installation {
             path: root.clone(),
             source,
         })?;
+        let root = authenticated_absolute_installation_root_path(&root, &root_directory).map_err(|source| {
+            Error::ValidateRootDirectory {
+                path: root.clone(),
+                source,
+            }
+        })?;
         let authority = snapshot::Authority::open(&root, &root_directory, cache_dir.as_deref(), lock_timeout)?;
         let active_state = read_state_id(&root_directory);
 
@@ -194,6 +200,12 @@ impl Installation {
         let root_directory = open_installation_root_path(&root).map_err(|source| Error::ValidateRootDirectory {
             path: root.clone(),
             source,
+        })?;
+        let root = authenticated_absolute_installation_root_path(&root, &root_directory).map_err(|source| {
+            Error::ValidateRootDirectory {
+                path: root.clone(),
+                source,
+            }
         })?;
 
         if let Some(dir) = &cache_dir

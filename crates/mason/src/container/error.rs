@@ -42,6 +42,8 @@ pub enum Error {
     FrozenRoot(#[from] forge::client::Error),
     #[error("open the authenticated frozen-root anchor for container activation")]
     AnchorFrozenRoot(#[source] io::Error),
+    #[error("authenticate the frozen root as a child-namespace locator")]
+    FrozenRootLocator(#[source] container::AnchoredLocatorError),
     #[error("prepare frozen mount")]
     Mount(#[from] io::Error),
     #[error("frozen derivation layout does not match runtime paths")]
@@ -80,6 +82,12 @@ pub enum Error {
     FrozenBindSourceCrossesMount(PathBuf),
     #[error("frozen external bind source pathname was replaced after pinning: {0:?}")]
     FrozenBindSourceReplaced(PathBuf),
+    #[error("authenticate frozen external bind source {path:?} as a child-namespace locator")]
+    FrozenBindSourceLocator {
+        path: PathBuf,
+        #[source]
+        source: container::AnchoredLocatorError,
+    },
     #[error("prepared frozen sandbox has no pinned artefact mount")]
     MissingFrozenArtefactMount,
     #[error("open the materialized frozen mount root {path:?} without following links")]
@@ -117,7 +125,10 @@ pub enum Error {
         source: io::Error,
     },
     #[cfg(feature = "delegated-fixture-test-support")]
-    #[error("authenticate the execution-capability preflight root")]
+    #[error("locate the execution-capability preflight root")]
+    LocateExecutionPreflightRoot(#[source] container::AnchoredLocatorError),
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("anchor the execution-capability preflight root")]
     AnchorExecutionPreflightRoot(#[source] io::Error),
     #[cfg(feature = "delegated-fixture-test-support")]
     #[error("prepare execution-capability preflight root path {path:?}")]
@@ -136,6 +147,9 @@ pub enum Error {
         #[source]
         source: io::Error,
     },
+    #[cfg(feature = "delegated-fixture-test-support")]
+    #[error("authenticate the execution-capability preflight bind source")]
+    AnchorExecutionPreflightBindSource(#[source] container::AnchoredLocatorError),
     #[cfg(feature = "delegated-fixture-test-support")]
     #[error("read execution-capability preflight payload witness {path:?}")]
     VerifyExecutionPreflightPayload {
