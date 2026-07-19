@@ -154,6 +154,9 @@ include!("linux_fs/descriptor_access.rs");
 #[allow(dead_code)] // standalone foundation for future mounted boot publication
 pub(crate) mod descriptor_boot_filesystem;
 
+#[allow(dead_code)] // strict image parser foundation for future boot role authentication
+pub(crate) mod gpt_partition_role;
+
 #[allow(dead_code)] // parser foundation consumed by the authenticated topology layer
 pub(crate) mod mountinfo;
 

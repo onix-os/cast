@@ -28,6 +28,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 include misc/make/hardening-tests.mk
 include misc/make/host-storage-safety-tests.mk
 include misc/make/linux-descriptor-boot-filesystem-tests.mk
+include misc/make/linux-gpt-partition-role-tests.mk
 include misc/make/linux-mount-attachment-tests.mk
 include misc/make/linux-mount-boot-policy-tests.mk
 include misc/make/linux-mountinfo-parser-tests.mk
