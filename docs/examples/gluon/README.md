@@ -25,8 +25,11 @@ per-mount flags `rw`, `nosuid`, `nodev`, `noexec`, and `nosymfollow`, and a
 writable (`rw`) superblock. Those facts are retained and revalidated as closed
 mountinfo policy evidence. Every topology pass now composes it with a private
 destination-descriptor `fstat`/`fstatfs` sandwich proving stable directory
-identity and the Linux MSDOS magic family. GPT role, write authority, and
-durability remain open. The `nosymfollow` requirement gives
+identity and the Linux MSDOS magic family. Retained sysfs snapshots now include
+bounded kernel device names and fixed-512-sector partition geometry, while a
+separate strict pure parser authenticates caller-owned GPT images and exact
+ESP/XBOOTLDR roles. The production read-only block-device binding, write
+authority, and durability remain open. The `nosymfollow` requirement gives
 the future boot publisher an effective Linux 5.10-or-newer admission boundary
 without changing the generic `linux_fs` Linux 5.6 compatibility baseline.
 `cast.boot_topology.v1` cannot be

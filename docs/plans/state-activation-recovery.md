@@ -463,8 +463,12 @@ Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`
 keeps its final descriptor inside retained attachment authority, and commit
 `a93efe70` composes it with exact mountinfo `vfat` evidence in every topology
-pass. Physical GPT role and disk admissibility, the durable descriptor-rooted
-publisher, device-flush ordering, and restart reconciliation remain open.
+pass. Commits `9c688dc6` through `28c4735b` retain bounded kernel device names
+and fixed-512-sector partition geometry. Commit `5ed70923` authenticates strict
+caller-owned GPT images and exact ESP/XBOOTLDR roles without opening a device.
+The production read-only parent-device binding and geometry composition, disk
+admissibility, durable descriptor-rooted publisher, device-flush ordering, and
+restart reconciliation remain open.
 Default and focused tests do not inspect or mutate host ESP/BOOT storage; real
 publication, reboot, and power-loss evidence requires the user-supplied
 disposable VM.

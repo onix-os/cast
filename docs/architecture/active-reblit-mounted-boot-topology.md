@@ -180,13 +180,20 @@ Use the authenticated mount `major:minor` to prepare and revalidate the
 descriptor-retained sysfs partition snapshot. The snapshot's canonical
 PARTUUID must equal the selector's PARTUUID exactly. The snapshot proves only
 the kernel block identity and block-parent observations made during its
-authenticated capture and revalidation passes. It is not a continuously live
-view and does not claim call-time or simultaneous residency.
+authenticated capture and revalidation passes. It also retains bounded kernel
+`DEVNAME` values for the partition and parent plus canonical partition `start`
+and positive `size` values in Linux's fixed 512-byte sectors. It is not a
+continuously live view and does not claim call-time or simultaneous residency.
 
-It does not prove the GPT type GUID, ESP/XBOOTLDR role, physical-disk identity,
-flush behavior, or persistence across reboot. Those claims require later,
-separately retained evidence. The selected mountinfo `vfat` policy and Linux
-MSDOS-family descriptor witness are now jointly retained per topology pass.
+Commit `5ed70923` separately provides a strict bounded pure parser for mirrored
+GPT headers and entry arrays, a non-hybrid protective MBR, and an exact expected
+ESP or XBOOTLDR partition role. It consumes only caller-owned bytes. No
+production adapter yet authenticates a parent block-device descriptor, feeds
+its bytes to that parser, or proves that the selected GPT range equals the
+retained sysfs geometry. Physical-disk read authority, flush behavior, and
+persistence across reboot therefore remain separate open claims. The selected
+mountinfo `vfat` policy and Linux MSDOS-family descriptor witness are jointly
+retained per topology pass.
 
 ## Topology invariants
 
@@ -331,8 +338,9 @@ recovery path.
 Mounted topology is necessary but not sufficient for real boot publication.
 Later layers must independently authenticate:
 
-- the on-disk GPT partition type as ESP or XBOOTLDR;
-- the exact partition/disk relationship beyond the retained sysfs observations;
+- a read-only parent block-device capability and composition of the strict pure
+  GPT role with retained sysfs identity and fixed-512-sector geometry;
+- the exact partition/disk relationship beyond the retained observations;
 - publication ordering, file replacement, directory synchronization, and
   device flush durability; and
 - restart reconciliation at every durable boundary.
