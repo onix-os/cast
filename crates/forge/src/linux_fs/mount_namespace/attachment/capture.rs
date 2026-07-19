@@ -6,6 +6,10 @@ use super::{
     filesystem::{DirectoryWitness, directory_witness, open_directory_component, require_same_directory},
     selector::AttachmentSelector,
 };
+use crate::linux_fs::descriptor_boot_filesystem::{
+    BootFilesystemAuthenticationError, ValidatedBootFilesystemDescriptorEvidence,
+    authenticate_boot_filesystem_directory_until,
+};
 
 struct PinnedComponent {
     name: std::ffi::CString,
@@ -28,6 +32,22 @@ impl AttachmentCapture {
 
     pub(super) const fn destination_witness(&self) -> DirectoryWitness {
         self.destination_witness
+    }
+
+    pub(super) fn authenticate_boot_filesystem_until(
+        &self,
+        deadline: std::time::Instant,
+    ) -> Result<ValidatedBootFilesystemDescriptorEvidence, BootFilesystemAuthenticationError> {
+        let destination = self
+            .components
+            .last()
+            .unwrap_or_else(|| unreachable!("validated attachment capture always retains one destination component"));
+        authenticate_boot_filesystem_directory_until(
+            &destination.file,
+            self.destination_witness.device,
+            self.destination_witness.inode,
+            deadline,
+        )
     }
 
     #[cfg(test)]

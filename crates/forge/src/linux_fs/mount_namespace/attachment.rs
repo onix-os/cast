@@ -37,7 +37,10 @@ use super::{
     capture::{Snapshot, require_snapshot_matches},
     filesystem::{DESCRIPTOR_MOUNT_ID_DESCRIPTOR_BOUND, DESCRIPTOR_MOUNT_ID_WORK_BOUND, Operation},
 };
-use crate::linux_fs::sysfs_block::SysfsDeviceNumber;
+use crate::linux_fs::{
+    descriptor_boot_filesystem::{BootFilesystemAuthenticationError, ValidatedBootFilesystemDescriptorEvidence},
+    sysfs_block::SysfsDeviceNumber,
+};
 
 const PRODUCTION_TIMEOUT: Duration = Duration::from_secs(30);
 const PRODUCTION_MAX_WORK: usize = 512 * 1024 * 1024;
@@ -362,6 +365,17 @@ impl RevalidatedTaskRootedAttachment<'_> {
 
     pub(crate) const fn destination_mount_id(&self) -> u64 {
         self.current.destination_witness().mount_id
+    }
+
+    /// Authenticate the retained final destination without exposing it.
+    ///
+    /// The exact `st_dev` and `st_ino` come from this same revalidated capture.
+    /// The returned closed evidence contains no descriptor or path authority.
+    pub(crate) fn authenticate_boot_filesystem_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<ValidatedBootFilesystemDescriptorEvidence, BootFilesystemAuthenticationError> {
+        self.current.authenticate_boot_filesystem_until(deadline)
     }
 
     /// Convert the destination `st_dev` into one exact sysfs device number.

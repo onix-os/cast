@@ -66,6 +66,13 @@ forge-linux-mount-namespace-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(crate) fn revalidate_until(&self, deadline: Instant)' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare_task_rooted_attachment_until(' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn revalidate_against_until(' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(crate) fn authenticate_boot_filesystem_until(' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'self.current.authenticate_boot_filesystem_until(deadline)' "$$core/attachment.rs"; \
+	timeout 10s grep -Fq 'pub(super) fn authenticate_boot_filesystem_until(' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'authenticate_boot_filesystem_directory_until(' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq '&destination.file,' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'self.destination_witness.device,' "$$core/attachment/capture.rs"; \
+	timeout 10s grep -Fq 'self.destination_witness.inode,' "$$core/attachment/capture.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn destination_sysfs_device_number(&self)' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'nix::libc::major(raw_device)' "$$core/attachment.rs"; \
 	timeout 10s grep -Fq 'nix::libc::minor(raw_device)' "$$core/attachment.rs"; \
