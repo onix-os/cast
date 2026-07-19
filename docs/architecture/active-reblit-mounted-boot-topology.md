@@ -230,14 +230,24 @@ attempt must not recapture a new authority and continue.
 
 ## Rendering and publication boundary
 
-The future BLS rendering stage remains pure. It receives the implemented
-lifetime-bound semantic input aggregate and a revalidated authenticated
-topology view, then returns deterministic desired content. No complete BLS
-renderer is wired today.
+Commit `aa341706` implements the pure deterministic BLS renderer. It consumes
+the lifetime-bound semantic input aggregate, emits bounded deterministic
+desired content, and combines it only with a revalidated authenticated
+topology view carrying the identical absolute deadline. The resulting
+non-detachable publication plan retains both views and the exact sealed source
+catalog.
 
 The pure renderer never receives destination file descriptors, namespace
 descriptors, mutation leases, or a function capable of writing. Consequently,
 rendering cannot discover storage or mutate a mounted partition.
+
+The renderer retains the exact input and topology views, their identical
+caller-owned deadline, and the exact sealed systemd-boot, kernel, and initrd
+asset views. Generated loader and Type 1 entry bytes, payload ordering,
+case-insensitive collision rules, FAT-safe relative paths, and finite
+request/path/generated-byte/work limits are deterministic and covered by
+synthetic golden tests. No coordinate can be detached from the retained asset
+catalog and treated as source authority.
 
 The implemented input stages preserve one caller-owned absolute deadline
 through the exact state/layout database and Stone projection -> bounded asset

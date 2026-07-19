@@ -90,8 +90,8 @@ It uses `RESOLVE_NO_XDEV`, so a separately mounted `/etc` or `/etc/cast` is an
 explicitly unsupported configuration and fails closed. No pathname fallback
 or mount operation is attempted.
 
-The complete future mounted-topology, pure-renderer, one-attempt publisher,
-and disposable-VM test contract is documented in
+The implemented mounted-topology and pure-renderer boundary, plus the future
+one-attempt publisher and disposable-VM test contract, are documented in
 [`ActiveReblit mounted boot topology`](architecture/active-reblit-mounted-boot-topology.md).
 
 ### Machine-local root filesystem
@@ -112,9 +112,10 @@ device, partition, or filesystem exists and does not inspect the running
 kernel, fstab, udev, package command lines, boot topology, or legacy disk
 probes. The fixed source is retained and repeatedly rebound beneath the
 installation descriptor under one caller-owned deadline. This producer is
-not yet wired into rendering or publication. Its single token is an isolated
-producer guarantee: the future aggregate must reserve the `root` key and
-reject any package or local command-line duplicate before concatenation.
+now wired into the lifetime-bound semantic aggregate and pure BLS renderer,
+but not the durable publisher. The aggregate reserves the `root` key, rejects
+package or local command-line duplicates, and emits the token exactly once per
+kernel before rendering.
 
 The [package-authoring guide](package-authoring.md) documents factories,
 explicit dependency scopes, standard and custom builders, typed phases,

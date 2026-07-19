@@ -688,7 +688,7 @@ the bounded checksummed journal, retained tree identity and marker primitives, s
 ownership probes, an operation-typed durable coordinator prefix through `UsrExchanged`, and descriptor-rooted
 activation-namespace assessment. The ActiveReblit boot track now composes its exact database/Stone projection -> bounded asset plan -> sealed CAS snapshot -> Stone binding chain, exact state-root authority and schemas, and retained local command-line policy under caller-owned deadlines with terminal checks.
 Its lifetime-bound render-input aggregate joins those owners to package/local command-line meaning, authenticated root intent, exact systemd-boot/kernel/initrd coordinates, and a fail-closed nonempty kernel projection while retaining the absolute deadline.
-Separate foundations provide explicit Gluon ESP/XBOOTLDR intent, retained same-deadline mountinfo/sysfs topology evidence, and a topology-aware pure publication plan; they grant no destination or mutation authority, and the complete BLS renderer, durable publisher, and real ESP/BOOT evidence remain open.
+Separate foundations provide explicit Gluon ESP/XBOOTLDR intent and retained same-deadline mountinfo/sysfs topology evidence. Commit `aa341706` completes the bounded deterministic BLS renderer and binds its exact authenticated inputs and sealed source catalog to the topology-aware pure publication plan without destination or mutation authority; the durable publisher and real ESP/BOOT evidence remain open.
 The production startup ladder handles one freshly observed checkpoint per entry, not a recovery loop. Separate entries
 normalize exchange durability, persist and route rollback, reverse `/usr`, and persist `UsrRestored`. NewState then
 preserves the candidate, invalidates the exact fresh row, reaches `RollbackComplete`, and finalizes to authenticated
@@ -908,7 +908,7 @@ candidate-wrapper, reservation-wrapper, roots-parent, and quarantine-parent sync
 `CandidatePreserved` with `AlreadySatisfied`. Commits `8c22ec67` and `cbe3679a` add reviewed ActivateArchived child-move and
 completion foundations; `c8c5ea41` production-wires completion, `32bf8589` adds terminal deletion plus clean handoff,
 `c6362aae` adds its exact 12-case terminal matrix, and `bc6d6792` expands candidate-preservation death to 28 cases. All are
-same-boot evidence, not reboot or power-loss proof. Roll-forward, complete boot rendering/publication and the actual repair effect, cleanup, other seams, and power-loss durability remain open.
+same-boot evidence, not reboot or power-loss proof. Roll-forward, durable boot publication and production boot-repair wiring, cleanup, other seams, reboot, and power-loss durability remain open.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

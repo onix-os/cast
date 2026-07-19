@@ -405,8 +405,8 @@ exact ActiveReblit `CandidatePreserved` rollback sourced from
 `BootSyncStarted` to `BootRepairRequired`. Commit `b5928340` independently
 admits an exact `BootRepairStarted` record on a later startup entry and advances
 it to terminal `BootRepairUnverified` while invoking boot zero times. There is
-still no production `BootRepairRequired` -> `BootRepairStarted` attempt, boot
-renderer, publisher, completion claim, or terminal deletion for that branch.
+still no production `BootRepairRequired` -> `BootRepairStarted` attempt,
+durable publisher, completion claim, or terminal deletion for that branch.
 
 The implemented preparation stack now carries one caller-owned absolute
 deadline, without resetting it, through the exact state/layout database and
@@ -441,7 +441,16 @@ materialization, and the returned view retains the caller's absolute deadline.
 Commit `3f752e32` makes the revalidated mounted-topology view retain that same
 deadline for the renderer to compare rather than silently minting a new budget.
 
-The complete BLS renderer, physical GPT role, filesystem and disk admissibility,
+Commit `aa341706` adds the pure deterministic BLS renderer. Its non-`Clone`
+result retains the exact revalidated semantic inputs, topology, absolute
+deadline, topology-scoped publication plan, and sealed asset views without
+exposing detachable source or mutation authority. It pins loader and Type 1
+entry bytes, canonical payload order, case-insensitive collision handling,
+FAT-safe relative paths, pre-materialization generated-byte limits, finite
+request/path/work limits, and terminal deadline checks. Synthetic topology
+fixtures exercise the production planning path without touching host storage.
+
+Physical GPT role, filesystem and disk admissibility,
 durable descriptor-rooted publisher, device-flush ordering, and restart
 reconciliation remain open. Default and focused tests are synthetic and do not
 inspect or mutate host ESP/BOOT storage; real publication, reboot, and
@@ -567,8 +576,8 @@ classification, and same-lock clean handoff. Commit `c6362aae` adds the exact
 12-case real-process terminal matrix across current and historical epochs,
 both rollback sources, and final-PRE, post-unlink, and post-directory-sync
 same-boot `SIGKILL` boundaries. It does not simulate reboot or power loss;
-later rollback, roll-forward, boot rendering and publication, the actual
-boot-repair effect, cleanup, other earlier interruption boundaries, and
+later rollback, roll-forward, durable boot publication, production boot-repair
+wiring, cleanup, other earlier interruption boundaries, reboot, and
 power-loss-equivalent durability work remain.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)

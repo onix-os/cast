@@ -362,7 +362,7 @@ closure remain authoritative in `PLAN.md`.
   sources, and the three deletion boundaries. The newer bounded boot
   projection, sealed Stone inputs, state roots and schemas, local and package
   command-line semantics, Gluon topology intent, and retained mounted-topology
-  evidence remain outside this coordinator. They grant no forward phase,
-  renderer, destination authority, or publisher callsite. Roll-forward, boot
-  rendering and publication, the actual boot-repair effect, cleanup, earlier
+  evidence and the pure BLS renderer remain outside this coordinator. They
+  grant no forward phase, destination authority, or publisher callsite.
+  Roll-forward, durable boot publication, the actual boot-repair effect, cleanup, earlier
   interruption boundaries, and power-loss-equivalent work remain.

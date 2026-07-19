@@ -966,7 +966,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   pass; that checkpoint alone made no real-process interruption, reboot, or
   power-loss claim. Commit `c6362aae` adds the matching exact 12-case same-boot
   terminal `SIGKILL` matrix across both epochs, both rollback sources, and the
-  three deletion boundaries. The ladder still has no roll-forward executor, boot renderer or publisher, actual
+  three deletion boundaries. The ladder still has no roll-forward executor, boot publisher, actual
   boot-repair attempt, cleanup, or power-loss-equivalent proof.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic

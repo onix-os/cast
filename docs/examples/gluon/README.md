@@ -37,9 +37,10 @@ printable-ASCII locator and owns the single `root=` prefix. The locator is
 authenticated authored intent, not evidence that a device or filesystem
 exists. It is not inferred from boot topology, the running kernel, fstab,
 udev, package command lines, or legacy disk probes. Rendering and publication
-remain deliberately unwired. Before concatenation, the future aggregate must
-reserve the `root` key and reject any package or local command-line duplicate;
-this producer alone does not establish that global collision rule.
+remain separated: the lifetime-bound aggregate and pure renderer are wired,
+while the durable publisher is not. Before rendering, the aggregate reserves
+the `root` key, rejects any package or local command-line duplicate, and emits
+the authenticated root token exactly once per kernel.
 
 The recipes under [`packages`](packages) exercise the public
 `cast.package.v3` interface as ordinary, pure Gluon programs. They are
