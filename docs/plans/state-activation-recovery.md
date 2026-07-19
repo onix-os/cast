@@ -408,26 +408,34 @@ it to terminal `BootRepairUnverified` while invoking boot zero times. There is
 still no production `BootRepairRequired` -> `BootRepairStarted` attempt, boot
 renderer, publisher, completion claim, or terminal deletion for that branch.
 
-The implemented preparation stack now freezes the exact state/layout database
-projection, derives the bounded Stone boot-asset plan, seals its CAS inputs,
-retains authenticated live and archived state roots, validates state schemas,
-and retains local `/etc/kernel/cmdline.d` append/mask policy. Separate
-machine-local Gluon intent declares explicit ESP and optional XBOOTLDR
-PARTUUIDs and mount points. Bounded current-thread mountinfo, current-task-root,
-attachment-chain, and sysfs observations then produce retained mounted-topology
-evidence without mounting, discovering an alternative, or granting mutation
-authority. Commit `66d7f6d1` additionally binds package-owned command-line
-files to the exact non-`Clone` Stone owner and exposes only normalized semantic
-text after bounded explicit-offset reads and exact coordinate revalidation.
+The implemented preparation stack now carries one caller-owned absolute
+deadline, without resetting it, through the exact state/layout database and
+Stone projection -> bounded boot-asset plan -> sealed CAS snapshot -> Stone
+binding chain. Exact live and archived state-root authority, state schemas, and
+the retained local `/etc/kernel/cmdline.d` append/mask policy expose the same
+deadline-preserving preparation and revalidation boundary, including terminal
+checks after completed materialization. Commit `66d7f6d1` separately binds
+package-owned command-line files to the exact non-`Clone` Stone owner and
+exposes only normalized semantic text after bounded explicit-offset reads and
+exact coordinate revalidation.
 
-The existing publication-plan module is still only a pure bounded syntactic
-destination list. Complete BLS entry rendering remains blocked on a separately
-authenticated explicit machine-local root-filesystem argument. Physical GPT
-role, filesystem and disk admissibility, durable descriptor-rooted publication,
-device-flush ordering, and restart reconciliation also remain open. Default and
-focused tests are synthetic and do not inspect or mutate host ESP/BOOT storage;
-real publication, reboot, and power-loss evidence requires the user-supplied
-disposable VM.
+Machine-local Gluon intent declares explicit ESP and optional XBOOTLDR
+PARTUUIDs and mount points, while `/etc/cast/root-filesystem.glu` authenticates
+one closed root-filesystem intent and can produce exactly one injection-safe
+`root=...` token after terminal revalidation. Bounded current-thread mountinfo,
+current-task-root, attachment-chain, and sysfs observations produce retained
+mounted-topology evidence without mounting, discovering an alternative, or
+granting mutation authority. The pure publication plan uses that topology to
+share one collision domain for aliased ESP/Boot or separate XBOOTLDR when it is
+distinct, and performs a terminal deadline check after materialization.
+
+These foundations do not yet form the lifetime-bound render-input aggregate:
+that layer must reserve `root` globally and reject package or local duplicates.
+The complete BLS renderer, physical GPT role, filesystem and disk admissibility,
+durable descriptor-rooted publisher, device-flush ordering, and restart
+reconciliation also remain open. Default and focused tests are synthetic and
+do not inspect or mutate host ESP/BOOT storage; real publication, reboot, and
+power-loss evidence requires the user-supplied disposable VM.
 
 ### Durable transition coordination
 

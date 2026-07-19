@@ -686,10 +686,10 @@ plan, not optional appendices.
 Phase 11 remains open. Completed foundations include canonical transition IDs, no-replace merged-/usr link publication,
 the bounded checksummed journal, retained tree identity and marker primitives, strict startup evidence gates, database
 ownership probes, an operation-typed durable coordinator prefix through `UsrExchanged`, and descriptor-rooted
-activation-namespace assessment. The ActiveReblit boot track also has bounded database and Stone projection, sealed CAS
-inputs, authenticated state roots and schemas, retained local command-line policy, explicit machine-local Gluon
-ESP/XBOOTLDR intent, retained mountinfo/sysfs topology evidence, and semantic package command-line inputs. These inputs
-grant no boot destination or mutation authority; complete BLS rendering and publication remain unwired.
+activation-namespace assessment. The ActiveReblit boot track now composes its exact database/Stone projection -> bounded asset plan -> sealed CAS
+snapshot -> Stone binding chain, exact state-root authority and schemas, and retained local command-line policy under caller-owned deadlines with terminal checks.
+Separate foundations provide package command-line inputs, authenticated machine-root Gluon intent, explicit Gluon ESP/XBOOTLDR intent, retained mountinfo/sysfs topology evidence, and a topology-aware pure publication plan.
+They grant no destination or mutation authority; the render-input aggregate, complete BLS renderer, durable publisher, and real ESP/BOOT evidence remain open.
 The production startup ladder handles one freshly observed checkpoint per entry, not a recovery loop. Separate entries
 normalize exchange durability, persist and route rollback, reverse `/usr`, and persist `UsrRestored`. NewState then
 preserves the candidate, invalidates the exact fresh row, reaches `RollbackComplete`, and finalizes to authenticated

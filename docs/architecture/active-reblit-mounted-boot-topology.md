@@ -230,14 +230,22 @@ attempt must not recapture a new authority and continue.
 
 ## Rendering and publication boundary
 
-Boot rendering remains pure. It receives immutable boot schemas, local boot
-policy, the revalidated declarative intent, and value-only authenticated
-topology facts. It returns a deterministic plan of desired directories, files,
-links, modes, and content identities.
+The future BLS rendering stage remains pure. It receives immutable boot
+schemas, local boot policy, revalidated declarative intent, and value-only
+authenticated topology facts, then returns deterministic desired content. No
+complete BLS renderer is wired today.
 
 The pure renderer never receives destination file descriptors, namespace
 descriptors, mutation leases, or a function capable of writing. Consequently,
 rendering cannot discover storage or mutate a mounted partition.
+
+The implemented input stages can now preserve one caller-owned absolute
+deadline through the exact state/layout database and Stone projection ->
+bounded asset plan -> sealed CAS snapshot -> Stone binding chain. Exact
+state-root authority, schemas, and local boot policy expose matching
+deadline-preserving preparation and revalidation paths with terminal checks.
+This is preparation infrastructure, not the missing lifetime-bound render-input
+aggregate.
 
 Package-owned command-line files now cross a separate semantic preparation
 boundary before rendering. That value remains lifetime-bound to the exact
@@ -257,8 +265,13 @@ This producer owns one token in isolation; it does not yet establish global
 single-root ownership. Existing package and local command-line normalizers can
 still retain authored `root=...` tokens. Before concatenating any command-line
 sources, the future aggregate must reserve the `root` key and reject every
-package or local duplicate. Complete BLS entry rendering remains unwired until
-that collision rule and the lifetime-bound inputs share one caller deadline.
+package or local duplicate under the same caller-owned deadline.
+
+The implemented pure publication plan consumes the authenticated topology
+layout only to scope destination collisions: aliased ESP/Boot share one domain,
+while a distinct XBOOTLDR uses a separate domain. It performs a terminal
+deadline check after complete materialization, but neither authorizes a target
+identity nor grants a destination descriptor or mutation capability.
 
 A separate durable publisher combines:
 
