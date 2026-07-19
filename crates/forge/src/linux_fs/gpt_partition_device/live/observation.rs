@@ -44,7 +44,10 @@ impl<'descriptor> RetainedBlockDeviceObserver<'descriptor> {
 
     /// Borrow a bounded GPT image using the most recently authenticated size.
     #[allow(dead_code)] // consumed by the next descriptor/GPT composition slice
-    pub(in crate::linux_fs) fn image_until(&self, deadline: Instant) -> io::Result<RetainedReadOnlyBlockImage<'_>> {
+    pub(in crate::linux_fs) fn image_until(
+        &self,
+        deadline: Instant,
+    ) -> io::Result<RetainedReadOnlyBlockImage<'descriptor>> {
         let latest = self.latest.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,

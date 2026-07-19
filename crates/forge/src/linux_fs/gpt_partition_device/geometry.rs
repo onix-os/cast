@@ -21,18 +21,9 @@ pub(super) fn require_exact_geometry(
     operation.charge_work(GEOMETRY_WORK_UNITS)?;
     let logical_block_size = validated.logical_block_size;
     let device_byte_length = validated.image_bytes;
-    if !(MIN_LOGICAL_BLOCK_SIZE..=MAX_LOGICAL_BLOCK_SIZE).contains(&logical_block_size)
-        || !logical_block_size.is_power_of_two()
-    {
-        return Err(invalid("block device reports an unsupported logical block size"));
-    }
-    let logical_block_size = u64::from(logical_block_size);
-    if device_byte_length == 0 || device_byte_length % logical_block_size != 0 {
-        return Err(invalid(
-            "block device byte length is zero or not aligned to its logical block size",
-        ));
-    }
+    require_sane_parent_geometry(logical_block_size, device_byte_length)?;
 
+    let logical_block_size = u64::from(logical_block_size);
     let sysfs_start = expected
         .start_512_sectors
         .checked_mul(SYSFS_SECTOR_BYTES)
@@ -67,6 +58,34 @@ pub(super) fn require_exact_geometry(
         start_bytes: gpt_start,
         size_bytes: gpt_size,
     })
+}
+
+pub(super) fn require_sane_parent_observation(
+    logical_block_size: u32,
+    device_byte_length: u64,
+    operation: &mut Operation<'_>,
+) -> io::Result<()> {
+    operation.charge_work(GEOMETRY_WORK_UNITS)?;
+    require_sane_parent_geometry(logical_block_size, device_byte_length)?;
+    operation.checkpoint()
+}
+
+fn require_sane_parent_geometry(logical_block_size: u32, device_byte_length: u64) -> io::Result<()> {
+    if !(MIN_LOGICAL_BLOCK_SIZE..=MAX_LOGICAL_BLOCK_SIZE).contains(&logical_block_size)
+        || !logical_block_size.is_power_of_two()
+    {
+        return Err(invalid("block device reports an unsupported logical block size"));
+    }
+    let logical_block_size = u64::from(logical_block_size);
+    if device_byte_length == 0
+        || device_byte_length > i64::MAX as u64
+        || device_byte_length % logical_block_size != 0
+    {
+        return Err(invalid(
+            "block device byte length is zero, unaddressable, or not aligned to its logical block size",
+        ));
+    }
+    Ok(())
 }
 
 fn invalid(message: &'static str) -> io::Error {

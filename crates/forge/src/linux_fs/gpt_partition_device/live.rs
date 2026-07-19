@@ -18,15 +18,21 @@
 //! that is already blocked.
 
 mod abi;
+mod authentication;
 mod image;
 mod observation;
 mod syscalls;
 
+pub(in crate::linux_fs) use authentication::{
+    LiveAuthenticatedGptPartitionDeviceEvidence, authenticate_retained_gpt_partition_device_with_interpass_until,
+};
 pub(in crate::linux_fs) use image::RetainedReadOnlyBlockImage;
 pub(in crate::linux_fs) use observation::RetainedBlockDeviceObserver;
 
 #[cfg(test)]
 pub(in crate::linux_fs) use abi::fixture_block_ioctl_requests;
+#[cfg(test)]
+pub(in crate::linux_fs) use authentication::authenticate_retained_gpt_partition_device_sources_fixture_with_interpass_until;
 #[cfg(test)]
 pub(in crate::linux_fs) use image::retained_read_only_block_image_fixture_until;
 #[cfg(test)]

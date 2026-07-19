@@ -5,13 +5,15 @@
 //! reconciles Linux's fixed 512-byte partition geometry with GPT logical-block
 //! geometry and returns only closed scalars. Actual descriptor opening,
 //! `fstat`, mount-ID capture, block-device queries, and reads remain behind a
-//! private observer seam for a later production adapter; this module performs no
-//! discovery, I/O, mount, write, or disk operation itself.
+//! private observer seam. The live coordinator in this module accepts only an
+//! already retained descriptor and performs bounded positional reads; it never
+//! discovers, opens, mounts, writes, or mutates storage.
 //!
 //! This pure layer cannot prove that caller-supplied GPT evidence was read
 //! from the observed descriptor. A live authority must run the GPT parser
 //! between its opening and closing descriptor observations before construction
-//! can be treated as authentication. Optional sysfs `DISKSEQ` evidence is
+//! can be treated as authentication. The descriptor-retained live coordinator
+//! performs that schedule and returns a separate evidence type. Optional sysfs `DISKSEQ` evidence is
 //! deliberately not returned: Linux 5.6 has no matching descriptor-bound disk
 //! sequence query in this project's baseline. The future live adapter must use
 //! the private GPT inter-pass callback so it can revalidate node identity,
@@ -30,6 +32,10 @@ use super::{
     gpt_partition_role::{GptPartitionRole, ValidatedGptPartitionRole},
     sysfs_identity::SysfsGptDeviceExpectation,
 };
+#[allow(unused_imports)] // consumed by the retained attachment composition layer
+pub(in crate::linux_fs) use live::{
+    LiveAuthenticatedGptPartitionDeviceEvidence, authenticate_retained_gpt_partition_device_with_interpass_until,
+};
 #[allow(unused_imports)] // retained syscall/image foundations for the production composition adapter
 pub(in crate::linux_fs) use live::{RetainedBlockDeviceObserver, RetainedReadOnlyBlockImage};
 pub(in crate::linux_fs) use observation::BlockDeviceObserver;
@@ -38,7 +44,8 @@ pub(in crate::linux_fs) use observation::{BlockDeviceObservation, ObservedDevice
 
 #[cfg(test)]
 pub(in crate::linux_fs) use live::{
-    FixtureBlockDeviceSyscall, FixtureBlockDeviceSyscallResult, fixture_block_ioctl_requests,
+    FixtureBlockDeviceSyscall, FixtureBlockDeviceSyscallResult,
+    authenticate_retained_gpt_partition_device_sources_fixture_with_interpass_until, fixture_block_ioctl_requests,
     observe_retained_block_device_fixture_with_clock_until, retained_read_only_block_image_fixture_until,
 };
 

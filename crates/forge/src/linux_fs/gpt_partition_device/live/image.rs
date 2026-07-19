@@ -13,8 +13,10 @@ const MAX_POSITIONAL_READ_BYTES: usize = 64 * 1024;
 /// Temporary read-only image over one caller-retained descriptor.
 ///
 /// This is operation authority, not evidence: it is deliberately not clonable,
-/// owns no descriptor, and cannot outlive the observer from which it was
-/// borrowed. Only its previously authenticated `BLKGETSIZE64` length is stored.
+/// owns no descriptor, and cannot outlive the caller-retained descriptor. It
+/// does not borrow the observer, so the composition layer can mutably
+/// re-observe that same descriptor between parser passes. Only its previously
+/// authenticated `BLKGETSIZE64` length is stored.
 /// The private GPT `Image::length` seam is infallible, so it cannot issue a
 /// fresh fallible query or detect length drift within one parser pass. The
 /// composition layer must observation-sandwich each pass and treat that

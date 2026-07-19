@@ -34,8 +34,53 @@ pub(super) fn reconcile_with_clock_until(
 ) -> io::Result<ReconciledGptPartitionDeviceEvidence> {
     let mut operation = Operation::new_with_clock(limits, deadline, clock)?;
     let opening = observe(observer, deadline, &mut operation)?;
+    let geometry = validate_opening(opening, expected, validated, &mut operation)?;
+
+    let closing = observe(observer, deadline, &mut operation)?;
+    finish_reconciliation(opening, closing, expected, validated, geometry, &mut operation)
+}
+
+/// Reconcile already captured opening and closing observations without
+/// invoking an observer. The live coordinator owns the observation schedule;
+/// this helper performs only closed-scalar validation and construction.
+pub(super) fn reconcile_observations_until(
+    opening: BlockDeviceObservation,
+    closing: BlockDeviceObservation,
+    expected: &ExpectedPartition<'_>,
+    validated: &ValidatedPartition<'_>,
+    deadline: Instant,
+) -> io::Result<ReconciledGptPartitionDeviceEvidence> {
+    let mut operation = Operation::new(Limits::production(), deadline)?;
+    let geometry = validate_opening(opening, expected, validated, &mut operation)?;
+    finish_reconciliation(opening, closing, expected, validated, geometry, &mut operation)
+}
+
+/// Reject a retained opening observation before any GPT image read when its
+/// closed identity, access, parent rdev, or basic geometry is not admissible.
+pub(super) fn preflight_opening_observation_until(
+    opening: BlockDeviceObservation,
+    expected: &ExpectedPartition<'_>,
+    deadline: Instant,
+) -> io::Result<()> {
+    let mut operation = Operation::new(Limits::production(), deadline)?;
     require_valid_observation(opening, &mut operation)?;
     require_expected_parent(opening, expected, &mut operation)?;
+    geometry::require_sane_parent_observation(
+        opening.logical_block_size(),
+        opening.byte_length(),
+        &mut operation,
+    )?;
+    operation.finish()
+}
+
+fn validate_opening(
+    opening: BlockDeviceObservation,
+    expected: &ExpectedPartition<'_>,
+    validated: &ValidatedPartition<'_>,
+    operation: &mut Operation<'_>,
+) -> io::Result<geometry::ReconciledGeometry> {
+    require_valid_observation(opening, operation)?;
+    require_expected_parent(opening, expected, operation)?;
 
     operation.charge_work(PARTITION_EVIDENCE_WORK)?;
     if validated.partition_uuid != expected.partition_uuid || validated.partition_number != expected.partition_number {
@@ -49,11 +94,19 @@ pub(super) fn reconcile_with_clock_until(
         ));
     }
 
-    let geometry = geometry::require_exact_geometry(expected, validated, &mut operation)?;
+    geometry::require_exact_geometry(expected, validated, operation)
+}
 
-    let closing = observe(observer, deadline, &mut operation)?;
-    require_valid_observation(closing, &mut operation)?;
-    require_expected_parent(closing, expected, &mut operation)?;
+fn finish_reconciliation(
+    opening: BlockDeviceObservation,
+    closing: BlockDeviceObservation,
+    expected: &ExpectedPartition<'_>,
+    validated: &ValidatedPartition<'_>,
+    geometry: geometry::ReconciledGeometry,
+    operation: &mut Operation<'_>,
+) -> io::Result<ReconciledGptPartitionDeviceEvidence> {
+    require_valid_observation(closing, operation)?;
+    require_expected_parent(closing, expected, operation)?;
     operation.charge_work(STABILITY_WORK)?;
     if opening != closing {
         return Err(invalid("parent block-device observation changed during reconciliation"));
