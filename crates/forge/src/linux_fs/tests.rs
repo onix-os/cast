@@ -9,6 +9,7 @@ use std::{
 use super::*;
 
 mod chmod_once;
+mod mount_attachment;
 mod mount_namespace;
 mod mountinfo_bounds;
 mod mountinfo_compatibility;
