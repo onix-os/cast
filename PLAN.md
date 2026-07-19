@@ -570,18 +570,11 @@ Adjacent hardening makes self-upgrade and malformed requests fail before mutatio
 
 ### Phase 10: Prove representative package declarations
 
-Offline source, lock, and planning proofs are not contentful execution proof.
-The contentful build, decoded-bundle, reproduction, and required-capability
-items below remain open until a non-skipped required-capability run provides
-that evidence.
-
-By 2026-07-19, the matrix contains twenty-six fixtures spanning standard/custom builders, mixed archive/Git/raw sources, generated payloads, an empty userspace profile, plugin/split outputs, localization, system/desktop integration, fonts, a vendored Go module, an offline PEP 517 Python wheel, and a CMake/CTest executable checked against an independently locked raw vector corpus.
-Commit `4c59473d` adds a self-authored Regular/Bold family as a deterministic 30,720-byte USTAR with SHA-256
-`8710f0728fbde240fd94ce8bce46c4e4d71336b8470416e8da7c0895dc2d700c`. Its exact three-leaf `out` contains both TTFs and OFL
-at mode `0644`; its closure is 63 packages and 213,892,544 bytes, caches are forbidden, and no runtime relation is invented.
-Commit `b0f16ef1` adds a pinned, vendored, network-disabled Go module whose one-output static ELF has no runtime relation; its exact 71-package closure adds only Go to the userspace baseline.
-The Python fixture binds build, installer, setuptools, pytest, interpreter, and typing-extension roles to an exact 76-package, 214,660,406-byte closure. Its hostile-host proof rebuilds and executes the wheel in disposable roots, but remains supplemental rather than delegated Stone execution. The external-test-vectors fixture independently locks a deterministic primary USTAR and raw JSON corpus, admits that corpus only through a declared pre-check Bash/`cp` capability, and forbids it from the one-output Stone; its disposable supplemental host proof does not replace live delegated execution. All fixtures union to an exact 172-package, 383,747,528-byte bootstrap pool. Offline and hostile-host contracts pin bytes, modes, providers, behavior, metadata, and syntax without claiming host deployment, a transaction, or rollback.
-An optional live run classified supplementary-group `setgroups` `EPERM` before package execution; no Stone was emitted, decoded, or reproduced, so every supported-host live-evidence item remains open.
+The matrix inventory, frozen closure, live-run history, evidence rules, and
+current blocker are indexed by the
+[delegated fixture execution subplan](docs/plans/delegated-fixture-execution.md).
+Offline source, lock, and planning proofs are not contentful execution proof;
+the live items below remain open until a non-skipped required run proves them.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
