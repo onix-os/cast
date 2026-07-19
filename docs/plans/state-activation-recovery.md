@@ -429,12 +429,22 @@ granting mutation authority. The pure publication plan uses that topology to
 share one collision domain for aliased ESP/Boot or separate XBOOTLDR when it is
 distinct, and performs a terminal deadline check after materialization.
 
-These foundations do not yet form the lifetime-bound render-input aggregate:
-that layer must reserve `root` globally and reject package or local duplicates.
+Commit `d3151b53` closes the lifetime-bound semantic render-input aggregate.
+It retains the exact Stone and state-root owners, internally constructs schema
+and package-command-line children, joins only eligible nonempty kernel inputs,
+and rebinds the exact systemd-boot, kernel, and ordered initrd coordinates.
+Every package and local append is grammar-audited before scope or masking;
+`root` and `cast.fstx` are reserved globally; canonical per-kernel command
+lines are admitted against byte, token, and aggregate bounds before output
+allocation. The final database revalidation closes the sandwich after semantic
+materialization, and the returned view retains the caller's absolute deadline.
+Commit `3f752e32` makes the revalidated mounted-topology view retain that same
+deadline for the renderer to compare rather than silently minting a new budget.
+
 The complete BLS renderer, physical GPT role, filesystem and disk admissibility,
 durable descriptor-rooted publisher, device-flush ordering, and restart
-reconciliation also remain open. Default and focused tests are synthetic and
-do not inspect or mutate host ESP/BOOT storage; real publication, reboot, and
+reconciliation remain open. Default and focused tests are synthetic and do not
+inspect or mutate host ESP/BOOT storage; real publication, reboot, and
 power-loss evidence requires the user-supplied disposable VM.
 
 ### Durable transition coordination

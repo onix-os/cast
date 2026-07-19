@@ -686,10 +686,9 @@ plan, not optional appendices.
 Phase 11 remains open. Completed foundations include canonical transition IDs, no-replace merged-/usr link publication,
 the bounded checksummed journal, retained tree identity and marker primitives, strict startup evidence gates, database
 ownership probes, an operation-typed durable coordinator prefix through `UsrExchanged`, and descriptor-rooted
-activation-namespace assessment. The ActiveReblit boot track now composes its exact database/Stone projection -> bounded asset plan -> sealed CAS
-snapshot -> Stone binding chain, exact state-root authority and schemas, and retained local command-line policy under caller-owned deadlines with terminal checks.
-Separate foundations provide package command-line inputs, authenticated machine-root Gluon intent, explicit Gluon ESP/XBOOTLDR intent, retained mountinfo/sysfs topology evidence, and a topology-aware pure publication plan.
-They grant no destination or mutation authority; the render-input aggregate, complete BLS renderer, durable publisher, and real ESP/BOOT evidence remain open.
+activation-namespace assessment. The ActiveReblit boot track now composes its exact database/Stone projection -> bounded asset plan -> sealed CAS snapshot -> Stone binding chain, exact state-root authority and schemas, and retained local command-line policy under caller-owned deadlines with terminal checks.
+Its lifetime-bound render-input aggregate joins those owners to package/local command-line meaning, authenticated root intent, exact systemd-boot/kernel/initrd coordinates, and a fail-closed nonempty kernel projection while retaining the absolute deadline.
+Separate foundations provide explicit Gluon ESP/XBOOTLDR intent, retained same-deadline mountinfo/sysfs topology evidence, and a topology-aware pure publication plan; they grant no destination or mutation authority, and the complete BLS renderer, durable publisher, and real ESP/BOOT evidence remain open.
 The production startup ladder handles one freshly observed checkpoint per entry, not a recovery loop. Separate entries
 normalize exchange durability, persist and route rollback, reverse `/usr`, and persist `UsrRestored`. NewState then
 preserves the candidate, invalidates the exact fresh row, reaches `RollbackComplete`, and finalizes to authenticated

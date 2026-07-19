@@ -230,22 +230,22 @@ attempt must not recapture a new authority and continue.
 
 ## Rendering and publication boundary
 
-The future BLS rendering stage remains pure. It receives immutable boot
-schemas, local boot policy, revalidated declarative intent, and value-only
-authenticated topology facts, then returns deterministic desired content. No
-complete BLS renderer is wired today.
+The future BLS rendering stage remains pure. It receives the implemented
+lifetime-bound semantic input aggregate and a revalidated authenticated
+topology view, then returns deterministic desired content. No complete BLS
+renderer is wired today.
 
 The pure renderer never receives destination file descriptors, namespace
 descriptors, mutation leases, or a function capable of writing. Consequently,
 rendering cannot discover storage or mutate a mounted partition.
 
-The implemented input stages can now preserve one caller-owned absolute
-deadline through the exact state/layout database and Stone projection ->
-bounded asset plan -> sealed CAS snapshot -> Stone binding chain. Exact
-state-root authority, schemas, and local boot policy expose matching
-deadline-preserving preparation and revalidation paths with terminal checks.
-This is preparation infrastructure, not the missing lifetime-bound render-input
-aggregate.
+The implemented input stages preserve one caller-owned absolute deadline
+through the exact state/layout database and Stone projection -> bounded asset
+plan -> sealed CAS snapshot -> Stone binding chain. The lifetime-bound
+render-input aggregate retains those exact owners, state-root authority,
+schemas, local policy, root intent, and exact systemd-boot/kernel/initrd
+coordinates through terminal revalidation. Its successful view retains the
+absolute deadline rather than exposing a fresh timeout boundary.
 
 Package-owned command-line files now cross a separate semantic preparation
 boundary before rendering. That value remains lifetime-bound to the exact
@@ -261,17 +261,19 @@ revalidation. It does not infer that value from ESP/XBOOTLDR topology,
 `/proc/cmdline`, fstab, udev, or the legacy disk probe, and it does not prove
 that the named storage exists.
 
-This producer owns one token in isolation; it does not yet establish global
-single-root ownership. Existing package and local command-line normalizers can
-still retain authored `root=...` tokens. Before concatenating any command-line
-sources, the future aggregate must reserve the `root` key and reject every
-package or local duplicate under the same caller-owned deadline.
+The aggregate establishes global single-root ownership before concatenating
+any command-line source. It grammar-audits every package and local append before
+scope or masking, rejects authored `root` and `cast.fstx` keys, and emits exactly
+one authenticated root token and one state token per kernel under the retained
+caller-owned deadline.
 
 The implemented pure publication plan consumes the authenticated topology
 layout only to scope destination collisions: aliased ESP/Boot share one domain,
-while a distinct XBOOTLDR uses a separate domain. It performs a terminal
-deadline check after complete materialization, but neither authorizes a target
-identity nor grants a destination descriptor or mutation capability.
+while a distinct XBOOTLDR uses a separate domain. The revalidated topology view
+now retains its caller-owned deadline so the renderer can require an exact
+match with its input aggregate. The plan performs a terminal deadline check
+after complete materialization, but neither authorizes a target identity nor
+grants a destination descriptor or mutation capability.
 
 A separate durable publisher combines:
 
