@@ -1,5 +1,11 @@
-let cast = import! cast.boot_topology.v1
+let cast = import! cast.boot_topology.v2
 
 cast.boot_topology.distinct
-    "11111111-2222-3333-4444-555555555555"
-    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    {
+        partuuid = "11111111-2222-3333-4444-555555555555",
+        mount_point = "/efi",
+    }
+    {
+        partuuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        mount_point = "/boot",
+    }

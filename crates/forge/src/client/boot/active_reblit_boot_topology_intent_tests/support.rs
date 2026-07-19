@@ -14,6 +14,8 @@ use crate::Installation;
 
 pub(super) const ESP_PARTUUID: &str = "11111111-2222-3333-4444-555555555555";
 pub(super) const XBOOTLDR_PARTUUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+pub(super) const ESP_MOUNT_POINT: &str = "/synthetic/esp-root";
+pub(super) const XBOOTLDR_MOUNT_POINT: &str = "/synthetic/boot-root";
 
 pub(super) struct Fixture {
     _temporary: TempDir,
@@ -61,12 +63,27 @@ impl Fixture {
 }
 
 pub(super) fn authored_alias(partuuid: &str) -> String {
-    format!("let cast = import! cast.boot_topology.v1\ncast.boot_topology.aliases_esp \"{partuuid}\"\n")
+    authored_alias_at(partuuid, ESP_MOUNT_POINT)
 }
 
 pub(super) fn authored_distinct(esp_partuuid: &str, xbootldr_partuuid: &str) -> String {
+    authored_distinct_at(esp_partuuid, ESP_MOUNT_POINT, xbootldr_partuuid, XBOOTLDR_MOUNT_POINT)
+}
+
+pub(super) fn authored_alias_at(partuuid: &str, mount_point: &str) -> String {
     format!(
-        "let cast = import! cast.boot_topology.v1\ncast.boot_topology.distinct \"{esp_partuuid}\" \"{xbootldr_partuuid}\"\n"
+        "let cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {{ partuuid = \"{partuuid}\", mount_point = \"{mount_point}\" }}\n"
+    )
+}
+
+pub(super) fn authored_distinct_at(
+    esp_partuuid: &str,
+    esp_mount_point: &str,
+    xbootldr_partuuid: &str,
+    xbootldr_mount_point: &str,
+) -> String {
+    format!(
+        "let cast = import! cast.boot_topology.v2\ncast.boot_topology.distinct {{ partuuid = \"{esp_partuuid}\", mount_point = \"{esp_mount_point}\" }} {{ partuuid = \"{xbootldr_partuuid}\", mount_point = \"{xbootldr_mount_point}\" }}\n"
     )
 }
 

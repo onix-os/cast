@@ -5,7 +5,7 @@ use super::{
         ActiveReblitBootTopologyIntentError, BootTopologyIntentBudget, BootTopologyIntentPolicy,
         MAX_BOOT_TOPOLOGY_SOURCE_BYTES, prepare_with_policy_and_checkpoint,
     },
-    support::{ESP_PARTUUID, Fixture, authored_alias},
+    support::{ESP_PARTUUID, Fixture, authored_alias, authored_alias_at},
 };
 
 #[test]
@@ -160,6 +160,59 @@ fn source_byte_bound_is_inclusive_and_production_ceiling_fails_before_evaluation
             actual,
             ..
         }) if actual == (MAX_BOOT_TOPOLOGY_SOURCE_BYTES + 1) as u64
+    ));
+}
+
+#[test]
+fn mount_selector_byte_component_byte_and_component_count_bounds_are_exact() {
+    let exact_total = mount_selector_with_total_bytes(4_095);
+    let over_total = mount_selector_with_total_bytes(4_096);
+    assert_eq!(exact_total.len(), 4_095);
+    assert_eq!(over_total.len(), 4_096);
+    assert_mount_selector_accepted(&exact_total);
+    assert_mount_selector_rejected(&over_total, 4_096);
+
+    let exact_component = format!("/synthetic/{}", "c".repeat(255));
+    let over_component = format!("/synthetic/{}", "c".repeat(256));
+    assert_mount_selector_accepted(&exact_component);
+    assert_mount_selector_rejected(&over_component, over_component.len());
+
+    let exact_components = format!("/{}", vec!["c"; 128].join("/"));
+    let over_components = format!("/{}", vec!["c"; 129].join("/"));
+    assert_mount_selector_accepted(&exact_components);
+    assert_mount_selector_rejected(&over_components, over_components.len());
+}
+
+fn mount_selector_with_total_bytes(total: usize) -> String {
+    let mut remaining = total - 1;
+    let mut components = Vec::new();
+    while remaining > 0 {
+        let component_bytes = remaining.min(255);
+        components.push("c".repeat(component_bytes));
+        remaining -= component_bytes;
+        if remaining > 0 {
+            remaining -= 1;
+        }
+    }
+    format!("/{}", components.join("/"))
+}
+
+fn assert_mount_selector_accepted(mount_point: &str) {
+    let fixture = Fixture::new();
+    fixture.write_source(authored_alias_at(ESP_PARTUUID, mount_point));
+    fixture.prepare().unwrap();
+}
+
+fn assert_mount_selector_rejected(mount_point: &str, actual_bytes: usize) {
+    let fixture = Fixture::new();
+    fixture.write_source(authored_alias_at(ESP_PARTUUID, mount_point));
+    assert!(matches!(
+        fixture.prepare(),
+        Err(ActiveReblitBootTopologyIntentError::InvalidMountPointSelector {
+            field: "esp.mount_point",
+            actual_bytes: actual,
+            ..
+        }) if actual == actual_bytes
     ));
 }
 

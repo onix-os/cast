@@ -1,8 +1,14 @@
 use gluon_config::DiagnosticCategory;
 
 use super::{
-    super::{ActiveReblitBootTopologyIntentError, BoundActiveReblitBootTopologyIntent},
-    support::{ESP_PARTUUID, Fixture, XBOOTLDR_PARTUUID, authored_alias, authored_distinct},
+    super::{
+        ActiveReblitBootTopologyIntentError, BoundActiveReblitBootPartitionSelector,
+        BoundActiveReblitBootTopologyIntent,
+    },
+    support::{
+        ESP_MOUNT_POINT, ESP_PARTUUID, Fixture, XBOOTLDR_MOUNT_POINT, XBOOTLDR_PARTUUID, authored_alias,
+        authored_alias_at, authored_distinct, authored_distinct_at,
+    },
 };
 
 #[test]
@@ -15,14 +21,17 @@ fn alias_intent_exposes_only_revalidated_typed_identity_and_exact_provenance() {
     assert_eq!(
         revalidated.topology(),
         BoundActiveReblitBootTopologyIntent::BootAliasesEsp {
-            esp_partuuid: ESP_PARTUUID,
+            esp: BoundActiveReblitBootPartitionSelector {
+                partuuid: ESP_PARTUUID,
+                mount_point_hint: ESP_MOUNT_POINT,
+            },
         }
     );
     let fingerprint = revalidated.fingerprint();
     fingerprint.validate().unwrap();
     assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.glu");
     assert_eq!(fingerprint.imported_modules.len(), 1);
-    assert_eq!(fingerprint.imported_modules[0].logical_name, "cast.boot_topology.v1");
+    assert_eq!(fingerprint.imported_modules[0].logical_name, "cast.boot_topology.v2");
 }
 
 #[test]
@@ -35,12 +44,18 @@ fn distinct_xbootldr_is_typed_declarative_intent_not_runtime_role_proof() {
     assert_eq!(
         revalidated.topology(),
         BoundActiveReblitBootTopologyIntent::DistinctXbootldr {
-            esp_partuuid: ESP_PARTUUID,
-            xbootldr_partuuid: XBOOTLDR_PARTUUID,
+            esp: BoundActiveReblitBootPartitionSelector {
+                partuuid: ESP_PARTUUID,
+                mount_point_hint: ESP_MOUNT_POINT,
+            },
+            xbootldr: BoundActiveReblitBootPartitionSelector {
+                partuuid: XBOOTLDR_PARTUUID,
+                mount_point_hint: XBOOTLDR_MOUNT_POINT,
+            },
         }
     );
-    // No mountpoint, device, GPT-role, or same-disk assertion is exposed by
-    // this intent-only type. A later physical-topology aggregate must prove it.
+    // The authored mount-point bytes are selectors only. No pathname, mount,
+    // device, GPT-role, or same-disk authority is exposed by this intent type.
 }
 
 #[test]
@@ -94,13 +109,72 @@ fn invalid_partuuid_diagnostics_cap_the_preview_at_an_exact_byte_boundary() {
 }
 
 #[test]
+fn lexical_mount_selector_grammar_accepts_valid_and_rejects_unsafe_forms() {
+    let valid = "/synthetic/machine-local/esp-root.é";
+    let fixture = Fixture::new();
+    fixture.write_source(authored_alias_at(ESP_PARTUUID, valid));
+    assert_eq!(
+        fixture
+            .prepare()
+            .unwrap()
+            .revalidate(&fixture.installation)
+            .unwrap()
+            .topology(),
+        BoundActiveReblitBootTopologyIntent::BootAliasesEsp {
+            esp: BoundActiveReblitBootPartitionSelector {
+                partuuid: ESP_PARTUUID,
+                mount_point_hint: valid,
+            },
+        }
+    );
+
+    for invalid in [
+        "synthetic/esp-root",
+        "/",
+        "/synthetic//esp-root",
+        "/synthetic/esp-root/",
+        "/synthetic/./esp-root",
+        "/synthetic/../esp-root",
+        "/synthetic/\0esp-root",
+    ] {
+        let fixture = Fixture::new();
+        fixture.write_source(authored_alias_at(ESP_PARTUUID, invalid));
+        assert!(matches!(
+            fixture.prepare(),
+            Err(ActiveReblitBootTopologyIntentError::InvalidMountPointSelector {
+                field: "esp.mount_point",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn distinct_form_rejects_duplicate_partition_identities() {
     let fixture = Fixture::new();
     fixture.write_source(authored_distinct(ESP_PARTUUID, ESP_PARTUUID));
     assert!(matches!(
         fixture.prepare(),
         Err(ActiveReblitBootTopologyIntentError::InvalidPartUuid {
-            field: "xbootldr_partuuid",
+            field: "xbootldr.partuuid",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn distinct_form_rejects_duplicate_mount_selectors_independently_of_partuuid() {
+    let fixture = Fixture::new();
+    fixture.write_source(authored_distinct_at(
+        ESP_PARTUUID,
+        ESP_MOUNT_POINT,
+        XBOOTLDR_PARTUUID,
+        ESP_MOUNT_POINT,
+    ));
+    assert!(matches!(
+        fixture.prepare(),
+        Err(ActiveReblitBootTopologyIntentError::InvalidMountPointSelector {
+            field: "xbootldr.mount_point",
             ..
         })
     ));
@@ -111,7 +185,7 @@ fn relative_host_and_unknown_embedded_imports_are_all_rejected() {
     for imported in ["\"other.glu\"", "std.fs", "cast.system.v1"] {
         let fixture = Fixture::new();
         fixture.write_source(format!(
-            "let _ = import! {imported}\nlet cast = import! cast.boot_topology.v1\ncast.boot_topology.aliases_esp \"{ESP_PARTUUID}\"\n"
+            "let _ = import! {imported}\nlet cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\" }}\n"
         ));
         assert!(matches!(
             fixture.prepare(),
@@ -122,22 +196,50 @@ fn relative_host_and_unknown_embedded_imports_are_all_rejected() {
 }
 
 #[test]
+fn v1_module_is_rejected_without_a_compatibility_fallback() {
+    let fixture = Fixture::new();
+    fixture.write_source(format!(
+        "let cast = import! cast.boot_topology.v1\ncast.boot_topology.aliases_esp \"{ESP_PARTUUID}\"\n"
+    ));
+    assert!(matches!(
+        fixture.prepare(),
+        Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
+            if diagnostic.category == DiagnosticCategory::Import
+    ));
+}
+
+#[test]
 fn api_import_is_mandatory_and_unknown_output_fields_are_rejected() {
     let no_api = Fixture::new();
     no_api.write_source(format!(
-        "type BootTarget = | AliasEsp\n{{ esp_partuuid = \"{ESP_PARTUUID}\", boot = AliasEsp }}\n"
+        "type BootTarget = | AliasEsp\n{{ esp = {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\" }}, boot = AliasEsp }}\n"
     ));
     assert!(no_api.prepare().is_err());
 
     let unknown = Fixture::new();
     unknown.write_source(format!(
-        "let cast = import! cast.boot_topology.v1\n{{ unexpected = \"input\", .. cast.boot_topology.aliases_esp \"{ESP_PARTUUID}\" }}\n"
+        "let cast = import! cast.boot_topology.v2\n{{ unexpected = \"input\", .. cast.boot_topology.aliases_esp {{ partuuid = \"{ESP_PARTUUID}\", mount_point = \"{ESP_MOUNT_POINT}\" }} }}\n"
     ));
     assert!(matches!(
         unknown.prepare(),
         Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
             if diagnostic.category == DiagnosticCategory::Type
     ));
+
+    for incomplete_selector in [
+        format!("{{ partuuid = \"{ESP_PARTUUID}\" }}"),
+        format!("{{ mount_point = \"{ESP_MOUNT_POINT}\" }}"),
+    ] {
+        let missing_field = Fixture::new();
+        missing_field.write_source(format!(
+            "let cast = import! cast.boot_topology.v2\ncast.boot_topology.aliases_esp {incomplete_selector}\n"
+        ));
+        assert!(matches!(
+            missing_field.prepare(),
+            Err(ActiveReblitBootTopologyIntentError::Evaluation(ref diagnostic))
+                if diagnostic.category == DiagnosticCategory::Type
+        ));
+    }
 }
 
 #[test]
@@ -178,30 +280,40 @@ fn exact_source_and_embedded_abi_participate_in_deterministic_fingerprint() {
 
 #[test]
 fn checked_documentation_examples_use_the_exact_restricted_topology_loader() {
-    for (source, expected) in [
+    for (source, distinct) in [
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../docs/examples/gluon/boot-topology-aliases-esp.glu"
             )),
-            BoundActiveReblitBootTopologyIntent::BootAliasesEsp {
-                esp_partuuid: ESP_PARTUUID,
-            },
+            false,
         ),
         (
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../docs/examples/gluon/boot-topology-distinct-xbootldr.glu"
             )),
-            BoundActiveReblitBootTopologyIntent::DistinctXbootldr {
-                esp_partuuid: ESP_PARTUUID,
-                xbootldr_partuuid: XBOOTLDR_PARTUUID,
-            },
+            true,
         ),
     ] {
         let fixture = Fixture::new();
         fixture.write_source(source);
         let prepared = fixture.prepare().unwrap();
-        assert_eq!(prepared.revalidate(&fixture.installation).unwrap().topology(), expected);
+        let revalidated = prepared.revalidate(&fixture.installation).unwrap();
+        let topology = revalidated.topology();
+        match (topology, distinct) {
+            (BoundActiveReblitBootTopologyIntent::BootAliasesEsp { esp }, false) => {
+                assert_eq!(esp.partuuid, ESP_PARTUUID);
+                assert!(esp.mount_point_hint.starts_with('/'));
+            }
+            (BoundActiveReblitBootTopologyIntent::DistinctXbootldr { esp, xbootldr }, true) => {
+                assert_eq!(esp.partuuid, ESP_PARTUUID);
+                assert_eq!(xbootldr.partuuid, XBOOTLDR_PARTUUID);
+                assert!(esp.mount_point_hint.starts_with('/'));
+                assert!(xbootldr.mount_point_hint.starts_with('/'));
+                assert_ne!(esp.mount_point_hint, xbootldr.mount_point_hint);
+            }
+            (actual, _) => panic!("documentation example produced the wrong topology: {actual:?}"),
+        }
     }
 }

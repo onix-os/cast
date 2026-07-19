@@ -5,16 +5,27 @@ Machine-local boot partition identity has two standalone examples:
 
 | Example | What it demonstrates |
 |---|---|
-| [`boot-topology-aliases-esp.glu`](boot-topology-aliases-esp.glu) | One canonical ESP PARTUUID used for both ESP and BOOT. |
-| [`boot-topology-distinct-xbootldr.glu`](boot-topology-distinct-xbootldr.glu) | A canonical ESP PARTUUID plus a distinct XBOOTLDR PARTUUID. |
+| [`boot-topology-aliases-esp.glu`](boot-topology-aliases-esp.glu) | One explicit ESP selector, including its canonical PARTUUID and authored mount point, used for both ESP and BOOT. |
+| [`boot-topology-distinct-xbootldr.glu`](boot-topology-distinct-xbootldr.glu) | Explicit ESP and XBOOTLDR selectors with different canonical PARTUUIDs and authored mount points. |
 
 The focused `make forge-active-reblit-boot-topology-intent-test` lane copies
 both exact files to the fixed `etc/cast/boot-topology.glu` location beneath a
 retained installation and evaluates them through the production restricted
-loader. They declare identity only: later authenticated evidence must still
-prove mounted devices, on-disk partition roles, and the ESP/XBOOTLDR same-disk
-relationship. Sysfs identity evidence alone cannot prove GPT type GUIDs or
-filesystem types.
+loader. Both import `cast.boot_topology.v2`. Each `PartitionSelector` contains
+a mandatory canonical PARTUUID and a mandatory bounded absolute lexical
+`mount_point` whose exact authored bytes are retained without canonicalization.
+
+Mount points are untrusted lexical lookup hints, not storage authority. They
+have no defaults and do not enable discovery, fallback, or `canonicalize`.
+Later descriptor-retained evidence must still prove the exact namespace
+attachment, mountinfo entry, mounted device, matching sysfs PARTUUID, and the
+topology relationship. GPT role, filesystem type, and durability require
+additional evidence. `cast.boot_topology.v1` cannot be migrated automatically
+because it has no mount points; administrators must rewrite it explicitly
+rather than let Cast guess from the host.
+
+The full future authority and publication boundary is specified in
+[`active-reblit-mounted-boot-topology.md`](../../architecture/active-reblit-mounted-boot-topology.md).
 
 The recipes under [`packages`](packages) exercise the public
 `cast.package.v3` interface as ordinary, pure Gluon programs. They are

@@ -3,15 +3,18 @@
 //! The fixed `etc/cast/boot-topology.glu` program is separate from the stored
 //! [`crate::SystemModel`]: it describes one machine's immutable partition
 //! identities, not stateless OS package intent. The restricted program must
-//! import exactly `cast.boot_topology.v1` and returns either one ESP PARTUUID
-//! used for both destinations or distinct ESP and XBOOTLDR PARTUUIDs.
+//! import exactly `cast.boot_topology.v2` and returns either one ESP selector
+//! used for both destinations or distinct ESP and XBOOTLDR selectors. Each
+//! selector contains a canonical PARTUUID. It also retains an exact, authored
+//! mount-point hint without normalization.
 //!
 //! This module authenticates only declarative intent. In particular,
 //! `DistinctXbootldr` is not evidence that either partition is mounted, has the
 //! claimed GPT role, or shares a disk with the ESP. A later physical-topology
-//! aggregate must bind these PARTUUIDs to authenticated mounted major:minor
-//! devices and prove the same-disk relationship before granting destination
-//! authority.
+//! aggregate must treat each mount-point hint as an untrusted lexical selector,
+//! bind each PARTUUID to an authenticated mounted major:minor device, and prove
+//! the same-disk relationship before granting destination authority. The hints
+//! grant no pathname, mount, filesystem, or mutation authority.
 //!
 //! Preparation retains every fixed pathname component, the exact regular-file
 //! inode and bytes, the evaluated value, and the complete Gluon fingerprint.
@@ -72,37 +75,63 @@ pub(in crate::client) struct RevalidatedActiveReblitBootTopologyIntent<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum BoundActiveReblitBootTopologyIntent<'a> {
     BootAliasesEsp {
-        esp_partuuid: &'a str,
+        esp: BoundActiveReblitBootPartitionSelector<'a>,
     },
     /// Declarative intent only; this is not physical GPT or mount-role proof.
     DistinctXbootldr {
-        esp_partuuid: &'a str,
-        xbootldr_partuuid: &'a str,
+        esp: BoundActiveReblitBootPartitionSelector<'a>,
+        xbootldr: BoundActiveReblitBootPartitionSelector<'a>,
     },
+}
+
+/// Borrowed declarative selector, never pathname or mounted-device authority.
+///
+/// `mount_point_hint` retains the exact authored UTF-8 bytes. It is only an
+/// untrusted lexical selector for a later authenticated attachment aggregate;
+/// it neither proves a mount exists nor permits opening or mutating that path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::client) struct BoundActiveReblitBootPartitionSelector<'a> {
+    pub(in crate::client) partuuid: &'a str,
+    pub(in crate::client) mount_point_hint: &'a str,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 struct ActiveReblitBootTopologyIntentValue {
-    esp_partuuid: Box<str>,
+    esp: ActiveReblitBootPartitionSelector,
     boot: ActiveReblitBootTopologyTarget,
 }
 
 #[derive(Debug, Eq, PartialEq)]
 enum ActiveReblitBootTopologyTarget {
     AliasEsp,
-    DistinctXbootldr(Box<str>),
+    DistinctXbootldr(ActiveReblitBootPartitionSelector),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct ActiveReblitBootPartitionSelector {
+    partuuid: Box<str>,
+    mount_point_hint: Box<str>,
+}
+
+impl ActiveReblitBootPartitionSelector {
+    fn bound(&self) -> BoundActiveReblitBootPartitionSelector<'_> {
+        BoundActiveReblitBootPartitionSelector {
+            partuuid: &self.partuuid,
+            mount_point_hint: &self.mount_point_hint,
+        }
+    }
 }
 
 impl ActiveReblitBootTopologyIntentValue {
     fn bound(&self) -> BoundActiveReblitBootTopologyIntent<'_> {
         match &self.boot {
-            ActiveReblitBootTopologyTarget::AliasEsp => BoundActiveReblitBootTopologyIntent::BootAliasesEsp {
-                esp_partuuid: &self.esp_partuuid,
-            },
-            ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr_partuuid) => {
+            ActiveReblitBootTopologyTarget::AliasEsp => {
+                BoundActiveReblitBootTopologyIntent::BootAliasesEsp { esp: self.esp.bound() }
+            }
+            ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr) => {
                 BoundActiveReblitBootTopologyIntent::DistinctXbootldr {
-                    esp_partuuid: &self.esp_partuuid,
-                    xbootldr_partuuid,
+                    esp: self.esp.bound(),
+                    xbootldr: xbootldr.bound(),
                 }
             }
         }
@@ -373,6 +402,13 @@ pub(in crate::client) enum ActiveReblitBootTopologyIntentError {
     },
     #[error("invalid {field} PARTUUID {value_preview:?} (actual {actual_bytes} bytes): {reason}")]
     InvalidPartUuid {
+        field: &'static str,
+        value_preview: Box<str>,
+        actual_bytes: usize,
+        reason: &'static str,
+    },
+    #[error("invalid {field} mount-point selector {value_preview:?} (actual {actual_bytes} bytes): {reason}")]
+    InvalidMountPointSelector {
         field: &'static str,
         value_preview: Box<str>,
         actual_bytes: usize,

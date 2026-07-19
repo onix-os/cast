@@ -1,4 +1,6 @@
-let cast = import! cast.boot_topology.v1
+let cast = import! cast.boot_topology.v2
 
-cast.boot_topology.aliases_esp
-    "11111111-2222-3333-4444-555555555555"
+cast.boot_topology.aliases_esp {
+    partuuid = "11111111-2222-3333-4444-555555555555",
+    mount_point = "/efi",
+}
