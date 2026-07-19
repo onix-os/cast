@@ -459,6 +459,13 @@ FAT-safe relative paths, pre-materialization generated-byte limits, finite
 request/path/work limits, and terminal deadline checks. Synthetic topology
 fixtures exercise the production planning path without touching host storage.
 
+Commit `dfa247d5` adds a distinct exact-byte SHA-256 identity. Sealed assets
+compute it during the existing bounded copy pass, generated publications derive
+it from their owned bytes, and renderer deduplication, publication planning,
+and final source binding all retain and recheck it. XXH3 remains the path and
+namespace-protocol checksum; this does not authenticate a publisher, establish
+ownership provenance, or add cryptographic destination verification.
+
 Commit `9ac34286` adds a pure bounded destination-namespace assessment for the
 rendered requests. It preserves request order, admits only stable `Absent`,
 `Exact`, or `Different` states, and rejects raw/kernel-name disagreement, FAT
