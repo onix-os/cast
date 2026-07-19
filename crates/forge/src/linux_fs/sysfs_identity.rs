@@ -179,6 +179,8 @@ impl std::fmt::Debug for RevalidatedSysfsPartitionIdentity<'_> {
             .field("partition_number", &self.partition_number())
             .field("partition_uuid", &self.partition_uuid())
             .field("disk_sequence", &self.disk_sequence())
+            .field("partition_device_name", &self.partition_device_name())
+            .field("parent_device_name", &self.parent_device_name())
             .finish_non_exhaustive()
     }
 }
@@ -205,6 +207,22 @@ impl RevalidatedSysfsPartitionIdentity<'_> {
     /// These bytes are descriptive evidence, not path or mutation authority.
     pub(crate) fn normalized_devpath(&self) -> &[u8] {
         self.current.normalized_devpath()
+    }
+
+    /// Return the validated kernel name for the partition block object.
+    ///
+    /// This is descriptive relative-locator evidence only. It carries no
+    /// descriptor, open, reopen, path-resolution, or mutation authority.
+    pub(crate) fn partition_device_name(&self) -> &[u8] {
+        self.current.partition_device_name()
+    }
+
+    /// Return the validated kernel name for the retained whole-disk parent.
+    ///
+    /// This is descriptive relative-locator evidence only. It carries no
+    /// descriptor, open, reopen, path-resolution, or mutation authority.
+    pub(crate) fn parent_device_name(&self) -> &[u8] {
+        self.current.parent_device_name()
     }
 
     /// Compare the authenticated block-parent evidence in two revalidated

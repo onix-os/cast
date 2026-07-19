@@ -3,9 +3,9 @@ use std::{ffi::CString, io};
 use super::{
     super::sysfs_block::{
         SYSFS_DEV_ATTRIBUTE_MAX_BYTES, SYSFS_LINK_TARGET_MAX_BYTES, SYSFS_PARTITION_ATTRIBUTE_MAX_BYTES,
-        SYSFS_UEVENT_MAX_BYTES, SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber, SysfsPartitionUuid,
-        normalize_sysfs_dev_block_target_until, parse_sysfs_disk_identity_until, parse_sysfs_partition_identity_until,
-        parse_sysfs_subsystem_target_until, require_matching_disk_sequence_until,
+        SYSFS_UEVENT_MAX_BYTES, SysfsBlockDeviceName, SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNumber,
+        SysfsPartitionUuid, normalize_sysfs_dev_block_target_until, parse_sysfs_disk_identity_until,
+        parse_sysfs_partition_identity_until, parse_sysfs_subsystem_target_until, require_matching_disk_sequence_until,
     },
     filesystem::{
         AttributeEvidence, CaptureAttribute, CaptureCheckpoint, CaptureNode, FileWitness, Operation, RootHandle,
@@ -56,6 +56,8 @@ struct Snapshot {
     partition_uuid: SysfsPartitionUuid,
     disk_sequence: Option<SysfsDiskSequence>,
     parent_device: SysfsDeviceNumber,
+    partition_device_name: Vec<u8>,
+    parent_device_name: Vec<u8>,
 }
 
 pub(super) struct Capture {
@@ -87,6 +89,14 @@ impl Capture {
 
     pub(super) fn normalized_devpath(&self) -> &[u8] {
         &self.snapshot.normalized_devpath
+    }
+
+    pub(super) fn partition_device_name(&self) -> &[u8] {
+        &self.snapshot.partition_device_name
+    }
+
+    pub(super) fn parent_device_name(&self) -> &[u8] {
+        &self.snapshot.parent_device_name
     }
 
     pub(super) fn require_retained(&self, root: &RootHandle, operation: &mut Operation<'_>) -> io::Result<()> {
@@ -319,6 +329,7 @@ impl Capture {
             && self.snapshot.parent_device == other.snapshot.parent_device
             && self.snapshot.parent_dev == other.snapshot.parent_dev
             && self.snapshot.parent_uevent == other.snapshot.parent_uevent
+            && self.snapshot.parent_device_name == other.snapshot.parent_device_name
             && self.parent_snapshot() == other.parent_snapshot()
     }
 
@@ -511,6 +522,7 @@ fn capture_once(
             "sysfs lookup device disagrees with captured partition identity",
         ));
     }
+    let partition_device_name = copy_device_name(partition_identity.device_name(), operation)?;
 
     let mut ancestor_evidence = Vec::new();
     ancestor_evidence
@@ -561,6 +573,7 @@ fn capture_once(
                 )?;
                 let disk_identity =
                     parse_sysfs_disk_identity_until(&parent_dev.bytes, &parent_uevent.bytes, operation.deadline())?;
+                let parent_device_name = copy_device_name(disk_identity.device_name(), operation)?;
                 let disk_sequence =
                     require_matching_disk_sequence_until(&partition_identity, &disk_identity, operation.deadline())?;
                 if disk_identity.device() == partition_identity.device() {
@@ -579,13 +592,14 @@ fn capture_once(
                     parent_uevent,
                     disk_identity.device(),
                     disk_sequence,
+                    parent_device_name,
                 ));
                 break;
             }
         }
         operation.checkpoint()?;
     }
-    let (parent_index, parent_witness, parent_dev, parent_uevent, parent_device, disk_sequence) =
+    let (parent_index, parent_witness, parent_dev, parent_uevent, parent_device, disk_sequence, parent_device_name) =
         selected.ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -639,9 +653,25 @@ fn capture_once(
             partition_uuid: partition_identity.partition_uuid(),
             disk_sequence,
             parent_device,
+            partition_device_name,
+            parent_device_name,
         },
         directories,
     })
+}
+
+fn copy_device_name(name: &SysfsBlockDeviceName, operation: &mut Operation<'_>) -> io::Result<Vec<u8>> {
+    let bytes = name.as_bytes();
+    operation.charge(
+        bytes.len().saturating_add(1),
+        "retaining authenticated block-device name",
+    )?;
+    let mut retained = Vec::new();
+    retained
+        .try_reserve_exact(bytes.len())
+        .map_err(|source| io::Error::other(format!("could not allocate authenticated block-device name: {source}")))?;
+    retained.extend_from_slice(bytes);
+    Ok(retained)
 }
 
 fn pin_lookup(

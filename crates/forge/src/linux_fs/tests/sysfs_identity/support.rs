@@ -19,7 +19,7 @@ pub(super) const PARTITION_UUID: &str = "5e85a94f-b115-41c5-9d72-9d23958b5edc";
 pub(super) const SIBLING_PARTITION_UUID: &str = "6e85a94f-b115-41c5-9d72-9d23958b5edc";
 
 const ROOT_NAME: &str = "synthetic-sysfs";
-const DISK_NAME: &str = "fixture-disk";
+pub(super) const DISK_NAME: &str = "fixture-disk";
 pub(super) const PARTITION_NAME: &str = "fixture-diskp7";
 const SIBLING_PARTITION_NAME: &str = "fixture-diskp8";
 const OUTSIDE_CONTENTS: &[u8] = b"outside fixture remains unchanged\n";

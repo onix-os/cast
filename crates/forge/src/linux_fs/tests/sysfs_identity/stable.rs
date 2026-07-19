@@ -2,8 +2,8 @@ use std::{fs, io};
 
 use super::super::super::{sysfs_block::SysfsDeviceNumber, sysfs_identity::FixtureSysfsTree};
 use super::support::{
-    DISK_MAJOR, DISK_MINOR, DISK_SEQUENCE, FixtureEntry, PARTITION_MAJOR, PARTITION_MINOR, PARTITION_NUMBER,
-    PARTITION_UUID, SIBLING_PARTITION_MINOR, SIBLING_PARTITION_UUID, SyntheticSysfs,
+    DISK_MAJOR, DISK_MINOR, DISK_NAME, DISK_SEQUENCE, FixtureEntry, PARTITION_MAJOR, PARTITION_MINOR, PARTITION_NAME,
+    PARTITION_NUMBER, PARTITION_UUID, SIBLING_PARTITION_MINOR, SIBLING_PARTITION_UUID, SyntheticSysfs,
 };
 
 fn device() -> SysfsDeviceNumber {
@@ -30,6 +30,8 @@ fn stable_fixture_captures_and_revalidates_exact_partition_identity() {
     assert_eq!(view.partition_uuid().as_str(), PARTITION_UUID);
     assert_eq!(view.disk_sequence().unwrap().get(), DISK_SEQUENCE);
     assert_eq!(view.normalized_devpath(), fixture.logical_device_path());
+    assert_eq!(view.partition_device_name(), PARTITION_NAME.as_bytes());
+    assert_eq!(view.parent_device_name(), DISK_NAME.as_bytes());
     fixture.assert_outside_unchanged();
 }
 
