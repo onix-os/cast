@@ -1,0 +1,12 @@
+// Pure, embedded API for explicit machine-local root-filesystem intent.
+
+type RootFilesystemIntent = {
+    root: String,
+}
+
+let root_filesystem: RootFilesystemIntent -> RootFilesystemIntent = \value -> value
+
+{
+    abi_version = 1,
+    root_filesystem,
+}

@@ -246,11 +246,19 @@ and length coordinate, and reads each sealed source only by bounded explicit
 offset under one caller-owned deadline. It retains normalized printable-ASCII
 text, not a destination descriptor or write capability.
 
-This package layer deliberately supplies no root-filesystem argument. A future
-complete entry renderer must receive that argument from separately
-authenticated, explicit machine-local input; it must not infer it from the
-ESP/XBOOTLDR topology, `/proc/cmdline`, fstab, udev, or the legacy disk probe.
-Until that producer exists, complete BLS entry rendering remains unwired.
+The dedicated `/etc/cast/root-filesystem.glu` producer now authenticates a
+closed `cast.root_filesystem.v1` value containing one explicit locator and can
+release exactly one injection-safe `root=<value>` token only after terminal
+revalidation. It does not infer that value from ESP/XBOOTLDR topology,
+`/proc/cmdline`, fstab, udev, or the legacy disk probe, and it does not prove
+that the named storage exists.
+
+This producer owns one token in isolation; it does not yet establish global
+single-root ownership. Existing package and local command-line normalizers can
+still retain authored `root=...` tokens. Before concatenating any command-line
+sources, the future aggregate must reserve the `root` key and reject every
+package or local duplicate. Complete BLS entry rendering remains unwired until
+that collision rule and the lifetime-bound inputs share one caller deadline.
 
 A separate durable publisher combines:
 

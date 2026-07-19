@@ -24,6 +24,7 @@ constructed only during that conversion.
 | Packaged Cast trigger | `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` | `cast.trigger.v1` |
 | Cast system intent | `/etc/cast/system.glu` | `cast.system.v1` |
 | Machine-local boot topology | `/etc/cast/boot-topology.glu` | `cast.boot_topology.v2` |
+| Machine-local root filesystem | `/etc/cast/root-filesystem.glu` | `cast.root_filesystem.v1` |
 
 System and user fragment loading is deterministic. Vendor files under
 `/usr/share/cast` load before administrator files under `/etc/cast`;
@@ -43,7 +44,9 @@ Runnable examples live in [`docs/examples/gluon`](examples/gluon):
 - [`boot-topology-aliases-esp.glu`](examples/gluon/boot-topology-aliases-esp.glu)
   declares one ESP selector for both destinations; and
 - [`boot-topology-distinct-xbootldr.glu`](examples/gluon/boot-topology-distinct-xbootldr.glu)
-  declares separate ESP and XBOOTLDR selectors.
+  declares separate ESP and XBOOTLDR selectors; and
+- [`root-filesystem.glu`](examples/gluon/root-filesystem.glu) declares one
+  explicit root locator.
 
 ### Machine-local boot topology
 
@@ -90,6 +93,28 @@ or mount operation is attempted.
 The complete future mounted-topology, pure-renderer, one-attempt publisher,
 and disposable-VM test contract is documented in
 [`ActiveReblit mounted boot topology`](architecture/active-reblit-mounted-boot-topology.md).
+
+### Machine-local root filesystem
+
+The mandatory `/etc/cast/root-filesystem.glu` source imports exactly
+`cast.root_filesystem.v1`. Its intentionally narrow closed value is
+`{ root: String }`. Rust validates one nonempty bounded whitespace-free
+printable-ASCII locator, rejects an authored `root=` prefix, and materializes
+exactly one `root=<value>` kernel token. Additional local kernel arguments
+remain owned by the separate local command-line policy; they are not fields of
+this ABI.
+
+Like boot topology, the root locator belongs to the physical machine rather
+than `SystemModel`. It is never archived, exported, or rolled back with the
+stored OS state. Acceptance proves the exact authenticated authored bytes,
+closed typed value, and evaluation fingerprint. It does not prove that a
+device, partition, or filesystem exists and does not inspect the running
+kernel, fstab, udev, package command lines, boot topology, or legacy disk
+probes. The fixed source is retained and repeatedly rebound beneath the
+installation descriptor under one caller-owned deadline. This producer is
+not yet wired into rendering or publication. Its single token is an isolated
+producer guarantee: the future aggregate must reserve the `root` key and
+reject any package or local command-line duplicate before concatenation.
 
 The [package-authoring guide](package-authoring.md) documents factories,
 explicit dependency scopes, standard and custom builders, typed phases,
@@ -288,6 +313,7 @@ Authored programs and generated values have different roles:
 | `build.lock.glu` | Cast planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
 | Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Cast CLI | Canonical standalone literals marked `@generated`; authored files are protected |
 | `/etc/cast/system.glu` | System administrator | Desired state; evaluated but never normalized in place |
+| `/etc/cast/root-filesystem.glu` | System administrator | Mandatory machine-local root locator; authenticated in place and never inferred or stored with OS state |
 | `/usr/lib/system-model.glu` | Cast state transaction | Canonical standalone snapshot stored with the state |
 
 `sources.lock.glu` is adjacent to `stone.glu`. It binds archive hashes and Git

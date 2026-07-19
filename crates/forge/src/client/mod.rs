@@ -104,6 +104,9 @@ mod active_reblit_package_cmdline_inputs;
 #[allow(dead_code)] // pre-claim pure output plan; consumed by the descriptor-safe publisher
 #[path = "boot/active_reblit_publication_plan.rs"]
 mod active_reblit_publication_plan;
+#[allow(dead_code)] // authenticated machine-local root locator; renderer remains deliberately unwired
+#[path = "boot/active_reblit_root_filesystem_intent.rs"]
+mod active_reblit_root_filesystem_intent;
 #[cfg(test)]
 mod active_reblit_tests;
 mod active_state_authority;
