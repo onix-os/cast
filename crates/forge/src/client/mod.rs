@@ -83,12 +83,12 @@ pub use self::self_upgrade::self_upgrade;
 #[allow(dead_code)] // pure lifetime-bound BLS requests for the later durable publisher
 #[path = "boot/active_reblit_bls_renderer.rs"]
 mod active_reblit_bls_renderer;
-#[allow(dead_code)] // closed plan inputs consumed by the later retained attachment coordinator
-#[path = "boot/active_reblit_boot_namespace_inputs.rs"]
-mod active_reblit_boot_namespace_inputs;
 #[allow(dead_code)] // pre-claim substrate; wired only with the descriptor-safe output plan
 #[path = "boot/active_reblit_boot_inputs.rs"]
 mod active_reblit_boot_inputs;
+#[allow(dead_code)] // closed plan inputs consumed by the later retained attachment coordinator
+#[path = "boot/active_reblit_boot_namespace_inputs.rs"]
+mod active_reblit_boot_namespace_inputs;
 #[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
 #[path = "boot/active_reblit_projection.rs"]
 pub(crate) mod active_reblit_boot_projection;
@@ -132,6 +132,9 @@ mod boot;
 #[allow(dead_code)] // pre-claim substrate; wired only after the worker input model is complete
 #[path = "boot/asset_snapshots.rs"]
 mod boot_asset_snapshots;
+#[allow(dead_code)] // typed SHA-256 identity carried through boot planning and publication
+#[path = "boot/boot_content_identity.rs"]
+mod boot_content_identity;
 mod cache;
 mod candidate_metadata;
 mod clean_boot_synchronization;

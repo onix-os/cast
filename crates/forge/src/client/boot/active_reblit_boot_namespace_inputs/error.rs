@@ -34,6 +34,8 @@ pub(in crate::client) enum ActiveReblitBootNamespaceInputError {
     NonUtf8PlanPath { plan_index: usize },
     #[error("generated boot publication {plan_index} has inconsistent scalar length")]
     GeneratedSourceLengthMismatch { plan_index: usize },
+    #[error("generated boot publication {plan_index} does not match its SHA-256 content identity")]
+    GeneratedSourceIdentityMismatch { plan_index: usize },
     #[error("sealed boot publication {plan_index} is absent from the retained renderer catalog")]
     MissingSealedSource { plan_index: usize },
     #[error("sealed boot publication {plan_index} does not match its retained asset identity")]

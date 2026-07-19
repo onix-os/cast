@@ -728,7 +728,7 @@ fn copy_fd_exact(
     expected_length: u64,
     expected_digest: u128,
     deadline: Option<Instant>,
-) -> Result<(), Error> {
+) -> Result<boot_content_identity::BootContentIdentity, Error> {
     if expected_length > MAX_BLIT_ASSET_BYTES {
         return Err(asset_copy_error(format!(
             "asset-copy length {expected_length} exceeds {MAX_BLIT_ASSET_BYTES} bytes"
@@ -737,6 +737,7 @@ fn copy_fd_exact(
     let mut buffer = [0_u8; ASSET_COPY_BUFFER_BYTES];
     let mut remaining = expected_length;
     let mut hasher = StoneDigestWriterHasher::new();
+    let mut content_hasher = <sha2::Sha256 as sha2::Digest>::new();
 
     while remaining != 0 {
         require_blit_deadline(deadline)?;
@@ -753,6 +754,7 @@ fn copy_fd_exact(
             )));
         }
         hasher.update(&buffer[..read_count]);
+        sha2::Digest::update(&mut content_hasher, &buffer[..read_count]);
         remaining = remaining
             .checked_sub(read_count as u64)
             .ok_or_else(|| asset_copy_error("asset-copy byte count underflow"))?;
@@ -789,5 +791,7 @@ fn copy_fd_exact(
             "cached asset digest mismatch: expected {expected_digest:032x}, got {actual_digest:032x}"
         )));
     }
-    Ok(())
+    Ok(boot_content_identity::BootContentIdentity::from_sha256(
+        sha2::Digest::finalize(content_hasher).into(),
+    ))
 }

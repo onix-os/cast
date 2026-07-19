@@ -13,7 +13,7 @@ forge-active-reblit-bls-renderer-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(BLS_RENDERER_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_bls_renderer::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 18; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 19; \
 	for name in \
 		schemas_and_identity::historical_local_schema_is_used_and_unavailable_history_uses_sticky_global_fallback \
 		schemas_and_identity::former_identities_emit_no_outputs_and_do_not_change_rendered_bytes \
@@ -21,6 +21,7 @@ forge-active-reblit-bls-renderer-test: host-storage-safety-test
 		payloads_and_collisions::identical_payload_bytes_and_leaf_reuse_one_path_across_versions_and_bindings \
 		payloads_and_collisions::same_namespace_version_and_leaf_with_different_bytes_use_distinct_paths \
 		payloads_and_collisions::case_insensitive_payload_alias_is_rejected_even_when_content_matches \
+		payloads_and_collisions::same_xxh3_and_length_with_different_sha256_is_rejected_before_deduplication \
 		ownership_and_effects::aliased_and_distinct_topologies_preserve_rendered_bytes_but_change_collision_domains \
 		ownership_and_effects::bound_plan_retains_exact_inputs_topology_and_sources_without_namespace_mutation \
 		golden_documents::golden_alias_plan_matches_pinned_loader_entry_payload_and_bootloader_bytes \
@@ -37,6 +38,7 @@ forge-active-reblit-bls-renderer-test: host-storage-safety-test
 	done; \
 	root="$(BLS_RENDERER_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer.rs"; \
 	core="$(BLS_RENDERER_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer"; \
+	content_identity="$(BLS_RENDERER_TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
 	tests="$(BLS_RENDERER_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer_tests.rs"; \
 	test_core="$(BLS_RENDERER_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer_tests"; \
 	timeout 10s grep -Fq "struct RenderedActiveReblitBlsRequests<'input, 'attempt, 'stone, 'roots>" "$$root"; \
@@ -62,12 +64,18 @@ forge-active-reblit-bls-renderer-test: host-storage-safety-test
 	timeout 10s grep -Fq 'sealed_sources: SealedSourceCatalog<' "$$root"; \
 	timeout 10s grep -Fq '.contains_publication_source(self.planned.source())' "$$root"; \
 	timeout 10s grep -Fq '.asset_for_publication_source(source)' "$$root"; \
+	timeout 10s grep -Fq 'pub(in crate::client) fn expected_content_identity(&self) -> BootContentIdentity' "$$root"; \
+	timeout 10s grep -Fq 'content_identity: kernel_content_identity,' "$$root"; \
+	timeout 10s grep -Fq 'content_identity: initrd.content_identity,' "$$root"; \
+	timeout 10s grep -Fq '|| previous.content_identity != candidate.content_identity' "$$core/payload_catalog.rs"; \
+	timeout 10s grep -Fq '(u16, u128, u64, BootContentIdentity)' "$$core/payload_catalog.rs"; \
+	timeout 10s grep -Fq 'asset_for_publication_source(&mismatched_source)' "$$test_core/ownership_and_effects.rs"; \
 	if timeout 10s rg -U --pcre2 -n '#\[derive\((?s:[^]]*Clone[^]]*)\)\]\s*(?:pub(?:\([^)]*\))?\s+)?struct\s+(?:(?:Rendered|Bound)ActiveReblitBls[A-Za-z0-9_]*)|impl(?:<(?s:[^;{}]*)>)?\s+Clone\s+for\s+(?:(?:Rendered|Bound)ActiveReblitBls[A-Za-z0-9_]*)|pub\(in crate::client\)\s+fn\s+(?:into_inner|into_plan|plan|detach|into_unbound)\b|pub\(in crate::client\)\s+fn\s+[A-Za-z0-9_]+(?s:[^{;]*)PreparedActiveReblitBootPublicationPlan' "$$root" "$$core"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'blsforme|std::fs|fs_err|OpenOptions|File::(?:open|create)|std::process|process::Command|Command::new|nix::mount|libc::mount|mount_partitions|canonicalize\(|create_dir|create_dir_all|rename\(|remove_file|remove_dir|(?:fs::|File::)write\(|\bdescriptor\s*\(|FileExt|(?:std::io::|io::)?Read\b|\.read(?:_exact|_to_end|_at|_exact_at)?\s*\(|\bpread(?:64)?\b|\bread_at\b|\bread_exact_at\b|\b(?:AsFd|BorrowedFd|OwnedFd|RawFd)\b|\bBLK[A-Z_]+\b|/dev/(disk|sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)' "$$root" "$$core"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	host_root_pattern='/''(boot|efi|esp)(/|["[:space:]]|$$)'; \
 	if timeout 10s rg -n "$$host_root_pattern" "$$root" "$$core"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -U --pcre2 -n 'build_relative_path\(&\["EFI", namespace, version|pub\(super\) fn payload_path\((?s:[^)]*)\bversion\b' "$$root" "$$core"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	for file in "$$root" "$$core"/*.rs "$$tests" "$$test_core"/*.rs "$(BLS_RENDERER_TOP_DIR)/misc/make/active-reblit-bls-renderer-tests.mk"; do \
+	for file in "$$root" "$$core"/*.rs "$$content_identity" "$$tests" "$$test_core"/*.rs "$(BLS_RENDERER_TOP_DIR)/misc/make/active-reblit-bls-renderer-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test --manifest-path "$(BLS_RENDERER_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1

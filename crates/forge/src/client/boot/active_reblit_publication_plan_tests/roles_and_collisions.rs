@@ -106,17 +106,26 @@ fn both_bootloader_roles_bind_exact_esp_paths_and_carry_one_binding_coordinate()
         assert_eq!(output.source().binding_index(), Some(7));
         assert_eq!(output.source().digest(), 0xfeed);
         assert_eq!(output.source().length(), 42);
+        assert_eq!(
+            output.source().content_identity(),
+            fixture_content_identity(0xfeed, 42)
+        );
     }
 }
 
 #[test]
-fn generated_digest_is_derived_from_owned_bytes() {
+fn generated_checksum_and_sha256_are_derived_from_owned_bytes() {
     let bytes = b"title AerynOS\noptions test.generated=1\n";
     let plan = prepare_alias([entry("loader/entries/a.conf", bytes)]).unwrap();
     let source = plan.outputs()[0].source();
     assert_eq!(source.generated_bytes(), Some(bytes.as_slice()));
     assert_eq!(source.binding_index(), None);
     assert_eq!(source.digest(), xxhash_rust::xxh3::xxh3_128(bytes));
+    assert_eq!(source.content_identity(), BootContentIdentity::hash(bytes));
+    assert_eq!(
+        hex::encode(source.content_identity().as_bytes()),
+        "59a5d781527833a3531f15528f39a5317e4a1916d69258d6b48e3a1e5940f1ed"
+    );
 }
 
 #[test]
@@ -191,6 +200,28 @@ fn only_identical_typed_requests_including_binding_are_deduplicated() {
     ]);
     assert!(matches!(
         different_binding,
+        Err(ActiveReblitBootPublicationPlanError::PublicationCollision { .. })
+    ));
+
+    let path = checksum_payload_path("Aeryn", "vmlinuz", 7, 11);
+    let different_sha256 = prepare_alias([
+        payload_with_content_identity(
+            path.clone(),
+            3,
+            7,
+            11,
+            BootContentIdentity::hash(b"first-bytes"),
+        ),
+        payload_with_content_identity(
+            path,
+            3,
+            7,
+            11,
+            BootContentIdentity::hash(b"other-bytes"),
+        ),
+    ]);
+    assert!(matches!(
+        different_sha256,
         Err(ActiveReblitBootPublicationPlanError::PublicationCollision { .. })
     ));
 }

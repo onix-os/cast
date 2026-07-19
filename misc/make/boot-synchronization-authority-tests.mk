@@ -15,7 +15,7 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 	for test in \
 		client::active_reblit_publication_plan::tests::canonical_order_is_typed_phase_then_root_then_precomputed_folded_path \
 		client::active_reblit_publication_plan::tests::both_bootloader_roles_bind_exact_esp_paths_and_carry_one_binding_coordinate \
-		client::active_reblit_publication_plan::tests::generated_digest_is_derived_from_owned_bytes \
+		client::active_reblit_publication_plan::tests::generated_checksum_and_sha256_are_derived_from_owned_bytes \
 		client::active_reblit_publication_plan::tests::raw_role_root_phase_source_and_path_mismatches_are_rejected \
 		client::active_reblit_publication_plan::tests::only_identical_typed_requests_including_binding_are_deduplicated \
 		client::active_reblit_publication_plan::tests::same_destination_with_different_content_or_invalid_role_is_rejected \
@@ -43,6 +43,7 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 	done; \
 	plan="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan.rs"; \
 	role_binding="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan/role_binding.rs"; \
+	content_identity="$(TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
 	timeout 10s grep -Fq 'role_binding::require_role_binding(&request, &relative_path)?;' "$$plan"; \
 	timeout 10s grep -Fq 'const CHECKSUM_PREFIX: &str = "xxh3-";' "$$role_binding"; \
 	timeout 10s grep -Fq 'const LENGTH_SEPARATOR: &str = "-l";' "$$role_binding"; \
@@ -53,8 +54,12 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 	timeout 10s grep -Fq 'length.bytes().all(is_lower_hex)' "$$role_binding"; \
 	timeout 10s grep -Fq 'u128::from_str_radix(digest, 16) == Ok(expected_digest)' "$$role_binding"; \
 	timeout 10s grep -Fq 'u64::from_str_radix(length, 16) == Ok(expected_length)' "$$role_binding"; \
+	timeout 10s grep -Fq 'content_identity: BootContentIdentity,' "$$plan"; \
+	timeout 10s grep -Fq 'let content_identity = BootContentIdentity::hash(&bytes);' "$$plan"; \
+	timeout 10s grep -Fq '&& &existing.source == source' "$$plan"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$plan" )" -le 1000; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$role_binding" )" -le 1000; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$content_identity" )" -le 1000; \
 	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_publication_plan::tests::" -- --test-threads=1
 
 forge-active-reblit-stone-boot-input-test:
@@ -78,6 +83,13 @@ forge-active-reblit-stone-boot-input-test:
 		client::active_reblit_boot_inputs::tests::final_revalidation_rejects_layout_mutation_after_snapshot_binding; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
+	root="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_inputs.rs"; \
+	snapshot="$(TOP_DIR)/crates/forge/src/client/boot/asset_snapshots.rs"; \
+	content_identity="$(TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
+	timeout 10s grep -Fq 'pub(in crate::client) fn content_identity(&self) -> BootContentIdentity' "$$root"; \
+	timeout 10s grep -Fq 'self.snapshot.content_identity()' "$$root"; \
+	timeout 10s grep -Fq 'content_identity: BootContentIdentity,' "$$snapshot"; \
+	for file in "$$root" "$$snapshot" "$$content_identity"; do timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; done; \
 	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_boot_inputs::tests::" -- --test-threads=1
 
 forge-active-reblit-boot-asset-plan-test:
@@ -137,7 +149,17 @@ forge-boot-asset-snapshot-test:
 		client::boot_asset_snapshots::tests::materialization_timeout_maps_to_the_boot_snapshot_deadline; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
-	timeout 900s $(CARGO) test -p forge --lib "client::boot_asset_snapshots::tests::" -- --test-threads=1
+	timeout 10s grep -Fqx 'client::tests::exact_copy_accepts_n_and_rejects_n_minus_or_plus_one: test' <<<"$$listed"; \
+	snapshot="$(TOP_DIR)/crates/forge/src/client/boot/asset_snapshots.rs"; \
+	copy="$(TOP_DIR)/crates/forge/src/client/materialization/assets.rs"; \
+	content_identity="$(TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
+	timeout 10s grep -Fq 'let content_identity = copy_fd_exact(' "$$snapshot"; \
+	timeout 10s grep -Fq 'BootContentIdentity::EMPTY' "$$snapshot"; \
+	timeout 10s grep -Fq 'sha2::Digest::update(&mut content_hasher, &buffer[..read_count]);' "$$copy"; \
+	timeout 10s grep -Fq 'Result<boot_content_identity::BootContentIdentity, Error>' "$$copy"; \
+	for file in "$$snapshot" "$$copy" "$$content_identity"; do timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::boot_asset_snapshots::tests::" -- --test-threads=1; \
+	timeout 900s $(CARGO) test -p forge --lib 'client::tests::exact_copy_accepts_n_and_rejects_n_minus_or_plus_one' -- --exact --test-threads=1
 
 forge-active-reblit-boot-projection-database-test:
 	@set -euo pipefail; \

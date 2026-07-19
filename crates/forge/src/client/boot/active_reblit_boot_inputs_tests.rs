@@ -196,15 +196,14 @@ fn ready_binds_each_plan_reference_by_digest_when_plan_and_snapshot_orders_diffe
     );
 
     for (planned, bound) in inputs.plan().assets().iter().zip(inputs.assets()) {
+        let expected_bytes = &fixture.bytes_by_digest[&bound.digest()];
         assert_eq!(bound.digest(), planned.digest());
         assert_eq!(bound.state_id(), planned.state_id());
         assert_eq!(bound.logical_path(), planned.logical_path());
         assert_eq!(bound.resolved_path(), planned.resolved_path());
         assert_eq!(bound.role(), planned.role());
-        assert_eq!(
-            descriptor_bytes(bound.descriptor(), bound.length()),
-            fixture.bytes_by_digest[&bound.digest()]
-        );
+        assert_eq!(bound.content_identity(), BootContentIdentity::hash(expected_bytes));
+        assert_eq!(descriptor_bytes(bound.descriptor(), bound.length()), *expected_bytes);
     }
 }
 
@@ -217,6 +216,8 @@ fn duplicate_plan_references_share_one_sealed_snapshot() {
     let bound = inputs.assets().collect::<Vec<_>>();
     assert_eq!(bound.len(), 2);
     assert_eq!(bound[0].digest(), bound[1].digest());
+    assert_eq!(bound[0].content_identity(), bound[1].content_identity());
+    assert_eq!(bound[0].content_identity(), BootContentIdentity::hash(shared));
     assert_eq!(bound[0].descriptor().as_raw_fd(), bound[1].descriptor().as_raw_fd());
     assert_eq!(descriptor_bytes(bound[0].descriptor(), bound[0].length()), shared);
     assert_eq!(inputs.referenced_input_bytes(), (shared.len() * 2) as u64);
@@ -265,6 +266,11 @@ fn optional_empty_digest_references_share_one_zero_length_binding() {
         .collect::<Vec<_>>();
     assert_eq!(empty.len(), 2);
     assert!(empty.iter().all(|asset| asset.length() == 0));
+    assert!(
+        empty
+            .iter()
+            .all(|asset| asset.content_identity() == BootContentIdentity::EMPTY)
+    );
     assert!(
         empty
             .windows(2)

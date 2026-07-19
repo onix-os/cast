@@ -272,7 +272,7 @@ fn exact_copy_accepts_n_and_rejects_n_minus_or_plus_one() {
 
     let source = fs::File::open(&source_path).unwrap();
     let target = fs::File::create(temporary.path().join("exact")).unwrap();
-    copy_fd_exact(
+    let content_identity = copy_fd_exact(
         source.as_raw_fd(),
         target.as_raw_fd(),
         bytes.len() as u64,
@@ -280,6 +280,7 @@ fn exact_copy_accepts_n_and_rejects_n_minus_or_plus_one() {
         Some(Instant::now() + Duration::from_secs(10)),
     )
     .unwrap();
+    assert_eq!(content_identity, boot_content_identity::BootContentIdentity::hash(&bytes));
     drop(target);
     assert_eq!(fs::read(temporary.path().join("exact")).unwrap(), bytes);
 

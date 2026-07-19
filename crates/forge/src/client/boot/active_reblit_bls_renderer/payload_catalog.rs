@@ -2,7 +2,7 @@ use std::{cmp::Ordering, path::PathBuf, time::Instant};
 
 use super::{
     super::active_reblit_publication_plan::ActiveReblitBootPublicationSource, ActiveReblitBlsRendererError,
-    BoundActiveReblitBootAsset, RenderBudget, allocation,
+    BootContentIdentity, BoundActiveReblitBootAsset, RenderBudget, allocation,
 };
 
 pub(super) struct PayloadCandidate<'asset> {
@@ -10,6 +10,7 @@ pub(super) struct PayloadCandidate<'asset> {
     pub(super) binding_index: u16,
     pub(super) digest: u128,
     pub(super) length: u64,
+    pub(super) content_identity: BootContentIdentity,
     pub(super) asset: Option<BoundActiveReblitBootAsset<'asset>>,
 }
 
@@ -17,6 +18,7 @@ pub(super) struct RetainedSealedSource<'asset> {
     binding_index: u16,
     digest: u128,
     length: u64,
+    content_identity: BootContentIdentity,
     asset: BoundActiveReblitBootAsset<'asset>,
 }
 
@@ -30,6 +32,7 @@ impl<'asset> PayloadCandidate<'asset> {
             binding_index: self.binding_index,
             digest: self.digest,
             length: self.length,
+            content_identity: self.content_identity,
             asset: self
                 .asset
                 .take()
@@ -43,18 +46,20 @@ impl<'asset> RetainedSealedSource<'asset> {
         binding_index: u16,
         digest: u128,
         length: u64,
+        content_identity: BootContentIdentity,
         asset: BoundActiveReblitBootAsset<'asset>,
     ) -> Self {
         Self {
             binding_index,
             digest,
             length,
+            content_identity,
             asset,
         }
     }
 
-    fn key(&self) -> (u16, u128, u64) {
-        (self.binding_index, self.digest, self.length)
+    fn key(&self) -> (u16, u128, u64, BootContentIdentity) {
+        (self.binding_index, self.digest, self.length, self.content_identity)
     }
 }
 
@@ -87,11 +92,13 @@ impl<'asset> SealedSourceCatalog<'asset> {
             binding_index,
             digest,
             length,
+            content_identity,
         } = source
         else {
             return false;
         };
-        self.asset_for_key((*binding_index, *digest, *length)).is_some()
+        self.asset_for_key((*binding_index, *digest, *length, *content_identity))
+            .is_some()
     }
 
     pub(super) fn asset_for_publication_source(
@@ -102,15 +109,16 @@ impl<'asset> SealedSourceCatalog<'asset> {
             binding_index,
             digest,
             length,
+            content_identity,
         } = source
         else {
             return None;
         };
-        self.asset_for_key((*binding_index, *digest, *length))
+        self.asset_for_key((*binding_index, *digest, *length, *content_identity))
             .map(|retained| &retained.asset)
     }
 
-    fn asset_for_key(&self, key: (u16, u128, u64)) -> Option<&RetainedSealedSource<'asset>> {
+    fn asset_for_key(&self, key: (u16, u128, u64, BootContentIdentity)) -> Option<&RetainedSealedSource<'asset>> {
         self.sources
             .binary_search_by_key(&key, RetainedSealedSource::key)
             .ok()
@@ -158,7 +166,10 @@ where
                 second: candidate.path,
             });
         }
-        if previous.digest != candidate.digest || previous.length != candidate.length {
+        if previous.digest != candidate.digest
+            || previous.length != candidate.length
+            || previous.content_identity != candidate.content_identity
+        {
             return Err(ActiveReblitBlsRendererError::PayloadCollision { path: candidate.path });
         }
         // Sorting makes the smallest exact binding coordinate canonical.
@@ -180,6 +191,7 @@ fn compare_candidate(left: &PayloadCandidate<'_>, right: &PayloadCandidate<'_>) 
         .then_with(|| left_path.cmp(right_path))
         .then_with(|| left.digest.cmp(&right.digest))
         .then_with(|| left.length.cmp(&right.length))
+        .then_with(|| left.content_identity.cmp(&right.content_identity))
         .then_with(|| left.binding_index.cmp(&right.binding_index))
 }
 

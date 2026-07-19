@@ -41,7 +41,9 @@ fn os_info(former: Vec<serde_json::Value>) -> Vec<u8> {
     .unwrap()
 }
 
-fn signature(plan: &PreparedActiveReblitBootPublicationPlan) -> Vec<(PathBuf, u128, u64, Option<Vec<u8>>)> {
+fn signature(
+    plan: &PreparedActiveReblitBootPublicationPlan,
+) -> Vec<(PathBuf, u128, u64, BootContentIdentity, Option<Vec<u8>>)> {
     plan.outputs()
         .iter()
         .map(|output| {
@@ -49,6 +51,7 @@ fn signature(plan: &PreparedActiveReblitBootPublicationPlan) -> Vec<(PathBuf, u1
                 output.relative_path().to_owned(),
                 output.source().digest(),
                 output.source().length(),
+                output.source().content_identity(),
                 output.source().generated_bytes().map(<[u8]>::to_vec),
             )
         })

@@ -95,6 +95,10 @@ fn sealed_snapshot_has_exact_bytes_digest_length_metadata_and_seals() {
     assert_eq!(snapshot.digest(), fixture.digest);
     assert_eq!(snapshot.length(), fixture.length);
     assert_eq!(snapshot_bytes(snapshot), bytes);
+    assert_eq!(
+        hex::encode(snapshot.content_identity().as_bytes()),
+        "be80b2b6b0fc63358be22d68565a55f12345d0ada9d3ee0e094d10a0b8856b16"
+    );
 
     let descriptor = snapshot.descriptor().as_raw_fd();
     let stat = fstat(descriptor).unwrap();
@@ -249,6 +253,10 @@ fn canonical_empty_asset_is_sealed_without_an_asset_pool() {
     assert_eq!(snapshot.digest(), EMPTY_FILE_DIGEST);
     assert_eq!(snapshot.length(), 0);
     assert!(snapshot_bytes(snapshot).is_empty());
+    assert_eq!(
+        hex::encode(snapshot.content_identity().as_bytes()),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
     assert!(!installation.assets_path("v2").exists());
 }
 

@@ -22,6 +22,7 @@ use super::{
     copy_fd_exact, frozen_asset_path, require_asset_unchanged_until,
 };
 use crate::Installation;
+use crate::client::boot_content_identity::BootContentIdentity;
 
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
@@ -130,6 +131,7 @@ pub(in crate::client) struct SealedBootAssetSnapshot {
     descriptor: OwnedFd,
     digest: u128,
     length: u64,
+    content_identity: BootContentIdentity,
 }
 
 impl SealedBootAssetSnapshot {
@@ -143,6 +145,10 @@ impl SealedBootAssetSnapshot {
 
     pub(in crate::client) fn length(&self) -> u64 {
         self.length
+    }
+
+    pub(in crate::client) fn content_identity(&self) -> BootContentIdentity {
+        self.content_identity
     }
 }
 
@@ -327,7 +333,14 @@ fn create_empty_snapshot(
     debug_assert_eq!(digest, EMPTY_FILE_DIGEST);
     require_snapshot_deadline(deadline, policy.timeout)?;
     let descriptor = create_snapshot_descriptor(digest)?;
-    finish_snapshot(descriptor, digest, 0, policy.timeout, deadline)
+    finish_snapshot(
+        descriptor,
+        digest,
+        0,
+        BootContentIdentity::EMPTY,
+        policy.timeout,
+        deadline,
+    )
 }
 
 fn create_source_snapshot<F>(
@@ -344,7 +357,7 @@ where
     let length = asset.witness.length;
     require_snapshot_deadline(deadline, policy.timeout)?;
     let descriptor = create_snapshot_descriptor(digest)?;
-    copy_fd_exact(
+    let content_identity = copy_fd_exact(
         asset.file.as_raw_fd(),
         descriptor.as_raw_fd(),
         length,
@@ -359,7 +372,7 @@ where
         .map_err(|source| map_source_changed_error(digest, source, policy.timeout, deadline))?;
     require_snapshot_deadline(deadline, policy.timeout)?;
 
-    finish_snapshot(descriptor, digest, length, policy.timeout, deadline)
+    finish_snapshot(descriptor, digest, length, content_identity, policy.timeout, deadline)
 }
 
 fn create_snapshot_descriptor(digest: u128) -> Result<OwnedFd, BootAssetSnapshotError> {
@@ -374,6 +387,7 @@ fn finish_snapshot(
     descriptor: OwnedFd,
     digest: u128,
     length: u64,
+    content_identity: BootContentIdentity,
     timeout: Duration,
     deadline: Instant,
 ) -> Result<SealedBootAssetSnapshot, BootAssetSnapshotError> {
@@ -430,6 +444,7 @@ fn finish_snapshot(
         descriptor,
         digest,
         length,
+        content_identity,
     })
 }
 

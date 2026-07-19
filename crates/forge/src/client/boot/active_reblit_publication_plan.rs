@@ -17,7 +17,10 @@ use std::{
     time::Instant,
 };
 
-use crate::client::active_reblit_mounted_boot_topology::BoundActiveReblitMountedBootTopology;
+use crate::client::{
+    active_reblit_mounted_boot_topology::BoundActiveReblitMountedBootTopology,
+    boot_content_identity::BootContentIdentity,
+};
 
 #[path = "active_reblit_publication_plan/error.rs"]
 mod error;
@@ -166,16 +169,18 @@ impl ActiveReblitBootPublicationRole {
 pub(in crate::client) enum ActiveReblitBootPublicationSource {
     /// `binding_index` identifies an asset binding in the exact Stone owner
     /// from which this plan was rendered. It is not authority by itself. The
-    /// final aggregate must match index, digest and length to that same owner
-    /// before execution.
+    /// final aggregate must match index, non-cryptographic XXH3 checksum,
+    /// length, and SHA-256 content identity to that same owner before execution.
     SealedSnapshot {
         binding_index: u16,
         digest: u128,
         length: u64,
+        content_identity: BootContentIdentity,
     },
     Generated {
         bytes: Box<[u8]>,
         digest: u128,
+        content_identity: BootContentIdentity,
     },
 }
 
@@ -187,6 +192,7 @@ enum ActiveReblitBootPublicationRequestSource {
         binding_index: u16,
         digest: u128,
         length: u64,
+        content_identity: BootContentIdentity,
     },
     Generated {
         bytes: Box<[u8]>,
@@ -203,6 +209,16 @@ impl ActiveReblitBootPublicationSource {
     pub(in crate::client) fn digest(&self) -> u128 {
         match self {
             Self::SealedSnapshot { digest, .. } | Self::Generated { digest, .. } => *digest,
+        }
+    }
+
+    /// Cryptographic identity of the exact expected output bytes. This is
+    /// distinct from the XXH3 checksum retained for destination path naming.
+    pub(in crate::client) fn content_identity(&self) -> BootContentIdentity {
+        match self {
+            Self::SealedSnapshot { content_identity, .. } | Self::Generated { content_identity, .. } => {
+                *content_identity
+            }
         }
     }
 
@@ -250,6 +266,7 @@ impl ActiveReblitBootPublicationRequest {
         binding_index: u16,
         digest: u128,
         length: u64,
+        content_identity: BootContentIdentity,
     ) -> Self {
         Self::sealed(
             ActiveReblitBootPublicationRole::Payload,
@@ -257,6 +274,7 @@ impl ActiveReblitBootPublicationRequest {
             binding_index,
             digest,
             length,
+            content_identity,
         )
     }
 
@@ -272,23 +290,35 @@ impl ActiveReblitBootPublicationRequest {
         )
     }
 
-    pub(in crate::client) fn sealed_fallback_bootloader(binding_index: u16, digest: u128, length: u64) -> Self {
+    pub(in crate::client) fn sealed_fallback_bootloader(
+        binding_index: u16,
+        digest: u128,
+        length: u64,
+        content_identity: BootContentIdentity,
+    ) -> Self {
         Self::sealed(
             ActiveReblitBootPublicationRole::FallbackBootloader,
             PathBuf::from(ACTIVE_REBLIT_FALLBACK_BOOTLOADER_PATH),
             binding_index,
             digest,
             length,
+            content_identity,
         )
     }
 
-    pub(in crate::client) fn sealed_systemd_bootloader(binding_index: u16, digest: u128, length: u64) -> Self {
+    pub(in crate::client) fn sealed_systemd_bootloader(
+        binding_index: u16,
+        digest: u128,
+        length: u64,
+        content_identity: BootContentIdentity,
+    ) -> Self {
         Self::sealed(
             ActiveReblitBootPublicationRole::SystemdBootloader,
             PathBuf::from(ACTIVE_REBLIT_SYSTEMD_BOOTLOADER_PATH),
             binding_index,
             digest,
             length,
+            content_identity,
         )
     }
 
@@ -298,6 +328,7 @@ impl ActiveReblitBootPublicationRequest {
         binding_index: u16,
         digest: u128,
         length: u64,
+        content_identity: BootContentIdentity,
     ) -> Self {
         Self {
             role,
@@ -308,6 +339,7 @@ impl ActiveReblitBootPublicationRequest {
                 binding_index,
                 digest,
                 length,
+                content_identity,
             },
         }
     }
@@ -889,6 +921,7 @@ fn prepare_source(
             binding_index,
             digest,
             length,
+            content_identity,
         } => {
             budget.step()?;
             if length > budget.policy.max_sealed_file_bytes {
@@ -902,15 +935,23 @@ fn prepare_source(
                 binding_index,
                 digest,
                 length,
+                content_identity,
             })
         }
         ActiveReblitBootPublicationRequestSource::Generated { bytes } => {
             budget.admit_generated(path, bytes.len())?;
+            // XXH3 remains the non-cryptographic checksum used in the existing
+            // checksum-addressed destination grammar.
             let digest = xxhash_rust::xxh3::xxh3_128(&bytes);
+            let content_identity = BootContentIdentity::hash(&bytes);
             // Hashing is bounded by `admit_generated`; this post-hash step also
             // enforces the wall-clock deadline before the source is admitted.
             budget.step()?;
-            Ok(ActiveReblitBootPublicationSource::Generated { bytes, digest })
+            Ok(ActiveReblitBootPublicationSource::Generated {
+                bytes,
+                digest,
+                content_identity,
+            })
         }
     }
 }

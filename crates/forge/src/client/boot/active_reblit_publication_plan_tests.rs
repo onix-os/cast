@@ -109,7 +109,30 @@ fn payload(
     digest: u128,
     length: u64,
 ) -> ActiveReblitBootPublicationRequest {
-    ActiveReblitBootPublicationRequest::sealed_payload(path.into(), binding_index, digest, length)
+    payload_with_content_identity(
+        path,
+        binding_index,
+        digest,
+        length,
+        fixture_content_identity(digest, length),
+    )
+}
+
+fn payload_with_content_identity(
+    path: impl Into<PathBuf>,
+    binding_index: u16,
+    digest: u128,
+    length: u64,
+    content_identity: BootContentIdentity,
+) -> ActiveReblitBootPublicationRequest {
+    ActiveReblitBootPublicationRequest::sealed_payload(path.into(), binding_index, digest, length, content_identity)
+}
+
+fn fixture_content_identity(digest: u128, length: u64) -> BootContentIdentity {
+    let mut fixture = [0_u8; 24];
+    fixture[..16].copy_from_slice(&digest.to_le_bytes());
+    fixture[16..].copy_from_slice(&length.to_le_bytes());
+    BootContentIdentity::hash(&fixture)
 }
 
 fn checksum_payload_path(namespace: &str, leaf: &str, digest: u128, length: u64) -> PathBuf {
@@ -140,11 +163,21 @@ fn loader_control(bytes: &[u8]) -> ActiveReblitBootPublicationRequest {
 }
 
 fn fallback_bootloader(binding_index: u16, digest: u128, length: u64) -> ActiveReblitBootPublicationRequest {
-    ActiveReblitBootPublicationRequest::sealed_fallback_bootloader(binding_index, digest, length)
+    ActiveReblitBootPublicationRequest::sealed_fallback_bootloader(
+        binding_index,
+        digest,
+        length,
+        fixture_content_identity(digest, length),
+    )
 }
 
 fn systemd_bootloader(binding_index: u16, digest: u128, length: u64) -> ActiveReblitBootPublicationRequest {
-    ActiveReblitBootPublicationRequest::sealed_systemd_bootloader(binding_index, digest, length)
+    ActiveReblitBootPublicationRequest::sealed_systemd_bootloader(
+        binding_index,
+        digest,
+        length,
+        fixture_content_identity(digest, length),
+    )
 }
 
 fn sealed_source(binding_index: u16, digest: u128, length: u64) -> ActiveReblitBootPublicationRequestSource {
@@ -152,6 +185,7 @@ fn sealed_source(binding_index: u16, digest: u128, length: u64) -> ActiveReblitB
         binding_index,
         digest,
         length,
+        content_identity: fixture_content_identity(digest, length),
     }
 }
 

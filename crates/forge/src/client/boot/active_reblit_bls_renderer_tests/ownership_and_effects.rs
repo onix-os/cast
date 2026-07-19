@@ -1,6 +1,8 @@
 use super::*;
 
-fn output_signature(plan: &PreparedActiveReblitBootPublicationPlan) -> Vec<(PathBuf, u128, u64, Option<Vec<u8>>)> {
+fn output_signature(
+    plan: &PreparedActiveReblitBootPublicationPlan,
+) -> Vec<(PathBuf, u128, u64, BootContentIdentity, Option<Vec<u8>>)> {
     plan.outputs()
         .iter()
         .map(|output| {
@@ -8,6 +10,7 @@ fn output_signature(plan: &PreparedActiveReblitBootPublicationPlan) -> Vec<(Path
                 output.relative_path().to_owned(),
                 output.source().digest(),
                 output.source().length(),
+                output.source().content_identity(),
                 output.source().generated_bytes().map(<[u8]>::to_vec),
             )
         })
@@ -59,16 +62,37 @@ fn bound_plan_retains_exact_inputs_topology_and_sources_without_namespace_mutati
             let mut sealed = 0usize;
             for output in plan.outputs() {
                 match output.sealed_coordinate().unwrap() {
-                    Some((_binding_index, digest, length)) => {
+                    Some((binding_index, digest, length, content_identity)) => {
                         let asset = output
                             .sealed_asset()
                             .unwrap()
                             .expect("sealed coordinate must resolve to its exact retained asset");
                         assert_eq!(asset.digest(), digest);
                         assert_eq!(asset.length(), length);
+                        assert_eq!(asset.content_identity(), content_identity);
+                        assert_eq!(output.expected_content_identity(), content_identity);
+                        let mut different_sha256 = *content_identity.as_bytes();
+                        different_sha256[0] ^= 1;
+                        let mismatched_source = ActiveReblitBootPublicationSource::SealedSnapshot {
+                            binding_index,
+                            digest,
+                            length,
+                            content_identity: BootContentIdentity::from_sha256(different_sha256),
+                        };
+                        assert!(
+                            plan.sealed_sources
+                                .asset_for_publication_source(&mismatched_source)
+                                .is_none()
+                        );
                         sealed += 1;
                     }
-                    None => assert!(output.sealed_asset().unwrap().is_none()),
+                    None => {
+                        assert!(output.sealed_asset().unwrap().is_none());
+                        assert_eq!(
+                            output.expected_content_identity(),
+                            BootContentIdentity::hash(output.generated_bytes().unwrap())
+                        );
+                    }
                 }
             }
             assert_eq!(sealed, 5);

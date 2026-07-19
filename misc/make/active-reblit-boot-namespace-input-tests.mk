@@ -28,6 +28,7 @@ forge-active-reblit-boot-namespace-input-unit-test:
 	tests="$(BOOT_NAMESPACE_INPUT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_namespace_inputs_tests.rs"; \
 	renderer="$(BOOT_NAMESPACE_INPUT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer.rs"; \
 	plan="$(BOOT_NAMESPACE_INPUT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan.rs"; \
+	content_identity="$(BOOT_NAMESPACE_INPUT_TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
 	timeout 10s grep -Fq "fn bind_boot_namespace_inputs<'plan>(" "$$root"; \
 	timeout 10s grep -Fq "'input: 'plan" "$$root"; \
 	timeout 10s grep -Fq "requests: Box<[BootNamespaceRequest<'plan>]>" "$$root"; \
@@ -41,7 +42,10 @@ forge-active-reblit-boot-namespace-input-unit-test:
 	timeout 10s grep -Fq 'preflight.logical_bytes != plan.logical_bytes()' "$$root"; \
 	timeout 10s grep -Fq 'RetainedBootNamespaceExpectedSource::generated(bytes)' "$$root"; \
 	timeout 10s grep -Fq 'RetainedBootNamespaceExpectedSource::sealed_descriptor(asset.descriptor())' "$$root"; \
-	timeout 10s grep -Fq 'asset.digest() != output.expected_digest() || asset.length() != output.expected_length()' "$$root"; \
+	timeout 10s grep -Fq '|| asset.content_identity() != output.expected_content_identity()' "$$root"; \
+	timeout 10s grep -Fq 'BootContentIdentity::hash(bytes) != output.expected_content_identity()' "$$root"; \
+	timeout 10s grep -Fq "byte-comparing the streams" "$$root"; \
+	timeout 10s grep -Fq 'cryptographic destination' "$$root"; \
 	timeout 10s grep -Fq '.try_reserve_exact(count)' "$$root"; \
 	timeout 10s grep -Fq 'actual >= self.expected_count' "$$root"; \
 	timeout 10s grep -Fq 'pub(in crate::client) enum ActiveReblitBootDestinationLayout' "$$plan"; \
@@ -49,7 +53,7 @@ forge-active-reblit-boot-namespace-input-unit-test:
 	timeout 10s grep -Fq "Item = BoundActiveReblitBlsPublication<'plan, 'input>" "$$renderer"; \
 	if timeout 10s rg -U --pcre2 -n '#\[derive\((?s:[^]]*(?:Clone|Copy)[^]]*)\)\]\s*(?:pub(?:\([^)]*\))?\s+)?(?:struct|enum)\s+(?:BoundActiveReblitBootNamespaceInputs|BoundActiveReblitBootNamespaceDomain)|impl(?:<(?s:[^;{}]*)>)?\s+Clone\s+for\s+(?:BoundActiveReblitBootNamespaceInputs|BoundActiveReblitBootNamespaceDomain)|fn\s+(?:descriptor|generated_bytes|sealed_asset|into_inner|detach|into_unbound)\b' "$$root" "$$error"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'F_DUPFD|\bdup(?:2|3)?\s*\(|File::open|OpenOptions|canonicalize\(|read_to_end|to_vec\(|\.clone\(\)|std::process|process::Command|Command::new|nix::mount|libc::mount|mount_partitions|/dev/(disk|sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)' "$$root" "$$error"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	for file in "$$root" "$$error" "$$tests" "$$renderer" "$$plan" "$(BOOT_NAMESPACE_INPUT_TOP_DIR)/misc/make/active-reblit-boot-namespace-input-tests.mk"; do \
+	for file in "$$root" "$$error" "$$tests" "$$renderer" "$$plan" "$$content_identity" "$(BOOT_NAMESPACE_INPUT_TOP_DIR)/misc/make/active-reblit-boot-namespace-input-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test --manifest-path "$(BOOT_NAMESPACE_INPUT_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1

@@ -18,6 +18,7 @@ use super::{
         ActiveReblitBootPublicationRequest, ActiveReblitBootPublicationRole, ActiveReblitBootPublicationSource,
         PlannedActiveReblitBootPublication, PreparedActiveReblitBootPublicationPlan,
     },
+    boot_content_identity::BootContentIdentity,
 };
 
 #[path = "active_reblit_bls_renderer/document.rs"]
@@ -94,6 +95,7 @@ struct RenderedInitrdCandidate<'asset> {
     binding_index: u16,
     digest: u128,
     length: u64,
+    content_identity: BootContentIdentity,
     asset: BoundActiveReblitBootAsset<'asset>,
 }
 
@@ -266,17 +268,22 @@ where
         self.planned.source().length()
     }
 
+    pub(in crate::client) fn expected_content_identity(&self) -> BootContentIdentity {
+        self.planned.source().content_identity()
+    }
+
     pub(in crate::client) fn sealed_coordinate(
         &self,
-    ) -> Result<Option<(u16, u128, u64)>, ActiveReblitBlsRendererError> {
+    ) -> Result<Option<(u16, u128, u64, BootContentIdentity)>, ActiveReblitBlsRendererError> {
         match self.planned.source() {
             ActiveReblitBootPublicationSource::Generated { .. } => Ok(None),
             ActiveReblitBootPublicationSource::SealedSnapshot {
                 binding_index,
                 digest,
                 length,
+                content_identity,
             } if self.sealed_sources.contains_publication_source(self.planned.source()) => {
-                Ok(Some((*binding_index, *digest, *length)))
+                Ok(Some((*binding_index, *digest, *length, *content_identity)))
             }
             ActiveReblitBootPublicationSource::SealedSnapshot { .. } => {
                 Err(ActiveReblitBlsRendererError::MissingSealedSource)
@@ -392,6 +399,8 @@ where
         let kernel_binding_index = kernel.kernel_binding_index();
         let kernel_digest = kernel.kernel_digest();
         let kernel_length = kernel.kernel_length();
+        let kernel_asset = kernel.kernel_asset();
+        let kernel_content_identity = kernel_asset.content_identity();
         let entry_path = paths::entry_path(
             schema.os_id(),
             kernel.version(),
@@ -423,6 +432,8 @@ where
             let binding_index = initrd.binding_index();
             let digest = initrd.digest();
             let length = initrd.length();
+            let asset = initrd.asset();
+            let content_identity = asset.content_identity();
             let basename =
                 initrd
                     .logical_basename()
@@ -446,7 +457,8 @@ where
                 binding_index,
                 digest,
                 length,
-                asset: initrd.asset(),
+                content_identity,
+                asset,
             });
         }
         budget.reserve_sort_work(initrds.len())?;
@@ -476,7 +488,8 @@ where
             binding_index: kernel_binding_index,
             digest: kernel_digest,
             length: kernel_length,
-            asset: Some(kernel.kernel_asset()),
+            content_identity: kernel_content_identity,
+            asset: Some(kernel_asset),
         });
         for initrd in initrds {
             payload_candidates.push(PayloadCandidate {
@@ -484,6 +497,7 @@ where
                 binding_index: initrd.binding_index,
                 digest: initrd.digest,
                 length: initrd.length,
+                content_identity: initrd.content_identity,
                 asset: Some(initrd.asset),
             });
         }
@@ -491,11 +505,14 @@ where
 
     debug_assert_eq!(entries.len() + payload_candidates.len() + 3, candidate_requests);
     let mut payloads = payload_catalog::canonicalize_payloads(payload_candidates, &mut budget, post_payload_sort_now)?;
+    let systemd_boot_asset = inputs.systemd_boot_asset();
+    let systemd_boot_content_identity = systemd_boot_asset.content_identity();
     let systemd_boot = RetainedSealedSource::new(
         inputs.systemd_boot_binding_index(),
         inputs.systemd_boot_digest(),
         inputs.systemd_boot_length(),
-        inputs.systemd_boot_asset(),
+        systemd_boot_content_identity,
+        systemd_boot_asset,
     );
     let sealed_sources = SealedSourceCatalog::prepare(systemd_boot, &mut payloads, &mut budget)?;
 
@@ -514,6 +531,7 @@ where
             payload.binding_index,
             payload.digest,
             payload.length,
+            payload.content_identity,
         ));
     }
     requests.append(&mut entries);
@@ -525,12 +543,14 @@ where
         inputs.systemd_boot_binding_index(),
         inputs.systemd_boot_digest(),
         inputs.systemd_boot_length(),
+        systemd_boot_content_identity,
     ));
     let _systemd = paths::fixed_path("EFI/systemd/systemd-bootx64.efi", &mut budget)?;
     requests.push(ActiveReblitBootPublicationRequest::sealed_systemd_bootloader(
         inputs.systemd_boot_binding_index(),
         inputs.systemd_boot_digest(),
         inputs.systemd_boot_length(),
+        systemd_boot_content_identity,
     ));
     debug_assert_eq!(requests.len(), request_capacity);
 

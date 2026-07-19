@@ -137,3 +137,33 @@ fn case_insensitive_payload_alias_is_rejected_even_when_content_matches() {
         ));
     });
 }
+
+#[test]
+fn same_xxh3_and_length_with_different_sha256_is_rejected_before_deduplication() {
+    let deadline = support::future_deadline();
+    let mut budget = RenderBudget::new(BLS_POLICY, deadline).unwrap();
+    let path = PathBuf::from("EFI/head/xxh3-00000000000000000000000000000007-l000000000000000b/vmlinuz");
+    let candidates = vec![
+        PayloadCandidate {
+            path: path.clone(),
+            binding_index: 3,
+            digest: 7,
+            length: 11,
+            content_identity: BootContentIdentity::hash(b"first-bytes"),
+            asset: None,
+        },
+        PayloadCandidate {
+            path,
+            binding_index: 3,
+            digest: 7,
+            length: 11,
+            content_identity: BootContentIdentity::hash(b"other-bytes"),
+            asset: None,
+        },
+    ];
+
+    assert!(matches!(
+        payload_catalog::canonicalize_payloads(candidates, &mut budget, Instant::now),
+        Err(ActiveReblitBlsRendererError::PayloadCollision { .. })
+    ));
+}

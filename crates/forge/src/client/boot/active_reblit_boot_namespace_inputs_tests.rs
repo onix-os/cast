@@ -74,6 +74,10 @@ fn alias_plan_binds_one_ordered_domain_and_streams_exact_generated_and_sealed_so
             };
             assert_eq!(output.expected_length(), bytes.len() as u64);
             assert_eq!(output.expected_digest(), xxhash_rust::xxh3::xxh3_128(bytes));
+            assert_eq!(
+                output.expected_content_identity(),
+                crate::client::boot_content_identity::BootContentIdentity::hash(bytes)
+            );
             fs::write(target, bytes).unwrap();
         }
 
@@ -101,6 +105,9 @@ fn alias_plan_binds_one_ordered_domain_and_streams_exact_generated_and_sealed_so
             support::future_deadline(),
         )
         .unwrap();
+        // Exact classification still exercises the observer's bytewise stream
+        // comparison and XXH3+length protocol; it is not a SHA-256 destination
+        // verification claim.
         assert_eq!(
             assessment.states(),
             vec![BootNamespaceDestinationState::Exact; plan.publication_count()]

@@ -21,6 +21,7 @@ use super::{
         PlannedBootSchemaRequirement, PreparedActiveReblitBootAssetPlan, PreparedActiveReblitBootProjection,
     },
     boot_asset_snapshots::{BootAssetSnapshotError, PreparedBootAssetSnapshots, SealedBootAssetSnapshot},
+    boot_content_identity::BootContentIdentity,
 };
 
 const KIB: u64 = 1024;
@@ -214,6 +215,10 @@ impl BoundActiveReblitBootAsset<'_> {
 
     pub(in crate::client) fn length(&self) -> u64 {
         self.length
+    }
+
+    pub(in crate::client) fn content_identity(&self) -> BootContentIdentity {
+        self.snapshot.content_identity()
     }
 
     /// Borrow the sealed input without transferring ownership. Consumers must
