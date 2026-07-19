@@ -95,9 +95,12 @@ mod active_reblit_boot_topology_intent;
 #[allow(dead_code)] // authenticated pre-claim local policy; no mutation authority
 #[path = "boot/active_reblit_local_boot_policy.rs"]
 mod active_reblit_local_boot_policy;
-#[allow(dead_code)] // pure closed facts; descriptor-retained capture is the next topology slice
+#[allow(dead_code)] // descriptor-retained mounted facts; consumed by the later durable publisher
 #[path = "boot/active_reblit_mounted_boot_topology.rs"]
 mod active_reblit_mounted_boot_topology;
+#[allow(dead_code)] // authenticated scalar package cmdlines for the later pure boot renderer
+#[path = "boot/active_reblit_package_cmdline_inputs.rs"]
+mod active_reblit_package_cmdline_inputs;
 #[allow(dead_code)] // pre-claim pure output plan; consumed by the descriptor-safe publisher
 #[path = "boot/active_reblit_publication_plan.rs"]
 mod active_reblit_publication_plan;

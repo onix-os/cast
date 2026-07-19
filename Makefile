@@ -44,6 +44,7 @@ include misc/make/boot-synchronization-authority-tests.mk
 include misc/make/active-reblit-boot-state-root-tests.mk
 include misc/make/active-reblit-boot-schema-input-tests.mk
 include misc/make/active-reblit-local-boot-policy-tests.mk
+include misc/make/active-reblit-package-cmdline-input-tests.mk
 include misc/make/active-reblit-boot-topology-intent-tests.mk
 include misc/make/startup-recovery-tests.mk
 include misc/make/startup-exchange-durability-tests.mk

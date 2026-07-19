@@ -239,6 +239,19 @@ The pure renderer never receives destination file descriptors, namespace
 descriptors, mutation leases, or a function capable of writing. Consequently,
 rendering cannot discover storage or mutate a mounted partition.
 
+Package-owned command-line files now cross a separate semantic preparation
+boundary before rendering. That value remains lifetime-bound to the exact
+non-cloneable Stone input owner, rebinds every state, role, path, index, digest,
+and length coordinate, and reads each sealed source only by bounded explicit
+offset under one caller-owned deadline. It retains normalized printable-ASCII
+text, not a destination descriptor or write capability.
+
+This package layer deliberately supplies no root-filesystem argument. A future
+complete entry renderer must receive that argument from separately
+authenticated, explicit machine-local input; it must not infer it from the
+ESP/XBOOTLDR topology, `/proc/cmdline`, fstab, udev, or the legacy disk probe.
+Until that producer exists, complete BLS entry rendering remains unwired.
+
 A separate durable publisher combines:
 
 - the frozen render plan and its identity;
