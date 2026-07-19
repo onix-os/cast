@@ -14,9 +14,9 @@ use super::{
     active_reblit_boot_schema_inputs::ValidatedActiveReblitBootSchema,
     active_reblit_mounted_boot_topology::RevalidatedActiveReblitMountedBootTopology,
     active_reblit_publication_plan::{
-        ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase, ActiveReblitBootPublicationRequest,
-        ActiveReblitBootPublicationRole, ActiveReblitBootPublicationSource, PlannedActiveReblitBootPublication,
-        PreparedActiveReblitBootPublicationPlan,
+        ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase,
+        ActiveReblitBootPublicationRequest, ActiveReblitBootPublicationRole, ActiveReblitBootPublicationSource,
+        PlannedActiveReblitBootPublication, PreparedActiveReblitBootPublicationPlan,
     },
 };
 
@@ -168,12 +168,26 @@ impl<'input, 'attempt, 'stone, 'roots> RenderedActiveReblitBlsRequests<'input, '
     }
 }
 
-impl BoundActiveReblitBlsPublicationPlan<'_, '_, '_, '_, '_, '_> {
-    pub(in crate::client) fn outputs(&self) -> impl ExactSizeIterator<Item = BoundActiveReblitBlsPublication<'_, '_>> {
+impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
+    BoundActiveReblitBlsPublicationPlan<
+        'input,
+        'topology_view,
+        'topology_authority,
+        'attempt,
+        'stone,
+        'roots,
+    >
+{
+    pub(in crate::client) fn outputs<'plan>(
+        &'plan self,
+    ) -> impl ExactSizeIterator<Item = BoundActiveReblitBlsPublication<'plan, 'input>> + 'plan
+    where
+        'input: 'plan,
+    {
         self.plan
             .outputs()
             .iter()
-            .map(|planned| BoundActiveReblitBlsPublication {
+            .map(move |planned| BoundActiveReblitBlsPublication {
                 planned,
                 sealed_sources: &self.sealed_sources,
             })
@@ -191,6 +205,18 @@ impl BoundActiveReblitBlsPublicationPlan<'_, '_, '_, '_, '_, '_> {
         self.plan.logical_bytes()
     }
 
+    pub(in crate::client) fn publication_count(&self) -> usize {
+        self.plan.outputs().len()
+    }
+
+    pub(in crate::client) fn publication_path_bytes(&self) -> usize {
+        self.plan.path_bytes()
+    }
+
+    pub(in crate::client) fn publication_generated_bytes(&self) -> usize {
+        self.plan.generated_bytes()
+    }
+
     pub(in crate::client) fn render_path_bytes(&self) -> usize {
         self.render_path_bytes
     }
@@ -202,9 +228,16 @@ impl BoundActiveReblitBlsPublicationPlan<'_, '_, '_, '_, '_, '_> {
     pub(in crate::client) fn render_work(&self) -> usize {
         self.render_work
     }
+
+    pub(in crate::client) fn destination_layout(&self) -> ActiveReblitBootDestinationLayout {
+        self.plan.destination_layout()
+    }
 }
 
-impl BoundActiveReblitBlsPublication<'_, '_> {
+impl<'plan, 'asset> BoundActiveReblitBlsPublication<'plan, 'asset>
+where
+    'asset: 'plan,
+{
     pub(in crate::client) fn role(&self) -> ActiveReblitBootPublicationRole {
         self.planned.role()
     }
@@ -217,12 +250,20 @@ impl BoundActiveReblitBlsPublication<'_, '_> {
         self.planned.phase()
     }
 
-    pub(in crate::client) fn relative_path(&self) -> &std::path::Path {
+    pub(in crate::client) fn relative_path(&self) -> &'plan std::path::Path {
         self.planned.relative_path()
     }
 
-    pub(in crate::client) fn generated_bytes(&self) -> Option<&[u8]> {
+    pub(in crate::client) fn generated_bytes(&self) -> Option<&'plan [u8]> {
         self.planned.source().generated_bytes()
+    }
+
+    pub(in crate::client) fn expected_digest(&self) -> u128 {
+        self.planned.source().digest()
+    }
+
+    pub(in crate::client) fn expected_length(&self) -> u64 {
+        self.planned.source().length()
     }
 
     pub(in crate::client) fn sealed_coordinate(
@@ -247,7 +288,7 @@ impl BoundActiveReblitBlsPublication<'_, '_> {
     /// coordinate in the private catalog is never treated as authority.
     pub(in crate::client) fn sealed_asset(
         &self,
-    ) -> Result<Option<&BoundActiveReblitBootAsset<'_>>, ActiveReblitBlsRendererError> {
+    ) -> Result<Option<&'plan BoundActiveReblitBootAsset<'asset>>, ActiveReblitBlsRendererError> {
         match self.planned.source() {
             ActiveReblitBootPublicationSource::Generated { .. } => Ok(None),
             source @ ActiveReblitBootPublicationSource::SealedSnapshot { .. } => self

@@ -291,6 +291,7 @@ fn plan_retains_the_topology_collision_layout_for_later_revalidation() {
     let distinct = distinct_topology();
     let alternate_distinct = alternate_distinct_topology();
     let alias = alias_topology();
+    assert_eq!(plan.destination_layout(), ActiveReblitBootDestinationLayout::DistinctXbootldr);
     assert!(plan.collision_domains_match(distinct.bound()));
     assert!(
         plan.collision_domains_match(alternate_distinct.bound()),
@@ -299,6 +300,7 @@ fn plan_retains_the_topology_collision_layout_for_later_revalidation() {
     assert!(!plan.collision_domains_match(alias.bound()));
 
     let alias_plan = prepare_alias([fallback_bootloader(0, 1, 1)]).unwrap();
+    assert_eq!(alias_plan.destination_layout(), ActiveReblitBootDestinationLayout::BootAliasesEsp);
     assert!(alias_plan.collision_domains_match(alias.bound()));
     assert!(!alias_plan.collision_domains_match(distinct.bound()));
 }

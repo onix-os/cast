@@ -48,6 +48,13 @@ pub(in crate::client) enum ActiveReblitBootDestinationRoot {
     Boot,
 }
 
+/// Retained scalar collision layout; never fresh topology or authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::client) enum ActiveReblitBootDestinationLayout {
+    BootAliasesEsp,
+    DistinctXbootldr,
+}
+
 /// Physical destination namespace used only for pure collision planning.
 ///
 /// This is derived from an already-validated mounted topology. It is not a
@@ -91,6 +98,19 @@ impl ActiveReblitBootDestinationCollisionDomains {
         match root {
             ActiveReblitBootDestinationRoot::Esp => self.esp,
             ActiveReblitBootDestinationRoot::Boot => self.boot,
+        }
+    }
+
+    const fn layout(self) -> ActiveReblitBootDestinationLayout {
+        match (self.esp, self.boot) {
+            (
+                ActiveReblitBootDestinationCollisionDomain::SharedEspAndBoot,
+                ActiveReblitBootDestinationCollisionDomain::SharedEspAndBoot,
+            ) => ActiveReblitBootDestinationLayout::BootAliasesEsp,
+            (ActiveReblitBootDestinationCollisionDomain::Esp, ActiveReblitBootDestinationCollisionDomain::Boot) => {
+                ActiveReblitBootDestinationLayout::DistinctXbootldr
+            }
+            _ => panic!("invalid boot destination collision layout"),
         }
     }
 }
@@ -404,6 +424,10 @@ impl PreparedActiveReblitBootPublicationPlan {
         topology: BoundActiveReblitMountedBootTopology<'_>,
     ) -> bool {
         self.collision_domains == ActiveReblitBootDestinationCollisionDomains::from_topology(topology)
+    }
+
+    pub(in crate::client) const fn destination_layout(&self) -> ActiveReblitBootDestinationLayout {
+        self.collision_domains.layout()
     }
 
     pub(in crate::client) fn logical_bytes(&self) -> u64 {
