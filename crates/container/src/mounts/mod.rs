@@ -1,3 +1,4 @@
+mod anchored_identity;
 mod anchored_root;
 mod pseudo_filesystems;
 mod syscalls;
@@ -5,6 +6,7 @@ mod syscalls;
 use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 
+pub use anchored_identity::{AnchoredLocator, AnchoredLocatorComponent, AnchoredLocatorError};
 pub(super) use anchored_root::{
     AnchoredMountTargetKind, PinnedAnchoredBindSource, descriptor_target_kind, normalized_anchored_mount_target,
     pin_anchored_bind_sources, setup,

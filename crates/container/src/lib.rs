@@ -18,6 +18,7 @@ mod payload;
 mod process_runtime;
 mod seccomp;
 
+pub use self::mounts::{AnchoredLocator, AnchoredLocatorComponent, AnchoredLocatorError};
 use self::mounts::{
     AnchoredMountTargetKind, Bind, BindSource, descriptor_target_kind, normalized_anchored_mount_target,
 };

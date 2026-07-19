@@ -15,14 +15,15 @@ use nix::sys::stat::Mode;
 use nix::unistd::{mkfifo, read};
 
 use super::{
-    AnchoredMountTargetKind, Bind, BindSource, BlockedSignalMask, CapabilityData, ChildLifecycle, ChildPidfdQuarantine,
-    Container, ContainerError, DevPolicy, Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES,
-    MAX_LINUX_CAPABILITY_NUMBER, MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT,
-    PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ, PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy,
-    PseudoMountDecision, RootFilesystemPolicy, RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TMPFS_MAGIC,
-    TmpPolicy, TmpfsLimitReadback, TmpfsLimits, TmpfsLimitsError, capability_is_set, checked_prctl_value,
-    cleanup_pidfd_child, close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec,
-    namespace_flags, normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
+    AnchoredLocator, AnchoredLocatorComponent, AnchoredLocatorError, AnchoredMountTargetKind, Bind, BindSource,
+    BlockedSignalMask, CapabilityData, ChildLifecycle, ChildPidfdQuarantine, Container, ContainerError, DevPolicy,
+    Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES, MAX_LINUX_CAPABILITY_NUMBER,
+    MINIMAL_DEV_IDENTITIES, MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
+    PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
+    RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TMPFS_MAGIC, TmpPolicy, TmpfsLimitReadback, TmpfsLimits,
+    TmpfsLimitsError, capability_is_set, checked_prctl_value, cleanup_pidfd_child, close_sync_endpoint,
+    contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec, namespace_flags,
+    normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target,
     pin_anchored_bind_sources, prctl, prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions,
     read_capabilities, read_child_error, reopen_pinned_readonly, require_atomic_cgroup_bind_policy,
     require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions, sealed_resolver_file,
@@ -461,6 +462,7 @@ fn host_denied_user_namespace_setup(error: &ContainerRunError) -> bool {
     }
 }
 
+include!("anchored_identity.rs");
 include!("anchored_inputs.rs");
 include!("policy_and_mounts.rs");
 include!("live_activation.rs");

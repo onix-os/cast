@@ -518,6 +518,15 @@ container-mount-boundary-test:
 	listed="$$( timeout 180s $(CARGO) test -p container --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	for test in \
+		tests::anchored_exact_locator_is_owned_and_reopens_only_the_same_identity \
+		tests::anchored_locator_path_bounds_admit_n_and_reject_n_plus_one \
+		tests::anchored_locator_accepts_exact_root_rejects_special_witnesses_and_retains_cloexec_ownership \
+		tests::anchored_locator_rejects_relative_aliased_and_unsafe_syntax \
+		tests::anchored_locator_construction_rejects_initial_identity_mismatch_symlink_and_missing_path \
+		tests::anchored_exact_locator_allows_mount_crossing_but_rejects_symlinks \
+		tests::anchored_exact_locator_rejects_replacement_but_accepts_same_inode_hardlink \
+		tests::anchored_beneath_locator_authenticates_base_and_leaf_independently \
+		tests::anchored_beneath_locator_rejects_leaf_replacement_symlinks_and_mount_crossing \
 		tests::anchored_constructor_owns_a_cloexec_opath_directory_duplicate \
 		tests::anchored_constructor_rejects_every_non_opath_or_non_directory_descriptor \
 		tests::anchored_bind_source_is_pinned_before_clone_and_survives_path_substitution \
@@ -559,7 +568,16 @@ container-mount-boundary-test:
 		tests::special_file_bind_gets_a_file_mountpoint; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 180s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
-	done
+	done; \
+	identity="$(TOP_DIR)/crates/container/src/mounts/anchored_identity.rs"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$identity" )" -le 1000; \
+	timeout 10s grep -Fq 'pub fn exact(' "$$identity"; \
+	timeout 10s grep -Fq 'pub fn beneath(' "$$identity"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'locator.authenticate_current_namespace()?;' "$$identity" )" = 2; \
+	timeout 10s grep -Fq 'nix::libc::RESOLVE_BENEATH | nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS' "$$identity"; \
+	timeout 10s grep -Fq 'nix::libc::RESOLVE_NO_XDEV' "$$identity"; \
+	timeout 10s grep -Fq 'actual == expected' "$$identity"; \
+	if timeout 10s rg -n '/proc/self/fd|canonicalize\(|read_link\(|RESOLVE_IN_ROOT|std::fs|fs_err|std::process|process::Command|Command::new' "$$identity"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi
 
 # The complete lane intentionally retains five socket-diagnostic tests which
 # this local sandbox denies with EPERM. Run every other direct root test here,
@@ -569,7 +587,7 @@ container-root-host-safe-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p container --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 64; \
+	timeout 10s test "$$count" = 73; \
 	ran=0; \
 	for test in $$( timeout 10s grep '^tests::.*: test$$' <<<"$$listed" | timeout 10s sed 's/: test$$//' ); do \
 		case "$$test" in \
@@ -582,7 +600,7 @@ container-root-host-safe-test:
 		timeout 180s $(CARGO) test -p container --lib "$$test" -- --exact --test-threads=1; \
 		ran=$$((ran + 1)); \
 	done; \
-	timeout 10s test "$$ran" = 59
+	timeout 10s test "$$ran" = 68
 
 mason-package-collect-test:
 	@set -eu; \
