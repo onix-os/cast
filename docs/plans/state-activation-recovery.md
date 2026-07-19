@@ -460,12 +460,14 @@ request/path/work limits, and terminal deadline checks. Synthetic topology
 fixtures exercise the production planning path without touching host storage.
 
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
-stable directory identity and the Linux MSDOS magic family. Composition with
-the retained topology and exact mountinfo `vfat` policy, physical GPT role and
-disk admissibility, the durable descriptor-rooted publisher, device-flush
-ordering, and restart reconciliation remain open. Default and focused tests do
-not inspect or mutate host ESP/BOOT storage; real publication, reboot, and
-power-loss evidence requires the user-supplied disposable VM.
+stable directory identity and the Linux MSDOS magic family; commit `029f0590`
+keeps its final descriptor inside retained attachment authority, and commit
+`a93efe70` composes it with exact mountinfo `vfat` evidence in every topology
+pass. Physical GPT role and disk admissibility, the durable descriptor-rooted
+publisher, device-flush ordering, and restart reconciliation remain open.
+Default and focused tests do not inspect or mutate host ESP/BOOT storage; real
+publication, reboot, and power-loss evidence requires the user-supplied
+disposable VM.
 
 ### Durable transition coordination
 
