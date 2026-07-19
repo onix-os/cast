@@ -19,6 +19,31 @@
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rustfmt" "clippy" ];
         };
+        pythonSetuptools = pkgs.python314Packages.setuptools.overridePythonAttrs (_: rec {
+          pname = "setuptools";
+          version = "82.0.1";
+          src = pkgs.fetchPypi {
+            inherit pname version;
+            hash = "sha256-fYcmgsXQHP3gfae8zHtlRp09yiAzGFFa2h3l7aNe+/k=";
+          };
+        });
+        pythonWheel = pkgs.python314Packages.wheel.overridePythonAttrs (old: rec {
+          pname = "wheel";
+          version = "0.47.0";
+          src = pkgs.fetchPypi {
+            inherit pname version;
+            hash = "sha256-zHK9EAm6DPY5IuKPlNnYO5IKorso95ijHQaRsC+jybM=";
+          };
+          dependencies = (old.dependencies or [ ]) ++ [ pkgs.python314Packages.packaging ];
+        });
+        pythonTypingExtensions =
+          assert pkgs.python314Packages.typing-extensions.version == "4.15.0";
+          pkgs.python314Packages.typing-extensions;
+        pythonToolchain = pkgs.python314.withPackages (_: [
+          pythonSetuptools
+          pythonTypingExtensions
+          pythonWheel
+        ]);
       in
       {
         devShells.default = pkgs.mkShell {
@@ -39,6 +64,7 @@
             pkgs.jq
             pkgs.ninja
             pkgs.pkg-config
+            pythonToolchain
             pkgs.ripgrep
             pkgs.typos
             pkgs.valgrind
@@ -55,6 +81,7 @@
             pkgs.libxml2
             pkgs.shared-mime-info
             pkgs.systemd
+            pkgs.util-linux
           ];
 
           CC = "${pkgs.clang}/bin/clang";
