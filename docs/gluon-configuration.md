@@ -96,15 +96,24 @@ expectation binds the parent device name, identity, partition number, PARTUUID,
 geometry, and optional disk sequence to one freshly revalidated sysfs view.
 Exact `/dev` `devtmpfs` mountinfo policy is validated separately. A borrowed
 directory can now be authenticated through stable `fstat`, mount-ID, and
-`fstatfs` observations which agree with that policy. This is only same-mount
-descriptor evidence: shared `TMPFS_MAGIC` does not prove the exact `/dev` root
-or exclude whole-root bind provenance. Read-only retained block observations
-and bounded positional reads are also available. A live coordinator places two
-complete GPT passes between opening, inter-pass, and closing block observations,
-with a caller-owned same-deadline name-rebind seam, and returns distinct closed
-read-provenance evidence after exact reconciliation. Binding that evidence to a
-retained exact `/dev` attachment and opening the sealed parent `DEVNAME` beneath
-it remain open. This does not authorize writes or establish durability. Because
+`fstatfs` observations which agree with that policy. Commit `bfa3a0c2` now
+binds that evidence to the exact retained `/dev` attachment, opens the sealed
+parent `DEVNAME` beneath the same private destination, and owns the complete
+opening-preflight, GPT-pass-one, private name rebind, inter-pass observation,
+GPT-pass-two, closing-observation, and reconciliation schedule. Shared
+`TMPFS_MAGIC` still does not prove whole-root non-bind provenance, and the
+closed result is not an ongoing-currentness lease; same-thread `setns` requires
+outer aggregate revalidation. Linux MSDOS magic likewise is not exact `vfat`.
+
+Commit `365e0ae5` completes the bounded retained destination observer, commit
+`8620986a` retains its exact observed-root device, inode, and mount ID, and
+commit `3f8309b1` sandwiches assessment through the same private destination
+`File` between opening and closing boot-filesystem authentication before
+requiring that root triple to match. The next client blocker is a bounded
+expected-source bridge for generated slices and sealed asset descriptors; it
+must use positional streaming rather than materialize the roughly 10-GiB
+publication ceiling. None of this authorizes writes, publication, durability,
+device flushes, restart reconciliation, or VM-backed operation. Because
 `nosymfollow` was added in
 Linux 5.10, the future boot publisher has an effective Linux 5.10-or-newer
 admission boundary. Generic `linux_fs` facilities remain compatible with the

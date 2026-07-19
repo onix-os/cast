@@ -466,14 +466,18 @@ aliases, cross mounts, wrong node kinds, inventory and lookup races, content
 drift, deadline expiry, and resource overruns. Commit `2eeaa22c` adds a
 syscall-free bounded parser for complete raw `getdents64` chunks, with strict
 record/name validation and a separately charged terminal EOF probe. It
-produces only a closed raw-name inventory; fresh directory descriptions,
-actual syscalls, a retained-descriptor observer, and mutation authority are not
-part of that foundation. Commit `f8a5da34` adds the actual one-shot
-`getdents64` source for one caller-owned fresh, offset-zero directory
-description, and commit `71ee5e95` makes the classifier reserve descriptor
-capacity before ownership transfers and unwind retained nodes in bounded LIFO
-order. Acquiring every fresh description and content reader beneath the private
-retained destination remains open.
+produces only a closed raw-name inventory. Commit `f8a5da34` adds the one-shot
+`getdents64` source, and commit `71ee5e95` reserves descriptor capacity before
+ownership transfers and unwinds retained nodes in bounded LIFO order. Commit
+`365e0ae5` completes the bounded production observer: it acquires fresh
+directory descriptions and positional content readers below one private
+retained destination and returns scalar states only. Commit `8620986a` retains
+the exact observed-root device, inode, and mount ID. Commit `3f8309b1` then
+sandwiches assessment through that same private destination `File` between
+opening and closing boot-filesystem authentication and requires the root triple
+to match. The next client blocker is a bounded expected-source bridge for
+generated slices and sealed asset descriptors; it must stream positionally
+rather than materialize the roughly 10-GiB publication ceiling.
 
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`
@@ -501,10 +505,17 @@ name rebind and exact descriptor re-observation, a closing observation, and
 reconciliation, returning distinct closed live read-provenance evidence.
 Commit `dceab6cc` independently binds stable directory identity, authenticated
 mount ID, and shared `TMPFS_MAGIC` to the exact devtmpfs mountinfo policy; it
-proves same-mount descriptor evidence, not the exact `/dev` root or non-bind
-provenance. The production retained `/dev` attachment and sealed-`DEVNAME`
-block-node opener, disk admissibility, durable descriptor-rooted publisher,
-device-flush ordering, and restart reconciliation remain open.
+proves same-mount descriptor evidence, not exact `/dev` authority by itself.
+Commit `bfa3a0c2` now composes the exact retained `/dev` attachment with that
+devtmpfs evidence, opens the sealed parent `DEVNAME` beneath the same private
+destination, and owns the opening-preflight, GPT-pass-one, private name-rebind,
+inter-pass observation, GPT-pass-two, closing-observation, and reconciliation
+schedule. The closed result does not prove whole-root non-bind provenance or
+ongoing currentness; same-thread `setns` still requires outer aggregate
+revalidation. Linux MSDOS magic likewise remains distinct from exact `vfat`.
+Disk admissibility beyond the admitted evidence, write authority, durable
+descriptor-rooted publication, device-flush ordering, restart reconciliation,
+and disposable-VM evidence remain open.
 Default and focused tests do not inspect or mutate host ESP/BOOT storage; real
 publication, reboot, and power-loss evidence requires the user-supplied
 disposable VM.
