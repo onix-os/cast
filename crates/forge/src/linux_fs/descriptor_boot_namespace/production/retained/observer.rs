@@ -69,6 +69,7 @@ pub(super) struct RetainedBootNamespaceObserver<'root, 'request, 'expected, Hook
     ledger: LiveLedger,
     nodes: Vec<RetainedNode<'root>>,
     inventory: Option<CachedInventory>,
+    observed_root_identity: Option<BootNamespaceNodeIdentity>,
     failure: Option<RetainedBootNamespaceAssessmentError>,
     hook: Hook,
 }
@@ -93,6 +94,7 @@ impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
             ledger,
             nodes: Vec::new(),
             inventory: None,
+            observed_root_identity: None,
             failure: None,
             hook,
         })
@@ -100,6 +102,10 @@ impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
 
     pub(super) fn take_failure(&mut self) -> Option<RetainedBootNamespaceAssessmentError> {
         self.failure.take()
+    }
+
+    pub(super) const fn observed_root_identity(&self) -> Option<BootNamespaceNodeIdentity> {
+        self.observed_root_identity
     }
 
     pub(super) fn finish(
@@ -119,6 +125,16 @@ impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
         if unreleased_nodes {
             return Err(RetainedBootNamespaceAssessmentError::ObserverProtocol {
                 reason: "classifier returned without releasing every retained node",
+            });
+        }
+        if classified && self.requests.is_empty() && self.observed_root_identity.is_some() {
+            return Err(RetainedBootNamespaceAssessmentError::ObserverProtocol {
+                reason: "empty classification unexpectedly observed a retained root",
+            });
+        }
+        if classified && !self.requests.is_empty() && self.observed_root_identity.is_none() {
+            return Err(RetainedBootNamespaceAssessmentError::ObserverProtocol {
+                reason: "successful nonempty classification omitted retained-root evidence",
             });
         }
         self.ledger.checkpoint()?;
@@ -182,7 +198,7 @@ impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
 
     fn root_identity_impl(&mut self) -> Result<BootNamespaceNodeIdentity, RetainedBootNamespaceAssessmentError> {
         self.require_healthy()?;
-        if !self.nodes.is_empty() {
+        if !self.nodes.is_empty() || self.observed_root_identity.is_some() {
             return Err(RetainedBootNamespaceAssessmentError::ObserverProtocol {
                 reason: "root was requested more than once",
             });
@@ -236,6 +252,7 @@ impl<'root, 'request, 'expected, Hook: RetainedBootNamespaceHook>
             reader: None,
             opening_regular: None,
         });
+        self.observed_root_identity = Some(identity);
         Ok(identity)
     }
 

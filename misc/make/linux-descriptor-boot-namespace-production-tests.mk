@@ -13,7 +13,7 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::descriptor_boot_namespace_production::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 31; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 34; \
 	for test_case in \
 		records:valid_inventory_filters_dot_entries_and_ignores_kernel_identity_hints \
 		records:complete_syscall_chunks_preserve_raw_record_order \
@@ -32,6 +32,9 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 		live:deadline_expiry_during_call_is_detected_immediately_after_return \
 		live:native_getdents64_reads_only_an_ordinary_target_fixture \
 		retained:ordinary_target_fixture_classifies_exact_different_and_absent \
+		retained:nonempty_result_exposes_exact_retained_root_identity \
+		retained:empty_result_has_no_observed_root_identity \
+		retained:root_protocol_failure_cannot_emit_validated_result \
 		retained:every_inventory_pass_starts_from_a_fresh_offset_zero_description \
 		retained:nested_nodes_release_in_strict_lifo_order_before_completion \
 		retained:injected_change_after_opening_hash_is_failed_closed \
@@ -114,6 +117,9 @@ forge-linux-descriptor-boot-namespace-production-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(crate) peak_descriptor_slots: usize' "$$module_dir/retained/limits.rs"; \
 	timeout 10s grep -Fq 'eof_probe_capacity_bytes' "$$module_dir/retained/limits.rs"; \
 	timeout 10s grep -Fq 'pub(crate) struct ValidatedRetainedBootNamespaceAssessment' "$$module_dir/retained.rs"; \
+	timeout 10s grep -Fq 'observed_root_identity: Option<BootNamespaceNodeIdentity>' "$$module_dir/retained.rs"; \
+	timeout 10s grep -Fq 'successful nonempty classification omitted retained-root evidence' "$$module_dir/retained.rs"; \
+	timeout 10s grep -Fq 'self.observed_root_identity = Some(identity);' "$$module_dir/retained/observer.rs"; \
 	if timeout 10s rg -n 'F_DUPFD|dup3?\(|try_clone\(' "$$module_dir/retained.rs" "$$module_dir/retained"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'descriptor_mount_id_until|retry_interrupted|openat2_file_until|AT_FDCWD|/proc/' "$$module_dir/retained.rs" "$$module_dir/retained"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'max_syscalls|\bsyscalls\b|max_descriptors|peak_descriptors|physical descriptor' "$$module_dir/retained.rs" "$$module_dir/retained" "$$test_dir/retained.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \

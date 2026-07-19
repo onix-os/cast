@@ -19,6 +19,7 @@ use super::super::{
         BootNamespaceAssessmentLimits, BootNamespaceDestinationState, BootNamespaceRequest,
         ValidatedBootNamespaceAssessment,
     },
+    observer::BootNamespaceNodeIdentity,
 };
 
 #[path = "retained/content.rs"]
@@ -64,6 +65,7 @@ use observer::RetainedBootNamespaceObserver;
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedRetainedBootNamespaceAssessment {
     assessment: ValidatedBootNamespaceAssessment,
+    observed_root_identity: Option<BootNamespaceNodeIdentity>,
     #[cfg(test)]
     usage: FixtureRetainedBootNamespaceUsage,
 }
@@ -71,6 +73,13 @@ pub(crate) struct ValidatedRetainedBootNamespaceAssessment {
 impl ValidatedRetainedBootNamespaceAssessment {
     pub(crate) fn states(&self) -> &[BootNamespaceDestinationState] {
         self.assessment.states()
+    }
+
+    /// Exact scalar identity captured from the production observer's retained
+    /// root descriptor. Empty request sets intentionally perform no root
+    /// observation and therefore return `None`.
+    pub(crate) const fn observed_root_identity(&self) -> Option<BootNamespaceNodeIdentity> {
+        self.observed_root_identity
     }
 
     #[cfg(test)]
@@ -179,6 +188,7 @@ fn assess_with_hook<'root, 'request, 'expected, Hook: hook::RetainedBootNamespac
         RetainedBootNamespaceObserver::new(retained_root, requests, expected, live_limits, deadline, hook)?;
     let classified = assess_with_observer_until(requests, namespace_limits, deadline, &mut observer);
     let closed = observer.finish(classified.is_ok());
+    let observed_root_identity = observer.observed_root_identity();
     let adapter_failure = observer.take_failure();
 
     if let Some(error) = adapter_failure {
@@ -186,8 +196,23 @@ fn assess_with_hook<'root, 'request, 'expected, Hook: hook::RetainedBootNamespac
     }
     let usage = closed?;
     let (assessment, _) = classified.map_err(RetainedBootNamespaceAssessmentError::Namespace)?;
+    let observed_root_identity = match (requests.is_empty(), observed_root_identity) {
+        (true, None) => None,
+        (false, Some(identity)) => Some(identity),
+        (true, Some(_)) => {
+            return Err(RetainedBootNamespaceAssessmentError::ObserverProtocol {
+                reason: "empty classification unexpectedly observed a retained root",
+            });
+        }
+        (false, None) => {
+            return Err(RetainedBootNamespaceAssessmentError::ObserverProtocol {
+                reason: "successful nonempty classification omitted retained-root evidence",
+            });
+        }
+    };
     Ok(ValidatedRetainedBootNamespaceAssessment {
         assessment,
+        observed_root_identity,
         #[cfg(test)]
         usage,
     })

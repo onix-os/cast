@@ -1,6 +1,8 @@
 use std::{
     cell::Cell,
     fs::{File, OpenOptions},
+    mem::MaybeUninit,
+    os::fd::AsRawFd as _,
     os::unix::fs::OpenOptionsExt as _,
     path::Path,
     time::{Duration, Instant},
@@ -22,6 +24,34 @@ fn retained_root(path: &Path) -> File {
         .custom_flags(nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(path)
         .unwrap()
+}
+
+fn retained_descriptor_identity(file: &File) -> (u64, u64, u64) {
+    let mut status = MaybeUninit::<nix::libc::stat>::uninit();
+    // SAFETY: fstat initializes the supplied storage on success and the
+    // retained fixture descriptor remains live for the complete call.
+    assert_eq!(unsafe { nix::libc::fstat(file.as_raw_fd(), status.as_mut_ptr()) }, 0);
+    // SAFETY: successful fstat initialized every stat field.
+    let status = unsafe { status.assume_init() };
+    // SAFETY: zero is a valid initial value for every statx field.
+    let mut extended: nix::libc::statx = unsafe { std::mem::zeroed() };
+    // SAFETY: the empty C string and output remain live for this descriptor-
+    // relative fixture observation.
+    assert_eq!(
+        unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_statx,
+                file.as_raw_fd(),
+                c"".as_ptr(),
+                nix::libc::AT_EMPTY_PATH,
+                nix::libc::STATX_MNT_ID,
+                &mut extended,
+            )
+        },
+        0
+    );
+    assert_ne!(extended.stx_mask & nix::libc::STATX_MNT_ID, 0);
+    (status.st_dev, status.st_ino, extended.stx_mnt_id)
 }
 
 fn request<'a>(name: &'a str, expected: &[u8]) -> BootNamespaceRequest<'a> {
@@ -72,6 +102,82 @@ fn ordinary_target_fixture_classifies_exact_different_and_absent() {
     assert!(assessment.fixture_usage().observation_io_attempts > 0);
     assert_eq!(assessment.fixture_usage().inventory_passes, 2);
     assert!(assessment.fixture_usage().raw_read_calls >= 2);
+}
+
+#[test]
+fn nonempty_result_exposes_exact_retained_root_identity() {
+    let temporary = target_temporary("forge-retained-root-evidence-");
+    let root = retained_root(temporary.path());
+    let expected_identity = retained_descriptor_identity(&root);
+    let expected = b"".as_slice();
+    let requests = [request("missing", expected)];
+    let streams = [expected];
+
+    let assessment = assess(&root, &requests, &streams).unwrap();
+    let observed = assessment
+        .observed_root_identity()
+        .expect("nonempty successful assessment must retain observed-root evidence");
+
+    assert_eq!(assessment.states(), &[BootNamespaceDestinationState::Absent]);
+    assert_eq!(
+        (observed.device, observed.inode, observed.mount_id),
+        expected_identity
+    );
+}
+
+#[test]
+fn empty_result_has_no_observed_root_identity() {
+    let temporary = target_temporary("forge-retained-empty-root-evidence-");
+    let root = retained_root(temporary.path());
+    let requests: [BootNamespaceRequest<'static>; 0] = [];
+    let streams: [&[u8]; 0] = [];
+
+    let assessment = assess(&root, &requests, &streams).unwrap();
+
+    assert!(assessment.states().is_empty());
+    assert_eq!(assessment.observed_root_identity(), None);
+}
+
+#[test]
+fn root_protocol_failure_cannot_emit_validated_result() {
+    let temporary = target_temporary("forge-retained-root-protocol-failure-");
+    let root = retained_root(temporary.path());
+    let expected = b"".as_slice();
+    let requests = [request("missing", expected)];
+    let streams = [expected];
+    let root_event = Cell::new(false);
+    let complete_event = Cell::new(false);
+    let mut hook = |event| match event {
+        FixtureRetainedBootNamespaceProtocolEvent::RootRetained { .. } => {
+            root_event.set(true);
+            Err(std::io::Error::other("injected retained-root protocol failure"))
+        }
+        FixtureRetainedBootNamespaceProtocolEvent::Complete => {
+            complete_event.set(true);
+            Ok(())
+        }
+        _ => Ok(()),
+    };
+
+    let result = assess_retained_boot_namespace_with_hook_until(
+        &root,
+        &requests,
+        &streams,
+        BootNamespaceAssessmentLimits::default(),
+        RetainedBootNamespaceAssessmentLimits::default(),
+        Instant::now() + Duration::from_secs(30),
+        &mut hook,
+    );
+
+    assert!(matches!(
+        result,
+        Err(RetainedBootNamespaceAssessmentError::Filesystem {
+            action: "running the retained-root protocol hook",
+            ..
+        })
+    ));
+    assert!(root_event.get());
+    assert!(!complete_event.get());
 }
 
 #[test]
@@ -380,6 +486,7 @@ fn empty_request_uses_no_descriptor_slots() {
     let assessment = assess(&root, &requests, &streams).unwrap();
 
     assert!(assessment.states().is_empty());
+    assert_eq!(assessment.observed_root_identity(), None);
     assert_eq!(assessment.fixture_usage().observation_io_attempts, 0);
     assert_eq!(assessment.fixture_usage().peak_descriptor_slots, 0);
     assert_eq!(assessment.fixture_usage().peak_retained_nodes, 0);
