@@ -8,7 +8,7 @@ forge-active-reblit-boot-topology-intent-test: host-storage-safety-test
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_boot_topology_intent::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 25; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 27; \
 	for name in \
 		evaluation::alias_intent_exposes_only_revalidated_typed_identity_and_exact_provenance \
 		evaluation::distinct_xbootldr_is_typed_declarative_intent_not_runtime_role_proof \
@@ -34,7 +34,9 @@ forge-active-reblit-boot-topology-intent-test: host-storage-safety-test
 		races_and_bounds::directory_chain_and_installation_root_substitution_are_rejected \
 		races_and_bounds::source_byte_bound_is_inclusive_and_production_ceiling_fails_before_evaluation \
 		races_and_bounds::mount_selector_byte_component_byte_and_component_count_bounds_are_exact \
-		races_and_bounds::work_and_elapsed_time_bounds_are_exact_and_fail_closed; do \
+		races_and_bounds::work_and_elapsed_time_bounds_are_exact_and_fail_closed \
+		races_and_bounds::caller_owned_deadline_is_rejected_at_prepare_and_revalidate_entry \
+		races_and_bounds::caller_owned_deadline_is_rechecked_at_prepare_and_revalidate_completion; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	for shared in \
@@ -48,6 +50,11 @@ forge-active-reblit-boot-topology-intent-test: host-storage-safety-test
 	abi=crates/forge/gluon/boot_topology.glu; \
 	timeout 10s grep -Fq 'PreparedActiveReblitBootTopologyIntent' "$$module"; \
 	timeout 10s grep -Fq 'RevalidatedActiveReblitBootTopologyIntent' "$$module"; \
+	timeout 10s grep -Fq 'Self::prepare_until(installation, deadline)' "$$module"; \
+	timeout 10s grep -Fq 'self.revalidate_until(installation, deadline)' "$$module"; \
+	timeout 10s grep -Fq 'BootTopologyIntentBudget::new_until' "$$module"; \
+	timeout 10s grep -Fq 'remaining_at_admission: Duration' "$$module"; \
+	timeout 10s grep -Fq 'exceeded caller-owned absolute deadline' "$$module"; \
 	timeout 10s grep -Fq 'revalidate_root_directory_until(budget.deadline)' "$$module"; \
 	timeout 10s grep -Fq 'BOOT_TOPOLOGY_ABI_NAME: &str = "cast.boot_topology.v2"' "$$gluon"; \
 	timeout 10s grep -Fq 'BOOT_TOPOLOGY_ABI_VERSION: u32 = 2' "$$gluon"; \

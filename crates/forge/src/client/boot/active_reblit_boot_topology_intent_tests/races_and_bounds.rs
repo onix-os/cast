@@ -1,9 +1,16 @@
-use std::{fs, os::unix::fs::PermissionsExt as _, time::Duration};
+use std::{
+    cell::Cell,
+    fs,
+    os::unix::fs::PermissionsExt as _,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use super::{
     super::{
         ActiveReblitBootTopologyIntentError, BootTopologyIntentBudget, BootTopologyIntentPolicy,
-        MAX_BOOT_TOPOLOGY_SOURCE_BYTES, prepare_with_policy_and_checkpoint,
+        MAX_BOOT_TOPOLOGY_SOURCE_BYTES, PreparedActiveReblitBootTopologyIntent, prepare_with_policy_and_checkpoint,
+        prepare_with_policy_until_and_clock,
     },
     support::{ESP_PARTUUID, Fixture, authored_alias, authored_alias_at},
 };
@@ -46,6 +53,7 @@ fn terminal_rebind_rejects_replacement_after_a_successful_evaluation() {
             fs::set_permissions(&source, fs::Permissions::from_mode(0o644)).unwrap();
         },
         || {},
+        || {},
     );
     assert!(matches!(
         result,
@@ -66,6 +74,7 @@ fn second_complete_pass_rejects_same_inode_content_change_between_passes() {
         &mut budget,
         || {},
         || fixture.write_source(authored_alias("22222222-3333-4444-5555-666666666666")),
+        || {},
     );
     assert!(matches!(
         result,
@@ -94,6 +103,7 @@ fn directory_chain_and_installation_root_substitution_are_rejected() {
             fs::write(cast.join("boot-topology.glu"), authored_alias(ESP_PARTUUID)).unwrap();
             fs::set_permissions(cast.join("boot-topology.glu"), fs::Permissions::from_mode(0o644)).unwrap();
         },
+        || {},
     );
     assert!(matches!(
         result,
@@ -116,6 +126,7 @@ fn directory_chain_and_installation_root_substitution_are_rejected() {
             fs::create_dir(&root).unwrap();
             fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
         },
+        || {},
     );
     assert!(matches!(
         result,
@@ -266,4 +277,106 @@ fn work_and_elapsed_time_bounds_are_exact_and_fail_closed() {
         ),
         Err(ActiveReblitBootTopologyIntentError::InvalidDeadline { .. })
     ));
+}
+
+#[test]
+fn caller_owned_deadline_is_rejected_at_prepare_and_revalidate_entry() {
+    let fixture = Fixture::new();
+    fixture.write_alias();
+    let deadline = Instant::now() - Duration::from_nanos(1);
+
+    let prepare_error = PreparedActiveReblitBootTopologyIntent::prepare_until(&fixture.installation, deadline)
+        .err()
+        .expect("an expired caller deadline must reject preparation at entry");
+    assert!(matches!(
+        prepare_error,
+        ActiveReblitBootTopologyIntentError::DeadlineExceeded {
+            deadline: actual,
+            remaining_at_admission: Duration::ZERO,
+            ..
+        } if actual == deadline
+    ));
+
+    let prepared = fixture.prepare().unwrap();
+    let revalidate_error = prepared
+        .revalidate_until(&fixture.installation, deadline)
+        .err()
+        .expect("an expired caller deadline must reject revalidation at entry");
+    assert!(matches!(
+        revalidate_error,
+        ActiveReblitBootTopologyIntentError::DeadlineExceeded {
+            deadline: actual,
+            remaining_at_admission: Duration::ZERO,
+            ..
+        } if actual == deadline
+    ));
+}
+
+#[test]
+fn caller_owned_deadline_is_rechecked_at_prepare_and_revalidate_completion() {
+    let fixture = Fixture::new();
+    fixture.write_alias();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let admitted_at = deadline - Duration::from_secs(60);
+
+    let prepare_complete = Rc::new(Cell::new(false));
+    let prepare_hook_state = Rc::clone(&prepare_complete);
+    let prepare_clock_state = Rc::clone(&prepare_complete);
+    let prepare_error = prepare_with_policy_until_and_clock(
+        &fixture.installation,
+        BootTopologyIntentPolicy::production(),
+        deadline,
+        move || prepare_hook_state.set(true),
+        move || terminal_deadline_time(&prepare_clock_state, admitted_at, deadline),
+    )
+    .err()
+    .expect("deadline expiry at the explicit preparation completion check must fail closed");
+    assert!(prepare_complete.get());
+    assert!(matches!(
+        prepare_error,
+        ActiveReblitBootTopologyIntentError::DeadlineExceeded {
+            deadline: actual,
+            remaining_at_admission,
+            ..
+        } if actual == deadline && remaining_at_admission == Duration::from_secs(60)
+    ));
+
+    let prepared = fixture.prepare().unwrap();
+    let revalidate_complete = Rc::new(Cell::new(false));
+    let revalidate_clock_state = Rc::clone(&revalidate_complete);
+    let mut budget = BootTopologyIntentBudget::new_until_with_clock(
+        &fixture.installation,
+        BootTopologyIntentPolicy::production(),
+        deadline,
+        move || terminal_deadline_time(&revalidate_clock_state, admitted_at, deadline),
+    )
+    .unwrap();
+    let revalidate_hook_state = Rc::clone(&revalidate_complete);
+    let revalidate_error = prepared
+        .revalidate_with_budget_and_checkpoints(
+            &fixture.installation,
+            &mut budget,
+            || {},
+            || {},
+            move || revalidate_hook_state.set(true),
+        )
+        .err()
+        .expect("deadline expiry at the explicit revalidation completion check must fail closed");
+    assert!(revalidate_complete.get());
+    assert!(matches!(
+        revalidate_error,
+        ActiveReblitBootTopologyIntentError::DeadlineExceeded {
+            deadline: actual,
+            remaining_at_admission,
+            ..
+        } if actual == deadline && remaining_at_admission == Duration::from_secs(60)
+    ));
+}
+
+fn terminal_deadline_time(complete: &Cell<bool>, admitted_at: Instant, deadline: Instant) -> Instant {
+    if complete.get() {
+        deadline + Duration::from_nanos(1)
+    } else {
+        admitted_at
+    }
 }

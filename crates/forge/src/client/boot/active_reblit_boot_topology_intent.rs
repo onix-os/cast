@@ -140,7 +140,16 @@ impl ActiveReblitBootTopologyIntentValue {
 
 impl PreparedActiveReblitBootTopologyIntent {
     pub(in crate::client) fn prepare(installation: &Installation) -> Result<Self, ActiveReblitBootTopologyIntentError> {
-        prepare_with_policy_and_checkpoint(installation, BootTopologyIntentPolicy::production(), |_| {})
+        let deadline = deadline_after(BOOT_TOPOLOGY_TIMEOUT)?;
+        Self::prepare_until(installation, deadline)
+    }
+
+    /// Prepare without replacing the caller-owned absolute deadline.
+    pub(in crate::client) fn prepare_until(
+        installation: &Installation,
+        deadline: Instant,
+    ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+        prepare_with_policy_until_and_checkpoint(installation, BootTopologyIntentPolicy::production(), deadline, |_| {})
     }
 
     /// Rebind and reevaluate the exact retained source twice before exposing it.
@@ -148,7 +157,18 @@ impl PreparedActiveReblitBootTopologyIntent {
         &'a self,
         installation: &'a Installation,
     ) -> Result<RevalidatedActiveReblitBootTopologyIntent<'a>, ActiveReblitBootTopologyIntentError> {
-        let mut budget = BootTopologyIntentBudget::new(installation, BootTopologyIntentPolicy::production())?;
+        let deadline = deadline_after(BOOT_TOPOLOGY_TIMEOUT)?;
+        self.revalidate_until(installation, deadline)
+    }
+
+    /// Revalidate without replacing the caller-owned absolute deadline.
+    pub(in crate::client) fn revalidate_until<'a>(
+        &'a self,
+        installation: &'a Installation,
+        deadline: Instant,
+    ) -> Result<RevalidatedActiveReblitBootTopologyIntent<'a>, ActiveReblitBootTopologyIntentError> {
+        let mut budget =
+            BootTopologyIntentBudget::new_until(installation, BootTopologyIntentPolicy::production(), deadline)?;
         self.revalidate_with_budget(installation, &mut budget)?;
         Ok(RevalidatedActiveReblitBootTopologyIntent {
             intent: self,
@@ -162,19 +182,21 @@ impl PreparedActiveReblitBootTopologyIntent {
         installation: &Installation,
         budget: &mut BootTopologyIntentBudget,
     ) -> Result<(), ActiveReblitBootTopologyIntentError> {
-        self.revalidate_with_budget_and_checkpoints(installation, budget, || {}, || {})
+        self.revalidate_with_budget_and_checkpoints(installation, budget, || {}, || {}, || {})
     }
 
-    fn revalidate_with_budget_and_checkpoints<F, G>(
+    fn revalidate_with_budget_and_checkpoints<F, G, H>(
         &self,
         installation: &Installation,
         budget: &mut BootTopologyIntentBudget,
         after_first_evaluation: F,
         between_passes: G,
+        before_final_deadline: H,
     ) -> Result<(), ActiveReblitBootTopologyIntentError>
     where
         F: FnOnce(),
         G: FnOnce(),
+        H: FnOnce(),
     {
         revalidate_installation_root(installation, budget)?;
         self.revalidate_complete_pass(installation, budget, after_first_evaluation)?;
@@ -183,6 +205,7 @@ impl PreparedActiveReblitBootTopologyIntent {
         revalidate_installation_root(installation, budget)?;
         self.revalidate_complete_pass(installation, budget, || {})?;
         revalidate_installation_root(installation, budget)?;
+        before_final_deadline();
         budget.require_deadline()
     }
 
@@ -267,8 +290,11 @@ impl BootTopologyIntentPolicy {
 struct BootTopologyIntentBudget {
     policy: BootTopologyIntentPolicy,
     deadline: Instant,
+    remaining_at_admission: Duration,
     work: usize,
     source_path: PathBuf,
+    #[cfg(test)]
+    clock: Option<Box<dyn Fn() -> Instant>>,
 }
 
 impl BootTopologyIntentBudget {
@@ -276,18 +302,48 @@ impl BootTopologyIntentBudget {
         installation: &Installation,
         policy: BootTopologyIntentPolicy,
     ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
-        let deadline =
-            Instant::now()
-                .checked_add(policy.timeout)
-                .ok_or(ActiveReblitBootTopologyIntentError::InvalidDeadline {
-                    timeout: policy.timeout,
-                })?;
-        Ok(Self {
+        let deadline = deadline_after(policy.timeout)?;
+        Self::new_until(installation, policy, deadline)
+    }
+
+    fn new_until(
+        installation: &Installation,
+        policy: BootTopologyIntentPolicy,
+        deadline: Instant,
+    ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+        Self::new_until_at(installation, policy, deadline, Instant::now())
+    }
+
+    fn new_until_at(
+        installation: &Installation,
+        policy: BootTopologyIntentPolicy,
+        deadline: Instant,
+        admitted_at: Instant,
+    ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+        let budget = Self {
             policy,
             deadline,
+            remaining_at_admission: deadline.saturating_duration_since(admitted_at),
             work: 0,
             source_path: boot_topology_intent_path(installation),
-        })
+            #[cfg(test)]
+            clock: None,
+        };
+        budget.require_deadline_at_time(&budget.source_path, admitted_at)?;
+        Ok(budget)
+    }
+
+    #[cfg(test)]
+    fn new_until_with_clock(
+        installation: &Installation,
+        policy: BootTopologyIntentPolicy,
+        deadline: Instant,
+        clock: impl Fn() -> Instant + 'static,
+    ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+        let admitted_at = clock();
+        let mut budget = Self::new_until_at(installation, policy, deadline, admitted_at)?;
+        budget.clock = Some(Box::new(clock));
+        Ok(budget)
     }
 
     fn step(&mut self, path: &Path) -> Result<(), ActiveReblitBootTopologyIntentError> {
@@ -309,10 +365,15 @@ impl BootTopologyIntentBudget {
     }
 
     fn require_deadline_at(&self, path: &Path) -> Result<(), ActiveReblitBootTopologyIntentError> {
-        if Instant::now() > self.deadline {
+        self.require_deadline_at_time(path, self.now())
+    }
+
+    fn require_deadline_at_time(&self, path: &Path, now: Instant) -> Result<(), ActiveReblitBootTopologyIntentError> {
+        if now > self.deadline {
             Err(ActiveReblitBootTopologyIntentError::DeadlineExceeded {
                 path: path.to_owned(),
-                timeout: self.policy.timeout,
+                deadline: self.deadline,
+                remaining_at_admission: self.remaining_at_admission,
             })
         } else {
             Ok(())
@@ -321,12 +382,21 @@ impl BootTopologyIntentBudget {
 
     fn remaining_duration(&self) -> Result<Duration, ActiveReblitBootTopologyIntentError> {
         self.deadline
-            .checked_duration_since(Instant::now())
+            .checked_duration_since(self.now())
             .filter(|remaining| !remaining.is_zero())
             .ok_or_else(|| ActiveReblitBootTopologyIntentError::DeadlineExceeded {
                 path: self.source_path.clone(),
-                timeout: self.policy.timeout,
+                deadline: self.deadline,
+                remaining_at_admission: self.remaining_at_admission,
             })
+    }
+
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(clock) = &self.clock {
+            return clock();
+        }
+        Instant::now()
     }
 }
 
@@ -338,9 +408,51 @@ fn prepare_with_policy_and_checkpoint<F>(
 where
     F: FnOnce(&PreparedActiveReblitBootTopologyIntent),
 {
-    let mut budget = BootTopologyIntentBudget::new(installation, policy)?;
-    revalidate_installation_root(installation, &mut budget)?;
-    let (source, bytes) = capture_source(installation, &mut budget)?;
+    let deadline = deadline_after(policy.timeout)?;
+    prepare_with_policy_until_and_checkpoint(installation, policy, deadline, before_final_revalidation)
+}
+
+fn prepare_with_policy_until_and_checkpoint<F>(
+    installation: &Installation,
+    policy: BootTopologyIntentPolicy,
+    deadline: Instant,
+    before_final_revalidation: F,
+) -> Result<PreparedActiveReblitBootTopologyIntent, ActiveReblitBootTopologyIntentError>
+where
+    F: FnOnce(&PreparedActiveReblitBootTopologyIntent),
+{
+    let mut budget = BootTopologyIntentBudget::new_until(installation, policy, deadline)?;
+    prepare_with_budget_and_checkpoints(installation, &mut budget, before_final_revalidation, || {})
+}
+
+#[cfg(test)]
+fn prepare_with_policy_until_and_clock<F, G>(
+    installation: &Installation,
+    policy: BootTopologyIntentPolicy,
+    deadline: Instant,
+    before_final_deadline: F,
+    clock: G,
+) -> Result<PreparedActiveReblitBootTopologyIntent, ActiveReblitBootTopologyIntentError>
+where
+    F: FnOnce(),
+    G: Fn() -> Instant + 'static,
+{
+    let mut budget = BootTopologyIntentBudget::new_until_with_clock(installation, policy, deadline, clock)?;
+    prepare_with_budget_and_checkpoints(installation, &mut budget, |_| {}, before_final_deadline)
+}
+
+fn prepare_with_budget_and_checkpoints<F, G>(
+    installation: &Installation,
+    budget: &mut BootTopologyIntentBudget,
+    before_final_revalidation: F,
+    before_final_deadline: G,
+) -> Result<PreparedActiveReblitBootTopologyIntent, ActiveReblitBootTopologyIntentError>
+where
+    F: FnOnce(&PreparedActiveReblitBootTopologyIntent),
+    G: FnOnce(),
+{
+    revalidate_installation_root(installation, budget)?;
+    let (source, bytes) = capture_source(installation, budget)?;
     let source_text = std::str::from_utf8(&bytes)
         .map_err(|source| ActiveReblitBootTopologyIntentError::InvalidUtf8 {
             path: boot_topology_intent_path(installation),
@@ -348,7 +460,7 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = gluon::evaluate(&source_text, &budget)?;
+    let evaluated = gluon::evaluate(&source_text, budget)?;
     let prepared = PreparedActiveReblitBootTopologyIntent {
         source,
         source_text,
@@ -358,7 +470,7 @@ where
         preparation_work: 0,
     };
     before_final_revalidation(&prepared);
-    prepared.revalidate_with_budget(installation, &mut budget)?;
+    prepared.revalidate_with_budget_and_checkpoints(installation, budget, || {}, || {}, before_final_deadline)?;
     #[cfg(test)]
     let prepared = PreparedActiveReblitBootTopologyIntent {
         preparation_work: budget.work,
@@ -380,14 +492,27 @@ fn boot_topology_intent_path(installation: &Installation) -> PathBuf {
     installation.root.join("etc/cast/boot-topology.glu")
 }
 
+fn deadline_after(timeout: Duration) -> Result<Instant, ActiveReblitBootTopologyIntentError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(ActiveReblitBootTopologyIntentError::InvalidDeadline { timeout })
+}
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootTopologyIntentError {
     #[error("revalidate the authenticated installation root around local boot-topology intent")]
     Installation(#[from] installation::Error),
     #[error("boot-topology intent deadline {timeout:?} cannot be represented")]
     InvalidDeadline { timeout: Duration },
-    #[error("boot-topology intent exceeded its {timeout:?} deadline at `{}`", path.display())]
-    DeadlineExceeded { path: PathBuf, timeout: Duration },
+    #[error(
+        "boot-topology intent exceeded caller-owned absolute deadline {deadline:?} at `{}` (remaining at admission {remaining_at_admission:?})",
+        path.display()
+    )]
+    DeadlineExceeded {
+        path: PathBuf,
+        deadline: Instant,
+        remaining_at_admission: Duration,
+    },
     #[error("boot-topology intent exceeded its work limit of {limit} at `{}` (actual {actual})", path.display())]
     WorkLimit { path: PathBuf, limit: usize, actual: usize },
     #[error("required machine-local boot-topology intent is missing at `{}`", path.display())]
