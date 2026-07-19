@@ -5,7 +5,7 @@ CARGO ?= cargo
 
 .PHONY: forge-active-reblit-boot-namespace-input-test forge-active-reblit-boot-namespace-input-unit-test
 
-forge-active-reblit-boot-namespace-input-test: host-storage-safety-test forge-active-reblit-bls-renderer-test forge-active-reblit-boot-publication-plan-test forge-linux-descriptor-boot-namespace-production-test forge-active-reblit-boot-namespace-input-unit-test
+forge-active-reblit-boot-namespace-input-test: host-storage-safety-test forge-active-reblit-bls-renderer-test forge-active-reblit-boot-publication-plan-test forge-active-reblit-desired-publication-test forge-linux-descriptor-boot-namespace-production-test forge-active-reblit-boot-namespace-input-unit-test
 
 forge-active-reblit-boot-namespace-input-unit-test:
 	@set -euo pipefail; \

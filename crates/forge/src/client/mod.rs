@@ -89,6 +89,9 @@ mod active_reblit_boot_inputs;
 #[allow(dead_code)] // closed plan inputs consumed by the later retained attachment coordinator
 #[path = "boot/active_reblit_boot_namespace_inputs.rs"]
 mod active_reblit_boot_namespace_inputs;
+#[allow(dead_code)] // pure owned desired-publication inventory for later desired-state comparison
+#[path = "boot/active_reblit_desired_publication.rs"]
+mod active_reblit_desired_publication;
 #[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
 #[path = "boot/active_reblit_projection.rs"]
 pub(crate) mod active_reblit_boot_projection;

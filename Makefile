@@ -57,6 +57,7 @@ include misc/make/active-reblit-boot-topology-intent-tests.mk
 include misc/make/active-reblit-root-filesystem-intent-tests.mk
 include misc/make/active-reblit-boot-render-input-tests.mk
 include misc/make/active-reblit-bls-renderer-tests.mk
+include misc/make/active-reblit-desired-publication-tests.mk
 include misc/make/active-reblit-boot-namespace-input-tests.mk
 include misc/make/startup-recovery-tests.mk
 include misc/make/startup-exchange-durability-tests.mk

@@ -256,6 +256,10 @@ where
         self.planned.relative_path()
     }
 
+    pub(in crate::client) fn mode(&self) -> u32 {
+        self.planned.mode()
+    }
+
     pub(in crate::client) fn generated_bytes(&self) -> Option<&'plan [u8]> {
         self.planned.source().generated_bytes()
     }
