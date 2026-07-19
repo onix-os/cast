@@ -46,7 +46,7 @@ fn target(
         .map(|sequence| format!("DISKSEQ={sequence}\n"))
         .unwrap_or_default();
     let uevent = format!(
-        "MAJOR={major}\nMINOR={minor}\nDEVTYPE=partition\nPARTN={partition_number}\nPARTUUID={partuuid}\n{disk_sequence_field}"
+        "MAJOR={major}\nMINOR={minor}\nDEVNAME=synthetic-diskp{partition_number}\nDEVTYPE=partition\nPARTN={partition_number}\nPARTUUID={partuuid}\n{disk_sequence_field}"
     );
     let identity = parse_sysfs_partition_identity(dev.as_bytes(), partition.as_bytes(), uevent.as_bytes())
         .expect("synthetic scalar identity must parse");

@@ -39,7 +39,7 @@ fn topology_target(
     let dev = format!("{major}:{minor}\n");
     let partition = format!("{partition_number}\n");
     let uevent = format!(
-        "MAJOR={major}\nMINOR={minor}\nDEVTYPE=partition\nPARTN={partition_number}\nPARTUUID={partuuid}\nDISKSEQ=77\n"
+        "MAJOR={major}\nMINOR={minor}\nDEVNAME=synthetic-diskp{partition_number}\nDEVTYPE=partition\nPARTN={partition_number}\nPARTUUID={partuuid}\nDISKSEQ=77\n"
     );
     let identity = parse_sysfs_partition_identity(dev.as_bytes(), partition.as_bytes(), uevent.as_bytes())
         .expect("synthetic publication topology must parse");
