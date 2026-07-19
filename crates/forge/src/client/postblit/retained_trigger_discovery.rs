@@ -86,6 +86,65 @@ mod tests {
         assert!(!loaded.iter().any(|trigger| trigger.name == "injected-system"));
     }
 
+    #[test]
+    fn stateful_system_scope_compiles_intent_from_the_retained_live_usr() {
+        let temporary = tempfile::tempdir().unwrap();
+        crate::test_support::prepare_private_installation_root(temporary.path());
+        let installation = crate::Installation::open(temporary.path(), None).unwrap();
+        let live_usr_path = installation.root.join("usr");
+        let original = live_usr_path.join("share/cast/triggers/sys.d/system.glu");
+        fs_err::create_dir_all(original.parent().unwrap()).unwrap();
+        fs_err::write(
+            &original,
+            trigger_source_with_path("original-system", "/bin/true", "system-scope-witness"),
+        )
+        .unwrap();
+        let retained_usr = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(&live_usr_path)
+            .unwrap();
+
+        let displaced = installation.root.join("displaced-system-usr");
+        fs_err::rename(&live_usr_path, &displaced).unwrap();
+        let injected = live_usr_path.join("share/cast/triggers/sys.d/system.glu");
+        fs_err::create_dir_all(injected.parent().unwrap()).unwrap();
+        fs_err::write(
+            &injected,
+            trigger_source_with_path("injected-system", "/bin/false", "system-scope-witness"),
+        )
+        .unwrap();
+
+        let tree = crate::client::vfs(vec![(
+            crate::package::Id::from("retained-system-scope"),
+            stone::StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: 0o755,
+                tag: 0,
+                file: stone::StonePayloadLayoutFile::Directory("share/system-scope-witness".into()),
+            },
+        )])
+        .unwrap();
+        let runners = crate::client::postblit::triggers(
+            crate::client::postblit::TriggerScope::System {
+                installation: &installation,
+                retained_usr: &retained_usr,
+                live_usr_path: &live_usr_path,
+            },
+            &tree,
+        )
+        .unwrap();
+
+        assert_eq!(runners.len(), 1);
+        assert!(matches!(
+            runners[0].handler(),
+            triggers::format::Handler::Run { run, args } if run == "/bin/true" && args.is_empty()
+        ));
+        assert!(injected.exists());
+        assert!(displaced.join("share/cast/triggers/sys.d/system.glu").exists());
+    }
+
     struct SubstitutedUsrFixture {
         _temporary: tempfile::TempDir,
         candidate_usr: File,
@@ -121,12 +180,16 @@ mod tests {
     }
 
     fn trigger_source(name: &str, command: &str) -> String {
+        trigger_source_with_path(name, command, name)
+    }
+
+    fn trigger_source_with_path(name: &str, command: &str, witness: &str) -> String {
         format!(
             r#"let cast = import! cast.trigger.v1
 let base = cast.trigger "{name}" "Retained trigger discovery fixture"
 {{
     paths = [cast.path
-        "/usr/share/{name}"
+        "/usr/share/{witness}"
         ["{name}"]
         (cast.optional.set cast.path_kind.directory)],
     handlers = [cast.handler.named "{name}" (cast.handler.run

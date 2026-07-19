@@ -146,7 +146,7 @@ fn observe_trigger_scope(scope: &TriggerScope<'_>) {
             phase: postblit::RetainedEphemeralPhase::System,
             ..
         } => "system",
-        TriggerScope::System(..) => "system",
+        TriggerScope::System { .. } => "system",
     };
     OBSERVED_TRIGGER_SCOPES.with(|observed| observed.borrow_mut().push(name));
 }

@@ -248,7 +248,7 @@ impl Client {
                 progress.set_message("Running retained ephemeral system-scope triggers");
                 "retained-ephemeral-system-scope-triggers"
             }
-            TriggerScope::System(..) => {
+            TriggerScope::System { .. } => {
                 progress.set_message("Running system-scope triggers");
                 "system-scope-triggers"
             }

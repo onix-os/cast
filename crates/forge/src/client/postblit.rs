@@ -156,8 +156,16 @@ pub(super) enum TriggerScope<'a> {
         view: super::external_materialization::RetainedEphemeralTriggerView<'a>,
     },
 
-    /// A stateful system trigger with reduced sandboxing.
-    System(&'a Installation),
+    /// A stateful system trigger whose packaged intent is rooted at the exact
+    /// candidate inode retained before activation. Non-live execution reuses
+    /// that inode as its `/usr` bind; live-root direct execution separately
+    /// revalidates the public name immediately before the handler.
+    /// The live path is only its canonical diagnostic and name-proof label.
+    System {
+        installation: &'a Installation,
+        retained_usr: &'a std::fs::File,
+        live_usr_path: &'a Path,
+    },
 }
 
 impl TriggerScope<'_> {
@@ -169,7 +177,7 @@ impl TriggerScope<'_> {
                 candidate_usr_path.join(TRIGGER_RELATIVE_TO_USR)
             }
             TriggerScope::RetainedEphemeral { view, .. } => view.usr().1.join(TRIGGER_RELATIVE_TO_USR),
-            TriggerScope::System(install) => install.root.join("usr").join(TRIGGER_RELATIVE_TO_USR),
+            TriggerScope::System { live_usr_path, .. } => live_usr_path.join(TRIGGER_RELATIVE_TO_USR),
         }
     }
 }
@@ -230,12 +238,11 @@ pub(super) fn triggers<'a>(
                     }
                 }
             }
-            TriggerScope::System(..) => config::Manager::custom(&full_trigger_path)
-                .load_gluon(&Evaluator::default(), &SystemTriggerCodec)
-                .map_err(|error| Error::Config(Box::new(error)))?
-                .into_iter()
-                .map(|loaded| loaded.value.0)
-                .collect_vec(),
+            TriggerScope::System {
+                retained_usr,
+                live_usr_path,
+                ..
+            } => retained_trigger_discovery::load_system(retained_usr, live_usr_path)?,
         };
 
         // Load trigger collection, process all the paths, convert back to scoped runners.
@@ -334,14 +341,19 @@ impl TriggerRunner<'_> {
                     }),
                 }
             }
-            TriggerScope::System(install) => {
+            TriggerScope::System {
+                installation,
+                retained_usr,
+                live_usr_path,
+            } => {
                 // This variant is stateful-only. External ephemeral system
                 // triggers have a distinct retained variant and therefore can
                 // never reach the live-root direct-execution branch.
                 if trigger_scope_may_execute_directly(self.scope) {
+                    system_trigger_container::revalidate_usr_name(installation, retained_usr, live_usr_path)?;
                     Ok(execute_trigger_directly(&self.trigger)?)
                 } else {
-                    let isolation = system_trigger_container::container(install)?;
+                    let isolation = system_trigger_container::container(installation, retained_usr, live_usr_path)?;
                     system_trigger_container::before_activation();
 
                     Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
@@ -352,7 +364,10 @@ impl TriggerRunner<'_> {
 }
 
 fn trigger_scope_may_execute_directly(scope: TriggerScope<'_>) -> bool {
-    matches!(scope, TriggerScope::System(installation) if installation.root == Path::new("/"))
+    matches!(
+        scope,
+        TriggerScope::System { installation, .. } if installation.root == Path::new("/")
+    )
 }
 
 /// Internal executor for triggers.

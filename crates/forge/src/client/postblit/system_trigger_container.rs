@@ -21,16 +21,18 @@ use crate::Installation;
 const MOUNT_TARGETS: [&CStr; 2] = [c"etc", c"usr"];
 const MAX_INTERRUPTS: usize = 1_024;
 
-pub(super) fn container(installation: &Installation) -> Result<Container, Error> {
+pub(super) fn container(
+    installation: &Installation,
+    retained_usr: &std::fs::File,
+    live_usr_path: &Path,
+) -> Result<Container, Error> {
     let isolation_path = installation.isolation_dir();
     let (isolation, initial_root_locator) = exact_named_installation_directory(installation, &isolation_path)
         .map_err(|source| pin_error("container root", &isolation_path, source))?;
     let etc_path = installation.root.join("etc");
     let (etc, initial_etc_locator) = beneath_named_installation_directory(installation, &etc_path)
         .map_err(|source| pin_error("installation /etc", &etc_path, source))?;
-    let usr_path = installation.root.join("usr");
-    let (usr, initial_usr_locator) = beneath_named_installation_directory(installation, &usr_path)
-        .map_err(|source| pin_error("installation /usr", &usr_path, source))?;
+    let initial_usr_locator = retained_usr_locator(installation, retained_usr, live_usr_path)?;
 
     // Authenticate every external name before provisioning fixed mount points.
     // The retained descriptors below then prove that none changed during this
@@ -46,8 +48,7 @@ pub(super) fn container(installation: &Installation) -> Result<Container, Error>
         .map_err(|source| pin_error("container root", &isolation_path, source))?;
     let etc_locator = beneath_installation_directory(installation, &etc_path, &etc)
         .map_err(|source| pin_error("installation /etc", &etc_path, source))?;
-    let usr_locator = beneath_installation_directory(installation, &usr_path, &usr)
-        .map_err(|source| pin_error("installation /usr", &usr_path, source))?;
+    let usr_locator = retained_usr_locator(installation, retained_usr, live_usr_path)?;
 
     let container = Container::new_anchored(root_locator)
         .map_err(|source| pin_error("container root", &isolation_path, source))?
@@ -55,9 +56,38 @@ pub(super) fn container(installation: &Installation) -> Result<Container, Error>
         .bind_rw_pinned(etc_locator, "/etc")
         .map_err(|source| pin_error("installation /etc", &etc_path, source))?
         .bind_rw_pinned(usr_locator, "/usr")
-        .map_err(|source| pin_error("installation /usr", &usr_path, source))?;
+        .map_err(|source| pin_error("installation /usr", live_usr_path, source))?;
 
     Ok(container.work_dir("/"))
+}
+
+/// Prove that the live `/usr` name still denotes the retained activation
+/// candidate without freezing its mutable directory metadata. System handlers
+/// may legitimately update the tree; only an inode/name substitution is
+/// rejected here.
+pub(super) fn revalidate_usr_name(
+    installation: &Installation,
+    retained_usr: &std::fs::File,
+    live_usr_path: &Path,
+) -> Result<(), Error> {
+    retained_usr_locator(installation, retained_usr, live_usr_path).map(drop)
+}
+
+fn retained_usr_locator(
+    installation: &Installation,
+    retained_usr: &std::fs::File,
+    live_usr_path: &Path,
+) -> Result<container::AnchoredLocator, Error> {
+    let canonical = installation.root.join("usr");
+    if live_usr_path != canonical {
+        return Err(pin_error(
+            "installation /usr",
+            live_usr_path,
+            io::Error::new(io::ErrorKind::InvalidInput, "system trigger /usr path is not canonical"),
+        ));
+    }
+    beneath_installation_directory(installation, live_usr_path, retained_usr)
+        .map_err(|source| pin_error("installation /usr", live_usr_path, source))
 }
 
 fn ensure_mount_target(isolation: &std::fs::File, name: &CStr, root: &Path) -> Result<(), Error> {
@@ -186,12 +216,18 @@ mod tests {
             path: "/usr/payload-witness".to_owned(),
             variables: BTreeMap::new(),
         };
+        let live_usr_path = installation.root.join("usr");
+        let retained_usr = std::fs::File::open(&live_usr_path).unwrap();
         let trigger = Handler::Delete {
             delete: vec!["/usr/payload-witness".to_owned()],
         }
         .compiled(&matched);
         let result = TriggerRunner {
-            scope: TriggerScope::System(&installation),
+            scope: TriggerScope::System {
+                installation: &installation,
+                retained_usr: &retained_usr,
+                live_usr_path: &live_usr_path,
+            },
             trigger,
         }
         .execute();

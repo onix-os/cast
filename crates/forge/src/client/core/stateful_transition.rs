@@ -428,7 +428,16 @@ impl Client {
             if run_system_triggers {
                 system_triggers_incomplete = true;
                 checkpoint(StatefulTransitionCheckpoint::AfterSystemTriggersStarted)?;
-                Self::apply_triggers(TriggerScope::System(&self.installation), fstree)?;
+                let (retained_usr, _) = tree_identity.retained_candidate_usr();
+                let live_usr_path = self.installation.root.join("usr");
+                Self::apply_triggers(
+                    TriggerScope::System {
+                        installation: &self.installation,
+                        retained_usr,
+                        live_usr_path: &live_usr_path,
+                    },
+                    fstree,
+                )?;
                 tree_identity.verify_forward_exchange(
                     &self.installation.root.join("usr"),
                     &self.installation.staging_path("usr"),

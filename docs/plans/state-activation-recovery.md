@@ -162,6 +162,11 @@ and instant rollback mechanism; it hardens their failure semantics.
   production-path tests cover metadata mutation, target and `/usr` substitution,
   `/etc` publication and replacement races, pinned bind substitution, invalid
   and destructive replacement triggers, and retained root-ABI publication.
+  Stateful system-trigger discovery is now rooted beneath its retained live
+  `/usr`, and non-live execution consumes that same inode. The established
+  live-root direct branch only revalidates the public `/usr` name immediately
+  before pathname-based handler execution; a private execution view that pins
+  the retained inode for the handler remains part of this open lifecycle item.
   Other path-based lifecycle and cleanup paths remain, so this item is
   intentionally still open.
 

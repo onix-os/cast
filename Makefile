@@ -496,6 +496,7 @@ forge-stateful-candidate-metadata-test:
 		client::tests::stateful_candidate_metadata::candidate_usr_clone_failure_precedes_all_metadata_decoration \
 		client::tests::stateful_candidate_metadata::owned_metadata_proof_outlives_source_identity_and_rejects_named_substitution \
 		client::tests::stateful_candidate_metadata::candidate_usr_substitution_before_metadata_never_decorates_replacement \
+		client::postblit::retained_trigger_discovery::tests::stateful_system_scope_compiles_intent_from_the_retained_live_usr \
 		client::postblit::system_trigger_container::tests::non_live_system_root_and_source_substitutions_fail_before_payload_mutation \
 		client::tests::stateful_candidate_metadata::successful_stateful_metadata_is_sealed_and_rollback_capable; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
