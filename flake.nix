@@ -39,6 +39,7 @@
             pkgs.jq
             pkgs.ninja
             pkgs.pkg-config
+            pkgs.ripgrep
             pkgs.typos
             pkgs.valgrind
             pkgs.xz
