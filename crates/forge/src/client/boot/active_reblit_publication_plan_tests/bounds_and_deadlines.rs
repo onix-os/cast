@@ -141,23 +141,24 @@ fn work_sort_reservation_and_deadline_failures_are_typed() {
     );
 
     policy.max_work = 100;
+    let expired = Instant::now() - Duration::from_millis(1);
     assert_eq!(
-        prepare_publication_plan(
+        prepare_publication_plan_until(
             [fallback_bootloader(0, 1, 1)],
             policy,
-            Some(Instant::now() - Duration::from_millis(1)),
+            ActiveReblitBootDestinationCollisionDomains::boot_aliases_esp(),
+            expired,
         )
         .unwrap_err(),
-        ActiveReblitBootPublicationPlanError::DeadlineExceeded {
-            timeout: policy.timeout
-        }
+        ActiveReblitBootPublicationPlanError::DeadlineExceeded { deadline: expired }
     );
 
     let expected_sort_work = 8 * 3 * SORT_WORK_PER_ELEMENT_LEVEL;
     assert_eq!(conservative_sort_work(8), expected_sort_work);
     let mut sort_policy = PublicationPlanPolicy::production();
     sort_policy.max_work = expected_sort_work - 1;
-    let mut budget = PublicationPlanBudget::new(sort_policy, Some(Instant::now() + Duration::from_secs(1))).unwrap();
+    let mut budget =
+        PublicationPlanBudget::new_until(sort_policy, Instant::now() + Duration::from_secs(1)).unwrap();
     assert_eq!(
         budget.reserve_sort_work(8).unwrap_err(),
         ActiveReblitBootPublicationPlanError::WorkLimit {
@@ -168,13 +169,24 @@ fn work_sort_reservation_and_deadline_failures_are_typed() {
 }
 
 #[test]
+fn caller_owned_deadline_is_checked_before_even_an_empty_plan() {
+    let deadline = Instant::now() - Duration::from_millis(1);
+    assert_eq!(
+        prepare_alias_until(std::iter::empty(), deadline).unwrap_err(),
+        ActiveReblitBootPublicationPlanError::DeadlineExceeded { deadline }
+    );
+}
+
+#[test]
 fn deadline_is_checked_again_after_sorting() {
     let policy = PublicationPlanPolicy::production();
     let checkpoint_ran = std::cell::Cell::new(false);
-    let error = prepare_publication_plan_with_sort_checkpoint(
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let error = prepare_publication_plan_until_with_sort_checkpoint(
         [fallback_bootloader(0, 1, 1)],
         policy,
-        Some(Instant::now() + Duration::from_secs(1)),
+        ActiveReblitBootDestinationCollisionDomains::boot_aliases_esp(),
+        deadline,
         || {
             checkpoint_ran.set(true);
             std::thread::sleep(Duration::from_millis(1_100));
@@ -182,12 +194,28 @@ fn deadline_is_checked_again_after_sorting() {
     )
     .unwrap_err();
     assert!(checkpoint_ran.get());
-    assert_eq!(
-        error,
-        ActiveReblitBootPublicationPlanError::DeadlineExceeded {
-            timeout: policy.timeout
-        }
-    );
+    assert_eq!(error, ActiveReblitBootPublicationPlanError::DeadlineExceeded { deadline });
+}
+
+#[test]
+fn deadline_is_checked_after_complete_plan_materialization() {
+    let policy = PublicationPlanPolicy::production();
+    let checkpoint_ran = std::cell::Cell::new(false);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let error = prepare_publication_plan_until_with_checkpoints(
+        [fallback_bootloader(0, 1, 1)],
+        policy,
+        ActiveReblitBootDestinationCollisionDomains::boot_aliases_esp(),
+        deadline,
+        || {},
+        || {
+            checkpoint_ran.set(true);
+            std::thread::sleep(Duration::from_millis(1_100));
+        },
+    )
+    .unwrap_err();
+    assert!(checkpoint_ran.get());
+    assert_eq!(error, ActiveReblitBootPublicationPlanError::DeadlineExceeded { deadline });
 }
 
 #[test]
@@ -203,7 +231,6 @@ fn production_contract_constants_match_the_publication_limits() {
     assert_eq!(policy.max_generated_bytes, 16 * 1024 * 1024);
     assert_eq!(policy.max_generated_file_bytes, 1024 * 1024);
     assert_eq!(policy.max_work, 1_000_000);
-    assert_eq!(policy.timeout, Duration::from_secs(30));
     assert_eq!(ACTIVE_REBLIT_BOOT_OUTPUT_MODE, 0o644);
     assert_eq!(MAX_ACTIVE_REBLIT_BOOT_PUBLICATIONS, 8_336);
     assert_eq!(Path::new("a/b").components().count(), 2);

@@ -6,12 +6,12 @@
 	forge-active-reblit-stone-boot-input-test \
 	forge-boot-asset-snapshot-test
 
-forge-active-reblit-boot-publication-plan-test:
+forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 	@set -euo pipefail; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -Ec '^client::active_reblit_publication_plan::tests::[^:]+: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 21; \
+	timeout 10s test "$$count" = 25; \
 	for test in \
 		client::active_reblit_publication_plan::tests::canonical_order_is_typed_phase_then_root_then_precomputed_folded_path \
 		client::active_reblit_publication_plan::tests::both_bootloader_roles_bind_exact_esp_paths_and_carry_one_binding_coordinate \
@@ -20,7 +20,9 @@ forge-active-reblit-boot-publication-plan-test:
 		client::active_reblit_publication_plan::tests::only_identical_typed_requests_including_binding_are_deduplicated \
 		client::active_reblit_publication_plan::tests::same_destination_with_different_content_or_invalid_role_is_rejected \
 		client::active_reblit_publication_plan::tests::raw_cross_root_request_is_rejected_before_collision_planning \
-		client::active_reblit_publication_plan::tests::shared_collision_domain_rejects_file_directory_hierarchy_in_both_orders \
+		client::active_reblit_publication_plan::tests::aliased_topology_rejects_cross_root_file_directory_hierarchy_in_both_orders \
+		client::active_reblit_publication_plan::tests::distinct_topology_keeps_esp_and_xbootldr_collision_domains_separate \
+		client::active_reblit_publication_plan::tests::plan_retains_the_topology_collision_layout_for_later_revalidation \
 		client::active_reblit_publication_plan::tests::unsafe_relative_paths_are_rejected_instead_of_normalized \
 		client::active_reblit_publication_plan::tests::non_utf8_and_non_ascii_paths_fail_closed \
 		client::active_reblit_publication_plan::tests::fat_forbidden_trailing_reserved_and_short_name_components_are_rejected \
@@ -32,7 +34,9 @@ forge-active-reblit-boot-publication-plan-test:
 		client::active_reblit_publication_plan::tests::generated_per_file_and_total_bounds_admit_n_and_reject_n_plus_one \
 		client::active_reblit_publication_plan::tests::sealed_snapshot_file_bound_admits_n_and_rejects_n_plus_one \
 		client::active_reblit_publication_plan::tests::work_sort_reservation_and_deadline_failures_are_typed \
+		client::active_reblit_publication_plan::tests::caller_owned_deadline_is_checked_before_even_an_empty_plan \
 		client::active_reblit_publication_plan::tests::deadline_is_checked_again_after_sorting \
+		client::active_reblit_publication_plan::tests::deadline_is_checked_after_complete_plan_materialization \
 		client::active_reblit_publication_plan::tests::production_contract_constants_match_the_publication_limits; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \

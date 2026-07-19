@@ -4,18 +4,25 @@
 //! turns already-sealed payloads and already-generated control bytes into one
 //! bounded, canonical publication list for a later descriptor-safe worker.
 //! The resulting value is not destination authority, a complete blsforme
-//! projection, or a durability proof: the later aggregate must bind every
-//! Stone binding to the same non-`Clone` input owner, resolve ESP/BOOT physical
-//! identity, inspect existing directories, and own the mutation barriers.
+//! projection, or a durability proof. Validated scalar topology scopes only
+//! the collision domains and is retained for later layout revalidation. The
+//! later aggregate must still bind every Stone binding to the same non-`Clone`
+//! input owner, revalidate descriptor-retained ESP/BOOT authority, inspect
+//! existing directories, and own the mutation barriers.
 
 use std::{
     collections::BTreeMap,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-use thiserror::Error;
+use crate::client::active_reblit_mounted_boot_topology::BoundActiveReblitMountedBootTopology;
+
+#[path = "active_reblit_publication_plan/error.rs"]
+mod error;
+
+pub(in crate::client) use error::ActiveReblitBootPublicationPlanError;
 
 pub(in crate::client) const ACTIVE_REBLIT_BOOT_OUTPUT_MODE: u32 = 0o644;
 pub(in crate::client) const MAX_ACTIVE_REBLIT_BOOT_PUBLICATIONS: usize = 8_336;
@@ -28,7 +35,6 @@ const MAX_ACTIVE_REBLIT_BOOT_PUBLICATION_SEALED_FILE_BYTES: u64 = 512 * 1024 * 1
 const MAX_ACTIVE_REBLIT_BOOT_PUBLICATION_GENERATED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ACTIVE_REBLIT_BOOT_PUBLICATION_GENERATED_FILE_BYTES: usize = 1024 * 1024;
 const MAX_ACTIVE_REBLIT_BOOT_PUBLICATION_WORK: usize = 1_000_000;
-const ACTIVE_REBLIT_BOOT_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(30);
 const SORT_WORK_PER_ELEMENT_LEVEL: usize = 4;
 
 const ACTIVE_REBLIT_LOADER_CONTROL_PATH: &str = "loader/loader.conf";
@@ -40,6 +46,53 @@ const ACTIVE_REBLIT_SYSTEMD_BOOTLOADER_PATH: &str = "EFI/systemd/systemd-bootx64
 pub(in crate::client) enum ActiveReblitBootDestinationRoot {
     Esp,
     Boot,
+}
+
+/// Physical destination namespace used only for pure collision planning.
+///
+/// This is derived from an already-validated mounted topology. It is not a
+/// descriptor, destination authority, or permission to perform I/O.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ActiveReblitBootDestinationCollisionDomain {
+    SharedEspAndBoot,
+    Esp,
+    Boot,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ActiveReblitBootDestinationCollisionDomains {
+    esp: ActiveReblitBootDestinationCollisionDomain,
+    boot: ActiveReblitBootDestinationCollisionDomain,
+}
+
+impl ActiveReblitBootDestinationCollisionDomains {
+    fn from_topology(topology: BoundActiveReblitMountedBootTopology<'_>) -> Self {
+        match topology {
+            BoundActiveReblitMountedBootTopology::BootAliasesEsp { .. } => Self::boot_aliases_esp(),
+            BoundActiveReblitMountedBootTopology::DistinctXbootldr { .. } => Self::distinct_xbootldr(),
+        }
+    }
+
+    const fn boot_aliases_esp() -> Self {
+        Self {
+            esp: ActiveReblitBootDestinationCollisionDomain::SharedEspAndBoot,
+            boot: ActiveReblitBootDestinationCollisionDomain::SharedEspAndBoot,
+        }
+    }
+
+    const fn distinct_xbootldr() -> Self {
+        Self {
+            esp: ActiveReblitBootDestinationCollisionDomain::Esp,
+            boot: ActiveReblitBootDestinationCollisionDomain::Boot,
+        }
+    }
+
+    const fn for_root(self, root: ActiveReblitBootDestinationRoot) -> ActiveReblitBootDestinationCollisionDomain {
+        match root {
+            ActiveReblitBootDestinationRoot::Esp => self.esp,
+            ActiveReblitBootDestinationRoot::Boot => self.boot,
+        }
+    }
 }
 
 /// Publication order, from independent payloads through control-plane files.
@@ -311,11 +364,13 @@ impl PlannedActiveReblitBootPublication {
 /// Bounded, canonical syntactic publication input.
 ///
 /// There is intentionally no removal list, descriptor authority or mutation
-/// API. A later aggregate must add the complete projection, physical root
-/// binding and durable execution protocol before any output is writable.
+/// API. A later aggregate must add the complete projection, freshly revalidate
+/// the retained collision layout and physical root bindings, and own the
+/// durable execution protocol before any output is writable.
 #[derive(Debug)]
 pub(in crate::client) struct PreparedActiveReblitBootPublicationPlan {
     outputs: Vec<PlannedActiveReblitBootPublication>,
+    collision_domains: ActiveReblitBootDestinationCollisionDomains,
     logical_bytes: u64,
     generated_bytes: usize,
     path_bytes: usize,
@@ -323,14 +378,32 @@ pub(in crate::client) struct PreparedActiveReblitBootPublicationPlan {
 }
 
 impl PreparedActiveReblitBootPublicationPlan {
-    pub(in crate::client) fn prepare(
+    /// Prepare a pure plan under the caller's absolute deadline and the exact
+    /// alias/distinct collision layout proven by mounted-topology validation.
+    pub(in crate::client) fn prepare_until(
         requests: impl IntoIterator<Item = ActiveReblitBootPublicationRequest>,
+        topology: BoundActiveReblitMountedBootTopology<'_>,
+        deadline: Instant,
     ) -> Result<Self, ActiveReblitBootPublicationPlanError> {
-        prepare_publication_plan(requests, PublicationPlanPolicy::production(), None)
+        prepare_publication_plan_until(
+            requests,
+            PublicationPlanPolicy::production(),
+            ActiveReblitBootDestinationCollisionDomains::from_topology(topology),
+            deadline,
+        )
     }
 
     pub(in crate::client) fn outputs(&self) -> &[PlannedActiveReblitBootPublication] {
         &self.outputs
+    }
+
+    /// Check a freshly revalidated topology before a later aggregate trusts
+    /// the collision decisions retained by this pure plan.
+    pub(in crate::client) fn collision_domains_match(
+        &self,
+        topology: BoundActiveReblitMountedBootTopology<'_>,
+    ) -> bool {
+        self.collision_domains == ActiveReblitBootDestinationCollisionDomains::from_topology(topology)
     }
 
     pub(in crate::client) fn logical_bytes(&self) -> u64 {
@@ -353,105 +426,6 @@ impl PreparedActiveReblitBootPublicationPlan {
     }
 }
 
-#[derive(Debug, Error, Eq, PartialEq)]
-pub(in crate::client) enum ActiveReblitBootPublicationPlanError {
-    #[error("cannot represent the {timeout:?} boot publication planning deadline")]
-    InvalidDeadline { timeout: Duration },
-    #[error("boot publication planning exceeded its {timeout:?} deadline")]
-    DeadlineExceeded { timeout: Duration },
-    #[error("boot publication count {actual} exceeds limit {limit}")]
-    PublicationCountLimit { limit: usize, actual: usize },
-    #[error("boot publication path bytes {actual} exceed limit {limit}")]
-    PathByteLimit { limit: usize, actual: usize },
-    #[error("boot publication path {path:?} has {actual} bytes, exceeding limit {limit}")]
-    SinglePathByteLimit { path: PathBuf, limit: usize, actual: usize },
-    #[error("boot publication path {path:?} has {actual} components, exceeding limit {limit}")]
-    PathComponentLimit { path: PathBuf, limit: usize, actual: usize },
-    #[error("boot publication path is empty")]
-    EmptyPath,
-    #[error("boot publication path {path:?} is absolute")]
-    AbsolutePath { path: PathBuf },
-    #[error("boot publication path {path:?} contains an empty component")]
-    EmptyPathComponent { path: PathBuf },
-    #[error("boot publication path {path:?} contains a dot component")]
-    DotPathComponent { path: PathBuf },
-    #[error("boot publication path {path:?} contains a parent component")]
-    ParentPathComponent { path: PathBuf },
-    #[error("boot publication path {path:?} contains NUL")]
-    NulPath { path: PathBuf },
-    #[error("boot publication path {path:?} is not UTF-8")]
-    NonUtf8Path { path: PathBuf },
-    #[error("boot publication path {path:?} contains a control character")]
-    ControlPathComponent { path: PathBuf },
-    #[error("boot publication path {path:?} contains a non-ASCII component")]
-    NonAsciiPathComponent { path: PathBuf },
-    #[error("boot publication path {path:?} contains a FAT component with {actual} bytes, exceeding limit {limit}")]
-    FatComponentByteLimit { path: PathBuf, limit: usize, actual: usize },
-    #[error("boot publication path {path:?} contains FAT-forbidden character {character:?}")]
-    FatForbiddenCharacter { path: PathBuf, character: char },
-    #[error("boot publication path {path:?} contains a component ending in a dot or space")]
-    FatTrailingDotOrSpace { path: PathBuf },
-    #[error("boot publication path {path:?} contains FAT short-name marker '~'")]
-    FatShortNameMarker { path: PathBuf },
-    #[error("boot publication path {path:?} contains DOS-reserved component {component:?}")]
-    FatReservedName { path: PathBuf, component: String },
-    #[error("boot publication role {role:?} requires root {expected:?}, not {actual:?}")]
-    RoleRootMismatch {
-        role: ActiveReblitBootPublicationRole,
-        expected: ActiveReblitBootDestinationRoot,
-        actual: ActiveReblitBootDestinationRoot,
-    },
-    #[error("boot publication role {role:?} requires phase {expected:?}, not {actual:?}")]
-    RolePhaseMismatch {
-        role: ActiveReblitBootPublicationRole,
-        expected: ActiveReblitBootPublicationPhase,
-        actual: ActiveReblitBootPublicationPhase,
-    },
-    #[error("boot publication role {role:?} has the wrong source kind")]
-    RoleSourceMismatch { role: ActiveReblitBootPublicationRole },
-    #[error("boot publication role {role:?} has invalid destination path {path:?}")]
-    RolePathMismatch {
-        role: ActiveReblitBootPublicationRole,
-        path: PathBuf,
-    },
-    #[error("sealed boot output {path:?} has {actual} bytes, exceeding limit {limit}")]
-    SealedSnapshotFileByteLimit { path: PathBuf, limit: u64, actual: u64 },
-    #[error("generated boot output {path:?} has {actual} bytes, exceeding limit {limit}")]
-    GeneratedFileByteLimit { path: PathBuf, limit: usize, actual: usize },
-    #[error("generated boot output bytes {actual} exceed limit {limit}")]
-    GeneratedTotalByteLimit { limit: usize, actual: usize },
-    #[error("logical boot publication bytes {actual} exceed limit {limit}")]
-    LogicalByteLimit { limit: u64, actual: u64 },
-    #[error("boot publication planning work {actual} exceeds limit {limit}")]
-    WorkLimit { limit: usize, actual: usize },
-    #[error(
-        "boot publication path {path:?} is declared with conflicting content or role under roots {first_root:?} and {second_root:?}"
-    )]
-    PublicationCollision {
-        first_root: ActiveReblitBootDestinationRoot,
-        second_root: ActiveReblitBootDestinationRoot,
-        path: PathBuf,
-    },
-    #[error(
-        "boot publication paths {first:?} and {second:?} collide case-insensitively under roots {first_root:?} and {second_root:?}"
-    )]
-    CaseInsensitiveCollision {
-        first_root: ActiveReblitBootDestinationRoot,
-        second_root: ActiveReblitBootDestinationRoot,
-        first: PathBuf,
-        second: PathBuf,
-    },
-    #[error(
-        "boot publication file {ancestor:?} under root {ancestor_root:?} is an ancestor of {descendant:?} under root {descendant_root:?}"
-    )]
-    PublicationHierarchyCollision {
-        ancestor_root: ActiveReblitBootDestinationRoot,
-        descendant_root: ActiveReblitBootDestinationRoot,
-        ancestor: PathBuf,
-        descendant: PathBuf,
-    },
-}
-
 #[derive(Clone, Copy)]
 struct PublicationPlanPolicy {
     max_publications: usize,
@@ -463,7 +437,6 @@ struct PublicationPlanPolicy {
     max_generated_bytes: usize,
     max_generated_file_bytes: usize,
     max_work: usize,
-    timeout: Duration,
 }
 
 impl PublicationPlanPolicy {
@@ -478,7 +451,6 @@ impl PublicationPlanPolicy {
             max_generated_bytes: MAX_ACTIVE_REBLIT_BOOT_PUBLICATION_GENERATED_BYTES,
             max_generated_file_bytes: MAX_ACTIVE_REBLIT_BOOT_PUBLICATION_GENERATED_FILE_BYTES,
             max_work: MAX_ACTIVE_REBLIT_BOOT_PUBLICATION_WORK,
-            timeout: ACTIVE_REBLIT_BOOT_PUBLICATION_TIMEOUT,
         }
     }
 }
@@ -493,26 +465,20 @@ struct PublicationPlanBudget {
 }
 
 impl PublicationPlanBudget {
-    fn new(
+    fn new_until(
         policy: PublicationPlanPolicy,
-        explicit_deadline: Option<Instant>,
+        deadline: Instant,
     ) -> Result<Self, ActiveReblitBootPublicationPlanError> {
-        let deadline = match explicit_deadline {
-            Some(deadline) => deadline,
-            None => Instant::now().checked_add(policy.timeout).ok_or(
-                ActiveReblitBootPublicationPlanError::InvalidDeadline {
-                    timeout: policy.timeout,
-                },
-            )?,
-        };
-        Ok(Self {
+        let budget = Self {
             policy,
             deadline,
             work: 0,
             publications: 0,
             path_bytes: 0,
             declared_generated_bytes: 0,
-        })
+        };
+        budget.require_deadline()?;
+        Ok(budget)
     }
 
     fn step(&mut self) -> Result<(), ActiveReblitBootPublicationPlanError> {
@@ -539,7 +505,7 @@ impl PublicationPlanBudget {
     fn require_deadline(&self) -> Result<(), ActiveReblitBootPublicationPlanError> {
         if Instant::now() > self.deadline {
             Err(ActiveReblitBootPublicationPlanError::DeadlineExceeded {
-                timeout: self.policy.timeout,
+                deadline: self.deadline,
             })
         } else {
             Ok(())
@@ -605,26 +571,37 @@ fn conservative_sort_work(publications: usize) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-fn prepare_publication_plan(
+fn prepare_publication_plan_until(
     requests: impl IntoIterator<Item = ActiveReblitBootPublicationRequest>,
     policy: PublicationPlanPolicy,
-    explicit_deadline: Option<Instant>,
+    collision_domains: ActiveReblitBootDestinationCollisionDomains,
+    deadline: Instant,
 ) -> Result<PreparedActiveReblitBootPublicationPlan, ActiveReblitBootPublicationPlanError> {
-    prepare_publication_plan_with_sort_checkpoint(requests, policy, explicit_deadline, || {})
+    prepare_publication_plan_until_with_sort_checkpoint(requests, policy, collision_domains, deadline, || {})
 }
 
-fn prepare_publication_plan_with_sort_checkpoint(
+fn prepare_publication_plan_until_with_sort_checkpoint(
     requests: impl IntoIterator<Item = ActiveReblitBootPublicationRequest>,
     policy: PublicationPlanPolicy,
-    explicit_deadline: Option<Instant>,
+    collision_domains: ActiveReblitBootDestinationCollisionDomains,
+    deadline: Instant,
     after_sort: impl FnOnce(),
 ) -> Result<PreparedActiveReblitBootPublicationPlan, ActiveReblitBootPublicationPlanError> {
-    let mut budget = PublicationPlanBudget::new(policy, explicit_deadline)?;
+    prepare_publication_plan_until_with_checkpoints(requests, policy, collision_domains, deadline, after_sort, || {})
+}
+
+fn prepare_publication_plan_until_with_checkpoints(
+    requests: impl IntoIterator<Item = ActiveReblitBootPublicationRequest>,
+    policy: PublicationPlanPolicy,
+    collision_domains: ActiveReblitBootDestinationCollisionDomains,
+    deadline: Instant,
+    after_sort: impl FnOnce(),
+    after_plan_materialized: impl FnOnce(),
+) -> Result<PreparedActiveReblitBootPublicationPlan, ActiveReblitBootPublicationPlanError> {
+    let mut budget = PublicationPlanBudget::new_until(policy, deadline)?;
     let mut outputs = Vec::<PlannedActiveReblitBootPublication>::new();
-    // ESP and BOOT deliberately share one conservative syntactic collision
-    // domain. A later descriptor authority may prove them distinct, but this
-    // pre-authority plan must also be safe when BOOT aliases ESP.
-    let mut destinations = BTreeMap::<String, usize>::new();
+    let mut destinations_by_domain =
+        BTreeMap::<ActiveReblitBootDestinationCollisionDomain, BTreeMap<String, usize>>::new();
 
     for request in requests {
         budget.admit_request(&request.relative_path)?;
@@ -634,6 +611,8 @@ fn prepare_publication_plan_with_sort_checkpoint(
         budget.step()?;
 
         let folded = case_folded_path(&relative_path);
+        let collision_domain = collision_domains.for_root(request.root);
+        let destinations = destinations_by_domain.entry(collision_domain).or_default();
         if let Some(existing_index) = destinations.get(folded.as_str()).copied() {
             let existing = &outputs[existing_index];
             if exact_duplicate(
@@ -730,13 +709,17 @@ fn prepare_publication_plan_with_sort_checkpoint(
         }
     }
 
-    Ok(PreparedActiveReblitBootPublicationPlan {
+    let prepared = PreparedActiveReblitBootPublicationPlan {
         outputs,
+        collision_domains,
         logical_bytes,
         generated_bytes,
         path_bytes: canonical_path_bytes,
         planning_work: budget.work,
-    })
+    };
+    after_plan_materialized();
+    budget.require_deadline()?;
+    Ok(prepared)
 }
 
 fn existing_ancestor_index(
