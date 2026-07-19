@@ -235,6 +235,35 @@ pub(super) fn read_exact_source_at(
     binding_index: usize,
     budget: &mut PackageCmdlineBudget,
 ) -> Result<Vec<u8>, ActiveReblitPackageCmdlineInputsError> {
+    read_exact_source_at_with(
+        descriptor,
+        length,
+        binding_index,
+        budget,
+        |descriptor, bytes, offset| {
+            // SAFETY: the borrowed descriptor remains live, `bytes` is a writable
+            // slice, and the explicit offset has already been bounded to `off_t`.
+            let result =
+                unsafe { nix::libc::pread(descriptor.as_raw_fd(), bytes.as_mut_ptr().cast(), bytes.len(), offset) };
+            if result >= 0 {
+                Ok(usize::try_from(result).expect("nonnegative pread result fits usize"))
+            } else {
+                Err(io::Error::last_os_error())
+            }
+        },
+    )
+}
+
+pub(super) fn read_exact_source_at_with<F>(
+    descriptor: BorrowedFd<'_>,
+    length: usize,
+    binding_index: usize,
+    budget: &mut PackageCmdlineBudget,
+    mut read_at: F,
+) -> Result<Vec<u8>, ActiveReblitPackageCmdlineInputsError>
+where
+    F: FnMut(BorrowedFd<'_>, &mut [u8], i64) -> io::Result<usize>,
+{
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(length)
@@ -249,52 +278,44 @@ pub(super) fn read_exact_source_at(
     while offset < length {
         budget.step("explicit-offset sealed source read")?;
         let file_offset = i64::try_from(offset).expect("package command-line source bound fits off_t");
-        // SAFETY: the borrowed descriptor remains live, the remaining vector
-        // range is writable, and the explicit offset is bounded and valid.
-        let result = unsafe {
-            nix::libc::pread(
-                descriptor.as_raw_fd(),
-                bytes[offset..].as_mut_ptr().cast(),
-                length - offset,
-                file_offset,
-            )
-        };
-        if result > 0 {
-            let read = usize::try_from(result).expect("positive pread result fits usize");
-            if read > length - offset {
-                return Err(read_error(
-                    binding_index,
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "pread exceeded the requested command-line range",
-                    ),
-                ));
+        match read_at(descriptor, &mut bytes[offset..], file_offset) {
+            Ok(read) => {
+                if read == 0 {
+                    return Err(read_error(
+                        binding_index,
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "sealed command-line source shortened during read",
+                        ),
+                    ));
+                }
+                if read > length - offset {
+                    return Err(read_error(
+                        binding_index,
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "pread exceeded the requested command-line range",
+                        ),
+                    ));
+                }
+                offset += read;
+                interruptions = 0;
             }
-            offset += read;
-            interruptions = 0;
-        } else if result == 0 {
-            return Err(read_error(
-                binding_index,
-                io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "sealed command-line source shortened during read",
-                ),
-            ));
-        } else {
-            let source = io::Error::last_os_error();
-            if source.kind() != io::ErrorKind::Interrupted {
+            Err(source) if source.kind() != io::ErrorKind::Interrupted => {
                 return Err(read_error(binding_index, source));
             }
-            if interruptions >= MAX_PACKAGE_CMDLINE_INTERRUPTED_RETRIES {
-                return Err(read_error(
-                    binding_index,
-                    io::Error::new(
-                        io::ErrorKind::Interrupted,
-                        "sealed command-line read exceeded interruption limit",
-                    ),
-                ));
+            Err(_) => {
+                if interruptions >= MAX_PACKAGE_CMDLINE_INTERRUPTED_RETRIES {
+                    return Err(read_error(
+                        binding_index,
+                        io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "sealed command-line read exceeded interruption limit",
+                        ),
+                    ));
+                }
+                interruptions += 1;
             }
-            interruptions += 1;
         }
     }
     budget.require_deadline("sealed source post-read checkpoint")?;

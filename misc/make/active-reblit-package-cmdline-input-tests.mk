@@ -13,7 +13,7 @@ forge-active-reblit-package-cmdline-input-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(PACKAGE_CMDLINE_INPUT_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_package_cmdline_inputs::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 18; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 19; \
 	for name in \
 		semantics::semantic_inputs_are_state_scoped_versioned_sorted_and_normalized \
 		semantics::non_cmdline_assets_never_enter_semantic_inputs \
@@ -32,6 +32,7 @@ forge-active-reblit-package-cmdline-input-test: host-storage-safety-test
 		bounds_and_deadlines::one_caller_deadline_is_not_replaced_between_sources_or_at_terminal_return \
 		bounds_and_deadlines::normalized_scalar_deadline_is_checked_after_materialization \
 		bounds_and_deadlines::production_limits_and_sort_reservation_are_explicit \
+		bounds_and_deadlines::interrupted_reads_admit_the_exact_retry_limit_and_reject_the_next_attempt \
 		bounds_and_deadlines::adversarial_last_state_position_lookup_is_precomputed_and_charged_exactly; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \

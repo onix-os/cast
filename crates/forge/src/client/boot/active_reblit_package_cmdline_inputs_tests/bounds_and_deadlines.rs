@@ -196,6 +196,50 @@ fn production_limits_and_sort_reservation_are_explicit() {
 }
 
 #[test]
+fn interrupted_reads_admit_the_exact_retry_limit_and_reject_the_next_attempt() {
+    let fixture = one_global(b"x".as_slice());
+    let stone = fixture.ready();
+    let asset = stone
+        .assets()
+        .find(|asset| matches!(asset.role(), BootAssetRole::GlobalCmdline))
+        .expect("fixture owns one global command-line source");
+
+    let accepted_calls = Cell::new(0usize);
+    let mut accepted_budget = PackageCmdlineBudget::new(PackageCmdlinePolicy::production(), future_deadline()).unwrap();
+    let bytes =
+        binding::read_exact_source_at_with(asset.descriptor(), 1, 7, &mut accepted_budget, |_, buffer, offset| {
+            assert_eq!(offset, 0);
+            let call = accepted_calls.get();
+            accepted_calls.set(call + 1);
+            if call < MAX_PACKAGE_CMDLINE_INTERRUPTED_RETRIES {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                buffer[0] = b'x';
+                Ok(1)
+            }
+        })
+        .unwrap();
+    assert_eq!(bytes, b"x");
+    assert_eq!(accepted_calls.get(), MAX_PACKAGE_CMDLINE_INTERRUPTED_RETRIES + 1);
+
+    let rejected_calls = Cell::new(0usize);
+    let mut rejected_budget = PackageCmdlineBudget::new(PackageCmdlinePolicy::production(), future_deadline()).unwrap();
+    let error = binding::read_exact_source_at_with(asset.descriptor(), 1, 7, &mut rejected_budget, |_, _, _| {
+        rejected_calls.set(rejected_calls.get() + 1);
+        Err(io::Error::from(io::ErrorKind::Interrupted))
+    })
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ActiveReblitPackageCmdlineInputsError::ReadSource {
+            binding_index: 7,
+            source,
+        } if source.kind() == io::ErrorKind::Interrupted
+    ));
+    assert_eq!(rejected_calls.get(), MAX_PACKAGE_CMDLINE_INTERRUPTED_RETRIES + 1);
+}
+
+#[test]
 fn adversarial_last_state_position_lookup_is_precomputed_and_charged_exactly() {
     let states = [1, 2, 3, 4, 5].map(state::Id::from);
     let mut exact_policy = PackageCmdlinePolicy::production();
