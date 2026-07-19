@@ -1,6 +1,7 @@
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use astr::AStr;
@@ -768,13 +769,31 @@ fn asset_path_kernel_snapshot_and_work_bounds_fail_with_typed_errors() {
 fn expired_planning_deadline_fails_before_asset_admission() {
     let layouts = complete_layouts("head");
     let (projection, _) = build_projection(&[&["head"]], &layouts);
-    let mut policy = BootAssetPlanPolicy::production();
-    policy.timeout = Duration::ZERO;
+    let expired = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
 
     assert!(matches!(
-        planning_error(prepare_asset_plan(&projection, policy)),
-        ActiveReblitBootAssetPlanError::DeadlineExceeded {
-            timeout: Duration::ZERO
-        }
+        planning_error(projection.prepare_asset_plan_until(expired)),
+        ActiveReblitBootAssetPlanError::DeadlineExceeded { .. }
     ));
+
+    let terminal_deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+    let expired_terminal = terminal_deadline.checked_add(Duration::from_nanos(1)).unwrap();
+    let terminal_checks = Cell::new(0usize);
+    assert!(matches!(
+        planning_error(prepare_asset_plan_until_and_terminal_clock(
+            &projection,
+            BootAssetPlanPolicy::production(),
+            terminal_deadline,
+            || {
+                terminal_checks.set(terminal_checks.get().saturating_add(1));
+                expired_terminal
+            },
+        )),
+        ActiveReblitBootAssetPlanError::DeadlineExceeded { .. }
+    ));
+    assert_eq!(
+        terminal_checks.get(),
+        1,
+        "complete plan materialization must precede expiry"
+    );
 }

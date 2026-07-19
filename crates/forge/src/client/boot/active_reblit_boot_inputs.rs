@@ -47,7 +47,7 @@ const STONE_BOOT_INPUT_POLICY: StoneBootInputPolicy = StoneBootInputPolicy {
 ///
 /// This owner is intentionally not `Clone`. It is not itself permission to
 /// publish boot state: a later descriptor-rooted output plan and one-attempt
-/// claim must consume it. That claim must call [`Self::revalidate`] again as
+/// claim must consume it. That claim must call [`Self::revalidate_until`] again as
 /// its final fallible database operation.
 pub(in crate::client) struct PreparedActiveReblitStoneBootInputs {
     projection: PreparedActiveReblitBootProjection,
@@ -78,32 +78,60 @@ pub(in crate::client) struct BoundActiveReblitBootAsset<'a> {
 }
 
 impl PreparedActiveReblitStoneBootInputs {
+    #[cfg(test)]
     pub(in crate::client) fn prepare(
         installation: &Installation,
         state_db: &db::state::Database,
         layout_db: &db::layout::Database,
         expected_head: &State,
     ) -> Result<ActiveReblitStoneBootInputsOutcome, ActiveReblitStoneBootInputsError> {
-        prepare_with_policy_and_checkpoint(
+        let deadline = stone_boot_input_deadline(STONE_BOOT_INPUT_POLICY.timeout)?;
+        Self::prepare_until(installation, state_db, layout_db, expected_head, deadline)
+    }
+
+    /// Prepare every database and sealed Stone input beneath one
+    /// caller-owned absolute deadline.
+    pub(in crate::client) fn prepare_until(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        layout_db: &db::layout::Database,
+        expected_head: &State,
+        deadline: Instant,
+    ) -> Result<ActiveReblitStoneBootInputsOutcome, ActiveReblitStoneBootInputsError> {
+        prepare_with_policy_until_and_checkpoint(
             installation,
             state_db,
             layout_db,
             expected_head,
             StoneBootInputPolicy::production(),
+            deadline,
             |_| {},
+            Instant::now,
         )
     }
 
     /// Repeat the exact bounded state-and-layout capture retained by this
     /// value. The eventual capability claim must invoke this immediately
     /// before consuming mutable-system ownership.
+    #[cfg(test)]
     pub(in crate::client) fn revalidate(
         &self,
         state_db: &db::state::Database,
         layout_db: &db::layout::Database,
     ) -> Result<(), ActiveReblitStoneBootInputsError> {
+        let deadline = stone_boot_input_deadline(STONE_BOOT_INPUT_POLICY.timeout)?;
+        self.revalidate_until(state_db, layout_db, deadline)
+    }
+
+    /// Revalidate without replacing the caller-owned absolute deadline.
+    pub(in crate::client) fn revalidate_until(
+        &self,
+        state_db: &db::state::Database,
+        layout_db: &db::layout::Database,
+        deadline: Instant,
+    ) -> Result<(), ActiveReblitStoneBootInputsError> {
         self.projection
-            .revalidate(state_db, layout_db)
+            .revalidate_until(state_db, layout_db, deadline)
             .map_err(ActiveReblitStoneBootInputsError::RevalidateProjection)
     }
 
@@ -234,17 +262,14 @@ struct BindingBudget {
 }
 
 impl BindingBudget {
-    fn new(policy: StoneBootInputPolicy) -> Result<Self, ActiveReblitStoneBootInputsError> {
-        let deadline = Instant::now().checked_add(policy.timeout).ok_or(
-            ActiveReblitStoneBootInputsError::InvalidBindingDeadline {
-                timeout: policy.timeout,
-            },
-        )?;
-        Ok(Self {
+    fn new_until(policy: StoneBootInputPolicy, deadline: Instant) -> Result<Self, ActiveReblitStoneBootInputsError> {
+        let budget = Self {
             policy,
             deadline,
             work: 0,
-        })
+        };
+        budget.require_deadline()?;
+        Ok(budget)
     }
 
     fn step(&mut self) -> Result<(), ActiveReblitStoneBootInputsError> {
@@ -261,16 +286,11 @@ impl BindingBudget {
     }
 
     fn require_deadline(&self) -> Result<(), ActiveReblitStoneBootInputsError> {
-        if Instant::now() > self.deadline {
-            Err(ActiveReblitStoneBootInputsError::BindingDeadlineExceeded {
-                timeout: self.policy.timeout,
-            })
-        } else {
-            Ok(())
-        }
+        require_stone_boot_input_deadline(self.deadline, self.policy.timeout, Instant::now())
     }
 }
 
+#[cfg(test)]
 fn prepare_with_policy_and_checkpoint<F>(
     installation: &Installation,
     state_db: &db::state::Database,
@@ -282,32 +302,63 @@ fn prepare_with_policy_and_checkpoint<F>(
 where
     F: FnOnce(&PreparedBootAssetSnapshots),
 {
-    let projection = PreparedActiveReblitBootProjection::prepare(state_db, layout_db, expected_head.id)
+    let deadline = stone_boot_input_deadline(policy.timeout)?;
+    prepare_with_policy_until_and_checkpoint(
+        installation,
+        state_db,
+        layout_db,
+        expected_head,
+        policy,
+        deadline,
+        before_revalidate,
+        Instant::now,
+    )
+}
+
+fn prepare_with_policy_until_and_checkpoint<F, N>(
+    installation: &Installation,
+    state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
+    expected_head: &State,
+    policy: StoneBootInputPolicy,
+    deadline: Instant,
+    before_revalidate: F,
+    mut checkpoint_now: N,
+) -> Result<ActiveReblitStoneBootInputsOutcome, ActiveReblitStoneBootInputsError>
+where
+    F: FnOnce(&PreparedBootAssetSnapshots),
+    N: FnMut() -> Instant,
+{
+    let projection = PreparedActiveReblitBootProjection::prepare_until(state_db, layout_db, expected_head.id, deadline)
         .map_err(ActiveReblitStoneBootInputsError::CaptureProjection)?;
-    if projection.head() != expected_head {
+    let head_matches = projection.head() == expected_head;
+    require_stone_boot_input_deadline(deadline, policy.timeout, Instant::now())?;
+    if !head_matches {
         return Err(ActiveReblitStoneBootInputsError::ExpectedHeadMismatch {
             expected: i32::from(expected_head.id),
             actual: i32::from(projection.head().id),
         });
     }
 
-    let plan = match projection
-        .prepare_asset_plan()
-        .map_err(ActiveReblitStoneBootInputsError::PlanAssets)?
-    {
+    let plan_outcome = projection
+        .prepare_asset_plan_until(deadline)
+        .map_err(ActiveReblitStoneBootInputsError::PlanAssets)?;
+    require_stone_boot_input_deadline(deadline, policy.timeout, checkpoint_now())?;
+    let plan = match plan_outcome {
         BootAssetPlanOutcome::NotApplicable(reason) => {
             return Ok(ActiveReblitStoneBootInputsOutcome::NotApplicable(reason));
         }
         BootAssetPlanOutcome::Ready(plan) => plan,
     };
-    let snapshots = PreparedBootAssetSnapshots::prepare(installation, &plan)
+    let snapshots = PreparedBootAssetSnapshots::prepare_until(installation, &plan, deadline)
         .map_err(ActiveReblitStoneBootInputsError::SnapshotAssets)?;
     let (bindings, referenced_input_bytes, control_input_bytes, binding_work) =
-        bind_snapshots(&plan, &snapshots, policy)?;
+        bind_snapshots_until(&plan, &snapshots, policy, deadline)?;
     before_revalidate(&snapshots);
     projection
-        .revalidate(state_db, layout_db)
+        .revalidate_until(state_db, layout_db, deadline)
         .map_err(ActiveReblitStoneBootInputsError::RevalidateProjection)?;
+    require_stone_boot_input_deadline(deadline, policy.timeout, checkpoint_now())?;
 
     Ok(ActiveReblitStoneBootInputsOutcome::Ready(
         PreparedActiveReblitStoneBootInputs {
@@ -322,12 +373,13 @@ where
     ))
 }
 
-fn bind_snapshots(
+fn bind_snapshots_until(
     plan: &PreparedActiveReblitBootAssetPlan,
     snapshots: &PreparedBootAssetSnapshots,
     policy: StoneBootInputPolicy,
+    deadline: Instant,
 ) -> Result<(Vec<BootAssetBinding>, u64, u64, usize), ActiveReblitStoneBootInputsError> {
-    let mut budget = BindingBudget::new(policy)?;
+    let mut budget = BindingBudget::new_until(policy, deadline)?;
 
     for digest in plan.snapshot_digests() {
         budget.step()?;
@@ -402,6 +454,25 @@ fn role_is_control_input(role: &BootAssetRole) -> bool {
     )
 }
 
+#[cfg(test)]
+fn stone_boot_input_deadline(timeout: Duration) -> Result<Instant, ActiveReblitStoneBootInputsError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(ActiveReblitStoneBootInputsError::InvalidDeadline { timeout })
+}
+
+fn require_stone_boot_input_deadline(
+    deadline: Instant,
+    timeout: Duration,
+    now: Instant,
+) -> Result<(), ActiveReblitStoneBootInputsError> {
+    if now > deadline {
+        Err(ActiveReblitStoneBootInputsError::DeadlineExceeded { timeout })
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub(in crate::client) enum ActiveReblitStoneBootInputsError {
     #[error("capture bounded ActiveReblit boot database projection")]
@@ -432,10 +503,10 @@ pub(in crate::client) enum ActiveReblitStoneBootInputsError {
     ReferencedInputByteLimit { limit: u64, actual: u64 },
     #[error("boot input binding exceeds {limit} bounded steps (got {actual})")]
     BindingWorkLimit { limit: usize, actual: usize },
-    #[error("boot input binding deadline could not represent {timeout:?}")]
-    InvalidBindingDeadline { timeout: Duration },
-    #[error("boot input binding exceeded its {timeout:?} deadline")]
-    BindingDeadlineExceeded { timeout: Duration },
+    #[error("Stone boot input deadline could not represent {timeout:?}")]
+    InvalidDeadline { timeout: Duration },
+    #[error("Stone boot input preparation exceeded its {timeout:?} deadline policy")]
+    DeadlineExceeded { timeout: Duration },
     #[error("revalidate the coherent ActiveReblit boot database projection")]
     RevalidateProjection(#[source] ActiveReblitBootProjectionError),
 }

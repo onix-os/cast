@@ -324,6 +324,51 @@ fn expired_deadline_stops_before_any_layout_query() {
         ActiveReblitBootProjectionError::DeadlineExceeded { .. }
     ));
     assert_eq!(calls.get(), 0);
+
+    let layout_db = db::layout::Database::new(":memory:").unwrap();
+    assert!(matches!(
+        PreparedActiveReblitBootProjection::prepare_until(&state_db, &layout_db, head.id, deadline),
+        Err(ActiveReblitBootProjectionError::DeadlineExceeded { .. })
+    ));
+
+    // Admit every operation through both layout reads and the second state
+    // read, then expire only the final post-materialization check.
+    let terminal_deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+    let expired_terminal = terminal_deadline.checked_add(Duration::from_nanos(1)).unwrap();
+    let clock_calls = Cell::new(0usize);
+    let layout_calls = Cell::new(0usize);
+    let mut terminal_clock = || {
+        let call = clock_calls.get().saturating_add(1);
+        clock_calls.set(call);
+        if call == 10 {
+            expired_terminal
+        } else {
+            terminal_deadline
+        }
+    };
+    let terminal_error = capture_with_layout_query_and_clock(
+        &state_db,
+        head.id,
+        PROJECTION_POLICY,
+        terminal_deadline,
+        &mut terminal_clock,
+        |_, _, _| {
+            layout_calls.set(layout_calls.get().saturating_add(1));
+            Ok(db::layout::BoundedQueryOutcome::Complete(Vec::new()))
+        },
+    )
+    .err()
+    .expect("the terminal projection deadline check must fail closed");
+    assert!(matches!(
+        terminal_error,
+        ActiveReblitBootProjectionError::DeadlineExceeded { .. }
+    ));
+    assert_eq!(layout_calls.get(), 2, "both layout reads must complete first");
+    assert_eq!(
+        clock_calls.get(),
+        10,
+        "expiry must be observed only at the terminal check"
+    );
 }
 
 #[test]
@@ -349,6 +394,26 @@ fn revalidation_accepts_unchanged_state_and_layout_evidence() {
     let prepared = PreparedActiveReblitBootProjection::prepare(&state_db, &layout_db, head.id).unwrap();
 
     prepared.revalidate(&state_db, &layout_db).unwrap();
+
+    // The capture has ten checks for this one-selection fixture. Admit all
+    // of them, then expire only the equality-complete revalidation check.
+    let terminal_deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+    let expired_terminal = terminal_deadline.checked_add(Duration::from_nanos(1)).unwrap();
+    let clock_calls = Cell::new(0usize);
+    let mut terminal_clock = || {
+        let call = clock_calls.get().saturating_add(1);
+        clock_calls.set(call);
+        if call == 12 {
+            expired_terminal
+        } else {
+            terminal_deadline
+        }
+    };
+    assert!(matches!(
+        prepared.revalidate_until_with_clock(&state_db, &layout_db, terminal_deadline, &mut terminal_clock,),
+        Err(ActiveReblitBootProjectionError::DeadlineExceeded { .. })
+    ));
+    assert_eq!(clock_calls.get(), 12, "expiry must follow complete equality checks");
 }
 
 #[test]

@@ -57,11 +57,27 @@ pub(in crate::client) struct PreparedBootAssetSnapshots {
 }
 
 impl PreparedBootAssetSnapshots {
+    #[cfg(test)]
     pub(in crate::client) fn prepare(
         installation: &Installation,
         plan: &PreparedActiveReblitBootAssetPlan,
     ) -> Result<Self, BootAssetSnapshotError> {
         prepare_digests(installation, plan.snapshot_digests().iter().copied())
+    }
+
+    /// Snapshot the plan without replacing the caller-owned absolute
+    /// deadline shared by the complete Stone-input preparation.
+    pub(in crate::client) fn prepare_until(
+        installation: &Installation,
+        plan: &PreparedActiveReblitBootAssetPlan,
+        deadline: Instant,
+    ) -> Result<Self, BootAssetSnapshotError> {
+        prepare_with_policy_until(
+            installation,
+            plan.snapshot_digests().iter().copied(),
+            BOOT_ASSET_SNAPSHOT_POLICY,
+            deadline,
+        )
     }
 
     pub(in crate::client) fn snapshot_for(&self, digest: u128) -> Option<&SealedBootAssetSnapshot> {
@@ -92,6 +108,7 @@ impl PreparedBootAssetSnapshots {
     }
 }
 
+#[cfg(test)]
 fn prepare_digests(
     installation: &Installation,
     digests: impl IntoIterator<Item = u128>,

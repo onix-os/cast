@@ -37,12 +37,24 @@ pub(crate) struct PreparedActiveReblitBootProjection {
 impl PreparedActiveReblitBootProjection {
     /// Capture the active head, bounded history, and their canonical package
     /// layouts with a state-layout-layout-state sandwich.
+    #[cfg(test)]
     pub(crate) fn prepare(
         state_db: &db::state::Database,
         layout_db: &db::layout::Database,
         head: state::Id,
     ) -> Result<Self, ActiveReblitBootProjectionError> {
-        capture_database_projection(state_db, layout_db, head, PROJECTION_POLICY)
+        let deadline = projection_deadline(PROJECTION_POLICY.timeout)?;
+        Self::prepare_until(state_db, layout_db, head, deadline)
+    }
+
+    /// Capture without replacing the caller-owned absolute deadline.
+    pub(crate) fn prepare_until(
+        state_db: &db::state::Database,
+        layout_db: &db::layout::Database,
+        head: state::Id,
+        deadline: Instant,
+    ) -> Result<Self, ActiveReblitBootProjectionError> {
+        capture_database_projection_until(state_db, layout_db, head, PROJECTION_POLICY, deadline)
     }
 
     pub(crate) fn head(&self) -> &State {
@@ -59,17 +71,54 @@ impl PreparedActiveReblitBootProjection {
 
     /// Repeat both bounded database reads and require exact equality with the
     /// originally prepared state and layout evidence.
+    #[cfg(test)]
     pub(crate) fn revalidate(
         &self,
         state_db: &db::state::Database,
         layout_db: &db::layout::Database,
     ) -> Result<(), ActiveReblitBootProjectionError> {
-        let current = capture_database_projection(state_db, layout_db, self.head().id, PROJECTION_POLICY)?;
+        let deadline = projection_deadline(PROJECTION_POLICY.timeout)?;
+        self.revalidate_until(state_db, layout_db, deadline)
+    }
 
-        if current.states != self.states {
+    /// Revalidate without replacing the caller-owned absolute deadline.
+    pub(crate) fn revalidate_until(
+        &self,
+        state_db: &db::state::Database,
+        layout_db: &db::layout::Database,
+        deadline: Instant,
+    ) -> Result<(), ActiveReblitBootProjectionError> {
+        let mut now = Instant::now;
+        self.revalidate_until_with_clock(state_db, layout_db, deadline, &mut now)
+    }
+
+    fn revalidate_until_with_clock<N>(
+        &self,
+        state_db: &db::state::Database,
+        layout_db: &db::layout::Database,
+        deadline: Instant,
+        now: &mut N,
+    ) -> Result<(), ActiveReblitBootProjectionError>
+    where
+        N: FnMut() -> Instant,
+    {
+        let current = capture_database_projection_until_with_clock(
+            state_db,
+            layout_db,
+            self.head().id,
+            PROJECTION_POLICY,
+            deadline,
+            now,
+        )?;
+
+        let states_match = current.states == self.states;
+        require_before_deadline_with_clock(deadline, PROJECTION_POLICY.timeout, now)?;
+        if !states_match {
             return Err(ActiveReblitBootProjectionError::StateChanged);
         }
-        if current.layouts != self.layouts {
+        let layouts_match = current.layouts == self.layouts;
+        require_before_deadline_with_clock(deadline, PROJECTION_POLICY.timeout, now)?;
+        if !layouts_match {
             return Err(ActiveReblitBootProjectionError::LayoutChanged);
         }
 
@@ -90,18 +139,34 @@ struct ProjectionSnapshot {
     layouts: Vec<(package::Id, StonePayloadLayoutRecord)>,
 }
 
-fn capture_database_projection(
+fn capture_database_projection_until(
     state_db: &db::state::Database,
     layout_db: &db::layout::Database,
     head: state::Id,
     policy: ProjectionPolicy,
+    deadline: Instant,
 ) -> Result<PreparedActiveReblitBootProjection, ActiveReblitBootProjectionError> {
-    let deadline = projection_deadline(policy.timeout)?;
-    let snapshot = capture_with_layout_query(state_db, head, policy, deadline, |packages, bounds, deadline| {
-        layout_db
-            .query_bounded(packages, bounds, || Instant::now() <= deadline)
-            .map_err(ActiveReblitBootProjectionError::LayoutDatabase)
-    })?;
+    let mut now = Instant::now;
+    capture_database_projection_until_with_clock(state_db, layout_db, head, policy, deadline, &mut now)
+}
+
+fn capture_database_projection_until_with_clock<N>(
+    state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
+    head: state::Id,
+    policy: ProjectionPolicy,
+    deadline: Instant,
+    now: &mut N,
+) -> Result<PreparedActiveReblitBootProjection, ActiveReblitBootProjectionError>
+where
+    N: FnMut() -> Instant,
+{
+    let snapshot =
+        capture_with_layout_query_and_clock(state_db, head, policy, deadline, now, |packages, bounds, deadline| {
+            layout_db
+                .query_bounded(packages, bounds, || Instant::now() <= deadline)
+                .map_err(ActiveReblitBootProjectionError::LayoutDatabase)
+        })?;
 
     Ok(PreparedActiveReblitBootProjection {
         states: snapshot.states,
@@ -109,12 +174,13 @@ fn capture_database_projection(
     })
 }
 
+#[cfg(test)]
 fn capture_with_layout_query<F>(
     state_db: &db::state::Database,
     head: state::Id,
     policy: ProjectionPolicy,
     deadline: Instant,
-    mut query_layouts: F,
+    query_layouts: F,
 ) -> Result<ProjectionSnapshot, ActiveReblitBootProjectionError>
 where
     F: FnMut(
@@ -123,37 +189,66 @@ where
         Instant,
     ) -> Result<db::layout::BoundedQueryOutcome, ActiveReblitBootProjectionError>,
 {
-    require_before_deadline(deadline, policy.timeout)?;
-    let states_before = state_db.frozen_boot_input(head)?;
-    require_before_deadline(deadline, policy.timeout)?;
+    let mut now = Instant::now;
+    capture_with_layout_query_and_clock(state_db, head, policy, deadline, &mut now, query_layouts)
+}
 
-    let packages = canonical_selected_packages(&states_before, policy, deadline)?;
-    require_before_deadline(deadline, policy.timeout)?;
+fn capture_with_layout_query_and_clock<F, N>(
+    state_db: &db::state::Database,
+    head: state::Id,
+    policy: ProjectionPolicy,
+    deadline: Instant,
+    now: &mut N,
+    mut query_layouts: F,
+) -> Result<ProjectionSnapshot, ActiveReblitBootProjectionError>
+where
+    F: FnMut(
+        &[package::Id],
+        db::layout::QueryBounds,
+        Instant,
+    ) -> Result<db::layout::BoundedQueryOutcome, ActiveReblitBootProjectionError>,
+    N: FnMut() -> Instant,
+{
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
+    let states_before = state_db.frozen_boot_input(head)?;
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
+
+    let packages = canonical_selected_packages(&states_before, policy, deadline, now)?;
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
 
     let layouts_before = complete_layout_query(
         query_layouts(&packages, policy.layout_bounds, deadline)?,
         policy.timeout,
     )?;
-    require_before_deadline(deadline, policy.timeout)?;
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
     let layouts_after = complete_layout_query(
         query_layouts(&packages, policy.layout_bounds, deadline)?,
         policy.timeout,
     )?;
-    require_before_deadline(deadline, policy.timeout)?;
-    if layouts_before != layouts_after {
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
+    let layouts_match = layouts_before == layouts_after;
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
+    if !layouts_match {
         return Err(ActiveReblitBootProjectionError::LayoutSandwichChanged);
     }
 
     let states_after = state_db.frozen_boot_input(head)?;
-    require_before_deadline(deadline, policy.timeout)?;
-    if states_before != states_after {
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
+    let states_match = states_before == states_after;
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
+    if !states_match {
         return Err(ActiveReblitBootProjectionError::StateSandwichChanged);
     }
 
-    Ok(ProjectionSnapshot {
+    // Equality and complete output materialization are part of the bounded
+    // capture, not work that may escape after the caller's deadline.
+    let snapshot = ProjectionSnapshot {
         states: states_before,
         layouts: layouts_before,
-    })
+    };
+    require_before_deadline_with_clock(deadline, policy.timeout, now)?;
+
+    Ok(snapshot)
 }
 
 fn complete_layout_query(
@@ -180,16 +275,20 @@ fn complete_layout_query(
     }
 }
 
-fn canonical_selected_packages(
+fn canonical_selected_packages<N>(
     states: &db::state::FrozenBootInput,
     policy: ProjectionPolicy,
     deadline: Instant,
-) -> Result<Vec<package::Id>, ActiveReblitBootProjectionError> {
+    now: &mut N,
+) -> Result<Vec<package::Id>, ActiveReblitBootProjectionError>
+where
+    N: FnMut() -> Instant,
+{
     let mut packages = BTreeSet::new();
     let mut package_id_bytes = 0usize;
 
     for selection in states.states().iter().flat_map(|state| &state.selections) {
-        require_before_deadline(deadline, policy.timeout)?;
+        require_before_deadline_with_clock(deadline, policy.timeout, now)?;
         if packages.contains(&selection.package) {
             continue;
         }
@@ -218,14 +317,22 @@ fn canonical_selected_packages(
     Ok(packages.into_iter().collect())
 }
 
+#[cfg(test)]
 fn projection_deadline(timeout: Duration) -> Result<Instant, ActiveReblitBootProjectionError> {
     Instant::now()
         .checked_add(timeout)
         .ok_or(ActiveReblitBootProjectionError::InvalidDeadline { timeout })
 }
 
-fn require_before_deadline(deadline: Instant, timeout: Duration) -> Result<(), ActiveReblitBootProjectionError> {
-    if Instant::now() > deadline {
+fn require_before_deadline_with_clock<N>(
+    deadline: Instant,
+    timeout: Duration,
+    now: &mut N,
+) -> Result<(), ActiveReblitBootProjectionError>
+where
+    N: FnMut() -> Instant,
+{
+    if now() > deadline {
         return Err(ActiveReblitBootProjectionError::DeadlineExceeded { timeout });
     }
     Ok(())

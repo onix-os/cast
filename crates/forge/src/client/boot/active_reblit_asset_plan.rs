@@ -161,8 +161,18 @@ impl PlannedBootAsset {
 }
 
 impl PreparedActiveReblitBootProjection {
+    #[cfg(test)]
     pub(crate) fn prepare_asset_plan(&self) -> Result<BootAssetPlanOutcome, ActiveReblitBootAssetPlanError> {
-        prepare_asset_plan(self, BootAssetPlanPolicy::production())
+        let deadline = boot_asset_plan_deadline(BOOT_PLAN_TIMEOUT)?;
+        self.prepare_asset_plan_until(deadline)
+    }
+
+    /// Plan assets without replacing the caller-owned absolute deadline.
+    pub(crate) fn prepare_asset_plan_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<BootAssetPlanOutcome, ActiveReblitBootAssetPlanError> {
+        prepare_asset_plan_until(self, BootAssetPlanPolicy::production(), deadline)
     }
 }
 
@@ -200,33 +210,38 @@ struct PlanBudget {
 }
 
 impl PlanBudget {
-    fn new(policy: BootAssetPlanPolicy) -> Result<Self, ActiveReblitBootAssetPlanError> {
-        let deadline =
-            Instant::now()
-                .checked_add(policy.timeout)
-                .ok_or(ActiveReblitBootAssetPlanError::InvalidDeadline {
-                    timeout: policy.timeout,
-                })?;
-        Ok(Self {
+    fn new_until(policy: BootAssetPlanPolicy, deadline: Instant) -> Result<Self, ActiveReblitBootAssetPlanError> {
+        let budget = Self {
             deadline,
             policy,
             work: 0,
             candidates: 0,
             path_bytes: 0,
-        })
+        };
+        budget.require_deadline()?;
+        Ok(budget)
     }
 
     fn step(&mut self) -> Result<(), ActiveReblitBootAssetPlanError> {
-        if Instant::now() > self.deadline {
-            return Err(ActiveReblitBootAssetPlanError::DeadlineExceeded {
-                timeout: self.policy.timeout,
-            });
-        }
+        self.require_deadline()?;
         self.work = self.work.checked_add(1).unwrap_or(usize::MAX);
         if self.work > self.policy.max_work {
             return Err(ActiveReblitBootAssetPlanError::WorkLimit {
                 limit: self.policy.max_work,
                 actual: self.work,
+            });
+        }
+        Ok(())
+    }
+
+    fn require_deadline(&self) -> Result<(), ActiveReblitBootAssetPlanError> {
+        self.require_deadline_at(Instant::now())
+    }
+
+    fn require_deadline_at(&self, now: Instant) -> Result<(), ActiveReblitBootAssetPlanError> {
+        if now > self.deadline {
+            return Err(ActiveReblitBootAssetPlanError::DeadlineExceeded {
+                timeout: self.policy.timeout,
             });
         }
         Ok(())
@@ -410,13 +425,38 @@ impl<'a> StateLayoutIndex<'a> {
     }
 }
 
+#[cfg(test)]
 fn prepare_asset_plan(
     projection: &PreparedActiveReblitBootProjection,
     policy: BootAssetPlanPolicy,
 ) -> Result<BootAssetPlanOutcome, ActiveReblitBootAssetPlanError> {
-    let mut budget = PlanBudget::new(policy)?;
-    match head_systemd_candidate_count(projection, &mut budget)? {
+    let deadline = boot_asset_plan_deadline(policy.timeout)?;
+    prepare_asset_plan_until(projection, policy, deadline)
+}
+
+fn prepare_asset_plan_until(
+    projection: &PreparedActiveReblitBootProjection,
+    policy: BootAssetPlanPolicy,
+    deadline: Instant,
+) -> Result<BootAssetPlanOutcome, ActiveReblitBootAssetPlanError> {
+    prepare_asset_plan_until_and_terminal_clock(projection, policy, deadline, Instant::now)
+}
+
+fn prepare_asset_plan_until_and_terminal_clock<N>(
+    projection: &PreparedActiveReblitBootProjection,
+    policy: BootAssetPlanPolicy,
+    deadline: Instant,
+    mut terminal_now: N,
+) -> Result<BootAssetPlanOutcome, ActiveReblitBootAssetPlanError>
+where
+    N: FnMut() -> Instant,
+{
+    let mut budget = PlanBudget::new_until(policy, deadline)?;
+    let systemd_candidates = head_systemd_candidate_count(projection, &mut budget)?;
+    budget.require_deadline()?;
+    match systemd_candidates {
         0 => {
+            budget.require_deadline_at(terminal_now())?;
             return Ok(BootAssetPlanOutcome::NotApplicable(
                 BootAssetPlanNotApplicable::NoSystemdBootAsset,
             ));
@@ -509,6 +549,7 @@ fn prepare_asset_plan(
     }
 
     if kernel_count == 0 {
+        budget.require_deadline_at(terminal_now())?;
         return Ok(BootAssetPlanOutcome::NotApplicable(
             BootAssetPlanNotApplicable::NoKernel,
         ));
@@ -550,14 +591,24 @@ fn prepare_asset_plan(
         }
     }
 
-    Ok(BootAssetPlanOutcome::Ready(PreparedActiveReblitBootAssetPlan {
+    let plan = PreparedActiveReblitBootAssetPlan {
         state_ids,
         assets,
         schema_requirements,
         systemd_boot_index: systemd_boot_index.expect("exactly one systemd-boot candidate classified"),
         kernel_count,
         snapshot_digests: snapshot_digests.into_iter().collect(),
-    }))
+    };
+    budget.require_deadline_at(terminal_now())?;
+
+    Ok(BootAssetPlanOutcome::Ready(plan))
+}
+
+#[cfg(test)]
+fn boot_asset_plan_deadline(timeout: Duration) -> Result<Instant, ActiveReblitBootAssetPlanError> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or(ActiveReblitBootAssetPlanError::InvalidDeadline { timeout })
 }
 
 fn selected_packages(state: &crate::State) -> BTreeSet<&str> {

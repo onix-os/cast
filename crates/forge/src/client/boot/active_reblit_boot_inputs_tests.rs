@@ -5,6 +5,7 @@ use std::{
         fd::{AsRawFd as _, BorrowedFd, FromRawFd as _, OwnedFd, RawFd},
         unix::fs::{FileExt as _, PermissionsExt as _},
     },
+    time::{Duration, Instant},
 };
 
 use astr::AStr;
@@ -69,7 +70,14 @@ impl BootInputFixture {
     }
 
     fn prepare(&self) -> Result<ActiveReblitStoneBootInputsOutcome, ActiveReblitStoneBootInputsError> {
-        PreparedActiveReblitStoneBootInputs::prepare(&self.installation, &self.state_db, &self.layout_db, &self.head)
+        let deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+        PreparedActiveReblitStoneBootInputs::prepare_until(
+            &self.installation,
+            &self.state_db,
+            &self.layout_db,
+            &self.head,
+            deadline,
+        )
     }
 
     fn prepare_with_policy(
@@ -212,6 +220,14 @@ fn duplicate_plan_references_share_one_sealed_snapshot() {
     assert_eq!(bound[0].descriptor().as_raw_fd(), bound[1].descriptor().as_raw_fd());
     assert_eq!(descriptor_bytes(bound[0].descriptor(), bound[0].length()), shared);
     assert_eq!(inputs.referenced_input_bytes(), (shared.len() * 2) as u64);
+
+    let expired = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        inputs.revalidate_until(&fixture.state_db, &fixture.layout_db, expired),
+        Err(ActiveReblitStoneBootInputsError::RevalidateProjection(
+            ActiveReblitBootProjectionError::DeadlineExceeded { .. }
+        ))
+    ));
 }
 
 #[test]
@@ -275,6 +291,20 @@ fn expected_head_mismatch_fails_before_returning_prepared_inputs() {
     assert!(matches!(
         error,
         ActiveReblitStoneBootInputsError::ExpectedHeadMismatch { .. }
+    ));
+
+    let expired = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        PreparedActiveReblitStoneBootInputs::prepare_until(
+            &fixture.installation,
+            &fixture.state_db,
+            &fixture.layout_db,
+            &fixture.head,
+            expired,
+        ),
+        Err(ActiveReblitStoneBootInputsError::CaptureProjection(
+            ActiveReblitBootProjectionError::DeadlineExceeded { .. }
+        ))
     ));
 }
 
@@ -398,6 +428,39 @@ fn binding_work_policy_admits_exact_n_and_rejects_n_plus_one() {
         Err(ActiveReblitStoneBootInputsError::BindingWorkLimit { limit, actual })
             if limit == exact_work - 1 && actual == exact_work
     ));
+
+    let terminal_deadline = Instant::now().checked_add(Duration::from_secs(60)).unwrap();
+    let expired_terminal = terminal_deadline.checked_add(Duration::from_nanos(1)).unwrap();
+    let terminal_checks = Cell::new(0usize);
+    let error = prepare_with_policy_until_and_checkpoint(
+        &fixture.installation,
+        &fixture.state_db,
+        &fixture.layout_db,
+        &fixture.head,
+        StoneBootInputPolicy::production(),
+        terminal_deadline,
+        |_| {},
+        || {
+            let check = terminal_checks.get().saturating_add(1);
+            terminal_checks.set(check);
+            if check == 2 {
+                expired_terminal
+            } else {
+                terminal_deadline
+            }
+        },
+    )
+    .err()
+    .expect("the complete Stone input must retain a terminal deadline check");
+    assert!(matches!(
+        error,
+        ActiveReblitStoneBootInputsError::DeadlineExceeded { .. }
+    ));
+    assert_eq!(
+        terminal_checks.get(),
+        2,
+        "the first post-plan check must pass before terminal expiry"
+    );
 }
 
 #[test]
