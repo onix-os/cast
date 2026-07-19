@@ -20,6 +20,18 @@ fn stable_512_and_4096_tables_retain_deterministic_nonzero_fingerprints() {
 }
 
 #[test]
+fn stable_512_esp_table_fingerprint_v1_is_pinned() {
+    let fixture = Fixture::esp(512);
+    assert_eq!(
+        fixture.authenticate().unwrap().table_sha256(),
+        &[
+            0x02, 0x59, 0x9b, 0xb8, 0x5a, 0x00, 0x76, 0xf4, 0x57, 0xea, 0x14, 0xbb, 0x0c, 0xa1, 0x41, 0xb3, 0x83, 0x1a,
+            0x2d, 0x2b, 0xee, 0xf2, 0xf1, 0xb9, 0x76, 0x65, 0x4d, 0x0a, 0x8b, 0x0a, 0x09, 0x04,
+        ]
+    );
+}
+
+#[test]
 fn a_valid_unselected_entry_change_is_rejected_between_passes() {
     let first = Fixture::esp(512);
     let mut second = Fixture::esp(512);

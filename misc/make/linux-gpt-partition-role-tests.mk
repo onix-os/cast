@@ -13,7 +13,7 @@ forge-linux-gpt-partition-role-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(GPT_PARTITION_ROLE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::gpt_partition_role::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 30; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 31; \
 	for name in \
 		stable::esp_guid_constant_uses_uefi_mixed_endian_disk_bytes \
 		stable::xbootldr_guid_constant_uses_uefi_mixed_endian_disk_bytes \
@@ -22,6 +22,7 @@ forge-linux-gpt-partition-role-test: host-storage-safety-test
 		stable::logical_block_size_endpoints_are_both_admitted \
 		stable::unselected_used_entries_are_validated_without_changing_the_selected_result \
 		snapshot_stability::stable_512_and_4096_tables_retain_deterministic_nonzero_fingerprints \
+		snapshot_stability::stable_512_esp_table_fingerprint_v1_is_pinned \
 		snapshot_stability::a_valid_unselected_entry_change_is_rejected_between_passes \
 		snapshot_stability::a_valid_disk_guid_change_is_rejected_between_4096_byte_passes \
 		snapshot_stability::one_exact_table_has_one_fingerprint_independent_of_selected_role \
