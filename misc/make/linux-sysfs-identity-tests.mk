@@ -13,7 +13,7 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(SYSFS_IDENTITY_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::sysfs_identity::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 25; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 27; \
 	for name in \
 		bounds::zero_fixture_limits_and_expired_deadlines_fail_before_hooks_or_syscalls \
 		bounds::injected_checkpoint_failure_is_propagated_without_external_effects \
@@ -21,6 +21,8 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 		bounds::revalidation_budget_is_global_across_both_recaptures_and_terminal_checks \
 		bounds::attribute_read_ceilings_accept_exact_bytes_and_reject_one_more \
 		bounds::uevent_and_link_bounds_are_enforced_before_resolution_or_parsing \
+		deadline::caller_deadline_equality_is_admitted_and_one_nanosecond_late_fails_before_fixture_work \
+		deadline::terminal_deadline_expiry_rejects_preparation_and_revalidation \
 		malformed::fixture_admission_accepts_only_one_retained_directory_component \
 		malformed::every_required_lookup_target_and_attribute_must_exist \
 		malformed::dev_block_lookup_target_cannot_escape_or_name_a_non_device_path \
@@ -46,7 +48,12 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 	capture="$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/sysfs_identity/capture.rs"; \
 	filesystem="$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/sysfs_identity/filesystem.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare(device: SysfsDeviceNumber) -> io::Result<Self>' "$$root"; \
+	timeout 10s grep -Fq 'pub(crate) fn prepare_until(device: SysfsDeviceNumber, deadline: Instant) -> io::Result<Self>' "$$root"; \
+	timeout 10s grep -Fq 'Self::prepare_until(device, deadline)' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) fn revalidate(&self) -> io::Result<RevalidatedSysfsPartitionIdentity<' "$$root"; \
+	timeout 10s grep -Fq 'pub(crate) fn revalidate_until(&self, deadline: Instant) -> io::Result<RevalidatedSysfsPartitionIdentity<' "$$root"; \
+	timeout 10s grep -Fq 'self.revalidate_until(deadline)' "$$root"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'operation.checkpoint()?;' "$$root" )" = 2; \
 	timeout 10s grep -Fq 'pub(crate) fn has_same_revalidated_block_parent_snapshot(&self, other: &Self) -> bool' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) fn normalized_devpath(&self) -> &[u8]' "$$root"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'PhantomData<Rc<()>>' "$$root" )" -ge 2; \
@@ -67,6 +74,8 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 	timeout 10s grep -Fq 'fn descriptor_mount_id(' "$$filesystem"; \
 	timeout 10s grep -Fq 'authenticated_current_thread_procfs_with_deadline(Some(operation.deadline()))?' "$$filesystem"; \
 	timeout 10s grep -Fq 'parse_descriptor_mount_id(&bytes)?' "$$filesystem"; \
+	timeout 10s grep -Fq 'pub(super) fn fixture_with_clock(' "$$filesystem"; \
+	timeout 10s grep -Fq 'clock: Option<&'"'"'a mut dyn FnMut() -> Instant>' "$$filesystem"; \
 	timeout 10s grep -Fq 'reject_kernel_pseudo_fixture(&parent, operation, "fixture sysfs parent")?;' "$$filesystem"; \
 	timeout 10s grep -Fq 'if status.f_type == SYSFS_MAGIC || status.f_type == PROC_SUPER_MAGIC {' "$$filesystem"; \
 	if timeout 10s rg -n 'read_dir|canonicalize|std::process|process::Command|Command::new|std::env|/dev/disk|/dev/(sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)|blkid|lsblk|findmnt|udevadm|smartctl|hdparm|OpenOptions|create_new|set_len|write_all|remove_(file|dir)|rename\(' "$$root" "$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/sysfs_identity"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \

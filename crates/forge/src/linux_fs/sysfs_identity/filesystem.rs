@@ -84,6 +84,8 @@ pub(super) struct Operation<'a> {
     pub(super) max_ancestors: usize,
     #[cfg(test)]
     hook: Option<&'a mut dyn FnMut(super::FixtureCheckpoint) -> io::Result<()>>,
+    #[cfg(test)]
+    clock: Option<&'a mut dyn FnMut() -> Instant>,
     #[cfg(not(test))]
     _lifetime: std::marker::PhantomData<&'a mut ()>,
 }
@@ -103,6 +105,8 @@ impl<'a> Operation<'a> {
             max_ancestors: limits.max_ancestors,
             #[cfg(test)]
             hook: None,
+            #[cfg(test)]
+            clock: None,
             #[cfg(not(test))]
             _lifetime: std::marker::PhantomData,
         }
@@ -114,27 +118,45 @@ impl<'a> Operation<'a> {
         deadline: Instant,
         hook: &'a mut impl FnMut(super::FixtureCheckpoint) -> io::Result<()>,
     ) -> io::Result<Self> {
-        let mut operation = Self::validate_fixture_limits(limits, deadline)?;
+        Self::require_fixture_limits(limits)?;
+        let mut operation = Self::new(limits, deadline);
         operation.hook = Some(hook);
+        operation.checkpoint()?;
+        Ok(operation)
+    }
+
+    #[cfg(test)]
+    pub(super) fn fixture_with_clock(
+        limits: SysfsIdentityLimits,
+        deadline: Instant,
+        hook: &'a mut impl FnMut(super::FixtureCheckpoint) -> io::Result<()>,
+        clock: &'a mut impl FnMut() -> Instant,
+    ) -> io::Result<Self> {
+        Self::require_fixture_limits(limits)?;
+        let mut operation = Self::new(limits, deadline);
+        operation.hook = Some(hook);
+        operation.clock = Some(clock);
+        operation.checkpoint()?;
         Ok(operation)
     }
 
     #[cfg(test)]
     pub(super) fn fixture_without_hook(limits: SysfsIdentityLimits, deadline: Instant) -> io::Result<Self> {
-        Self::validate_fixture_limits(limits, deadline)
+        Self::require_fixture_limits(limits)?;
+        let mut operation = Self::new(limits, deadline);
+        operation.checkpoint()?;
+        Ok(operation)
     }
 
     #[cfg(test)]
-    fn validate_fixture_limits(limits: SysfsIdentityLimits, deadline: Instant) -> io::Result<Self> {
+    fn require_fixture_limits(limits: SysfsIdentityLimits) -> io::Result<()> {
         if limits.max_work == 0 || limits.max_ancestors == 0 || limits.max_descriptors == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "sysfs fixture limits must all be nonzero",
             ));
         }
-        let mut operation = Self::new(limits, deadline);
-        operation.checkpoint()?;
-        Ok(operation)
+        Ok(())
     }
 
     pub(super) const fn deadline(&self) -> Instant {
@@ -142,7 +164,15 @@ impl<'a> Operation<'a> {
     }
 
     pub(super) fn checkpoint(&mut self) -> io::Result<()> {
-        if Instant::now() > self.deadline {
+        #[cfg(test)]
+        let now = if let Some(clock) = self.clock.as_mut() {
+            clock()
+        } else {
+            Instant::now()
+        };
+        #[cfg(not(test))]
+        let now = Instant::now();
+        if now > self.deadline {
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "sysfs identity operation exceeded its deadline",

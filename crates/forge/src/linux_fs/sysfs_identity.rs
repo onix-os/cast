@@ -78,6 +78,14 @@ impl PreparedSysfsPartitionIdentity {
     /// never enumerates sysfs and never opens a block device.
     pub(crate) fn prepare(device: SysfsDeviceNumber) -> io::Result<Self> {
         let deadline = deadline_after(PRODUCTION_TIMEOUT)?;
+        Self::prepare_until(device, deadline)
+    }
+
+    /// Prepare one partition under the caller's absolute deadline.
+    ///
+    /// The supplied deadline is shared by every open, read, parse, and
+    /// terminal consistency check. It is never replaced with a fresh timeout.
+    pub(crate) fn prepare_until(device: SysfsDeviceNumber, deadline: Instant) -> io::Result<Self> {
         let mut operation = Operation::production(PRODUCTION_LIMITS, deadline);
         let root = RootHandle::open_production(&mut operation)?;
         Self::prepare_from_root(root, device, &mut operation)
@@ -91,6 +99,9 @@ impl PreparedSysfsPartitionIdentity {
         let capture = capture_twice(&root, device, operation)?;
         root.require_named(operation)?;
         capture.require_terminal_names(&root, operation)?;
+        // No prepared identity may escape after the caller's absolute
+        // deadline, including expiry immediately after the final name check.
+        operation.checkpoint()?;
         Ok(Self {
             root,
             capture,
@@ -102,6 +113,11 @@ impl PreparedSysfsPartitionIdentity {
     /// deadline and return a lifetime-bound semantic view.
     pub(crate) fn revalidate(&self) -> io::Result<RevalidatedSysfsPartitionIdentity<'_>> {
         let deadline = deadline_after(PRODUCTION_TIMEOUT)?;
+        self.revalidate_until(deadline)
+    }
+
+    /// Revalidate under the caller's absolute deadline without resetting it.
+    pub(crate) fn revalidate_until(&self, deadline: Instant) -> io::Result<RevalidatedSysfsPartitionIdentity<'_>> {
         let mut operation = Operation::production(PRODUCTION_LIMITS, deadline);
         self.revalidate_with_operation(&mut operation)
     }
@@ -116,6 +132,9 @@ impl PreparedSysfsPartitionIdentity {
         require_capture_matches(&self.capture, &current)?;
         self.root.require_named(operation)?;
         current.require_terminal_names(&self.root, operation)?;
+        // This is deliberately after all retained and public-name evidence;
+        // terminal expiry must fail rather than returning a stale view.
+        operation.checkpoint()?;
         Ok(RevalidatedSysfsPartitionIdentity {
             prepared: self,
             current,
@@ -130,6 +149,18 @@ impl PreparedSysfsPartitionIdentity {
         hook: &mut impl FnMut(FixtureCheckpoint) -> io::Result<()>,
     ) -> io::Result<RevalidatedSysfsPartitionIdentity<'_>> {
         let mut operation = Operation::fixture(limits.into(), deadline, hook)?;
+        self.revalidate_with_operation(&mut operation)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn revalidate_with_clock(
+        &self,
+        limits: FixtureSysfsIdentityLimits,
+        deadline: Instant,
+        hook: &mut impl FnMut(FixtureCheckpoint) -> io::Result<()>,
+        clock: &mut impl FnMut() -> Instant,
+    ) -> io::Result<RevalidatedSysfsPartitionIdentity<'_>> {
+        let mut operation = Operation::fixture_with_clock(limits.into(), deadline, hook, clock)?;
         self.revalidate_with_operation(&mut operation)
     }
 }
@@ -318,6 +349,19 @@ impl FixtureSysfsTree {
         hook: &mut impl FnMut(FixtureCheckpoint) -> io::Result<()>,
     ) -> io::Result<PreparedSysfsPartitionIdentity> {
         let mut operation = Operation::fixture(limits.into(), deadline, hook)?;
+        let root = self.root.reopen_owned(&mut operation)?;
+        PreparedSysfsPartitionIdentity::prepare_from_root(root, device, &mut operation)
+    }
+
+    pub(crate) fn prepare_with_clock(
+        &self,
+        device: SysfsDeviceNumber,
+        limits: FixtureSysfsIdentityLimits,
+        deadline: Instant,
+        hook: &mut impl FnMut(FixtureCheckpoint) -> io::Result<()>,
+        clock: &mut impl FnMut() -> Instant,
+    ) -> io::Result<PreparedSysfsPartitionIdentity> {
+        let mut operation = Operation::fixture_with_clock(limits.into(), deadline, hook, clock)?;
         let root = self.root.reopen_owned(&mut operation)?;
         PreparedSysfsPartitionIdentity::prepare_from_root(root, device, &mut operation)
     }
