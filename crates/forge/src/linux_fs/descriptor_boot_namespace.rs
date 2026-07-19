@@ -20,6 +20,9 @@ mod fixture;
 mod model;
 #[path = "descriptor_boot_namespace/observer.rs"]
 mod observer;
+#[allow(dead_code)] // retained-descriptor integration follows this parser foundation
+#[path = "descriptor_boot_namespace/production.rs"]
+mod production;
 #[path = "descriptor_boot_namespace/trie.rs"]
 mod trie;
 
@@ -43,4 +46,10 @@ pub(crate) use model::FixtureBootNamespaceUsage;
 #[cfg(test)]
 pub(crate) use observer::{
     BootNamespaceLookup, BootNamespaceNodeIdentity, BootNamespaceNodeKind, BootNamespaceRegularWitness,
+};
+#[cfg(test)]
+pub(crate) use production::{
+    ProductionRawDirectoryInventory, ProductionRawDirectoryInventoryError, ProductionRawDirectoryInventoryLimits,
+    ProductionRawDirectoryInventoryUsage, ProductionRawDirectorySource, ProductionRawDirectorySourceError,
+    parse_production_raw_directory_inventory_until, parse_production_raw_directory_inventory_with_usage_until,
 };
