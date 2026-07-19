@@ -30,13 +30,20 @@ bounded kernel device names and fixed-512-sector partition geometry, and a
 sealed expectation binds the parent-disk facts to one freshly revalidated view.
 A separate strict pure parser now authenticates two complete, exactly matching
 GPT table passes and returns exact ESP/XBOOTLDR geometry plus a role-independent
-table fingerprint without table bytes or read authority. Exact `/dev`
-`devtmpfs` mountinfo policy is also available, but the production retained
-block-device binding, write authority, and durability remain open. A pure
-bounded destination classifier
-can now distinguish stable absence, exact bytes, and different bytes while
+table fingerprint without table bytes or read authority. It also retains the
+selected partition number, logical-block size, and image length and exposes one
+private same-deadline inter-pass checkpoint for a future live descriptor owner.
+Exact `/dev` `devtmpfs` mountinfo policy is also available. Pure reconciliation
+can reject disagreement between sealed sysfs/GPT facts and exact opening and
+closing injected block-node observations, but it is intentionally not live
+descriptor or read-provenance authority. The production retained block-device
+binding, write authority, and durability remain open. A pure bounded
+destination classifier can now distinguish stable absence, exact bytes, and
+different bytes while
 rejecting FAT aliases and namespace/content races, but its retained-descriptor
-production observer is not wired yet. The `nosymfollow` requirement gives
+production observer is not wired yet. Its strict bounded raw `getdents64` parser
+is implemented without syscalls; actual fresh directory descriptions and
+descriptor-rooted reads remain open. The `nosymfollow` requirement gives
 the future boot publisher an effective Linux 5.10-or-newer admission boundary
 without changing the generic `linux_fs` Linux 5.6 compatibility baseline.
 `cast.boot_topology.v1` cannot be

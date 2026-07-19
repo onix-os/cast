@@ -88,12 +88,18 @@ Linux MSDOS magic family. Retained sysfs evidence also includes bounded
 partition and parent `DEVNAME` values plus canonical partition geometry in
 fixed 512-byte sectors. A strict pure GPT parser can authenticate caller-owned
 images through two complete, exactly matching table passes and return exact
-ESP/XBOOTLDR geometry plus a role-independent table fingerprint. A sealed
+ESP/XBOOTLDR geometry plus a role-independent table fingerprint. Its closed role
+also retains the partition number, logical-block size, and complete image
+length, and one private same-deadline inter-pass hook runs before the second
+source observation. A sealed
 expectation binds the parent device name, identity, partition number, PARTUUID,
 geometry, and optional disk sequence to one freshly revalidated sysfs view.
 Exact `/dev` `devtmpfs` mountinfo policy is validated separately, but no
-production adapter yet turns it into retained descriptor authority, opens the
-expected parent block node, or composes GPT byte geometry with the sysfs view.
+production adapter yet turns it into retained descriptor authority or owns the
+complete two-pass read schedule. A bounded pure reconciliation now rejects any
+disagreement among exact injected opening/closing block-node observations, GPT
+byte geometry, and the sealed sysfs view, but deliberately proves no descriptor
+or read provenance.
 This does not authorize writes or establish durability. Because
 `nosymfollow` was added in
 Linux 5.10, the future boot publisher has an effective Linux 5.10-or-newer

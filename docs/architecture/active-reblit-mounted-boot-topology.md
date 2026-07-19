@@ -193,20 +193,28 @@ on image length, logical block size, the full protective-MBR block, both full
 header blocks, the already mirrored entry array, and selected semantics. The
 returned closed evidence adds one role-independent, domain-separated table
 fingerprint; it retains no table bytes, image, descriptor, path, or reusable
-read authority.
+read authority. Commit `215b9032` additionally retains the selected partition
+number, logical-block size, and complete image length. Its private inter-pass
+hook runs exactly once after the first stable table pass and before any second
+source observation, under the original deadline, so a future descriptor owner
+can rebind live identity without weakening the two-pass schedule.
 
 Commit `24d82abf` seals the parent `DEVNAME`, device number, partition number,
 PARTUUID, fixed-512-sector geometry, and optional disk sequence to one freshly
 revalidated sysfs view. Commit `78b87df9` separately validates only an exact
 `/dev` root attachment reported as `devtmpfs`, including consistent access and
 device-option semantics. That mountinfo policy is not descriptor authority and
-cannot alone prove whole-filesystem bind provenance. No production adapter yet
-opens the expected parent block node beneath a retained `/dev`, proves its
-descriptor identity and capacity, feeds two observations to the pure parser, or
-reconciles GPT byte geometry with the sysfs view. Physical-disk read authority,
-flush behavior, and persistence across reboot therefore remain separate open
-claims. The selected mountinfo `vfat` policy and Linux MSDOS-family descriptor
-witness are jointly retained per topology pass.
+cannot alone prove whole-filesystem bind provenance. Commit `2eeaa22c` adds a
+bounded pure reconciliation of exact opening and closing block-node identity,
+access, geometry, and capacity observations with the GPT role and sealed sysfs
+expectation. It rejects geometry overflow and disagreement, but is explicitly
+non-authoritative because injected observations prove neither a live descriptor
+nor the provenance of GPT reads. No production adapter yet owns that complete
+opening, inter-pass rebind, second-pass, and closing schedule beneath retained
+`/dev`. Physical-disk read authority, flush behavior, and persistence across
+reboot therefore remain separate open claims. The selected mountinfo `vfat`
+policy and Linux MSDOS-family descriptor witness are jointly retained per
+topology pass.
 
 ## Topology invariants
 
@@ -333,9 +341,13 @@ aliases, FAT short-name aliases, cross-mount entries, type changes, and content
 races fail closed. Independent hard ceilings cover requests, 4095-byte paths,
 8 MiB aggregate path bytes, directory entries, raw names, reads, allocations,
 descriptors, sort work, and the caller-owned deadline. This is still an
-injected model. The production observer must make every observation through
-the private retained destination descriptor before it can authorize a durable
-publisher.
+injected model. Commit `2eeaa22c` adds its bounded syscall-free raw
+`getdents64` chunk parser, including strict record and name validation,
+dot-entry filtering, and an explicitly budgeted terminal EOF probe. It returns
+only a closed raw-name inventory and does not trust inode or type hints. The
+production observer must still acquire fresh directory descriptions and make
+every observation through the private retained destination descriptor before
+it can authorize a durable publisher.
 
 A separate durable publisher combines:
 

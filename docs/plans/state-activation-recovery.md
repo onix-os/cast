@@ -463,8 +463,12 @@ Commit `9ac34286` adds a pure bounded destination-namespace assessment for the
 rendered requests. It preserves request order, admits only stable `Absent`,
 `Exact`, or `Different` states, and rejects raw/kernel-name disagreement, FAT
 aliases, cross mounts, wrong node kinds, inventory and lookup races, content
-drift, deadline expiry, and resource overruns. No production descriptor
-observer or mutation authority is part of that foundation.
+drift, deadline expiry, and resource overruns. Commit `2eeaa22c` adds a
+syscall-free bounded parser for complete raw `getdents64` chunks, with strict
+record/name validation and a separately charged terminal EOF probe. It
+produces only a closed raw-name inventory; fresh directory descriptions,
+actual syscalls, a retained-descriptor observer, and mutation authority are not
+part of that foundation.
 
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`
@@ -479,9 +483,15 @@ strict caller-owned GPT images and exact ESP/XBOOTLDR roles without opening a
 device. Commit `c2539d7f` strengthens that parser to require two complete,
 exactly matching table passes under one cumulative ledger and deadline and
 returns a role-independent table fingerprint without raw bytes or reusable read
-authority. The production read-only parent-device binding and geometry
-composition, disk admissibility, durable descriptor-rooted publisher,
-device-flush ordering, and restart reconciliation remain open.
+authority. Commit `215b9032` retains the partition number, logical-block size,
+and complete image length and introduces one private same-deadline inter-pass
+hook before any second-pass source observation. Commit `2eeaa22c` then provides
+bounded pure reconciliation of exact opening and closing injected block-node
+observations with those GPT scalars and the sealed sysfs expectation. That
+result is deliberately non-authoritative: it owns no descriptor and cannot
+prove GPT read provenance. The production read-only parent-device binding and
+full live observation schedule, disk admissibility, durable descriptor-rooted
+publisher, device-flush ordering, and restart reconciliation remain open.
 Default and focused tests do not inspect or mutate host ESP/BOOT storage; real
 publication, reboot, and power-loss evidence requires the user-supplied
 disposable VM.
