@@ -47,9 +47,9 @@ selectors. The constructors do not infer any field.
 `partuuid` remains a canonical, lowercase, non-nil UUID. `mount_point` is a
 mandatory, bounded absolute lexical selector. Its components are explicit input:
 empty components, `.`, `..`, repeated separators, a trailing separator, NUL,
-and the namespace root are rejected. A bounded implementation must preserve
-the accepted authored UTF-8 as exact bytes for later comparison; it does not
-canonicalize the selector.
+and the current task's filesystem root are rejected. A bounded implementation
+must preserve the accepted authored UTF-8 as exact bytes for later comparison;
+it does not canonicalize the selector.
 
 ### Selectors are not authority
 
@@ -92,20 +92,30 @@ It owns the following non-cloneable, lifetime-bound evidence.
 ### Current mount-namespace epoch
 
 At the beginning of acquisition, retain a descriptor for the current thread's
-mount namespace and authenticate it as `nsfs`. Bind its device/inode witness to
-the aggregate. Retain a descriptor for that namespace's root as the traversal
-origin. These descriptors establish the namespace epoch; they do not grant
-permission to switch namespaces.
+mount namespace and authenticate it as the mount-namespace type on `nsfs`.
+Bind its device/inode witness to the aggregate. Separately retain the current
+task's filesystem-root descriptor as the traversal origin. These descriptors
+establish one task-relative filesystem epoch; they do not grant permission to
+switch namespaces or change the task root.
+
+The distinction is required by Linux: mountinfo's `mount_point` field is
+relative to the reader's filesystem root. Production opens the exact current
+thread's root through authenticated `/proc/<pid>/task/<tid>/root`; it does not
+substitute the thread-group leader's `/proc/<pid>/root`. Mount-namespace
+identity alone therefore cannot detect an observed `chroot` or equivalent
+task-root mismatch. Acquisition and revalidation must bind both witnesses. See
+[`proc_pid_mountinfo(5)`](https://man7.org/linux/man-pages/man5/proc_pid_mountinfo.5.html)
+and [`proc_pid_root(5)`](https://man7.org/linux/man-pages/man5/proc_pid_root.5.html).
 
 All attachment, mountinfo, sysfs, rendering-input, and publication checks occur
-on the acquiring thread. A namespace witness must be checked around every
-complete evidence pass and again at the terminal rebind. Moving a prepared
-value across threads or accepting a caller-supplied pathname descriptor is not
-allowed.
+on the acquiring thread. Both the mount-namespace and current-task-root
+witnesses must be checked around every complete evidence pass and again at the
+terminal rebind. Moving a prepared value across threads or accepting a
+caller-supplied pathname descriptor is not allowed.
 
-### Namespace-rooted attachment chain
+### Current-task-rooted attachment chain
 
-For each selector, start at the retained namespace root and open every exact
+For each selector, start at the retained current-task root and open every exact
 raw component descriptor-relatively. Retain:
 
 - the raw component names;
@@ -118,7 +128,7 @@ The walk rejects symlink components and non-directories. It does not use
 directory, or a pathname reopen from the host root. Mount crossings are
 observed rather than followed implicitly and forgotten.
 
-Rebinding the complete chain from the retained namespace root must reproduce
+Rebinding the complete chain from the retained current-task root must reproduce
 every component witness. A final parent-plus-name rebind must reproduce the
 destination inode and mount ID. Possessing only the final directory descriptor
 is insufficient.
@@ -190,21 +200,26 @@ One successful observation is not enough. A complete pass is a sandwich:
 
 ```text
 mount namespace
-  -> namespace-rooted attachment chain
+  -> current task root
+  -> current-task-rooted attachment chain
   -> destination descriptor mount ID
   -> bounded mountinfo snapshot and exact selected entry
   -> retained sysfs partition snapshot
   -> destination mount ID again
   -> attachment chain again
+  -> current task root again
   -> mount namespace again
 ```
 
 Run two complete passes and require exact agreement of all semantic witnesses.
 Immediately before the first publication effect, perform a terminal rebind of
-the namespace, each attachment chain, final parent/name, selected mountinfo
-entries, and sysfs snapshots. Any replacement, disappearance, ambiguity,
-namespace change, identity change, or limit exhaustion invalidates the entire
-aggregate. The same attempt must not recapture a new authority and continue.
+the namespace, current task root, each attachment chain, final parent/name,
+selected mountinfo entries, and sysfs snapshots. Any replacement,
+disappearance, ambiguity, namespace or task-root mismatch, identity mismatch,
+or limit exhaustion observed at one of these checks invalidates the entire
+aggregate. These endpoint sandwiches deliberately do not claim to detect a
+transient change that returns to the exact retained identity between checks.
+The same attempt must not recapture a new authority and continue.
 
 ## Rendering and publication boundary
 

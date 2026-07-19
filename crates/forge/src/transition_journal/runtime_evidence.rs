@@ -1,6 +1,5 @@
 use std::{
     io,
-    mem::zeroed,
     os::{fd::AsRawFd as _, unix::fs::MetadataExt as _},
     path::Path,
 };
@@ -9,14 +8,12 @@ use thiserror::Error;
 
 use crate::linux_fs::{
     authenticated_current_thread_procfs, authenticated_procfs_root, controlled_resolution, descriptor_mount_id,
-    openat2_file, read_to_end_bounded, require_procfs,
+    mount_namespace::authenticate_mount_namespace_descriptor, openat2_file, read_to_end_bounded, require_procfs,
 };
 
 use super::{BootId, CodecError, MountNamespaceIdentity, RuntimeEpoch, RuntimeTreeIdentity};
 
 const BOOT_ID_FILE_BYTES: usize = BootId::TEXT_LENGTH + 1;
-const NSFS_MAGIC: nix::libc::c_long = 0x6e73_6673;
-const MAX_INTERRUPTED_FSTATFS_RETRIES: usize = 1_024;
 
 impl RuntimeEpoch {
     /// Capture the boot and mount-namespace epoch through authenticated
@@ -110,46 +107,16 @@ fn capture_mount_namespace() -> Result<MountNamespaceIdentity, RuntimeEvidenceEr
 pub(super) fn mount_namespace_identity(
     namespace: &std::fs::File,
 ) -> Result<MountNamespaceIdentity, RuntimeEvidenceError> {
-    require_nsfs(namespace).map_err(RuntimeEvidenceError::AuthenticateMountNamespace)?;
-    let metadata = namespace
-        .metadata()
-        .map_err(RuntimeEvidenceError::InspectMountNamespace)?;
+    let authenticated = authenticate_mount_namespace_descriptor(namespace, None)
+        .map_err(RuntimeEvidenceError::AuthenticateMountNamespace)?;
     let identity = MountNamespaceIdentity {
-        st_dev: metadata.dev(),
-        inode: metadata.ino(),
+        st_dev: authenticated.device,
+        inode: authenticated.inode,
     };
     if identity.st_dev == 0 || identity.inode == 0 {
         return Err(RuntimeEvidenceError::ZeroMountNamespaceIdentity);
     }
     Ok(identity)
-}
-
-fn require_nsfs(file: &std::fs::File) -> io::Result<()> {
-    // SAFETY: zeroed statfs storage is a valid output buffer and `file`
-    // remains live for every bounded fstatfs attempt.
-    let mut stat: nix::libc::statfs = unsafe { zeroed() };
-    let mut interruptions = 0usize;
-    loop {
-        // SAFETY: `stat` is writable and `file` is a live descriptor.
-        if unsafe { nix::libc::fstatfs(file.as_raw_fd(), &mut stat) } == 0 {
-            break;
-        }
-        let source = io::Error::last_os_error();
-        if source.kind() != io::ErrorKind::Interrupted || interruptions >= MAX_INTERRUPTED_FSTATFS_RETRIES {
-            return Err(source);
-        }
-        interruptions += 1;
-    }
-    if stat.f_type != NSFS_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "mount-namespace descriptor is not nsfs: expected {NSFS_MAGIC:#x}, found {:#x}",
-                stat.f_type
-            ),
-        ));
-    }
-    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -176,8 +143,6 @@ pub(crate) enum RuntimeEvidenceError {
     OpenMountNamespace(#[source] io::Error),
     #[error("authenticate current mount-namespace descriptor as nsfs")]
     AuthenticateMountNamespace(#[source] io::Error),
-    #[error("inspect current mount-namespace descriptor")]
-    InspectMountNamespace(#[source] io::Error),
     #[error("current mount-namespace identity contains a zero field")]
     ZeroMountNamespaceIdentity,
     #[error("inspect retained transition tree")]

@@ -63,6 +63,7 @@ help:
 	@echo "  forge-linux-fs-test  Run the exact retained Linux filesystem capability tests"
 	@timeout 10s echo "  host-storage-safety-test  Audit local tests and harnesses for host-storage access"
 	@timeout 10s echo "  forge-linux-mountinfo-parser-test  Run the bounded byte-preserving Linux mountinfo parser contracts"
+	@timeout 10s echo "  forge-linux-mount-namespace-test  Run retained synthetic namespace and task-root anchor contracts"
 	@timeout 10s echo "  forge-linux-sysfs-block-parser-test  Run bounded kernel block-identity parser contracts"
 	@timeout 10s echo "  forge-linux-sysfs-identity-test  Run descriptor-retained synthetic sysfs identity contracts"
 	@echo "  forge-cache-test  Run the exact descriptor-rooted download and asset cache tests"

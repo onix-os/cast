@@ -65,11 +65,11 @@ A mount point is a mandatory untrusted lexical lookup hint. It is not storage
 authority, has no default, and never enables `canonicalize`, mount discovery,
 device discovery, a pathname fallback, or a mount operation. Before boot files
 can be changed, separate descriptor-retained evidence must prove the exact
-current mount-namespace attachment, exactly one mountinfo entry with the
-selector's decoded bytes, the matching descriptor mount ID and major:minor
-device, and a matching sysfs PARTUUID. A distinct XBOOTLDR must also prove
-different attachments, mounts, devices, and PARTUUIDs. Its paired retained
-sysfs snapshots must report the same block-parent witness across both complete
+current task root and mount-namespace attachment, exactly one mountinfo entry
+with the selector's decoded bytes, the matching descriptor mount ID and
+major:minor device, and a matching sysfs PARTUUID. A distinct XBOOTLDR must
+also prove different attachments, mounts, devices, and PARTUUIDs. Its paired
+retained sysfs snapshots must report the same block-parent witness across both complete
 topology passes and the terminal revalidation. Those snapshots are bounded
 observations, not continuously live or simultaneous-residency claims. Sysfs
 evidence alone does not prove the on-disk GPT type GUIDs, filesystem types,

@@ -154,6 +154,9 @@ include!("linux_fs/descriptor_access.rs");
 #[allow(dead_code)] // parser foundation consumed by the authenticated topology layer
 pub(crate) mod mountinfo;
 
+#[allow(dead_code)] // retained foundation consumed by mounted boot topology
+pub(crate) mod mount_namespace;
+
 #[allow(dead_code)] // pure parser foundation consumed by retained sysfs identity
 pub(crate) mod sysfs_block;
 

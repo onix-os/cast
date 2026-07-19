@@ -148,7 +148,6 @@ fn runtime_tree_error_is_structural(error: &RuntimeEvidenceError) -> bool {
         | RuntimeEvidenceError::AuthenticateNamespaceDirectory(_)
         | RuntimeEvidenceError::OpenMountNamespace(_)
         | RuntimeEvidenceError::AuthenticateMountNamespace(_)
-        | RuntimeEvidenceError::InspectMountNamespace(_)
         | RuntimeEvidenceError::ZeroMountNamespaceIdentity => false,
     }
 }
