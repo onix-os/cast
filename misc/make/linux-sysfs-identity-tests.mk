@@ -13,7 +13,7 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(SYSFS_IDENTITY_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::sysfs_identity::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 27; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 29; \
 	for name in \
 		bounds::zero_fixture_limits_and_expired_deadlines_fail_before_hooks_or_syscalls \
 		bounds::injected_checkpoint_failure_is_propagated_without_external_effects \
@@ -23,6 +23,8 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 		bounds::uevent_and_link_bounds_are_enforced_before_resolution_or_parsing \
 		deadline::caller_deadline_equality_is_admitted_and_one_nanosecond_late_fails_before_fixture_work \
 		deadline::terminal_deadline_expiry_rejects_preparation_and_revalidation \
+		gpt_expectation::expectation_binds_every_exact_gpt_fact_to_one_revalidated_view \
+		gpt_expectation::parent_device_number_drift_cannot_produce_an_expectation \
 		malformed::fixture_admission_accepts_only_one_retained_directory_component \
 		malformed::every_required_lookup_target_and_attribute_must_exist \
 		malformed::dev_block_lookup_target_cannot_escape_or_name_a_non_device_path \
@@ -46,6 +48,8 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 	done; \
 	root="$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/sysfs_identity.rs"; \
 	capture="$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/sysfs_identity/capture.rs"; \
+	expectation="$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/sysfs_identity/gpt_expectation.rs"; \
+	expectation_test="$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/tests/sysfs_identity/gpt_expectation.rs"; \
 	filesystem="$(SYSFS_IDENTITY_TOP_DIR)/crates/forge/src/linux_fs/sysfs_identity/filesystem.rs"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare(device: SysfsDeviceNumber) -> io::Result<Self>' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare_until(device: SysfsDeviceNumber, deadline: Instant) -> io::Result<Self>' "$$root"; \
@@ -56,7 +60,20 @@ forge-linux-sysfs-identity-test: host-storage-safety-test
 	timeout 10s test "$$( timeout 10s grep -Fc 'operation.checkpoint()?;' "$$root" )" = 2; \
 	timeout 10s grep -Fq 'pub(crate) fn has_same_revalidated_block_parent_snapshot(&self, other: &Self) -> bool' "$$root"; \
 	timeout 10s grep -Fq 'pub(crate) fn normalized_devpath(&self) -> &[u8]' "$$root"; \
+	timeout 10s grep -Fq 'pub(in crate::linux_fs) fn gpt_device_expectation(&self) -> SysfsGptDeviceExpectation<' "$$root"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'PhantomData<Rc<()>>' "$$root" )" -ge 2; \
+	timeout 10s grep -Fq "pub(in crate::linux_fs) struct SysfsGptDeviceExpectation<'a>" "$$expectation"; \
+	timeout 10s grep -Fq "pub(super) fn from_revalidated(revalidated: &'a RevalidatedSysfsPartitionIdentity<'_>) -> Self" "$$expectation"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'fn from_revalidated' "$$expectation" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Ec '^    (authenticated_parent_devname|parent_device|partition_number|partition_uuid|partition_start_512_sectors|partition_size_512_sectors|disk_sequence):' "$$expectation" )" = 7; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'pub(in crate::linux_fs) const fn' "$$expectation" )" = 7; \
+	timeout 10s grep -Fq 'authenticated_parent_devname: revalidated.current.parent_device_name(),' "$$expectation"; \
+	timeout 10s grep -Fq 'parent_device: revalidated.current.parent_device(),' "$$expectation"; \
+	timeout 10s grep -Fq '_thread_bound: PhantomData<Rc<()>>,' "$$expectation"; \
+	timeout 10s grep -Fq "fn bind_expectation<'view>(" "$$expectation_test"; \
+	timeout 10s grep -Fq ") -> SysfsGptDeviceExpectation<'view>" "$$expectation_test"; \
+	if timeout 10s rg -n 'pub\(crate\).*fn parent_device\(' "$$root"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'std::fs|RawFd|OwnedFd|BorrowedFd|std::path|PathBuf|&Path|File::|OpenOptions|open\(|reopen\(|write\(|remove_|rename\(|ioctl' "$$expectation"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'let first = capture_once(root, device, operation)?;' "$$capture"; \
 	timeout 10s grep -Fq 'let second = capture_once(root, device, operation)?;' "$$capture"; \
 	timeout 10s grep -Fq 'operation.emit(CaptureCheckpoint::TerminalRebind)?;' "$$capture"; \

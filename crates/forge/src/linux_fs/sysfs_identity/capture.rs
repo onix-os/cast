@@ -92,6 +92,10 @@ impl Capture {
         self.snapshot.disk_sequence
     }
 
+    pub(super) const fn parent_device(&self) -> SysfsDeviceNumber {
+        self.snapshot.parent_device
+    }
+
     pub(super) fn normalized_devpath(&self) -> &[u8] {
         &self.snapshot.normalized_devpath
     }

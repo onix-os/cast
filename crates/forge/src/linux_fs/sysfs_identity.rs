@@ -23,6 +23,9 @@ use super::sysfs_block::{SysfsDeviceNumber, SysfsDiskSequence, SysfsPartitionNum
 
 mod capture;
 mod filesystem;
+mod gpt_expectation;
+
+pub(in crate::linux_fs) use gpt_expectation::SysfsGptDeviceExpectation;
 
 use capture::{Capture, capture_twice, require_capture_matches};
 use filesystem::{Operation, RootHandle, SysfsIdentityLimits};
@@ -239,6 +242,16 @@ impl RevalidatedSysfsPartitionIdentity<'_> {
     /// This does not prove a GPT role or the parent disk's logical block size.
     pub(crate) const fn partition_size_512_sectors(&self) -> u64 {
         self.current.partition_size_512_sectors()
+    }
+
+    /// Bind the GPT-device facts from this exact revalidated capture.
+    ///
+    /// The result borrows the authenticated parent `DEVNAME` from this view,
+    /// remains thread-bound, and carries no descriptor, path, reopen, or
+    /// mutation authority. Its private constructor does not accept a second
+    /// parent device number which could disagree with the retained capture.
+    pub(in crate::linux_fs) fn gpt_device_expectation(&self) -> SysfsGptDeviceExpectation<'_> {
+        SysfsGptDeviceExpectation::from_revalidated(self)
     }
 
     /// Compare the authenticated block-parent evidence in two revalidated
