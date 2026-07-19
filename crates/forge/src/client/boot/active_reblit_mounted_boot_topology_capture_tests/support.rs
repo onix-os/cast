@@ -353,6 +353,8 @@ fn build_sysfs_fixture(
 
     fs::write(partition.join("dev"), format!("{partition_major}:{partition_minor}\n"))?;
     fs::write(partition.join("partition"), b"1\n")?;
+    fs::write(partition.join("start"), b"2048\n")?;
+    fs::write(partition.join("size"), b"1048576\n")?;
     let partition_uevent = partition.join("uevent");
     fs::write(
         &partition_uevent,
