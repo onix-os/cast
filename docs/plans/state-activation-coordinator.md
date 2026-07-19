@@ -244,9 +244,10 @@ closure remain authoritative in `PLAN.md`.
   The coordinator still has no live client callsite. Publishing its intent
   remains forbidden because the startup
   [rollback ladder](state-activation-startup-reconciliation.md#admitted-startup-recovery-ladder)
-  covers the full NewState and ActiveReblit rollback suffixes through
-  authenticated terminal absence, but not every corresponding durable
-  forward, ActivateArchived, roll-forward, boot, and cleanup phase.
+  covers the full no-boot rollback suffixes through authenticated terminal
+  absence and the journal-only ActiveReblit boot-required/unverified routes,
+  but not every corresponding durable forward, other boot-bearing rollback,
+  roll-forward, actual boot effect, or cleanup phase.
 
 ## Archived-state verification
 
@@ -305,18 +306,21 @@ closure remain authoritative in `PLAN.md`.
   entry to its first unresolved rollback intent, restore `/usr`, and persist
   `UsrRestored`. Separate operation-specific entries then carry NewState through
   candidate preservation, fresh-row invalidation, `RollbackComplete`, and
-  authenticated terminal journal absence. ActiveReblit carries its
-  whole-wrapper candidate preservation through a later journal-only
-  `CandidatePreserved` to `RollbackComplete` route. A separate later entry now
-  admits terminal deletion only for exact `ExistingCandidate`/`Cleared`
-  database evidence with present provenance, `previous: None`,
-  `candidate == previous`, and the unchanged preserved-wrapper topology and
-  index. It retains the same continuously locked journal store for one
-  conditional delete, authenticates public absence, and transfers that store
-  to shared clean admission without a database, non-journal namespace,
-  trigger, wrapper, or cleanup effect. ActivateArchived now production-preserves
-  its staged archived candidate through one bounded startup entry and stops at
-  `CandidatePreserved`; its completion route and terminal finalizer remain sealed.
+  authenticated terminal journal absence. ActiveReblit whose rollback plan
+  requires no boot repair carries its whole-wrapper preservation through a
+  later journal-only `CandidatePreserved` to `RollbackComplete` route. A
+  separate later entry admits terminal deletion only for exact
+  `ExistingCandidate`/`Cleared` database evidence with present provenance,
+  `previous: None`, `candidate == previous`, and the unchanged preserved-wrapper
+  topology and index. It retains the same continuously locked journal store for
+  one conditional delete, authenticates public absence, and transfers that
+  store to shared clean admission without a database, non-journal namespace,
+  trigger, wrapper, or cleanup effect. An exact `BootSyncStarted` rollback
+  instead routes `CandidatePreserved` to `BootRepairRequired`; a later startup
+  observing `BootRepairStarted` records terminal `BootRepairUnverified` without
+  invoking boot. The actual repair attempt remains unwired. ActivateArchived
+  preservation, completion, and terminal finalization now run as three separate
+  bounded production entries with no same-entry successor redispatch.
   Commits
   `62b15f29`, `e69ad276`, and `50cb98f8` respectively sealed the exact restored
   outcome, connected the one-phase reverse dispatcher to real mutable startup,
@@ -355,5 +359,10 @@ closure remain authoritative in `PLAN.md`.
   suffix. Commit `32bf8589` adds its separate deterministic terminal deletion
   and same-lock clean handoff. Commit `c6362aae` adds its exact 12-case
   real-process terminal `SIGKILL` matrix across both epochs, both rollback
-  sources, and the three deletion boundaries. Roll-forward, boot, cleanup,
-  earlier interruption boundaries, and power-loss-equivalent work remain.
+  sources, and the three deletion boundaries. The newer bounded boot
+  projection, sealed Stone inputs, state roots and schemas, local and package
+  command-line semantics, Gluon topology intent, and retained mounted-topology
+  evidence remain outside this coordinator. They grant no forward phase,
+  renderer, destination authority, or publisher callsite. Roll-forward, boot
+  rendering and publication, the actual boot-repair effect, cleanup, earlier
+  interruption boundaries, and power-loss-equivalent work remain.

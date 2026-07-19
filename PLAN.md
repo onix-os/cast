@@ -683,22 +683,22 @@ coordinator work, and phase-specific recovery rules are indexed by
 That hub and its linked continuations are a required part of this canonical
 plan, not optional appendices.
 
-Phase 11 remains open. Completed foundations include canonical transition IDs,
-no-replace merged-/usr link publication, the bounded checksummed journal,
-retained tree identity and marker primitives, strict startup evidence gates,
-database ownership probes, an operation-typed durable coordinator prefix
-through `UsrExchanged`, and descriptor-rooted activation-namespace
-assessment.
-
-The production startup ladder handles one freshly observed checkpoint per entry, not a recovery loop.
-Separate entries normalize exchange durability, persist and route rollback, reverse `/usr`, and persist
-`UsrRestored`. NewState then preserves the candidate, invalidates the exact fresh row, reaches
-`RollbackComplete`, and finalizes to authenticated journal absence. ActiveReblit preserves its whole wrapper and advances
-from `CandidatePreserved` to `RollbackComplete`; a separate terminal entry authenticates deletion and clean admission.
-Commit `19f60c51` adds an exact 2 x 2 x 7 = 28 NewState candidate-move matrix across current/historical record epochs,
-both rollback sources, and seven post-move seams. Genuine same-boot `SIGKILL` is followed by fresh-process Finish with zero second move; it is not reboot or power-loss evidence.
-Every entry remains bounded. ActiveReblit retains exact 2 x 2 x 3 terminal and 2 x 2 x 8 wrapper-exchange matrices, while
-ActivateArchived retains exact 2 x 2 x 3 terminal and 2 x 2 x 7 candidate-preservation matrices, all without reboot/power-loss claims.
+Phase 11 remains open. Completed foundations include canonical transition IDs, no-replace merged-/usr link publication,
+the bounded checksummed journal, retained tree identity and marker primitives, strict startup evidence gates, database
+ownership probes, an operation-typed durable coordinator prefix through `UsrExchanged`, and descriptor-rooted
+activation-namespace assessment. The ActiveReblit boot track also has bounded database and Stone projection, sealed CAS
+inputs, authenticated state roots and schemas, retained local command-line policy, explicit machine-local Gluon
+ESP/XBOOTLDR intent, retained mountinfo/sysfs topology evidence, and semantic package command-line inputs. These inputs
+grant no boot destination or mutation authority; complete BLS rendering and publication remain unwired.
+The production startup ladder handles one freshly observed checkpoint per entry, not a recovery loop. Separate entries
+normalize exchange durability, persist and route rollback, reverse `/usr`, and persist `UsrRestored`. NewState then
+preserves the candidate, invalidates the exact fresh row, reaches `RollbackComplete`, and finalizes to authenticated
+journal absence. ActiveReblit with no required boot repair advances from `CandidatePreserved` to `RollbackComplete`, then
+finalizes separately. A `BootSyncStarted` rollback instead routes `CandidatePreserved` to `BootRepairRequired`; no boot
+effect is wired, and a fresh startup observing `BootRepairStarted` invokes boot zero times and retains terminal
+`BootRepairUnverified` evidence for manual recovery. Commit `19f60c51` adds the 28-case NewState candidate-move matrix.
+ActiveReblit retains its 12-case terminal and 32-case wrapper-exchange matrices; ActivateArchived retains its 12-case terminal and 28-case preservation matrices.
+Every process-death matrix remains same-boot `SIGKILL` evidence, not reboot or power-loss proof.
 
 Commit `7e0618dc` adds the next candidate-preservation foundation, which at
 that historical checkpoint was not yet on the production ladder. A sealed,
@@ -909,7 +909,7 @@ candidate-wrapper, reservation-wrapper, roots-parent, and quarantine-parent sync
 `CandidatePreserved` with `AlreadySatisfied`. Commits `8c22ec67` and `cbe3679a` add reviewed ActivateArchived child-move and
 completion foundations; `c8c5ea41` production-wires completion, `32bf8589` adds terminal deletion plus clean handoff,
 `c6362aae` adds its exact 12-case terminal matrix, and `bc6d6792` expands candidate-preservation death to 28 cases. All are
-same-boot evidence, not reboot or power-loss proof. Roll-forward, boot repair, cleanup, other seams, and power-loss durability remain open.
+same-boot evidence, not reboot or power-loss proof. Roll-forward, complete boot rendering/publication and the actual repair effect, cleanup, other seams, and power-loss durability remain open.
 
 **Exit gate:** after a kill or power-loss-equivalent interruption at every
 persisted boundary, reopening Cast either completes the committed transition,

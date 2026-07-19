@@ -75,12 +75,15 @@ and instant rollback mechanism; it hardens their failure semantics.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix, the complete NewState suffix
-  through authenticated terminal journal absence, and the complete
-  ActiveReblit rollback suffix through the same clean-startup handoff.
+  through authenticated terminal journal absence, and the ActiveReblit
+  no-boot-repair suffix through the same clean-startup handoff. An ActiveReblit
+  rollback sourced from `BootSyncStarted` instead routes a preserved candidate
+  to `BootRepairRequired`; a separately observed `BootRepairStarted` record is
+  retained as terminal `BootRepairUnverified` without invoking boot again.
   The complete ActivateArchived rollback suffix now reaches that same
-  authenticated clean-startup handoff. Roll-forward execution, boot repair,
-  and cleanup are not implemented. The public
-  `ReadOnlyClient` path is now real: construction requires the explicit
+  authenticated clean-startup handoff. Roll-forward execution, the actual boot
+  repair effect and its durable publisher, and cleanup are not implemented.
+  The public `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
   rejects orphan transitions and prune residue before strict live selection,
   then images metadata and layouts. It exposes only bounded state-ID, exact
@@ -394,6 +397,38 @@ and instant rollback mechanism; it hardens their failure semantics.
   previous-tree classification, trigger-proof marker reservation, and
   coordinator integration remain open, so this item is not complete.
 
+### ActiveReblit boot-repair input and topology foundations
+
+The boot-repair effect remains unwired, but its fail-closed input and recovery
+boundaries are no longer absent. Commit `92fa7aa0` production-routes only an
+exact ActiveReblit `CandidatePreserved` rollback sourced from
+`BootSyncStarted` to `BootRepairRequired`. Commit `b5928340` independently
+admits an exact `BootRepairStarted` record on a later startup entry and advances
+it to terminal `BootRepairUnverified` while invoking boot zero times. There is
+still no production `BootRepairRequired` -> `BootRepairStarted` attempt, boot
+renderer, publisher, completion claim, or terminal deletion for that branch.
+
+The implemented preparation stack now freezes the exact state/layout database
+projection, derives the bounded Stone boot-asset plan, seals its CAS inputs,
+retains authenticated live and archived state roots, validates state schemas,
+and retains local `/etc/kernel/cmdline.d` append/mask policy. Separate
+machine-local Gluon intent declares explicit ESP and optional XBOOTLDR
+PARTUUIDs and mount points. Bounded current-thread mountinfo, current-task-root,
+attachment-chain, and sysfs observations then produce retained mounted-topology
+evidence without mounting, discovering an alternative, or granting mutation
+authority. Commit `66d7f6d1` additionally binds package-owned command-line
+files to the exact non-`Clone` Stone owner and exposes only normalized semantic
+text after bounded explicit-offset reads and exact coordinate revalidation.
+
+The existing publication-plan module is still only a pure bounded syntactic
+destination list. Complete BLS entry rendering remains blocked on a separately
+authenticated explicit machine-local root-filesystem argument. Physical GPT
+role, filesystem and disk admissibility, durable descriptor-rooted publication,
+device-flush ordering, and restart reconciliation also remain open. Default and
+focused tests are synthetic and do not inspect or mutate host ESP/BOOT storage;
+real publication, reboot, and power-loss evidence requires the user-supplied
+disposable VM.
+
 ### Durable transition coordination
 
 The open coordinator work item, its implemented durable prefix, and its exact
@@ -405,24 +440,27 @@ authority, trigger sequencing, and one-shot forward exchange contract.
 ### Startup reconciliation and interruption campaign
 
 The open startup-reconciliation and interruption work items, including the
-completed database-ownership probes and the operation-specific NewState and
-ActiveReblit rollback suffixes, continue in the
+completed database-ownership probes, every operation's no-boot rollback
+suffix, and the ActiveReblit boot-required journal routes, continue in the
 [startup-reconciliation plan](state-activation-startup-reconciliation.md).
 Production startup handles exactly one entry checkpoint at a time. NewState
 preparation-only target creation or normalization retains its phase; movement,
 routing, exact fresh-row invalidation, completion persistence, and terminal
 deletion each stop after their own boundary. ActiveReblit preserves its whole
-replacement wrapper and, on a later entry, uses a separate sealed authority to
-advance only the journal from `CandidatePreserved` to `RollbackComplete`; that
+replacement wrapper. When boot repair is not required, a later entry advances
+only the journal from `CandidatePreserved` to `RollbackComplete`; that
 successor is never finalized in the same entry. A further entry admits the
-terminal ActiveReblit record only with the exact `ExistingCandidate` row under
-`Cleared` ownership, present immutable provenance, `previous: None`,
-`candidate == previous`, and the unchanged preserved-wrapper topology and
-wrapper index. Its operation-specific finalizer retains the same continuously
-locked journal store, performs one conditional deletion, authenticates public
-absence, and transfers that store directly into the shared clean-startup
-audit. It performs no database, non-journal namespace, trigger, cleanup, or
-wrapper effect. Compiler-local seals prevent sibling authority construction,
+terminal record only with the exact `ExistingCandidate` row under `Cleared`
+ownership, present immutable provenance, `previous: None`, `candidate ==
+previous`, and the unchanged preserved-wrapper topology and wrapper index. Its
+operation-specific finalizer retains the same continuously locked journal
+store, performs one conditional deletion, authenticates public absence, and
+transfers that store directly into the shared clean-startup audit. It performs
+no database, non-journal namespace, trigger, cleanup, or wrapper effect. An
+exact `BootSyncStarted` source instead routes the preserved candidate to
+`BootRepairRequired`; independently observed `BootRepairStarted` evidence
+becomes terminal `BootRepairUnverified` without another boot invocation.
+Compiler-local seals prevent sibling authority construction,
 and operation-specific real-gate contracts cover the complete deterministic
 matrices, journal-update and terminal-delete faults, evidence races, and
 fresh-handle restart.
@@ -511,8 +549,9 @@ classification, and same-lock clean handoff. Commit `c6362aae` adds the exact
 12-case real-process terminal matrix across current and historical epochs,
 both rollback sources, and final-PRE, post-unlink, and post-directory-sync
 same-boot `SIGKILL` boundaries. It does not simulate reboot or power loss;
-later rollback, roll-forward, boot, cleanup, other earlier interruption
-boundaries, and power-loss-equivalent durability work remain.
+later rollback, roll-forward, boot rendering and publication, the actual
+boot-repair effect, cleanup, other earlier interruption boundaries, and
+power-loss-equivalent durability work remain.
 
 The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
 remains authoritative in `PLAN.md`.

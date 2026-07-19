@@ -20,7 +20,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Admitted startup recovery ladder
 
-  As of 2026-07-18, startup's diagnostic checkpoint remains deliberately
+  As of 2026-07-19, startup's diagnostic checkpoint remains deliberately
   read-only and fail closed. Immediately before it, the mutable startup gate has
   one sealed, bounded recovery ladder: the ActiveReblit restrictive
   replacement-mode normalizer, descriptor-bound forward exchange-parent
@@ -30,12 +30,13 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   entries prepare the quarantine target, preserve the candidate, invalidate the
   exact fresh database row, advance through `FreshDbInvalidated` to
   `RollbackComplete`, and finally authenticate terminal journal absence.
-  ActiveReblit instead preserves its whole replacement wrapper, then uses its
-  exact cleared existing-state row, retained provenance, and preserved-wrapper
-  proof to advance directly from `CandidatePreserved` to `RollbackComplete`.
-  A separate later entry may finalize that exact terminal record and pass the
-  same continuously locked journal store into shared clean admission; the
-  completion-route entry never redispatches its successor.
+  ActiveReblit first preserves its whole replacement wrapper. With no required boot repair, exact cleared
+  existing-state provenance and preserved-wrapper proof authorize the direct `CandidatePreserved` to
+  `RollbackComplete` route. A later entry may finalize that record and pass the same locked journal store into
+  shared clean admission; the completion route never redispatches its successor. An exact `BootSyncStarted`
+  rollback instead routes `CandidatePreserved` only to `BootRepairRequired`; the actual repair attempt remains
+  unwired. A fresh startup observing `BootRepairStarted` invokes boot zero times and persists terminal
+  `BootRepairUnverified` for manual recovery rather than guessing whether an interrupted effect applied.
   Each entry recaptures authority from the current canonical record and fresh
   database and namespace evidence, admits at most one preparation/effect
   checkpoint, at most one journal advance, or one terminal deletion, then
@@ -912,21 +913,15 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Remaining recovery campaign
 
-  The production ladder now covers the authenticated `/usr` rollback prefix,
-  the exact NewState suffix from `CandidatePreserveIntent` through authenticated
-  terminal journal absence, and the ActiveReblit suffix through authenticated
-  terminal journal absence and shared clean admission. Separate NewState
-  entries may create or normalize
-  the quarantine target without advancing, move and durably preserve the
-  candidate, invalidate the exact fresh transition or accept proved joint
-  absence, route to completion, and delete the exact terminal record. Separate
-  ActiveReblit entries preserve the whole replacement wrapper and then perform
-  the direct journal route from `CandidatePreserved` to `RollbackComplete`;
-  only a further entry may authenticate and delete that terminal record.
-  Every entry handles at most its observed checkpoint and immediately returns;
-  no resulting record is redispatched in the same entry.
+  The production ladder covers the authenticated `/usr` rollback prefix, the exact NewState suffix through
+  authenticated terminal journal absence, and the ActiveReblit no-boot-repair suffix through shared clean admission.
+  Separate NewState entries prepare and preserve the candidate, invalidate the exact fresh transition or accept proved
+  joint absence, route to completion, and delete the terminal record. Separate no-boot ActiveReblit entries preserve the
+  whole replacement wrapper and route `CandidatePreserved` to `RollbackComplete`; only a further entry may authenticate
+  and delete that terminal record. Every entry handles only its observed checkpoint, returns immediately, and never
+  redispatches the resulting record.
 
-  The focused ActiveReblit completion lane adds six real-startup contracts and
+  The focused no-boot ActiveReblit completion lane adds six real-startup contracts and
   one direct authority-binding proof: a 16-case
   epoch/source/`/usr`/candidate-outcome matrix, all five conditional
   journal-update faults with second-entry convergence, both fresh-handle
@@ -936,6 +931,12 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   lane passes 17/17 contracts. Completion repeats no wrapper exchange or
   candidate durability effect and changes neither the database nor the
   non-journal namespace.
+
+  Commit `92fa7aa0` adds the disjoint production route for exact ActiveReblit `CandidatePreserved` evidence sourced from
+  `BootSyncStarted`: it advances once to `BootRepairRequired`, reopens only the exact source or successor, invokes boot zero
+  times, and returns. Commit `b5928340` separately admits exact `BootRepairStarted` on a fresh startup; operational capture
+  faults remain errors, structural incompatibility defers, and exact evidence advances once to terminal
+  `BootRepairUnverified` with zero boot calls. No production entry creates `BootRepairStarted` or performs the repair.
 
   Commit `cbe3679a` production-wires exactly one ActivateArchived
   `CandidatePreserveIntent` checkpoint per startup entry. Exact staged evidence
@@ -965,8 +966,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   pass; that checkpoint alone made no real-process interruption, reboot, or
   power-loss claim. Commit `c6362aae` adds the matching exact 12-case same-boot
   terminal `SIGKILL` matrix across both epochs, both rollback sources, and the
-  three deletion boundaries. The ladder still has no roll-forward executor,
-  boot repair, cleanup, or power-loss-equivalent proof.
+  three deletion boundaries. The ladder still has no roll-forward executor, boot renderer or publisher, actual
+  boot-repair attempt, cleanup, or power-loss-equivalent proof.
   The exact reverse prefix has deterministic contracts and genuine
   process-termination coverage. The NewState suffix adds deterministic
   real-startup matrices, all five journal durability faults across each of four
