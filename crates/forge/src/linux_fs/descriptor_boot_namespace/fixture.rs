@@ -162,6 +162,23 @@ impl FixtureExpectedStream {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum FixtureBootNamespaceProtocolEvent {
+    Root {
+        identity: BootNamespaceNodeIdentity,
+    },
+    Lookup {
+        directory: BootNamespaceNodeIdentity,
+        requested_name: Vec<u8>,
+        boundary: BootNamespaceObservationBoundary,
+        request_index: usize,
+        component_index: usize,
+    },
+    Release {
+        identity: BootNamespaceNodeIdentity,
+    },
+}
+
 #[derive(Debug)]
 pub(crate) struct FixtureBootNamespace {
     pub(crate) root: BootNamespaceNodeIdentity,
@@ -171,12 +188,16 @@ pub(crate) struct FixtureBootNamespace {
     now: Instant,
     expired_now: Instant,
     expire_after_now_call: Option<usize>,
+    expire_while_retained_now: Option<Instant>,
     now_calls: usize,
     allocation_failure: Option<usize>,
     observation_failure: Option<usize>,
     observation_calls: usize,
     actual_read_calls: usize,
     expected_read_calls: usize,
+    protocol_events: Vec<FixtureBootNamespaceProtocolEvent>,
+    retained_nodes: Vec<BootNamespaceNodeIdentity>,
+    peak_retained_nodes: usize,
 }
 
 impl FixtureBootNamespace {
@@ -195,12 +216,16 @@ impl FixtureBootNamespace {
             now,
             expired_now: now,
             expire_after_now_call: None,
+            expire_while_retained_now: None,
             now_calls: 0,
             allocation_failure: None,
             observation_failure: None,
             observation_calls: 0,
             actual_read_calls: 0,
             expected_read_calls: 0,
+            protocol_events: Vec::new(),
+            retained_nodes: Vec::new(),
+            peak_retained_nodes: 0,
         }
     }
 
@@ -220,12 +245,34 @@ impl FixtureBootNamespace {
         self
     }
 
+    pub(crate) fn expire_while_retained(mut self, expired_now: Instant) -> Self {
+        self.expire_while_retained_now = Some(expired_now);
+        self
+    }
+
     pub(crate) const fn now_calls(&self) -> usize {
         self.now_calls
     }
 
     pub(crate) const fn read_calls(&self) -> (usize, usize) {
         (self.actual_read_calls, self.expected_read_calls)
+    }
+
+    pub(crate) fn protocol_events(&self) -> &[FixtureBootNamespaceProtocolEvent] {
+        &self.protocol_events
+    }
+
+    pub(crate) const fn retained_node_count(&self) -> usize {
+        self.retained_nodes.len()
+    }
+
+    pub(crate) const fn peak_retained_nodes(&self) -> usize {
+        self.peak_retained_nodes
+    }
+
+    fn retain_node(&mut self, identity: BootNamespaceNodeIdentity) {
+        self.retained_nodes.push(identity);
+        self.peak_retained_nodes = self.peak_retained_nodes.max(self.retained_nodes.len());
     }
 
     fn observe<T>(&mut self, value: T) -> ObserverResult<T> {
@@ -255,6 +302,11 @@ impl FixtureBootNamespace {
 impl BootNamespaceObserver for FixtureBootNamespace {
     fn now(&mut self) -> Instant {
         self.now_calls = self.now_calls.saturating_add(1);
+        if !self.retained_nodes.is_empty() {
+            if let Some(expired_now) = self.expire_while_retained_now {
+                return expired_now;
+            }
+        }
         if self.expire_after_now_call.is_some_and(|call| self.now_calls > call) {
             self.expired_now
         } else {
@@ -272,7 +324,11 @@ impl BootNamespaceObserver for FixtureBootNamespace {
 
     fn root_identity(&mut self) -> ObserverResult<BootNamespaceNodeIdentity> {
         let root = self.root;
-        self.observe(root)
+        let root = self.observe(root)?;
+        self.protocol_events
+            .push(FixtureBootNamespaceProtocolEvent::Root { identity: root });
+        self.retain_node(root);
+        Ok(root)
     }
 
     fn directory_entry_count(
@@ -318,6 +374,8 @@ impl BootNamespaceObserver for FixtureBootNamespace {
         directory: BootNamespaceNodeIdentity,
         requested_name: &[u8],
         boundary: BootNamespaceObservationBoundary,
+        request_index: usize,
+        component_index: usize,
     ) -> ObserverResult<BootNamespaceLookup> {
         let lookup = {
             let directory = self.directory(directory)?;
@@ -344,7 +402,28 @@ impl BootNamespaceObserver for FixtureBootNamespace {
                 )
             }
         };
-        self.observe(lookup)
+        let lookup = self.observe(lookup)?;
+        self.protocol_events.push(FixtureBootNamespaceProtocolEvent::Lookup {
+            directory,
+            requested_name: requested_name.to_vec(),
+            boundary,
+            request_index,
+            component_index,
+        });
+        if boundary == BootNamespaceObservationBoundary::Opening {
+            if let BootNamespaceLookup::Present { identity, .. } = lookup {
+                self.retain_node(identity);
+            }
+        }
+        Ok(lookup)
+    }
+
+    fn release_node(&mut self, identity: BootNamespaceNodeIdentity) {
+        self.protocol_events
+            .push(FixtureBootNamespaceProtocolEvent::Release { identity });
+        if let Some(index) = self.retained_nodes.iter().rposition(|retained| *retained == identity) {
+            self.retained_nodes.remove(index);
+        }
     }
 
     fn regular_witness(

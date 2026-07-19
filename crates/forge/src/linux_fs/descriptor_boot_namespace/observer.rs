@@ -72,6 +72,8 @@ pub(super) trait BootNamespaceObserver {
 
     fn before_allocation(&mut self, attempt: usize) -> ObserverResult<()>;
 
+    /// A successful call transfers one retained root node to the classifier.
+    /// A failed call must discard any private state created by the attempt.
     fn root_identity(&mut self) -> ObserverResult<BootNamespaceNodeIdentity>;
 
     fn directory_entry_count(
@@ -88,12 +90,23 @@ pub(super) trait BootNamespaceObserver {
         raw_name: &mut [u8],
     ) -> ObserverResult<BootNamespaceDirectoryEntryObservation>;
 
+    /// An opening `Present` result transfers one retained node. Closing and
+    /// `Absent` results transfer none; failed calls must clean up their attempt.
     fn lookup(
         &mut self,
         directory: BootNamespaceNodeIdentity,
         requested_name: &[u8],
         boundary: BootNamespaceObservationBoundary,
+        request_index: usize,
+        component_index: usize,
     ) -> ObserverResult<BootNamespaceLookup>;
+
+    /// Releases the node retained by a successful root or opening lookup.
+    ///
+    /// Cleanup is deliberately infallible: the classifier calls this while
+    /// unwinding both successful and failed assessments, so an observer must
+    /// drop its private state without replacing the assessment result.
+    fn release_node(&mut self, identity: BootNamespaceNodeIdentity);
 
     fn regular_witness(
         &mut self,

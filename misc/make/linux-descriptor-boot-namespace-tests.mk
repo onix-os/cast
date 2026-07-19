@@ -13,7 +13,7 @@ forge-linux-descriptor-boot-namespace-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_NAMESPACE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::descriptor_boot_namespace::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 47; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 51; \
 	for test_case in \
 		classification:stable_missing_leaf_is_absent \
 		classification:stable_missing_ancestor_marks_nested_request_absent \
@@ -23,6 +23,10 @@ forge-linux-descriptor-boot-namespace-test: host-storage-safety-test
 		classification:stable_length_mismatch_is_different \
 		classification:stable_equal_length_byte_mismatch_is_different \
 		classification:shared_trie_preserves_original_request_order \
+		protocol:nested_protocol_carries_indices_and_releases_in_lifo_order \
+		protocol:failed_content_protocol_releases_every_retained_node \
+		protocol:descriptor_limit_preflight_blocks_n_plus_one_lookup_and_unwinds \
+		protocol:late_deadline_after_retained_callback_releases_root_state \
 		aliases_and_types:raw_ascii_case_alias_is_rejected \
 		aliases_and_types:kernel_short_alias_cannot_hide_a_different_raw_name \
 		aliases_and_types:duplicate_raw_inventory_name_is_rejected \
@@ -80,6 +84,7 @@ forge-linux-descriptor-boot-namespace-test: host-storage-safety-test
 		"$$test_root" \
 		"$$test_dir/support.rs" \
 		"$$test_dir/classification.rs" \
+		"$$test_dir/protocol.rs" \
 		"$$test_dir/aliases_and_types.rs" \
 		"$$test_dir/races.rs" \
 		"$$test_dir/bounds_and_deadlines.rs" \

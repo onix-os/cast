@@ -38,14 +38,15 @@ pub(crate) use model::{
 pub(crate) use classifier::assess_fixture_boot_namespace_until;
 #[cfg(test)]
 pub(crate) use fixture::{
-    FixtureBootNamespace, FixtureDirectory, FixtureDirectoryEntry, FixtureExpectedStream, FixtureLookup,
-    FixtureRegularFile,
+    FixtureBootNamespace, FixtureBootNamespaceProtocolEvent, FixtureDirectory, FixtureDirectoryEntry,
+    FixtureExpectedStream, FixtureLookup, FixtureRegularFile,
 };
 #[cfg(test)]
 pub(crate) use model::FixtureBootNamespaceUsage;
 #[cfg(test)]
 pub(crate) use observer::{
-    BootNamespaceLookup, BootNamespaceNodeIdentity, BootNamespaceNodeKind, BootNamespaceRegularWitness,
+    BootNamespaceLookup, BootNamespaceNodeIdentity, BootNamespaceNodeKind, BootNamespaceObservationBoundary,
+    BootNamespaceRegularWitness,
 };
 #[cfg(test)]
 pub(crate) use production::{

@@ -39,31 +39,42 @@ pub(super) fn assess_with_observer_until<'a, Observer: BootNamespaceObserver>(
     states.resize(requests.len(), BootNamespaceDestinationState::Absent);
 
     if !requests.is_empty() {
-        let root = operation.observe("observing the retained namespace root identity", |observer| {
-            observer.root_identity()
-        })?;
-        if !root.is_valid() {
-            return Err(BootNamespaceAssessmentError::InvalidRootIdentity);
-        }
-        let mut bound_identities = Vec::new();
-        operation.reserve(
-            &mut bound_identities,
-            1,
-            "allocating bounded requested-identity mapping",
-        )?;
-        bound_identities.push(root);
         operation.acquire_descriptor(0, 0)?;
-        assess_directory(
-            &trie,
-            trie.root(),
-            root,
-            root.mount_id,
-            requests,
-            &mut states,
-            &mut bound_identities,
-            &mut operation,
-        )?;
-        operation.release_descriptor();
+        let root = match operation.observe_retained(
+            "observing the retained namespace root identity",
+            |observer| observer.root_identity(),
+            |observer, identity| observer.release_node(*identity),
+        ) {
+            Ok(root) => root,
+            Err(error) => {
+                operation.cancel_descriptor_reservation();
+                return Err(error);
+            }
+        };
+        let assessment = (|| {
+            if !root.is_valid() {
+                return Err(BootNamespaceAssessmentError::InvalidRootIdentity);
+            }
+            let mut bound_identities = Vec::new();
+            operation.reserve(
+                &mut bound_identities,
+                1,
+                "allocating bounded requested-identity mapping",
+            )?;
+            bound_identities.push(root);
+            assess_directory(
+                &trie,
+                trie.root(),
+                root,
+                root.mount_id,
+                requests,
+                &mut states,
+                &mut bound_identities,
+                &mut operation,
+            )
+        })();
+        operation.release_descriptor(root);
+        assessment?;
     }
 
     operation.checkpoint()?;
@@ -101,9 +112,25 @@ fn assess_directory<'a, Observer: BootNamespaceObserver>(
 
     for edge in node.children() {
         reject_ascii_fold_alias(edge, &opening, operation)?;
-        let lookup = observe_lookup(directory, edge, BootNamespaceObservationBoundary::Opening, operation)?;
-        bind_lookup(edge, lookup, &opening, root_mount_id, operation)?;
-        bind_unique_requested_identity(lookup, bound_identities, operation)?;
+        operation.acquire_descriptor(edge.request_index(), edge.component_index())?;
+        let lookup = match observe_lookup(directory, edge, BootNamespaceObservationBoundary::Opening, operation) {
+            Ok(lookup) => lookup,
+            Err(error) => {
+                operation.cancel_descriptor_reservation();
+                return Err(error);
+            }
+        };
+        if lookup == BootNamespaceLookup::Absent {
+            operation.cancel_descriptor_reservation();
+        }
+        let binding = bind_lookup(edge, lookup, &opening, root_mount_id, operation)
+            .and_then(|()| bind_unique_requested_identity(lookup, bound_identities, operation));
+        if let Err(error) = binding {
+            if let BootNamespaceLookup::Present { identity, .. } = lookup {
+                operation.release_descriptor(identity);
+            }
+            return Err(error);
+        }
         opening_lookups.push(lookup);
         process_opening_lookup(
             trie,
@@ -166,9 +193,11 @@ fn process_opening_lookup<'a, Observer: BootNamespaceObserver>(
     } else {
         BootNamespaceNodeKind::Directory
     };
-    require_kind(edge, kind, expected_kind)?;
-    operation.acquire_descriptor(edge.request_index(), edge.component_index())?;
-    if expected_kind == BootNamespaceNodeKind::Directory {
+    if let Err(error) = require_kind(edge, kind, expected_kind) {
+        operation.release_descriptor(identity);
+        return Err(error);
+    }
+    let assessment = if expected_kind == BootNamespaceNodeKind::Directory {
         assess_directory(
             trie,
             child,
@@ -178,15 +207,17 @@ fn process_opening_lookup<'a, Observer: BootNamespaceObserver>(
             states,
             bound_identities,
             operation,
-        )?;
+        )
     } else {
         let request_index = child
             .leaf_request()
             .expect("validated request trie regular leaf must own one request");
-        states[request_index] = assess_regular(request_index, requests[request_index], identity, operation)?;
-    }
-    operation.release_descriptor();
-    Ok(())
+        assess_regular(request_index, requests[request_index], identity, operation).map(|state| {
+            states[request_index] = state;
+        })
+    };
+    operation.release_descriptor(identity);
+    assessment
 }
 
 fn bind_unique_requested_identity<Observer: BootNamespaceObserver>(
@@ -313,9 +344,28 @@ fn observe_lookup<Observer: BootNamespaceObserver>(
     boundary: BootNamespaceObservationBoundary,
     operation: &mut Operation<'_, Observer>,
 ) -> Result<BootNamespaceLookup, BootNamespaceAssessmentError> {
-    operation.observe("performing one bounded kernel-lookup observation", |observer| {
-        observer.lookup(directory, edge.component(), boundary)
-    })
+    let lookup = |observer: &mut Observer| {
+        observer.lookup(
+            directory,
+            edge.component(),
+            boundary,
+            edge.request_index(),
+            edge.component_index(),
+        )
+    };
+    if boundary == BootNamespaceObservationBoundary::Opening {
+        operation.observe_retained(
+            "performing one bounded kernel-lookup observation",
+            lookup,
+            |observer, lookup| {
+                if let BootNamespaceLookup::Present { identity, .. } = lookup {
+                    observer.release_node(*identity);
+                }
+            },
+        )
+    } else {
+        operation.observe("performing one bounded kernel-lookup observation", lookup)
+    }
 }
 
 fn bind_lookup<Observer: BootNamespaceObserver>(

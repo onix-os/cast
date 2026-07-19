@@ -138,6 +138,22 @@ impl<'a, Observer: BootNamespaceObserver> Operation<'a, Observer> {
         Ok(observed)
     }
 
+    pub(super) fn observe_retained<T>(
+        &mut self,
+        action: &'static str,
+        observe: impl FnOnce(&mut Observer) -> super::observer::ObserverResult<T>,
+        release_after_late_deadline: impl FnOnce(&mut Observer, &T),
+    ) -> Result<T, BootNamespaceAssessmentError> {
+        self.charge_work(1, action)?;
+        let observed =
+            observe(self.observer).map_err(|_| BootNamespaceAssessmentError::ObservationFailed { action })?;
+        if let Err(error) = self.checkpoint() {
+            release_after_late_deadline(self.observer, &observed);
+            return Err(error);
+        }
+        Ok(observed)
+    }
+
     pub(super) fn charge_entries(&mut self, found: usize) -> Result<(), BootNamespaceAssessmentError> {
         if found > self.limits.max_directory_entries {
             return Err(BootNamespaceAssessmentError::DirectoryEntryLimitExceeded {
@@ -268,12 +284,23 @@ impl<'a, Observer: BootNamespaceObserver> Operation<'a, Observer> {
                 component_index,
             });
         }
+        self.charge_work(1, "reserving one bounded namespace identity slot")?;
         self.descriptors = next;
         self.peak_descriptors = self.peak_descriptors.max(next);
-        self.charge_work(1, "retaining one bounded namespace identity")
+        Ok(())
     }
 
-    pub(super) fn release_descriptor(&mut self) {
+    pub(super) fn release_descriptor(&mut self, identity: super::observer::BootNamespaceNodeIdentity) {
+        debug_assert!(self.descriptors > 0, "releasing an unaccounted namespace descriptor");
+        self.descriptors = self.descriptors.saturating_sub(1);
+        self.observer.release_node(identity);
+    }
+
+    pub(super) fn cancel_descriptor_reservation(&mut self) {
+        debug_assert!(
+            self.descriptors > 0,
+            "cancelling an absent namespace descriptor reservation"
+        );
         self.descriptors = self.descriptors.saturating_sub(1);
     }
 
