@@ -29,6 +29,7 @@ include misc/make/hardening-tests.mk
 include misc/make/host-storage-safety-tests.mk
 include misc/make/linux-mountinfo-parser-tests.mk
 include misc/make/linux-sysfs-block-parser-tests.mk
+include misc/make/linux-sysfs-identity-tests.mk
 include misc/make/draft-hardening-tests.mk
 include misc/make/state-request-tests.mk
 include misc/make/exact-fresh-transition-removal-tests.mk

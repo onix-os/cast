@@ -16,6 +16,7 @@ mod sysfs_block_identity;
 mod sysfs_block_links;
 mod sysfs_block_numeric;
 mod sysfs_block_uevent;
+mod sysfs_identity;
 mod xattrs;
 
 struct InterruptingBoundedReader<'a> {

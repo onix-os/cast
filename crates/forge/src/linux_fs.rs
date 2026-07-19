@@ -157,5 +157,8 @@ pub(crate) mod mountinfo;
 #[allow(dead_code)] // pure parser foundation consumed by retained sysfs identity
 pub(crate) mod sysfs_block;
 
+#[allow(dead_code)] // authenticated foundation consumed by mounted boot topology
+pub(crate) mod sysfs_identity;
+
 #[cfg(test)]
 mod tests;

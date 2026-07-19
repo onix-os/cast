@@ -64,6 +64,7 @@ help:
 	@timeout 10s echo "  host-storage-safety-test  Audit local tests and harnesses for host-storage access"
 	@timeout 10s echo "  forge-linux-mountinfo-parser-test  Run the bounded byte-preserving Linux mountinfo parser contracts"
 	@timeout 10s echo "  forge-linux-sysfs-block-parser-test  Run bounded kernel block-identity parser contracts"
+	@timeout 10s echo "  forge-linux-sysfs-identity-test  Run descriptor-retained synthetic sysfs identity contracts"
 	@echo "  forge-cache-test  Run the exact descriptor-rooted download and asset cache tests"
 	@echo "  forge-client-direct-test  Run all direct frozen and state-transition client tests"
 	@echo "  forge-cli-state-request-test  Run bounded canonical state-ID and removal-range contracts"
