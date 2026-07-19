@@ -1,12 +1,16 @@
-use std::{cmp, io, time::Instant};
+use std::{cmp, io};
 
 use super::{
     GptPartitionRole, constants,
     guid::Guid,
-    reader::{Image, Limits, Operation},
+    reader::{Image, Operation},
+    snapshot::AuthenticatedGptTableSnapshot,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct SelectedEntry {
+    pub(super) partition_number: u32,
+    pub(super) role: GptPartitionRole,
     pub(super) partition_uuid: Guid,
     pub(super) start_lba: u64,
     pub(super) size_lba: u64,
@@ -32,39 +36,15 @@ struct UsedRange {
     index: u32,
 }
 
-pub(super) fn authenticate_until(
+pub(super) fn authenticate_with_operation(
     source: &mut impl Image,
     logical_block_size: u32,
     expected_partition_number: u32,
     expected_partition_uuid: Guid,
     expected_role: GptPartitionRole,
-    limits: Limits,
-    deadline: Instant,
-) -> io::Result<SelectedEntry> {
-    authenticate_with_clock_until(
-        source,
-        logical_block_size,
-        expected_partition_number,
-        expected_partition_uuid,
-        expected_role,
-        limits,
-        deadline,
-        None,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(super) fn authenticate_with_clock_until(
-    source: &mut impl Image,
-    logical_block_size: u32,
-    expected_partition_number: u32,
-    expected_partition_uuid: Guid,
-    expected_role: GptPartitionRole,
-    limits: Limits,
-    deadline: Instant,
-    clock: Option<&mut dyn FnMut() -> Instant>,
-) -> io::Result<SelectedEntry> {
-    let mut operation = Operation::new_with_clock(limits, deadline, clock)?;
+    operation: &mut Operation<'_>,
+) -> io::Result<AuthenticatedGptTableSnapshot> {
+    operation.checkpoint()?;
     let block_bytes = validate_logical_block_size(logical_block_size)?;
     if expected_partition_number == 0 {
         return Err(invalid_input("expected GPT partition number must be positive"));
@@ -88,17 +68,11 @@ pub(super) fn authenticate_with_clock_until(
     }
     let last_lba = total_lbas - 1;
 
-    validate_pmbr(source, total_lbas, block_bytes, &mut operation)?;
-    let primary_bytes = read_block(source, 1, block_bytes, &mut operation, "reading primary GPT header")?;
-    let backup_bytes = read_block(
-        source,
-        last_lba,
-        block_bytes,
-        &mut operation,
-        "reading backup GPT header",
-    )?;
-    let primary = parse_header(&primary_bytes, &mut operation, "primary GPT header")?;
-    let backup = parse_header(&backup_bytes, &mut operation, "backup GPT header")?;
+    let pmbr_bytes = validate_pmbr(source, total_lbas, block_bytes, operation)?;
+    let primary_bytes = read_block(source, 1, block_bytes, operation, "reading primary GPT header")?;
+    let backup_bytes = read_block(source, last_lba, block_bytes, operation, "reading backup GPT header")?;
+    let primary = parse_header(&primary_bytes, operation, "primary GPT header")?;
+    let backup = parse_header(&backup_bytes, operation, "backup GPT header")?;
     validate_header_pair(primary, backup, last_lba, block_bytes_u64)?;
 
     if expected_partition_number > primary.entry_count {
@@ -121,7 +95,7 @@ pub(super) fn authenticate_with_clock_until(
         primary.entry_lba,
         array_bytes,
         block_bytes_u64,
-        &mut operation,
+        operation,
         "reading primary GPT entry array",
     )?;
     let backup_array = read_region(
@@ -129,13 +103,13 @@ pub(super) fn authenticate_with_clock_until(
         backup.entry_lba,
         array_bytes,
         block_bytes_u64,
-        &mut operation,
+        operation,
         "reading backup GPT entry array",
     )?;
-    if crc32(&primary_array, &mut operation)? != primary.entry_crc32 {
+    if crc32(&primary_array, operation)? != primary.entry_crc32 {
         return Err(invalid_data("primary GPT entry-array CRC32 does not match"));
     }
-    if crc32(&backup_array, &mut operation)? != backup.entry_crc32 {
+    if crc32(&backup_array, operation)? != backup.entry_crc32 {
         return Err(invalid_data("backup GPT entry-array CRC32 does not match"));
     }
     operation.charge_work(array_bytes, "comparing redundant GPT entry arrays")?;
@@ -149,10 +123,18 @@ pub(super) fn authenticate_with_clock_until(
         expected_partition_number,
         expected_partition_uuid,
         expected_role,
-        &mut operation,
+        operation,
     )?;
     operation.checkpoint()?;
-    Ok(selected)
+    Ok(AuthenticatedGptTableSnapshot::new(
+        image_bytes,
+        logical_block_size,
+        pmbr_bytes,
+        primary_bytes,
+        backup_bytes,
+        primary_array,
+        selected,
+    ))
 }
 
 fn validate_logical_block_size(value: u32) -> io::Result<usize> {
@@ -174,7 +156,7 @@ fn validate_pmbr(
     total_lbas: u64,
     block_bytes: usize,
     operation: &mut Operation<'_>,
-) -> io::Result<()> {
+) -> io::Result<Vec<u8>> {
     let mut bytes = operation.allocate_zeroed(block_bytes, "protective MBR logical-block buffer")?;
     operation.read_exact(source, 0, &mut bytes, "reading protective MBR")?;
     operation.charge_work(bytes.len(), "validating protective MBR")?;
@@ -214,7 +196,8 @@ fn validate_pmbr(
             return Err(invalid_data("protective MBR is hybrid rather than GPT-only"));
         }
     }
-    operation.checkpoint()
+    operation.checkpoint()?;
+    Ok(bytes)
 }
 
 fn read_block(
@@ -438,6 +421,8 @@ fn validate_entries(
                 .and_then(|size| size.checked_add(1))
                 .ok_or_else(|| invalid_data("selected GPT entry size overflowed"))?;
             selected = Some(SelectedEntry {
+                partition_number,
+                role: expected_role,
                 partition_uuid,
                 start_lba: first_lba,
                 size_lba,

@@ -196,6 +196,14 @@ impl Fixture {
         );
     }
 
+    pub(super) fn set_disk_guid(&mut self, disk_guid: [u8; 16]) {
+        for lba in [self.primary_header_lba, self.backup_header_lba] {
+            let offset = self.block_offset(lba) + 56;
+            self.bytes[offset..offset + 16].copy_from_slice(&disk_guid);
+            self.repair_header_crc(lba);
+        }
+    }
+
     pub(super) fn repair_header_crc(&mut self, lba: u64) {
         let offset = self.block_offset(lba);
         self.bytes[offset + 16..offset + 20].fill(0);

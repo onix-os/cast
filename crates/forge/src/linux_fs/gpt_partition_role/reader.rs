@@ -2,7 +2,11 @@ use std::{io, mem::size_of, time::Instant};
 
 use super::constants;
 
-pub(super) trait Image {
+/// Minimal random-access image seam visible only inside `linux_fs`.
+///
+/// The future retained block-device adapter can implement this trait without
+/// making a descriptor, path, or read capability part of returned evidence.
+pub(in crate::linux_fs) trait Image {
     fn length(&self) -> u64;
     fn read(&mut self, offset: u64, output: &mut [u8]) -> io::Result<usize>;
 }
@@ -147,12 +151,6 @@ pub(super) struct Operation<'a> {
     limits: Limits,
 }
 
-impl Operation<'_> {
-    pub(super) fn new(limits: Limits, deadline: Instant) -> io::Result<Self> {
-        Self::new_with_clock(limits, deadline, None)
-    }
-}
-
 impl<'a> Operation<'a> {
     pub(super) fn new_with_clock(
         limits: Limits,
@@ -167,6 +165,17 @@ impl<'a> Operation<'a> {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "GPT parser limits must all be nonzero",
+            ));
+        }
+        let production = Limits::production();
+        if limits.max_read_bytes > production.max_read_bytes
+            || limits.max_read_calls > production.max_read_calls
+            || limits.max_work > production.max_work
+            || limits.max_allocation_bytes > production.max_allocation_bytes
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "GPT parser limits exceed the hard production ceilings",
             ));
         }
         let mut operation = Self {

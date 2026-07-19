@@ -81,10 +81,10 @@ fn expired_deadline_and_zero_limits_fail_before_image_parsing() {
 #[test]
 fn read_byte_and_call_limits_fail_closed_at_exact_boundaries() {
     let fixture = Fixture::esp(512);
-    let exact_read_bytes = 512 + 2 * 512 + 2 * fixture.array_bytes();
+    let exact_read_bytes = 2 * (512 + 2 * 512 + 2 * fixture.array_bytes());
     let mut limits = FixtureGptPartitionRoleLimits {
         max_read_bytes: exact_read_bytes,
-        max_read_calls: 5,
+        max_read_calls: 10,
         ..FixtureGptPartitionRoleLimits::default()
     };
     authenticate_with(&fixture, limits).unwrap();
@@ -122,10 +122,12 @@ fn work_and_allocation_limits_reject_underprovisioned_operations() {
 
 #[test]
 fn maximum_entry_count_and_array_size_are_admitted_within_global_bounds() {
-    let fixture = Fixture::with_entry_count(512, 4_096);
-    let selected = fixture.authenticate().unwrap();
-    assert_eq!(selected.partition_uuid(), ESP_UUID);
-    assert_eq!(fixture.array_bytes(), 512 * 1024);
+    for block_size in [512, 65_536] {
+        let fixture = Fixture::with_entry_count(block_size, 4_096);
+        let selected = fixture.authenticate().unwrap();
+        assert_eq!(selected.partition_uuid(), ESP_UUID);
+        assert_eq!(fixture.array_bytes(), 512 * 1024);
+    }
 }
 
 #[test]

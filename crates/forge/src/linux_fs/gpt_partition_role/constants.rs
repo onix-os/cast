@@ -15,10 +15,16 @@ pub(super) const MAX_GPT_ENTRIES: u32 = 4_096;
 pub(super) const MAX_ENTRY_ARRAY_BYTES: usize = 512 * 1024;
 
 pub(super) const READ_CHUNK_BYTES: usize = 64 * 1024;
+// These are cumulative hard ceilings for both accepted-table passes, exact
+// snapshot comparison, and fingerprinting.  Fixture limits may lower but
+// never raise them.
 pub(super) const MAX_READ_BYTES: usize = 4 * 1024 * 1024;
 pub(super) const MAX_READ_CALLS: usize = 1_024;
 pub(super) const MAX_WORK: usize = 16 * 1024 * 1024;
-pub(super) const MAX_ALLOCATION_BYTES: usize = 2 * 1024 * 1024;
+// Two authenticated passes share one cumulative ledger.  Four MiB admits two
+// maximum-profile snapshots plus their temporary validation indexes while
+// remaining a hard ceiling rather than a caller-controlled allocation size.
+pub(super) const MAX_ALLOCATION_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) const ESP_TYPE_GUID: [u8; 16] = [
     0x28, 0x73, 0x2a, 0xc1, 0x1f, 0xf8, 0xd2, 0x11, 0xba, 0x4b, 0x00, 0xa0, 0xc9, 0x3e, 0xc9, 0x3b,

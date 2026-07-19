@@ -16,23 +16,25 @@ fn xbootldr_guid_constant_uses_uefi_mixed_endian_disk_bytes() {
 }
 
 #[test]
-fn stable_512_byte_esp_image_returns_only_selected_semantics() {
+fn stable_512_byte_esp_image_returns_selected_semantics_and_table_identity() {
     let fixture = Fixture::esp(512);
     let selected = fixture.authenticate().unwrap();
     assert_eq!(selected.role(), GptPartitionRole::Esp);
     assert_eq!(selected.partition_uuid(), ESP_UUID);
     assert_eq!(selected.start_lba(), fixture.selected_start_lba);
     assert_eq!(selected.size_lba(), fixture.selected_size_lba);
+    assert_ne!(selected.table_sha256(), &[0; 32]);
 }
 
 #[test]
-fn stable_4096_byte_xbootldr_image_returns_only_selected_semantics() {
+fn stable_4096_byte_xbootldr_image_returns_selected_semantics_and_table_identity() {
     let fixture = Fixture::xbootldr(4_096);
     let selected = fixture.authenticate().unwrap();
     assert_eq!(selected.role(), GptPartitionRole::Xbootldr);
     assert_eq!(selected.partition_uuid(), XBOOTLDR_UUID);
     assert_eq!(selected.start_lba(), fixture.selected_start_lba);
     assert_eq!(selected.size_lba(), fixture.selected_size_lba);
+    assert_ne!(selected.table_sha256(), &[0; 32]);
 }
 
 #[test]

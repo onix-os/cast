@@ -2,17 +2,23 @@
 //!
 //! This foundation accepts only the GPT revision-1 layout used by the boot
 //! publication policy.  It requires matching primary and backup metadata and
-//! returns semantic facts for exactly one selected entry.  It performs no
-//! discovery and returns no image contents or reusable read capability.
+//! returns semantic facts for exactly one selected entry plus a
+//! role-independent SHA-256 identity of the complete accepted table.  It
+//! performs no discovery and returns no image contents or reusable read
+//! capability.
 
 use std::{io, time::Instant};
 
 mod constants;
+mod fingerprint;
 mod guid;
 mod parser;
 mod reader;
+mod snapshot;
+mod stable;
 
 use guid::Guid;
+pub(in crate::linux_fs) use reader::Image as GptPartitionRoleImage;
 
 /// Declarative GPT role admitted by the boot publication policy.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -30,13 +36,17 @@ impl GptPartitionRole {
     }
 }
 
-/// Closed semantic evidence for one exact selected GPT entry.
+/// Closed scalar evidence for one selected entry and its exact accepted table.
+///
+/// `table_sha256` identifies the full table but does not retain table bytes,
+/// an image, a descriptor, a path, or any reusable read authority.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedGptPartitionRole {
     role: GptPartitionRole,
     partition_uuid: [u8; 36],
     start_lba: u64,
     size_lba: u64,
+    table_sha256: [u8; 32],
 }
 
 impl ValidatedGptPartitionRole {
@@ -55,13 +65,20 @@ impl ValidatedGptPartitionRole {
     pub(crate) const fn size_lba(&self) -> u64 {
         self.size_lba
     }
+
+    /// Domain-separated SHA-256 of the complete accepted GPT table.
+    pub(crate) const fn table_sha256(&self) -> &[u8; 32] {
+        &self.table_sha256
+    }
 }
 
-/// Authenticate one exact GPT entry from a complete, caller-owned image.
+/// Authenticate one exact GPT entry and table identity from a complete,
+/// caller-owned image.
 ///
-/// Every read, allocation, validation step, and terminal check shares the
-/// supplied absolute deadline.  The logical block size must be a power of two
-/// from 512 through 65,536 bytes, inclusive.
+/// The immutable slice is parsed twice; every read, allocation, validation,
+/// exact comparison, hash step, and terminal check shares one hard resource
+/// ledger and the supplied absolute deadline.  The logical block size must be
+/// a power of two from 512 through 65,536 bytes, inclusive.
 pub(crate) fn authenticate_gpt_partition_role_image_until(
     image: &[u8],
     logical_block_size: u32,
@@ -70,10 +87,39 @@ pub(crate) fn authenticate_gpt_partition_role_image_until(
     expected_role: GptPartitionRole,
     deadline: Instant,
 ) -> io::Result<ValidatedGptPartitionRole> {
+    let mut first_source = reader::SliceImage::new(image);
+    let mut second_source = reader::SliceImage::new(image);
+    authenticate_gpt_partition_role_sources_until(
+        &mut first_source,
+        &mut second_source,
+        logical_block_size,
+        expected_partition_number,
+        expected_partition_uuid,
+        expected_role,
+        deadline,
+    )
+}
+
+/// Pure two-pass seam for a future retained block-device reader.
+///
+/// Visibility is deliberately limited to the `linux_fs` module tree.  Both
+/// sources must independently authenticate to one exact bounded snapshot, and
+/// only scalar evidence survives their exact comparison.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::linux_fs) fn authenticate_gpt_partition_role_sources_until(
+    first_source: &mut impl GptPartitionRoleImage,
+    second_source: &mut impl GptPartitionRoleImage,
+    logical_block_size: u32,
+    expected_partition_number: u32,
+    expected_partition_uuid: &str,
+    expected_role: GptPartitionRole,
+    deadline: Instant,
+) -> io::Result<ValidatedGptPartitionRole> {
     let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
-    let mut source = reader::SliceImage::new(image);
-    let selected = parser::authenticate_until(
-        &mut source,
+    let stable = stable::authenticate_until(
+        first_source,
+        second_source,
         logical_block_size,
         expected_partition_number,
         expected_uuid,
@@ -81,12 +127,7 @@ pub(crate) fn authenticate_gpt_partition_role_image_until(
         reader::Limits::production(),
         deadline,
     )?;
-    Ok(ValidatedGptPartitionRole {
-        role: expected_role,
-        partition_uuid: selected.partition_uuid.canonical_bytes(),
-        start_lba: selected.start_lba,
-        size_lba: selected.size_lba,
-    })
+    Ok(validated_from_stable(stable))
 }
 
 #[cfg(test)]
@@ -103,9 +144,11 @@ pub(crate) fn authenticate_gpt_partition_role_fixture_until(
     deadline: Instant,
 ) -> io::Result<ValidatedGptPartitionRole> {
     let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
-    let mut source = reader::SliceImage::new(image);
-    let selected = parser::authenticate_until(
-        &mut source,
+    let mut first_source = reader::SliceImage::new(image);
+    let mut second_source = reader::SliceImage::new(image);
+    let stable = stable::authenticate_until(
+        &mut first_source,
+        &mut second_source,
         logical_block_size,
         expected_partition_number,
         expected_uuid,
@@ -113,12 +156,63 @@ pub(crate) fn authenticate_gpt_partition_role_fixture_until(
         limits.into(),
         deadline,
     )?;
-    Ok(ValidatedGptPartitionRole {
-        role: expected_role,
-        partition_uuid: selected.partition_uuid.canonical_bytes(),
-        start_lba: selected.start_lba,
-        size_lba: selected.size_lba,
-    })
+    Ok(validated_from_stable(stable))
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authenticate_gpt_partition_role_two_image_fixture_until(
+    first_image: &[u8],
+    second_image: &[u8],
+    logical_block_size: u32,
+    expected_partition_number: u32,
+    expected_partition_uuid: &str,
+    expected_role: GptPartitionRole,
+    limits: FixtureGptPartitionRoleLimits,
+    deadline: Instant,
+) -> io::Result<ValidatedGptPartitionRole> {
+    let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
+    let mut first_source = reader::SliceImage::new(first_image);
+    let mut second_source = reader::SliceImage::new(second_image);
+    let stable = stable::authenticate_until(
+        &mut first_source,
+        &mut second_source,
+        logical_block_size,
+        expected_partition_number,
+        expected_uuid,
+        expected_role,
+        limits.into(),
+        deadline,
+    )?;
+    Ok(validated_from_stable(stable))
+}
+
+#[cfg(test)]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::linux_fs) fn authenticate_gpt_partition_role_two_sources_fixture_with_clock_until(
+    first_source: &mut impl GptPartitionRoleImage,
+    second_source: &mut impl GptPartitionRoleImage,
+    logical_block_size: u32,
+    expected_partition_number: u32,
+    expected_partition_uuid: &str,
+    expected_role: GptPartitionRole,
+    limits: FixtureGptPartitionRoleLimits,
+    deadline: Instant,
+    clock: &mut impl FnMut() -> Instant,
+) -> io::Result<ValidatedGptPartitionRole> {
+    let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
+    let stable = stable::authenticate_with_clock_until(
+        first_source,
+        second_source,
+        logical_block_size,
+        expected_partition_number,
+        expected_uuid,
+        expected_role,
+        limits.into(),
+        deadline,
+        Some(clock),
+    )?;
+    Ok(validated_from_stable(stable))
 }
 
 #[cfg(test)]
@@ -134,9 +228,11 @@ pub(crate) fn authenticate_gpt_partition_role_chunked_fixture_until(
     deadline: Instant,
 ) -> io::Result<ValidatedGptPartitionRole> {
     let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
-    let mut source = reader::ChunkedSliceImage::new(image, max_chunk, stop_after);
-    let selected = parser::authenticate_until(
-        &mut source,
+    let mut first_source = reader::ChunkedSliceImage::new(image, max_chunk, stop_after);
+    let mut second_source = reader::ChunkedSliceImage::new(image, max_chunk, stop_after);
+    let stable = stable::authenticate_until(
+        &mut first_source,
+        &mut second_source,
         logical_block_size,
         expected_partition_number,
         expected_uuid,
@@ -144,12 +240,7 @@ pub(crate) fn authenticate_gpt_partition_role_chunked_fixture_until(
         reader::Limits::production(),
         deadline,
     )?;
-    Ok(ValidatedGptPartitionRole {
-        role: expected_role,
-        partition_uuid: selected.partition_uuid.canonical_bytes(),
-        start_lba: selected.start_lba,
-        size_lba: selected.size_lba,
-    })
+    Ok(validated_from_stable(stable))
 }
 
 #[cfg(test)]
@@ -165,9 +256,11 @@ pub(crate) fn authenticate_gpt_partition_role_fixture_with_clock_until(
     clock: &mut impl FnMut() -> Instant,
 ) -> io::Result<ValidatedGptPartitionRole> {
     let expected_uuid = Guid::parse_canonical(expected_partition_uuid, deadline)?;
-    let mut source = reader::SliceImage::new(image);
-    let selected = parser::authenticate_with_clock_until(
-        &mut source,
+    let mut first_source = reader::SliceImage::new(image);
+    let mut second_source = reader::SliceImage::new(image);
+    let stable = stable::authenticate_with_clock_until(
+        &mut first_source,
+        &mut second_source,
         logical_block_size,
         expected_partition_number,
         expected_uuid,
@@ -176,10 +269,16 @@ pub(crate) fn authenticate_gpt_partition_role_fixture_with_clock_until(
         deadline,
         Some(clock),
     )?;
-    Ok(ValidatedGptPartitionRole {
-        role: expected_role,
+    Ok(validated_from_stable(stable))
+}
+
+fn validated_from_stable(stable: stable::StableSelectedEntry) -> ValidatedGptPartitionRole {
+    let selected = stable.selected;
+    ValidatedGptPartitionRole {
+        role: selected.role,
         partition_uuid: selected.partition_uuid.canonical_bytes(),
         start_lba: selected.start_lba,
         size_lba: selected.size_lba,
-    })
+        table_sha256: stable.table_sha256,
+    }
 }
