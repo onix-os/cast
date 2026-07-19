@@ -1,0 +1,63 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let copy_test_vectors = b.step.shell_with {
+    interpreter = b.program.binary "bash",
+    declared_programs = [b.program.binary "cp"],
+    script = r#"test ! -e "${CAST_BUILDER_DIR}/external-test-vectors.json" && cp --preserve=mode,timestamps -- "${CAST_SOURCE_DIR}/external-test-vectors.json" "${CAST_BUILDER_DIR}/external-test-vectors.json" && test -f "${CAST_BUILDER_DIR}/external-test-vectors.json" && test ! -L "${CAST_BUILDER_DIR}/external-test-vectors.json" && test -s "${CAST_BUILDER_DIR}/external-test-vectors.json""#,
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Frame codec checked against an independently locked corpus",
+    description = b.optional.set "A real CMake/CTest build whose check-only corpus never enters the installed output.",
+    paths = [b.path.exe "/usr/bin/cast-external-test-vectors-fixture"],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-external-test-vectors-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-external-test-vectors-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = cmake.builder {
+        flags = [
+            "-DBUILD_TESTING=ON",
+            "-DCAST_EXTERNAL_VECTOR_FILE=external-test-vectors.json",
+        ],
+        run_tests = b.boolean.true,
+    },
+    hooks = b.hooks {
+        pre_check = [copy_test_vectors],
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [b.dep.binary "cp"],
+    outputs = [root],
+    options = b.options {
+        networking = b.boolean.false,
+        .. b.defaults.options
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-external-test-vectors-fixture-1.0.0.tar",
+            hash = "c04932c66a3399d95fda58b459b7f3e903454e5d2963f3529667216fdad50404",
+            rename = b.optional.set "cast-external-test-vectors-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-external-test-vectors-fixture",
+        },
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-external-test-vectors-fixture-1.0.0-vectors.json",
+            hash = "c957dce5105c8add6e581f9aa0ee34002cbff8c9d403fab5132cebf0a8c7685c",
+            rename = b.optional.set "external-test-vectors.json",
+            strip_dirs = b.optional.unset,
+            unpack = b.boolean.false,
+            unpack_dir = b.optional.unset,
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

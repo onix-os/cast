@@ -28,6 +28,7 @@ pub(super) fn assert_fixture_bundle(
                 | "custom"
                 | "daemon-generated"
                 | "desktop-integration"
+                | "external-test-vectors"
                 | "factory-override"
                 | "font-family"
                 | "generated-config"
@@ -116,6 +117,7 @@ pub(super) fn assert_fixture_bundle(
         "generated-config"
             | "generated-shell"
             | "desktop-integration"
+            | "external-test-vectors"
             | "font-family"
             | "gettext-localization"
             | "go-module"
@@ -178,6 +180,8 @@ pub(super) fn assert_fixture_bundle(
         assert_python_module_fixture(planned, &packages);
     } else if name == "desktop-integration" {
         assert_desktop_integration_fixture(planned, &packages);
+    } else if name == "external-test-vectors" {
+        assert_external_test_vectors_fixture(planned, &packages);
     } else if name == "font-family" {
         assert_font_family_fixture(planned, &packages);
     } else if name == "system-integration-assets" {

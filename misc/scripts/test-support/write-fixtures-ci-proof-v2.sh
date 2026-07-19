@@ -70,6 +70,7 @@ set -- \
     custom \
     daemon-generated \
     desktop-integration \
+    external-test-vectors \
     factory-override \
     font-family \
     generated-config \
@@ -95,7 +96,7 @@ stone_count_for_fixture() {
         header-only-library) stone_count=2 ;;
         daemon-generated|plugin-output) stone_count=3 ;;
         split) stone_count=5 ;;
-        desktop-integration|font-family|generated-config|generated-shell|gettext-localization|go-module|python-module|system-integration-assets|userspace-profile) stone_count=1 ;;
+        desktop-integration|external-test-vectors|font-family|generated-config|generated-shell|gettext-localization|go-module|python-module|system-integration-assets|userspace-profile) stone_count=1 ;;
         *) printf 'unknown test fixture proof fixture: %s\n' "$1" >&2; exit 1 ;;
     esac
 }
@@ -137,12 +138,12 @@ cat >>"$output" <<EOF_HEADER
   "required_execution": true,
   "bundle_ledger_schema": "cast.fixtures-ci.bundle.v1",
   "totals": {
-    "fixture_count": 25,
-    "execution_count": 50,
-    "bundle_validation_count": 75,
-    "stone_count": 130,
-    "manifest_count": 50,
-    "artifact_count": 180,
+    "fixture_count": 26,
+    "execution_count": 52,
+    "bundle_validation_count": 78,
+    "stone_count": 131,
+    "manifest_count": 52,
+    "artifact_count": 183,
     "artifact_bytes": $artifact_bytes
   },
   "fixtures": [
@@ -228,7 +229,7 @@ EOF_FIXTURE
       ]
     }
 EOF_ENTRIES
-    if [ "$fixture_number" -lt 25 ]; then
+    if [ "$fixture_number" -lt 26 ]; then
         printf '    ,\n' >>"$output"
     fi
     fixture_number=$((fixture_number + 1))

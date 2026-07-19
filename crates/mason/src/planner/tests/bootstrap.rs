@@ -37,6 +37,7 @@ include!("bootstrap/execution_topology.rs");
 include!("bootstrap/autotools_regeneration.rs");
 include!("bootstrap/cmake_zlib.rs");
 include!("bootstrap/desktop_integration.rs");
+include!("bootstrap/external_test_vectors.rs");
 include!("bootstrap/font_family.rs");
 include!("bootstrap/gettext_localization.rs");
 include!("bootstrap/go_module.rs");
@@ -520,6 +521,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     assert_autotools_regeneration_bootstrap_contract(&closure, &indexed);
     assert_cmake_zlib_bootstrap_contract(&closure, &indexed);
     assert_desktop_integration_bootstrap_contract(&closure, &indexed);
+    assert_external_test_vectors_bootstrap_contract(&closure, &indexed);
     assert_font_family_bootstrap_contract(&closure, &indexed);
     assert_gettext_localization_bootstrap_contract(&closure, &indexed);
     assert_go_module_bootstrap_contract(&closure, &indexed);
@@ -766,7 +768,7 @@ cast.profiles [
         let storage_dir = planned.runtime.paths.upstreams().host;
         let expected_sources = match planned.plan.package.name.as_str() {
             "cast-generated-config-fixture" | "cast-generated-shell-fixture" | "cast-userspace-profile-fixture" => 0,
-            "cast-hooks-fixture" => 2,
+            "cast-external-test-vectors-fixture" | "cast-hooks-fixture" => 2,
             "cast-multiple-sources-fixture" => 3,
             _ => 1,
         };

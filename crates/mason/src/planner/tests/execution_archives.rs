@@ -55,6 +55,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-custom-fixture-1.0.0",
             "cast-daemon-fixture-1.0.0",
             "cast-desktop-integration-fixture-1.0.0",
+            "cast-external-test-vectors-fixture-1.0.0",
             "cast-factory-override-fixture-1.0.0",
             "cast-font-family-fixture-1.0.0",
             "cast-gettext-localization-fixture-1.0.0",
@@ -79,6 +80,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
     assert_eq!(
         source_file_names,
         BTreeSet::from([
+            EXTERNAL_TEST_VECTORS_RAW_ARTIFACT.to_owned(),
             HOOKS_PATCH_ARTIFACT.to_owned(),
             MULTIPLE_SOURCES_RAW_ARTIFACT.to_owned(),
         ])
@@ -519,8 +521,17 @@ install -Dm644 build/cast-plugin-output.so \
             encode_source_lock(&lock).into_bytes(),
             "{name}: checked-in source lock is not canonical"
         );
+        if name == "external-test-vectors" {
+            assert_external_test_vectors_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-external-test-vectors-fixture-1.0.0"),
+                &source_files.join(EXTERNAL_TEST_VECTORS_RAW_ARTIFACT),
+                &lock,
+            );
+        }
 
         let expected_sources = match name {
+            "external-test-vectors" => 2,
             "hooks-patch" => 2,
             "multiple-sources" => 3,
             _ => 1,
@@ -620,6 +631,14 @@ install -Dm644 build/cast-plugin-output.so \
             });
             locked_sources.push(locked);
             source_artifacts.push(Some((artifact_path, bytes)));
+        }
+        if name == "external-test-vectors" {
+            let (_, raw_bytes) = source_artifacts[1].as_ref().unwrap();
+            assert_eq!(raw_bytes.as_slice(), EXTERNAL_TEST_VECTORS_RAW_BYTES);
+            assert_eq!(
+                fs::read(source_files.join(EXTERNAL_TEST_VECTORS_RAW_ARTIFACT)).unwrap(),
+                EXTERNAL_TEST_VECTORS_RAW_BYTES
+            );
         }
         locked_source_count += locked_sources.len();
 
@@ -799,6 +818,12 @@ install -Dm644 build/cast-plugin-output.so \
                 &published,
             );
         }
+        if name == "external-test-vectors" {
+            assert_external_test_vectors_archive_matches_tracked_sources(
+                &source_trees.join("cast-external-test-vectors-fixture-1.0.0"),
+                &published,
+            );
+        }
         if name == "font-family" {
             assert_font_family_archive_matches_tracked_sources(
                 &source_trees.join("cast-font-family-fixture-1.0.0"),
@@ -875,12 +900,12 @@ install -Dm644 build/cast-plugin-output.so \
         .map(|entry| entry.file_name().into_string().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(present_git_bundles, admitted_git_bundles, "orphaned execution Git bundle");
-    assert_eq!(locked_source_count, 25, "locked execution source inventory drift");
+    assert_eq!(locked_source_count, 27, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
-        [17, 1, 2, 2],
-        "execution fixtures must cover seventeen plain tar streams, two XZ, one gzip, and two Zstandard"
+        [18, 1, 2, 2],
+        "execution fixtures must cover eighteen plain tar streams, two XZ, one gzip, and two Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 22, "execution source inventory drift");
+    assert_eq!(sourceful_fixtures, 23, "execution source inventory drift");
     assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
 }

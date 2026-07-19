@@ -419,6 +419,7 @@ include!("bundle/package_decode.rs");
 include!("bundle/package_metadata.rs");
 include!("bundle/tracked_sources.rs");
 include!("bundle/desktop_integration.rs");
+include!("bundle/external_test_vectors.rs");
 include!("bundle/font_family.rs");
 include!("bundle/gettext_localization.rs");
 include!("bundle/go_module.rs");

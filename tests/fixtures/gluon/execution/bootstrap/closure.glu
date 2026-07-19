@@ -59,6 +59,7 @@ let repository = {
         { name = "custom", package_ids = package_sets.custom },
         { name = "daemon-generated", package_ids = package_sets.cmake },
         { name = "desktop-integration", package_ids = package_sets.desktop_integration },
+        { name = "external-test-vectors", package_ids = package_sets.cmake },
         { name = "factory-override", package_ids = package_sets.cmake },
         { name = "font-family", package_ids = package_sets.font_family },
         { name = "generated-config", package_ids = package_sets.generated_config },

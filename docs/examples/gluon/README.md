@@ -17,14 +17,14 @@ a mandatory canonical PARTUUID and a mandatory bounded absolute lexical
 
 Mount points are untrusted lexical lookup hints, not storage authority. They
 have no defaults and do not enable discovery, fallback, or `canonicalize`.
-Later descriptor-retained evidence must still prove the exact namespace
+The descriptor-retained coordinator must still prove the exact namespace
 attachment, mountinfo entry, mounted device, matching sysfs PARTUUID, and the
 topology relationship. GPT role, filesystem type, and durability require
 additional evidence. `cast.boot_topology.v1` cannot be migrated automatically
 because it has no mount points; administrators must rewrite it explicitly
 rather than let Cast guess from the host.
 
-The full future authority and publication boundary is specified in
+The complete capture and future publication boundary is specified in
 [`active-reblit-mounted-boot-topology.md`](../../architecture/active-reblit-mounted-boot-topology.md).
 
 The recipes under [`packages`](packages) exercise the public
@@ -119,7 +119,7 @@ belong to the contentful execution-fixture lane below.
 
 ## Representative execution fixtures
 
-Twenty-four separate fixtures cover representative package shapes. Twenty-one contain
+Twenty-six separate fixtures cover representative package shapes. Twenty-three contain
 small, real source trees for Autotools, configured Autotools with an
 intentionally disabled check phase, Cargo, feature-selected multi-binary Cargo,
 vendored/offline Cargo, CMake, custom-step, pre-setup patch hooks, Meson,
@@ -142,6 +142,16 @@ exact pinned `zlib-devel` provider, and performs a real `compress2`/`uncompress`
 round trip under CTest. Its bundle checks bind the manifest BuildDepends entry
 to that provider and require the installed ELF and emitted Stone metadata to
 carry `soname(libz.so.1(x86_64))`.
+The `external-test-vectors` CMake fixture keeps its executable source and its
+conformance corpus as two independently locked inputs. The primary USTAR is
+the only extracted source; a typed pre-check Bash hook uses only its declared
+`cp` capability to admit the raw JSON into private build scratch before CTest.
+The frozen plan pins both source identities and proves that source order 1 is
+never interpreted as an archive. Its one-output bundle may contain only the
+installed frame-codec ELF: the corpus is check-only and must not enter the
+Stone or create a runtime relation. The supplemental hostile-host lane proves
+the check fails without the corpus, succeeds with the exact bytes, and rejects
+a mutated vector, but it is not delegated Stone execution evidence.
 The second CMake fixture turns the documented `post_install` pattern into an
 offline executable proof. Its ordinary check phase runs the build-tree target,
 then its post-install hook invokes only
@@ -243,13 +253,13 @@ phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has twenty-two deterministic tar streams: seventeen
+The checked-in source matrix has twenty-three deterministic tar streams: eighteen
 plain USTAR archives, vendored Cargo as deterministic gzip, two deterministic
 XZ archives, and the generated-daemon and Go fixtures as deterministic
 Zstandard. It
-also contains two independently locked raw files and one deterministic Git
+also contains three independently locked raw files and one deterministic Git
 bundle.
-`make fixture-sources` rebuilds all twenty-four archive/raw artifacts plus that one
+`make fixture-sources` rebuilds all twenty-six archive/raw artifacts plus that one
 bundle; the offline lane rejects any format, filename, order, unpack policy,
 commit, normalized Git tree, or digest drift. The source generator fixes Git's
 identity, timestamps, refs, and configuration before producing the bundle.
@@ -262,6 +272,7 @@ make delegated-execution-preflight
 make bootstrap-fixtures
 make bootstrap-fixtures FIXTURE=cmake
 make bootstrap-fixtures FIXTURE=desktop-integration
+make bootstrap-fixtures FIXTURE=external-test-vectors
 make bootstrap-fixtures FIXTURE=font-family
 make bootstrap-fixtures FIXTURE=gettext-localization
 make bootstrap-fixtures FIXTURE=go-module
@@ -269,6 +280,7 @@ make bootstrap-fixtures FIXTURE=multiple-sources
 make bootstrap-fixtures FIXTURE=python-module
 make bootstrap-fixtures FIXTURE=system-integration-assets
 make delegated-execution-fixtures FIXTURE=cmake
+make external-test-vectors-fixture-test
 make font-family-fixture-test
 make go-module-fixture-test
 make python-module-fixture-test
@@ -284,7 +296,8 @@ bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
 materializes the production-format root mirror, then attempts to build,
 package, and reproduce every fixture. Set `FIXTURE=<name>` to select exactly
 one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
-`cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `desktop-integration`, `factory-override`, `font-family`,
+`cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `desktop-integration`,
+`external-test-vectors`, `factory-override`, `font-family`,
 `generated-config`, `generated-shell`, `gettext-localization`, `go-module`, `header-only-library`, `hooks-patch`,
 `meson`, `multiple-sources`, `plugin-output`,
 `post-install-smoke-test`, `python-module`, `split`, `system-integration-assets`, or
@@ -296,7 +309,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all twenty-five, and always requires execution.
+selection, runs all twenty-six, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -330,8 +343,8 @@ content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all twenty-five fixtures complete both executions. It records exactly 50
-executions, 75 bundle validations, 130 Stones, 50 manifests, and 180 artifacts,
+all twenty-six fixtures complete both executions. It records exactly 52
+executions, 78 bundle validations, 131 Stones, 52 manifests, and 183 artifacts,
 plus repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle

@@ -13,12 +13,12 @@ case "$1" in
     --preflight-only)
         mode=preflight
         ;;
-    all|autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|python-module|split|system-integration-assets|userspace-profile)
+    all|autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|external-test-vectors|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|python-module|split|system-integration-assets|userspace-profile)
         fixture=$1
         ;;
     *)
         printf '%s\n' \
-            'argument must be exactly `--preflight-only`, `all`, or one of: autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated desktop-integration factory-override font-family generated-config generated-shell gettext-localization go-module header-only-library hooks-patch meson multiple-sources plugin-output post-install-smoke-test python-module split system-integration-assets userspace-profile' >&2
+            'argument must be exactly `--preflight-only`, `all`, or one of: autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated desktop-integration external-test-vectors factory-override font-family generated-config generated-shell gettext-localization go-module header-only-library hooks-patch meson multiple-sources plugin-output post-install-smoke-test python-module split system-integration-assets userspace-profile' >&2
         exit 2
         ;;
 esac

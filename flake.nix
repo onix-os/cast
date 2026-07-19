@@ -37,6 +37,7 @@
             pkgs.gzip
             pkgs.gnumake
             pkgs.jq
+            pkgs.ninja
             pkgs.pkg-config
             pkgs.typos
             pkgs.valgrind

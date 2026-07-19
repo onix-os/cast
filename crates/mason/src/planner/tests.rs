@@ -138,7 +138,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 25] = [
+const EXECUTION_FIXTURES: [&str; 26] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -148,6 +148,7 @@ const EXECUTION_FIXTURES: [&str; 25] = [
     "custom",
     "daemon-generated",
     "desktop-integration",
+    "external-test-vectors",
     "factory-override",
     "font-family",
     "generated-config",
@@ -166,7 +167,7 @@ const EXECUTION_FIXTURES: [&str; 25] = [
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 24] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 25] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -176,6 +177,7 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 24] = [
     "custom",
     "daemon-generated",
     "desktop-integration",
+    "external-test-vectors",
     "factory-override",
     "font-family",
     "generated-config",
@@ -236,6 +238,7 @@ include!("tests/execution_capability.rs");
 include!("tests/execution_cmake_zlib.rs");
 include!("tests/execution_desktop_integration.rs");
 include!("tests/execution_external_patch.rs");
+include!("tests/execution_external_test_vectors.rs");
 include!("tests/execution_font_family.rs");
 include!("tests/execution_gettext_localization.rs");
 include!("tests/execution_go_module.rs");
@@ -575,7 +578,43 @@ fn package_example_roots() -> Vec<(String, PathBuf)> {
         found, PACKAGE_EXAMPLES,
         "the planner matrix must explicitly cover every checked-in package example"
     );
+    assert_package_example_readme_index(&root, &examples);
     examples
+}
+
+fn assert_package_example_readme_index(root: &Path, examples: &[(String, PathBuf)]) {
+    let readme_path = root
+        .parent()
+        .expect("package example root has a parent")
+        .join("README.md");
+    let readme = fs::read_to_string(&readme_path)
+        .unwrap_or_else(|error| panic!("read package example index {readme_path:?}: {error}"));
+    let mut linked = Vec::new();
+    for line in readme.lines() {
+        let Some(row) = line.strip_prefix("| [`") else {
+            continue;
+        };
+        let Some((label, target)) = row.split_once("`](packages/") else {
+            continue;
+        };
+        let Some((directory, _description)) = target.split_once("/stone.glu) |") else {
+            panic!("malformed package example README row: {line}");
+        };
+        assert_eq!(label, directory, "package example README label and target disagree");
+        linked.push(directory);
+    }
+
+    let linked_set = linked.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(
+        linked.len(),
+        linked_set.len(),
+        "package example README contains a duplicate package row"
+    );
+    let expected = examples.iter().map(|(name, _)| name.as_str()).collect::<BTreeSet<_>>();
+    assert_eq!(
+        linked_set, expected,
+        "package example README must index exactly every planner-covered package"
+    );
 }
 
 fn copy_package_directory(source: &Path, destination: &Path) {

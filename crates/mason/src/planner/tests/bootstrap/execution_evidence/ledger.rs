@@ -171,6 +171,7 @@ pub(super) fn expected_stones(fixture: &str) -> u64 {
         "generated-config"
         | "generated-shell"
         | "desktop-integration"
+        | "external-test-vectors"
         | "font-family"
         | "gettext-localization"
         | "go-module"
