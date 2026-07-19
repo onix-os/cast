@@ -63,6 +63,7 @@ needed by a declarative userspace.
 | [`platform-factory`](packages/platform-factory/stone.glu) | A pure factory receiving explicit platform policy and dependency capabilities from local modules. |
 | [`kernel-module-factory`](packages/kernel-module-factory/stone.glu) | A kernel-specialized package factory with an exact headers output, ABI release, module path, and target set. |
 | [`layered-overrides`](packages/layered-overrides/stone.glu) | Ordered total package transformations with visible prepend, append, and scalar replacement semantics. |
+| [`locked-template-substitution`](packages/locked-template-substitution/stone.glu) | A locked template specialized by one explicit Gluon values record through typed `Run` steps and exact tool providers. |
 | [`dependency-roles`](packages/dependency-roles/stone.glu) | Native, target, check, runtime, output, binary, library, and interpreter relations. |
 | [`shared-capability-origins`](packages/shared-capability-origins/stone.glu) | One provider request retaining every distinct package, executable, and output origin in the frozen closure. |
 | [`custom-steps`](packages/custom-steps/stone.glu) | Explicit `Run` and declared-program `Shell` steps. |

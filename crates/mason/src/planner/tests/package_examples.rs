@@ -9,6 +9,7 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "go-module" => assert_go_module_semantics(declaration, plan),
         "kernel-module-factory" => assert_kernel_module_factory_semantics(declaration, plan),
         "layered-overrides" => assert_layered_override_semantics(declaration, plan),
+        "locked-template-substitution" => assert_locked_template_substitution_semantics(declaration, plan),
         "maven-application" => assert_maven_application_semantics(declaration, plan),
         "native-codegen-target-library" => documented_code_generation::assert_semantics(declaration, plan),
         "nodejs-vendored-application" => assert_nodejs_vendored_application_semantics(declaration, plan),
@@ -26,6 +27,74 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "zig-project" => assert_zig_project_semantics(declaration, plan),
         _ => documented_semantics::assert_semantics(name, declaration, plan),
     }
+}
+
+fn assert_locked_template_substitution_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {
+    assert_eq!(declaration.meta.pname, "session-index-config");
+    assert_eq!(
+        dependency_names(&declaration.builder.required_tools),
+        ["binary(sed)", "binary(grep)", "binary(bash)", "binary(install)"]
+    );
+
+    let [StepSpec::Run { program, args }] = declaration.builder.phases.setup.steps.as_slice() else {
+        panic!("locked-template-substitution must retain one structural substitution step");
+    };
+    assert_eq!(program.path, "sed");
+    assert_eq!(
+        args.as_slice(),
+        [
+            "-i",
+            "-e",
+            "s|@SERVICE_NAME@|session-index|g",
+            "-e",
+            "s|@SOCKET_PATH@|/run/session-index/control.sock|g",
+            "-e",
+            "s|@WORKER_COUNT@|4|g",
+            "-e",
+            "s|@ACCESS_MODE@|read-only|g",
+            "config/session-index.conf.in",
+        ]
+    );
+
+    let expected = [
+        "service_name = session-index",
+        "socket_path = /run/session-index/control.sock",
+        "worker_count = 4",
+        "access_mode = read-only",
+    ];
+    assert_eq!(declaration.builder.phases.check.steps.len(), expected.len());
+    for (step, expected_line) in declaration.builder.phases.check.steps.iter().zip(expected) {
+        let StepSpec::Run { program, args } = step else {
+            panic!("locked-template-substitution checks must remain structural Run steps");
+        };
+        assert_eq!(program.path, "grep");
+        assert_eq!(
+            args.as_slice(),
+            ["-Fqx", expected_line, "config/session-index.conf.in"]
+        );
+    }
+
+    let [StepSpec::Shell {
+        interpreter,
+        declared_programs,
+        script,
+    }] = declaration.builder.phases.install.steps.as_slice()
+    else {
+        panic!("locked-template-substitution must retain one explicit install step");
+    };
+    assert_eq!(interpreter.path, "bash");
+    assert_eq!(
+        declared_programs.iter().map(|program| program.path.as_str()).collect::<Vec<_>>(),
+        ["install"]
+    );
+    assert!(script.contains("${CAST_INSTALL_ROOT}${CAST_DATADIR}/session-index/session-index.conf"));
+    assert!(declaration.outputs[0].paths.iter().any(|path| {
+        matches!(path, stone_recipe::PathSpec::Any { path }
+            if path == "/usr/share/session-index/session-index.conf")
+    }));
+    assert!(matches!(declaration.sources.as_slice(), [UpstreamSpec::Archive { .. }]));
+    assert_eq!(plan.execution.network, NetworkMode::Disabled);
+    assert_x86_64_platform(plan);
 }
 
 fn assert_kernel_module_factory_semantics(declaration: &PackageSpec, plan: &DerivationPlan) {

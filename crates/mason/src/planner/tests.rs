@@ -52,7 +52,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 57] = [
+const PACKAGE_EXAMPLES: [&str; 58] = [
     "autotools",
     "backend-choice-factory",
     "binary-release",
@@ -77,6 +77,7 @@ const PACKAGE_EXAMPLES: [&str; 57] = [
     "hooks",
     "kernel-module-factory",
     "layered-overrides",
+    "locked-template-substitution",
     "manual-compiler-pipeline",
     "maven-application",
     "meson",
