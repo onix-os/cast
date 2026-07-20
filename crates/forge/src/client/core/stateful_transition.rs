@@ -215,11 +215,11 @@ impl Client {
                 )?;
             }
             checkpoint(StatefulTransitionCheckpoint::AfterTransactionTriggers)?;
-            Ok::<_, Error>(metadata)
+            Ok::<_, Error>((metadata, isolation_root))
         })();
 
-        let metadata = match prepare {
-            Ok(metadata) => metadata,
+        let (metadata, isolation_root) = match prepare {
+            Ok(prepared) => prepared,
             Err(primary) => {
                 return Err(self.preserve_unswapped_candidate(
                     state.id,
@@ -243,6 +243,8 @@ impl Client {
             &tree_identity,
             Some(&metadata),
             live_root_abi,
+            &isolation_root,
+            &local_etc,
             active_state,
             &mut checkpoint,
         )
@@ -271,6 +273,8 @@ impl Client {
         tree_identity: &StatefulTreeIdentity,
         metadata: Option<&candidate_metadata::CandidateMetadataProof>,
         live_root_abi: RootAbiPreflight,
+        isolation_root: &RetainedRootAbi,
+        local_etc: &transaction_root::RetainedLocalEtc,
         active_state: &active_state_authority::ActiveStateAuthority,
         checkpoint: &mut F,
     ) -> Result<(), Error>
@@ -433,6 +437,8 @@ impl Client {
                 Self::apply_triggers(
                     TriggerScope::System {
                         installation: &self.installation,
+                        isolation_root,
+                        local_etc,
                         retained_usr,
                         live_usr_path: &live_usr_path,
                     },

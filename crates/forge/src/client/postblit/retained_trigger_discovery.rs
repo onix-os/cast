@@ -91,6 +91,8 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         crate::test_support::prepare_private_installation_root(temporary.path());
         let installation = crate::Installation::open(temporary.path(), None).unwrap();
+        let local_etc = crate::client::transaction_root::prepare_local_etc(&installation).unwrap();
+        let isolation_root = crate::client::create_root_links(&installation.isolation_dir()).unwrap();
         let live_usr_path = installation.root.join("usr");
         let original = live_usr_path.join("share/cast/triggers/sys.d/system.glu");
         fs_err::create_dir_all(original.parent().unwrap()).unwrap();
@@ -129,6 +131,8 @@ mod tests {
         let runners = crate::client::postblit::triggers(
             crate::client::postblit::TriggerScope::System {
                 installation: &installation,
+                isolation_root: &isolation_root,
+                local_etc: &local_etc,
                 retained_usr: &retained_usr,
                 live_usr_path: &live_usr_path,
             },

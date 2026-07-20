@@ -35,7 +35,7 @@ impl Client {
         F: FnMut(StatefulTransitionCheckpoint) -> Result<(), Error>,
     {
         self.require_stateful_scope()?;
-        let _local_etc = transaction_root::prepare_local_etc(&self.installation)?;
+        let local_etc = transaction_root::prepare_local_etc(&self.installation)?;
         let mut active_state = active_state_authority::ActiveStateAuthority::acquire(&self.installation)?;
         // Fetch the new state
         let new = self.state_db.get(id).map_err(|_| Error::StateDoesntExist(id))?;
@@ -59,6 +59,7 @@ impl Client {
         // the read-only proof so the same names can be revalidated at the
         // exchange boundary without reopening mutable path authority.
         let live_root_abi = preflight_root_links(&self.installation.root)?;
+        let isolation_root = create_root_links(&self.installation.isolation_dir())?;
 
         let archived_usr = self.installation.root_path(new.id.to_string()).join("usr");
         active_state.revalidate(&self.installation)?;
@@ -122,6 +123,8 @@ impl Client {
             &tree_identity,
             None,
             live_root_abi,
+            &isolation_root,
+            &local_etc,
             &active_state,
             &mut checkpoint,
         )?;

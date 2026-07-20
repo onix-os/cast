@@ -31,6 +31,27 @@ struct DirectoryWitness {
     changed_nanoseconds: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MutableDirectoryIdentity {
+    device: u64,
+    inode: u64,
+    owner: u32,
+    group: u32,
+    mode: u32,
+}
+
+impl DirectoryWitness {
+    fn mutable_identity(self) -> MutableDirectoryIdentity {
+        MutableDirectoryIdentity {
+            device: self.device,
+            inode: self.inode,
+            owner: self.owner,
+            group: self.group,
+            mode: self.mode,
+        }
+    }
+}
+
 /// One exact local `/etc` directory retained through transaction-trigger
 /// container construction and activation.
 ///
@@ -72,6 +93,39 @@ impl RetainedLocalEtc {
             return Err(local_etc_changed(installation, "local /etc final name changed"));
         }
         require_no_acl(&named, &self.path, installation, "revalidate named local /etc")?;
+        installation.revalidate_root_directory()?;
+        Ok(())
+    }
+
+    /// Revalidate the retained local `/etc` directory while allowing system
+    /// triggers to change its declared writable contents. The directory inode,
+    /// owner, group, mode, ACL policy, and canonical name remain immutable.
+    pub(super) fn revalidate_mutable(&self, installation: &Installation) -> Result<(), super::Error> {
+        installation.revalidate_root_directory()?;
+        let expected = self.witness.mutable_identity();
+        if local_etc_mutable_identity(&self.directory, &self.path, installation)? != expected {
+            return Err(local_etc_changed(
+                installation,
+                "retained mutable local /etc identity or policy changed",
+            ));
+        }
+        require_no_acl(
+            &self.directory,
+            &self.path,
+            installation,
+            "revalidate retained mutable local /etc",
+        )?;
+
+        let named = open_local_etc(installation, "reopen retained mutable local /etc final name")?;
+        if local_etc_mutable_identity(&named, &self.path, installation)? != expected
+            || local_etc_mutable_identity(&self.directory, &self.path, installation)? != expected
+        {
+            return Err(local_etc_changed(
+                installation,
+                "mutable local /etc final name changed",
+            ));
+        }
+        require_no_acl(&named, &self.path, installation, "revalidate named mutable local /etc")?;
         installation.revalidate_root_directory()?;
         Ok(())
     }
@@ -418,6 +472,38 @@ fn local_etc_witness(
     }
 }
 
+fn local_etc_mutable_identity(
+    directory: &std::fs::File,
+    path: &std::path::Path,
+    installation: &Installation,
+) -> Result<MutableDirectoryIdentity, super::Error> {
+    let metadata = directory
+        .metadata()
+        .map_err(|source| local_etc_error("revalidate mutable local /etc metadata", installation, source))?;
+    let identity = MutableDirectoryIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        owner: metadata.uid(),
+        group: metadata.gid(),
+        mode: metadata.permissions().mode() & 0o7777,
+    };
+    if metadata.file_type().is_dir() && identity.owner == super::effective_user_id() && identity.mode == 0o755 {
+        Ok(identity)
+    } else {
+        Err(local_etc_error_at(
+            "validate mutable local /etc policy",
+            path,
+            io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "unsafe mutable local /etc (uid={}, mode={:04o})",
+                    identity.owner, identity.mode
+                ),
+            ),
+        ))
+    }
+}
+
 fn require_private_residue(directory: &std::fs::File, path: &std::path::Path) -> Result<(), super::Error> {
     let metadata = directory
         .metadata()
@@ -747,6 +833,26 @@ mod tests {
         retained.revalidate(&installation).unwrap();
 
         assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o7777, 0o755);
+    }
+
+    #[test]
+    fn mutable_revalidation_allows_content_changes_but_rejects_final_name_replacement() {
+        let (_temporary, installation) = fixture();
+        let retained = prepare_local_etc(&installation).unwrap();
+        let path = installation.root.join("etc");
+        fs::write(path.join("declared-system-change"), b"allowed contents").unwrap();
+        retained.revalidate_mutable(&installation).unwrap();
+
+        let displaced = installation.root.join("retained-mutable-etc");
+        fs::rename(&path, &displaced).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_proof_failure(retained.revalidate_mutable(&installation));
+        assert_eq!(
+            fs::read(displaced.join("declared-system-change")).unwrap(),
+            b"allowed contents"
+        );
     }
 
     #[test]

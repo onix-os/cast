@@ -20,16 +20,6 @@ pub(super) fn exact_directory(path: &Path, retained: &std::fs::File) -> io::Resu
     AnchoredLocator::exact(path, &witness).map_err(locator_error)
 }
 
-pub(super) fn exact_named_installation_directory(
-    installation: &Installation,
-    path: &Path,
-) -> io::Result<(std::fs::File, AnchoredLocator)> {
-    let relative = installation_relative_path(installation, path)?;
-    let retained = open_path_directory(installation.root_directory(), relative)?;
-    let locator = exact_directory(path, &retained)?;
-    Ok((retained, locator))
-}
-
 pub(super) fn beneath_directory(
     absolute_base_path: &Path,
     retained_base: &std::fs::File,
@@ -50,16 +40,6 @@ pub(super) fn beneath_installation_directory(
 ) -> io::Result<AnchoredLocator> {
     let relative = installation_relative_path(installation, path)?;
     beneath_directory(&installation.root, installation.root_directory(), relative, retained)
-}
-
-pub(super) fn beneath_named_installation_directory(
-    installation: &Installation,
-    path: &Path,
-) -> io::Result<(std::fs::File, AnchoredLocator)> {
-    let relative = installation_relative_path(installation, path)?;
-    let retained = open_path_directory(installation.root_directory(), relative)?;
-    let locator = beneath_directory(&installation.root, installation.root_directory(), relative, &retained)?;
-    Ok((retained, locator))
 }
 
 fn installation_relative_path<'path>(installation: &Installation, path: &'path Path) -> io::Result<&'path Path> {

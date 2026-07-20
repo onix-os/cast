@@ -156,13 +156,13 @@ pub(super) enum TriggerScope<'a> {
         view: super::external_materialization::RetainedEphemeralTriggerView<'a>,
     },
 
-    /// A stateful system trigger whose packaged intent is rooted at the exact
-    /// candidate inode retained before activation. Non-live execution reuses
-    /// that inode as its `/usr` bind; live-root direct execution separately
-    /// revalidates the public name immediately before the handler.
-    /// The live path is only its canonical diagnostic and name-proof label.
+    /// A stateful system trigger whose packaged intent and execution view are
+    /// rooted at the exact candidate inode retained before activation. The
+    /// live path is only its canonical diagnostic and name-proof label.
     System {
         installation: &'a Installation,
+        isolation_root: &'a super::RetainedRootAbi,
+        local_etc: &'a super::transaction_root::RetainedLocalEtc,
         retained_usr: &'a std::fs::File,
         live_usr_path: &'a Path,
     },
@@ -282,11 +282,10 @@ impl TriggerRunner<'_> {
 
     /// Execute a trigger, taking care to account for the transaction scope and client scope
     ///
-    /// All transaction triggers are run via sandboxing ([`container::Container`]) to limit their
-    /// system view, and limit write access.
-    /// System triggers will execute without any sandboxing when Cast is used directly against the
-    /// live root filesystem, and will force sandboxing when using a non-`/` root (such as using the
-    /// `-D` argument with `cast install`)
+    /// All triggers execute in a scope-specific [`container::Container`].
+    /// Stateful system triggers use the same retained, anchored execution view
+    /// for live and non-live installation roots; there is no direct live-root
+    /// fallback.
     pub fn execute(&self) -> Result<(), Error> {
         match self.scope {
             TriggerScope::Transaction(install) => {
@@ -343,31 +342,46 @@ impl TriggerRunner<'_> {
             }
             TriggerScope::System {
                 installation,
+                isolation_root,
+                local_etc,
                 retained_usr,
                 live_usr_path,
             } => {
                 // This variant is stateful-only. External ephemeral system
-                // triggers have a distinct retained variant and therefore can
-                // never reach the live-root direct-execution branch.
-                if trigger_scope_may_execute_directly(self.scope) {
-                    system_trigger_container::revalidate_usr_name(installation, retained_usr, live_usr_path)?;
-                    Ok(execute_trigger_directly(&self.trigger)?)
-                } else {
-                    let isolation = system_trigger_container::container(installation, retained_usr, live_usr_path)?;
-                    system_trigger_container::before_activation();
-
-                    Ok(isolation.run(|| execute_trigger_directly(&self.trigger))?)
+                // triggers have a distinct retained variant. Every stateful
+                // system handler, including one targeting `/`, executes only
+                // after the anchored private view has pinned `/usr` and `/etc`.
+                let isolation = system_trigger_container::container(
+                    installation,
+                    isolation_root,
+                    local_etc,
+                    retained_usr,
+                    live_usr_path,
+                )?;
+                system_trigger_container::before_activation();
+                let primary = isolation
+                    .run(|| execute_trigger_directly(&self.trigger))
+                    .map_err(Error::from);
+                system_trigger_container::after_payload();
+                let revalidation = system_trigger_container::revalidate(
+                    installation,
+                    isolation_root,
+                    local_etc,
+                    retained_usr,
+                    live_usr_path,
+                );
+                match (primary, revalidation) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(primary), Ok(())) => Err(primary),
+                    (Ok(()), Err(revalidation)) => Err(revalidation),
+                    (Err(primary), Err(revalidation)) => Err(Error::SystemTriggerOperationAndRevalidation {
+                        primary: Box::new(primary),
+                        revalidation: Box::new(revalidation),
+                    }),
                 }
             }
         }
     }
-}
-
-fn trigger_scope_may_execute_directly(scope: TriggerScope<'_>) -> bool {
-    matches!(
-        scope,
-        TriggerScope::System { installation, .. } if installation.root == Path::new("/")
-    )
 }
 
 /// Internal executor for triggers.
@@ -626,6 +640,14 @@ pub enum Error {
         "retained ephemeral trigger operation failed with {primary}; the following authority revalidation also failed: {revalidation}"
     )]
     RetainedEphemeralOperationAndRevalidation {
+        primary: Box<Error>,
+        revalidation: Box<Error>,
+    },
+
+    #[error(
+        "stateful system trigger operation failed with {primary}; the following authority revalidation also failed: {revalidation}"
+    )]
+    SystemTriggerOperationAndRevalidation {
         primary: Box<Error>,
         revalidation: Box<Error>,
     },

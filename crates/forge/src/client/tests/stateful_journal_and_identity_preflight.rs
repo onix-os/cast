@@ -254,6 +254,8 @@ fn first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr() {
     let live_usr = client.installation.root.join("usr");
     assert!(!live_usr.exists());
 
+    let local_etc = transaction_root::prepare_local_etc(&client.installation).unwrap();
+    let isolation_root = create_root_links(&client.installation.isolation_dir()).unwrap();
     let mut active_state = active_state_authority::ActiveStateAuthority::acquire(&client.installation).unwrap();
     let tree_identity = client
         .prepare_stateful_tree_identity(&candidate_usr, candidate.id)
@@ -291,6 +293,8 @@ fn first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr() {
             &tree_identity,
             Some(&metadata_proof),
             live_root_abi,
+            &isolation_root,
+            &local_etc,
             &active_state,
             &mut |_| Ok(()),
         )

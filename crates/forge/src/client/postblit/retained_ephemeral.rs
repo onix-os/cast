@@ -19,7 +19,7 @@ use crate::{
 };
 
 const TRANSACTION_MOUNT_TARGETS: [&CStr; 5] = [c"etc", c"usr", c"proc", c"tmp", c"dev"];
-const SYSTEM_MOUNT_TARGETS: [&CStr; 6] = [c"etc", c"usr", c"proc", c"tmp", c"sys", c"dev"];
+const SYSTEM_MOUNT_TARGETS: [&CStr; 5] = [c"etc", c"usr", c"proc", c"tmp", c"dev"];
 const MAX_INTERRUPTS: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69,13 +69,9 @@ pub(super) fn container(
         .map_err(|source| pin_error("external candidate /usr", usr_path, source))?;
     let base = Container::new_anchored(root_locator)
         .map_err(|source| pin_error("container root", isolation_path, source))?
-        .networking(false);
-    let base = match phase {
-        RetainedEphemeralPhase::Transaction => base
-            .root_filesystem(TRANSACTION_ROOT_FILESYSTEM)
-            .pseudo_filesystems(TRANSACTION_PSEUDO_FILESYSTEMS),
-        RetainedEphemeralPhase::System => base,
-    };
+        .networking(false)
+        .root_filesystem(TRANSACTION_ROOT_FILESYSTEM)
+        .pseudo_filesystems(TRANSACTION_PSEUDO_FILESYSTEMS);
     let base = bind_pinned(base, etc_locator, "/etc", policy.etc_read_only)
         .map_err(|source| pin_error("external candidate /etc", etc_path, source))?;
     let container = bind_pinned(base, usr_locator, "/usr", policy.usr_read_only)
@@ -195,14 +191,23 @@ mod tests {
 
     use super::*;
     use crate::client::{
-        AssetMaterialization, BlitExecution,
-        candidate_metadata::RetainedEphemeralUsr,
+        AssetMaterialization, BlitExecution, candidate_metadata::RetainedEphemeralUsr,
         external_materialization::RetainedExternalMaterializationTarget,
-        postblit::{TriggerScope, trigger_scope_may_execute_directly},
     };
 
     #[test]
     fn retained_ephemeral_phase_policies_keep_transaction_etc_read_only() {
+        assert_eq!(TRANSACTION_MOUNT_TARGETS, [c"etc", c"usr", c"proc", c"tmp", c"dev"]);
+        assert_eq!(SYSTEM_MOUNT_TARGETS, [c"etc", c"usr", c"proc", c"tmp", c"dev"]);
+        assert_eq!(TRANSACTION_ROOT_FILESYSTEM, container::RootFilesystemPolicy::ReadOnly);
+        assert_eq!(TRANSACTION_PSEUDO_FILESYSTEMS.proc, container::ProcPolicy::ReadOnly);
+        assert!(matches!(
+            TRANSACTION_PSEUDO_FILESYSTEMS.tmp,
+            container::TmpPolicy::Bounded(limits)
+                if limits.size_bytes() == 256 * 1024 * 1024 && limits.inodes() == 65_536
+        ));
+        assert_eq!(TRANSACTION_PSEUDO_FILESYSTEMS.sys, container::SysPolicy::None);
+        assert_eq!(TRANSACTION_PSEUDO_FILESYSTEMS.dev, container::DevPolicy::Minimal);
         assert_eq!(
             candidate_bind_policy(RetainedEphemeralPhase::Transaction),
             CandidateBindPolicy {
@@ -250,19 +255,40 @@ mod tests {
     }
 
     #[test]
-    fn system_container_mounts_usr_and_etc_read_write() {
+    fn system_container_uses_writable_candidate_binds_inside_a_read_only_minimal_root() {
         let mut fixture = EphemeralContainerFixture::new();
         let isolation = fixture.container(RetainedEphemeralPhase::System).unwrap();
 
         let result = isolation.run(|| {
             fs::write("/usr/system-write", b"system usr")?;
             fs::write("/etc/system-write", b"system etc")?;
+            fs::write("/tmp/system-write", b"bounded tmp")?;
+
+            let root_error = fs::write("/undeclared-root-write", b"forbidden")
+                .expect_err("read-only scratch root accepted an undeclared write");
+            require_write_denial(root_error, "scratch root")?;
+
+            match fs::symlink_metadata("/sys") {
+                Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => return Err(source),
+                Ok(_) => return Err(io::Error::other("ephemeral system trigger unexpectedly inherited sysfs")),
+            }
+
+            let mut devices = fs::read_dir("/dev")?
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<Result<Vec<_>, _>>()?;
+            devices.sort();
+            if devices != ["full", "null", "zero"] {
+                return Err(io::Error::other(format!("unexpected minimal device view: {devices:?}")));
+            }
             Ok::<(), io::Error>(())
         });
 
         if activation_completed(result, "retained ephemeral system access") {
             assert_eq!(fs::read(fixture.root.join("usr/system-write")).unwrap(), b"system usr");
             assert_eq!(fs::read(fixture.root.join("etc/system-write")).unwrap(), b"system etc");
+            assert!(!fixture.isolation_root.path().join("undeclared-root-write").exists());
+            assert!(!fixture.isolation_root.path().join("tmp/system-write").exists());
         }
     }
 
@@ -362,28 +388,6 @@ mod tests {
         assert_eq!(fs::read_link(detached.join("bin")).unwrap(), Path::new("usr/bin"));
     }
 
-    #[test]
-    fn retained_ephemeral_system_scope_never_uses_live_root_direct_execution() {
-        let mut fixture = EphemeralContainerFixture::new();
-        let view = fixture
-            .target
-            .prepare_trigger_view(&fixture.installation, &fixture.candidate_usr)
-            .unwrap();
-
-        // Constructing a retained external target against `/` is prohibited
-        // because no destination can be disjoint from it. Mutating only this
-        // public diagnostic field after all capabilities are retained lets us
-        // exercise dispatch without touching the live root.
-        fixture.installation.root = PathBuf::from("/");
-        let scope = TriggerScope::RetainedEphemeral {
-            phase: RetainedEphemeralPhase::System,
-            installation: &fixture.installation,
-            isolation_root: &fixture.isolation_root,
-            view,
-        };
-        assert!(!trigger_scope_may_execute_directly(scope));
-    }
-
     struct EphemeralContainerFixture {
         _temporary: tempfile::TempDir,
         installation: Installation,
@@ -467,19 +471,22 @@ mod tests {
     fn activation_completed(result: Result<(), container::Error>, context: &str) -> bool {
         match result {
             Ok(()) => true,
-            Err(container::Error::CloneNamespaces {
-                source: nix::errno::Errno::EPERM | nix::errno::Errno::EACCES | nix::errno::Errno::ENOSYS,
-            }) => {
-                eprintln!("SKIP {context}: host denied mandatory namespaces");
-                false
-            }
-            Err(container::Error::Failure { message })
-                if message.starts_with("legacy clone requires an authenticated single-task supervisor:") =>
-            {
-                eprintln!("SKIP {context} payload: {message}");
+            Err(error) if error.execution_capability_unavailable() => {
+                eprintln!("SKIP {context}: host denied mandatory container capability: {error}");
                 false
             }
             Err(error) => panic!("{context} activation failed: {error:?}"),
+        }
+    }
+
+    fn require_write_denial(source: io::Error, path_role: &str) -> io::Result<()> {
+        if matches!(
+            source.raw_os_error(),
+            Some(nix::libc::EROFS | nix::libc::EACCES | nix::libc::EPERM)
+        ) {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("unexpected {path_role} write result: {source}")))
         }
     }
 }

@@ -15,6 +15,7 @@ help:
 	@echo "  forge-installation-test  Run all direct installation policy and filesystem tests"
 	@echo "  forge-mutable-startup-namespace-test  Run retained mutable startup namespace substitution tests"
 	@timeout 10s echo "  forge-mutable-system-capabilities-test  Run coherent mutable startup capability and drop-order contracts"
+	@timeout 10s echo "  forge-system-trigger-view-test  Run anchored least-privilege system-trigger view contracts"
 	@timeout 10s echo "  forge-active-reblit-boot-schema-input-test  Run sealed state-schema binding contracts"
 	@timeout 10s echo "  forge-active-reblit-local-boot-policy-test  Run descriptor-retained local cmdline policy contracts"
 	@timeout 10s echo "  forge-active-reblit-package-cmdline-input-test  Run sealed package cmdline semantic-input contracts"

@@ -536,6 +536,8 @@ fn fresh_identity_can_archive_after_a_complete_compensating_recovery() {
     let next = fixture.client.state_db.add(&[], Some("next candidate"), None).unwrap();
     record_state_id(&fixture.client.installation.staging_dir(), next.id).unwrap();
     let staged = fixture.client.installation.staging_path("usr");
+    let local_etc = transaction_root::prepare_local_etc(&fixture.client.installation).unwrap();
+    let isolation_root = create_root_links(&fixture.client.installation.isolation_dir()).unwrap();
     let mut active_state = active_state_authority::ActiveStateAuthority::acquire(&fixture.client.installation).unwrap();
     let identity = fixture.client.prepare_stateful_tree_identity(&staged, next.id).unwrap();
     let metadata =
@@ -558,6 +560,8 @@ fn fresh_identity_can_archive_after_a_complete_compensating_recovery() {
             &identity,
             Some(&metadata),
             live_root_abi,
+            &isolation_root,
+            &local_etc,
             &active_state,
             &mut no_fault,
         )
