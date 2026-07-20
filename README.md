@@ -3,9 +3,9 @@
 # SPDX-License-Identifier: MPL-2.0
 -->
 
-# OS Tools
+# Cast
 
-OS Tools is the declarative package-building and system-state toolkit used by
+Cast is the declarative package-building and system-state toolkit used by
 Onix OS. It ships one command: `cast`.
 
 Cast is backed by two internal Rust libraries:
@@ -109,7 +109,7 @@ misc/           boot integration, MIME data, scripts, and notices
 
 ## Declarative configuration
 
-Gluon is the only OS Tools configuration language. The main authored entry
+Gluon is the only Cast configuration language. The main authored entry
 points are:
 
 - `stone.glu` for packages;
@@ -122,7 +122,7 @@ Public modules use only the `cast.*` namespace, including
 `cast.package.v3`, `cast.builders.*.v2`, `cast.profile.v1`,
 `cast.repository.v1`, `cast.trigger.v1`, and `cast.system.v1`.
 
-OS Tools does not fall back to YAML or KDL. The only YAML allowlist belongs to
+Cast does not fall back to YAML or KDL. The only YAML allowlist belongs to
 external GitHub interfaces under `.github/`. `make test` runs the
 `config-formats` gate so owned YAML or KDL paths fail validation.
 
@@ -246,9 +246,9 @@ PIDs, 32 GiB memory, no swap, and CPU bandwidth equal to the frozen
 
 ## Acknowledgments
 
-OS Tools builds on prior open-source work; the people and projects it grew
+Cast builds on prior open-source work; the people and projects it grew
 from are credited in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## License
 
-OS Tools is available under the [Mozilla Public License 2.0](LICENSE).
+Cast is available under the [Mozilla Public License 2.0](LICENSE).
