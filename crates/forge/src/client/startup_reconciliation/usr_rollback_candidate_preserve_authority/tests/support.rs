@@ -28,6 +28,12 @@ impl CandidateSource {
         Self::Exchanged,
         Self::RootLinksComplete,
     ];
+    #[allow(dead_code)] // path-included legacy suites intentionally stop before invalidation
+    pub(super) const THROUGH_FRESH_DB_INVALIDATED: [Self; 3] = [
+        Self::Intent,
+        Self::Exchanged,
+        Self::RootLinksComplete,
+    ];
 
     fn fixture_source(self) -> SourceCase {
         match self {

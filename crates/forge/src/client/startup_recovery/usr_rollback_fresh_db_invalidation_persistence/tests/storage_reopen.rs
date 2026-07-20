@@ -53,52 +53,58 @@ fn startup_fresh_db_invalidation_persistence_faults_reopen_exact_intent_or_inval
         ),
     ];
 
-    for origin in FreshDbInvalidationOrigin::ALL {
-        for source in Source::ALL {
-            for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
-                for candidate_outcome in CandidateResult::ALL {
-                    for (arm, assert_consumed, expected_durable) in cases {
-                        let fixture = fixture_for_origin(origin, false, source, usr_outcome, candidate_outcome);
-                        let journal = fixture.open_journal();
-                        let reservation = ActiveStateReservation::acquire().unwrap();
-                        let authority = effect_authority(&fixture, &journal, &reservation, origin);
-                        let expected = expected_fresh_db_invalidated(&fixture, origin);
-                        let expected_removals = if origin == FreshDbInvalidationOrigin::Applied {
-                            1
-                        } else {
-                            0
-                        };
-                        arm();
+    let mut executions = 0;
+    for historical in [false, true] {
+        for origin in FreshDbInvalidationOrigin::ALL {
+            for source in Source::THROUGH_FRESH_DB_INVALIDATED {
+                for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                    for candidate_outcome in CandidateResult::ALL {
+                        for (arm, assert_consumed, expected_durable) in cases {
+                            executions += 1;
+                            let fixture =
+                                fixture_for_origin(origin, historical, source, usr_outcome, candidate_outcome);
+                            let journal = fixture.open_journal();
+                            let reservation = ActiveStateReservation::acquire().unwrap();
+                            let authority = effect_authority(&fixture, &journal, &reservation, origin);
+                            let expected = expected_fresh_db_invalidated(&fixture, origin);
+                            let expected_removals = if origin == FreshDbInvalidationOrigin::Applied {
+                                1
+                            } else {
+                                0
+                            };
+                            arm();
 
-                        let error =
-                            persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority).unwrap_err();
+                            let error = persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority)
+                                .unwrap_err();
 
-                        assert_consumed();
-                        assert!(matches!(
-                            error,
-                            UsrRollbackFreshDbInvalidationPersistenceError::Advance { durable, .. }
-                                if durable == expected_durable
-                        ));
-                        match expected_durable {
-                            DurableUsrRollbackFreshDbInvalidationRecord::FreshDbInvalidationIntent => {
-                                assert_eq!(fixture.canonical_record(), fixture.record)
+                            assert_consumed();
+                            assert!(matches!(
+                                error,
+                                UsrRollbackFreshDbInvalidationPersistenceError::Advance { durable, .. }
+                                    if durable == expected_durable
+                            ));
+                            match expected_durable {
+                                DurableUsrRollbackFreshDbInvalidationRecord::FreshDbInvalidationIntent => {
+                                    assert_eq!(fixture.canonical_record(), fixture.record)
+                                }
+                                DurableUsrRollbackFreshDbInvalidationRecord::FreshDbInvalidated => {
+                                    assert_eq!(fixture.canonical_record(), expected)
+                                }
                             }
-                            DurableUsrRollbackFreshDbInvalidationRecord::FreshDbInvalidated => {
-                                assert_eq!(fixture.canonical_record(), expected)
-                            }
+                            fixture.assert_exact_joint_absence();
+                            assert_eq!(fresh_db_invalidation_removal_call_count(), expected_removals);
+                            let names = fs::read_dir(fixture.fixture.fixture.installation.root.join(".cast/journal"))
+                                .unwrap()
+                                .map(|entry| entry.unwrap().file_name())
+                                .collect::<Vec<_>>();
+                            assert_eq!(names.len(), 2, "stale journal residue remained after reopen: {names:?}");
                         }
-                        fixture.assert_exact_joint_absence();
-                        assert_eq!(fresh_db_invalidation_removal_call_count(), expected_removals);
-                        let names = fs::read_dir(fixture.fixture.fixture.installation.root.join(".cast/journal"))
-                            .unwrap()
-                            .map(|entry| entry.unwrap().file_name())
-                            .collect::<Vec<_>>();
-                        assert_eq!(names.len(), 2, "stale journal residue remained after reopen: {names:?}");
                     }
                 }
             }
         }
     }
+    assert_eq!(executions, 240);
 }
 
 #[test]

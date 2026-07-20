@@ -9,7 +9,7 @@ use crate::{
         },
     },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
-    transition_journal::Phase,
+    transition_journal::{Phase, RollbackAction, RollbackActionOutcome},
 };
 
 use super::{
@@ -18,15 +18,18 @@ use super::{
 };
 
 #[test]
-fn startup_root_links_complete_new_state_reaches_generation_16_then_stays_closed_without_effects() {
+fn startup_root_links_complete_new_state_reaches_generation_17_then_stays_closed_without_later_effects() {
     for historical in [false, true] {
         for candidate_outcome in CandidateOutcome::ALL {
+            for fresh_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
             let fixture = if historical {
                 Fixture::historical(OperationKind::NewState, SourceCase::RootLinksCompletePost)
             } else {
                 Fixture::new(OperationKind::NewState, SourceCase::RootLinksCompletePost)
             };
-            let case = format!("historical={historical} candidate={candidate_outcome:?}");
+            let case = format!(
+                "historical={historical} candidate={candidate_outcome:?} fresh={fresh_outcome:?}"
+            );
             let database_before = fixture.database_snapshot();
             let root_links_before = root_link_snapshot(&fixture);
             reset_retained_exchange_syscall_count();
@@ -86,9 +89,9 @@ fn startup_root_links_complete_new_state_reaches_generation_16_then_stays_closed
             assert_eq!(
                 candidate_preserved.rollback.as_ref().unwrap().candidate.action,
                 match candidate_outcome {
-                    CandidateOutcome::Applied => crate::transition_journal::RollbackAction::Applied,
+                    CandidateOutcome::Applied => RollbackAction::Applied,
                     CandidateOutcome::AlreadySatisfied => {
-                        crate::transition_journal::RollbackAction::AlreadySatisfied
+                        RollbackAction::AlreadySatisfied
                     }
                 },
                 "{case}"
@@ -105,7 +108,6 @@ fn startup_root_links_complete_new_state_reaches_generation_16_then_stays_closed
             drop(candidate_entry);
 
             reset_boot_synchronize_attempt_count();
-            let removal_before = fresh_db_invalidation_removal_call_count();
             let route_entry = fixture.enter();
             let invalidation_intent = fixture.canonical_record();
             assert_eq!(pending(&route_entry).phase(), Phase::FreshDbInvalidationIntent, "{case}");
@@ -117,24 +119,87 @@ fn startup_root_links_complete_new_state_reaches_generation_16_then_stays_closed
                 "{case}"
             );
             assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
-            assert_eq!(fresh_db_invalidation_removal_call_count(), removal_before, "{case}");
             assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
             assert_eq!(fixture.database_snapshot(), database_before, "{case}");
             assert_eq!(fixture.namespace_snapshot(), route_namespace_before, "{case}");
             assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
-            let intent_bytes = fixture.canonical_bytes();
             drop(route_entry);
 
-            let stable_entry = fixture.enter();
-            assert_eq!(pending(&stable_entry).phase(), Phase::FreshDbInvalidationIntent, "{case}");
-            assert_eq!(fixture.canonical_record(), invalidation_intent, "{case}");
-            assert_eq!(fixture.canonical_bytes(), intent_bytes, "{case}");
+            let observation = fixture
+                .database
+                .inspect_exact_fresh_transition(fixture.candidate_state, &invalidation_intent.transition_id)
+                .unwrap();
+            match fresh_outcome {
+                RollbackActionOutcome::Applied => assert!(matches!(
+                    observation,
+                    crate::db::state::ExactFreshTransitionObservation::Present(_)
+                )),
+                RollbackActionOutcome::AlreadySatisfied => {
+                    let crate::db::state::ExactFreshTransitionObservation::Present(preimage) = observation else {
+                        panic!("fresh endpoint fixture must start with one exact row: {case}");
+                    };
+                    fixture.database.remove_exact_fresh_transition(preimage).unwrap();
+                }
+            }
+
+            let invalidation_entry = fixture.enter();
+            let invalidated = fixture.canonical_record();
+            assert_eq!(pending(&invalidation_entry).phase(), Phase::FreshDbInvalidated, "{case}");
+            assert_eq!(invalidated.phase, Phase::FreshDbInvalidated, "{case}");
+            assert_eq!(invalidated.generation, 17, "{case}");
+            assert_eq!(
+                invalidated,
+                invalidation_intent.rollback_successor(Some(fresh_outcome)).unwrap(),
+                "{case}"
+            );
+            assert_eq!(
+                invalidated.rollback.as_ref().unwrap().fresh_db,
+                match fresh_outcome {
+                    RollbackActionOutcome::Applied => RollbackAction::Applied,
+                    RollbackActionOutcome::AlreadySatisfied => RollbackAction::AlreadySatisfied,
+                },
+                "{case}"
+            );
             assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
-            assert_eq!(fresh_db_invalidation_removal_call_count(), removal_before, "{case}");
+            assert_eq!(
+                fresh_db_invalidation_removal_call_count(),
+                usize::from(fresh_outcome == RollbackActionOutcome::Applied),
+                "{case}"
+            );
             assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
-            assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+            assert!(matches!(
+                fixture.database.inspect_exact_fresh_transition(
+                    fixture.candidate_state,
+                    &invalidated.transition_id,
+                ),
+                Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
+            ));
             assert_eq!(fixture.namespace_snapshot(), route_namespace_before, "{case}");
             assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+            let invalidated_bytes = fixture.canonical_bytes();
+            drop(invalidation_entry);
+
+            let stable_entry = fixture.enter();
+            assert_eq!(pending(&stable_entry).phase(), Phase::FreshDbInvalidated, "{case}");
+            assert_eq!(fixture.canonical_record(), invalidated, "{case}");
+            assert_eq!(fixture.canonical_bytes(), invalidated_bytes, "{case}");
+            assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+            assert_eq!(
+                fresh_db_invalidation_removal_call_count(),
+                usize::from(fresh_outcome == RollbackActionOutcome::Applied),
+                "{case}"
+            );
+            assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
+            assert!(matches!(
+                fixture.database.inspect_exact_fresh_transition(
+                    fixture.candidate_state,
+                    &invalidated.transition_id,
+                ),
+                Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
+            ));
+            assert_eq!(fixture.namespace_snapshot(), route_namespace_before, "{case}");
+            assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+            }
         }
     }
 }

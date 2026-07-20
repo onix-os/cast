@@ -3,7 +3,7 @@ use std::{fs, os::unix::fs::MetadataExt as _, path::PathBuf};
 use crate::{
     client::startup_reconciliation::{
         active_reblit_candidate_preserve_exchange_attempt_count,
-        reset_active_reblit_candidate_preserve_exchange_attempt_count,
+        fresh_db_invalidation_removal_call_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
     },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
     transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome, TransitionRecord},
@@ -147,18 +147,46 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
 
-                    let invalidation_bytes = fixture.canonical_bytes();
+                    let invalidation_intent_bytes = fixture.canonical_bytes();
                     drop(invalidation_entry);
-                    let stable_entry = fixture.enter();
-                    assert_eq!(
-                        pending(&stable_entry).phase(),
-                        Phase::FreshDbInvalidationIntent,
-                        "{case}"
-                    );
-                    assert_eq!(fixture.canonical_record(), invalidation_intent, "{case}");
-                    assert_eq!(fixture.canonical_bytes(), invalidation_bytes, "{case}");
+
+                    let invalidated_entry = fixture.enter();
+                    let invalidated = invalidation_intent
+                        .rollback_successor(Some(RollbackActionOutcome::Applied))
+                        .unwrap();
+                    assert_eq!(invalidated.phase, Phase::FreshDbInvalidated, "{case}");
+                    assert_eq!(invalidated.generation, 17, "{case}");
+                    assert_eq!(pending(&invalidated_entry).phase(), Phase::FreshDbInvalidated, "{case}");
+                    assert!(pending(&invalidated_entry).blockers().is_empty(), "{case}");
+                    assert_eq!(fixture.canonical_record(), invalidated, "{case}");
+                    assert_ne!(fixture.canonical_bytes(), invalidation_intent_bytes, "{case}");
                     assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
-                    assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+                    assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
+                    assert!(matches!(
+                        fixture.database.inspect_exact_fresh_transition(
+                            fixture.candidate_state,
+                            &invalidated.transition_id,
+                        ),
+                        Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
+                    ));
+                    assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
+                    assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+
+                    let invalidated_bytes = fixture.canonical_bytes();
+                    drop(invalidated_entry);
+                    let stable_entry = fixture.enter();
+                    assert_eq!(pending(&stable_entry).phase(), Phase::FreshDbInvalidated, "{case}");
+                    assert_eq!(fixture.canonical_record(), invalidated, "{case}");
+                    assert_eq!(fixture.canonical_bytes(), invalidated_bytes, "{case}");
+                    assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
+                    assert!(matches!(
+                        fixture.database.inspect_exact_fresh_transition(
+                            fixture.candidate_state,
+                            &invalidated.transition_id,
+                        ),
+                        Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
+                    ));
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
                 }

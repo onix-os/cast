@@ -13,10 +13,12 @@ use super::support::{
 };
 
 fn exercise_success_matrix(origin: FreshDbInvalidationOrigin) {
+    let mut cases = 0;
     for historical in [false, true] {
-        for source in Source::ALL {
+        for source in Source::THROUGH_FRESH_DB_INVALIDATED {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 for candidate_outcome in CandidateResult::ALL {
+                    cases += 1;
                     let case = (origin, historical, source, usr_outcome, candidate_outcome);
                     let fixture = fixture_for_origin(origin, historical, source, usr_outcome, candidate_outcome);
                     let journal = fixture.open_journal();
@@ -56,6 +58,7 @@ fn exercise_success_matrix(origin: FreshDbInvalidationOrigin) {
             }
         }
     }
+    assert_eq!(cases, 24, "{origin:?}");
 }
 
 #[test]

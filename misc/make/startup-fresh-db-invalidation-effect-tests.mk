@@ -13,7 +13,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_reconciliation::usr_rollback_fresh_db_invalidation_authority::tests::'; \
 	count="$$( timeout 10s awk -v prefix="$$prefix" 'index($$0, prefix) == 1 && $$0 ~ /: test$$/ { count += 1 } END { print count + 0 }' "$$listed" )"; \
-	timeout 10s test "$$count" = 12; \
+	timeout 10s test "$$count" = 18; \
 	for name in \
 		admission::startup_fresh_db_invalidation_admits_exact_present_apply_and_bound_joint_absence_finish_matrix \
 		admission::startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action \
@@ -26,7 +26,13 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 		evidence_races::startup_fresh_db_invalidation_binding_rejects_reopened_and_cross_root_journals_before_removal \
 		evidence_races::startup_fresh_db_invalidation_capture_rejects_database_changes_between_its_two_snapshots \
 		evidence_races::startup_fresh_db_invalidation_final_database_namespace_and_journal_races_refuse_authority \
-		evidence_races::startup_fresh_db_invalidation_refuses_conflicting_lookalikes_and_retains_stable_ambient_quarantine; do \
+		evidence_races::startup_fresh_db_invalidation_refuses_conflicting_lookalikes_and_retains_stable_ambient_quarantine \
+		record_binding::startup_fresh_db_invalidation_capture_rejects_same_byte_source_inode_replacement \
+		record_binding::startup_fresh_db_invalidation_effect_rejects_same_byte_source_inode_replacement_after_one_removal \
+		record_binding::startup_fresh_db_invalidation_effect_rejects_same_byte_source_inode_replacement_before_removal \
+		root_abi_races::startup_root_links_fresh_db_invalidation_capture_rejects_all_root_abi_mutations_across_fresh_outcomes \
+		root_abi_races::startup_root_links_fresh_db_invalidation_effect_revalidation_rejects_all_root_abi_mutations_before_removal \
+		root_abi_races::startup_root_links_fresh_db_invalidation_post_attempt_rejects_all_root_abi_mutations_after_one_removal; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority.rs; \
@@ -43,12 +49,18 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	admission_tests=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests/admission.rs; \
 	effect_tests=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests/effect.rs; \
 	race_tests=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests/evidence_races.rs; \
+	record_binding_tests=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests/record_binding.rs; \
+	root_abi_tests=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests/root_abi_races.rs; \
 	support=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority/tests/support.rs; \
 	timeout 10s grep -Fqx 'mod usr_rollback_fresh_db_invalidation_authority;' "$$reconciliation_root"; \
 	timeout 10s grep -Fqx 'mod effect_reconciliation;' "$$authority"; \
 	timeout 10s grep -Fqx 'mod fresh_db_invalidation_proof;' "$$namespace_root"; \
 	timeout 10s grep -Fqx '#[cfg(test)]' "$$authority"; \
 	timeout 10s grep -Fqx 'mod tests;' "$$authority"; \
+	for module in admission effect evidence_races record_binding root_abi_races; do \
+		timeout 10s grep -Fqx "mod $$module;" "$$tests"; \
+	done; \
+	timeout 10s test "$$( timeout 10s grep -Ec '^mod [a-z_]+;' "$$tests" )" = 5; \
 	timeout 10s grep -Fqx 'pub(in crate::client) enum UsrRollbackFreshDbInvalidationAdmission<'\''reservation> {' "$$authority"; \
 	for variant in '    NotApplicable,' '    Deferred,' '    Apply(UsrRollbackFreshDbInvalidationApplyAuthority<'\''reservation>),' '    Finish(UsrRollbackFreshDbInvalidationFinishAuthority<'\''reservation>),'; do \
 		timeout 10s grep -Fqx "$$variant" "$$authority"; \
@@ -91,7 +103,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	timeout 10s grep -q . "$$finish_body"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'remove_exact_fresh_transition' "$$apply_body" )" = 0; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'remove_exact_fresh_transition' "$$finish_body" )" = 0; \
-	binding_line="$$( timeout 10s grep -nE 'require_(effect_|journal_)?binding|has_binding' "$$effect" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
+	binding_line="$$( timeout 10s grep -nE 'require_.*binding|has_.*binding' "$$effect" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
 	removal_line="$$( timeout 10s grep -nF 'remove_exact_fresh_transition' "$$effect" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test -n "$$binding_line"; \
 	timeout 10s test -n "$$removal_line"; \
@@ -109,6 +121,20 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	timeout 10s test "$$( timeout 10s rg -n -w -F 'inspect_current_database' "$$authority" | timeout 10s wc -l )" = 5; \
 	timeout 10s test "$$( timeout 10s rg -n -w -F 'inspect_current_database' "$$effect" | timeout 10s wc -l )" = 3; \
 	timeout 10s grep -Fq 'fresh_db_invalidation_plan_is_exact' "$$authority"; \
+	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$authority"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::THROUGH_FRESH_DB_INVALIDATED {' "$$admission_tests"; \
+	timeout 10s grep -Fq 'pub(super) const THROUGH_FRESH_DB_INVALIDATED: [Self; 3] = [' crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs; \
+	timeout 10s grep -Fq 'pub(super) const ALL: [Self; 2] = [Self::Intent, Self::Exchanged];' crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs; \
+	for file in "$$authority" "$$effect"; do \
+		timeout 10s grep -Fq 'journal_record_binding: TransitionJournalRecordBinding,' "$$file"; \
+	done; \
+	timeout 10s grep -Fq 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;' "$$authority"; \
+	timeout 10s grep -Fq 'journal.has_record_store_binding(binding)' "$$authority"; \
+	timeout 10s grep -Fq 'journal.has_record_binding(cast, binding, record)?' "$$authority"; \
+	timeout 10s grep -Fq 'journal_record_binding: &TransitionJournalRecordBinding,' "$$proof"; \
+	timeout 10s grep -Fq 'journal.has_record_store_binding(journal_record_binding)' "$$proof"; \
+	timeout 10s grep -Fq 'journal.has_record_binding(cast, journal_record_binding, expected)?' "$$proof"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(|journal\.has_binding\(|journal\.load\(' "$$authority" "$$effect" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for field in \
 		'record.operation == Operation::NewState' \
 		'record.phase == Phase::FreshDbInvalidationIntent' \
@@ -144,7 +170,27 @@ forge-startup-usr-rollback-fresh-db-invalidation-effect-test:
 	timeout 10s grep -Fqx '    pub(super) fn overwrite_canonical(&self, record: &TransitionRecord) {' "$$support"; \
 	timeout 10s grep -Fqx '    second.overwrite_canonical(&first.record);' "$$race_tests"; \
 	timeout 10s grep -Fq 'transition_quarantine_path' "$$race_tests"; \
-	for file in "$$authority" "$$effect" "$$proof" "$$reconciliation_root" "$$namespace_root" "$$startup_gate" "$$startup_recovery" "$$tests" "$$admission_tests" "$$effect_tests" "$$race_tests" "$$support" misc/make/startup-fresh-db-invalidation-effect-tests.mk Makefile misc/make/help.mk; do \
+	for loop in \
+		'for historical in [false, true] {' \
+		'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {' \
+		'for candidate_outcome in CandidateOutcome::ALL {' \
+		'for row in [FreshRowLayout::Present, FreshRowLayout::JointlyAbsent] {' \
+		'for (name, target) in ROOT_ABI {' \
+		'for mutation in RootAbiMutation::ALL {'; do \
+		timeout 10s test "$$( timeout 10s grep -Fc "$$loop" "$$root_abi_tests" )" -ge 2; \
+	done; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'for row in [FreshRowLayout::Present, FreshRowLayout::JointlyAbsent] {' "$$root_abi_tests" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'for (name, target) in ROOT_ABI {' "$$root_abi_tests" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'for mutation in RootAbiMutation::ALL {' "$$root_abi_tests" )" = 3; \
+	timeout 10s grep -Fq 'assert_eq!(executions, 48);' "$$admission_tests"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(executions, 240);' "$$root_abi_tests" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(executions, 120);' "$$root_abi_tests" )" = 1; \
+	timeout 10s grep -Fq 'assert!(!displaced_directory.path().starts_with(&root));' "$$root_abi_tests"; \
+	timeout 10s grep -Fq 'assert_eq!(after[index].as_ref(), Some(original), "{label}");' "$$root_abi_tests"; \
+	timeout 10s grep -Fq 'arm_after_exact_fresh_transition_removal_attempt_before_reconciliation(hook);' "$$root_abi_tests"; \
+	timeout 10s grep -Fq 'fresh_db_invalidation_removal_call_count(), 1' "$$root_abi_tests"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'same_byte_different_inode_hook' "$$record_binding_tests" )" = 5; \
+	for file in "$$authority" "$$effect" "$$proof" "$$reconciliation_root" "$$namespace_root" "$$startup_gate" "$$startup_recovery" "$$tests" "$$admission_tests" "$$effect_tests" "$$race_tests" "$$record_binding_tests" "$$root_abi_tests" "$$support" misc/make/startup-fresh-db-invalidation-effect-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1

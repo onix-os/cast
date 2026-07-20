@@ -7,7 +7,7 @@
 
 use crate::{
     Installation,
-    transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -32,9 +32,10 @@ impl UsrRollbackFreshDbInvalidationNamespaceInspection {
     pub(in crate::client::startup_reconciliation) fn begin(
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<Self, UsrRollbackFreshDbInvalidationNamespaceError> {
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         let before = capture_snapshot(installation, expected)?;
         require_exact_new_state_fresh_db_invalidation_topology(expected, &before)?;
         Ok(Self { before })
@@ -44,6 +45,7 @@ impl UsrRollbackFreshDbInvalidationNamespaceInspection {
         self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<UsrRollbackFreshDbInvalidationNamespaceProof, UsrRollbackFreshDbInvalidationNamespaceError> {
         let after = capture_snapshot(installation, expected)?;
@@ -52,7 +54,7 @@ impl UsrRollbackFreshDbInvalidationNamespaceInspection {
         require_matching_fingerprints(&self.before, &after)?;
         require_exact_new_state_fresh_db_invalidation_topology(expected, &self.before)?;
         require_exact_new_state_fresh_db_invalidation_topology(expected, &after)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackFreshDbInvalidationNamespaceProof {
             before: self.before,
@@ -66,6 +68,7 @@ impl UsrRollbackFreshDbInvalidationNamespaceProof {
         &self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<(), UsrRollbackFreshDbInvalidationNamespaceError> {
         installation.revalidate_mutable_namespace()?;
@@ -74,7 +77,7 @@ impl UsrRollbackFreshDbInvalidationNamespaceProof {
         require_matching_fingerprints(&self.before, &self.after)?;
         require_exact_new_state_fresh_db_invalidation_topology(expected, &self.before)?;
         require_exact_new_state_fresh_db_invalidation_topology(expected, &self.after)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
 
         run_before_fresh_namespace_capture();
         let fresh = capture_snapshot(installation, expected)?;
@@ -82,7 +85,7 @@ impl UsrRollbackFreshDbInvalidationNamespaceProof {
         require_matching_fingerprints(&self.before, &fresh)?;
         require_exact_new_state_fresh_db_invalidation_topology(expected, &fresh)?;
 
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
@@ -102,12 +105,19 @@ fn require_matching_fingerprints(
 }
 
 fn require_exact_journal(
+    installation: &Installation,
     journal: &TransitionJournalStore,
+    journal_record_binding: &TransitionJournalRecordBinding,
     expected: &TransitionRecord,
 ) -> Result<(), UsrRollbackFreshDbInvalidationNamespaceError> {
-    match journal.load()? {
-        Some(actual) if actual == *expected => Ok(()),
-        Some(_) | None => Err(UsrRollbackFreshDbInvalidationNamespaceError::JournalChanged),
+    if !journal.has_record_store_binding(journal_record_binding) {
+        return Err(UsrRollbackFreshDbInvalidationNamespaceError::JournalChanged);
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, journal_record_binding, expected)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackFreshDbInvalidationNamespaceError::JournalChanged)
     }
 }
 

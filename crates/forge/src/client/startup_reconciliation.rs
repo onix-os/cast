@@ -121,7 +121,7 @@ pub(in crate::client) use usr_rollback_fresh_db_invalidation_authority::{
     UsrRollbackFreshDbInvalidationAdmission, UsrRollbackFreshDbInvalidationApplyAuthority,
     UsrRollbackFreshDbInvalidationApplyReconciliation, UsrRollbackFreshDbInvalidationAuthority,
     UsrRollbackFreshDbInvalidationAuthorityError, UsrRollbackFreshDbInvalidationEffectAuthority,
-    UsrRollbackFreshDbInvalidationFinishAuthority,
+    UsrRollbackFreshDbInvalidationFinishAuthority, UsrRollbackFreshDbInvalidationRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_route_authority::{
     UsrRollbackFreshDbInvalidationRouteAdmission, UsrRollbackFreshDbInvalidationRouteAuthority,

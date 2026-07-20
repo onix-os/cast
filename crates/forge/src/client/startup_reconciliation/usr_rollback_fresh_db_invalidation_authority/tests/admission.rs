@@ -11,8 +11,9 @@ use super::support::{CandidateOutcome, CandidateSource, FreshDbInvalidationFixtu
 
 #[test]
 fn startup_fresh_db_invalidation_admits_exact_present_apply_and_bound_joint_absence_finish_matrix() {
+    let mut executions = 0;
     for historical in [false, true] {
-        for source in CandidateSource::ALL {
+        for source in CandidateSource::THROUGH_FRESH_DB_INVALIDATED {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 for candidate_outcome in CandidateOutcome::ALL {
                     for row in [FreshRowLayout::Present, FreshRowLayout::JointlyAbsent] {
@@ -42,11 +43,13 @@ fn startup_fresh_db_invalidation_admits_exact_present_apply_and_bound_joint_abse
                             "historical={historical} source={source:?} usr={usr_outcome:?} candidate={candidate_outcome:?} row={row:?}"
                         );
                         fixture.assert_journal_namespace_and_previous_unchanged(&canonical, &namespace, &previous);
+                        executions += 1;
                     }
                 }
             }
         }
     }
+    assert_eq!(executions, 48);
 }
 
 #[test]
@@ -86,7 +89,11 @@ fn startup_fresh_db_invalidation_refuses_wrong_phase_operation_and_missing_rollb
 
 #[test]
 fn startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action() {
-    for source in [ForwardPhase::UsrExchangeIntent, ForwardPhase::UsrExchanged] {
+    for source in [
+        ForwardPhase::UsrExchangeIntent,
+        ForwardPhase::UsrExchanged,
+        ForwardPhase::RootLinksComplete,
+    ] {
         for usr_exchange in [RollbackAction::Applied, RollbackAction::AlreadySatisfied] {
             for candidate in [RollbackAction::Applied, RollbackAction::AlreadySatisfied] {
                 let fixture = FreshDbInvalidationFixture::new(

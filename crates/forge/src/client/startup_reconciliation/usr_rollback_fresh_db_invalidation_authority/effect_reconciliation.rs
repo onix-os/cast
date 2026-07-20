@@ -7,9 +7,13 @@
 
 mod persistence;
 
+pub(in crate::client) use persistence::UsrRollbackFreshDbInvalidationRecordAdvanceError;
+
 use crate::{
     Installation, db,
-    transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        RollbackActionOutcome, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::{
@@ -46,7 +50,7 @@ pub(in crate::client) struct UsrRollbackFreshDbInvalidationEffectAuthority<'rese
     before_database: DatabaseEvidence,
     database: UsrRollbackFreshDbInvalidationDatabaseEvidence,
     namespace: UsrRollbackFreshDbInvalidationNamespaceProof,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     origin: RollbackActionOutcome,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
@@ -63,9 +67,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationApplyAuthority<'reservation> {
     > {
         reset_removal_call_count();
         // This binding check is intentionally the first evidence observation.
-        if !journal.has_binding(&self.evidence.journal_binding) {
-            return Err(UsrRollbackFreshDbInvalidationAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        self.evidence.require_journal_record_binding(journal)?;
         self.evidence
             .revalidate(journal, FreshDbInvalidationDatabaseKind::Present)?;
         self.evidence.reconcile_apply_after_revalidation(journal)
@@ -82,9 +84,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationFinishAuthority<'reservation> {
     {
         reset_removal_call_count();
         // This binding check is intentionally the first evidence observation.
-        if !journal.has_binding(&self.evidence.journal_binding) {
-            return Err(UsrRollbackFreshDbInvalidationAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        self.evidence.require_journal_record_binding(journal)?;
         self.evidence
             .revalidate(journal, FreshDbInvalidationDatabaseKind::JointlyAbsent)?;
         self.evidence.into_already_satisfied_effect()
@@ -105,7 +105,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
         let UsrRollbackFreshDbInvalidationDatabaseEvidence::Present { context, preimage } = database else {
@@ -120,7 +120,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
                     &state_db,
                     &record,
                     &namespace,
-                    &journal_binding,
+                    &journal_record_binding,
                     journal,
                     &absence,
                 )?;
@@ -132,14 +132,20 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
                         before_database: context,
                         database,
                         namespace,
-                        journal_binding,
+                        journal_record_binding,
                         origin: RollbackActionOutcome::Applied,
                         _active_state_reservation,
                     },
                 ))
             }
             Err(source) => {
-                revalidate_trailing_non_database(&installation, &record, &namespace, &journal_binding, journal)?;
+                revalidate_trailing_non_database(
+                    &installation,
+                    &record,
+                    &namespace,
+                    &journal_record_binding,
+                    journal,
+                )?;
                 Ok(match source.outcome() {
                     db::state::ExactFreshTransitionRemovalOutcome::DefinitelyNotApplied => {
                         UsrRollbackFreshDbInvalidationApplyReconciliation::NotApplied
@@ -162,7 +168,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
         let context = match &database {
@@ -178,7 +184,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
             before_database: context,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             origin: RollbackActionOutcome::AlreadySatisfied,
             _active_state_reservation,
         })
@@ -190,20 +196,19 @@ fn capture_bound_absence(
     state_db: &db::state::Database,
     record: &TransitionRecord,
     namespace: &UsrRollbackFreshDbInvalidationNamespaceProof,
-    journal_binding: &TransitionJournalBinding,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
     applied_absence: &db::state::ExactFreshTransitionAbsence,
 ) -> Result<UsrRollbackFreshDbInvalidationDatabaseEvidence, UsrRollbackFreshDbInvalidationAuthorityError> {
-    if !journal.has_binding(journal_binding) {
-        return Err(UsrRollbackFreshDbInvalidationAuthorityErrorKind::JournalBindingMismatch.into());
-    }
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     let database_before = require_joint_absence(inspect_current_database(record, state_db)?, applied_absence)?;
-    namespace.revalidate(installation, journal, record)?;
+    namespace.revalidate(installation, journal, journal_record_binding, record)?;
     let database_after = require_joint_absence(inspect_current_database(record, state_db)?, applied_absence)?;
     if database_before != database_after || !fresh_db_invalidation_plan_is_exact(record) {
         return Err(UsrRollbackFreshDbInvalidationAuthorityErrorKind::EvidenceMismatch.into());
     }
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     Ok(database_after)
 }
@@ -216,17 +221,16 @@ fn revalidate_trailing_non_database(
     installation: &Installation,
     record: &TransitionRecord,
     namespace: &UsrRollbackFreshDbInvalidationNamespaceProof,
-    journal_binding: &TransitionJournalBinding,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
 ) -> Result<(), UsrRollbackFreshDbInvalidationAuthorityError> {
-    if !journal.has_binding(journal_binding) {
-        return Err(UsrRollbackFreshDbInvalidationAuthorityErrorKind::JournalBindingMismatch.into());
-    }
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
-    namespace.revalidate(installation, journal, record)?;
+    namespace.revalidate(installation, journal, journal_record_binding, record)?;
     if !fresh_db_invalidation_plan_is_exact(record) {
         return Err(UsrRollbackFreshDbInvalidationAuthorityErrorKind::EvidenceMismatch.into());
     }
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     Ok(())
 }
