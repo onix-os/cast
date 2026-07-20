@@ -2,7 +2,7 @@ use std::{
     ffi::{OsStr, OsString},
     fs::{File, Metadata},
     io::{self, Read},
-    os::unix::fs::{FileTypeExt as _, MetadataExt as _},
+    os::unix::fs::MetadataExt as _,
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
@@ -15,8 +15,8 @@ use stone::{StoneDigestWriterHasher, StonePayloadLayoutFile, StonePayloadLayoutR
 use super::{
     CollectionLimits, Error,
     filesystem::{
-        CollectionContext, Deadline, changed, is_supported_special, metadata, open_entry, open_entry_handle,
-        read_symlink_handle, require_snapshot,
+        CollectionContext, Deadline, changed, metadata, open_entry, open_entry_handle, read_symlink_handle,
+        require_snapshot, unsupported_file_type_kind,
     },
     inventory::{DirectoryId, WitnessGraph},
     mutation,
@@ -35,7 +35,6 @@ pub(super) enum VerifiedKind {
     Regular { hash: u128 },
     Symlink { target: String },
     Directory,
-    Special,
 }
 
 #[derive(Debug, Clone)]
@@ -121,9 +120,6 @@ impl VerifiedPath {
                 } else {
                     Err(changed(&path, "collected symlink target changed"))
                 }
-            }
-            VerifiedKind::Special if !is_supported_special(&current.file_type()) => {
-                Err(changed(&path, "collected special entry changed type"))
             }
             _ => Ok(()),
         }
@@ -500,14 +496,6 @@ pub(super) fn layout_from_metadata(
         StonePayloadLayoutFile::Symlink(source.into(), target)
     } else if file_type.is_dir() {
         StonePayloadLayoutFile::Directory(target)
-    } else if file_type.is_char_device() {
-        StonePayloadLayoutFile::CharacterDevice(target)
-    } else if file_type.is_block_device() {
-        StonePayloadLayoutFile::BlockDevice(target)
-    } else if file_type.is_fifo() {
-        StonePayloadLayoutFile::Fifo(target)
-    } else if file_type.is_socket() {
-        StonePayloadLayoutFile::Socket(target)
     } else if file_type.is_file() {
         StonePayloadLayoutFile::Regular(
             regular_hash.ok_or_else(|| Error::TreeChanged {
@@ -519,7 +507,7 @@ pub(super) fn layout_from_metadata(
     } else {
         return Err(Error::UnsupportedFileType {
             path: full_target_path,
-            kind: "unknown special inode",
+            kind: unsupported_file_type_kind(&file_type),
         });
     };
 

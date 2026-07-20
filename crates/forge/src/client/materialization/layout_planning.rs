@@ -11,6 +11,7 @@ pub fn vfs(layouts: Vec<(package::Id, StonePayloadLayoutRecord)>) -> Result<vfs:
         // enforces this contract atomically, but corrupted or test-populated
         // databases must not recover an escape path here.
         require_usr_relative_stone_layout(&id, &layout)?;
+        require_materializable_stone_layout(&id, &layout)?;
         tbuild.push(PendingFile { id: id.clone(), layout });
     }
 
@@ -58,6 +59,25 @@ fn require_usr_relative_stone_layout<'a>(
         target: stone_layout_target_diagnostic(target),
         reason,
     })
+}
+
+fn require_materializable_stone_layout(
+    package: &package::Id,
+    layout: &StonePayloadLayoutRecord,
+) -> Result<(), Error> {
+    match &layout.file {
+        StonePayloadLayoutFile::Regular(..)
+        | StonePayloadLayoutFile::Symlink(..)
+        | StonePayloadLayoutFile::Directory(_) => Ok(()),
+        StonePayloadLayoutFile::CharacterDevice(_)
+        | StonePayloadLayoutFile::BlockDevice(_)
+        | StonePayloadLayoutFile::Fifo(_)
+        | StonePayloadLayoutFile::Socket(_)
+        | StonePayloadLayoutFile::Unknown(..) => Err(Error::UnsupportedFrozenLayout {
+            package: package.clone(),
+            path: format!("/usr/{}", layout.file.target()),
+        }),
+    }
 }
 
 fn stone_layout_target_diagnostic(target: &str) -> String {

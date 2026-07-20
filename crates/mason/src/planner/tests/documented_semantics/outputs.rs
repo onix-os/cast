@@ -11,7 +11,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
     assert!(declaration.sources.is_empty());
     assert_eq!(
         dependency_names(&declaration.builder.required_tools),
-        ["binary(bash)", "binary(install)", "binary(ln)", "binary(mkfifo)"]
+        ["binary(bash)", "binary(install)", "binary(ln)"]
     );
     assert_eq!(
         declaration
@@ -19,7 +19,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
             .iter()
             .map(|output| output.name.as_str())
             .collect::<Vec<_>>(),
-        ["out", "commands", "links", "ipc"]
+        ["out", "commands", "links", "activation"]
     );
     assert!(matches!(
         declaration.outputs[0].paths.as_slice(),
@@ -35,7 +35,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
     ));
     assert!(matches!(
         declaration.outputs[3].paths.as_slice(),
-        [PathSpec::Special { path }] if path == "/usr/lib/typed-router/events.fifo"
+        [PathSpec::Any { path }] if path == "/usr/lib/tmpfiles.d/typed-router.conf"
     ));
 
     let [
@@ -54,10 +54,11 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
             .iter()
             .map(|program| program.path.as_str())
             .collect::<Vec<_>>(),
-        ["/usr/bin/install", "/usr/bin/ln", "/usr/bin/mkfifo"]
+        ["/usr/bin/install", "/usr/bin/ln"]
     );
     assert!(script.contains("typed-router-current"));
-    assert!(script.contains("events.fifo"));
+    assert!(script.contains("p /run/typed-router/events.fifo"));
+    assert!(script.contains("/tmpfiles.d/typed-router.conf"));
 
     assert_eq!(
         plan.collection_rules,
@@ -78,9 +79,9 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
                 pattern: "/usr/bin/typed-router-current".to_owned(),
             },
             CollectionRulePlan {
-                output: "ipc".to_owned(),
-                kind: PathRuleKind::Special,
-                pattern: "/usr/lib/typed-router/events.fifo".to_owned(),
+                output: "activation".to_owned(),
+                kind: PathRuleKind::Any,
+                pattern: "/usr/lib/tmpfiles.d/typed-router.conf".to_owned(),
             },
         ]
     );
@@ -94,8 +95,8 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
         install.steps.as_slice(),
         [StepPlan::Shell { declared_programs, script, .. }]
             if declared_programs.iter().map(|program| program.requirement.canonical_name()).collect::<Vec<_>>()
-                == ["binary(install)", "binary(ln)", "binary(mkfifo)"]
-                && script.contains("mkfifo")
+                == ["binary(install)", "binary(ln)"]
+                && script.contains("tmpfiles.d")
     ));
     let commands = plan.outputs.iter().find(|output| output.name == "commands").unwrap();
     assert!(matches!(

@@ -494,7 +494,12 @@ fn blit_element_item(
         | StonePayloadLayoutFile::BlockDevice(_)
         | StonePayloadLayoutFile::Fifo(_)
         | StonePayloadLayoutFile::Socket(_)
-        | StonePayloadLayoutFile::Unknown(..) => {}
+        | StonePayloadLayoutFile::Unknown(..) => {
+            return Err(Error::UnsupportedFrozenLayout {
+                package: item.id.clone(),
+                path: format!("/usr/{}", item.layout.file.target()),
+            });
+        }
     };
 
     Ok(())

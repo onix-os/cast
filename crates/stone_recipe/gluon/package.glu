@@ -708,6 +708,8 @@ let git = \url git_ref -> GitSource {
         any = \path -> Any { path },
         exe = \path -> Exe { path },
         symlink = \path -> Symlink { path },
+        // Reserved for package-v3 ABI stability. Concrete package validation
+        // rejects special inodes from immutable package layouts.
         special = \path -> Special { path },
     },
     tuning = {

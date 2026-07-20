@@ -17,7 +17,9 @@ mod gluon;
 mod validation;
 
 pub(crate) use validation::valid_package_name;
-pub use validation::{PackageConversionError, PackageValidationLimits};
+pub use validation::{
+    DependencyKind, DependencyRole, PackageConversionError, PackageValidationLimits,
+};
 
 /// One pure, concrete package declaration returned by a Gluon package factory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,7 +434,9 @@ mod tests {
 
     include!("validation/tests/fixtures.rs");
     include!("validation/tests/budgets_relations_profiles.rs");
+    include!("validation/tests/dependency_roles.rs");
     include!("validation/tests/metadata_selectors.rs");
+    include!("validation/tests/path_rules.rs");
     include!("validation/tests/source_materialization.rs");
     include!("validation/tests/structural_relations.rs");
 }

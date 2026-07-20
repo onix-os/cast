@@ -310,6 +310,8 @@ pub enum PathSpec {
     Any { path: String },
     Exe { path: String },
     Symlink { path: String },
+    /// Reserved by package-v3 for ABI stability; concrete package validation
+    /// rejects special inodes from immutable package layouts.
     Special { path: String },
 }
 

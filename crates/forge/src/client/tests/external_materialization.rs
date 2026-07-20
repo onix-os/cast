@@ -41,6 +41,34 @@ fn an_absent_empty_closure_publishes_a_root_with_one_retained_usr() {
 }
 
 #[test]
+fn low_level_blitter_rejects_special_layout_instead_of_silent_success() {
+    let fixture = ExternalFixture::new();
+    let package = package::Id::from("unsupported-low-level-layout");
+    let mut builder = TreeBuilder::new();
+    builder.push(PendingFile {
+        id: package.clone(),
+        layout: StonePayloadLayoutRecord {
+            uid: 0,
+            gid: 0,
+            mode: nix::libc::S_IFIFO | 0o600,
+            tag: 0,
+            file: StonePayloadLayoutFile::Fifo("share/events.fifo".into()),
+        },
+    });
+    builder.bake();
+    let tree = builder.tree().unwrap();
+
+    assert!(matches!(
+        blit_root(&fixture.client.installation, &tree, &fixture.target),
+        Err(Error::UnsupportedFrozenLayout {
+            package: rejected_package,
+            path,
+        }) if rejected_package == package && path == "/usr/share/events.fifo"
+    ));
+    assert!(!fixture.target.join("usr/share/events.fifo").exists());
+}
+
+#[test]
 fn parent_path_replacement_after_retention_cannot_redirect_target_creation() {
     let fixture = ExternalFixture::new();
     let detached = fixture.parent.with_extension("retained");

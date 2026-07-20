@@ -43,8 +43,8 @@ use filesystem::{
     CollectionContext, CollectionUsage, Deadline, c_name, changed, checked_add_limit, copy_os_string, copy_string,
     directory_relative, enforce_u64_limit, enforce_usize_limit, find_child, is_supported_special, join_relative,
     metadata, open_entry, open_entry_handle, read_directory_names, read_symlink_handle, relative_to_root,
-    require_snapshot, reserve, split_parent_name, stable_directory_snapshot, verify_directory_collection,
-    verify_entry_collection,
+    require_snapshot, reserve, split_parent_name, stable_directory_snapshot, unsupported_file_type_kind,
+    verify_directory_collection, verify_entry_collection,
 };
 
 pub(crate) use publication::{GeneratedArtifact, GeneratedTimes};
@@ -615,14 +615,14 @@ impl Collector {
             )
         } else if is_supported_special(&file_type) {
             verify_entry_collection(&parent, &name, entry_snapshot, &display_path)?;
-            (
-                layout_from_metadata(&relative, &entry_metadata, None, None)?,
-                VerifiedKind::Special,
-            )
+            return Err(Error::UnsupportedFileType {
+                path: display_path,
+                kind: unsupported_file_type_kind(&file_type),
+            });
         } else {
             return Err(Error::UnsupportedFileType {
                 path: display_path,
-                kind: "unknown special inode",
+                kind: unsupported_file_type_kind(&file_type),
             });
         };
 

@@ -96,7 +96,7 @@ help:
 	@echo "  stone-recipe-derivation-provenance-test  Run exact derivation provenance identity and validation tests"
 	@echo "  stone-recipe-derivation-validation-test  Run all extracted derivation validation tests"
 	@echo "  stone-recipe-build-lock-test  Run all extracted build-lock codec and validation tests"
-	@echo "  stone-recipe-package-validation-test  Run extracted package validation and limit tests"
+	@echo "  stone-recipe-package-validation-test  Run package validation, limits, and package-v3 conversion tests"
 	@echo "  stone-recipe-build-policy-validation-test  Run extracted policy validation and budget tests"
 	@echo "  stone-recipe-build-policy-contract-test  Run repository policy ABI and validation tests"
 	@echo "  stone-recipe-build-policy-patch-test  Run total policy-patch composition tests"

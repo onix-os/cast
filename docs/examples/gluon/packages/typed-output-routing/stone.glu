@@ -7,16 +7,15 @@ let phases = b.scripts {
             declared_programs = [
                 b.program.binary "install",
                 b.program.binary "ln",
-                b.program.binary "mkfifo",
             ],
             script = r#"
 printf '%s\n' '#!/usr/bin/bash' 'exit 0' > typed-router
 printf '%s\n' 'Typed output routing example' > README
+printf '%s\n' 'p /run/typed-router/events.fifo 0600 root root -' > typed-router.conf
 install -Dm755 typed-router "${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router"
 ln -s typed-router "${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router-current"
 install -Dm644 README "${CAST_INSTALL_ROOT}${CAST_DATADIR}/typed-router/README"
-install -d "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/typed-router"
-mkfifo "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/typed-router/events.fifo"
+install -Dm644 typed-router.conf "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/typed-router.conf"
 "#,
         },
     ],
@@ -48,9 +47,9 @@ let links = b.output_with {
     .. b.output "links"
 }
 
-let ipc = b.output_with {
-    paths = [b.path.special "/usr/lib/typed-router/events.fifo"],
-    .. b.output "ipc"
+let activation = b.output_with {
+    paths = [b.path.any "/usr/lib/tmpfiles.d/typed-router.conf"],
+    .. b.output "activation"
 }
 
 {
@@ -58,11 +57,10 @@ let ipc = b.output_with {
         b.dep.binary "bash",
         b.dep.binary "install",
         b.dep.binary "ln",
-        b.dep.binary "mkfifo",
     ],
     // The catch-all is deliberately first. Later type-specific rules win
     // collector matching without hiding their authored declaration order.
-    outputs = [root, commands, links, ipc],
+    outputs = [root, commands, links, activation],
     architectures = ["native"],
     .. base
 }

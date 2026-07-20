@@ -930,6 +930,20 @@ pub(super) fn is_supported_special(file_type: &std::fs::FileType) -> bool {
     file_type.is_char_device() || file_type.is_block_device() || file_type.is_fifo() || file_type.is_socket()
 }
 
+pub(super) fn unsupported_file_type_kind(file_type: &std::fs::FileType) -> &'static str {
+    if file_type.is_char_device() {
+        "character device"
+    } else if file_type.is_block_device() {
+        "block device"
+    } else if file_type.is_fifo() {
+        "FIFO"
+    } else if file_type.is_socket() {
+        "UNIX socket"
+    } else {
+        "unknown special inode"
+    }
+}
+
 pub(super) fn enforce_usize_limit(
     resource: &'static str,
     limit: usize,

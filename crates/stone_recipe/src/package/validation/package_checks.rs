@@ -242,13 +242,18 @@ impl PackageSpec {
 
             let mut paths = BTreeMap::new();
             for (path_index, rule) in output.paths.iter().enumerate() {
+                let rule_field = format!("outputs[{output_index}].paths[{path_index}]");
                 let (kind, pattern) = match rule {
                     PathSpec::Any { path } => ("any", path),
                     PathSpec::Exe { path } => ("exe", path),
                     PathSpec::Symlink { path } => ("symlink", path),
-                    PathSpec::Special { path } => ("special", path),
+                    PathSpec::Special { .. } => {
+                        return Err(PackageConversionError::UnsupportedSpecialPathRule {
+                            field: rule_field,
+                        });
+                    }
                 };
-                let field = format!("outputs[{output_index}].paths[{path_index}].path");
+                let field = format!("{rule_field}.path");
                 validate_trimmed_text(&field, pattern, "must be a non-empty glob without control characters")?;
                 glob::Pattern::new(pattern).map_err(|source| PackageConversionError::InvalidGlob {
                     field: field.clone(),

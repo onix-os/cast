@@ -89,6 +89,38 @@ fn frozen_root_rejects_unenforceable_ownership_before_touching_destination() {
     assert_eq!(fs::read(marker).unwrap(), b"original root");
 }
 
+#[test]
+fn frozen_root_rejects_every_special_layout_before_touching_destination() {
+    let cases = [
+        StonePayloadLayoutFile::CharacterDevice("share/character-device".into()),
+        StonePayloadLayoutFile::BlockDevice("share/block-device".into()),
+        StonePayloadLayoutFile::Fifo("share/events.fifo".into()),
+        StonePayloadLayoutFile::Socket("share/service.socket".into()),
+        StonePayloadLayoutFile::Unknown("opaque".into(), "share/unknown".into()),
+    ];
+
+    for file in cases {
+        let expected_path = format!("/usr/{}", file.target());
+        assert_frozen_layout_rejected_before_touching_destination(
+            StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: 0,
+                tag: 0,
+                file,
+            },
+            |error| {
+                assert!(matches!(
+                    error,
+                    Error::UnsupportedFrozenLayout { package, path }
+                        if package == package::Id::from("invalid-layout")
+                            && path == expected_path
+                ));
+            },
+        );
+    }
+}
+
 fn assert_frozen_layout_rejected_before_touching_destination(
     layout: StonePayloadLayoutRecord,
     assert_error: impl FnOnce(Error),

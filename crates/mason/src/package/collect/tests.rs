@@ -1,11 +1,10 @@
 use std::{
     ffi::CString,
     fs::Permissions,
-    io::{ErrorKind, Read as _},
+    io::Read as _,
     os::unix::{
         ffi::{OsStrExt, OsStringExt},
         fs::{PermissionsExt, symlink},
-        net::UnixListener,
     },
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -233,22 +232,27 @@ fn symlink_rules_use_lstat_and_enumeration_does_not_follow_linked_directories() 
 }
 
 #[test]
-fn special_rules_match_unix_domain_sockets() {
+fn special_entries_are_rejected_under_catch_all_and_reserved_special_rules() {
     let root = tempfile::tempdir().unwrap();
-    let socket = root.path().join("run/service.sock");
-    fs::create_dir_all(socket.parent().unwrap()).unwrap();
-    let _listener = match UnixListener::bind(&socket) {
-        Ok(listener) => listener,
-        Err(error) if error.kind() == ErrorKind::PermissionDenied => return,
-        Err(error) => panic!("failed to create Unix socket fixture: {error}"),
-    };
-    let mut collector = Collector::new(root.path());
-    add_rule(&mut collector, "*", "out", PathRuleKind::Any);
-    add_rule(&mut collector, "/run/*", "special", PathRuleKind::Special);
+    let fifo = root.path().join("run/events.fifo");
+    fs::create_dir_all(fifo.parent().unwrap()).unwrap();
+    let name = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: name is a live NUL-terminated pathname below the temporary root.
+    assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
 
-    let info = collector.path(&socket, &mut StoneDigestWriterHasher::new()).unwrap();
-    assert_eq!(info.package.as_ref(), "special");
-    assert!(matches!(info.layout.file, StonePayloadLayoutFile::Socket(..)));
+    let catch_all = all_collector(root.path());
+    assert!(matches!(
+        catch_all.path(&fifo, &mut StoneDigestWriterHasher::new()),
+        Err(Error::UnsupportedFileType { kind: "FIFO", .. })
+    ));
+
+    let mut reserved = Collector::new(root.path());
+    add_rule(&mut reserved, "*", "out", PathRuleKind::Any);
+    add_rule(&mut reserved, "/run/*", "special", PathRuleKind::Special);
+    assert!(matches!(
+        reserved.path(&fifo, &mut StoneDigestWriterHasher::new()),
+        Err(Error::UnsupportedFileType { kind: "FIFO", .. })
+    ));
 }
 
 #[test]

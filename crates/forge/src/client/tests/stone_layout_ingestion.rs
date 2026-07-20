@@ -21,6 +21,14 @@ const ALL_STONE_LAYOUT_KINDS: [TestStoneLayoutKind; 8] = [
     TestStoneLayoutKind::Unknown,
 ];
 
+const UNSUPPORTED_STONE_LAYOUT_KINDS: [TestStoneLayoutKind; 5] = [
+    TestStoneLayoutKind::CharacterDevice,
+    TestStoneLayoutKind::BlockDevice,
+    TestStoneLayoutKind::Fifo,
+    TestStoneLayoutKind::Socket,
+    TestStoneLayoutKind::Unknown,
+];
+
 fn test_stone_layout(kind: TestStoneLayoutKind, target: impl Into<AStr>) -> StonePayloadLayoutRecord {
     let target = target.into();
     let file = match kind {
@@ -106,6 +114,24 @@ fn stone_layout_ingestion_confines_every_inode_variant_to_canonical_usr_relative
                 }) if rejected_package == package && target == reserved
             ));
         }
+    }
+}
+
+#[test]
+fn materialization_rejects_decodable_special_layouts_with_exact_package_and_path() {
+    let package = package::Id::from("unsupported-layout");
+    for (index, kind) in UNSUPPORTED_STONE_LAYOUT_KINDS.into_iter().enumerate() {
+        let target = format!("share/special-{index}");
+        let layout = test_stone_layout(kind, target.clone());
+
+        require_usr_relative_stone_layout(&package, &layout).unwrap();
+        assert!(matches!(
+            vfs(vec![(package.clone(), layout)]),
+            Err(Error::UnsupportedFrozenLayout {
+                package: rejected_package,
+                path,
+            }) if rejected_package == package && path == format!("/usr/{target}")
+        ));
     }
 }
 

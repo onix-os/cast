@@ -1,7 +1,9 @@
 use std::{collections::BTreeMap, path::Path};
 
 use crate::{
-    package::{BuilderSpec, DependencySpec, HooksSpec, PackageSpec, ProgramSpec, StepSpec},
+    package::{
+        BuilderSpec, DependencyKind, DependencyRole, DependencySpec, HooksSpec, PackageSpec, ProgramSpec, StepSpec,
+    },
     spec::{is_normalized_relative_path, is_safe_artifact_component},
 };
 
@@ -32,10 +34,20 @@ impl PackageSpec {
             return Err(PackageConversionError::MissingRootOutput);
         }
 
-        self.validate_dependency_list(&self.native_build_inputs, "native_build_inputs", &outputs, false)?;
-        self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs, false)?;
-        self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs, false)?;
-        self.validate_dependency_list(&self.builder.required_tools, "builder.required_tools", &outputs, false)?;
+        self.validate_dependency_list(
+            &self.native_build_inputs,
+            "native_build_inputs",
+            &outputs,
+            DependencyRole::NativeBuild,
+        )?;
+        self.validate_dependency_list(&self.build_inputs, "build_inputs", &outputs, DependencyRole::Build)?;
+        self.validate_dependency_list(&self.check_inputs, "check_inputs", &outputs, DependencyRole::Check)?;
+        self.validate_dependency_list(
+            &self.builder.required_tools,
+            "builder.required_tools",
+            &outputs,
+            DependencyRole::BuilderTool,
+        )?;
         self.validate_builder_programs(&self.builder, &self.hooks, "builder", "hooks", &outputs)?;
 
         for (index, profile) in self.profiles.iter().enumerate() {
@@ -44,25 +56,25 @@ impl PackageSpec {
                 &profile.builder.required_tools,
                 &format!("{parent}.builder.required_tools"),
                 &outputs,
-                false,
+                DependencyRole::BuilderTool,
             )?;
             self.validate_dependency_list(
                 &profile.native_build_inputs,
                 &format!("{parent}.native_build_inputs"),
                 &outputs,
-                false,
+                DependencyRole::NativeBuild,
             )?;
             self.validate_dependency_list(
                 &profile.build_inputs,
                 &format!("{parent}.build_inputs"),
                 &outputs,
-                false,
+                DependencyRole::Build,
             )?;
             self.validate_dependency_list(
                 &profile.check_inputs,
                 &format!("{parent}.check_inputs"),
                 &outputs,
-                false,
+                DependencyRole::Check,
             )?;
             self.validate_builder_programs(
                 &profile.builder,
@@ -78,13 +90,13 @@ impl PackageSpec {
                 &output.runtime_inputs,
                 &format!("outputs[{index}].runtime_inputs"),
                 &outputs,
-                false,
+                DependencyRole::Runtime,
             )?;
             self.validate_dependency_list(
                 &output.conflicts,
                 &format!("outputs[{index}].conflicts"),
                 &outputs,
-                true,
+                DependencyRole::Conflict,
             )?;
         }
 
@@ -96,12 +108,20 @@ impl PackageSpec {
         dependencies: &[DependencySpec],
         field: &str,
         outputs: &BTreeMap<&str, usize>,
-        provider: bool,
+        role: DependencyRole,
     ) -> Result<(), PackageConversionError> {
         let mut seen = BTreeMap::new();
         for (index, dependency) in dependencies.iter().enumerate() {
             let dependency_field = format!("{field}[{index}]");
-            let identity = self.validate_dependency(dependency, &dependency_field, outputs, provider)?;
+            let identity = self.validate_dependency(dependency, &dependency_field, outputs, role.is_provider())?;
+            let kind = DependencyKind::of(dependency);
+            if !role.accepts(kind) {
+                return Err(PackageConversionError::UnsupportedDependencyRole {
+                    field: dependency_field,
+                    role,
+                    kind,
+                });
+            }
             if let Some(first_index) = seen.insert(identity.clone(), index) {
                 return Err(PackageConversionError::DuplicateValue {
                     field: dependency_field,

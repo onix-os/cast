@@ -14,7 +14,7 @@ let cmake = import! cast.builders.cmake.v2
     })
     let root = {
         summary = b.optional.set "Package produced by a Gluon factory",
-        runtime_inputs = [deps.tls],
+        runtime_inputs = [b.dep.soname "libtls.so.28"],
         paths = [b.path.exe "/usr/bin/factory-hello"],
         .. b.output "out"
     }
@@ -33,7 +33,7 @@ let cmake = import! cast.builders.cmake.v2
             ],
             .. b.defaults.hooks
         },
-        build_inputs = [deps.zlib],
+        build_inputs = [deps.zlib, deps.tls],
         outputs = b.outputs.with_root base.meta.pname root,
         sources = [
             b.source.archive

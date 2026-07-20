@@ -451,8 +451,12 @@ stone-recipe-package-validation-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^package::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 25; \
-	timeout 900s $(CARGO) test -p stone_recipe --lib "package::tests::" -- --test-threads=1
+	timeout 10s test "$$count" = 32; \
+	timeout 900s $(CARGO) test -p stone_recipe --lib "package::tests::" -- --test-threads=1; \
+	abi_listed="$$( timeout 300s $(CARGO) test -p stone_recipe --test package_v3 -- --list )"; \
+	abi_count="$$( timeout 10s grep -c ': test$$' <<<"$$abi_listed" )"; \
+	timeout 10s test "$$abi_count" = 21; \
+	timeout 900s $(CARGO) test -p stone_recipe --test package_v3 -- --test-threads=1
 
 stone-recipe-build-policy-validation-test:
 	@set -eu; \

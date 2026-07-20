@@ -96,10 +96,19 @@ capability emitted by package analysis. Script runtimes such as `python3`,
 
 Put them in the field matching their purpose:
 
-- `native_build_inputs`: programs executed while building;
-- `build_inputs`: target libraries, headers, or other build-time inputs;
-- `check_inputs`: inputs used only by checks;
+- `builder.required_tools`: executable Package, Output, Binary, or
+  SystemBinary capabilities invoked by the selected builder;
+- `native_build_inputs`: build-platform capabilities;
+- `build_inputs`: target libraries, headers, tools, or other build-time
+  capabilities;
+- `check_inputs`: capabilities used only by checks;
 - `outputs[*].runtime_inputs`: runtime relations of one emitted output.
+
+Native, build, and check inputs deliberately accept every typed capability:
+cross builds can require both tools and libraries in those roles. Runtime
+inputs reject development-only CMake, PkgConfig, and PkgConfig32 metadata.
+Output conflicts remain provider relations and accept every provider-capable
+kind.
 
 The shared `stone::relation` model is the canonical parser and representation
 used by Cast and package conversion. Local output references are
@@ -328,8 +337,13 @@ let development = {
 }
 ```
 
-Path constructors are `any`, `exe`, `symlink`, and `special`. Outputs can also
-set `description`, `provides_exclude`, `runtime_exclude`, and typed `conflicts`.
+Materializable path constructors are `any`, `exe`, and `symlink`. The
+`cast.package.v3` `special` constructor remains reserved so the versioned ABI
+does not change in place, but concrete package validation rejects it: immutable
+package layouts cannot contain devices, FIFOs, or sockets. Package a
+`/usr/lib/tmpfiles.d/*.conf` regular file when such runtime state must be
+created during system activation. Outputs can also set `description`,
+`provides_exclude`, `runtime_exclude`, and typed `conflicts`.
 
 ## Package patches and argument overrides
 

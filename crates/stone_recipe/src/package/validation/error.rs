@@ -1,5 +1,5 @@
 use crate::{
-    package::{BuilderEnvironmentSpec, DependencySpec},
+    package::{BuilderEnvironmentSpec, DependencyKind, DependencyRole, DependencySpec},
     spec::UpstreamValidationError,
 };
 use stone::relation::ParseError;
@@ -87,6 +87,16 @@ pub enum PackageConversionError {
         #[source]
         source: ParseError,
     },
+    #[error("{field}: dependency kind `{kind}` is not allowed in the `{role}` role")]
+    UnsupportedDependencyRole {
+        field: String,
+        role: DependencyRole,
+        kind: DependencyKind,
+    },
+    #[error(
+        "{field}: special path routing is reserved by package-v3 but unsupported by immutable package layouts"
+    )]
+    UnsupportedSpecialPathRule { field: String },
     #[error("outputs: package must declare exactly one `out` output")]
     MissingRootOutput,
     #[error("outputs[{index}].name: duplicate output name `{name}`")]
@@ -155,6 +165,8 @@ impl PackageConversionError {
             | Self::LimitExceeded { field, .. }
             | Self::InvalidDependency { field, .. }
             | Self::InvalidProvider { field, .. }
+            | Self::UnsupportedDependencyRole { field, .. }
+            | Self::UnsupportedSpecialPathRule { field }
             | Self::MissingOutputReference { field, .. }
             | Self::OutputDependencyCycle { field, .. }
             | Self::DuplicateBuilderEnvironment { field, .. }

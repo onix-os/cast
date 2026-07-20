@@ -2,9 +2,9 @@ use std::path::Path;
 
 use gluon_config::{DiagnosticCategory, Evaluator, Source, SourceRoot};
 use stone_recipe::package::{
-    BuilderEnvironmentSpec, BuiltProgramSpec, DependencySpec, PACKAGE_ABI_VERSION, PackageConversionError,
-    PackageEvaluationError, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon, evaluate_gluon_with,
-    evaluate_gluon_with_inputs,
+    BuilderEnvironmentSpec, BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec, PACKAGE_ABI_VERSION,
+    PackageConversionError, PackageEvaluationError, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,
+    evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
@@ -23,6 +23,28 @@ fn binary_program(name: &str) -> ProgramSpec {
         path: format!("/usr/bin/{name}"),
         requirement: DependencySpec::Binary(name.to_owned()),
     }
+}
+
+fn assert_dependency_role_conversion_error(
+    error: PackageEvaluationError,
+    expected_field: &str,
+    expected_role: DependencyRole,
+    expected_kind: DependencyKind,
+) {
+    let diagnostic = error.to_string();
+    let PackageEvaluationError::Conversion(PackageConversionError::UnsupportedDependencyRole {
+        field,
+        role,
+        kind,
+    }) = error
+    else {
+        panic!("expected a dependency role conversion error, found: {diagnostic}");
+    };
+    assert_eq!(field, expected_field);
+    assert_eq!(role, expected_role);
+    assert_eq!(kind, expected_kind);
+    assert!(diagnostic.contains(&format!("`{expected_role}` role")));
+    assert!(diagnostic.contains(&format!("kind `{expected_kind}`")));
 }
 
 #[test]
@@ -86,7 +108,10 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     );
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
-    assert_eq!(dependency_names(&evaluated.package.build_inputs), ["zlib"]);
+    assert_eq!(
+        dependency_names(&evaluated.package.build_inputs),
+        ["zlib", "pkgconfig(libressl)"]
+    );
     let phases = evaluated.package.phases();
     assert_eq!(
         phases.setup.steps,
@@ -149,7 +174,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     );
     assert_eq!(
         dependency_names(&evaluated.package.outputs[0].runtime_inputs),
-        ["pkgconfig(libressl)"]
+        ["soname(libtls.so.28)"]
     );
     assert_eq!(
         dependency_names(&evaluated.package.outputs[9].runtime_inputs),
@@ -388,6 +413,203 @@ make { wrong = b.dep.binary "cmake" }
 }
 
 #[test]
+fn evaluator_accepts_typed_kinds_in_ordinary_dependency_roles() {
+    let source = authored(
+        r#"
+let root = {
+    runtime_inputs = [
+        b.dep.package "runtime-package",
+        b.dep.output (b.package_ref "runtime-suite") "runtime",
+        b.dep.binary "runtime-binary",
+        b.dep.system_binary "runtime-system-binary",
+        b.dep.soname "libruntime.so.1",
+        b.dep.python "runtime_python",
+        b.dep.interpreter "/usr/lib/ld-runtime.so.1(x86_64)",
+    ],
+    conflicts = [b.dep.pkgconfig32 "conflicting-devel"],
+    .. b.output "out"
+}
+{
+    builder = b.builder.custom b.defaults.scripts [
+        b.dep.package "tool-package",
+        b.dep.output (b.package_ref "tool-suite") "tools",
+        b.dep.binary "tool-binary",
+        b.dep.system_binary "tool-system-binary",
+    ],
+    native_build_inputs = [b.dep.cmake "NativeConfig"],
+    build_inputs = [b.dep.pkgconfig "target-devel", b.dep.pkgconfig32 "target-devel"],
+    check_inputs = [
+        b.dep.soname "libcheck.so.1",
+        b.dep.interpreter "/usr/lib/ld-check.so.1(x86_64)",
+    ],
+    outputs = [root],
+    .. b.mk_package (b.meta {
+        pname = "ordinary-roles", version = "1.0.0", release = 1,
+        homepage = "https://example.com", license = ["MPL-2.0"],
+    })
+}
+"#,
+    );
+
+    let evaluated = evaluate_gluon(&source).unwrap();
+    assert_eq!(
+        dependency_names(evaluated.package.builder.required_tools()),
+        [
+            "tool-package",
+            "tool-suite-tools",
+            "binary(tool-binary)",
+            "sysbinary(tool-system-binary)",
+        ]
+    );
+    assert_eq!(
+        dependency_names(&evaluated.package.outputs[0].runtime_inputs),
+        [
+            "runtime-package",
+            "runtime-suite-runtime",
+            "binary(runtime-binary)",
+            "sysbinary(runtime-system-binary)",
+            "soname(libruntime.so.1)",
+            "python(runtime_python)",
+            "interpreter(/usr/lib/ld-runtime.so.1(x86_64))",
+        ]
+    );
+    assert_eq!(
+        evaluated.package.outputs[0].conflicts[0]
+            .provider()
+            .unwrap()
+            .to_name(),
+        "pkgconfig32(conflicting-devel)"
+    );
+}
+
+#[test]
+fn evaluator_rejects_typed_kind_mismatches_in_ordinary_dependency_roles() {
+    for (field, declaration, role, kind) in [
+        (
+            "builder.required_tools[0]",
+            "builder = b.builder.custom b.defaults.scripts [b.dep.soname \"libtool.so.1\"],",
+            DependencyRole::BuilderTool,
+            DependencyKind::Soname,
+        ),
+        (
+            "outputs[0].runtime_inputs[0]",
+            "outputs = [{ runtime_inputs = [b.dep.cmake \"RuntimeConfig\"], .. b.output \"out\" }],",
+            DependencyRole::Runtime,
+            DependencyKind::CMake,
+        ),
+        (
+            "outputs[0].runtime_inputs[0]",
+            "outputs = [{ runtime_inputs = [b.dep.pkgconfig \"runtime-devel\"], .. b.output \"out\" }],",
+            DependencyRole::Runtime,
+            DependencyKind::PkgConfig,
+        ),
+        (
+            "outputs[0].runtime_inputs[0]",
+            "outputs = [{ runtime_inputs = [b.dep.pkgconfig32 \"runtime-devel\"], .. b.output \"out\" }],",
+            DependencyRole::Runtime,
+            DependencyKind::PkgConfig32,
+        ),
+    ] {
+        let source = authored(&format!(
+            r#"
+let base = b.mk_package (b.meta {{
+    pname = "ordinary-role-error", version = "1.0.0", release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+}})
+{{
+    {declaration}
+    .. base
+}}
+"#
+        ));
+
+        assert_dependency_role_conversion_error(evaluate_gluon(&source).unwrap_err(), field, role, kind);
+    }
+}
+
+#[test]
+fn evaluator_accepts_typed_kinds_in_a_selected_profile() {
+    let source = authored(
+        r#"
+let selected = b.profile_with {
+    builder = b.builder.custom b.defaults.scripts [
+        b.dep.package "profile-tool-package",
+        b.dep.output (b.package_ref "profile-tool-suite") "tools",
+        b.dep.binary "profile-tool-binary",
+        b.dep.system_binary "profile-tool-system-binary",
+    ],
+    native_build_inputs = [b.dep.cmake "ProfileNativeConfig"],
+    build_inputs = [b.dep.pkgconfig "profile-devel", b.dep.pkgconfig32 "profile-devel"],
+    check_inputs = [
+        b.dep.soname "libprofile-check.so.1",
+        b.dep.interpreter "/usr/lib/ld-profile-check.so.1(x86_64)",
+    ],
+    .. b.profile "emul32/x86_64"
+}
+{
+    outputs = [b.output "out"],
+    profiles = [selected],
+    .. b.mk_package (b.meta {
+        pname = "profile-roles", version = "1.0.0", release = 1,
+        homepage = "https://example.com", license = ["MPL-2.0"],
+    })
+}
+"#,
+    );
+
+    let evaluated = evaluate_gluon(&source).unwrap();
+    let selected = evaluated.package.profile("emul32/x86_64").unwrap();
+    assert_eq!(
+        dependency_names(selected.builder.required_tools()),
+        [
+            "profile-tool-package",
+            "profile-tool-suite-tools",
+            "binary(profile-tool-binary)",
+            "sysbinary(profile-tool-system-binary)",
+        ]
+    );
+    assert_eq!(
+        dependency_names(&selected.build_inputs),
+        ["pkgconfig(profile-devel)", "pkgconfig32(profile-devel)"]
+    );
+}
+
+#[test]
+fn evaluator_rejects_typed_kind_mismatches_in_a_selected_profile() {
+    for (dependency, kind) in [
+        ("b.dep.pkgconfig32 \"profile-devel\"", DependencyKind::PkgConfig32),
+        (
+            "b.dep.interpreter \"/usr/lib/ld-profile.so.1(x86_64)\"",
+            DependencyKind::Interpreter,
+        ),
+    ] {
+        let source = authored(&format!(
+            r#"
+let selected = b.profile_with {{
+    builder = b.builder.custom b.defaults.scripts [{dependency}],
+    .. b.profile "emul32/x86_64"
+}}
+{{
+    outputs = [b.output "out"],
+    profiles = [selected],
+    .. b.mk_package (b.meta {{
+        pname = "profile-role-error", version = "1.0.0", release = 1,
+        homepage = "https://example.com", license = ["MPL-2.0"],
+    }})
+}}
+"#
+        ));
+
+        assert_dependency_role_conversion_error(
+            evaluate_gluon(&source).unwrap_err(),
+            "profiles[0].builder.required_tools[0]",
+            DependencyRole::BuilderTool,
+            kind,
+        );
+    }
+}
+
+#[test]
 fn missing_local_output_reference_has_an_indexed_field() {
     let source = authored(
         r#"
@@ -592,6 +814,34 @@ let base = b.mk_package (b.meta {
         PackageEvaluationError::Conversion(PackageConversionError::FrozenBuildNetworkingUnsupported)
     ));
     assert!(error.to_string().contains("locked sources"));
+}
+
+#[test]
+fn evaluator_keeps_special_constructor_reserved_but_rejects_concrete_package_use() {
+    let source = authored(
+        r#"
+let base = b.mk_package (b.meta {
+    pname = "example", version = "1.0.0", release = 1,
+    homepage = "https://example.com", license = ["MPL-2.0"],
+})
+{
+    outputs = [b.output_with {
+        paths = [b.path.special "/usr/lib/example/events.fifo"],
+        .. b.output "out"
+    }],
+    .. base
+}
+"#,
+    );
+
+    let error = evaluate_gluon(&source).unwrap_err();
+    assert!(matches!(
+        error,
+        PackageEvaluationError::Conversion(
+            PackageConversionError::UnsupportedSpecialPathRule { ref field }
+        ) if field == "outputs[0].paths[0]"
+    ));
+    assert!(error.to_string().contains("reserved by package-v3"));
 }
 
 #[test]

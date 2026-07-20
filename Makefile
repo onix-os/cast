@@ -658,6 +658,9 @@ forge-frozen-normalization-test:
 		linux_fs::tests::descriptor_read_rejects_non_regular_capabilities \
 		client::tests::frozen_copy_manifest_counts_output_inodes_and_enforces_exact_byte_limit \
 		client::tests::frozen_capability_retry_timeout_remains_a_materialization_timeout \
+		client::tests::materialization_rejects_decodable_special_layouts_with_exact_package_and_path \
+		client::tests::frozen_root_rejects_every_special_layout_before_touching_destination \
+		client::tests::external_materialization::low_level_blitter_rejects_special_layout_instead_of_silent_success \
 		client::tests::independent_copy_rejects_length_changed_after_byte_preflight_before_creation \
 		client::tests::frozen_normalization_handles_mode_zero_entries_and_never_follows_symlinks \
 		client::tests::frozen_normalization_rejects_unplanned_missing_and_extra_entries \

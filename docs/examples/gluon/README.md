@@ -123,7 +123,7 @@ needed by a declarative userspace.
 | [`explicit-git-subprojects`](packages/explicit-git-subprojects/stone.glu) | Three independently locked Git trees composed into one explicit subproject layout without recursive fetching. |
 | [`native-codegen-target-library`](packages/native-codegen-target-library/stone.glu) | A build-platform generator and target-platform library kept in distinct typed dependency roles. |
 | [`split-outputs`](packages/split-outputs/stone.glu) | Runtime, development, documentation, and root output rules. |
-| [`typed-output-routing`](packages/typed-output-routing/stone.glu) | Ordered catch-all, executable, symlink, and special-file collection rules across explicit outputs. |
+| [`typed-output-routing`](packages/typed-output-routing/stone.glu) | Ordered regular, executable, and symlink routing, with runtime FIFO creation declared through a packaged tmpfiles configuration. |
 | [`userspace-role-factory`](packages/userspace-role-factory/stone.glu) | Closed workstation, server, and builder roles selected through an ordinary pure function rather than module merging. |
 | [`variant-matrix-factory`](packages/variant-matrix-factory/stone.glu) | Two exhaustive typed axes forming one dependency and build-policy matrix without independent boolean drift. |
 | [`conflicts`](packages/conflicts/stone.glu) | Typed conflicts, exclusions, provides, and path kinds. |
