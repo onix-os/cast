@@ -12,11 +12,13 @@ use crate::{
         boot,
         startup_gate::{
             self, CleanSystemStartup, UsrRollbackActiveReblitBootRepairCompleteSeal,
-            UsrRollbackActiveReblitFinalizationSeal,
+            UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
         },
         startup_reconciliation::{
             UsrRollbackActiveReblitBootRepairCompleteAdmission,
             UsrRollbackActiveReblitBootRepairCompleteAuthority,
+            UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
+            UsrRollbackActiveReblitCompleteRouteAuthorityError,
             UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
             active_reblit_candidate_preserve_exchange_attempt_count,
             reset_active_reblit_candidate_preserve_exchange_attempt_count,
@@ -36,9 +38,10 @@ use crate::{
     db,
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
+    transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
     transition_journal::{
-        BootRepairOutcome, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, RollbackActionOutcome,
-        TransitionJournalStore, TransitionRecord, decode,
+        AbortDisposition, BootRepairOutcome, BootRollback, ForwardPhase, Operation, Phase, RollbackAction,
+        RollbackActionOutcome, TransitionJournalStore, TransitionRecord, decode,
     },
 };
 
@@ -188,6 +191,33 @@ pub(super) fn expected_rollback_complete(candidate_preserved: &TransitionRecord)
     let successor = candidate_preserved.rollback_successor(None).unwrap();
     assert_eq!(successor.phase, Phase::RollbackComplete);
     successor
+}
+
+pub(super) fn assert_exact_no_boot_completion_plan(record: &TransitionRecord, source: CandidateSource) {
+    assert!(matches!(record.phase, Phase::CandidatePreserved | Phase::RollbackComplete));
+    assert_eq!(record.candidate.id, record.previous.id);
+    let rollback = record.rollback.as_ref().unwrap();
+    assert_eq!(
+        rollback.source,
+        match source {
+            CandidateSource::Intent => ForwardPhase::UsrExchangeIntent,
+            CandidateSource::Exchanged => ForwardPhase::UsrExchanged,
+            CandidateSource::RootLinksComplete => ForwardPhase::RootLinksComplete,
+        }
+    );
+    assert_eq!(rollback.previous_archive, RollbackAction::NotRequired);
+    assert!(matches!(
+        rollback.usr_exchange,
+        RollbackAction::Applied | RollbackAction::AlreadySatisfied
+    ));
+    assert!(matches!(
+        rollback.candidate.action,
+        RollbackAction::Applied | RollbackAction::AlreadySatisfied
+    ));
+    assert_eq!(rollback.candidate.disposition, AbortDisposition::Quarantine);
+    assert_eq!(rollback.fresh_db, RollbackAction::NotRequired);
+    assert_eq!(rollback.boot, BootRollback::NotRequired);
+    assert!(rollback.external_effects_may_remain);
 }
 
 pub(super) fn expected_boot_repair_required(candidate_preserved: &TransitionRecord) -> TransitionRecord {
@@ -386,6 +416,57 @@ pub(super) fn capture_finalization_ready<'reservation>(
     authority
 }
 
+pub(super) fn capture_complete_route<'reservation>(
+    fixture: &CandidatePreserveFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> Result<
+    UsrRollbackActiveReblitCompleteRouteAdmission<'reservation>,
+    UsrRollbackActiveReblitCompleteRouteAuthorityError,
+> {
+    capture_complete_route_parts(
+        &fixture.fixture.installation,
+        &fixture.fixture.database,
+        journal,
+        reservation,
+        record,
+    )
+}
+
+pub(super) fn capture_complete_route_ready<'reservation>(
+    fixture: &CandidatePreserveFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
+    match capture_complete_route(fixture, journal, reservation, record).unwrap() {
+        UsrRollbackActiveReblitCompleteRouteAdmission::Ready(authority) => authority,
+        _ => panic!("exact ActiveReblit CandidatePreserved evidence did not admit completion routing"),
+    }
+}
+
+fn capture_complete_route_parts<'reservation>(
+    installation: &Installation,
+    database: &db::state::Database,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> Result<
+    UsrRollbackActiveReblitCompleteRouteAdmission<'reservation>,
+    UsrRollbackActiveReblitCompleteRouteAuthorityError,
+> {
+    let seal = UsrRollbackActiveReblitCompleteRouteSeal::new_for_test();
+    UsrRollbackActiveReblitCompleteRouteAuthority::capture(
+        &seal,
+        installation,
+        journal,
+        database,
+        reservation,
+        record,
+    )
+}
+
 pub(super) fn capture_boot_repair_complete_ready<'system, 'reservation>(
     fixture: &'system BootRepairFixture,
     journal: &TransitionJournalStore,
@@ -413,11 +494,27 @@ pub(super) fn reset_candidate_effect_observers() {
     reset_active_reblit_candidate_preserve_post_exchange_durability_events();
 }
 
+pub(super) fn reset_complete_route_effect_observers() {
+    reset_candidate_effect_observers();
+    reset_boot_synchronize_observer();
+    reset_retained_exchange_syscall_count();
+}
+
 pub(super) fn assert_no_candidate_effects() {
     assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
     assert!(
         take_active_reblit_candidate_preserve_post_exchange_durability_events().is_empty(),
         "completion routing must not repeat candidate-preservation durability"
+    );
+}
+
+pub(super) fn assert_complete_route_journal_only() {
+    assert_no_candidate_effects();
+    assert_no_boot_synchronize_attempts();
+    assert_eq!(
+        retained_exchange_syscall_count(),
+        0,
+        "journal-only ActiveReblit completion routing repeated a /usr exchange"
     );
 }
 
@@ -693,6 +790,57 @@ pub(super) fn install_persistent_boot_database(fixture: &mut BootRepairFixture) 
     database.clear_transition_if_matches(candidate, transition).unwrap();
     let old = std::mem::replace(&mut fixture.fixture.database, database);
     drop(old);
+}
+
+pub(super) struct FreshCompleteRouteHandles {
+    pub(super) installation: Installation,
+    pub(super) database: db::state::Database,
+    pub(super) journal: TransitionJournalStore,
+    pub(super) record: TransitionRecord,
+}
+
+impl FreshCompleteRouteHandles {
+    pub(super) fn open(root: &Path) -> Self {
+        let installation = Installation::open(root, None).unwrap();
+        let database = open_state_database(&installation);
+        let journal = TransitionJournalStore::open_retained(installation.root_directory(), root).unwrap();
+        let record = journal
+            .load()
+            .unwrap()
+            .expect("fresh-handle reopen requires a durable ActiveReblit completion-route record");
+        Self {
+            installation,
+            database,
+            journal,
+            record,
+        }
+    }
+
+    pub(super) fn capture<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> Result<
+        UsrRollbackActiveReblitCompleteRouteAdmission<'reservation>,
+        UsrRollbackActiveReblitCompleteRouteAuthorityError,
+    > {
+        capture_complete_route_parts(
+            &self.installation,
+            &self.database,
+            &self.journal,
+            reservation,
+            &self.record,
+        )
+    }
+
+    pub(super) fn capture_ready<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
+        match self.capture(reservation).unwrap() {
+            UsrRollbackActiveReblitCompleteRouteAdmission::Ready(authority) => authority,
+            _ => panic!("fresh exact ActiveReblit CandidatePreserved handles did not admit completion routing"),
+        }
+    }
 }
 
 pub(super) fn release_candidate_handles(mut fixture: CandidatePreserveFixture) -> tempfile::TempDir {

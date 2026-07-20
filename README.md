@@ -17,32 +17,75 @@ Cast is backed by two internal Rust libraries:
 Mason and Forge are implementation boundaries, not commands or public
 configuration namespaces. See the [Cast architecture](docs/architecture/cast.md).
 
-## Why this is a hard fork
+## Atomic by design
 
-This repository intentionally hard-forks
-[AerynOS OS Tools](https://github.com/AerynOS/os-tools). It retains the
-original Git history and much of the inherited package and state-management
-foundation, but it is not a drop-in configuration-compatible client.
+Cast's core promise is that changing the system is a transaction: it either
+happens completely or it did not happen at all, and either way the system can
+prove which.
 
-Onix is building a declarative Linux userspace. Package recipes, build policy,
-profiles, repositories, transaction triggers, and desired system state are all
-authored in Gluon. YAML and KDL loaders, fallbacks, dual writes, and compatibility
-representations have been removed.
+- **Immutable states.** Every install, removal, or sync produces a new
+  numbered state — an immutable snapshot of the selected package set. States
+  are never mutated, only created and pruned.
+- **One kernel-atomic switch.** A new state's `/usr` is fully staged and
+  fsynced first, then activated with a single `renameat2(RENAME_EXCHANGE)`
+  of the real `/usr` directory. There is no symlink indirection, no script
+  window where the system is half-old and half-new: the visible tree changes
+  in one atomic kernel operation.
+- **A crash journal, not hope.** Activation runs under a phase-ladder
+  transition journal with named fsync barriers, boot-epoch and
+  mount-namespace evidence, and a single-in-flight invariant. If power dies
+  mid-transition, startup reconciliation rolls the journal forward or back
+  deterministically.
+- **Content-addressed storage by construction.** Every unique file is stored
+  once in a content-addressed asset store and hardlinked into each state's
+  tree. Deduplication is the storage model, not an optimisation pass.
+- **Bootable rollback.** Retained states get their own boot-loader entries;
+  rolling back is selecting an older state at boot or re-activating it live
+  through the same atomic exchange.
+- **Hermetic, locked builds.** Package builds run in namespaced,
+  seccomp-filtered sandboxes with **no network access at all** — every input
+  enters through hash-pinned source locks and a frozen dependency closure.
+  Each build is identified by a SHA-256 derivation identity that covers the
+  recipe, locks, policies, environment, and content-hashed toolchain
+  binaries.
+- **A real, standard filesystem.** All of this happens on an ordinary merged
+  `/usr` FHS tree. Unmodified third-party binaries, proprietary software, and
+  language package managers work as-is.
+- **Typed, bounded configuration.** All configuration is Gluon: statically
+  typed, evaluated once under strict resource limits in a capability-
+  restricted sandbox, and committed to a SHA-256 evaluation fingerprint.
+  No configuration language runs in the install path — resolution reads
+  binary indexes.
 
-That break is specifically with the inherited YAML/KDL configuration paths. Nix
-compatibility or interoperability is not a goal of the current Gluon work, but it
-is not rejected or designed out; it remains a separate future decision.
+## How Cast compares to Nix
 
-This is an architectural break, not a file-extension change. Gluon programs
-cross typed, versioned, capability-restricted ABIs and produce evaluation
-fingerprints. Authored programs remain separate from generated locks and
-normalized state. Cast freezes exact dependency closures and canonical
-derivation plans before execution.
+Cast and Nix answer the same question — how to make a system safe to change
+and possible to roll back — with the purity boundary in opposite layers. Nix
+moves correctness to *evaluation time*: the system is a value computed by a
+lazy functional language, outputs are addressed by their inputs, and
+activation is a profile flip plus activation scripts. Cast moves correctness
+to *transition time*: packages are resolved from binary indexes, files are
+content-addressed, and the moment of change is one journaled, kernel-atomic
+exchange of the real `/usr`.
 
-Keeping the inherited configuration paths would preserve two sources of truth
-and two incompatible composition models. The hard fork makes that break
-explicit while retaining full credit for the work it builds on. See
-[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
+| | Cast | Nix / NixOS |
+|---|---|---|
+| Activation | Single atomic `RENAME_EXCHANGE` under a crash journal | Symlink flip + activation scripts |
+| File dedup | Content-addressed store, dedup by construction | Opt-in `nix store optimise` |
+| Build network access | Rejected outright; hash-pinned source locks only | Allowed in fixed-output derivations |
+| Config language | Typed, resource-bounded, fingerprinted; not in the install path | Untyped, lazy, evaluated on every rebuild |
+| Filesystem | Real FHS `/usr`; foreign binaries work unmodified | `/nix/store` paths; patchelf/FHS shims needed |
+| Declarative scope | Package set + repositories | Entire system (services, users, kernel) |
+| Multi-version / dev shells | One live tree; no shell story (yet) | Native store-path coexistence, `nix develop` |
+| Ecosystem | One implementation, young repository | ~140k packages, multiple implementations |
+
+The trade is deliberate. Cast does not offer per-machine composed closures,
+side-by-side package versions, or a whole-system module language — that is
+the price of a compatible filesystem, solver-free installs, and an activation
+step strong enough to carry a crash journal. In exchange, Cast keeps most of
+the operational value people run NixOS for — atomic updates, bootable
+rollback, reproducible locked builds — while looking and behaving like a
+normal package manager on a normal Linux tree.
 
 ## Components
 
@@ -200,6 +243,11 @@ before cloning a build process if that contract is absent. Each derivation is
 then placed atomically in its own leaf with executor-owned ceilings of 4096
 PIDs, 32 GiB memory, no swap, and CPU bandwidth equal to the frozen
 `execution.jobs` value. These are operational safety limits, not recipe inputs.
+
+## Acknowledgments
+
+OS Tools builds on prior open-source work; the people and projects it grew
+from are credited in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## License
 

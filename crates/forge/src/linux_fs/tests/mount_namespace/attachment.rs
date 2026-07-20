@@ -1,5 +1,5 @@
-mod bounds;
 mod boot_namespace;
+mod bounds;
 mod deadline;
 mod device;
 mod gpt_device;

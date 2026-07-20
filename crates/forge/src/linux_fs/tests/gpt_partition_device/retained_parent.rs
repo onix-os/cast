@@ -101,15 +101,7 @@ fn block_observation_mount_id_must_equal_the_captured_descriptor_mount_id() {
     let root = tempfile::tempfile().unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut calls = Vec::new();
-    let changed = observation(
-        41,
-        52,
-        ROOT_MOUNT_ID + 1,
-        PARENT_MAJOR,
-        PARENT_MINOR,
-        512,
-        DEVICE_BYTES,
-    );
+    let changed = observation(41, 52, ROOT_MOUNT_ID + 1, PARENT_MAJOR, PARENT_MINOR, 512, DEVICE_BYTES);
     let mut respond = |call: FixtureRetainedParentProtocolCall| {
         calls.push(call.clone());
         standard_result(call, changed)

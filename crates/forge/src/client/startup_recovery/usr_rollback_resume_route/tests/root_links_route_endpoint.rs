@@ -1,6 +1,10 @@
 use std::{fs, os::unix::fs::MetadataExt as _, path::PathBuf};
 
 use crate::{
+    client::startup_reconciliation::{
+        active_reblit_candidate_preserve_exchange_attempt_count,
+        reset_active_reblit_candidate_preserve_exchange_attempt_count,
+    },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
     transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome, TransitionRecord},
 };
@@ -24,6 +28,7 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
             assert_eq!(root_links_before.len(), 5, "{case}");
             let usr_before = usr_layout(&fixture);
             reset_retained_exchange_syscall_count();
+            reset_active_reblit_candidate_preserve_exchange_attempt_count();
 
             let decision_entry = fixture.enter();
             assert_eq!(pending(&decision_entry).phase(), Phase::RollbackDecided, "{case}");
@@ -113,6 +118,11 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
             assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
             assert_eq!(fixture.database_snapshot(), database_before, "{case}");
             assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+            assert_eq!(
+                active_reblit_candidate_preserve_exchange_attempt_count(),
+                usize::from(kind == OperationKind::ActiveReblit),
+                "{case}"
+            );
 
             let preserved_bytes = fixture.canonical_bytes();
             let preserved_namespace = fixture.namespace_snapshot();
@@ -180,11 +190,28 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
                 }
                 OperationKind::ActiveReblit => {
                     assert_eq!(candidate_preserved.generation, 13, "{case}");
-                    let stable_entry = fixture.enter();
-                    assert_eq!(pending(&stable_entry).phase(), Phase::CandidatePreserved, "{case}");
-                    assert_eq!(fixture.canonical_record(), candidate_preserved, "{case}");
-                    assert_eq!(fixture.canonical_bytes(), preserved_bytes, "{case}");
+                    let complete_entry = fixture.enter();
+                    let rollback_complete = candidate_preserved.rollback_successor(None).unwrap();
+                    assert_eq!(rollback_complete.phase, Phase::RollbackComplete, "{case}");
+                    assert_eq!(rollback_complete.generation, 14, "{case}");
+                    assert_eq!(pending(&complete_entry).phase(), Phase::RollbackComplete, "{case}");
+                    assert!(pending(&complete_entry).blockers().is_empty(), "{case}");
+                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
+                    assert_ne!(fixture.canonical_bytes(), preserved_bytes, "{case}");
                     assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 1, "{case}");
+                    assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+                    assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
+                    assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+
+                    let complete_bytes = fixture.canonical_bytes();
+                    drop(complete_entry);
+                    let stable_entry = fixture.enter();
+                    assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");
+                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
+                    assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");
+                    assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 1, "{case}");
                     assert_eq!(fixture.database_snapshot(), database_before, "{case}");
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");

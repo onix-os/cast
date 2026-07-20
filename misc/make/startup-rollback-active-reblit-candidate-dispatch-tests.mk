@@ -8,16 +8,20 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_active_reblit::tests::'; \
-	timeout 10s test "$$( timeout 10s grep "^$$prefix.*: test$$" "$$listed" | timeout 10s grep -Evc "^$$prefix"'(finalization_|boot_repair_required_|boot_repair_complete_|boot_repair_unverified_)' )" = 18; \
+	timeout 10s test "$$( timeout 10s grep "^$$prefix.*: test$$" "$$listed" | timeout 10s grep -Evc "^$$prefix"'(finalization_|boot_repair_required_|boot_repair_complete_|boot_repair_unverified_)' )" = 22; \
 	for name in \
 		candidate_wrapper_exchange_process_kill::startup_active_reblit_candidate_wrapper_exchange_process_kill_recovers_without_second_exchange \
 		complete_authority_binding::startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_root_journal_bindings \
 		complete_evidence_races::startup_active_reblit_complete_route_rejects_database_provenance_journal_and_namespace_races \
+		complete_evidence_races::startup_active_reblit_complete_route_root_links_rejects_all_root_abi_mutations_at_two_seams \
 		complete_exclusions::startup_active_reblit_complete_route_preserves_operation_and_phase_ordering \
-		complete_matrix::startup_active_reblit_complete_route_covers_all_sixteen_exact_candidate_preserved_cases \
-		complete_restart::startup_active_reblit_complete_route_source_durable_failure_converges_with_fresh_handles \
-		complete_restart::startup_active_reblit_complete_route_successor_durable_failure_finalizes_with_fresh_handles \
-		complete_storage_faults::startup_active_reblit_complete_route_all_five_journal_faults_converge_on_second_entry \
+		complete_matrix::startup_active_reblit_complete_route_covers_all_twenty_four_exact_candidate_preserved_cases \
+		complete_record_binding::startup_active_reblit_complete_route_bound_advance_same_byte_replacements_never_succeed \
+		complete_record_binding::startup_active_reblit_complete_route_same_byte_successor_replacement_fails_reopened_binding \
+		complete_record_binding::startup_active_reblit_complete_route_same_byte_successor_replacement_fails_same_store_binding \
+		complete_restart::startup_active_reblit_complete_route_source_durable_fresh_handle_reopen_retries_only_the_route \
+		complete_restart::startup_active_reblit_complete_route_successor_durable_fresh_handle_reopen_skips_the_route \
+		complete_storage_faults::startup_active_reblit_complete_route_all_five_journal_faults_reopen_exact_durable_record \
 		durability_failures::startup_active_reblit_candidate_dispatch_all_six_durability_barriers_fail_at_exact_prefix_for_both_origins \
 		effect_failures::startup_active_reblit_candidate_dispatch_classifies_all_three_raw_exchange_reports_from_evidence \
 		evidence_races::startup_active_reblit_candidate_dispatch_rejects_database_provenance_journal_and_namespace_races \
@@ -43,13 +47,13 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "mod usr_rollback_active_reblit;" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; fi; \
 	timeout 10s grep -Fqx '#[cfg(test)]' "$$orchestrator"; \
 	timeout 10s grep -Fqx 'mod tests;' "$$orchestrator"; \
-	for module in candidate_wrapper_exchange_kill_boundaries candidate_wrapper_exchange_process_harness candidate_wrapper_exchange_process_kill complete_authority_binding complete_evidence_races complete_exclusions complete_matrix complete_restart complete_storage_faults durability_failures effect_failures evidence_races exclusions matrix new_state_regression restart storage_faults support; do \
+	for module in candidate_wrapper_exchange_kill_boundaries candidate_wrapper_exchange_process_harness candidate_wrapper_exchange_process_kill complete_authority_binding complete_evidence_races complete_exclusions complete_matrix complete_record_binding complete_restart complete_storage_faults durability_failures effect_failures evidence_races exclusions matrix new_state_regression restart storage_faults support; do \
 		timeout 10s grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
-	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests" --glob '!finalization_*.rs' --glob '!boot_repair_required_*.rs' --glob '!boot_repair_complete_*.rs' --glob '!boot_repair_unverified_*.rs' | timeout 10s wc -l )" = 18; \
+	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests" --glob '!finalization_*.rs' --glob '!boot_repair_required_*.rs' --glob '!boot_repair_complete_*.rs' --glob '!boot_repair_unverified_*.rs' | timeout 10s wc -l )" = 22; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$tests/support.rs" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$tests/support.rs" )" = 3; \
-	if timeout 10s rg -n --glob '!complete_authority_binding.rs' --glob '!finalization_*.rs' --glob '!boot_repair_required_*.rs' 'UsrRollbackCandidatePreserve(?:Seal::new_for_test|Authority::capture)|UsrRollbackActiveReblitCompleteRoute(?:Seal::new_for_test|Authority::capture)|usr_rollback_active_reblit::dispatch|super::super::dispatch|dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback_active_reblit_(candidate_preserve|complete_route)_and_reopen' "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n --glob '!complete_*.rs' --glob '!support.rs' --glob '!finalization_*.rs' --glob '!boot_repair_required_*.rs' 'UsrRollbackCandidatePreserve(?:Seal::new_for_test|Authority::capture)|UsrRollbackActiveReblitCompleteRoute(?:Seal::new_for_test|Authority::capture)|usr_rollback_active_reblit::dispatch|super::super::dispatch|dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback_active_reblit_(candidate_preserve|complete_route)_and_reopen' "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx 'pub(super) fn dispatch<'\''reservation>(' "$$orchestrator"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'if record.operation != Operation::ActiveReblit {' "$$orchestrator" )" = 1; \
 	timeout 10s grep -Fqx '        Phase::CandidatePreserveIntent => {' "$$orchestrator"; \

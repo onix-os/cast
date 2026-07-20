@@ -111,8 +111,9 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 10s test "$$drop_journal_line" -lt "$$reopen_line"; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|remove_exact_fresh_transition|renameat|unlink|mkdir|create_dir|set_permissions|chmod|Phase::BootRepair(Started|Unverified)' "$$authority" "$$proof" "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n '#\[derive\([^]]*Clone' "$$authority" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$complete_authority"; \
+	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$complete_authority"; \
 	timeout 10s grep -Fq 'rollback.boot == BootRollback::NotRequired' "$$complete_authority"; \
+	if timeout 10s rg -n 'rollback\.source == ForwardPhase::BootSyncStarted' "$$complete_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'assert_completion_refused(&fixture.fixture, &journal, &reservation, &exact);' "$$tests/boot_repair_required_exclusions.rs"; \
 	for source in BootSyncComplete TransactionTriggersComplete SystemTriggersComplete UsrExchangeIntent UsrExchanged; do timeout 10s grep -Fq "ForwardPhase::$$source" "$$tests/boot_repair_required_exclusions.rs"; done; \
 	for boot in NotRequired Unverified; do timeout 10s grep -Fq "BootRollback::$$boot" "$$tests/boot_repair_required_exclusions.rs"; done; \

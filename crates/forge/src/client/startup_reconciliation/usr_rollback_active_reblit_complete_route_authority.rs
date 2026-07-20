@@ -4,7 +4,8 @@
 //! This authority is deliberately disjoint from the NewState completion
 //! route: there is no fresh-database or joint-absence evidence. Admission
 //! instead retains the exact cleared existing-state row, its metadata
-//! provenance, the preserved whole-wrapper namespace, journal binding,
+//! provenance, the preserved whole-wrapper namespace, exact journal-record
+//! binding,
 //! installation capability, and active-state reservation. It exposes no
 //! database, namespace, journal, trigger, cleanup, retry, or finalization
 //! effect.
@@ -12,8 +13,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
-        TransitionJournalStore, TransitionRecord,
+        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
+        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -40,7 +41,7 @@ pub(in crate::client) struct UsrRollbackActiveReblitCompleteRouteAuthority<'rese
     record: TransitionRecord,
     database: UsrRollbackActiveReblitCompleteRouteDatabaseEvidence,
     namespace: UsrRollbackActiveReblitCompleteRouteNamespaceProof,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -78,10 +79,9 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
             return Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Deferred);
         }
 
-        let journal_binding = journal.binding();
-        if !journal.has_binding(&journal_binding) {
-            return Err(UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        installation.revalidate_mutable_namespace()?;
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database(record, state_db)? {
@@ -90,13 +90,22 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
                 return Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Deferred);
             }
         };
-        let namespace_inspection =
-            match UsrRollbackActiveReblitCompleteRouteNamespaceInspection::begin(installation, journal, record) {
-                Ok(inspection) => inspection,
-                Err(_) => return Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Deferred),
-            };
+        let namespace_inspection = match UsrRollbackActiveReblitCompleteRouteNamespaceInspection::begin(
+            installation,
+            journal,
+            &journal_record_binding,
+            record,
+        ) {
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Deferred),
+        };
         run_between_database_captures();
-        let namespace = match namespace_inspection.finish(installation, journal, record) {
+        let namespace = match namespace_inspection.finish(
+            installation,
+            journal,
+            &journal_record_binding,
+            record,
+        ) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Deferred),
         };
@@ -113,13 +122,15 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
         installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(installation, journal, &journal_record_binding, record)?;
+        installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Ready(Self {
             installation: installation.clone(),
             state_db: retained_state_db,
             record: record.clone(),
             database: database_after,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         }))
     }
@@ -129,18 +140,32 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackActiveReblitCompleteRouteAuthorityError> {
-        if !journal.has_binding(&self.journal_binding) {
-            return Err(UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
-        self.namespace.revalidate(&self.installation, journal, &self.record)?;
+        self.namespace.revalidate(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         let database_after =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if database_before != database_after || !active_reblit_complete_route_plan_is_exact(&self.record) {
             return Err(UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -153,9 +178,42 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
         &self.record
     }
 
+    /// Consume the complete authority through the exact bound
+    /// predecessor-to-successor journal boundary.
+    pub(in crate::client) fn advance_record_binding(
+        self,
+        journal: &TransitionJournalStore,
+        next: &TransitionRecord,
+    ) -> Result<TransitionJournalRecordBinding, UsrRollbackActiveReblitCompleteRouteRecordAdvanceError> {
+        self.revalidate(journal)?;
+        let cast = self.installation.retained_mutable_cast_directory()?;
+        journal
+            .advance_record_binding(cast, self.journal_record_binding, next)
+            .map_err(UsrRollbackActiveReblitCompleteRouteRecordAdvanceError::Storage)
+    }
+
     #[cfg(test)]
     pub(in crate::client) fn wrapper_index(&self) -> usize {
         self.namespace.wrapper_index()
+    }
+}
+
+fn require_journal_record_binding(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackActiveReblitCompleteRouteAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(
+            UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::JournalRecordBindingMismatch.into(),
+        );
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, binding, record)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::JournalRecordBindingMismatch.into())
     }
 }
 
@@ -170,7 +228,7 @@ fn active_reblit_complete_route_plan_is_exact(record: &TransitionRecord) -> bool
         && record.candidate.id == record.previous.id
         && matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
         )
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
@@ -273,10 +331,28 @@ impl From<crate::installation::Error> for UsrRollbackActiveReblitCompleteRouteAu
     }
 }
 
+impl From<StorageError> for UsrRollbackActiveReblitCompleteRouteAuthorityError {
+    fn from(source: StorageError) -> Self {
+        UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::Journal(source).into()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(in crate::client) enum UsrRollbackActiveReblitCompleteRouteRecordAdvanceError {
+    #[error("revalidate exact ActiveReblit rollback-completion route authority before the bound journal advance")]
+    Authority(#[from] UsrRollbackActiveReblitCompleteRouteAuthorityError),
+    #[error("revalidate retained installation before the bound ActiveReblit rollback-completion route advance")]
+    Installation(#[from] crate::installation::Error),
+    #[error("advance the exact bound ActiveReblit rollback-completion route record")]
+    Storage(#[source] StorageError),
+}
+
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind {
-    #[error("ActiveReblit rollback-completion authority was paired with a different open journal store")]
-    JournalBindingMismatch,
+    #[error("ActiveReblit rollback-completion authority lost its exact journal record binding")]
+    JournalRecordBindingMismatch,
+    #[error("capture or revalidate the exact ActiveReblit rollback-completion journal record")]
+    Journal(#[source] StorageError),
     #[error("exact ActiveReblit CandidatePreserved evidence no longer selects rollback completion")]
     RouteEvidenceMismatch,
     #[error("inspect ActiveReblit rollback-completion startup database context")]

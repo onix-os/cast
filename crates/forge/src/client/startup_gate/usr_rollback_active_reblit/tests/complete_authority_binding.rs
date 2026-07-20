@@ -1,21 +1,16 @@
 //! Direct negative proof for a capability pairing startup cannot construct.
 
 use crate::{
-    client::{
-        active_state_snapshot::ActiveStateReservation,
-        startup_gate::UsrRollbackActiveReblitCompleteRouteSeal,
-        startup_reconciliation::{
-            UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
-        },
-    },
+    client::active_state_snapshot::ActiveStateReservation,
     transition_journal::RollbackActionOutcome,
 };
 
 use super::{
     super::candidate_test_support::CandidateSource,
     support::{
-        CandidateOrigin, Epoch, WRAPPER_INDEX, assert_no_candidate_effects, build_active, persist_candidate_preserved,
-        reset_candidate_effect_observers,
+        CandidateOrigin, Epoch, WRAPPER_INDEX, assert_complete_route_journal_only,
+        assert_exact_no_boot_completion_plan, build_active, capture_complete_route_ready,
+        persist_candidate_preserved, reset_complete_route_effect_observers,
     },
 };
 
@@ -23,7 +18,7 @@ use super::{
 fn startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_root_journal_bindings() {
     let fixture = build_active(
         Epoch::Current,
-        CandidateSource::Exchanged,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOrigin::AlreadySatisfied,
     );
@@ -41,21 +36,10 @@ fn startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_roo
     let other_namespace = other.fixture.namespace_snapshot();
     let journal = fixture.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let seal = UsrRollbackActiveReblitCompleteRouteSeal::new_for_test();
-    reset_candidate_effect_observers();
+    assert_exact_no_boot_completion_plan(&record, CandidateSource::RootLinksComplete);
+    reset_complete_route_effect_observers();
 
-    let admission = UsrRollbackActiveReblitCompleteRouteAuthority::capture(
-        &seal,
-        &fixture.fixture.installation,
-        &journal,
-        &fixture.fixture.database,
-        &reservation,
-        &record,
-    )
-    .unwrap();
-    let UsrRollbackActiveReblitCompleteRouteAdmission::Ready(authority) = admission else {
-        panic!("exact source-root CandidatePreserved evidence did not admit completion routing");
-    };
+    let authority = capture_complete_route_ready(&fixture, &journal, &reservation, &record);
     assert_eq!(authority.wrapper_index(), WRAPPER_INDEX);
     authority.revalidate(&journal).unwrap();
     drop(journal);
@@ -64,7 +48,7 @@ fn startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_roo
     let reopened_error = authority.revalidate(&reopened_journal).unwrap_err();
     assert_eq!(
         reopened_error.to_string(),
-        "ActiveReblit rollback-completion authority was paired with a different open journal store"
+        "ActiveReblit rollback-completion authority lost its exact journal record binding"
     );
     drop(reopened_journal);
 
@@ -73,12 +57,12 @@ fn startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_roo
 
     assert_eq!(
         error.to_string(),
-        "ActiveReblit rollback-completion authority was paired with a different open journal store"
+        "ActiveReblit rollback-completion authority lost its exact journal record binding"
     );
     assert_eq!(fixture.fixture.canonical_record(), record);
     assert_eq!(fixture.fixture.database_snapshot(), fixture_database);
     assert_eq!(fixture.fixture.namespace_snapshot(), fixture_namespace);
     assert_eq!(other.fixture.database_snapshot(), other_database);
     assert_eq!(other.fixture.namespace_snapshot(), other_namespace);
-    assert_no_candidate_effects();
+    assert_complete_route_journal_only();
 }

@@ -21,6 +21,7 @@ mod complete_authority_binding;
 mod complete_evidence_races;
 mod complete_exclusions;
 mod complete_matrix;
+mod complete_record_binding;
 mod complete_restart;
 mod complete_storage_faults;
 mod durability_failures;

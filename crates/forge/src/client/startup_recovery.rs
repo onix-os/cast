@@ -160,8 +160,10 @@ pub(in crate::client) use usr_rollback_activate_archived_candidate_preserve_pers
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_complete_route::{
-    DurableUsrRollbackActiveReblitCompleteRouteRecord,
+    DurableUsrRollbackActiveReblitCompleteRouteRecord, UsrRollbackActiveReblitCompleteRouteSuccessorBindingError,
+    arm_after_usr_rollback_active_reblit_complete_route_successor_binding_check_before_reopen,
     arm_before_usr_rollback_active_reblit_complete_route_final_revalidation,
+    arm_before_usr_rollback_active_reblit_complete_route_successor_binding_revalidation,
 };
 
 #[cfg(test)]

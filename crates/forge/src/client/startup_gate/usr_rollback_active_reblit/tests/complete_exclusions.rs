@@ -14,9 +14,9 @@ use super::{
     },
     support::{
         CandidateOrigin, Epoch, WRAPPER_INDEX, active_wrapper_path, assert_canonical_absent,
-        assert_no_candidate_effects, assert_pending_phase, build_active, build_other, enter_candidate,
-        enter_clean_candidate, expected_rollback_complete, persist_candidate_preserved,
-        reset_candidate_effect_observers,
+        assert_complete_route_journal_only, assert_no_candidate_effects, assert_pending_phase, build_active,
+        build_other, enter_candidate, enter_clean_candidate, expected_rollback_complete,
+        persist_candidate_preserved, reset_candidate_effect_observers, reset_complete_route_effect_observers,
     },
 };
 
@@ -106,7 +106,7 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
     .unwrap();
     let wrong_plan_database = wrong_plan.fixture.database_snapshot();
     let wrong_plan_namespace = wrong_plan.fixture.namespace_snapshot();
-    reset_candidate_effect_observers();
+    reset_complete_route_effect_observers();
 
     let wrong_plan_error = enter_candidate(&wrong_plan);
 
@@ -114,10 +114,11 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
     assert_eq!(wrong_plan.fixture.canonical_record(), inexact);
     assert_eq!(wrong_plan.fixture.database_snapshot(), wrong_plan_database);
     assert_eq!(wrong_plan.fixture.namespace_snapshot(), wrong_plan_namespace);
-    assert_no_candidate_effects();
+    assert_complete_route_journal_only();
 
     // A valid generic rollback plan that also derives RollbackComplete must
-    // not widen this operation-specific route beyond its two /usr sources.
+    // not widen this operation-specific route beyond its three exact no-boot
+    // /usr sources.
     let route_inexact = build_active(
         Epoch::Historical,
         CandidateSource::Intent,

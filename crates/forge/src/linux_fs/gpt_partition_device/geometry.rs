@@ -77,10 +77,7 @@ fn require_sane_parent_geometry(logical_block_size: u32, device_byte_length: u64
         return Err(invalid("block device reports an unsupported logical block size"));
     }
     let logical_block_size = u64::from(logical_block_size);
-    if device_byte_length == 0
-        || device_byte_length > i64::MAX as u64
-        || device_byte_length % logical_block_size != 0
-    {
+    if device_byte_length == 0 || device_byte_length > i64::MAX as u64 || device_byte_length % logical_block_size != 0 {
         return Err(invalid(
             "block device byte length is zero, unaddressable, or not aligned to its logical block size",
         ));

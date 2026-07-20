@@ -74,7 +74,7 @@ pub(in crate::client) use usr_rollback_active_reblit_boot_repair_unverified_auth
 };
 pub(in crate::client) use usr_rollback_active_reblit_complete_route_authority::{
     UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
-    UsrRollbackActiveReblitCompleteRouteAuthorityError,
+    UsrRollbackActiveReblitCompleteRouteAuthorityError, UsrRollbackActiveReblitCompleteRouteRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_finalization_authority::{
     UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,

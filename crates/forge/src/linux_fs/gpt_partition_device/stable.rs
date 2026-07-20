@@ -65,11 +65,7 @@ pub(super) fn preflight_opening_observation_until(
     let mut operation = Operation::new(Limits::production(), deadline)?;
     require_valid_observation(opening, &mut operation)?;
     require_expected_parent(opening, expected, &mut operation)?;
-    geometry::require_sane_parent_observation(
-        opening.logical_block_size(),
-        opening.byte_length(),
-        &mut operation,
-    )?;
+    geometry::require_sane_parent_observation(opening.logical_block_size(), opening.byte_length(), &mut operation)?;
     operation.finish()
 }
 

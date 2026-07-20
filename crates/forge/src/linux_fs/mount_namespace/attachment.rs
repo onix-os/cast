@@ -31,10 +31,8 @@ mod filesystem;
 mod gpt_device;
 mod selector;
 
+pub(crate) use boot_namespace::{TaskRootBootNamespaceAssessmentError, ValidatedTaskRootBootNamespaceAssessment};
 use capture::{AttachmentCapture, capture_twice, require_capture_matches};
-pub(crate) use boot_namespace::{
-    TaskRootBootNamespaceAssessmentError, ValidatedTaskRootBootNamespaceAssessment,
-};
 pub(crate) use device::{TaskRootDevtmpfsAttachmentAuthenticationError, ValidatedTaskRootDevtmpfsAttachmentEvidence};
 use filesystem::{AttachmentLimits, directory_witness, duplicate_directory, require_same_directory};
 #[allow(unused_imports)] // named by the future owned mounted-topology aggregate
