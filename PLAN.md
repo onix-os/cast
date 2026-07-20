@@ -657,10 +657,10 @@ the live items below remain open until a non-skipped required run proves them.
   Status is runtime plus twice kill-after, a five/sixty/ten-second client margin, and
   five seconds: defaults are 50, 7,325, 14,525, and 21,675 seconds; inner/outer caps
   are 18,665/22,215. Shorter outer limits are only fault/cleanup tests, not run proof.
-  At exact commit `10d51fb9`, the canonical disposable NixOS VM completed both runs
-  for 19/26 fixtures; `hooks-patch` passed twice. `multiple-sources` passed once and
-  emitted nine Stones, but its second run hit the former fixed two-hour inner limit.
-  No assertion failed, no v2 receipt was published, and cleanup required no reboot; all three live items remain open pending a clean full rerun from the accepted commit.
+  At exact commit `10d51fb9`, the disposable NixOS VM completed both runs for 19/26
+  fixtures; `hooks-patch` passed twice, while `multiple-sources` passed once with nine
+  Stones before its second run hit the former two-hour limit. A clean `7b3770b1` rerun
+  proved the new budgets but filled the live-root tmpfs during pre-fixture compilation: zero fixtures ran, no receipt was published, and a cross-tmpfs recovery caused OOM service loss without disk access or reboot. The three live items remain open pending a capacity-proven persistent guest.
   CI covers `develop`, matching the required untouched-`main` integration workflow.
 
 **Exit gate:** every example is checked and frozen through public production

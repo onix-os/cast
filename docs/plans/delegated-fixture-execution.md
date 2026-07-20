@@ -76,6 +76,24 @@ completed. The VM was safely cleaned of campaign units, processes, mounts, and
 broker state without a reboot. This is useful partial execution evidence, but
 it does not close any checklist item that requires the complete matrix receipt.
 
+A later clean rerun from exact commit `7b3770b1` proved the new nested runtime
+budgets but exposed a separate guest-capacity failure before delegated preflight
+or fixture selection. The outer six-hour unit started correctly; the
+pre-fixture `make fixtures-ci` contract-test build then filled the NixOS live
+root tmpfs. `ld.lld` terminated with `SIGBUS`, the bounded log writer reported
+`ENOSPC`, and the campaign closed with zero of twenty-six fixtures and zero of
+fifty-two executions. It published no receipt. Its owned units, processes,
+mounts, and run staging were removed before the failed recovery experiment.
+
+Moving an already-populated Cargo target between two memory filesystems was
+not a valid recovery: the duplicate allocation caused guest OOM pressure and
+loss of SSH service. No block device was opened, no installed-system disk was
+used, and the VM was not rebooted or reset. This incident is environment
+evidence, not package evidence. A replacement campaign must prove sufficient
+persistent build-space and inode headroom before compilation, keep bounded
+evidence separate from disposable build artifacts, and fail before launching
+the outer unit rather than attempting a cross-tmpfs relocation after pressure.
+
 ## Runtime containment contract
 
 Accepted runtime commit `249b5c8b` replaces the equal nested deadlines exposed
@@ -107,7 +125,8 @@ An explicitly shorter outer deadline remains valid for bounded fault-injection
 and cleanup tests. It deliberately may expire before the requested inner
 runtime and therefore cannot produce accepted complete-campaign evidence.
 The full twenty-six-fixture campaign and its v2 receipt still require a clean,
-non-skipped rerun from the accepted commit; that rerun has not yet occurred.
+non-skipped rerun from an accepted commit on a capacity-proven persistent
+guest; that rerun has not yet occurred.
 
 ## Acceptance rule
 
