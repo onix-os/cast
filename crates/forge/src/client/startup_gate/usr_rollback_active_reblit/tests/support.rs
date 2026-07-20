@@ -140,9 +140,6 @@ pub(super) fn build_active_at_wrapper_index(
             CandidatePreserveFixture::historical(OperationKind::ActiveReblit, source, usr_outcome, origin.layout())
         }
     };
-    if source == CandidateSource::Exchanged {
-        install_live_root_abi(&fixture.fixture.installation);
-    }
     fixture.with_active_reblit_wrapper_index(wrapper_index)
 }
 
@@ -153,7 +150,7 @@ pub(super) fn build_other(
 ) -> CandidatePreserveFixture {
     assert_ne!(kind, OperationKind::ActiveReblit);
     let fixture = CandidatePreserveFixture::new(kind, source, RollbackActionOutcome::Applied, layout);
-    if kind == OperationKind::Archived || (kind == OperationKind::NewState && source == CandidateSource::Exchanged) {
+    if kind == OperationKind::Archived && source == CandidateSource::Intent {
         install_live_root_abi(&fixture.fixture.installation);
     }
     fixture

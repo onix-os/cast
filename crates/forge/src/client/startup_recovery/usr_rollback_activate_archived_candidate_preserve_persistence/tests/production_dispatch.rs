@@ -1,7 +1,5 @@
 //! Shared production-leaf wiring for ActivateArchived candidate preservation.
 
-use std::os::unix::fs::symlink;
-
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
@@ -77,9 +75,6 @@ fn startup_activate_archived_candidate_preserve_production_leaf_rejects_cross_op
                 RollbackActionOutcome::Applied,
                 layout(origin),
             );
-            if other_kind == OperationKind::ActiveReblit {
-                install_live_root_abi(&other);
-            }
             let archived_journal = archived.open_journal();
             let other_journal = other.open_journal();
             let reservation = ActiveStateReservation::acquire().unwrap();
@@ -141,17 +136,5 @@ fn layout(origin: CandidateOrigin) -> CandidateLayout {
     match origin {
         CandidateOrigin::Applied => CandidateLayout::Staged,
         CandidateOrigin::AlreadySatisfied => CandidateLayout::Preserved,
-    }
-}
-
-fn install_live_root_abi(fixture: &CandidatePreserveFixture) {
-    for (name, target) in [
-        ("bin", "usr/bin"),
-        ("sbin", "usr/sbin"),
-        ("lib", "usr/lib"),
-        ("lib32", "usr/lib32"),
-        ("lib64", "usr/lib"),
-    ] {
-        symlink(target, fixture.fixture.installation.root.join(name)).unwrap();
     }
 }
