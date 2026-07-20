@@ -4,6 +4,7 @@ mod persistence;
 
 #[cfg(test)]
 pub(in crate::client) use persistence::arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence;
+pub(in crate::client) use persistence::UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError;
 
 #[cfg(test)]
 use crate::transition_journal::RollbackActionOutcome;

@@ -20,7 +20,7 @@ use crate::{
     transition_journal::RollbackActionOutcome,
 };
 
-use super::support::{CandidateOrigin, Fixture, OperationKind, Source, durable_authority, fixture_for_origin};
+use super::support::{CandidateOrigin, Epoch, Fixture, OperationKind, Source, durable_authority, fixture_for_origin};
 
 #[derive(Clone, Copy, Debug)]
 enum EvidenceRace {
@@ -34,104 +34,122 @@ enum EvidenceRace {
 
 #[test]
 fn startup_active_reblit_candidate_preserve_persistence_rejects_mixed_and_cross_root_journals() {
-    for origin in CandidateOrigin::ALL {
-        let fixture = fixture_for_origin(origin, Source::Exchanged, RollbackActionOutcome::Applied);
-        let first = fixture.open_journal();
-        let reservation = ActiveStateReservation::acquire().unwrap();
-        reset_active_reblit_candidate_preserve_exchange_attempt_count();
-        let authority = durable_authority(&fixture, &first, &reservation, origin);
-        let expected_exchange_count = usize::from(origin == CandidateOrigin::Applied);
-        drop(first);
-        let second = fixture.open_journal();
+    for epoch in Epoch::ALL {
+        for origin in CandidateOrigin::ALL {
+            let fixture = fixture_for_origin(epoch, origin, Source::Exchanged, RollbackActionOutcome::Applied);
+            let first = fixture.open_journal();
+            let reservation = ActiveStateReservation::acquire().unwrap();
+            reset_active_reblit_candidate_preserve_exchange_attempt_count();
+            let authority = durable_authority(&fixture, &first, &reservation, origin);
+            let expected_exchange_count = usize::from(origin == CandidateOrigin::Applied);
+            drop(first);
+            let second = fixture.open_journal();
 
-        let result = persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(second, authority);
-        drop(reservation);
-        let error = result.unwrap_err();
+            let result = persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(second, authority);
+            drop(reservation);
+            let error = result.unwrap_err();
 
-        assert!(matches!(
-            error,
-            UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(_)
-        ));
-        assert_eq!(fixture.fixture.canonical_record(), fixture.candidate_intent);
-        assert_eq!(
-            active_reblit_candidate_preserve_exchange_attempt_count(),
-            expected_exchange_count
-        );
-        let first_fixture = fixture_for_origin(origin, Source::Intent, RollbackActionOutcome::AlreadySatisfied);
-        let second_fixture = fixture_for_origin(origin, Source::Intent, RollbackActionOutcome::AlreadySatisfied);
-        let first = first_fixture.open_journal();
-        let reservation = ActiveStateReservation::acquire().unwrap();
-        reset_active_reblit_candidate_preserve_exchange_attempt_count();
-        let authority = durable_authority(&first_fixture, &first, &reservation, origin);
-        drop(first);
-        fs::write(
-            super::super::test_fixture::canonical_journal(&second_fixture.fixture.installation.root),
-            first_fixture.fixture.canonical_bytes(),
-        )
-        .unwrap();
-        let foreign = second_fixture.open_journal();
+            assert!(matches!(
+                error,
+                UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(_)
+            ));
+            assert_eq!(fixture.fixture.canonical_record(), fixture.candidate_intent);
+            assert_eq!(
+                active_reblit_candidate_preserve_exchange_attempt_count(),
+                expected_exchange_count
+            );
+            let first_fixture = fixture_for_origin(
+                epoch,
+                origin,
+                Source::Intent,
+                RollbackActionOutcome::AlreadySatisfied,
+            );
+            let second_fixture = fixture_for_origin(
+                epoch,
+                origin,
+                Source::Intent,
+                RollbackActionOutcome::AlreadySatisfied,
+            );
+            let first = first_fixture.open_journal();
+            let reservation = ActiveStateReservation::acquire().unwrap();
+            reset_active_reblit_candidate_preserve_exchange_attempt_count();
+            let authority = durable_authority(&first_fixture, &first, &reservation, origin);
+            drop(first);
+            fs::write(
+                super::super::test_fixture::canonical_journal(&second_fixture.fixture.installation.root),
+                first_fixture.fixture.canonical_bytes(),
+            )
+            .unwrap();
+            let foreign = second_fixture.open_journal();
 
-        let result = persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(foreign, authority);
-        drop(reservation);
-        let error = result.unwrap_err();
+            let result = persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(foreign, authority);
+            drop(reservation);
+            let error = result.unwrap_err();
 
-        assert!(matches!(
-            error,
-            UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(_)
-        ));
-        assert_eq!(first_fixture.fixture.canonical_record(), first_fixture.candidate_intent);
-        assert_eq!(
-            second_fixture.fixture.canonical_record(),
-            first_fixture.candidate_intent
-        );
-        assert_eq!(
-            active_reblit_candidate_preserve_exchange_attempt_count(),
-            expected_exchange_count
-        );
+            assert!(matches!(
+                error,
+                UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(_)
+            ));
+            assert_eq!(first_fixture.fixture.canonical_record(), first_fixture.candidate_intent);
+            assert_eq!(
+                second_fixture.fixture.canonical_record(),
+                first_fixture.candidate_intent
+            );
+            assert_eq!(
+                active_reblit_candidate_preserve_exchange_attempt_count(),
+                expected_exchange_count
+            );
+        }
     }
 }
 
 #[test]
 fn startup_active_reblit_candidate_preserve_persistence_final_races_fail_before_advance() {
-    for origin in CandidateOrigin::ALL {
-        for race in [
-            EvidenceRace::Database,
-            EvidenceRace::Provenance,
-            EvidenceRace::Journal,
-            EvidenceRace::Installation,
-            EvidenceRace::Namespace,
-            EvidenceRace::Plan,
-        ] {
-            let fixture = fixture_for_origin(origin, Source::Exchanged, RollbackActionOutcome::Applied);
-            let journal = fixture.open_journal();
-            let reservation = ActiveStateReservation::acquire().unwrap();
-            reset_active_reblit_candidate_preserve_exchange_attempt_count();
-            let authority = durable_authority(&fixture, &journal, &reservation, origin);
-            let source = fixture.candidate_intent.clone();
-            let expected_exchange_count = usize::from(origin == CandidateOrigin::Applied);
-            arm_final_race(&fixture, race);
+    for epoch in Epoch::ALL {
+        for origin in CandidateOrigin::ALL {
+            for race in [
+                EvidenceRace::Database,
+                EvidenceRace::Provenance,
+                EvidenceRace::Journal,
+                EvidenceRace::Installation,
+                EvidenceRace::Namespace,
+                EvidenceRace::Plan,
+            ] {
+                let fixture = fixture_for_origin(epoch, origin, Source::Exchanged, RollbackActionOutcome::Applied);
+                let journal = fixture.open_journal();
+                let reservation = ActiveStateReservation::acquire().unwrap();
+                reset_active_reblit_candidate_preserve_exchange_attempt_count();
+                let authority = durable_authority(&fixture, &journal, &reservation, origin);
+                let source = fixture.candidate_intent.clone();
+                let expected_exchange_count = usize::from(origin == CandidateOrigin::Applied);
+                arm_final_race(&fixture, race);
 
-            let result = persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(journal, authority);
-            drop(reservation);
-            let error = result.unwrap_err();
+                let result = persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(journal, authority);
+                drop(reservation);
+                let error = result.unwrap_err();
 
-            assert!(
-                matches!(
-                    error,
-                    UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(_)
-                ),
-                "{origin:?} {race:?}"
-            );
-            assert_eq!(
-                active_reblit_candidate_preserve_exchange_attempt_count(),
-                expected_exchange_count,
-                "{origin:?} {race:?}"
-            );
-            if matches!(
-                race,
-                EvidenceRace::Database | EvidenceRace::Provenance | EvidenceRace::Namespace
-            ) {
-                assert_eq!(fixture.fixture.canonical_record(), source, "{origin:?} {race:?}");
+                assert!(
+                    matches!(
+                        error,
+                        UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(_)
+                    ),
+                    "{epoch:?} {origin:?} {race:?}"
+                );
+                assert_eq!(
+                    active_reblit_candidate_preserve_exchange_attempt_count(),
+                    expected_exchange_count,
+                    "{epoch:?} {origin:?} {race:?}"
+                );
+                if matches!(
+                    race,
+                    EvidenceRace::Database | EvidenceRace::Provenance | EvidenceRace::Namespace
+                ) {
+                    assert_eq!(
+                        fixture.fixture.canonical_record(),
+                        source,
+                        "{epoch:?} {origin:?} {race:?}"
+                    );
+                }
             }
         }
     }
@@ -185,7 +203,7 @@ fn arm_final_race(fixture: &Fixture, race: EvidenceRace) {
         EvidenceRace::Plan => {
             let changed = Fixture::new(
                 OperationKind::Archived,
-                Source::Exchanged,
+                super::super::candidate_test_support::CandidateSource::Exchanged,
                 RollbackActionOutcome::Applied,
                 super::super::candidate_test_support::CandidateLayout::Staged,
             );

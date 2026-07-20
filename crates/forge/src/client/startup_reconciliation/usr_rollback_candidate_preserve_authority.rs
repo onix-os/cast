@@ -42,6 +42,7 @@ pub(in crate::client) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveEffectLease,
+    UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_effect::{

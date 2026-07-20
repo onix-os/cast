@@ -2,7 +2,10 @@
 
 mod post_exchange_durability;
 
-pub(in crate::client) use post_exchange_durability::UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority;
+pub(in crate::client) use post_exchange_durability::{
+    UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
+    UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError,
+};
 #[cfg(test)]
 pub(in crate::client) use post_exchange_durability::{
     arm_before_active_reblit_candidate_preserve_durable_trailing_evidence,

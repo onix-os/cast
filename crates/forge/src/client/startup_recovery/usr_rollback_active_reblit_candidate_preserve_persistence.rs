@@ -11,11 +11,14 @@ use thiserror::Error;
 
 use crate::{
     installation,
-    transition_journal::{CodecError, Phase, StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::super::startup_reconciliation::{
-    UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority, UsrRollbackCandidatePreserveAuthorityError,
+    UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
+    UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError, UsrRollbackCandidatePreserveAuthorityError,
 };
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
@@ -37,6 +40,21 @@ pub(in crate::client) enum DurableUsrRollbackActiveReblitCandidatePreserveRecord
     CandidatePreserved,
 }
 
+enum UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome {
+    Published {
+        successor: TransitionRecord,
+        binding: TransitionJournalRecordBinding,
+    },
+    StorageFailed {
+        successor: TransitionRecord,
+        source: StorageError,
+    },
+    SuccessorBindingFailed {
+        successor: TransitionRecord,
+        source: UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError,
+    },
+}
+
 /// Persist the sole `CandidatePreserved` successor fixed by durable
 /// ActiveReblit evidence, then independently reopen and compare the record.
 pub(in crate::client) fn persist_usr_rollback_active_reblit_candidate_preserve_and_reopen(
@@ -51,44 +69,106 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_candidate_preserve_a
         ));
     }
     let source_record = authority.record().clone();
-    let successor = match authority.candidate_preserved_successor() {
-        Ok(successor) if successor.phase == Phase::CandidatePreserved => successor,
-        Ok(successor) => {
-            drop(authority);
-            drop(journal);
-            return Err(
-                UsrRollbackActiveReblitCandidatePreservePersistenceError::UnexpectedSuccessor {
-                    phase: successor.phase,
-                },
+
+    before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation();
+    let installation = authority.installation().clone();
+    let advance = match authority.advance_candidate_preserved_record_binding(&journal) {
+        Ok(published) => {
+            let (successor, successor_binding) = published.into_parts();
+            before_usr_rollback_active_reblit_candidate_preserve_successor_binding_revalidation();
+            let exact = revalidate_published_active_reblit_candidate_preserved_binding(
+                &installation,
+                &journal,
+                &successor_binding,
+                &successor,
             );
+            match exact {
+                Ok(true) => UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::Published {
+                    successor,
+                    binding: successor_binding,
+                },
+                Ok(false) => {
+                    drop(successor_binding);
+                    UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::SuccessorBindingFailed {
+                        successor,
+                        source: UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Changed,
+                    }
+                }
+                Err(source) => {
+                    drop(successor_binding);
+                    UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::SuccessorBindingFailed {
+                        successor,
+                        source,
+                    }
+                }
+            }
         }
-        Err(source) => {
-            drop(authority);
+        Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Authority(source)) => {
+            drop(journal);
+            return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(source));
+        }
+        Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Installation(source)) => {
+            drop(journal);
+            return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Installation(source));
+        }
+        Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Successor(source)) => {
             drop(journal);
             return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::SuccessorConstruction { source });
         }
+        Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::UnexpectedSuccessor { phase }) => {
+            drop(journal);
+            return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::UnexpectedSuccessor { phase });
+        }
+        Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Storage { source, successor }) => {
+            UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::StorageFailed { successor, source }
+        }
     };
 
-    before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation();
-    if let Err(source) = authority.revalidate(&journal) {
-        drop(authority);
-        drop(journal);
-        return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(
-            source,
-        ));
-    }
-    let installation = authority.installation().clone();
-    let advance = journal.advance(&source_record, &successor);
-
-    // Canonical reopen starts only after every old capability is destroyed.
-    drop(authority);
+    // The evidence authority and exact predecessor binding were consumed by
+    // the bound advance. Reopening while the old store remains alive would
+    // retain the canonical lock.
     drop(journal);
 
+    if let UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::Published { .. } = &advance {
+        after_usr_rollback_active_reblit_candidate_preserve_successor_binding_check_before_reopen();
+    }
     let reopened =
         reopen_canonical_journal(&installation).map_err(UsrRollbackActiveReblitCandidatePreserveReopenError::from);
     match advance {
-        Ok(()) => match reopened {
-            Ok((reopened, Some(actual))) if actual == successor => Ok((reopened, successor)),
+        UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::Published {
+            successor,
+            binding: successor_binding,
+        } => match reopened {
+            Ok((reopened, Some(actual))) if actual == successor => {
+                let exact = revalidate_reopened_active_reblit_candidate_preserved_binding(
+                    &installation,
+                    &reopened,
+                    &successor_binding,
+                    &successor,
+                );
+                drop(successor_binding);
+                match exact {
+                    Ok(true) => Ok((reopened, successor)),
+                    Ok(false) => {
+                        drop(reopened);
+                        Err(
+                            UsrRollbackActiveReblitCandidatePreservePersistenceError::SuccessorRecordBinding {
+                                durable: DurableUsrRollbackActiveReblitCandidatePreserveRecord::CandidatePreserved,
+                                source: UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Changed,
+                            },
+                        )
+                    }
+                    Err(source) => {
+                        drop(reopened);
+                        Err(
+                            UsrRollbackActiveReblitCandidatePreservePersistenceError::SuccessorRecordBinding {
+                                durable: DurableUsrRollbackActiveReblitCandidatePreserveRecord::CandidatePreserved,
+                                source,
+                            },
+                        )
+                    }
+                }
+            }
             Ok((reopened, actual)) => {
                 drop(reopened);
                 Err(
@@ -101,7 +181,10 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_candidate_preserve_a
                 Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::ReopenAfterSuccessfulAdvance { source })
             }
         },
-        Err(advance_error) => match reopened {
+        UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::StorageFailed {
+            successor,
+            source: advance_error,
+        } => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {
                 drop(reopened);
                 Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Advance {
@@ -132,7 +215,87 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_candidate_preserve_a
                 },
             ),
         },
+        UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::SuccessorBindingFailed {
+            successor,
+            source: binding,
+        } => match reopened {
+            Ok((reopened, Some(actual))) if actual == source_record => {
+                drop(reopened);
+                Err(
+                    UsrRollbackActiveReblitCandidatePreservePersistenceError::SuccessorRecordBinding {
+                        durable: DurableUsrRollbackActiveReblitCandidatePreserveRecord::Source,
+                        source: binding,
+                    },
+                )
+            }
+            Ok((reopened, Some(actual))) if actual == successor => {
+                drop(reopened);
+                Err(
+                    UsrRollbackActiveReblitCandidatePreservePersistenceError::SuccessorRecordBinding {
+                        durable: DurableUsrRollbackActiveReblitCandidatePreserveRecord::CandidatePreserved,
+                        source: binding,
+                    },
+                )
+            }
+            Ok((reopened, actual)) => {
+                drop(reopened);
+                Err(
+                    UsrRollbackActiveReblitCandidatePreservePersistenceError::SuccessorRecordBindingAndReopen {
+                        binding,
+                        reopen: unexpected_record(&source_record, &successor, actual),
+                    },
+                )
+            }
+            Err(reopen) => Err(
+                UsrRollbackActiveReblitCandidatePreservePersistenceError::SuccessorRecordBindingAndReopen {
+                    binding,
+                    reopen,
+                },
+            ),
+        },
     }
+}
+
+fn revalidate_published_active_reblit_candidate_preserved_binding(
+    installation: &crate::Installation,
+    journal: &TransitionJournalStore,
+    successor_binding: &TransitionJournalRecordBinding,
+    successor: &TransitionRecord,
+) -> Result<bool, UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Installation)?;
+    let exact = journal
+        .has_record_binding(cast, successor_binding, successor)
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Installation)?;
+    Ok(exact)
+}
+
+fn revalidate_reopened_active_reblit_candidate_preserved_binding(
+    installation: &crate::Installation,
+    journal: &TransitionJournalStore,
+    successor_binding: &TransitionJournalRecordBinding,
+    successor: &TransitionRecord,
+) -> Result<bool, UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Installation)?;
+    let exact = journal
+        .has_reopened_record_binding(cast, successor_binding, successor)
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError::Installation)?;
+    Ok(exact)
 }
 
 fn unexpected_record(
@@ -150,6 +313,10 @@ fn unexpected_record(
 #[cfg(test)]
 std::thread_local! {
     static BEFORE_FINAL_AUTHORITY_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_SUCCESSOR_BINDING_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -174,6 +341,58 @@ fn before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revali
 #[cfg(not(test))]
 fn before_usr_rollback_active_reblit_candidate_preserve_persistence_final_revalidation() {}
 
+#[cfg(test)]
+pub(crate) fn arm_before_usr_rollback_active_reblit_candidate_preserve_successor_binding_revalidation(
+    hook: impl FnOnce() + 'static,
+) {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_usr_rollback_active_reblit_candidate_preserve_successor_binding_revalidation() {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_usr_rollback_active_reblit_candidate_preserve_successor_binding_revalidation() {}
+
+#[cfg(test)]
+pub(crate) fn arm_after_usr_rollback_active_reblit_candidate_preserve_successor_binding_check_before_reopen(
+    hook: impl FnOnce() + 'static,
+) {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_usr_rollback_active_reblit_candidate_preserve_successor_binding_check_before_reopen() {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_usr_rollback_active_reblit_candidate_preserve_successor_binding_check_before_reopen() {}
+
+#[derive(Debug, Error)]
+pub(in crate::client) enum UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError {
+    #[error("revalidate retained installation after publishing the ActiveReblit CandidatePreserved outcome")]
+    Installation(#[source] installation::Error),
+    #[error("the published ActiveReblit CandidatePreserved successor lost its exact record binding")]
+    Changed,
+    #[error("revalidate the published ActiveReblit CandidatePreserved successor record binding")]
+    Storage(#[source] StorageError),
+}
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum UsrRollbackActiveReblitCandidatePreservePersistenceError {
     #[error("revalidate exact durable ActiveReblit candidate-preservation authority")]
@@ -185,6 +404,20 @@ pub(in crate::client) enum UsrRollbackActiveReblitCandidatePreservePersistenceEr
     },
     #[error("durable ActiveReblit candidate-preservation authority selected unexpected successor phase {phase:?}")]
     UnexpectedSuccessor { phase: Phase },
+    #[error("revalidate retained installation before the exact ActiveReblit CandidatePreserved record advance")]
+    Installation(#[from] installation::Error),
+    #[error("published ActiveReblit successor binding failed with exact durable {durable:?} evidence")]
+    SuccessorRecordBinding {
+        durable: DurableUsrRollbackActiveReblitCandidatePreserveRecord,
+        #[source]
+        source: UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError,
+    },
+    #[error("ActiveReblit successor binding failed ({binding}) and its canonical record could not be reconciled")]
+    SuccessorRecordBindingAndReopen {
+        binding: UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError,
+        #[source]
+        reopen: UsrRollbackActiveReblitCandidatePreserveReopenError,
+    },
     #[error("ActiveReblit journal advance failed after reopening exact durable {durable:?} record")]
     Advance {
         durable: DurableUsrRollbackActiveReblitCandidatePreserveRecord,

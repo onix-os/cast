@@ -26,11 +26,32 @@ use super::super::candidate_test_support::{
 };
 
 pub(super) use super::super::candidate_test_support::{
-    CandidatePreserveFixture as Fixture, CandidateSource as Source, capture_record,
+    CandidatePreserveFixture as Fixture, capture_record,
 };
 pub(super) use super::super::test_fixture::OperationKind;
 
 pub(super) const WRAPPER_INDEX: usize = 13;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Epoch {
+    Current,
+    Historical,
+}
+
+impl Epoch {
+    pub(super) const ALL: [Self; 2] = [Self::Current, Self::Historical];
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Source {
+    Intent,
+    Exchanged,
+    BootSyncStarted,
+}
+
+impl Source {
+    pub(super) const ALL: [Self; 3] = [Self::Intent, Self::Exchanged, Self::BootSyncStarted];
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CandidateOrigin {
@@ -47,19 +68,53 @@ impl CandidateOrigin {
             Self::AlreadySatisfied => RollbackActionOutcome::AlreadySatisfied,
         }
     }
+
+    fn layout(self) -> CandidateLayout {
+        match self {
+            Self::Applied => CandidateLayout::Staged,
+            Self::AlreadySatisfied => CandidateLayout::Preserved,
+        }
+    }
 }
 
 pub(super) fn fixture_for_origin(
+    epoch: Epoch,
     origin: CandidateOrigin,
-    source: CandidateSource,
+    source: Source,
     usr_outcome: RollbackActionOutcome,
 ) -> CandidatePreserveFixture {
-    let layout = match origin {
-        CandidateOrigin::Applied => CandidateLayout::Staged,
-        CandidateOrigin::AlreadySatisfied => CandidateLayout::Preserved,
+    let fixture = match (epoch, source) {
+        (Epoch::Current, Source::Intent) => CandidatePreserveFixture::new(
+            OperationKind::ActiveReblit,
+            CandidateSource::Intent,
+            usr_outcome,
+            origin.layout(),
+        ),
+        (Epoch::Current, Source::Exchanged) => CandidatePreserveFixture::new(
+            OperationKind::ActiveReblit,
+            CandidateSource::Exchanged,
+            usr_outcome,
+            origin.layout(),
+        ),
+        (Epoch::Historical, Source::Intent) => CandidatePreserveFixture::historical(
+            OperationKind::ActiveReblit,
+            CandidateSource::Intent,
+            usr_outcome,
+            origin.layout(),
+        ),
+        (Epoch::Historical, Source::Exchanged) => CandidatePreserveFixture::historical(
+            OperationKind::ActiveReblit,
+            CandidateSource::Exchanged,
+            usr_outcome,
+            origin.layout(),
+        ),
+        (epoch, Source::BootSyncStarted) => CandidatePreserveFixture::active_reblit_boot_sync_started(
+            epoch == Epoch::Historical,
+            usr_outcome,
+            origin.layout(),
+        ),
     };
-    CandidatePreserveFixture::new(OperationKind::ActiveReblit, source, usr_outcome, layout)
-        .with_active_reblit_wrapper_index(WRAPPER_INDEX)
+    fixture.with_active_reblit_wrapper_index(WRAPPER_INDEX)
 }
 
 pub(super) fn durable_authority<'reservation>(

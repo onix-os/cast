@@ -16,14 +16,16 @@ use crate::{
     transition_journal::{RollbackActionOutcome, arm_next_temporary_sync_fault, assert_temporary_sync_fault_consumed},
 };
 
-use super::support::{CandidateOrigin, Source, expected_candidate_preserved, fixture_for_origin};
+use super::support::{CandidateOrigin, Epoch, Source, expected_candidate_preserved, fixture_for_origin};
 
 #[test]
 fn startup_active_reblit_candidate_preserve_production_leaf_dispatches_applied_and_finish_exactly_once() {
-    for origin in CandidateOrigin::ALL {
-        for source in Source::ALL {
-            for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
-                let fixture = fixture_for_origin(origin, source, usr_outcome);
+    let mut exercised = 0;
+    for epoch in Epoch::ALL {
+        for origin in CandidateOrigin::ALL {
+            for source in Source::ALL {
+                for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                let fixture = fixture_for_origin(epoch, origin, source, usr_outcome);
                 let journal = fixture.open_journal();
                 let reservation = ActiveStateReservation::acquire().unwrap();
                 let ready = match fixture.capture(&journal, &reservation) {
@@ -55,14 +57,18 @@ fn startup_active_reblit_candidate_preserve_production_leaf_dispatches_applied_a
                     active_reblit_candidate_preserve_exchange_attempt_count(),
                     usize::from(origin == CandidateOrigin::Applied)
                 );
+                exercised += 1;
+                }
             }
         }
     }
+    assert_eq!(exercised, 24);
 }
 
 #[test]
 fn startup_active_reblit_candidate_preserve_production_leaf_source_fault_restarts_finish_without_second_exchange() {
     let fixture = fixture_for_origin(
+        Epoch::Current,
         CandidateOrigin::Applied,
         Source::Exchanged,
         RollbackActionOutcome::Applied,
