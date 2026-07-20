@@ -43,6 +43,11 @@ const ROOT_ABI: [(&str, &str); 5] = [
     ("lib64", "usr/lib"),
 ];
 
+const USR_OUTCOMES: [RollbackActionOutcome; 2] = [
+    RollbackActionOutcome::Applied,
+    RollbackActionOutcome::AlreadySatisfied,
+];
+
 #[derive(Clone, Copy, Debug)]
 enum RootAbiMutation {
     Missing,
@@ -182,10 +187,17 @@ fn root_abi_mutation_hook(
 
 #[test]
 fn startup_active_reblit_complete_route_root_links_rejects_all_root_abi_mutations_at_two_seams() {
+    assert_eq!(RootAbiSeam::ALL.len(), 2);
+    assert_eq!(Epoch::ALL.len(), 2);
+    assert_eq!(USR_OUTCOMES.len(), 2);
+    assert_eq!(CandidateOrigin::ALL.len(), 2);
+    assert_eq!(ROOT_ABI.len(), 5);
+    assert_eq!(RootAbiMutation::ALL.len(), 3);
     let mut cases = 0;
     for seam in RootAbiSeam::ALL {
+        let mut seam_cases = 0;
         for epoch in Epoch::ALL {
-            for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+            for usr_outcome in USR_OUTCOMES {
                 for candidate_outcome in CandidateOrigin::ALL {
                     for (name, target) in ROOT_ABI {
                         for mutation in RootAbiMutation::ALL {
@@ -278,12 +290,14 @@ fn startup_active_reblit_complete_route_root_links_rejects_all_root_abi_mutation
                                 mutation,
                                 &case,
                             );
+                            seam_cases += 1;
                             cases += 1;
                         }
                     }
                 }
             }
         }
+        assert_eq!(seam_cases, 120, "{seam:?}");
     }
     assert_eq!(cases, 240);
 }

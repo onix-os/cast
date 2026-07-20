@@ -127,9 +127,9 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	timeout 10s test "$$advance_line" -lt "$$drop_journal"; \
 	timeout 10s test "$$drop_journal" -lt "$$reopen_line"; \
 	timeout 10s sed -E 's,//.*$$,,' "$$authority" "$$proof" "$$executor" > "$$production_code"; \
-	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|=[[:space:]]*(loop|while)[[:space:]]|=[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|diesel::|SqliteConnection|run_(transaction|system)_triggers|journal\.delete|remove_exact_fresh_transition|renameat|unlink|mkdir|create_dir|remove_(dir|file)|attempt_move|reconcile_move|finalize_usr_rollback|dispatch|retry|boot::|synchronize_boot' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|=[[:space:]]*(loop|while)[[:space:]]|=[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|diesel::|SqliteConnection|run_(transaction|system)_triggers|journal\.delete|remove_exact_fresh_transition|std::fs|(^|[^[:alnum:]_])fs::|(^|[^[:alnum:]_])nix::|transition_identity|linux_fs|rename(at)?|unlink(at)?|linkat|hard_link|symlink|sync_(all|data)|write_all|set_permissions|chmod|mkdir|create_dir|remove_(dir|file)|attempt_move|reconcile_move|finalize_usr_rollback|dispatch|retry|boot::|synchronize_boot' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx '    pub(super) const ALL: [Self; 2] = [Self::Intent, Self::Exchanged];' "$$candidate_support"; \
-	timeout 10s grep -Fqx '    pub(super) const THROUGH_CANDIDATE_PRESERVED: [Self; 3] = [' "$$candidate_support"; \
+	timeout 10s rg -U -q '^    pub\(super\) const THROUGH_CANDIDATE_PRESERVED: \[Self; 3\] = \[\n        Self::Intent,\n        Self::Exchanged,\n        Self::RootLinksComplete,\n    \];' "$$candidate_support"; \
 	for file in complete_matrix.rs complete_storage_faults.rs complete_restart.rs complete_record_binding.rs; do \
 		timeout 10s grep -Fq 'CandidateSource::THROUGH_CANDIDATE_PRESERVED' "$$tests/$$file"; \
 	done; \
@@ -148,9 +148,17 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(cases, 24);' "$$tests/complete_restart.rs" )" = 2; \
 	if timeout 10s rg -n 'Command::new|SIGKILL|process::' "$$tests/complete_restart.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx '    const ALL: [Self; 2] = [Self::CaptureSandwich, Self::FinalRevalidation];' "$$tests/complete_evidence_races.rs"; \
+	timeout 10s rg -U -q '^const USR_OUTCOMES: \[RollbackActionOutcome; 2\] = \[\n    RollbackActionOutcome::Applied,\n    RollbackActionOutcome::AlreadySatisfied,\n\];' "$$tests/complete_evidence_races.rs"; \
 	timeout 10s grep -Fq 'CandidateSource::RootLinksComplete,' "$$tests/complete_evidence_races.rs"; \
-	timeout 10s grep -Fq 'for (name, target) in ROOT_ABI {' "$$tests/complete_evidence_races.rs"; \
-	timeout 10s grep -Fq 'for mutation in RootAbiMutation::ALL {' "$$tests/complete_evidence_races.rs"; \
+	for loop in 'for seam in RootAbiSeam::ALL {' 'for epoch in Epoch::ALL {' 'for usr_outcome in USR_OUTCOMES {' 'for candidate_outcome in CandidateOrigin::ALL {' 'for (name, target) in ROOT_ABI {' 'for mutation in RootAbiMutation::ALL {'; do \
+		timeout 10s grep -Fq "$$loop" "$$tests/complete_evidence_races.rs"; \
+	done; \
+	for cardinality in 'RootAbiSeam::ALL.len(), 2' 'Epoch::ALL.len(), 2' 'USR_OUTCOMES.len(), 2' 'CandidateOrigin::ALL.len(), 2' 'ROOT_ABI.len(), 5' 'RootAbiMutation::ALL.len(), 3'; do \
+		timeout 10s grep -Fq "$$cardinality" "$$tests/complete_evidence_races.rs"; \
+	done; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'let mut seam_cases = 0;' "$$tests/complete_evidence_races.rs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'seam_cases += 1;' "$$tests/complete_evidence_races.rs" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(seam_cases, 120, "{seam:?}");' "$$tests/complete_evidence_races.rs" )" = 1; \
 	timeout 10s grep -Fq 'assert!(!displaced_directory.path().starts_with(&root));' "$$tests/complete_evidence_races.rs"; \
 	timeout 10s grep -Fq 'assert_exact_root_abi_mutation(' "$$tests/complete_evidence_races.rs"; \
 	timeout 10s grep -Fq 'assert_eq!(cases, 240);' "$$tests/complete_evidence_races.rs"; \
