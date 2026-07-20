@@ -325,9 +325,8 @@ closure remain authoritative in `PLAN.md`.
   operations, and both recorded `/usr` outcomes, RootLinks-sourced
   `UsrRestored` now advances journal-only to `CandidatePreserveIntent`; the
   matching operation writer then reaches its sole exact `CandidatePreserved`
-  successor. A subsequent startup remains stably at `CandidatePreserved`.
-  The endpoint still performs exactly one reverse `/usr` exchange, and all five
-  canonical root-link targets and identities remain unchanged.
+  successor. The endpoint performs exactly one reverse `/usr` exchange, and
+  all five canonical root-link targets and identities remain unchanged.
 
   Root-ABI mutation coverage now rejects 360 route races split evenly across
   fresh-capture and final-revalidation seams, plus 360 admission races spanning
@@ -337,11 +336,23 @@ closure remain authoritative in `PLAN.md`.
   fault executions, 96 predecessor/successor binding substitutions, and 48
   fresh restarts; ActiveReblit covers 32, 160, 128, and 64 respectively.
 
-  No later completion or finalization source axis is widened by this slice. The
-  next candidate-recovery boundary is to evaluate exact RootLinks-sourced
-  `CandidatePreserved` evidence at those separately authorized later
-  checkpoints. RootLinks process-death coverage, boot repair, cleanup, reboot,
-  and power-loss durability remain unclaimed.
+  Accepted commit `e35a2183` now admits only exact RootLinks-sourced NewState
+  `CandidatePreserved` generation 15 to the existing journal-only route. One
+  non-Clone record-inode binding crosses the bound advance to
+  `FreshDbInvalidationIntent` generation 16, same-store successor validation,
+  destruction of the old lock-bearing store, and independent canonical reopen.
+  Its matrices cover 24 successes, 120 storage faults, 96 predecessor or
+  successor binding substitutions, and 48 fresh-handle reopens. Another 240
+  races mutate each of the five canonical root links at capture or final
+  revalidation. Fresh-handle reopen is not process-death evidence.
+
+  A subsequent NewState entry leaves generation 16 byte-stable because the
+  downstream invalidation, completion, and finalization source gates still
+  exclude RootLinks. The end-to-end route retains exactly one reverse exchange;
+  this journal-only entry performs no database mutation or other non-journal
+  effect, trigger, boot, completion, or finalization. ActivateArchived and
+  ActiveReblit still stop at exact `CandidatePreserved`. RootLinks process-death coverage, boot repair,
+  cleanup, reboot, and power-loss durability remain unclaimed.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect

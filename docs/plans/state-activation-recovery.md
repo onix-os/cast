@@ -75,7 +75,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix, every RootLinks operation through
-  exact `CandidatePreserved`, the complete pre-existing NewState suffix through
+  exact `CandidatePreserved`, RootLinks NewState through exact
+  `FreshDbInvalidationIntent`, the complete pre-existing NewState suffix through
   authenticated terminal journal absence, and the ActiveReblit no-boot-repair
   suffix through the same clean-startup handoff. An ActiveReblit
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
@@ -659,8 +660,7 @@ recorded `/usr` outcomes, RootLinks-sourced `UsrRestored` now routes to
 `CandidatePreserveIntent`, then the matching operation writer persists its sole
 exact `CandidatePreserved` successor. The production endpoint performs exactly
 one reverse `/usr` exchange across the full route, preserves all five canonical
-root-link targets and identities, and leaves a later startup stably stopped at
-`CandidatePreserved`.
+root-link targets and identities.
 
 The route proof rejects 360 root-link mutation races, 180 at each of its two
 revalidation seams. Candidate admission separately rejects 360 mutations
@@ -670,10 +670,23 @@ NewState and ActivateArchived each cover 24 success, 120 storage-fault, 96
 predecessor/successor binding-substitution, and 48 fresh-restart writer
 executions. ActiveReblit covers 32, 160, 128, and 64 respectively.
 
-This widening does not admit RootLinks-sourced `CandidatePreserved` into later
-completion or finalization. Evaluating those separately authorized checkpoints
-is the next candidate-recovery boundary. RootLinks process-death coverage, boot
-repair, cleanup, reboot, and power-loss durability remain unclaimed.
+Accepted commit `e35a2183` admits only exact RootLinks-sourced NewState
+`CandidatePreserved` generation 15 into the existing journal-only route. It
+carries the non-Clone record-inode binding through one bound advance to
+`FreshDbInvalidationIntent` generation 16, validates the exact successor in the
+same store, destroys the old lock-bearing store, and independently reopens the
+canonical journal. Its matrices cover 24 successes, 120 storage faults, 96
+binding substitutions, and 48 fresh-handle reopens. Another 240 cases mutate
+all five canonical root links at the capture or final-revalidation seam.
+Fresh-handle reopen is explicitly not process-death evidence.
+
+A later entry leaves generation 16 byte-identical because RootLinks remains
+excluded from downstream invalidation, completion, and finalization. The
+end-to-end route retains one reverse exchange; this journal-only entry performs
+no database mutation or other non-journal effect, trigger, boot, completion,
+or finalization. ActivateArchived
+and ActiveReblit still stop at exact `CandidatePreserved`. RootLinks process
+death, boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
 
 ### Startup reconciliation and interruption campaign
 

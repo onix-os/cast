@@ -23,7 +23,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   As of 2026-07-20, startup's diagnostic checkpoint remains read-only and fail closed.
   Immediately before it, the mutable gate has one sealed, bounded ladder: ActiveReblit replacement-mode repair,
   forward exchange-parent durability, exact `UsrExchanged` root-ABI normalization, rollback-decision persistence and routing, and `/usr` reversal. Exact
-  RootLinks-sourced `UsrRestored` now routes through candidate preservation and stops stably at `CandidatePreserved`; no later RootLinks completion or finalization source axis is admitted. For the pre-existing later source set, NewState prepares its
+  RootLinks-sourced `UsrRestored` now routes through candidate preservation. NewState alone advances exact generation-15 `CandidatePreserved` to generation-16 `FreshDbInvalidationIntent` and stops byte-stably there; ActivateArchived and ActiveReblit stop at `CandidatePreserved`, and no downstream RootLinks invalidation, completion, or finalization source axis is admitted. For the pre-existing later source set, NewState prepares its
   quarantine target, preserves the candidate, invalidates its exact fresh row,
   reaches `RollbackComplete`, and authenticates terminal journal absence.
   ActiveReblit preserves its whole replacement wrapper; exact cleared ownership and provenance can route the no-boot case through `RollbackComplete` and a
@@ -79,7 +79,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Fresh entries now move RootLinks exactly through `RollbackDecided` -> `ReverseExchangeIntent` -> `UsrRestored`; the reverse entry exchanges once and a later entry leaves the restored record byte-identical. Operation/epoch/outcome, five-fault, and same-byte replacement matrices converge without a second effect while all five canonical root links retain their exact targets and identities.
   Commit `7b3770b1` captures the exact non-Clone `TransitionJournalRecordBinding` before namespace/database evidence and moves it through NewState create/normalize/move, ActivateArchived, ActiveReblit, common effect/durability/persistence-facing authority, and dispatch; all six coarse semantic loads are eliminated, and `RestartRequired` now carries an opaque one-use unchanged-source authority. Its original identical-bytes/different-inode matrix was 44 pre-effect + 44 post-effect + 16 restart cases across current/historical epochs and both `/usr` outcomes, with `BootSyncStarted` only for ActiveReblit.
   Commits `fec890ad`, `c9140a88`, and `043a3c24` complete exact candidate persistence for NewState, ActivateArchived, and ActiveReblit respectively. Each consuming writer derives its sole `CandidatePreserved` successor from private operation evidence, validates the exact successor binding in the same store, destroys the old lock-bearing store, and requires an independent canonical reopen inside a final installation-revalidation sandwich. Covered publication faults, same-byte/different-inode replacement seams, and fresh restarts fail closed without extra database, non-journal namespace, or redispatch effects.
-  Commit `67ad3de0` widens only the exact RootLinks source passage: current/historical epochs, all three operations, and both `/usr` outcomes now follow `UsrRestored` -> `CandidatePreserveIntent` -> `CandidatePreserved`, with one reverse exchange and all five root-link identities unchanged. Route mutation coverage is 360 cases across two seams; admission rejects another 360 races spanning all five links. Common binding totals become 64 pre-effect, 64 post-effect, and 24 restart cases; NewState and ActivateArchived writer totals are 24/120/96/48 for success/storage fault/binding substitution/restart, and ActiveReblit totals are 32/160/128/64. A later entry remains at exact `CandidatePreserved`; later completion/finalization, RootLinks process-death coverage, boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
+  Commit `67ad3de0` widens only the exact RootLinks source passage: current/historical epochs, all three operations, and both `/usr` outcomes now follow `UsrRestored` -> `CandidatePreserveIntent` -> `CandidatePreserved`, with one reverse exchange and all five root-link identities unchanged. Route mutation coverage is 360 cases across two seams; admission rejects another 360 races spanning all five links. Common binding totals become 64 pre-effect, 64 post-effect, and 24 restart cases; NewState and ActivateArchived writer totals are 24/120/96/48 for success/storage fault/binding substitution/restart, and ActiveReblit totals are 32/160/128/64. Accepted commit `e35a2183` then admits only exact RootLinks NewState generation-15 `CandidatePreserved` and carries its non-Clone record-inode binding through a bound advance to generation-16 `FreshDbInvalidationIntent`, same-store successor validation, old-store destruction, and independent canonical reopen. Its proof covers 24 successes, 120 storage faults, 96 binding substitutions, 48 fresh-handle reopens, and 240 all-five-root-ABI races split across capture and final-revalidation seams. Fresh-handle reopen is not process-death evidence. A later entry leaves generation 16 byte-stable because downstream RootLinks invalidation, completion, and finalization gates remain closed. The end-to-end route retains one reverse exchange; this journal-only entry invokes no database mutation or other non-journal effect, trigger, boot, completion, or finalization. ActivateArchived and ActiveReblit remain at `CandidatePreserved`; RootLinks process death, boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
 
   Commit `911dcbc` separated rollback routing from decision persistence.
   Startup deliberately permits only one recovery journal mutation per entry.
@@ -449,16 +449,16 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   `FreshDbInvalidationIntent`, and reopens the canonical journal to accept only
   the exact source or exact successor record.
 
-  Commit `0f041afe` keeps the route behind a separate test-only seal. A restart
-  from the source retries only this route, while the exact successor skips it.
-  No path in this checkpoint removes or changes the fresh row, its provenance,
-  or the activation namespace. The dedicated route lane passes 11/11; the
-  persistence, post-move durability, and combined authority lanes remain 9/9,
-  6/6, and 56/56. `make fmt` and `make check` pass in the repository Nix shell
-  with only the four established warnings, `make source-loc` reports all 1083
-  tracked text files at no more than 1000 lines, and independent review found
-  no issue. Commit `9adc2760` preserves the inventory-gate coverage while
-  avoiding the host argument-size limit.
+  At that historical checkpoint, commit `0f041afe` kept the route behind a separate test-only seal. Accepted commit `e35a2183` now admits exact
+  RootLinks-sourced NewState `CandidatePreserved` generation 15 and consumes its non-Clone record-inode binding through the bound advance to
+  `FreshDbInvalidationIntent` generation 16. The writer validates the successor binding in the same store, destroys the old lock-bearing store, and requires
+  an independent canonical reopen. Its 24 success, 120 storage-fault, 96 binding-substitution, and 48 fresh-handle-reopen cases cover both record
+  epochs, three admitted candidate sources, both `/usr` outcomes, and both candidate outcomes. These handle reopens do not simulate process death.
+  Another 240 cases mutate every canonical root link at capture or final revalidation. The end-to-end route keeps one reverse exchange; this entry invokes no
+  database mutation or other non-journal effect, trigger, boot, completion, or
+  finalization. A later entry leaves generation 16 byte-stable because every
+  downstream RootLinks gate stays closed. Commit `9adc2760` preserves the
+  inventory-gate coverage while avoiding the host argument-size limit.
 
   Commit `20b36768` completes Phase 11A's exact fresh-transition removal
   substrate without widening that route. One exclusive database snapshot
@@ -913,8 +913,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Remaining recovery campaign
 
-  The production ladder covers the authenticated `/usr` rollback prefix and exact RootLinks rollback for all three operations through stable `CandidatePreserved`.
-  Later RootLinks completion and finalization remain excluded; evaluating those separately authorized checkpoints is the next candidate-recovery boundary.
+  The production ladder covers the authenticated `/usr` rollback prefix and exact RootLinks rollback for all three operations through `CandidatePreserved`. NewState alone advances the exact generation-15 record to generation-16 `FreshDbInvalidationIntent`, then remains byte-stable because RootLinks invalidation, completion, and finalization remain excluded; ActivateArchived and ActiveReblit still stop at `CandidatePreserved`.
+  Commit `e35a2183` proves that NewState journal-only edge with bound non-Clone record-inode identity, same-store and independent-reopen validation, 24/120/96/48 success/storage/binding/fresh-handle cases, and 240 all-link races at two seams. Fresh-handle reopen is not process death; the end-to-end route has one reverse exchange, while this entry has no database mutation or other non-journal effect, trigger, boot, completion, or finalization.
   The earlier source set retains the exact NewState suffix through authenticated terminal journal absence and the ActiveReblit no-boot-repair suffix through shared clean admission.
   Separate NewState entries preserve the candidate, invalidate the exact fresh transition or accept proved joint absence, route to completion, and delete the terminal record.
   Separate no-boot ActiveReblit entries preserve the whole replacement wrapper and route `CandidatePreserved` to `RollbackComplete`;
