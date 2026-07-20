@@ -2,13 +2,13 @@ use std::{fs, os::unix::fs::MetadataExt as _, path::PathBuf};
 
 use crate::{
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
-    transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome},
+    transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome, TransitionRecord},
 };
 
-use super::fixture::{Fixture, OperationKind, SourceCase, pending};
+use super::fixture::{Fixture, OperationKind, SourceCase, create_private_directory, pending};
 
 #[test]
-fn startup_root_links_complete_fresh_entries_reach_usr_restored_once_then_remain_byte_stable() {
+fn startup_root_links_complete_fresh_entries_reach_candidate_preserved_without_second_reverse_exchange() {
     for historical in [false, true] {
         for kind in OperationKind::ALL {
             let fixture = if historical {
@@ -76,16 +76,75 @@ fn startup_root_links_complete_fresh_entries_reach_usr_restored_once_then_remain
             let restored_bytes = fixture.canonical_bytes();
             let usr_restored = usr_layout(&fixture);
             drop(reverse_entry);
-            let stable_entry = fixture.enter();
-            assert_eq!(pending(&stable_entry).phase(), Phase::UsrRestored, "{case}");
-            assert_eq!(fixture.canonical_record(), restored, "{case}");
-            assert_eq!(fixture.canonical_bytes(), restored_bytes, "{case}");
+
+            let candidate_route_entry = fixture.enter();
+            let candidate_intent = restored.rollback_successor(None).unwrap();
+            assert_eq!(candidate_intent.phase, Phase::CandidatePreserveIntent, "{case}");
+            assert_eq!(pending(&candidate_route_entry).phase(), Phase::CandidatePreserveIntent, "{case}");
+            assert!(pending(&candidate_route_entry).blockers().is_empty(), "{case}");
+            assert_eq!(fixture.canonical_record(), candidate_intent, "{case}");
+            assert_ne!(fixture.canonical_bytes(), restored_bytes, "{case}");
             assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
             assert_eq!(fixture.database_snapshot(), database_before, "{case}");
             assert_eq!(usr_layout(&fixture), usr_restored, "{case}");
             assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+            drop(candidate_route_entry);
+
+            prepare_archived_candidate_prefix(&fixture, &candidate_intent);
+            let mut candidate_entry = fixture.enter();
+            if kind == OperationKind::NewState {
+                assert_eq!(pending(&candidate_entry).phase(), Phase::CandidatePreserveIntent, "{case}");
+                assert_eq!(fixture.canonical_record(), candidate_intent, "{case}");
+                assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+                assert_eq!(usr_layout(&fixture), usr_restored, "{case}");
+                assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+                drop(candidate_entry);
+                candidate_entry = fixture.enter();
+            }
+            let candidate_preserved = candidate_intent
+                .rollback_successor(Some(RollbackActionOutcome::Applied))
+                .unwrap();
+            assert_eq!(candidate_preserved.phase, Phase::CandidatePreserved, "{case}");
+            assert_eq!(pending(&candidate_entry).phase(), Phase::CandidatePreserved, "{case}");
+            assert!(pending(&candidate_entry).blockers().is_empty(), "{case}");
+            assert_eq!(fixture.canonical_record(), candidate_preserved, "{case}");
+            assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+            assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+            assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+
+            let preserved_bytes = fixture.canonical_bytes();
+            drop(candidate_entry);
+            let stable_entry = fixture.enter();
+            assert_eq!(pending(&stable_entry).phase(), Phase::CandidatePreserved, "{case}");
+            assert_eq!(fixture.canonical_record(), candidate_preserved, "{case}");
+            assert_eq!(fixture.canonical_bytes(), preserved_bytes, "{case}");
+            assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+            assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+            assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
         }
     }
+}
+
+fn prepare_archived_candidate_prefix(fixture: &Fixture, record: &TransitionRecord) {
+    if fixture.kind != OperationKind::Archived {
+        return;
+    }
+    let wrapper = fixture
+        .installation
+        .root
+        .join(".cast/root")
+        .join(fixture.candidate_state.to_string());
+    create_private_directory(&wrapper);
+    fs::hard_link(
+        fixture.installation.staging_dir().join("usr/.cast-tree-id"),
+        wrapper.join(format!(
+            ".cast-state-slot-{}-{}",
+            fixture.candidate_state,
+            record.candidate.tree_token.as_str()
+        )),
+    )
+    .unwrap();
 }
 
 #[derive(Debug, Eq, PartialEq)]

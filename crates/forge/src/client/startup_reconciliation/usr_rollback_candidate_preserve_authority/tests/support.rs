@@ -18,15 +18,22 @@ use super::test_fixture::{BootSyncStartedLayout, DatabaseSnapshot, Fixture, Name
 pub(super) enum CandidateSource {
     Intent,
     Exchanged,
+    RootLinksComplete,
 }
 
 impl CandidateSource {
     pub(super) const ALL: [Self; 2] = [Self::Intent, Self::Exchanged];
+    pub(super) const THROUGH_CANDIDATE_PRESERVED: [Self; 3] = [
+        Self::Intent,
+        Self::Exchanged,
+        Self::RootLinksComplete,
+    ];
 
     fn fixture_source(self) -> SourceCase {
         match self {
             Self::Intent => SourceCase::IntentPost,
             Self::Exchanged => SourceCase::ExchangedPost,
+            Self::RootLinksComplete => SourceCase::RootLinksCompletePost,
         }
     }
 }

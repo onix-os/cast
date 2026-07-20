@@ -46,11 +46,17 @@ impl Epoch {
 pub(super) enum Source {
     Intent,
     Exchanged,
+    RootLinksComplete,
     BootSyncStarted,
 }
 
 impl Source {
-    pub(super) const ALL: [Self; 3] = [Self::Intent, Self::Exchanged, Self::BootSyncStarted];
+    pub(super) const ALL: [Self; 4] = [
+        Self::Intent,
+        Self::Exchanged,
+        Self::RootLinksComplete,
+        Self::BootSyncStarted,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,6 +111,18 @@ pub(super) fn fixture_for_origin(
         (Epoch::Historical, Source::Exchanged) => CandidatePreserveFixture::historical(
             OperationKind::ActiveReblit,
             CandidateSource::Exchanged,
+            usr_outcome,
+            origin.layout(),
+        ),
+        (Epoch::Current, Source::RootLinksComplete) => CandidatePreserveFixture::new(
+            OperationKind::ActiveReblit,
+            CandidateSource::RootLinksComplete,
+            usr_outcome,
+            origin.layout(),
+        ),
+        (Epoch::Historical, Source::RootLinksComplete) => CandidatePreserveFixture::historical(
+            OperationKind::ActiveReblit,
+            CandidateSource::RootLinksComplete,
             usr_outcome,
             origin.layout(),
         ),

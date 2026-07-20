@@ -108,7 +108,7 @@ fn startup_active_reblit_candidate_preserve_persistence_faults_reopen_exact_sour
             }
         }
     }
-    assert_eq!(exercised, 120);
+    assert_eq!(exercised, 160);
 }
 
 #[test]

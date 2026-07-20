@@ -109,7 +109,7 @@ impl EffectCase {
     }
 
     fn record_sources(self) -> impl Iterator<Item = RecordSourceCase> {
-        CandidateSource::ALL
+        CandidateSource::THROUGH_CANDIDATE_PRESERVED
             .into_iter()
             .map(RecordSourceCase::Candidate)
             .chain(
@@ -390,7 +390,7 @@ fn startup_candidate_preserve_same_byte_predecessor_replacement_before_effect_ne
             }
         }
     }
-    assert_eq!(cases, 44, "pre-effect record-binding matrix drifted");
+    assert_eq!(cases, 64, "pre-effect record-binding matrix drifted");
 }
 
 #[test]
@@ -427,14 +427,14 @@ fn startup_candidate_preserve_same_byte_predecessor_replacement_after_physical_e
             }
         }
     }
-    assert_eq!(cases, 44, "post-effect record-binding matrix drifted");
+    assert_eq!(cases, 64, "post-effect record-binding matrix drifted");
 }
 
 #[test]
 fn startup_candidate_preparation_restart_authority_rejects_same_bytes_at_a_successor_inode() {
     let mut cases = 0;
     for historical in [false, true] {
-        for source in CandidateSource::ALL {
+        for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
             for outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 for case in [EffectCase::CreateTarget, EffectCase::NormalizeTarget] {
                     cases += 1;
@@ -491,5 +491,5 @@ fn startup_candidate_preparation_restart_authority_rejects_same_bytes_at_a_succe
             }
         }
     }
-    assert_eq!(cases, 16, "preparation restart matrix drifted");
+    assert_eq!(cases, 24, "preparation restart matrix drifted");
 }

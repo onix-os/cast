@@ -58,7 +58,7 @@ fn startup_usr_rollback_candidate_preserve_persistence_faults_reopen_exact_sourc
 
     for historical in [false, true] {
         for origin in CandidateOrigin::ALL {
-            for source in Source::ALL {
+            for source in Source::THROUGH_CANDIDATE_PRESERVED {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     for (arm, assert_consumed, expected_durable) in cases {
                         let fixture = fixture_for_origin_at_epoch(historical, origin, source, usr_outcome);

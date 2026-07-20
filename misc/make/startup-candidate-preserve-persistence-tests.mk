@@ -29,6 +29,7 @@ forge-startup-usr-rollback-candidate-preserve-persistence-test:
 	root=crates/forge/src/client/startup_recovery.rs; \
 	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_persistence/tests.rs; \
+	candidate_source_support=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs; \
 	support=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_persistence/tests/support.rs; \
 	matrix=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_persistence/tests/matrix.rs; \
 	races=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_persistence/tests/evidence_races.rs; \
@@ -105,10 +106,17 @@ forge-startup-usr-rollback-candidate-preserve-persistence-test:
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]|retry' <<<"$$production_code"; then exit 1; fi; \
 	if timeout 10s rg -n 'clear_transition_if_matches|remove_transition_if_matches|insert_fresh_metadata|delete_metadata|invalidation|invalidate|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|remove_exact_archived|cleanup|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' <<<"$$production_code"; then exit 1; fi; \
 	if timeout 10s rg -n 'startup_gate|dispatch' "$$executor"; then exit 1; fi; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'for source in Source::ALL {' "$$matrix" )" = 1; \
+	candidate_source_axis="$$( timeout 10s sed -n '/^    pub(super) const THROUGH_CANDIDATE_PRESERVED:/,/^    \];/p' "$$candidate_source_support" )"; \
+	timeout 10s grep -Fqx '    pub(super) const ALL: [Self; 2] = [Self::Intent, Self::Exchanged];' "$$candidate_source_support"; \
+	timeout 10s grep -Fqx '    pub(super) const THROUGH_CANDIDATE_PRESERVED: [Self; 3] = [' <<<"$$candidate_source_axis"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        Self::' <<<"$$candidate_source_axis" )" = 3; \
+	for source in Intent Exchanged RootLinksComplete; do timeout 10s grep -Fqx "        Self::$$source," <<<"$$candidate_source_axis"; done; \
+	timeout 10s grep -Fqx '            Self::RootLinksComplete => SourceCase::RootLinksCompletePost,' "$$candidate_source_support"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'for source in Source::THROUGH_CANDIDATE_PRESERVED {' "$$matrix" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'for historical in [false, true] {' "$$matrix" )" = 1; \
 	timeout 10s test "$$( timeout 10s rg -n '^            arm_next_(temporary_sync|update_exchange|update_first_directory_sync|displaced_unlink|update_final_directory_sync)_fault,$$' "$$storage" | timeout 10s wc -l )" = 5; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'for historical in [false, true] {' "$$storage" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'for source in Source::THROUGH_CANDIDATE_PRESERVED {' "$$storage" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'reset_new_state_candidate_preserve_move_attempt_count();' "$$storage" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);' "$$storage" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(fixture.fixture.database_snapshot(), database_before);' "$$storage" )" = 2; \
@@ -118,7 +126,7 @@ forge-startup-usr-rollback-candidate-preserve-persistence-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'arm_public_binding_revalidation_callback(boundary, hook);' "$$record_binding" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'arm_before_usr_rollback_candidate_preserve_successor_binding_revalidation(hook);' "$$record_binding" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'arm_after_usr_rollback_candidate_preserve_successor_binding_check_before_reopen(hook);' "$$record_binding" )" = 1; \
-	for axis in 'for historical in [false, true] {' 'for source in Source::ALL {' 'for origin in CandidateOrigin::ALL {' 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {'; do timeout 10s test "$$( timeout 10s grep -Fc "$$axis" "$$record_binding" )" = 3; done; \
+	for axis in 'for historical in [false, true] {' 'for source in Source::THROUGH_CANDIDATE_PRESERVED {' 'for origin in CandidateOrigin::ALL {' 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {'; do timeout 10s test "$$( timeout 10s grep -Fc "$$axis" "$$record_binding" )" = 3; done; \
 	timeout 10s grep -Fq 'assert_ne!(retained_identity, inode_identity(&canonical));' "$$record_binding"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_unchanged_outside_journal(' "$$record_binding" )" = 4; \
 	timeout 10s grep -Fq 'new_state_candidate_preserve_move_attempt_count()' "$$record_binding"; \
@@ -128,8 +136,9 @@ forge-startup-usr-rollback-candidate-preserve-persistence-test:
 	timeout 10s grep -Fq 'arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence' "$$races"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'drop(reservation);' "$$restart" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$restart" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'for source in Source::THROUGH_CANDIDATE_PRESERVED {' "$$restart" )" = 2; \
 	timeout 10s grep -Fq 'expected_post_events(&fixture)' "$$restart"; \
-	for file in "$$executor" "$$authority_parent" "$$authority" "$$reopen" "$$root" "$$tests" "$$support" "$$matrix" "$$races" "$$storage" "$$restart" "$$record_binding" misc/make/startup-candidate-preserve-persistence-tests.mk Makefile; do \
+	for file in "$$executor" "$$authority_parent" "$$authority" "$$reopen" "$$root" "$$tests" "$$candidate_source_support" "$$support" "$$matrix" "$$races" "$$storage" "$$restart" "$$record_binding" misc/make/startup-candidate-preserve-persistence-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1

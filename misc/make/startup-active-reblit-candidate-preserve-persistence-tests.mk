@@ -125,9 +125,16 @@ forge-startup-usr-rollback-active-reblit-candidate-preserve-persistence-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveApplyEffectSelection::Unsupported' "$$production_dispatch"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveDispatchError::ActiveReblitPersistence' "$$production_tests"; \
 	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$matrix" "$$races" "$$storage" "$$restart" "$$record_binding" "$$production_tests" | timeout 10s wc -l )" = 14; \
-	timeout 10s grep -Fqx '    pub(super) const ALL: [Self; 3] = [Self::Intent, Self::Exchanged, Self::BootSyncStarted];' "$$support"; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(cases, 12);' "$$matrix" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 24);' "$$production_tests" )" = 1; \
+	source_axis="$$( timeout 10s sed -n '/^    pub(super) const ALL: \[Self; 4\] = \[/,/^    \];/p' "$$support" )"; \
+	timeout 10s grep -Fqx '    pub(super) const ALL: [Self; 4] = [' <<<"$$source_axis"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        Self::' <<<"$$source_axis" )" = 4; \
+	for source in Intent Exchanged RootLinksComplete BootSyncStarted; do timeout 10s grep -Fqx "        Self::$$source," <<<"$$source_axis"; done; \
+	timeout 10s grep -Fqx '        (Epoch::Current, Source::RootLinksComplete) => CandidatePreserveFixture::new(' "$$support"; \
+	timeout 10s grep -Fqx '        (Epoch::Historical, Source::RootLinksComplete) => CandidatePreserveFixture::historical(' "$$support"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(cases, 16);' "$$matrix" )" = 1; \
+	timeout 10s grep -Fqx '    exercise_success_matrix(CandidateOrigin::Applied);' "$$matrix"; \
+	timeout 10s grep -Fqx '    exercise_success_matrix(CandidateOrigin::AlreadySatisfied);' "$$matrix"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 32);' "$$production_tests" )" = 1; \
 	for race in Database Provenance Journal Installation Namespace Plan; do timeout 10s grep -Fq "EvidenceRace::$$race" "$$races"; done; \
 	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do timeout 10s grep -Fq "$$fault" "$$storage"; done; \
 	timeout 10s test "$$( timeout 10s rg -n '^            arm_next_(temporary_sync|update_exchange|update_first_directory_sync|displaced_unlink|update_final_directory_sync)_fault,$$' "$$storage" | timeout 10s wc -l )" = 5; \
@@ -135,7 +142,7 @@ forge-startup-usr-rollback-active-reblit-candidate-preserve-persistence-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(fixture.fixture.database_snapshot(), database_before);' "$$storage" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);' "$$storage" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), effect_count_before);' "$$storage" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 120);' "$$storage" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 160);' "$$storage" )" = 1; \
 	timeout 10s grep -Fqx 'mod record_binding;' "$$tests"; \
 	for seam in BeforeBoundAdvancePublish BeforeBoundAdvanceFinalBinding; do timeout 10s test "$$( timeout 10s grep -Fc "PublicBindingRevalidationBoundary::$$seam" "$$record_binding" )" = 1; done; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'arm_public_binding_revalidation_callback(boundary, hook);' "$$record_binding" )" = 1; \
@@ -146,13 +153,13 @@ forge-startup-usr-rollback-active-reblit-candidate-preserve-persistence-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'assert_unchanged_outside_journal(' "$$record_binding" )" = 4; \
 	timeout 10s grep -Fq 'active_reblit_candidate_preserve_exchange_attempt_count()' "$$record_binding"; \
 	timeout 10s grep -Fq 'assert_eq!(names.len(), 2, "bound update left journal residue: {names:?}");' "$$record_binding"; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 48);' "$$record_binding" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 24);' "$$record_binding" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 64);' "$$record_binding" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 32);' "$$record_binding" )" = 2; \
 	for axis in 'for epoch in Epoch::ALL {' 'for source in Source::ALL {' 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {'; do timeout 10s test "$$( timeout 10s grep -Fc "$$axis" "$$restart" )" = 2; done; \
 	timeout 10s test "$$( timeout 10s rg -n 'for (first_)?origin in CandidateOrigin::ALL \{' "$$restart" | timeout 10s wc -l )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'drop(reservation);' "$$restart" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$restart" )" = 4; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 24);' "$$restart" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    assert_eq!(exercised, 32);' "$$restart" )" = 2; \
 	timeout 10s grep -Fq 'expected_post_events(&fixture)' "$$restart"; \
 	for file in "$$executor" "$$recovery_root" "$$production_dispatch" "$$authority_root" "$$authority_active" "$$authority_post" "$$authority_persistence" "$$journal_record_binding" "$$proof" "$$capture" "$$namespace" "$$namespace_post" "$$reconciliation_root" "$$tests" "$$support" "$$matrix" "$$races" "$$storage" "$$restart" "$$record_binding" "$$production_tests" misc/make/startup-active-reblit-candidate-preserve-persistence-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \

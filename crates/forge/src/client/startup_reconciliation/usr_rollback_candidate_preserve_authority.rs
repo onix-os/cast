@@ -201,7 +201,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         };
         if !matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
         ) && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
         {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
@@ -552,7 +552,7 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     if record.phase != Phase::CandidatePreserveIntent
         || (!matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
         ) && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || !matches!(

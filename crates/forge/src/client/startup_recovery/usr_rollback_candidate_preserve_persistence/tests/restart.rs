@@ -29,7 +29,7 @@ use super::support::{
 fn startup_usr_rollback_candidate_preserve_source_fault_restart_finishes_without_second_move() {
     for historical in [false, true] {
         for first_origin in CandidateOrigin::ALL {
-            for source in Source::ALL {
+            for source in Source::THROUGH_CANDIDATE_PRESERVED {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     let fixture = fixture_for_origin_at_epoch(historical, first_origin, source, usr_outcome);
                     let journal = fixture.open_journal();
@@ -82,7 +82,7 @@ fn startup_usr_rollback_candidate_preserve_source_fault_restart_finishes_without
 fn startup_usr_rollback_candidate_preserve_successor_fault_restart_skips_preservation() {
     for historical in [false, true] {
         for origin in CandidateOrigin::ALL {
-            for source in Source::ALL {
+            for source in Source::THROUGH_CANDIDATE_PRESERVED {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     let fixture = fixture_for_origin_at_epoch(historical, origin, source, usr_outcome);
                     let journal = fixture.open_journal();

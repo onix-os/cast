@@ -151,7 +151,7 @@ fn startup_active_reblit_candidate_preserve_bound_advance_same_byte_replacements
             }
         }
     }
-    assert_eq!(exercised, 48);
+    assert_eq!(exercised, 64);
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn startup_active_reblit_candidate_preserve_same_byte_successor_replacement_afte
             }
         }
     }
-    assert_eq!(exercised, 24);
+    assert_eq!(exercised, 32);
 }
 
 #[test]
@@ -250,5 +250,5 @@ fn startup_active_reblit_candidate_preserve_same_byte_successor_replacement_afte
             }
         }
     }
-    assert_eq!(exercised, 24);
+    assert_eq!(exercised, 32);
 }

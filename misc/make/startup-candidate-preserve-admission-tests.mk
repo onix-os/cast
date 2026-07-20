@@ -55,11 +55,29 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 	production_dispatch=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests; \
 	record_binding_tests="$$tests/record_binding.rs"; \
+	candidate_source_axis="$$( timeout 10s sed -n '/^    pub(super) const THROUGH_CANDIDATE_PRESERVED:/,/^    \];/p' "$$tests/support.rs" )"; \
+	timeout 10s grep -Fqx '    pub(super) const ALL: [Self; 2] = [Self::Intent, Self::Exchanged];' "$$tests/support.rs"; \
+	timeout 10s grep -Fqx '    pub(super) const THROUGH_CANDIDATE_PRESERVED: [Self; 3] = [' <<<"$$candidate_source_axis"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        Self::' <<<"$$candidate_source_axis" )" = 3; \
+	for source in Intent Exchanged RootLinksComplete; do timeout 10s grep -Fqx "        Self::$$source," <<<"$$candidate_source_axis"; done; \
+	timeout 10s grep -Fqx '            Self::RootLinksComplete => SourceCase::RootLinksCompletePost,' "$$tests/support.rs"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {' "$$tests/admission.rs" )" = 1; \
+	root_abi_race_matrix="$$( timeout 10s sed -n '/^fn exercise_root_abi_binding_races()/,/^fn root_abi_snapshot/p' "$$tests/admission.rs" | timeout 10s sed '$$d' )"; \
+	for marker in \
+		'    for historical in [false, true] {' \
+		'        for kind in OperationKind::ALL {' \
+		'            for outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {' \
+		'                for layout in [CandidateLayout::Staged, CandidateLayout::Preserved] {' \
+		'                    for race in RootAbiRace::ALL {' \
+		'                        for (link_index, (link_name, link_target)) in ROOT_ABI.into_iter().enumerate() {'; \
+	do timeout 10s test "$$( timeout 10s grep -Fxc "$$marker" <<<"$$root_abi_race_matrix" )" = 1; done; \
+	timeout 10s test "$$( timeout 10s grep -Fxc '                            cases += 1;' <<<"$$root_abi_race_matrix" )" = 1; \
+	timeout 10s grep -Fqx '    assert_eq!(cases, 360, "root ABI admission binding-race matrix drifted");' <<<"$$root_abi_race_matrix"; \
 	effect_cases="$$( timeout 10s sed -n '/^    const ALL: \[Self; 5\] = \[/,/^    \];/p' "$$record_binding_tests" )"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '        Self::' <<<"$$effect_cases" )" = 5; \
 	for case in CreateTarget NormalizeTarget MoveNewState MoveArchived ExchangeActiveReblit; do timeout 10s grep -Fqx "        Self::$$case," <<<"$$effect_cases"; done; \
 	source_axis="$$( timeout 10s sed -n '/^    fn record_sources(self)/,/^    }/p' "$$record_binding_tests" )"; \
-	timeout 10s test "$$( timeout 10s grep -Fc '        CandidateSource::ALL' <<<"$$source_axis" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        CandidateSource::THROUGH_CANDIDATE_PRESERVED' <<<"$$source_axis" )" = 1; \
 	timeout 10s grep -Fq '(self == Self::ExchangeActiveReblit).then_some(RecordSourceCase::BootSyncStarted)' <<<"$$source_axis"; \
 	timeout 10s grep -Fq 'pub(super) fn active_reblit_boot_sync_started(' "$$tests/support.rs"; \
 	timeout 10s grep -Fq 'Fixture::active_reblit_boot_sync_started(BootSyncStartedLayout::Post, historical)' "$$tests/support.rs"; \
@@ -73,13 +91,13 @@ forge-startup-usr-rollback-candidate-preserve-admission-test:
 		timeout 10s test "$$( timeout 10s grep -Fc '            for case in EffectCase::ALL {' <<<"$$matrix" )" = 1; \
 		timeout 10s test "$$( timeout 10s grep -Fc '                for source in case.record_sources() {' <<<"$$matrix" )" = 1; \
 	done; \
-	timeout 10s grep -Fq 'assert_eq!(cases, 44, "pre-effect record-binding matrix drifted");' <<<"$$pre_binding_matrix"; \
-	timeout 10s grep -Fq 'assert_eq!(cases, 44, "post-effect record-binding matrix drifted");' <<<"$$post_binding_matrix"; \
+	timeout 10s grep -Fq 'assert_eq!(cases, 64, "pre-effect record-binding matrix drifted");' <<<"$$pre_binding_matrix"; \
+	timeout 10s grep -Fq 'assert_eq!(cases, 64, "post-effect record-binding matrix drifted");' <<<"$$post_binding_matrix"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    for historical in [false, true] {' <<<"$$restart_binding_matrix" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc '        for source in CandidateSource::ALL {' <<<"$$restart_binding_matrix" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {' <<<"$$restart_binding_matrix" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '            for outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {' <<<"$$restart_binding_matrix" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '                for case in [EffectCase::CreateTarget, EffectCase::NormalizeTarget] {' <<<"$$restart_binding_matrix" )" = 1; \
-	timeout 10s grep -Fq 'assert_eq!(cases, 16, "preparation restart matrix drifted");' <<<"$$restart_binding_matrix"; \
+	timeout 10s grep -Fq 'assert_eq!(cases, 24, "preparation restart matrix drifted");' <<<"$$restart_binding_matrix"; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$startup_gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {' "$$startup_gate"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$startup_gate"; \

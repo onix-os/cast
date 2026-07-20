@@ -1,5 +1,7 @@
 use std::{
     fs,
+    os::unix::fs::{MetadataExt as _, symlink},
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -22,13 +24,43 @@ use crate::{
             persist_usr_rollback_resume_route_and_reopen,
         },
     },
-    transition_journal::{Phase, RollbackActionOutcome},
+    transition_journal::{ForwardPhase, Phase, RollbackActionOutcome},
 };
 
 use super::{
-    fixture::{OperationKind, SourceCase, create_private_directory, pending},
+    fixture::{OperationKind, ROOT_ABI, SourceCase, create_private_directory, pending},
     support::RouteFixture,
 };
+
+#[derive(Clone, Copy, Debug)]
+enum RootAbiRouteSeam {
+    FreshNamespaceCapture,
+    FinalRevalidation,
+}
+
+impl RootAbiRouteSeam {
+    const ALL: [Self; 2] = [Self::FreshNamespaceCapture, Self::FinalRevalidation];
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RootAbiRace {
+    Missing,
+    WrongTarget,
+    SameTargetDifferentInode,
+}
+
+impl RootAbiRace {
+    const ALL: [Self; 3] = [Self::Missing, Self::WrongTarget, Self::SameTargetDifferentInode];
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RootAbiLinkIdentity {
+    target: PathBuf,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+}
 
 #[test]
 fn startup_usr_rollback_resume_route_rejects_a_different_open_journal_binding() {
@@ -231,6 +263,73 @@ fn startup_usr_rollback_resume_route_capture_and_final_revalidation_races_fail_b
 }
 
 #[test]
+fn startup_root_links_complete_usr_restored_root_abi_races_reject_both_route_seams_without_advance() {
+    let mut fresh_namespace_capture_cases = 0;
+    let mut final_revalidation_cases = 0;
+
+    for seam in RootAbiRouteSeam::ALL {
+        for historical in [false, true] {
+            for kind in OperationKind::ALL {
+                for outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                    for link_index in 0..ROOT_ABI.len() {
+                        for race in RootAbiRace::ALL {
+                            let fixture = RouteFixture::usr_restored_at_epoch(
+                                kind,
+                                SourceCase::RootLinksCompletePost,
+                                outcome,
+                                historical,
+                            );
+                            let case = format!(
+                                "{seam:?} historical={historical} {kind:?} {outcome:?} {} {race:?}",
+                                ROOT_ABI[link_index].0
+                            );
+                            assert_eq!(fixture.source.phase, Phase::UsrRestored, "{case}");
+                            assert_eq!(
+                                fixture.source.rollback.as_ref().unwrap().source,
+                                ForwardPhase::RootLinksComplete,
+                                "{case}"
+                            );
+                            let journal_before = fixture.fixture.canonical_bytes();
+                            let database_before = fixture.fixture.database_snapshot();
+                            let root_abi_before = root_abi_snapshot(&fixture.fixture.installation.root);
+                            let root = fixture.fixture.installation.root.clone();
+                            let hook = move || apply_root_abi_race(&root, link_index, race);
+                            match seam {
+                                RootAbiRouteSeam::FreshNamespaceCapture => {
+                                    arm_before_usr_rollback_resume_route_fresh_namespace_capture(hook);
+                                    fresh_namespace_capture_cases += 1;
+                                }
+                                RootAbiRouteSeam::FinalRevalidation => {
+                                    arm_before_usr_rollback_resume_route_final_revalidation(hook);
+                                    final_revalidation_cases += 1;
+                                }
+                            }
+
+                            assert_authority_failure(fixture.enter());
+
+                            assert_eq!(fixture.fixture.canonical_bytes(), journal_before, "{case}");
+                            assert_eq!(fixture.canonical_record(), fixture.source, "{case}");
+                            assert_eq!(fixture.fixture.database_snapshot(), database_before, "{case}");
+                            assert_exact_root_abi_race(
+                                &root_abi_before,
+                                &root_abi_snapshot(&fixture.fixture.installation.root),
+                                link_index,
+                                race,
+                                &case,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(fresh_namespace_capture_cases, 180);
+    assert_eq!(final_revalidation_cases, 180);
+    assert_eq!(fresh_namespace_capture_cases + final_revalidation_cases, 360);
+}
+
+#[test]
 fn startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remain_exact() {
     for kind in OperationKind::ALL {
         let fixture = RouteFixture::historical(kind, SourceCase::ExchangedPost);
@@ -303,7 +402,6 @@ fn startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remai
             .unwrap();
 
         let reservation_after = fs::symlink_metadata(reservation_path).unwrap();
-        use std::os::unix::fs::MetadataExt as _;
         assert_eq!(
             (
                 reservation_after.dev(),
@@ -318,6 +416,77 @@ fn startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remai
         );
         assert_eq!(fixture.fixture.database.all().unwrap().len(), 1);
         assert_eq!(fixture.fixture.database_snapshot(), database_before);
+    }
+}
+
+fn root_abi_snapshot(root: &Path) -> [Option<RootAbiLinkIdentity>; 5] {
+    ROOT_ABI.map(|(name, _)| {
+        let path = root.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => Some(RootAbiLinkIdentity {
+                target: fs::read_link(path).unwrap(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+                links: metadata.nlink(),
+            }),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => panic!("inspect root ABI route-race fixture: {source}"),
+        }
+    })
+}
+
+fn apply_root_abi_race(root: &Path, link_index: usize, race: RootAbiRace) {
+    let (name, target) = ROOT_ABI[link_index];
+    let link = root.join(name);
+    fs::remove_file(&link).unwrap();
+    match race {
+        RootAbiRace::Missing => {}
+        RootAbiRace::WrongTarget => symlink(format!("usr/not-{name}"), link).unwrap(),
+        RootAbiRace::SameTargetDifferentInode => symlink(target, link).unwrap(),
+    }
+}
+
+fn assert_exact_root_abi_race(
+    before: &[Option<RootAbiLinkIdentity>; 5],
+    after: &[Option<RootAbiLinkIdentity>; 5],
+    link_index: usize,
+    race: RootAbiRace,
+    case: &str,
+) {
+    for (index, (_, expected_target)) in ROOT_ABI.into_iter().enumerate() {
+        let original = before[index]
+            .as_ref()
+            .unwrap_or_else(|| panic!("root ABI fixture link {index} was missing before {case}"));
+        assert_eq!(original.target, PathBuf::from(expected_target), "{case}");
+        if index != link_index {
+            assert_eq!(after[index].as_ref(), Some(original), "{case}");
+        }
+    }
+
+    let original = before[link_index].as_ref().unwrap();
+    match race {
+        RootAbiRace::Missing => assert!(after[link_index].is_none(), "{case}"),
+        RootAbiRace::WrongTarget => {
+            let changed = after[link_index].as_ref().unwrap();
+            assert_eq!(
+                changed.target,
+                PathBuf::from(format!("usr/not-{}", ROOT_ABI[link_index].0)),
+                "{case}"
+            );
+            assert_eq!(changed.device, original.device, "{case}");
+            assert_ne!(changed.inode, original.inode, "{case}");
+            assert_eq!(changed.mode, original.mode, "{case}");
+            assert_eq!(changed.links, original.links, "{case}");
+        }
+        RootAbiRace::SameTargetDifferentInode => {
+            let changed = after[link_index].as_ref().unwrap();
+            assert_eq!(changed.target, original.target, "{case}");
+            assert_eq!(changed.device, original.device, "{case}");
+            assert_ne!(changed.inode, original.inode, "{case}");
+            assert_eq!(changed.mode, original.mode, "{case}");
+            assert_eq!(changed.links, original.links, "{case}");
+        }
     }
 }
 

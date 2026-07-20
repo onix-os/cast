@@ -92,7 +92,7 @@ fn startup_active_reblit_candidate_preserve_persistence_source_fault_restart_fin
             }
         }
     }
-    assert_eq!(exercised, 24);
+    assert_eq!(exercised, 32);
 }
 
 #[test]
@@ -151,5 +151,5 @@ fn startup_active_reblit_candidate_preserve_persistence_successor_fault_restart_
             }
         }
     }
-    assert_eq!(exercised, 24);
+    assert_eq!(exercised, 32);
 }

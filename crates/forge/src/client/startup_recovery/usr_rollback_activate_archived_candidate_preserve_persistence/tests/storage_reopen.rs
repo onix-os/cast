@@ -60,7 +60,7 @@ fn startup_archived_candidate_preserve_persistence_faults_reopen_exact_source_or
 
     for epoch in Epoch::ALL {
         for origin in CandidateOrigin::ALL {
-            for source in CandidateSource::ALL {
+            for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     for (arm, assert_consumed, expected_durable) in cases {
                         let fixture = fixture_for_origin(epoch, origin, source, usr_outcome);

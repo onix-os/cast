@@ -15,7 +15,7 @@ use crate::{
 };
 
 use super::{
-    fixture::{OperationKind, SourceCase},
+    fixture::OperationKind,
     support::RouteFixture,
 };
 
@@ -52,41 +52,40 @@ fn startup_root_links_complete_route_all_storage_faults_reopen_exact_record_acro
     for historical in [false, true] {
         for kind in OperationKind::ALL {
             for &(arm, assert_consumed, expected_durable) in &cases {
-                let fixture = if historical {
-                    RouteFixture::historical(kind, SourceCase::RootLinksCompletePost)
-                } else {
-                    RouteFixture::new(kind, SourceCase::RootLinksCompletePost)
-                };
-                arm();
+                for fixture in RouteFixture::root_links_routes_at_epoch(kind, historical) {
+                    let phase = fixture.source.phase;
+                    let usr_outcome = fixture.source.rollback.as_ref().unwrap().usr_exchange;
+                    arm();
 
-                let error = fixture.enter();
+                    let error = fixture.enter();
 
-                assert_consumed();
-                assert!(
-                    matches!(
-                        error,
-                        startup_gate::Error::UsrRollbackResumeRoutePersistence(
-                            UsrRollbackResumeRoutePersistenceError::Advance { durable, .. }
-                        ) if durable == expected_durable
-                    ),
-                    "{kind:?} historical={historical} durable={expected_durable:?}: {error:?}"
-                );
-                let actual = fixture.canonical_record();
-                match expected_durable {
-                    DurableUsrRollbackResumeRouteRecord::Source => {
-                        assert_eq!(actual, fixture.source, "{kind:?} historical={historical}")
+                    assert_consumed();
+                    assert!(
+                        matches!(
+                            error,
+                            startup_gate::Error::UsrRollbackResumeRoutePersistence(
+                                UsrRollbackResumeRoutePersistenceError::Advance { durable, .. }
+                            ) if durable == expected_durable
+                        ),
+                        "{kind:?} {phase:?} {usr_outcome:?} historical={historical} durable={expected_durable:?}: {error:?}"
+                    );
+                    let actual = fixture.canonical_record();
+                    match expected_durable {
+                        DurableUsrRollbackResumeRouteRecord::Source => {
+                            assert_eq!(actual, fixture.source, "{kind:?} {phase:?} historical={historical}")
+                        }
+                        DurableUsrRollbackResumeRouteRecord::Successor => fixture.assert_exact_route(&actual),
                     }
-                    DurableUsrRollbackResumeRouteRecord::Successor => fixture.assert_exact_route(&actual),
+                    let names = fs::read_dir(fixture.fixture.installation.root.join(".cast/journal"))
+                        .unwrap()
+                        .map(|entry| entry.unwrap().file_name())
+                        .collect::<Vec<_>>();
+                    assert_eq!(
+                        names.len(),
+                        2,
+                        "{kind:?} {phase:?} historical={historical}: stale journal residue remained after reopen: {names:?}"
+                    );
                 }
-                let names = fs::read_dir(fixture.fixture.installation.root.join(".cast/journal"))
-                    .unwrap()
-                    .map(|entry| entry.unwrap().file_name())
-                    .collect::<Vec<_>>();
-                assert_eq!(
-                    names.len(),
-                    2,
-                    "{kind:?} historical={historical}: stale journal residue remained after reopen: {names:?}"
-                );
             }
         }
     }

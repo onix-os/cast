@@ -124,6 +124,9 @@ impl ProcessSource {
         match source {
             CandidateSource::Intent => Self::Intent,
             CandidateSource::Exchanged => Self::Exchanged,
+            CandidateSource::RootLinksComplete => {
+                unreachable!("RootLinksComplete is outside the later process-kill source axis")
+            }
         }
     }
 

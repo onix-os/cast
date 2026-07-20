@@ -62,7 +62,7 @@ fn startup_active_reblit_candidate_preserve_production_leaf_dispatches_applied_a
             }
         }
     }
-    assert_eq!(exercised, 24);
+    assert_eq!(exercised, 32);
 }
 
 #[test]

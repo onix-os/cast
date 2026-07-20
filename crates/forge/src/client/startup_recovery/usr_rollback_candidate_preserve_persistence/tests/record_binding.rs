@@ -92,7 +92,7 @@ fn startup_usr_rollback_candidate_preserve_bound_advance_same_byte_replacements_
         ),
     ] {
         for historical in [false, true] {
-            for source in Source::ALL {
+            for source in Source::THROUGH_CANDIDATE_PRESERVED {
                 for origin in CandidateOrigin::ALL {
                     for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                         let fixture = fixture_for_origin_at_epoch(historical, origin, source, usr_outcome);
@@ -144,7 +144,7 @@ fn startup_usr_rollback_candidate_preserve_bound_advance_same_byte_replacements_
 #[test]
 fn startup_usr_rollback_candidate_preserve_same_byte_successor_replacement_after_publication_fails_exact_binding() {
     for historical in [false, true] {
-        for source in Source::ALL {
+        for source in Source::THROUGH_CANDIDATE_PRESERVED {
             for origin in CandidateOrigin::ALL {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     let fixture = fixture_for_origin_at_epoch(historical, origin, source, usr_outcome);
@@ -188,7 +188,7 @@ fn startup_usr_rollback_candidate_preserve_same_byte_successor_replacement_after
 #[test]
 fn startup_usr_rollback_candidate_preserve_same_byte_successor_replacement_after_same_store_binding_fails_reopened_binding() {
     for historical in [false, true] {
-        for source in Source::ALL {
+        for source in Source::THROUGH_CANDIDATE_PRESERVED {
             for origin in CandidateOrigin::ALL {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     let fixture = fixture_for_origin_at_epoch(historical, origin, source, usr_outcome);

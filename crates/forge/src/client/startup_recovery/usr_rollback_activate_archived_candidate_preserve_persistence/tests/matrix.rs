@@ -19,7 +19,7 @@ use super::support::{
 
 fn exercise_matrix(origin: CandidateOrigin) {
     for epoch in Epoch::ALL {
-        for source in CandidateSource::ALL {
+        for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 let fixture = fixture_for_origin(epoch, origin, source, usr_outcome);
                 let database_before = fixture.fixture.database_snapshot();

@@ -156,8 +156,8 @@ fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
     record.rollback.as_ref().is_some_and(|rollback| {
         matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
-        ) || (record.phase == Phase::RollbackDecided && rollback.source == ForwardPhase::RootLinksComplete)
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
+        )
             || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
     })
 }

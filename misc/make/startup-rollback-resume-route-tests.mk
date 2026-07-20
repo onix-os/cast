@@ -5,7 +5,7 @@ forge-startup-usr-rollback-resume-route-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_recovery::usr_rollback_resume_route::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 21; \
+	timeout 10s test "$$count" = 22; \
 	for test in \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_pending_matrix_persists_reverse_exchange_intent \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_satisfied_matrix_skips_reverse_exchange \
@@ -15,6 +15,7 @@ forge-startup-usr-rollback-resume-route-test:
 		client::startup_recovery::usr_rollback_resume_route::tests::evidence_races::startup_usr_rollback_resume_route_database_and_provenance_conflicts_never_advance \
 		client::startup_recovery::usr_rollback_resume_route::tests::evidence_races::startup_usr_rollback_resume_route_namespace_conflicts_never_advance \
 		client::startup_recovery::usr_rollback_resume_route::tests::evidence_races::startup_usr_rollback_resume_route_capture_and_final_revalidation_races_fail_before_advance \
+		client::startup_recovery::usr_rollback_resume_route::tests::evidence_races::startup_root_links_complete_usr_restored_root_abi_races_reject_both_route_seams_without_advance \
 		client::startup_recovery::usr_rollback_resume_route::tests::evidence_races::startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remain_exact \
 		client::startup_recovery::usr_rollback_resume_route::tests::storage_reopen::startup_usr_rollback_resume_route_storage_faults_reopen_to_exact_source_or_successor \
 		client::startup_recovery::usr_rollback_resume_route::tests::storage_reopen::startup_usr_rollback_resume_route_rejects_cross_root_authority_and_reopens_success \
@@ -27,7 +28,7 @@ forge-startup-usr-rollback-resume-route-test:
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_successor_replacement_reopens_but_never_succeeds \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_successor_replacement_after_binding_before_reopen_never_succeeds \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_storage_faults::startup_root_links_complete_route_all_storage_faults_reopen_exact_record_across_operations_and_epochs \
-		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_endpoint::startup_root_links_complete_fresh_entries_reach_usr_restored_once_then_remain_byte_stable \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_endpoint::startup_root_links_complete_fresh_entries_reach_candidate_preserved_without_second_reverse_exchange \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
@@ -43,7 +44,12 @@ forge-startup-usr-rollback-resume-route-test:
 	coordinator_test=crates/forge/src/transition_identity/journal_coordinator/tests/usr_exchange_effect.rs; \
 	forward_support=crates/forge/src/client/startup_recovery/forward_origin_test_support.rs; \
 	end_to_end=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/end_to_end.rs; \
+	evidence_races=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/evidence_races.rs; \
 	root_links_endpoint=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/root_links_route_endpoint.rs; \
+	root_links_record_binding=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/root_links_record_binding.rs; \
+	root_links_storage=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/root_links_storage_faults.rs; \
+	route_matrix=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/matrix.rs; \
+	route_support=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/support.rs; \
 	timeout 10s grep -Fqx '            if kind == OperationKind::ActiveReblit && expected.phase == Phase::CandidatePreserveIntent {' "$$end_to_end"; \
 	timeout 10s grep -Fq 'This resume-route end-to-end test stops before crossing into' "$$end_to_end"; \
 	successor_count="$$( timeout 10s rg -n '\.rollback_successor\(' "$$executor" "$$authority" "$$proof" | timeout 10s wc -l )"; \
@@ -185,11 +191,29 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s grep -Fq 'pub(crate) fn advance_record_binding(' "$$record_binding"; \
 	timeout 10s grep -Fq 'if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored)' "$$authority"; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$authority"; \
-	timeout 10s grep -Fq 'record.phase == Phase::RollbackDecided && rollback.source == ForwardPhase::RootLinksComplete' "$$authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$authority" )" = 1; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$reverse_authority"; \
 	timeout 10s grep -Fq 'let restored = reverse_intent' "$$root_links_endpoint"; \
-	timeout 10s grep -Fq 'assert_eq!(retained_exchange_syscall_count(), 1, "{case}");' "$$root_links_endpoint"; \
-	timeout 10s grep -Fq 'assert_eq!(fixture.canonical_bytes(), restored_bytes, "{case}");' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq 'let candidate_intent = restored.rollback_successor(None).unwrap();' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq 'let candidate_preserved = candidate_intent' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq 'assert_eq!(pending(&stable_entry).phase(), Phase::CandidatePreserved, "{case}");' "$$root_links_endpoint"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(retained_exchange_syscall_count(), 1, "{case}");' "$$root_links_endpoint" )" = 5; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");' "$$root_links_endpoint" )" = 5; \
+	timeout 10s grep -Fq 'for seam in RootAbiRouteSeam::ALL {' "$$evidence_races"; \
+	timeout 10s grep -Fq 'for historical in [false, true] {' "$$evidence_races"; \
+	timeout 10s grep -Fq 'for kind in OperationKind::ALL {' "$$evidence_races"; \
+	timeout 10s grep -Fq 'for outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {' "$$evidence_races"; \
+	timeout 10s grep -Fq 'for link_index in 0..ROOT_ABI.len() {' "$$evidence_races"; \
+	timeout 10s grep -Fq 'for race in RootAbiRace::ALL {' "$$evidence_races"; \
+	timeout 10s grep -Fq 'SourceCase::RootLinksCompletePost,' "$$evidence_races"; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_resume_route_fresh_namespace_capture(hook);' "$$evidence_races"; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_resume_route_final_revalidation(hook);' "$$evidence_races"; \
+	timeout 10s grep -Fq 'assert_eq!(fresh_namespace_capture_cases, 180);' "$$evidence_races"; \
+	timeout 10s grep -Fq 'assert_eq!(final_revalidation_cases, 180);' "$$evidence_races"; \
+	timeout 10s grep -Fq 'assert_eq!(fresh_namespace_capture_cases + final_revalidation_cases, 360);' "$$evidence_races"; \
+	timeout 10s grep -Fq 'SourceCase::RootLinksCompletePost,' "$$route_matrix"; \
+	timeout 10s grep -Fq 'pub(super) fn root_links_routes_at_epoch(kind: OperationKind, historical: bool) -> [Self; 3] {' "$$route_support"; \
+	timeout 10s test "$$( timeout 10s rg -n -F 'RouteFixture::root_links_routes_at_epoch(kind, historical)' "$$root_links_record_binding" "$$root_links_storage" | timeout 10s wc -l )" = 4; \
 	timeout 10s grep -Fq '(RollbackAction::Pending, UsrExchangeLayout::Post)' "$$authority"; \
 	timeout 10s grep -Fq '(RollbackAction::AlreadySatisfied, UsrExchangeLayout::Pre)' "$$authority"; \
 	timeout 10s grep -Fq 'RollbackAction::Applied | RollbackAction::AlreadySatisfied' "$$authority"; \
@@ -200,7 +224,7 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s grep -Fq 'decision.rollback_successor(None).unwrap()' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'retained_exchange_syscall_count() == 1' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'assert_eq!(pending.phase(), Phase::ReverseExchangeIntent);' "$$forward_support"; \
-	for file in "$$executor" "$$authority" "$$proof" "$$reopen" "$$root_links_endpoint" misc/make/startup-rollback-resume-route-tests.mk; do \
+	for file in "$$executor" "$$authority" "$$proof" "$$reopen" "$$evidence_races" "$$root_links_endpoint" "$$root_links_record_binding" "$$root_links_storage" "$$route_matrix" "$$route_support" misc/make/startup-rollback-resume-route-tests.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \

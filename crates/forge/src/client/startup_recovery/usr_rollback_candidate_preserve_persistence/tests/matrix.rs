@@ -14,7 +14,7 @@ use super::support::{
 
 fn exercise_success_matrix(origin: CandidateOrigin) {
     for historical in [false, true] {
-        for source in Source::ALL {
+        for source in Source::THROUGH_CANDIDATE_PRESERVED {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 let fixture = fixture_for_origin_at_epoch(historical, origin, source, usr_outcome);
                 let journal = fixture.open_journal();

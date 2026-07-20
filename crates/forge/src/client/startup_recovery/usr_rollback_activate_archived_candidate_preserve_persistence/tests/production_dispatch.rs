@@ -30,7 +30,7 @@ const USR_OUTCOMES: [RollbackActionOutcome; 2] =
 fn startup_activate_archived_candidate_preserve_production_leaf_dispatches_all_exact_cases_once() {
     for epoch in Epoch::ALL {
         for origin in CandidateOrigin::ALL {
-            for source in CandidateSource::ALL {
+            for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
                 for usr_outcome in USR_OUTCOMES {
                     let fixture = fixture_for_origin(epoch, origin, source, usr_outcome);
                     let journal = fixture.open_journal();

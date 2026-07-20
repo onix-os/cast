@@ -54,7 +54,7 @@ fn exercise_success_matrix(origin: CandidateOrigin) {
             }
         }
     }
-    assert_eq!(cases, 12);
+    assert_eq!(cases, 16);
 }
 
 #[test]

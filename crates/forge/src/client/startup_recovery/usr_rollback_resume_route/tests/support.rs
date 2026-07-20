@@ -61,11 +61,27 @@ impl RouteFixture {
     }
 
     pub(super) fn usr_restored(kind: OperationKind, source: SourceCase, outcome: RollbackActionOutcome) -> Self {
+        Self::usr_restored_at_epoch(kind, source, outcome, false)
+    }
+
+    pub(super) fn usr_restored_at_epoch(
+        kind: OperationKind,
+        source: SourceCase,
+        outcome: RollbackActionOutcome,
+        historical: bool,
+    ) -> Self {
         assert!(
-            matches!(source, SourceCase::IntentPost | SourceCase::ExchangedPost),
+            matches!(
+                source,
+                SourceCase::IntentPost | SourceCase::ExchangedPost | SourceCase::RootLinksCompletePost
+            ),
             "UsrRestored fixture requires a pending reverse-exchange route"
         );
-        let mut fixture = Self::new(kind, source);
+        let mut fixture = if historical {
+            Self::historical(kind, source)
+        } else {
+            Self::new(kind, source)
+        };
         let reverse_intent = fixture.source.rollback_successor(None).unwrap();
         assert_eq!(reverse_intent.phase, Phase::ReverseExchangeIntent);
         exchange_usr_layout(&fixture.fixture.installation.root);
@@ -78,6 +94,29 @@ impl RouteFixture {
         fixture.source = restored;
         assert_eq!(fixture.canonical_record(), fixture.source);
         fixture
+    }
+
+    pub(super) fn root_links_routes_at_epoch(kind: OperationKind, historical: bool) -> [Self; 3] {
+        let decision = if historical {
+            Self::historical(kind, SourceCase::RootLinksCompletePost)
+        } else {
+            Self::new(kind, SourceCase::RootLinksCompletePost)
+        };
+        [
+            decision,
+            Self::usr_restored_at_epoch(
+                kind,
+                SourceCase::RootLinksCompletePost,
+                RollbackActionOutcome::Applied,
+                historical,
+            ),
+            Self::usr_restored_at_epoch(
+                kind,
+                SourceCase::RootLinksCompletePost,
+                RollbackActionOutcome::AlreadySatisfied,
+                historical,
+            ),
+        ]
     }
 
     pub(super) fn enter(&self) -> startup_gate::Error {
