@@ -587,12 +587,18 @@ to persist one `RollbackDecided` with source `RootLinksComplete` and pending
 `/usr`, invokes neither root-ABI publication nor complete-set synchronization,
 verifies the exact successor binding, drops the old store, and independently
 reopens the canonical journal. Same-byte predecessor or successor replacement
-and uncertain storage outcomes never authorize success or retry. That entry
-stops at `RecoveryPending`; a fresh entry deliberately leaves the decision
-unchanged because rollback-resume routing for this source remains closed. The
-decision, journal, coordinator, publication, and normalizer lanes pass 15/15,
-85/85, 97/97, 15/15, and 19/19. Extending this source through the later rollback
-suffix is next.
+and uncertain storage outcomes never authorize success or retry. Commit
+`2201a24b` admits only that exact decision through the journal-only resume
+route. It captures exact record identity before namespace or database evidence,
+consumes the non-Clone binding through one advance to `ReverseExchangeIntent`,
+authenticates the returned successor binding, and canonically reopens after
+every mutation uncertainty. Its 20 focused tests cover all three operations,
+current and historical epochs, exact and conflicting plans, same-byte
+predecessor and successor replacement, and all five journal fault points. The
+route changes no namespace or database state and invokes no reverse exchange or
+root-ABI effect. A fresh entry leaves `ReverseExchangeIntent` byte-identical
+because RootLinks admission remains closed in the coarse-bound reverse-effect
+chain. Hardening that full effect, durability, and persistence chain is next.
 
 ### Startup reconciliation and interruption campaign
 

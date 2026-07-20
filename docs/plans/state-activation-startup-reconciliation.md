@@ -74,8 +74,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Revalidation checks store identity first and consumes the non-Clone binding through one conditional `advance_record_binding`, deriving exactly one `RollbackDecided` with source `RootLinksComplete` and pending `/usr` without a namespace, database, trigger, rollback, or retry effect.
   After the advance it authenticates the exact successor binding, drops the old lock-bearing store, and independently reopens the canonical journal.
   Same-byte predecessor or successor inode replacement never becomes success; reopen classifies only the exact durable source or decision.
-  The handled entry returns `RecoveryPending` and never redispatches its successor. A fresh entry currently leaves that decision unchanged because rollback-resume routing does not yet admit `RootLinksComplete`.
-  The focused decision and direct journal lanes pass 15/15 and 85/85; extending this exact source through routing and the later rollback suffix is next.
+  The handled entry returns `RecoveryPending` and never redispatches its successor. Commit `2201a24b` admits only the resulting exact RootLinks decision through the journal-only resume route.
+  That route captures a non-Clone record binding before namespace or database evidence, advances once to exact `ReverseExchangeIntent`, validates the returned successor binding, and independently reopens after every mutation uncertainty. Its 20 focused cases span all operations, both epochs, plan conflicts, same-byte predecessor and successor replacement, and all five journal fault points. A third startup leaves that intent byte-identical and invokes zero reverse exchanges because RootLinks remains excluded from the still-coarse reverse-effect chain; hardening that entire chain is next.
 
   Commit `911dcbc` separated rollback routing from decision persistence.
   Startup deliberately permits only one recovery journal mutation per entry.

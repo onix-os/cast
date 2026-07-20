@@ -270,8 +270,13 @@ closure remain authoritative in `PLAN.md`.
   binding and persists one `RollbackDecided` without replaying root-ABI
   publication or synchronization. Exact successor binding and an independent
   canonical reopen make predecessor or successor inode replacement fail closed.
-  The entry stops at `RecoveryPending`; rollback-resume routing for this exact
-  source remains closed and is the next boundary.
+  The entry stops at `RecoveryPending`. Commit `2201a24b` consumes the next
+  fresh exact decision through a separately record-bound journal-only route to
+  `ReverseExchangeIntent`; all five journal fault points, both epochs, and all
+  three operations reopen to only the exact source or successor without a
+  reverse, root-ABI, namespace, or database effect. A third entry remains at
+  that byte-identical intent because RootLinks is still excluded from the
+  coarse-bound reverse-effect chain, whose exact-binding hardening is next.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
