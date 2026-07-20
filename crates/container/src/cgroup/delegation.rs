@@ -37,9 +37,19 @@ impl DelegationAuthority {
         match &self.topology {
             DelegationTopology::Systemd(supervisor) => {
                 let enabled = probe_root_authority_pre_enable(&self.directory, &self.label)?;
-                require_descendant_topology(&self.directory, &self.label, 1, false)?;
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    1,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )?;
                 probe_supervisor(&self.directory, &self.label, supervisor)?;
-                require_descendant_topology(&self.directory, &self.label, 1, false)?;
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    1,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )?;
                 Ok(enabled)
             }
             #[cfg(test)]
@@ -51,9 +61,19 @@ impl DelegationAuthority {
         match &self.topology {
             DelegationTopology::Systemd(supervisor) => {
                 probe_root_authority(&self.directory, &self.label)?;
-                require_descendant_topology(&self.directory, &self.label, 1, false)?;
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    1,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )?;
                 probe_supervisor(&self.directory, &self.label, supervisor)?;
-                require_descendant_topology(&self.directory, &self.label, 1, false)
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    1,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )
             }
             #[cfg(test)]
             DelegationTopology::Simulated => Ok(()),
@@ -64,10 +84,20 @@ impl DelegationAuthority {
         match &self.topology {
             DelegationTopology::Systemd(supervisor) => {
                 probe_root_authority(&self.directory, &self.label)?;
-                require_descendant_topology(&self.directory, &self.label, 2, false)?;
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    2,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )?;
                 probe_supervisor(&self.directory, &self.label, supervisor)?;
                 probe_leaf(&self.directory, leaf)?;
-                require_descendant_topology(&self.directory, &self.label, 2, false)
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    2,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )
             }
             #[cfg(test)]
             DelegationTopology::Simulated => probe_leaf_witness(&self.directory, leaf),
@@ -78,10 +108,20 @@ impl DelegationAuthority {
         match &self.topology {
             DelegationTopology::Systemd(supervisor) => {
                 probe_root_authority(&self.directory, &self.label)?;
-                require_descendant_topology(&self.directory, &self.label, 2, false)?;
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    2,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )?;
                 probe_supervisor(&self.directory, &self.label, supervisor)?;
                 probe_activated_leaf(&self.directory, leaf, expected_tgid)?;
-                require_descendant_topology(&self.directory, &self.label, 2, false)
+                require_descendant_topology(
+                    &self.directory,
+                    &self.label,
+                    2,
+                    MAX_RETIRED_CGROUPS_AT_ADMISSION,
+                )
             }
             #[cfg(test)]
             DelegationTopology::Simulated => {
@@ -95,16 +135,16 @@ impl DelegationAuthority {
         }
     }
 
-    /// A removed cgroup may retain dying controller state temporarily. Verify
-    /// the visible tree is back to the supervisor-only baseline without
-    /// converting normal asynchronous CSS release into a false cleanup error.
+    /// A removed cgroup may retain unreachable dying controller state for an
+    /// unbounded asynchronous reclamation interval. Verify the visible tree is
+    /// back to the supervisor-only baseline while enforcing the finite cap.
     fn probe_cleanup_baseline(&self) -> Result<()> {
         match &self.topology {
             DelegationTopology::Systemd(supervisor) => {
                 probe_root_authority(&self.directory, &self.label)?;
-                require_descendant_topology(&self.directory, &self.label, 1, true)?;
+                require_descendant_topology(&self.directory, &self.label, 1, MAX_RETIRED_CGROUPS)?;
                 probe_supervisor(&self.directory, &self.label, supervisor)?;
-                require_descendant_topology(&self.directory, &self.label, 1, true)
+                require_descendant_topology(&self.directory, &self.label, 1, MAX_RETIRED_CGROUPS)
             }
             #[cfg(test)]
             DelegationTopology::Simulated => Ok(()),
@@ -166,9 +206,19 @@ impl DelegatedCgroupRoot {
         // with an empty `cgroup.subtree_control`. Authenticate the root and
         // exact supervisor topology before Cast enables anything in it.
         probe_root_authority_pre_enable(&directory, &label)?;
-        require_descendant_topology(&directory, &label, 1, false)?;
+        require_descendant_topology(
+            &directory,
+            &label,
+            1,
+            MAX_RETIRED_CGROUPS_AT_ADMISSION,
+        )?;
         let supervisor = capture_supervisor(&directory, &label)?;
-        require_descendant_topology(&directory, &label, 1, false)?;
+        require_descendant_topology(
+            &directory,
+            &label,
+            1,
+            MAX_RETIRED_CGROUPS_AT_ADMISSION,
+        )?;
         let authority = DelegationAuthority {
             directory,
             label,

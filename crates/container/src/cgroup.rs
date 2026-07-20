@@ -83,6 +83,14 @@ const MIN_CPU_BANDWIDTH_MICROS: u64 = 1_000;
 const MAX_CPU_PERIOD_MICROS: u64 = 1_000_000;
 // Linux BW_SHIFT is 20, leaving 44 bits for the finite runtime value.
 const MAX_CPU_QUOTA_MICROS: u64 = (1_u64 << 44) - 1;
+// The kernel may retain a removed cgroup as a dying descendant for an
+// unbounded asynchronous reclamation interval. Each terminal payload leaf can
+// add at most one such object, so cap that deleted controller state instead of
+// confusing it with a visible, reusable leaf. Admission reserves one final
+// slot for the leaf owned by the next execution; cleanup may consume that slot
+// after authenticated removal.
+const MAX_RETIRED_CGROUPS: u64 = 64;
+const MAX_RETIRED_CGROUPS_AT_ADMISSION: u64 = MAX_RETIRED_CGROUPS - 1;
 const DEFAULT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -133,13 +141,13 @@ pub enum CgroupError {
     DelegationSubtreePopulated { path: PathBuf },
 
     #[snafu(display(
-        "delegated cgroup topology at {} expected {expected_descendants} visible descendants and {dying_requirement} dying descendants, found {descendants} visible and {dying_descendants} dying",
+        "delegated cgroup topology at {} expected {expected_descendants} visible descendants and at most {maximum_dying_descendants} dying descendants, found {descendants} visible and {dying_descendants} dying",
         path.display()
     ))]
     DelegationTopology {
         path: PathBuf,
         expected_descendants: u64,
-        dying_requirement: &'static str,
+        maximum_dying_descendants: u64,
         descendants: u64,
         dying_descendants: u64,
     },

@@ -6,6 +6,9 @@ use tempfile::TempDir;
 
 use super::*;
 
+#[path = "topology_tests.rs"]
+mod topology_tests;
+
 const ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn limits() -> CgroupLimits {
@@ -256,7 +259,7 @@ fn event_parser_accepts_unknown_counters_but_rejects_malformed_core_state() {
 }
 
 #[test]
-fn delegated_root_requires_zero_visible_and_dying_descendants() {
+fn descendant_counter_reader_requires_both_canonical_fields() {
     let temporary = tempfile::tempdir().unwrap();
     let root = simulated_root(&temporary);
     let path = temporary.path().join("cgroup.stat");
@@ -328,26 +331,6 @@ fn activated_leaf_membership_is_exactly_the_blocked_clone_child() {
         assert!(matches!(
             require_exact_leaf_membership(members, expected, path),
             Err(CgroupError::LeafMembership { .. })
-        ));
-    }
-}
-
-#[test]
-fn exact_topology_admits_n_and_rejects_n_plus_one_or_dying_state() {
-    let path = Path::new("cgroup.stat");
-    validate_descendant_topology(1, 0, 1, false, path).unwrap();
-    validate_descendant_topology(2, 0, 2, false, path).unwrap();
-    validate_descendant_topology(1, 7, 1, true, path).unwrap();
-
-    for (descendants, dying, expected) in [(2, 0, 1), (3, 0, 2), (1, 1, 1), (2, 1, 2)] {
-        assert!(matches!(
-            validate_descendant_topology(descendants, dying, expected, false, path),
-            Err(CgroupError::DelegationTopology {
-                expected_descendants,
-                descendants: found,
-                dying_descendants,
-                ..
-            }) if expected_descendants == expected && found == descendants && dying_descendants == dying
         ));
     }
 }

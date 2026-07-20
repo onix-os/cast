@@ -484,7 +484,7 @@ container-cgroup-test:
 	@set -eu; \
 	listed="$$( timeout 120s $(CARGO) test -p container --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^cgroup::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 41; \
+	timeout 10s test "$$count" = 45; \
 	timeout 300s $(CARGO) test -p container --lib "cgroup::tests::" -- --test-threads=1
 
 # Socket-diagnostic tests remain in the complete `make test` lane. The local

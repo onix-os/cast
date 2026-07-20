@@ -206,7 +206,7 @@ fn probe_supervisor_descriptor(directory: &OwnedFd, label: &Path, expected_tgid:
         label,
     )?);
     require_populated_unfrozen_delegation(read_events(directory, label)?, &label.join("cgroup.events"))?;
-    require_descendant_topology(directory, label, 0, false)
+    require_descendant_topology(directory, label, 0, 0)
 }
 
 fn probe_leaf(root: &OwnedFd, leaf: &CgroupLeaf) -> Result<()> {
@@ -240,7 +240,7 @@ fn probe_leaf(root: &OwnedFd, leaf: &CgroupLeaf) -> Result<()> {
         read_events(&leaf.directory, &leaf.label)?,
         &leaf.label.join("cgroup.events"),
     )?;
-    require_descendant_topology(&leaf.directory, &leaf.label, 0, false)?;
+    require_descendant_topology(&leaf.directory, &leaf.label, 0, 0)?;
     probe_leaf_witness(root, leaf)
 }
 
@@ -274,7 +274,7 @@ fn probe_activated_leaf(root: &OwnedFd, leaf: &CgroupLeaf, expected_tgid: u32) -
         read_events(&leaf.directory, &leaf.label)?,
         &leaf.label.join("cgroup.events"),
     )?;
-    require_descendant_topology(&leaf.directory, &leaf.label, 0, false)?;
+    require_descendant_topology(&leaf.directory, &leaf.label, 0, 0)?;
     probe_leaf_witness(root, leaf)
 }
 
@@ -352,14 +352,14 @@ fn require_descendant_topology(
     directory: &OwnedFd,
     label: &Path,
     expected_descendants: u64,
-    allow_dying: bool,
+    maximum_dying_descendants: u64,
 ) -> Result<()> {
     let (descendants, dying_descendants) = read_descendant_counts(directory, label)?;
     validate_descendant_topology(
         descendants,
         dying_descendants,
         expected_descendants,
-        allow_dying,
+        maximum_dying_descendants,
         &label.join("cgroup.stat"),
     )
 }
@@ -368,16 +368,16 @@ fn validate_descendant_topology(
     descendants: u64,
     dying_descendants: u64,
     expected_descendants: u64,
-    allow_dying: bool,
+    maximum_dying_descendants: u64,
     path: &Path,
 ) -> Result<()> {
-    if descendants == expected_descendants && (allow_dying || dying_descendants == 0) {
+    if descendants == expected_descendants && dying_descendants <= maximum_dying_descendants {
         Ok(())
     } else {
         Err(CgroupError::DelegationTopology {
             path: path.to_owned(),
             expected_descendants,
-            dying_requirement: if allow_dying { "any number of" } else { "zero" },
+            maximum_dying_descendants,
             descendants,
             dying_descendants,
         })
