@@ -74,9 +74,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   incompatible database, active-selection, record, or installation authority.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
-  now covers the shared `/usr` reversal prefix, the complete NewState suffix
-  through authenticated terminal journal absence, and the ActiveReblit
-  no-boot-repair suffix through the same clean-startup handoff. An ActiveReblit
+  now covers the shared `/usr` reversal prefix, every RootLinks operation through
+  exact `CandidatePreserved`, the complete pre-existing NewState suffix through
+  authenticated terminal journal absence, and the ActiveReblit no-boot-repair
+  suffix through the same clean-startup handoff. An ActiveReblit
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
   to `BootRepairRequired`; a separately observed `BootRepairStarted` record is
   retained as terminal `BootRepairUnverified` without invoking boot again.
@@ -622,8 +623,8 @@ entry performs exactly one exchange and the five canonical root links retain
 their targets and identities. A following entry leaves that exact
 `UsrRestored` record byte-identical.
 
-Commit `7b3770b1` hardens the common candidate-preservation passage without
-widening that RootLinks gate. It captures one exact non-Clone
+Commit `7b3770b1` hardens the common candidate-preservation passage. At that
+checkpoint it did not widen the RootLinks gate. It captures one exact non-Clone
 `TransitionJournalRecordBinding` inside an installation-revalidation sandwich
 before namespace or database inspection, then moves it through NewState target
 creation, target normalization, and candidate movement; ActivateArchived and
@@ -633,9 +634,9 @@ loads from that chain. A safe creation or normalization crash prefix now
 returns an opaque, one-use `RestartRequired` source authority rather than
 discarding the binding and loading the source record again.
 
-The identical-bytes/different-inode proof has 44 pre-effect cases, 44
-post-effect cases, and 16 preparation-restart cases: 104 total across current
-and historical epochs, both recorded `/usr` outcomes, and all common candidate
+At that checkpoint, the identical-bytes/different-inode proof had 44 pre-effect
+cases, 44 post-effect cases, and 16 preparation-restart cases across current
+and historical epochs, both recorded `/usr` outcomes, and both common candidate
 sources, with `BootSyncStarted` admitted only for ActiveReblit. The pre-effect
 matrix authorizes no operation; the post-effect matrix never converts an inode
 substitution into success; and the restart matrix rejects the same bytes at a
@@ -652,10 +653,27 @@ success, storage-fault, same-byte/different-inode, and fresh-restart matrices
 remain fail closed without changing established database or non-journal
 namespace effects and without redispatching a new checkpoint.
 
-RootLinks remains intentionally excluded from candidate admission and the
-`UsrRestored` candidate route. Widening the `RootLinksComplete` source through
-the three exact operation-specific writers is the next blocker. That widening,
-boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
+Commit `67ad3de0` widens only the exact passage through `CandidatePreserved`.
+For current and historical record epochs, all three operations, and both
+recorded `/usr` outcomes, RootLinks-sourced `UsrRestored` now routes to
+`CandidatePreserveIntent`, then the matching operation writer persists its sole
+exact `CandidatePreserved` successor. The production endpoint performs exactly
+one reverse `/usr` exchange across the full route, preserves all five canonical
+root-link targets and identities, and leaves a later startup stably stopped at
+`CandidatePreserved`.
+
+The route proof rejects 360 root-link mutation races, 180 at each of its two
+revalidation seams. Candidate admission separately rejects 360 mutations
+spanning every one of the five canonical links. The common same-byte binding
+proof is now 64 pre-effect, 64 post-effect, and 24 preparation-restart cases.
+NewState and ActivateArchived each cover 24 success, 120 storage-fault, 96
+predecessor/successor binding-substitution, and 48 fresh-restart writer
+executions. ActiveReblit covers 32, 160, 128, and 64 respectively.
+
+This widening does not admit RootLinks-sourced `CandidatePreserved` into later
+completion or finalization. Evaluating those separately authorized checkpoints
+is the next candidate-recovery boundary. RootLinks process-death coverage, boot
+repair, cleanup, reboot, and power-loss durability remain unclaimed.
 
 ### Startup reconciliation and interruption campaign
 

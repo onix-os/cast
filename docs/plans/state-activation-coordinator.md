@@ -305,10 +305,11 @@ closure remain authoritative in `PLAN.md`.
   `RestartRequired` is now an opaque one-use unchanged-source authority rather
   than a fieldless result that dispatch resolves with another load.
 
-  The same-byte/different-inode gate covers 44 pre-effect, 44 post-effect, and
-  16 restart cases, or 104 total. It crosses current and historical records,
-  both `/usr` outcomes, all common sources, and `BootSyncStarted` only for
-  ActiveReblit. Commits `fec890ad`, `c9140a88`, and `043a3c24` then complete
+  At commit `7b3770b1`, the same-byte/different-inode gate covered 44 pre-effect,
+  44 post-effect, and 16 restart cases. It crossed current and historical
+  records, both `/usr` outcomes, both then-admitted common sources, and
+  `BootSyncStarted` only for ActiveReblit. Commits `fec890ad`, `c9140a88`, and
+  `043a3c24` then complete
   exact candidate persistence for NewState, ActivateArchived, and ActiveReblit
   respectively. Each writer consumes the exact predecessor binding, derives
   its sole `CandidatePreserved` successor from the private operation origin,
@@ -319,10 +320,28 @@ closure remain authoritative in `PLAN.md`.
   and fresh restarts remain fail closed without changing the established
   database, non-journal namespace, or one-checkpoint dispatch effects.
 
-  RootLinks is still excluded from candidate admission and the `UsrRestored`
-  candidate route. Widening the `RootLinksComplete` source through these exact
-  operation-specific writers is the next blocker. That widening, boot repair,
-  cleanup, reboot, and power-loss durability remain unclaimed.
+  Commit `67ad3de0` deliberately widens only the source axis through exact
+  `CandidatePreserved`. Across current and historical epochs, all three
+  operations, and both recorded `/usr` outcomes, RootLinks-sourced
+  `UsrRestored` now advances journal-only to `CandidatePreserveIntent`; the
+  matching operation writer then reaches its sole exact `CandidatePreserved`
+  successor. A subsequent startup remains stably at `CandidatePreserved`.
+  The endpoint still performs exactly one reverse `/usr` exchange, and all five
+  canonical root-link targets and identities remain unchanged.
+
+  Root-ABI mutation coverage now rejects 360 route races split evenly across
+  fresh-capture and final-revalidation seams, plus 360 admission races spanning
+  every canonical link. The common same-byte replacement matrices expand to 64
+  pre-effect, 64 post-effect, and 24 preparation-restart cases. NewState and
+  ActivateArchived each cover 24 successful writer executions, 120 storage-
+  fault executions, 96 predecessor/successor binding substitutions, and 48
+  fresh restarts; ActiveReblit covers 32, 160, 128, and 64 respectively.
+
+  No later completion or finalization source axis is widened by this slice. The
+  next candidate-recovery boundary is to evaluate exact RootLinks-sourced
+  `CandidatePreserved` evidence at those separately authorized later
+  checkpoints. RootLinks process-death coverage, boot repair, cleanup, reboot,
+  and power-loss durability remain unclaimed.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
