@@ -384,9 +384,22 @@ closure remain authoritative in `PLAN.md`.
   `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
   NewState stays byte-stable at generation 17, ActivateArchived at generation
   12, and ActiveReblit at generation 14 because every RootLinks finalization
-  gate remains closed. Fresh-handle reopen is not process-death evidence;
-  RootLinks same-boot `SIGKILL`, terminal finalization, reboot, and power-loss
-  durability remain unclaimed. NewState next requires the separately admitted
+  gate remains closed. Accepted commit `68759ba3` adds genuine same-boot
+  `SIGKILL` proof only for the RootLinks NewState generation-16 -> generation-17
+  boundary: exactly 20 cases = two epochs x (five SQLite application-transaction
+  seams + five journal-update durability seams). The parent releases every
+  installation, journal, and database handle before crash and recovery children
+  re-execute production `CleanSystemStartup`; a 15-second supervisor deadline
+  kills and reaps only a hung child, and recovery is the first database opener.
+  A nonempty selected row proves real cascade deletion. SQLite rolls back the
+  first four database seams, after which recovery performs one exact `Applied`
+  removal; post-commit and journal paths remove zero and converge through exact
+  `AlreadySatisfied` or source-versus-successor evidence. Post-crash raw
+  temporary-file inventory precedes every recovery journal-store or SQLite
+  open, all five root-link identities stay exact, and namespace, exchange, and
+  boot effects remain zero. This remains
+  same-boot evidence, not reboot or power-loss proof; RootLinks terminal
+  finalization is also open. NewState next requires the separately admitted
   generation-17 `FreshDbInvalidated` -> generation-18 `RollbackComplete` edge.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
@@ -506,7 +519,17 @@ closure remain authoritative in `PLAN.md`.
   side restart skips invalidation. Accepted commit `7457b259` makes this exact
   effect and persistence boundary production-reachable for the RootLinks
   source, while leaving generation-17 completion and finalization closed.
-  Same-boot process death at this boundary, later rollback actions,
+  Accepted commit `68759ba3` proves this RootLinks-only boundary across genuine
+  same-boot process death: two epochs cross five real SQLite transaction seams
+  and five journal-update seams for exactly 20 re-executed production-startup
+  cases. After all parent handles are released, a 15-second deadline bounds and
+  reaps each child; post-crash raw inventory runs before recovery opens and the
+  recovery child is the first database opener. The first four database deaths
+  roll back, then require one `Applied` removal of a nonempty selected row;
+  post-commit and journal deaths require zero removal and preserve exact
+  `AlreadySatisfied` or source/successor classification. All five root-link
+  identities remain exact and every unrelated effect stays zero. This is not
+  reboot or power-loss proof. Generation-17 completion, later rollback actions,
   roll-forward, triggers, and cleanup remain open. ActiveReblit's terminal
   finalizer now has an exact
   12-case real-process matrix across current/historical record epochs, both

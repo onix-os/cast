@@ -75,7 +75,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix, RootLinks NewState through exact
-  `FreshDbInvalidated`, and RootLinks ActivateArchived and ActiveReblit
+  `FreshDbInvalidated` plus its genuine same-boot invalidation-death matrix, and
+  RootLinks ActivateArchived and ActiveReblit
   through exact `RollbackComplete`; the complete pre-existing NewState suffix reaches
   authenticated terminal journal absence, and the ActiveReblit no-boot-repair
   suffix through the same clean-startup handoff. An ActiveReblit
@@ -687,6 +688,24 @@ success, storage-fault, predecessor-or-successor binding-substitution, and
 fresh-handle matrices cover 48, 240, 192, and 96 executions respectively.
 Fresh-handle reopen is explicitly not process-death evidence.
 
+Accepted commit `68759ba3` adds genuine same-boot `SIGKILL` proof only for this
+RootLinks NewState generation-16 -> generation-17 boundary. Its exact 20 cases
+are two record epochs x (five SQLite application-transaction seams + five
+journal-update durability seams). The parent releases every installation,
+journal, and database handle before separate crash and recovery children
+re-execute production `CleanSystemStartup`; a 15-second deadline kills and
+reaps a hung child, and the recovery child is the first SQLite opener.
+
+The selected fresh row has a nonempty selection. SQLite rolls back deaths at
+the first four database seams, so recovery observes the complete preimage and
+performs one exact `Applied` removal. The post-commit database seam and all
+journal seams perform zero removals: they reconcile joint absence as exact
+`AlreadySatisfied`, or consume the exact already-published successor according
+to raw source-versus-successor evidence. Post-crash raw temporary-file inventory
+is taken before any recovery journal-store or SQLite open. All five root-link
+targets and identities remain exact and namespace, exchange, and boot effects stay
+zero.
+
 Five all-link mutation seams fail closed: 240 capture, 240 pre-effect, 120
 Applied post-attempt, 240 initial-persistence, and 240 final-revalidation
 executions. The endpoint performs exactly one reverse `/usr` exchange and
@@ -722,8 +741,9 @@ boot, database, non-journal namespace, finalization, or cleanup effect. Exact
 `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
 NewState remains byte-stable at generation 17, ActivateArchived at generation
 12, and ActiveReblit at generation 14 because all RootLinks finalization gates
-remain closed. Fresh-handle reopen is not process-death evidence; RootLinks
-same-boot `SIGKILL`, terminal finalization, reboot, and power-loss durability
+remain closed. Commit `68759ba3` proves only the NewState invalidation boundary;
+it does not widen another rollback source or operation suffix. Other RootLinks
+process-death boundaries, terminal finalization, reboot, and power-loss durability
 remain unclaimed. The next NewState widening is the exact generation-17
 `FreshDbInvalidated` -> generation-18 `RollbackComplete` boundary; it must not
 silently admit terminal deletion.
