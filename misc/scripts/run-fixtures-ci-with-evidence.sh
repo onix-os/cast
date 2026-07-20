@@ -12,16 +12,192 @@ if [[ ${1-} == --capture-log ]]; then
     exit $?
 fi
 
+remove_flat_run_directory() {
+    local directory=$1 expected_identity=${2-} actual_identity nested
+    local mount_status
+    if [[ -z $expected_identity ]]; then
+        printf 'fixture CI run staging has no authenticated identity: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    if [[ -L $directory || ! -d $directory ]]; then
+        printf 'fixture CI run staging is no longer a non-symlink directory: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    actual_identity=$(stat -c '%u:%a:%d:%i' -- "$directory") || return 1
+    if [[ $actual_identity != "$expected_identity" ]]; then
+        printf 'fixture CI run staging identity changed before cleanup: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    if ! nested=$(find "$directory" -mindepth 1 -maxdepth 1 -type d \
+        -print -quit); then
+        printf 'fixture CI run staging could not be inspected safely: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    if [[ -n $nested ]]; then
+        printf 'fixture CI run staging contains a nested directory: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    actual_identity=$(stat -c '%u:%a:%d:%i' -- "$directory") || return 1
+    if [[ $actual_identity != "$expected_identity" ]]; then
+        printf 'fixture CI run staging identity changed during cleanup: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    if mountpoint -q -- "$directory"; then
+        printf 'fixture CI run staging must not be a mount point: %s\n' \
+            "$directory" >&2
+        return 1
+    else
+        mount_status=$?
+    fi
+    if [[ $mount_status -ne 32 ]]; then
+        printf 'fixture CI run staging mount status is indeterminate: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    if ! find "$directory" -mindepth 1 -maxdepth 1 ! -type d \
+        -exec rm -f -- {} +; then
+        printf 'fixture CI run staging contents could not be removed safely: %s\n' \
+            "$directory" >&2
+        return 1
+    fi
+    rmdir -- "$directory"
+}
+
+reclaim_stale_run_directories() {
+    local evidence_device=$1 caller_uid=$2 path name token metadata
+    local owner mode device inode mount_status nested index
+    local -a candidates=() identities=()
+
+    shopt -s nullglob
+    candidates=("$evidence_dir"/.fixtures-ci-run.*)
+    shopt -u nullglob
+    for path in "${candidates[@]}"; do
+        name=${path##*/}
+        token=${name#.fixtures-ci-run.}
+        if [[ ${#token} -ne 12 ]]; then
+            printf 'fixture CI found a malformed stale run name: %s\n' "$path" >&2
+            return 1
+        fi
+        case "$token" in
+            *[!A-Za-z0-9]*)
+                printf 'fixture CI found a malformed stale run name: %s\n' \
+                    "$path" >&2
+                return 1
+                ;;
+        esac
+        if [[ -L $path || ! -d $path ]]; then
+            printf 'stale fixture CI run must be a non-symlink directory: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        metadata=$(stat -c '%u:%a:%d:%i' -- "$path") || {
+            printf 'stale fixture CI run metadata is unavailable: %s\n' "$path" >&2
+            return 1
+        }
+        IFS=: read -r owner mode device inode <<<"$metadata"
+        if [[ $owner != "$caller_uid" || $mode != 700 ]]; then
+            printf 'stale fixture CI run must be caller-owned with mode 700: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        if [[ $device != "$evidence_device" ]]; then
+            printf 'stale fixture CI run crosses the evidence filesystem: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        if mountpoint -q -- "$path"; then
+            printf 'stale fixture CI run must not be a mount point: %s\n' \
+                "$path" >&2
+            return 1
+        else
+            mount_status=$?
+        fi
+        if [[ $mount_status -ne 32 ]]; then
+            printf 'stale fixture CI run mount status is indeterminate: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        if ! nested=$(find "$path" -mindepth 1 -maxdepth 1 -type d \
+            -print -quit); then
+            printf 'stale fixture CI run could not be inspected safely: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        if [[ -n $nested ]]; then
+            printf 'stale fixture CI run contains a nested directory: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        identities+=("$metadata")
+    done
+
+    # Revalidate the complete set before removing any entry. This prevents a
+    # late identity, mount, or nesting failure in one candidate from partially
+    # reclaiming otherwise valid siblings.
+    for index in "${!candidates[@]}"; do
+        path=${candidates[$index]}
+        metadata=$(stat -c '%u:%a:%d:%i' -- "$path") || {
+            printf 'stale fixture CI run disappeared before reclamation: %s\n' \
+                "$path" >&2
+            return 1
+        }
+        if [[ $metadata != "${identities[$index]}" ]]; then
+            printf 'stale fixture CI run identity changed before reclamation: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        if mountpoint -q -- "$path"; then
+            printf 'stale fixture CI run became a mount point: %s\n' \
+                "$path" >&2
+            return 1
+        else
+            mount_status=$?
+        fi
+        if [[ $mount_status -ne 32 ]]; then
+            printf 'stale fixture CI run mount status became indeterminate: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        if ! nested=$(find "$path" -mindepth 1 -maxdepth 1 -type d \
+            -print -quit); then
+            printf 'stale fixture CI run could not be re-inspected safely: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+        if [[ -n $nested ]]; then
+            printf 'stale fixture CI run gained a nested directory: %s\n' \
+                "$path" >&2
+            return 1
+        fi
+    done
+
+    for index in "${!candidates[@]}"; do
+        path=${candidates[$index]}
+        metadata=${identities[$index]}
+        remove_flat_run_directory "$path" "$metadata" || return 1
+    done
+}
+
 proof=
 bounded_temporary=
 run_directory=
+run_directory_identity=
 launch_signal_status=
 setup_cleanup() {
     status=$?
     trap - EXIT
     trap '' HUP INT TERM
     set +e
-    [[ -z "$run_directory" ]] || rm -rf -- "$run_directory"
+    if [[ -n $run_directory ]] \
+        && ! remove_flat_run_directory "$run_directory" "$run_directory_identity"; then
+        status=1
+    fi
     [[ -z "$bounded_temporary" ]] || rm -f -- "$bounded_temporary"
     if [[ $status -ne 0 && -n "$proof" ]]; then
         rm -f -- "$proof"
@@ -160,6 +336,14 @@ command -v systemctl >/dev/null 2>&1 || {
     printf 'systemctl is required to own the fixture CI service\n' >&2
     exit 1
 }
+command -v flock >/dev/null 2>&1 || {
+    printf 'flock is required to serialize fixture CI evidence publication\n' >&2
+    exit 1
+}
+command -v mountpoint >/dev/null 2>&1 || {
+    printf 'mountpoint is required to authenticate stale fixture CI runs\n' >&2
+    exit 1
+}
 if ! timeout --kill-after=1s 10s systemctl --user show-environment >/dev/null 2>&1; then
     printf 'fixture CI requires a reachable systemd user manager\n' >&2
     exit 1
@@ -171,10 +355,47 @@ if [[ -L "$evidence_dir" || -e "$evidence_dir" && ! -d "$evidence_dir" ]]; then
 fi
 mkdir -p "$evidence_dir"
 chmod 700 "$evidence_dir"
-if [[ $(stat -c '%u' "$evidence_dir") -ne $(id -u) || $(stat -c '%a' "$evidence_dir") != 700 ]]; then
+caller_uid=$(id -u)
+evidence_metadata=$(stat -Lc '%u:%a:%d:%i' -- "$evidence_dir") || {
+    printf 'fixture evidence directory metadata is unavailable: %s\n' \
+        "$evidence_dir" >&2
+    exit 1
+}
+IFS=: read -r evidence_owner evidence_mode evidence_device evidence_inode \
+    <<<"$evidence_metadata"
+if [[ $evidence_owner != "$caller_uid" || $evidence_mode != 700 ]]; then
     printf 'fixture evidence directory must be caller-owned with mode 700: %s\n' "$evidence_dir" >&2
     exit 1
 fi
+exec 9<"$evidence_dir"
+locked_evidence_metadata=$(stat -Lc '%u:%a:%d:%i' -- "/proc/$$/fd/9") || {
+    printf 'fixture evidence directory descriptor cannot be authenticated: %s\n' \
+        "$evidence_dir" >&2
+    exit 1
+}
+if [[ $locked_evidence_metadata != "$evidence_metadata" ]]; then
+    printf 'fixture evidence directory changed while it was opened: %s\n' \
+        "$evidence_dir" >&2
+    exit 1
+fi
+if ! flock --exclusive --nonblock 9; then
+    printf 'fixture evidence directory is already owned by another run: %s\n' \
+        "$evidence_dir" >&2
+    exit 1
+fi
+if [[ -L $evidence_dir || ! -d $evidence_dir ]]; then
+    printf 'fixture evidence path changed after locking: %s\n' \
+        "$evidence_dir" >&2
+    exit 1
+fi
+if [[ $(stat -Lc '%u:%a:%d:%i' -- "$evidence_dir") \
+    != "$locked_evidence_metadata" ]]; then
+    printf 'fixture evidence directory changed after locking: %s\n' \
+        "$evidence_dir" >&2
+    exit 1
+fi
+
+reclaim_stale_run_directories "$evidence_device" "$caller_uid"
 
 proof="$evidence_dir/fixtures-ci-proof.json"
 bounded_log="$evidence_dir/fixtures-ci.log"
@@ -193,6 +414,11 @@ if [[ -L "$run_directory" || ! -d "$run_directory" \
         "$run_directory" >&2
     exit 1
 fi
+run_directory_identity=$(stat -c '%u:%a:%d:%i' -- "$run_directory") || {
+    printf 'fixture CI run staging metadata is unavailable: %s\n' \
+        "$run_directory" >&2
+    exit 1
+}
 staged_proof="$run_directory/fixtures-ci-proof.json"
 output_fifo="$run_directory/fixture-output.fifo"
 execution_ready="$run_directory/execution-ready"
@@ -208,6 +434,11 @@ case "$invocation_token" in
         exit 1
         ;;
 esac
+if [[ ${#invocation_token} -ne 12 ]]; then
+    printf 'mktemp returned an unexpected fixture CI invocation token length: %s\n' \
+        "$invocation_token" >&2
+    exit 1
+fi
 unit="cast-fixtures-ci-$(id -u)-$$-$invocation_token.service"
 unit_marker="CAST_FIXTURE_CI_UNIT_TOKEN=$invocation_token"
 mkfifo -m 600 "$output_fifo"
@@ -289,7 +520,7 @@ validate_proof() {
 wait_group_exit() {
     local pid=$1
     timeout --kill-after=1s -- "${kill_after_seconds}s" \
-        "$bash_executable" -c '
+        "$bash_executable" --noprofile --norc -p -c '
             target_group=$1
             while :; do
                 live_member=0
@@ -373,7 +604,9 @@ finalize() {
         fi
         log_pipeline_pid=
     fi
-    rm -rf -- "$run_directory"
+    staging_cleanup_failed=0
+    remove_flat_run_directory "$run_directory" "$run_directory_identity" \
+        || staging_cleanup_failed=1
     if [[ -f "$bounded_temporary" && ! -L "$bounded_temporary" ]] \
         && [[ $(stat -c '%s' "$bounded_temporary") -le $maximum_log_bytes ]]; then
         chmod 600 "$bounded_temporary"
@@ -384,6 +617,9 @@ finalize() {
     fi
     rm -f "$bounded_temporary"
     if [[ $unit_cleanup_failed -eq 1 && $status -eq 0 ]]; then
+        status=1
+    fi
+    if [[ $staging_cleanup_failed -eq 1 && $status -eq 0 ]]; then
         status=1
     fi
     if [[ $status -ne 0 || $finalize_status -ne 0 ]]; then
@@ -451,7 +687,8 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$kill_after_seconds" setsid "$latched_runner" \
     "$execution_channels_ready" "$execution_status_fifo" \
     "$execution_release_fifo" \
     --parent-loss-cleanup "$owned_unit_stopper" \
-    "$unit" "$unit_marker" "$kill_after_seconds" -- \
+    "$unit" "$unit_marker" "$kill_after_seconds" \
+    --close-payload-fd-9 -- \
     timeout --foreground --kill-after="${kill_after_seconds}s" -- "${client_timeout_seconds}s" \
     systemd-run \
     --user \
@@ -476,7 +713,8 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$kill_after_seconds" setsid "$latched_runner" \
 execution_launch_pid=$!
 log_timeout_seconds=$((client_timeout_seconds + kill_after_seconds + 5))
 setsid timeout --kill-after="${kill_after_seconds}s" -- "${log_timeout_seconds}s" \
-    "$bash_executable" "$root/misc/scripts/run-fixtures-ci-with-evidence.sh" \
+    "$bash_executable" --noprofile --norc -p \
+    "$root/misc/scripts/run-fixtures-ci-with-evidence.sh" \
     --capture-log "$output_fifo" "$maximum_log_bytes" \
     "$bounded_temporary" 5>&- 6>&- &
 log_pipeline_pid=$!

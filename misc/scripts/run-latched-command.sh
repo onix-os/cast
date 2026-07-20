@@ -3,14 +3,19 @@
 set -eu
 
 parent_loss_cleanup=
+parent_loss_cleanup_set=0
 parent_loss_unit=
 parent_loss_marker=
 parent_loss_bound=
 post_kill_setsid=
 post_kill_shell=
-if [ "$#" -lt 7 ]; then
+close_payload_fd_9=0
+usage() {
     printf '%s\n' \
-        "usage: $0 <ready-file> <ack-file> <channels-ready-file> <status-fifo> <release-fifo> [--parent-loss-cleanup <executable> <unit> <marker> <bound>] -- <command> [argument ...]" >&2
+        "usage: $0 <ready-file> <ack-file> <channels-ready-file> <status-fifo> <release-fifo> [--parent-loss-cleanup <executable> <unit> <marker> <bound>] [--close-payload-fd-9] -- <command> [argument ...]" >&2
+}
+if [ "$#" -lt 7 ]; then
+    usage
     exit 2
 fi
 ready_file=$1
@@ -18,23 +23,48 @@ ack_file=$2
 channels_ready_file=$3
 status_fifo=$4
 release_fifo=$5
-if [ "$#" -ge 7 ] && [ "$6" = -- ]; then
-    shift 6
-elif [ "$#" -ge 12 ] && [ "$6" = --parent-loss-cleanup ] \
-    && [ "${11}" = -- ]; then
-    parent_loss_cleanup=$7
-    parent_loss_unit=$8
-    parent_loss_marker=$9
-    parent_loss_bound=${10}
-    shift 11
-else
-    printf '%s\n' \
-        "usage: $0 <ready-file> <ack-file> <channels-ready-file> <status-fifo> <release-fifo> [--parent-loss-cleanup <executable> <unit> <marker> <bound>] -- <command> [argument ...]" >&2
+shift 5
+options_complete=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --parent-loss-cleanup)
+            if [ "$parent_loss_cleanup_set" -eq 1 ] || [ "$#" -lt 5 ]; then
+                usage
+                exit 2
+            fi
+            parent_loss_cleanup_set=1
+            parent_loss_cleanup=$2
+            parent_loss_unit=$3
+            parent_loss_marker=$4
+            parent_loss_bound=$5
+            shift 5
+            ;;
+        --close-payload-fd-9)
+            if [ "$close_payload_fd_9" -eq 1 ]; then
+                usage
+                exit 2
+            fi
+            close_payload_fd_9=1
+            shift
+            ;;
+        --)
+            shift
+            options_complete=1
+            break
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+done
+if [ "$options_complete" -ne 1 ] || [ "$#" -eq 0 ]; then
+    usage
     exit 2
 fi
 kill_after_seconds=${CAST_LATCHED_KILL_AFTER_SECONDS:-30}
 
-if [ -n "$parent_loss_cleanup" ]; then
+if [ "$parent_loss_cleanup_set" -eq 1 ]; then
     case "$parent_loss_cleanup" in
         /*) ;;
         *) printf 'parent-loss cleanup executable must be absolute: %s\n' \
@@ -82,7 +112,7 @@ if [ "$kill_after_seconds" -lt 1 ] || [ "$kill_after_seconds" -gt 300 ]; then
     printf 'CAST_LATCHED_KILL_AFTER_SECONDS must be between 1 and 300\n' >&2
     exit 2
 fi
-if [ -n "$parent_loss_cleanup" ]; then
+if [ "$parent_loss_cleanup_set" -eq 1 ]; then
     case "$parent_loss_bound" in
         ''|*[!0-9]*)
             printf 'parent-loss cleanup bound must be decimal\n' >&2
@@ -482,7 +512,11 @@ exit_if_termination_pending
     exec 7>&-
     CAST_LATCHED_SUPERVISOR_PID=$$
     export CAST_LATCHED_SUPERVISOR_PID
-    exec "$@"
+    if [ "$close_payload_fd_9" -eq 1 ]; then
+        exec "$@" 9>&-
+    else
+        exec "$@"
+    fi
 ) &
 command_pid=$!
 forward_termination

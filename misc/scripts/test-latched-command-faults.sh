@@ -147,6 +147,33 @@ EOF
 chmod 755 "$work/cleanup-callback"
 cleanup_callback="$work/cleanup-callback"
 
+set +e
+setsid "$runner" \
+    "$work/duplicate-ready" "$work/duplicate-ack" "$work/duplicate-channels" \
+    "$work/duplicate-status" "$work/duplicate-release" \
+    --close-payload-fd-9 --close-payload-fd-9 -- true \
+    >"$work/duplicate-close-option.out" 2>&1
+duplicate_close_status=$?
+setsid "$runner" \
+    "$work/missing-separator-ready" "$work/missing-separator-ack" \
+    "$work/missing-separator-channels" "$work/missing-separator-status" \
+    "$work/missing-separator-release" --close-payload-fd-9 true \
+    >"$work/missing-close-separator.out" 2>&1
+missing_close_separator_status=$?
+setsid "$runner" \
+    "$work/missing-command-ready" "$work/missing-command-ack" \
+    "$work/missing-command-channels" "$work/missing-command-status" \
+    "$work/missing-command-release" --close-payload-fd-9 -- \
+    >"$work/missing-close-command.out" 2>&1
+missing_close_command_status=$?
+set -e
+[ "$duplicate_close_status" -eq 2 ] \
+    || fail 'duplicate close-payload-fd-9 option was accepted'
+[ "$missing_close_separator_status" -eq 2 ] \
+    || fail 'close-payload-fd-9 option without a separator was accepted'
+[ "$missing_close_command_status" -eq 2 ] \
+    || fail 'close-payload-fd-9 option without a command was accepted'
+
 for invalid_bound in 0 01 301 999999999999999999999999; do
     set +e
     CAST_LATCHED_KILL_AFTER_SECONDS=1 setsid "$runner" \
@@ -194,6 +221,11 @@ prepare_case() {
 launch_case() {
     cleanup_status=$1
     shift
+    case "${LATCHED_TEST_CLOSE_PAYLOAD_FD_9-0}" in
+        0) set -- -- "$@" ;;
+        1) set -- --close-payload-fd-9 -- "$@" ;;
+        *) fail "$case_name received an invalid close-payload-fd-9 test mode" ;;
+    esac
     case_unit="cast-fixtures-ci-$(id -u)-$$-${case_name}.service"
     case_marker="CAST_FIXTURE_CI_UNIT_TOKEN=${case_name}"
     LATCHED_TEST_CLEANUP_LOG="$cleanup_log" \
@@ -203,7 +235,7 @@ launch_case() {
         "$ready_file" "$acknowledgement_file" "$channels_ready_file" \
         "$status_fifo" "$release_fifo" \
         --parent-loss-cleanup "$cleanup_callback" \
-        "$case_unit" "$case_marker" 1 -- "$@" \
+        "$case_unit" "$case_marker" 1 "$@" \
         >"$helper_log" 2>&1 5>&- 6>&- &
     leader_pid=$!
     active_group=$leader_pid
@@ -316,6 +348,39 @@ reap_expected_status 23
 finish_group
 [ ! -e "$cleanup_log" ] || fail 'normal release invoked parent-loss cleanup'
 assert_sentinel_live
+
+exercise_payload_fd9_policy() {
+    fd_case=$1
+    fd_policy=$2
+    prepare_case "$fd_case"
+    exec 9>"$case_directory/inherited-fd9"
+    if [ "$fd_policy" = closed ]; then
+        LATCHED_TEST_CLOSE_PAYLOAD_FD_9=1 launch_case 0 sh -c \
+            '[ ! -e "/proc/$$/fd/9" ]'
+    else
+        launch_case 0 sh -c '[ -e "/proc/$$/fd/9" ]'
+    fi
+    await_readiness
+    acknowledge_and_await_channels
+    open_parent_channels
+    read_status_with_bound
+    [ "$status_record" = 0 ] \
+        || fail "$case_name payload FD9 policy returned $status_record"
+    printf 'release\n' >&8 || fail "$case_name release write failed"
+    exec 8>&-
+    exec 7<&-
+    reap_expected_status 0
+    finish_group
+    exec 9>&-
+    [ ! -e "$cleanup_log" ] \
+        || fail "$case_name release invoked parent-loss cleanup"
+    assert_sentinel_live
+}
+
+# The option is narrow: legacy callers preserve descriptor inheritance, while
+# an explicit close removes FD9 in the trusted pre-exec payload subshell.
+exercise_payload_fd9_policy preservefd9 preserved
+exercise_payload_fd9_policy closefd9 closed
 
 # Kill the leader after readiness but before acknowledgement. Its private
 # monitor must keep the PGID anchored, observe release EOF, and run cleanup

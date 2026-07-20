@@ -84,8 +84,12 @@ hostile_bash_bin="$work/hostile-bash-bin"
 evidence="$work/evidence"
 outer_state="$work/outer-state"
 gates="$work/gates"
+bash_env_hook="$work/bash-env-hook"
+bash_env_start_marker="$work/bash-env-started"
+bash_env_fd9_marker="$work/bash-env-saw-fd9"
 real_tee=$(command -v tee)
 real_jq=$(command -v jq)
+real_chmod=$(command -v chmod)
 real_bash=$(command -v bash)
 case "$real_bash" in
     /*) ;;
@@ -96,6 +100,16 @@ test -x "$real_bash"
 fake_commit=$(timeout 10s git -C "$root" rev-parse --verify HEAD)
 mkdir -p "$fakebin" "$hostile_bash_bin" "$evidence" "$outer_state" "$gates"
 chmod 700 "$evidence"
+cat >"$bash_env_hook" <<'EOF'
+if [ -n "${BASH_ENV_TEST_START_MARKER-}" ]; then
+    : >"$BASH_ENV_TEST_START_MARKER"
+fi
+if [ -e "/proc/$$/fd/9" ]; then
+    : >"${BASH_ENV_FD9_MARKER:?}"
+    flock --unlock 9 >/dev/null 2>&1 || :
+fi
+EOF
+chmod 600 "$bash_env_hook"
 if [ -L "$proof_generator" ] || [ ! -f "$proof_generator" ] \
     || [ ! -x "$proof_generator" ]; then
     printf 'fixture proof test generator is unavailable or unsafe: %s\n' \
@@ -441,6 +455,11 @@ case "$FAKE_MAKE_MODE" in
         mkdir "$evidence_parent/.fixtures-ci.log.tmp"
         printf 'FINALIZE-FAILURE\n'
         ;;
+    current-run-nested)
+        emit_proof
+        mkdir "$CAST_FIXTURE_EVIDENCE_DIR/injected-directory"
+        printf 'CURRENT-RUN-NESTED\n'
+        ;;
     *) exit 2 ;;
 esac
 EOF
@@ -497,6 +516,10 @@ cat >"$fakebin/systemd-run" <<'EOF'
 #!/bin/sh
 set -eu
 : "${FAKE_OUTER_STATE:?}"
+if [ -e "/proc/$$/fd/9" ]; then
+    printf '%s\n' 'evidence lock crossed the delegated payload boundary' >&2
+    exit 73
+fi
 # Start from a poisoned user-manager value so only an explicit set-or-unset
 # boundary can give the service the caller's intended locale state.
 LOCALE_ARCHIVE=/poisoned-manager-locale-archive
@@ -763,14 +786,19 @@ run_wrapper() {
     wrapper_timeout=$2
     wrapper_program=${RUN_WRAPPER_TEST_PROGRAM-$runner}
     wrapper_interpreter=${RUN_WRAPPER_TEST_INTERPRETER-$real_bash}
+    wrapper_outer_state=${RUN_WRAPPER_TEST_OUTER_STATE-$outer_state}
     wrapper_path="$fakebin:$PATH"
     if [ -n "${RUN_WRAPPER_TEST_PATH_PREFIX-}" ]; then
         wrapper_path="$RUN_WRAPPER_TEST_PATH_PREFIX:$wrapper_path"
     fi
     current_case=$wrapper_case
-    rm -f "$outer_state"/*
+    mkdir -p "$wrapper_outer_state"
+    rm -f "$wrapper_outer_state"/*
     set -- env \
         PATH="$wrapper_path" \
+        BASH_ENV="$bash_env_hook" \
+        BASH_ENV_TEST_START_MARKER="$bash_env_start_marker" \
+        BASH_ENV_FD9_MARKER="$bash_env_fd9_marker" \
         MAKE="$fakebin/make" \
         FIXTURE_EVIDENCE_DIR="$evidence" \
         CAST_FIXTURE_LOG_MAX_BYTES=256 \
@@ -788,12 +816,13 @@ run_wrapper() {
         FAKE_DOUBLE_SIGNAL_GATE="${FAKE_DOUBLE_SIGNAL_GATE-}" \
         FAKE_FINALIZE_STOP_GATE="${FAKE_FINALIZE_STOP_GATE-}" \
         FAKE_LOAD_STATE_GATE="${FAKE_LOAD_STATE_GATE-}" \
-        FAKE_OUTER_STATE="$outer_state" \
+        FAKE_OUTER_STATE="$wrapper_outer_state" \
         FAKE_PUBLIC_EVIDENCE_DIR="$evidence" \
         FAKE_TEE_MODE="${FAKE_TEE_MODE-pass}" \
         CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP="${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}" \
         CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE="${CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE-}" \
         REAL_JQ="$real_jq" \
+        REAL_CHMOD="$real_chmod" \
         REAL_TEE="$real_tee" \
         FAKE_MAKE_MODE="$wrapper_case"
     if [ -n "$wrapper_interpreter" ]; then
@@ -817,6 +846,9 @@ assert_bounded_inventory() {
     test ! -e "$evidence/.fixtures-ci-proof.json.tmp"
     test ! -e "$evidence/.fixtures-ci.output.fifo"
     test -z "$(find "$evidence" -maxdepth 1 -name '.fixtures-ci-run.*' -print -quit)"
+    flock --exclusive --nonblock "$evidence" true
+    test -f "$bash_env_start_marker"
+    test ! -e "$bash_env_fd9_marker"
 }
 
 process_is_live() {

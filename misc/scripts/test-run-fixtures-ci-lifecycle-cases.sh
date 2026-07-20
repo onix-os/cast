@@ -19,10 +19,21 @@ assert_bounded_inventory
 
 # Parent death before command completion must be observed by the private
 # release monitor. It stops the authenticated unit, terminates the supervisor
-# group, and lets the independent logger finish on FIFO EOF.
+# group, and lets the independent logger finish on FIFO EOF. Both children
+# inherit the evidence-directory lock, so a replacement wrapper cannot erase
+# shared evidence or reclaim staging until the complete abandoned run drains.
 current_case=parent-sigkill-active
+active_stop_gate="$gates/active-parent-stop"
+active_lock_probe_state="$work/active-lock-probe-state"
+rm -rf "$active_stop_gate.ready" "$active_stop_gate.continue" \
+    "$active_stop_gate.claim" "$active_lock_probe_state"
+mkdir -p "$active_lock_probe_state"
+mkfifo -m 600 "$active_stop_gate.continue"
+tracked_gate_fifo="$active_stop_gate.continue"
+tracked_gate_token=continue
 set +e
-run_wrapper --exec parent-sigkill-active 10 \
+FAKE_FINALIZE_STOP_GATE="$active_stop_gate" \
+    run_wrapper --exec parent-sigkill-active 10 \
     >"$work/active-parent-sigkill.out" 2>&1 &
 active_invocation_pid=$!
 tracked_runner_pid=$active_invocation_pid
@@ -61,6 +72,10 @@ if [ -z "$active_logger_pid" ]; then
         "$active_wrapper_pid" >&2
     exit 1
 fi
+test -e "/proc/$active_supervisor_pid/fd/9"
+test -e "/proc/$active_logger_pid/fd/9"
+test ! -e "/proc/$active_payload_pid/fd/9"
+test ! -e "$bash_env_fd9_marker"
 active_unit=$(cat "$outer_state/unit")
 kill -KILL "$active_wrapper_pid"
 set +e
@@ -69,6 +84,29 @@ active_status=$?
 set -e
 tracked_runner_pid=
 test "$active_status" -eq 137
+wait_for_receipt "$active_stop_gate.ready" "$active_supervisor_pid" \
+    'parent-loss unit stop gate'
+test "$(find "$evidence" -mindepth 1 -maxdepth 1 \
+    -name '.fixtures-ci-run.*' -print | wc -l)" -eq 1
+printf '%s\n' 'locked-public-proof' >"$evidence/fixtures-ci-proof.json"
+chmod 644 "$evidence/fixtures-ci-proof.json"
+printf '%s\n' 'locked-public-log' >"$evidence/fixtures-ci.log"
+chmod 600 "$evidence/fixtures-ci.log"
+set +e
+RUN_WRAPPER_TEST_OUTER_STATE="$active_lock_probe_state" \
+    run_wrapper success 10 >"$work/active-lock-probe.out" 2>&1
+active_lock_status=$?
+set -e
+test "$active_lock_status" -eq 1
+grep -Fq 'fixture evidence directory is already owned by another run:' \
+    "$work/active-lock-probe.out"
+grep -Fqx 'locked-public-proof' "$evidence/fixtures-ci-proof.json"
+grep -Fqx 'locked-public-log' "$evidence/fixtures-ci.log"
+test "$(find "$evidence" -mindepth 1 -maxdepth 1 \
+    -name '.fixtures-ci-run.*' -print | wc -l)" -eq 1
+printf 'continue\n' >"$active_stop_gate.continue"
+tracked_gate_fifo=
+tracked_gate_token=
 active_drain=0
 while process_is_live "$active_supervisor_pid" \
     || process_is_live "$active_payload_pid" \
@@ -79,9 +117,25 @@ while process_is_live "$active_supervisor_pid" \
     sleep 0.01
 done
 grep -Fqx "$active_unit" "$outer_state/stops"
-test ! -e "$evidence/fixtures-ci-proof.json"
-rm -rf "$evidence"/.fixtures-ci-run.*
-rm -f "$evidence"/.fixtures-ci.log.tmp "$evidence/fixtures-ci.log"
+grep -Fqx 'locked-public-proof' "$evidence/fixtures-ci-proof.json"
+test "$(find "$evidence" -mindepth 1 -maxdepth 1 \
+    -name '.fixtures-ci-run.*' -print | wc -l)" -eq 1
+active_lock_release_probe=0
+while ! flock --exclusive --nonblock "$evidence" true; do
+    active_lock_release_probe=$((active_lock_release_probe + 1))
+    test "$active_lock_release_probe" -le 300
+    sleep 0.01
+done
+set +e
+run_wrapper success 10 >"$work/active-stale-recovery.out" 2>&1
+active_recovery_status=$?
+set -e
+if [ "$active_recovery_status" -ne 0 ]; then
+    cat "$work/active-stale-recovery.out" >&2
+    exit 1
+fi
+jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
+assert_bounded_inventory
 
 # Kill the parent only after it consumed the status record but before release.
 # The supervisor is then blocked on the release FIFO and must exit on real EOF.
@@ -123,8 +177,14 @@ while process_is_live "$killed_supervisor_pid"; do
     sleep 0.01
 done
 test ! -e "$evidence/fixtures-ci-proof.json"
-rm -rf "$evidence"/.fixtures-ci-run.*
-rm -f "$evidence"/.fixtures-ci.log.tmp "$evidence/fixtures-ci.log"
+release_lock_probe=0
+while ! flock --exclusive --nonblock "$evidence" true; do
+    release_lock_probe=$((release_lock_probe + 1))
+    test "$release_lock_probe" -le 300
+    sleep 0.01
+done
+test "$(find "$evidence" -mindepth 1 -maxdepth 1 \
+    -name '.fixtures-ci-run.*' -print | wc -l)" -eq 1
 
 current_case=setup-signal
 setup_gate="$gates/setup-signal"
