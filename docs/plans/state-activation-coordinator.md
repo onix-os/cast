@@ -296,9 +296,26 @@ closure remain authoritative in `PLAN.md`.
   record byte-identical.
 
   RootLinks is still intentionally excluded from candidate admission and from
-  the `UsrRestored` candidate route. Exact candidate preservation is the next
-  safe hardening boundary; these commits do not claim candidate completion,
-  boot repair, cleanup, reboot, or power-loss durability.
+  the `UsrRestored` candidate route.
+
+  Commit `7b3770b1` carries one exact non-Clone
+  `TransitionJournalRecordBinding` through the common candidate-preservation
+  coordinator passage. Capture occurs before namespace or database evidence
+  inside an installation-revalidation sandwich. The same binding then moves
+  through NewState create, normalize, and move; ActivateArchived and
+  ActiveReblit effect and durability; each persistence-facing authority; and
+  dispatch. Six coarse semantic journal loads are gone. Preparation-only
+  `RestartRequired` is now an opaque one-use unchanged-source authority rather
+  than a fieldless result that dispatch resolves with another load.
+
+  The same-byte/different-inode gate covers 44 pre-effect, 44 post-effect, and
+  16 restart cases, or 104 total. It crosses current and historical records,
+  both `/usr` outcomes, all common sources, and `BootSyncStarted` only for
+  ActiveReblit. RootLinks remains excluded, while the existing candidate writer
+  persistence, conditional advance, and canonical reopen are deliberately
+  unchanged. Exact binding through that writer boundary is the next blocker;
+  candidate completion, boot repair, cleanup, reboot, and power-loss durability
+  remain unclaimed.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect

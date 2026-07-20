@@ -77,7 +77,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   The handled entry returns `RecoveryPending` and never redispatches its successor. Commit `2201a24b` admits only the resulting exact RootLinks decision through the journal-only resume route; commit `66e3cf6b` retains each non-Clone successor binding across old-store destruction and requires an independent canonical reopen to authenticate that exact inode and record inside an installation-revalidation sandwich.
   Commit `1b34d718` carries that exact non-Clone record binding through reverse admission, one reconciled effect, ordered parent durability, and bound persistence. Its durable authority privately seals `Applied` after one exchange or `AlreadySatisfied` from exact `PRE`, validates the successor in the same store and across canonical reopen, and never accepts an outcome from its caller.
   Fresh entries now move RootLinks exactly through `RollbackDecided` -> `ReverseExchangeIntent` -> `UsrRestored`; the reverse entry exchanges once and a later entry leaves the restored record byte-identical. Operation/epoch/outcome, five-fault, and same-byte replacement matrices converge without a second effect while all five canonical root links retain their exact targets and identities.
-  RootLinks remains intentionally excluded from candidate admission and the `UsrRestored` candidate route until exact candidate preservation is hardened end to end. Candidate completion, boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
+  RootLinks remains intentionally excluded from candidate admission and the `UsrRestored` candidate route. Candidate completion, boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
+  Commit `7b3770b1` captures the exact non-Clone `TransitionJournalRecordBinding` before namespace/database evidence and moves it through NewState create/normalize/move, ActivateArchived, ActiveReblit, common effect/durability/persistence-facing authority, and dispatch; all six coarse semantic loads are eliminated, and `RestartRequired` now carries an opaque one-use unchanged-source authority.
+  Its identical-bytes/different-inode matrix is 44 pre-effect + 44 post-effect + 16 restart = 104 cases across current/historical epochs and both `/usr` outcomes, with `BootSyncStarted` only for ActiveReblit. RootLinks stays excluded; writer persistence, conditional advance, and canonical reopen are intentionally unchanged and are the next blocker.
 
   Commit `911dcbc` separated rollback routing from decision persistence.
   Startup deliberately permits only one recovery journal mutation per entry.
@@ -280,12 +282,12 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   classifies a completely unchanged fingerprint as `NotApplied`; a stable
   transition from absence to the exact restrictive residue or canonical empty
   private target as `RestartRequired`; and every other target, parent,
-  namespace, or capture result as `Ambiguous`. `RestartRequired` describes the
-  safe observed prefix rather than proving which actor created it. All three
-  results are fieldless and retain no descriptor, retry, normalization, or move
-  capability. Database, journal, installation, and plan evidence is checked
-  again after the attempt, so even a safe prepared target requires a fresh
-  startup entry.
+  namespace, or capture result as `Ambiguous`. At that historical checkpoint,
+  `RestartRequired` described the safe observed prefix rather than proving
+  which actor created it, and all three results were fieldless. None retained a
+  descriptor, retry, normalization, or move capability. Database, journal,
+  installation, and plan evidence was checked again after the attempt, so even
+  a safe prepared target required a fresh startup entry.
 
   Canonical targets carrying POSIX access or default ACLs fail closed. A
   restrictive-mode residue remains opaque with respect to both payload and ACL
@@ -311,11 +313,11 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   replacement, namespace race, or final mismatch yields `Ambiguous` and no
   partial durability authority.
 
-  The externally observable normalization results are the fieldless
-  `RestartRequired`, `NotApplied`, and `Ambiguous`. None retains evidence,
-  descriptors, a retry, movement, or persistence capability. Even fully
-  normalized and synchronized evidence therefore forces a new startup entry;
-  this checkpoint cannot fall through into candidate movement.
+  At that historical checkpoint the externally observable normalization
+  results were the fieldless `RestartRequired`, `NotApplied`, and `Ambiguous`.
+  None retained evidence, descriptors, a retry, movement, or persistence
+  capability. Even fully normalized and synchronized evidence therefore forced
+  a new startup entry; this checkpoint could not fall through into movement.
 
   Commit `0d93f979` strengthens every freshly selected Move lease independently.
   Each lease repeats the retained candidate-tree barrier, then synchronizes the

@@ -621,10 +621,29 @@ Fresh RootLinks entries now progress exactly from `RootLinksComplete` to
 entry performs exactly one exchange and the five canonical root links retain
 their targets and identities. A following entry leaves that exact
 `UsrRestored` record byte-identical. RootLinks remains intentionally excluded
-from candidate admission and the `UsrRestored` candidate route until the
-complete candidate-preservation chain carries the same exact authority. That
-is the next safe boundary. Candidate completion, boot repair, cleanup, reboot,
-and power-loss durability remain unclaimed.
+from candidate admission and the `UsrRestored` candidate route.
+
+Commit `7b3770b1` hardens the common candidate-preservation passage without
+widening that RootLinks gate. It captures one exact non-Clone
+`TransitionJournalRecordBinding` inside an installation-revalidation sandwich
+before namespace or database inspection, then moves it through NewState target
+creation, target normalization, and candidate movement; ActivateArchived and
+ActiveReblit effects; their durability and persistence-facing authorities; and
+production dispatch. The slice eliminates all six coarse semantic journal
+loads from that chain. A safe creation or normalization crash prefix now
+returns an opaque, one-use `RestartRequired` source authority rather than
+discarding the binding and loading the source record again.
+
+The identical-bytes/different-inode proof has 44 pre-effect cases, 44
+post-effect cases, and 16 preparation-restart cases: 104 total across current
+and historical epochs, both recorded `/usr` outcomes, and all common candidate
+sources, with `BootSyncStarted` admitted only for ActiveReblit. The pre-effect
+matrix authorizes no operation; the post-effect matrix never converts an inode
+substitution into success; and the restart matrix rejects the same bytes at a
+successor inode. Candidate writer persistence, conditional journal advance,
+and canonical reopen are intentionally unchanged. Carrying exact identity
+through that writer boundary is the next blocker. Candidate completion, boot
+repair, cleanup, reboot, and power-loss durability remain unclaimed.
 
 ### Startup reconciliation and interruption campaign
 
