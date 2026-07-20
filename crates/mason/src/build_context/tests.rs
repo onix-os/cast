@@ -94,6 +94,33 @@ fn compiler_flag_tokens_preserve_policy_order_and_multiplicity() {
 }
 
 #[test]
+fn repository_default_tuning_reaches_rustflags_without_token_loss() {
+    let policy = BuildPolicy::repository_for_tests();
+    let target = policy.target("x86_64").unwrap();
+    let tuning = crate::build::tuning::resolve(&policy.spec.tuning, target, ToolchainSpec::Llvm, &[]).unwrap();
+    let mut inputs = fixture_context("x86_64", false, false).inputs;
+    inputs.flags = tuning.flags;
+
+    let context = BuildContext::resolve(&policy.spec, target, inputs).unwrap();
+    assert_eq!(
+        context.environment["RUSTFLAGS"],
+        "-C strip=none \
+         -C link-args=-Wl,--build-id=sha1 \
+         -C link-args=-Wl,--compress-debug-sections=zstd \
+         -C debuginfo=2 \
+         -C split-debuginfo=off \
+         -C lto=thin \
+         -C linker-plugin-lto \
+         -C embed-bitcode=yes \
+         -C force-frame-pointers \
+         -C opt-level=3 \
+         -C codegen-units=1 \
+         -Ctarget-cpu=x86-64-v2"
+    );
+    assert!(!context.environment.contains_key("CARGO_ENCODED_RUSTFLAGS"));
+}
+
+#[test]
 fn compiler_command_tokens_are_shell_quoted_without_path_lookup() {
     let command = BuildCommandSpec {
         program: BuildProgramSpec {

@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use stone_recipe::{
     NamedTuningSpec, ToolchainSpec, TuningSpec,
-    build_policy::{
-        CompilerFlagsSpec, NamedTuningFlagSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, TuningPolicySpec,
-    },
+    build_policy::{CompilerFlagsSpec, NamedTuningFlagSpec, TargetPolicySpec, ToolchainFlagsSpec, TuningPolicySpec},
 };
 use thiserror::Error;
 
@@ -142,15 +140,19 @@ pub fn extend_toolchain_flags(output: &mut CompilerFlagsSpec, flag: &ToolchainFl
 }
 
 fn extend_with_fallback(output: &mut CompilerFlagsSpec, flag: &ToolchainFlagsSpec, selected: &CompilerFlagsSpec) {
+    // Selected flag-record names are already unique. Their values are ordered
+    // argv fragments, where repeated introducers such as `-C` and `-Xclang`
+    // are structural and must never be deduplicated token by token.
     macro_rules! extend {
         ($field:ident) => {
-            extend_unique(
-                &mut output.$field,
+            output.$field.extend(
                 if selected.$field.is_empty() {
                     &flag.common.$field
                 } else {
                     &selected.$field
-                },
+                }
+                .iter()
+                .cloned(),
             );
         };
     }
@@ -162,14 +164,6 @@ fn extend_with_fallback(output: &mut CompilerFlagsSpec, flag: &ToolchainFlagsSpe
     extend!(vala);
     extend!(go);
     extend!(ld);
-}
-
-fn extend_unique(output: &mut Vec<TextSpec>, values: &[TextSpec]) {
-    for value in values {
-        if !output.contains(value) {
-            output.push(value.clone());
-        }
-    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -184,7 +178,7 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    use stone_recipe::build_policy::ContextValue;
+    use stone_recipe::build_policy::{ContextValue, TextSpec};
 
     use super::*;
     use crate::BuildPolicy;
@@ -219,6 +213,75 @@ mod tests {
                 .flags
                 .rust
                 .contains(&TextSpec::Literal("-Ctarget-cpu=x86-64-v2".to_owned()))
+        );
+    }
+
+    #[test]
+    fn repository_default_rust_argv_preserves_repeated_option_introducers() {
+        let selected = selected(Vec::new(), ToolchainSpec::Llvm);
+
+        assert_eq!(
+            selected.flags.rust,
+            [
+                "-C",
+                "strip=none",
+                "-C",
+                "link-args=-Wl,--build-id=sha1",
+                "-C",
+                "link-args=-Wl,--compress-debug-sections=zstd",
+                "-C",
+                "debuginfo=2",
+                "-C",
+                "split-debuginfo=off",
+                "-C",
+                "lto=thin",
+                "-C",
+                "linker-plugin-lto",
+                "-C",
+                "embed-bitcode=yes",
+                "-C",
+                "force-frame-pointers",
+                "-C",
+                "opt-level=3",
+                "-C",
+                "codegen-units=1",
+                "-Ctarget-cpu=x86-64-v2",
+            ]
+            .map(|value| TextSpec::Literal(value.to_owned()))
+        );
+    }
+
+    #[test]
+    fn repository_llvm_argv_preserves_repeated_driver_markers() {
+        let selected = selected(
+            vec![NamedTuningSpec {
+                key: "polly".to_owned(),
+                value: TuningSpec::Enable,
+            }],
+            ToolchainSpec::Llvm,
+        );
+        let start = selected
+            .flags
+            .c
+            .iter()
+            .position(|flag| flag == &TextSpec::Literal("-fplugin=LLVMPolly.so".to_owned()))
+            .unwrap();
+
+        assert_eq!(
+            &selected.flags.c[start..start + 10],
+            [
+                "-fplugin=LLVMPolly.so",
+                "-fpass-plugin=LLVMPolly.so",
+                "-Xclang",
+                "-mllvm",
+                "-Xclang",
+                "-polly",
+                "-Xclang",
+                "-mllvm",
+                "-Xclang",
+                "-polly-vectorizer=stripmine",
+            ]
+            .map(|value| TextSpec::Literal(value.to_owned()))
         );
     }
 

@@ -115,6 +115,7 @@ help:
 	@echo "  mason-paths-test  Run all retained workspace path and execution-lock tests"
 	@echo "  mason-executor-test  Run all frozen executor supervision and output-bound tests"
 	@echo "  mason-build-context-test  Run all frozen build-context resolution tests"
+	@echo "  mason-build-tuning-test  Run ordered compiler-tuning composition tests"
 	@echo "  mason-recipe-explanation-test  Run recipe explanation determinism tests"
 	@echo "  mason-upstream-git-cache-test  Run authenticated Git cache lifecycle tests"
 	@echo "  mason-build-root-test  Run exact frozen-root input and binding tests"

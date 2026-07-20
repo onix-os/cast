@@ -19,7 +19,7 @@
 	mason-package-collect-transaction-test mason-analysis-handler-test mason-emit-test \
 	mason-archive-test mason-package-publication-test \
 	mason-git-materialization-test mason-paths-test mason-executor-test \
-	mason-build-context-test mason-recipe-explanation-test \
+	mason-build-context-test mason-build-tuning-test mason-recipe-explanation-test \
 	mason-upstream-git-cache-test mason-build-root-test mason-profile-test \
 	mason-planner-bootstrap-test mason-policy-test \
 	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
@@ -713,8 +713,16 @@ mason-build-context-test:
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^build::context::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 19; \
+	timeout 10s test "$$count" = 20; \
 	timeout 900s $(CARGO) test -p mason --lib "build::context::tests::" -- --test-threads=1
+
+mason-build-tuning-test:
+	@set -eu; \
+	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -c '^build::tuning::tests::.*: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 6; \
+	timeout 900s $(CARGO) test -p mason --lib "build::tuning::tests::" -- --test-threads=1
 
 mason-recipe-explanation-test:
 	@set -eu; \
