@@ -642,26 +642,26 @@ the live items below remain open until a non-skipped required run proves them.
   Rebuild from the unchanged source and build locks and require byte-identical
   plans, derivation IDs, Stone files, and manifests before accepting reuse.
 - [x] Add a required-capability Make lane for CI where unavailable namespace or
-  mount support is a failure, not a skip. The ordinary developer lane may
-  report a narrowly classified capability skip, but must never report it as an
-  execution success or use it to hide a payload failure. `make fixtures-ci`
-  selects every fixture with `REQUIRE_EXECUTION=1`; its harness-free runner
-  creates an authenticated, bounded-lifetime delegated systemd unit. CI first
-  runs `make delegated-execution-preflight` through that exact production
-  capability boundary, before restoring the Stone bootstrap cache.
-  The complete live execution, bundle decoding, and repeated-build assertions
-  are implemented. Only a complete required matrix can atomically publish its
-  bounded v2 receipt: 52 executions, 78 bundle validations, 132 Stones,
-  52 manifests, and 184 artifacts, with each fixture's repeated plan and lock,
-  publication outcomes, sorted artifact digests, and three matching bundle
-  ledgers. Exact validation rejects duplicate keys, structural drift, unsafe
-  bounds, and ledger-framing changes; a direct producer/validator test still
-  does not substitute for live execution. The three items above therefore
-  remain open pending one non-skipped `make fixtures-ci` run attached to the
-  accepted commit. Exact commit `887aecf5` passes the strict anchored kernel
-  mount boundary and production delegated preflight on disposable NixOS 6.18;
-  no build matrix has yet emitted, decoded, or reproduced a Stone. CI covers
-  `develop`, matching the required untouched-`main` integration workflow.
+  mount support is a failure, not a skip. The ordinary developer lane may report a
+  narrowly classified capability skip, but never as execution success or over a
+  payload failure. `make fixtures-ci` selects all fixtures with `REQUIRE_EXECUTION=1`;
+  its harness-free runner creates an authenticated bounded-lifetime delegated unit.
+  CI first runs `make delegated-execution-preflight` through that production boundary,
+  before restoring the bootstrap cache. Live execution, decoding, and repetition are
+  implemented. Only a complete matrix from the exact accepted commit may publish its
+  v2 receipt: 52 executions, 78 bundle validations, 132 Stones, 52 manifests, and 184
+  artifacts, with repeated plans, locks, publication outcomes, digests, and ledgers.
+  Exact validation rejects drift; focused tests do not substitute for live execution.
+  Accepted runtime commit `249b5c8b` sets preflight, named-fixture, `all`, and outer
+  service limits to 30, 7,200, 14,400, and 21,600 seconds; `all` is capped at 18,000.
+  Status is runtime plus twice kill-after, a five/sixty/ten-second client margin, and
+  five seconds: defaults are 50, 7,325, 14,525, and 21,675 seconds; inner/outer caps
+  are 18,665/22,215. Shorter outer limits are only fault/cleanup tests, not run proof.
+  At exact commit `10d51fb9`, the canonical disposable NixOS VM completed both runs
+  for 19/26 fixtures; `hooks-patch` passed twice. `multiple-sources` passed once and
+  emitted nine Stones, but its second run hit the former fixed two-hour inner limit.
+  No assertion failed, no v2 receipt was published, and cleanup required no reboot; all three live items remain open pending a clean full rerun from the accepted commit.
+  CI covers `develop`, matching the required untouched-`main` integration workflow.
 
 **Exit gate:** every example is checked and frozen through public production
 boundaries; all four standard builders plus the custom and split-output cases

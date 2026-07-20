@@ -56,15 +56,58 @@ truncate-shaped opens, but Linux rejects the ordinary `O_CREAT` shape.
 
 Making ambient host-device mounts writable was rejected. It would expose host
 inode metadata to a root-mapped payload and make frozen execution depend on
-undeclared ambient state. The required correction is the
+undeclared ambient state. That diagnostic instead required the
 [private minimal-device boundary](../architecture/private-minimal-dev.md):
-three fresh namespace-unreachable device mounts per execution, provided through a narrow
-initial-user-namespace privilege boundary and installed beneath an immutable
-three-name `/dev`.
+three fresh namespace-unreachable device mounts per execution, provided through
+a narrow initial-user-namespace privilege boundary and installed beneath an
+immutable three-name `/dev`. The incomplete Python run emitted no Stone and
+closed none of the canonical Phase 10 live items.
 
-Until that boundary and its ordinary-user VM proof land, the Python run is a
-useful real-build diagnostic but not accepted execution evidence. It emitted
-no Stone and closes none of the canonical Phase 10 live items.
+At exact commit `10d51fb9`, a canonical required campaign on the disposable
+NixOS VM completed both required executions for nineteen of the twenty-six
+fixtures. In particular, `hooks-patch` passed both executions, including its
+pre-setup hook. Fixture twenty, `multiple-sources`, passed its first execution
+and emitted nine Stones. Its second execution was terminated when the inner
+delegated unit reached the runner's former fixed two-hour runtime limit.
+
+No fixture assertion failed. The enclosing campaign nevertheless failed
+closed: it published no v2 receipt because all twenty-six fixtures had not
+completed. The VM was safely cleaned of campaign units, processes, mounts, and
+broker state without a reboot. This is useful partial execution evidence, but
+it does not close any checklist item that requires the complete matrix receipt.
+
+## Runtime containment contract
+
+Accepted runtime commit `249b5c8b` replaces the equal nested deadlines exposed
+by that campaign with one shared, tested budget hierarchy:
+
+- delegated preflight retains a 30-second service runtime;
+- one named fixture retains a 7,200-second service runtime;
+- `all` defaults to 14,400 seconds and accepts an explicit bounded maximum of
+  18,000 seconds; and
+- the enclosing evidence service defaults to, and is capped at, 21,600 seconds.
+
+At the largest accepted inner runtime, the ordinary outer limit therefore
+retains exactly 3,600 seconds for preparation, client stop/reap, validation,
+evidence publication, and cleanup. The outer runner explicitly passes the
+validated inner runtime to the delegated runner instead of allowing the inner
+unit to rediscover an unrelated default.
+
+Client and status waits are derived rather than hard-coded. For a service
+runtime `R`, kill-after `K`, completion margin `C`, and five-second status
+delivery margin, the status deadline is exactly `R + 2K + C + 5`. The
+completion margin is five seconds for preflight, sixty seconds for delegated
+fixtures, and ten seconds for the outer campaign. With the ordinary kill-after
+defaults, the resulting preflight, named-fixture, default-`all`, and outer
+status deadlines are respectively 50, 7,325, 14,525, and 21,675 seconds. With
+the accepted maximum runtime and 300-second kill envelope, the inner and outer
+status caps are respectively 18,665 and 22,215 seconds.
+
+An explicitly shorter outer deadline remains valid for bounded fault-injection
+and cleanup tests. It deliberately may expire before the requested inner
+runtime and therefore cannot produce accepted complete-campaign evidence.
+The full twenty-six-fixture campaign and its v2 receipt still require a clean,
+non-skipped rerun from the accepted commit; that rerun has not yet occurred.
 
 ## Acceptance rule
 
