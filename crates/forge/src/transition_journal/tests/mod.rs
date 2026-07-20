@@ -349,6 +349,7 @@ fn assert_no_journal_temporaries(root: &Path) {
 
 
 include!("record_contract.rs");
+include!("record_binding.rs");
 include!("record_successors.rs");
 include!("runtime_evidence.rs");
 include!("transition_semantics.rs");

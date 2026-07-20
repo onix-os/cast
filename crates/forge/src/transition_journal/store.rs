@@ -14,6 +14,9 @@ use super::{
     temporary_name, try_open_and_lock, unlinkat, valid_temporary_name, validation::validate_advance,
 };
 
+mod record_binding;
+pub(crate) use record_binding::TransitionJournalRecordBinding;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DurabilityCheckpoint {
     TemporaryFullySynced,
@@ -40,6 +43,8 @@ pub(super) enum StorageFaultPoint {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum PublicBindingRevalidationBoundary {
     BeforeLoadFinalBinding,
+    BeforeBoundAdvancePublish,
+    BeforeBoundAdvanceFinalBinding,
     BeforeDeleteUnlinkBinding,
     BeforeDeleteFalseFinalBinding,
     BeforeDeleteFinalBinding,
@@ -250,15 +255,6 @@ pub(crate) struct TransitionJournalStore {
 #[derive(Clone, Debug)]
 pub(crate) struct TransitionJournalBinding(Arc<()>);
 
-/// Exact publicly named canonical-record inode retained by one open journal
-/// store. Equal bytes at the same name are not interchangeable with the inode
-/// that startup authority originally admitted.
-#[derive(Clone, Debug)]
-pub(crate) struct TransitionJournalRecordBinding {
-    store: Arc<()>,
-    canonical: Arc<std::fs::File>,
-}
-
 #[derive(Debug)]
 struct LoadedRecord {
     record: TransitionRecord,
@@ -408,46 +404,6 @@ impl TransitionJournalStore {
     /// substitute for the store captured by mutation authority.
     pub(crate) fn has_binding(&self, expected: &TransitionJournalBinding) -> bool {
         Arc::ptr_eq(&self.binding, &expected.0)
-    }
-
-    /// Bind an expected record to this publicly authenticated store and retain
-    /// its canonical inode. This is stricter than semantic record equality.
-    pub(crate) fn record_binding(
-        &self,
-        cast_directory: &std::fs::File,
-        expected: &TransitionRecord,
-    ) -> Result<TransitionJournalRecordBinding, StorageError> {
-        let _operation = self.lock_operation()?;
-        let loaded = self
-            .load_pinned_revalidated_retained_cast_locked(cast_directory)?
-            .ok_or(StorageError::CanonicalChanged)?;
-        if loaded.record != *expected {
-            return Err(StorageError::CanonicalChanged);
-        }
-        Ok(TransitionJournalRecordBinding {
-            store: Arc::clone(&self.binding),
-            canonical: Arc::new(loaded._file),
-        })
-    }
-
-    /// Reauthenticate the public store, record semantics, and retained
-    /// canonical inode captured by `record_binding`.
-    pub(crate) fn has_record_binding(
-        &self,
-        cast_directory: &std::fs::File,
-        expected: &TransitionJournalRecordBinding,
-        record: &TransitionRecord,
-    ) -> Result<bool, StorageError> {
-        if !Arc::ptr_eq(&self.binding, &expected.store) {
-            return Ok(false);
-        }
-        let _operation = self.lock_operation()?;
-        let Some(loaded) = self.load_pinned_revalidated_retained_cast_locked(cast_directory)? else {
-            return Ok(false);
-        };
-        let retained = inode_identity(&expected.canonical)
-            .map_err(|source| StorageError::ValidateCanonical { source })?;
-        Ok(loaded.record == *record && loaded.identity == retained)
     }
 
     /// Revalidate that this retained store is still publicly bound below the
@@ -611,6 +567,29 @@ impl TransitionJournalStore {
     }
 
     fn publish_record(&self, framed: &[u8], existing: Option<LoadedRecord>) -> Result<(), StorageError> {
+        self.publish_record_inode(framed, existing).map(drop)
+    }
+
+    fn publish_record_retained(
+        &self,
+        framed: &[u8],
+        record: &TransitionRecord,
+        existing: Option<LoadedRecord>,
+    ) -> Result<LoadedRecord, StorageError> {
+        let temporary = self.publish_record_inode(framed, existing)?;
+        Ok(LoadedRecord {
+            record: record.clone(),
+            framed: framed.to_vec(),
+            _file: temporary.file,
+            identity: temporary.identity,
+        })
+    }
+
+    fn publish_record_inode(
+        &self,
+        framed: &[u8],
+        existing: Option<LoadedRecord>,
+    ) -> Result<TemporaryRecord, StorageError> {
         let mut temporary = self.create_temporary()?;
         if let Err(source) = temporary.file.write_all(&framed) {
             self.cleanup_temporary(&temporary)?;
@@ -645,7 +624,8 @@ impl TransitionJournalStore {
         match existing {
             None => self.publish_initial(&temporary),
             Some(existing) => self.publish_update(&temporary, &existing),
-        }
+        }?;
+        Ok(temporary)
     }
 
     /// Remove the canonical record after validating both its storage metadata

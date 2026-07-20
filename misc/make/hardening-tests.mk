@@ -374,7 +374,7 @@ forge-transition-journal-test:
 	@set -eu; \
 	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 78; \
+	timeout 10s test "$$count" = 85; \
 	timeout 900s $(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
 
 stone-read-test:
