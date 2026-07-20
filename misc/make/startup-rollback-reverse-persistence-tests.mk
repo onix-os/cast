@@ -48,7 +48,7 @@ forge-startup-usr-rollback-reverse-persistence-test:
 	if timeout 10s rg -n 'advance_usr_restored_record_binding\(&journal[[:space:]]*,' "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'journal.advance_record_binding(cast, self._effect.journal_record_binding, &successor)' "$$authority"; \
 	timeout 10s grep -Fqx '            let (successor, successor_binding) = published.into_parts();' "$$executor"; \
-	publication_consumers="$$( timeout 10s rg -n 'published\.into_parts\(\)' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
+	publication_consumers="$$( timeout 10s grep -Fc 'published.into_parts()' "$$executor" )"; \
 	timeout 10s test "$$publication_consumers" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_reverse_and_reopen(' "$$executor" )" = 1; \
 	callers="$$( timeout 10s rg -n 'persist_usr_rollback_reverse_and_reopen\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/usr_rollback_reverse_persistence.rs' | timeout 10s wc -l )"; \

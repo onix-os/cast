@@ -50,11 +50,31 @@ pub(super) fn fixture_for_origin(
     source: CandidateSource,
     usr_outcome: RollbackActionOutcome,
 ) -> CandidatePreserveFixture {
+    fixture_for_origin_at_epoch(false, origin, source, usr_outcome)
+}
+
+pub(super) fn fixture_for_origin_at_epoch(
+    historical: bool,
+    origin: CandidateOrigin,
+    source: CandidateSource,
+    usr_outcome: RollbackActionOutcome,
+) -> CandidatePreserveFixture {
     match origin {
-        CandidateOrigin::Applied => CandidatePreserveFixture::new_state_empty_quarantine_prefix(source, usr_outcome),
-        CandidateOrigin::AlreadySatisfied => {
-            CandidatePreserveFixture::new(OperationKind::NewState, source, usr_outcome, CandidateLayout::Preserved)
+        CandidateOrigin::Applied => {
+            CandidatePreserveFixture::new_state_empty_quarantine_prefix_at_epoch(historical, source, usr_outcome)
         }
+        CandidateOrigin::AlreadySatisfied if historical => CandidatePreserveFixture::historical(
+            OperationKind::NewState,
+            source,
+            usr_outcome,
+            CandidateLayout::Preserved,
+        ),
+        CandidateOrigin::AlreadySatisfied => CandidatePreserveFixture::new(
+            OperationKind::NewState,
+            source,
+            usr_outcome,
+            CandidateLayout::Preserved,
+        ),
     }
 }
 

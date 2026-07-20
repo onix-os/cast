@@ -94,6 +94,7 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
     UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
     UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackCandidatePreserveRestartAuthority,
+    UsrRollbackCandidatePreserveRecordAdvanceError,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,

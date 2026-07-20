@@ -41,7 +41,7 @@ pub(super) enum StorageFaultPoint {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PublicBindingRevalidationBoundary {
+pub(crate) enum PublicBindingRevalidationBoundary {
     BeforeLoadFinalBinding,
     BeforeBoundAdvancePublish,
     BeforeBoundAdvanceFinalBinding,
@@ -184,7 +184,7 @@ pub(super) fn assert_storage_fault_consumed() {
 }
 
 #[cfg(test)]
-pub(super) fn arm_public_binding_revalidation_callback(
+pub(crate) fn arm_public_binding_revalidation_callback(
     boundary: PublicBindingRevalidationBoundary,
     callback: impl FnOnce() + 'static,
 ) {
@@ -197,7 +197,7 @@ pub(super) fn arm_public_binding_revalidation_callback(
 }
 
 #[cfg(test)]
-pub(super) fn assert_public_binding_revalidation_callback_consumed() {
+pub(crate) fn assert_public_binding_revalidation_callback_consumed() {
     PUBLIC_BINDING_REVALIDATION_CALLBACK.with(|armed| {
         assert!(
             armed.borrow().is_none(),

@@ -8,36 +8,43 @@ use crate::{
 
 use super::support::{
     CandidateOrigin, Source, durable_authority, expected_candidate_preserved, fixture_for_origin,
+    fixture_for_origin_at_epoch,
     non_journal_namespace_snapshot,
 };
 
 fn exercise_success_matrix(origin: CandidateOrigin) {
-    for source in Source::ALL {
-        for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
-            let fixture = fixture_for_origin(origin, source, usr_outcome);
-            let journal = fixture.open_journal();
-            let reservation = ActiveStateReservation::acquire().unwrap();
-            let authority = durable_authority(&fixture, &journal, &reservation, origin);
-            let expected = expected_candidate_preserved(&fixture, origin);
-            let database_before = fixture.fixture.database_snapshot();
-            let namespace_before = non_journal_namespace_snapshot(&fixture);
+    for historical in [false, true] {
+        for source in Source::ALL {
+            for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                let fixture = fixture_for_origin_at_epoch(historical, origin, source, usr_outcome);
+                let journal = fixture.open_journal();
+                let reservation = ActiveStateReservation::acquire().unwrap();
+                let authority = durable_authority(&fixture, &journal, &reservation, origin);
+                let expected = expected_candidate_preserved(&fixture, origin);
+                let database_before = fixture.fixture.database_snapshot();
+                let namespace_before = non_journal_namespace_snapshot(&fixture);
 
-            let (reopened, actual) = persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap();
+                let (reopened, actual) =
+                    persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap();
 
-            assert_eq!(actual, expected, "{origin:?} {source:?} {usr_outcome:?}");
-            assert_eq!(actual.phase, Phase::CandidatePreserved);
-            assert_eq!(
-                actual.rollback.as_ref().unwrap().candidate.action,
-                match origin {
-                    CandidateOrigin::Applied => RollbackAction::Applied,
-                    CandidateOrigin::AlreadySatisfied => RollbackAction::AlreadySatisfied,
-                }
-            );
-            assert_eq!(actual.rollback.as_ref().unwrap().fresh_db, RollbackAction::Pending);
-            assert_eq!(reopened.load().unwrap(), Some(expected.clone()));
-            assert_eq!(fixture.fixture.canonical_record(), expected);
-            assert_eq!(fixture.fixture.database_snapshot(), database_before);
-            assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
+                assert_eq!(
+                    actual, expected,
+                    "{origin:?} {source:?} {usr_outcome:?} historical={historical}"
+                );
+                assert_eq!(actual.phase, Phase::CandidatePreserved);
+                assert_eq!(
+                    actual.rollback.as_ref().unwrap().candidate.action,
+                    match origin {
+                        CandidateOrigin::Applied => RollbackAction::Applied,
+                        CandidateOrigin::AlreadySatisfied => RollbackAction::AlreadySatisfied,
+                    }
+                );
+                assert_eq!(actual.rollback.as_ref().unwrap().fresh_db, RollbackAction::Pending);
+                assert_eq!(reopened.load().unwrap(), Some(expected.clone()));
+                assert_eq!(fixture.fixture.canonical_record(), expected);
+                assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
+            }
         }
     }
 }

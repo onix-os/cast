@@ -61,6 +61,7 @@ pub(in crate::client) use archived_effect::{
 pub(in crate::client) use effect_reconciliation::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use effect_reconciliation::{
     UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackCandidatePreserveRecordAdvanceError,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,

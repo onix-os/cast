@@ -15,6 +15,7 @@ mod persistence;
 
 #[cfg(test)]
 pub(in crate::client) use persistence::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
+pub(in crate::client) use persistence::UsrRollbackCandidatePreserveRecordAdvanceError;
 
 use super::super::UsrRollbackCandidatePreserveAuthorityErrorKind;
 use super::{

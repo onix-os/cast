@@ -1,12 +1,14 @@
-//! Persistence-facing revalidation and projection of durable candidate proof.
+//! Persistence-facing revalidation and exact advance of durable candidate proof.
 //!
 //! The post-move durability constructor remains isolated from journal
-//! successor semantics. This child exposes only the read-only evidence checks
-//! and authority-owned projection needed at the persistence boundary.
+//! successor semantics. This child owns the complete evidence recheck and the
+//! one exact authority-derived journal advance required by persistence.
 
 use crate::{
     Installation,
-    transition_journal::{CodecError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::{
@@ -17,6 +19,19 @@ use crate::client::startup_reconciliation::{
     UsrRollbackCandidatePreserveAuthorityError,
     usr_rollback_candidate_preserve_authority::effect_evidence::require_effect_binding,
 };
+
+/// Exact authority-derived `CandidatePreserved` publication and its new inode
+/// binding.
+pub(in crate::client) struct UsrRollbackCandidatePreservePublishedRecord {
+    record: TransitionRecord,
+    binding: TransitionJournalRecordBinding,
+}
+
+impl UsrRollbackCandidatePreservePublishedRecord {
+    pub(in crate::client) fn into_parts(self) -> (TransitionRecord, TransitionJournalRecordBinding) {
+        (self.record, self.binding)
+    }
+}
 
 impl UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'_> {
     /// Revalidate the complete durable authority without repeating any
@@ -74,11 +89,52 @@ impl UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'_> {
         &self._effect.record
     }
 
-    /// Derive the sole legal `CandidatePreserved` successor from the origin
-    /// fixed by the authority's construction path.
-    pub(in crate::client) fn candidate_preserved_successor(&self) -> Result<TransitionRecord, CodecError> {
-        self._effect.record.rollback_successor(Some(self.origin))
+    /// Revalidate, then consume the durable authority through the exact
+    /// `CandidatePreserveIntent` to `CandidatePreserved` journal boundary. The
+    /// caller cannot supply or override the successor fixed by the private
+    /// origin.
+    pub(in crate::client) fn advance_candidate_preserved_record_binding(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<UsrRollbackCandidatePreservePublishedRecord, UsrRollbackCandidatePreserveRecordAdvanceError> {
+        self.revalidate(journal)?;
+        let successor = self
+            ._effect
+            .record
+            .rollback_successor(Some(self.origin))
+            .map_err(UsrRollbackCandidatePreserveRecordAdvanceError::Successor)?;
+        if successor.phase != Phase::CandidatePreserved {
+            return Err(UsrRollbackCandidatePreserveRecordAdvanceError::UnexpectedSuccessor {
+                phase: successor.phase,
+            });
+        }
+        let cast = self._effect.installation.retained_mutable_cast_directory()?;
+        match journal.advance_record_binding(cast, self._effect.journal_record_binding, &successor) {
+            Ok(binding) => Ok(UsrRollbackCandidatePreservePublishedRecord {
+                record: successor,
+                binding,
+            }),
+            Err(source) => Err(UsrRollbackCandidatePreserveRecordAdvanceError::Storage { source, successor }),
+        }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(in crate::client) enum UsrRollbackCandidatePreserveRecordAdvanceError {
+    #[error("revalidate exact durable NewState candidate-preservation authority before the bound journal advance")]
+    Authority(#[from] UsrRollbackCandidatePreserveAuthorityError),
+    #[error("revalidate retained installation before the bound CandidatePreserved journal advance")]
+    Installation(#[from] crate::installation::Error),
+    #[error("derive the authority-owned CandidatePreserved successor")]
+    Successor(#[source] CodecError),
+    #[error("authority-owned candidate-preservation successor has unexpected phase {phase:?}")]
+    UnexpectedSuccessor { phase: Phase },
+    #[error("advance the exact bound candidate-preservation journal record")]
+    Storage {
+        #[source]
+        source: StorageError,
+        successor: TransitionRecord,
+    },
 }
 
 #[cfg(test)]

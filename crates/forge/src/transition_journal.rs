@@ -47,8 +47,9 @@ pub(crate) use recovery::RecoveryDisposition;
 pub(crate) use runtime_evidence::RuntimeEvidenceError;
 #[cfg(test)]
 pub(crate) use store::{
-    JournalDeleteDurabilityBoundary, JournalUpdateDurabilityBoundary, arm_journal_delete_durability_callback,
-    arm_journal_update_durability_callback,
+    JournalDeleteDurabilityBoundary, JournalUpdateDurabilityBoundary, PublicBindingRevalidationBoundary,
+    arm_journal_delete_durability_callback, arm_journal_update_durability_callback,
+    arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed,
 };
 pub(crate) use store::{TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalStore};
 #[allow(unused_imports)] // deliberate internal surface for the next durable coordinator slice
@@ -61,9 +62,8 @@ use codec::{
 };
 #[cfg(test)]
 use store::{
-    DurabilityCheckpoint, PublicBindingRevalidationBoundary, StorageFaultPoint,
-    arm_public_binding_revalidation_callback, arm_storage_fault, assert_public_binding_revalidation_callback_consumed,
-    assert_storage_fault_consumed, take_durability_checkpoints,
+    DurabilityCheckpoint, StorageFaultPoint, arm_storage_fault, assert_storage_fault_consumed,
+    take_durability_checkpoints,
 };
 
 /// Arm the first temporary-file sync in the next journal update. Exposed only
