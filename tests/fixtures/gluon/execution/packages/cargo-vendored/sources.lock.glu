@@ -25,7 +25,7 @@ type SourceLock = {
         Archive {
             order = 0,
             url = "https://fixtures.invalid/sources/cast-cargo-vendored-fixture-1.0.0.tar.gz",
-            sha256 = "7b852cc6802af8126d5ae4d81962e072143bc63bfc7927174d179e574d5d672e",
+            sha256 = "f4e4c01bcd965a8843ec3d93f8d72e3c85d8dbf3e7b9625e17a5bffe9d255c22",
         },
     ],
 }

@@ -187,6 +187,41 @@ if [ "$mode" = check ]; then
     check_root=$(timeout 30s mktemp -d "${TMPDIR:-/tmp}/cast-execution-fixtures.XXXXXX")
 fi
 
+vendored_package="$source_root/cast-cargo-vendored-fixture-1.0.0/vendor/cast-fixture-greeting-0.1.0"
+vendored_checksum="$vendored_package/.cargo-checksum.json"
+test -f "$vendored_checksum" && test ! -L "$vendored_checksum" || {
+    printf 'vendored Cargo checksum is unavailable or unsafe: %s\n' \
+        "$vendored_checksum" >&2
+    exit 1
+}
+vendored_manifest_hash=$(timeout 30s sha256sum "$vendored_package/Cargo.toml")
+vendored_manifest_hash=${vendored_manifest_hash%% *}
+vendored_library_hash=$(timeout 30s sha256sum "$vendored_package/src/lib.rs")
+vendored_library_hash=${vendored_library_hash%% *}
+for vendored_hash in "$vendored_manifest_hash" "$vendored_library_hash"; do
+    case "$vendored_hash" in
+        *[!0-9a-f]*|'')
+            printf 'vendored Cargo source produced an invalid SHA-256: %s\n' \
+                "$vendored_hash" >&2
+            exit 1
+            ;;
+    esac
+    test "${#vendored_hash}" -eq 64 || {
+        printf 'vendored Cargo source produced a non-256-bit hash: %s\n' \
+            "$vendored_hash" >&2
+        exit 1
+    }
+done
+vendored_checksum_expected=$(printf \
+    '{"files":{"Cargo.toml":"%s","src/lib.rs":"%s"},"package":"%s"}' \
+    "$vendored_manifest_hash" "$vendored_library_hash" \
+    1111111111111111111111111111111111111111111111111111111111111111)
+vendored_checksum_actual=$(timeout 30s cat "$vendored_checksum")
+test "$vendored_checksum_actual" = "$vendored_checksum_expected" || {
+    printf 'vendored Cargo checksum is stale: %s\n' "$vendored_checksum" >&2
+    exit 1
+}
+
 for fixture in \
     cast-autotools-fixture-1.0.0 \
     cast-autotools-options-fixture-1.0.0 \
