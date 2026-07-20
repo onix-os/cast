@@ -23,7 +23,7 @@ use crate::{
 use super::super::candidate_test_support::{CandidateSource, capture_record};
 use super::support::{
     CandidateOrigin, Epoch, assert_preserved, durable_authority, expected_candidate_preserved, expected_post_events,
-    fixture_for_origin,
+    fixture_for_origin, non_journal_namespace_snapshot,
 };
 
 #[test]
@@ -38,6 +38,9 @@ fn startup_archived_candidate_preserve_source_fault_restart_finishes_without_sec
                     reset_archived_candidate_preserve_move_attempt_count();
                     let authority = durable_authority(&fixture, &journal, &reservation, first_origin);
                     let first_move_count = usize::from(first_origin == CandidateOrigin::Applied);
+                    assert_eq!(archived_candidate_preserve_move_attempt_count(), first_move_count);
+                    let database_before = fixture.fixture.database_snapshot();
+                    let namespace_before = non_journal_namespace_snapshot(&fixture);
                     arm_next_temporary_sync_fault();
 
                     let result = persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, authority);
@@ -52,6 +55,9 @@ fn startup_archived_candidate_preserve_source_fault_restart_finishes_without_sec
                         }
                     ));
                     assert_eq!(fixture.fixture.canonical_record(), fixture.candidate_intent);
+                    assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                    assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
+                    assert_eq!(archived_candidate_preserve_move_attempt_count(), first_move_count);
                     assert_preserved(&fixture);
 
                     let journal = fixture.open_journal();
@@ -72,6 +78,8 @@ fn startup_archived_candidate_preserve_source_fault_restart_finishes_without_sec
 
                     assert_eq!(actual, expected);
                     assert_eq!(reopened.load().unwrap(), Some(expected));
+                    assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                    assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
                     assert_eq!(archived_candidate_preserve_move_attempt_count(), first_move_count);
                 }
             }
@@ -93,6 +101,7 @@ fn startup_archived_candidate_preserve_successor_fault_restart_skips_preservatio
                     let expected_move_count = usize::from(origin == CandidateOrigin::Applied);
                     let expected = expected_candidate_preserved(&fixture, origin);
                     let database_before = fixture.fixture.database_snapshot();
+                    let namespace_before = non_journal_namespace_snapshot(&fixture);
                     arm_next_update_first_directory_sync_fault();
 
                     let result = persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, authority);
@@ -108,6 +117,7 @@ fn startup_archived_candidate_preserve_successor_fault_restart_skips_preservatio
                     ));
                     assert_eq!(fixture.fixture.canonical_record(), expected);
                     assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                    assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
                     assert_eq!(archived_candidate_preserve_move_attempt_count(), expected_move_count);
                     assert_preserved(&fixture);
 
@@ -120,6 +130,8 @@ fn startup_archived_candidate_preserve_successor_fault_restart_skips_preservatio
                     drop(reservation);
                     assert!(not_applicable);
                     assert_eq!(journal.load().unwrap(), Some(expected));
+                    assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                    assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
                     assert_eq!(archived_candidate_preserve_move_attempt_count(), expected_move_count);
                 }
             }

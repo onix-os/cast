@@ -8,7 +8,7 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	persistence_prefix='client::startup_recovery::usr_rollback_activate_archived_candidate_preserve_persistence::tests::'; \
 	startup_prefix='client::startup_gate::usr_rollback_activate_archived::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$persistence_prefix"'.*: test$$' "$$listed" )" = 11; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$persistence_prefix"'.*: test$$' "$$listed" )" = 14; \
 	for name in \
 		matrix::startup_archived_candidate_preserve_persistence_applied_matrix_persists_exact_successor \
 		matrix::startup_archived_candidate_preserve_persistence_finish_matrix_persists_exact_successor \
@@ -19,6 +19,9 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 		storage_reopen::startup_archived_candidate_preserve_persistence_consumes_old_store_and_reopens_success \
 		restart::startup_archived_candidate_preserve_source_fault_restart_finishes_without_second_move \
 		restart::startup_archived_candidate_preserve_successor_fault_restart_skips_preservation \
+		record_binding::startup_archived_candidate_preserve_bound_advance_same_byte_replacements_never_succeed \
+		record_binding::startup_archived_candidate_preserve_same_byte_successor_replacement_after_publication_fails_exact_binding \
+		record_binding::startup_archived_candidate_preserve_same_byte_successor_replacement_after_same_store_binding_fails_reopened_binding \
 		production_dispatch::startup_activate_archived_candidate_preserve_production_leaf_dispatches_all_exact_cases_once \
 		production_dispatch::startup_activate_archived_candidate_preserve_production_leaf_rejects_cross_operation_pairing; do \
 		timeout 10s grep -Fqx "$$persistence_prefix$$name: test" "$$listed"; \
@@ -44,7 +47,11 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	production_leaf=crates/forge/src/client/startup_recovery/usr_rollback_candidate_preserve_dispatch.rs; \
 	recovery=crates/forge/src/client/startup_recovery.rs; \
 	persistence=crates/forge/src/client/startup_recovery/usr_rollback_activate_archived_candidate_preserve_persistence.rs; \
+	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
 	persistence_tests=crates/forge/src/client/startup_recovery/usr_rollback_activate_archived_candidate_preserve_persistence/tests; \
+	record_binding="$$persistence_tests/record_binding.rs"; \
+	storage="$$persistence_tests/storage_reopen.rs"; \
+	restart="$$persistence_tests/restart.rs"; \
 	startup_tests=crates/forge/src/client/startup_gate/usr_rollback_activate_archived/tests; \
 	process_kill="$$startup_tests/candidate_move_process_kill.rs"; \
 	process_kill_boundaries="$$startup_tests/candidate_process_kill_boundaries.rs"; \
@@ -70,18 +77,83 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveApplyEffectSelection::MoveArchived' "$$production_leaf" "$$authority"; \
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived' "$$production_leaf" "$$authority"; \
 	timeout 10s grep -Fq 'persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, durable)' "$$production_leaf"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'authority.revalidate(&journal)' "$$persistence" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'journal.advance(&source_record, &successor)' "$$persistence" )" = 1; \
+	if timeout 10s rg -n 'RollbackActionOutcome|rollback_successor\(' "$$persistence"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'authority.revalidate(&journal)' "$$persistence" )" = 1; \
+	if timeout 10s rg -n 'candidate_preserved_successor\(' "$$persistence" "$$archived_persistence_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq '.rollback_successor(Some(outcome))' "$$archived_persistence_authority"; \
+	if timeout 10s rg -U -n 'fn[^\(]*\([^\)]*(origin|outcome)[^\)]*\)' "$$persistence" "$$archived_persistence_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n '\.advance\(' "$$persistence" "$$archived_persistence_authority" "$$reopen"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fqx '    let advance = match authority.advance_candidate_preserved_record_binding(&journal) {' "$$persistence"; \
+	timeout 10s grep -Fq 'pub(in crate::client) fn advance_candidate_preserved_record_binding(' "$$archived_persistence_authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'advance_candidate_preserved_record_binding' "$$persistence" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'advance_candidate_preserved_record_binding' "$$archived_persistence_authority" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal.advance_record_binding(cast, self.effect.journal_record_binding, &successor)' "$$archived_persistence_authority" )" = 1; \
+	timeout 10s grep -Fqx '            let (successor, successor_binding) = published.into_parts();' "$$persistence"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'published.into_parts()' "$$persistence" )" = 1; \
+	first_revalidate_line="$$( timeout 10s grep -nF 'authority.revalidate(&journal)' "$$persistence" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
+	seam_line="$$( timeout 10s grep -nF '    before_usr_rollback_archived_candidate_preserve_persistence_final_revalidation();' "$$persistence" | timeout 10s cut -d: -f1 )"; \
+	clone_line="$$( timeout 10s grep -nF '    let installation = authority.installation().clone();' "$$persistence" | timeout 10s cut -d: -f1 )"; \
+	advance_line="$$( timeout 10s grep -nF '    let advance = match authority.advance_candidate_preserved_record_binding(&journal) {' "$$persistence" | timeout 10s cut -d: -f1 )"; \
+	same_store_line="$$( timeout 10s grep -nF '            let exact = revalidate_published_archived_candidate_preserved_binding(' "$$persistence" | timeout 10s cut -d: -f1 )"; \
+	drop_journal_line="$$( timeout 10s grep -nF '    drop(journal);' "$$persistence" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
+	reopen_seam_line="$$( timeout 10s grep -nF '        after_usr_rollback_archived_candidate_preserve_successor_binding_check_before_reopen();' "$$persistence" | timeout 10s cut -d: -f1 )"; \
+	reopen_line="$$( timeout 10s grep -nF '        reopen_canonical_journal(&installation).map_err(UsrRollbackArchivedCandidatePreserveReopenError::from);' "$$persistence" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$first_revalidate_line" -lt "$$seam_line"; \
+	timeout 10s test "$$seam_line" -lt "$$clone_line"; \
+	timeout 10s test "$$clone_line" -lt "$$advance_line"; \
+	timeout 10s test "$$advance_line" -lt "$$same_store_line"; \
+	timeout 10s test "$$same_store_line" -lt "$$drop_journal_line"; \
+	timeout 10s test "$$drop_journal_line" -lt "$$reopen_seam_line"; \
+	timeout 10s test "$$reopen_seam_line" -lt "$$reopen_line"; \
+	suffix="$$( timeout 10s sed -n '/    let advance = match authority.advance_candidate_preserved_record_binding/,/        reopen_canonical_journal(&installation)/p' "$$persistence" )"; \
+	if timeout 10s grep -Fq 'drop(authority)' <<<"$$suffix"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' <<<"$$suffix" )" = 1; \
+	published_branch="$$( timeout 10s sed -n '/        Ok(published) => {/,/        Err(UsrRollbackArchivedCandidatePreserveRecordAdvanceError::Authority(source)) => {/p' "$$persistence" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '        Ok(published) => {' <<<"$$published_branch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackArchivedCandidatePreserveAdvanceOutcome::Published {' <<<"$$published_branch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackArchivedCandidatePreserveAdvanceOutcome::SuccessorBindingFailed {' <<<"$$published_branch" )" = 2; \
+	if timeout 10s rg -n '(^|[^[:alnum:]_])return([^[:alnum:]_]|$$)|\?|panic!|unreachable!|\.unwrap\(|\.expect\(' <<<"$$published_branch"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'open_in_retained_cast|journal\.load\(' "$$persistence"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.has_record_binding(cast, successor_binding, successor)' "$$persistence" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.has_reopened_record_binding(cast, successor_binding, successor)' "$$persistence" )" = 1; \
+	published_binding_helper="$$( timeout 10s sed -n '/^fn revalidate_published_archived_candidate_preserved_binding(/,/^}/p' "$$persistence" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.revalidate_mutable_namespace()' <<<"$$published_binding_helper" )" = 2; \
+	timeout 10s grep -Fq '.has_record_binding(cast, successor_binding, successor)' <<<"$$published_binding_helper"; \
+	reopened_binding_helper="$$( timeout 10s sed -n '/^fn revalidate_reopened_archived_candidate_preserved_binding(/,/^}/p' "$$persistence" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.revalidate_mutable_namespace()' <<<"$$reopened_binding_helper" )" = 2; \
+	timeout 10s grep -Fq '.has_reopened_record_binding(cast, successor_binding, successor)' <<<"$$reopened_binding_helper"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' "$$persistence" )" = 1; \
-	timeout 10s grep -Fq 'if actual == source_record =>' "$$persistence"; \
-	timeout 10s grep -Fq 'if actual == successor =>' "$$persistence"; \
+	timeout 10s grep -Fqx '                                durable: DurableUsrRollbackArchivedCandidatePreserveRecord::CandidatePreserved,' "$$persistence"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '            Ok((reopened, Some(actual))) if actual == source_record => {' "$$persistence" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc '            Ok((reopened, Some(actual))) if actual == successor => {' "$$persistence" )" = 3; \
+	timeout 10s grep -Fqx '                    Ok(true) => Ok((reopened, successor)),' "$$persistence"; \
 	timeout 10s grep -Fq 'ArchivedDurabilityOrigin::Applied' "$$archived_authority"; \
 	timeout 10s grep -Fq 'ArchivedDurabilityOrigin::AlreadySatisfied' "$$archived_authority"; \
 	if timeout 10s rg -n 'pub[^\n]*(ArchivedDurabilityOrigin|origin)' "$$archived_authority" "$$archived_persistence_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	production_code="$$( timeout 10s sed -E 's,//.*$$,,' "$$child" "$$persistence" "$$archived_authority" "$$archived_persistence_authority" )"; \
 	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|=[[:space:]]*(loop|while)[[:space:]]|retry' <<<"$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for race in Database Provenance Journal Installation Namespace Plan; do timeout 10s grep -Fq "EvidenceRace::$$race" "$$persistence_tests/evidence_races.rs" "$$startup_tests/candidate_evidence_races.rs"; done; \
-	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do timeout 10s grep -Fq "$$fault" "$$persistence_tests/storage_reopen.rs"; done; \
+	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do timeout 10s grep -Fq "$$fault" "$$storage"; done; \
+	timeout 10s test "$$( timeout 10s rg -n '^            arm_next_(temporary_sync|update_exchange|update_first_directory_sync|displaced_unlink|update_final_directory_sync)_fault,$$' "$$storage" | timeout 10s wc -l )" = 5; \
+	for axis in 'for epoch in Epoch::ALL {' 'for origin in CandidateOrigin::ALL {' 'for source in CandidateSource::ALL {' 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {'; do timeout 10s grep -Fq "$$axis" "$$storage"; done; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(fixture.fixture.database_snapshot(), database_before);' "$$storage" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);' "$$storage" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(archived_candidate_preserve_move_attempt_count(), effect_count_before);' "$$storage" )" = 2; \
+	timeout 10s grep -Fqx 'mod record_binding;' "$$persistence_tests.rs"; \
+	for seam in BeforeBoundAdvancePublish BeforeBoundAdvanceFinalBinding; do timeout 10s test "$$( timeout 10s grep -Fc "PublicBindingRevalidationBoundary::$$seam" "$$record_binding" )" = 1; done; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'arm_public_binding_revalidation_callback(boundary, hook);' "$$record_binding" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'arm_before_usr_rollback_archived_candidate_preserve_successor_binding_revalidation(hook);' "$$record_binding" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'arm_after_usr_rollback_archived_candidate_preserve_successor_binding_check_before_reopen(hook);' "$$record_binding" )" = 1; \
+	for axis in 'for epoch in Epoch::ALL {' 'for source in CandidateSource::ALL {' 'for origin in CandidateOrigin::ALL {' 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {'; do timeout 10s test "$$( timeout 10s grep -Fc "$$axis" "$$record_binding" )" = 3; done; \
+	timeout 10s grep -Fq 'assert_ne!(retained_identity, inode_identity(&canonical));' "$$record_binding"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_unchanged_outside_journal(' "$$record_binding" )" = 4; \
+	timeout 10s grep -Fq 'archived_candidate_preserve_move_attempt_count()' "$$record_binding"; \
+	timeout 10s grep -Fq 'assert_eq!(names.len(), 2, "bound update left journal residue: {names:?}");' "$$record_binding"; \
+	for axis in 'for epoch in Epoch::ALL {' 'for source in CandidateSource::ALL {' 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {'; do timeout 10s test "$$( timeout 10s grep -Fc "$$axis" "$$restart" )" = 2; done; \
+	timeout 10s test "$$( timeout 10s rg -n 'for (first_)?origin in CandidateOrigin::ALL \{' "$$restart" | timeout 10s wc -l )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'drop(reservation);' "$$restart" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$restart" )" = 4; \
+	timeout 10s grep -Fq 'expected_post_events(&fixture)' "$$restart"; \
 	timeout 10s grep -Fqx 'mod candidate_move_process_kill;' "$$startup_tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod candidate_process_kill_boundaries;' "$$startup_tests/mod.rs"; \
 	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$process_kill"; \
@@ -109,7 +181,7 @@ forge-startup-usr-rollback-activate-archived-candidate-dispatch-test:
 	timeout 10s grep -Fq 'power-loss oracle' "$$process_kill"; \
 	timeout 10s grep -Fq 'historical record epoch is not a reboot' "$$process_kill"; \
 	if timeout 10s rg -n 'dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback|journal\.(advance|delete)|reconcile_move|arm_archived_candidate_preserve_move_fault|arm_next_|StorageFault' "$$process_kill" "$$process_kill_boundaries"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	for file in "$$gate" "$$child" "$$reconciliation" "$$authority" "$$archived_authority" "$$archived_persistence_authority" "$$production_leaf" "$$recovery" "$$persistence" "$$persistence_tests"/*.rs "$$startup_tests"/*.rs misc/make/startup-rollback-activate-archived-candidate-dispatch-tests.mk Makefile misc/make/help.mk; do \
+	for file in "$$gate" "$$child" "$$reconciliation" "$$authority" "$$archived_authority" "$$archived_persistence_authority" "$$production_leaf" "$$recovery" "$$reopen" "$$persistence" "$$persistence_tests"/*.rs "$$startup_tests"/*.rs misc/make/startup-rollback-activate-archived-candidate-dispatch-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1800s $(CARGO) test -p forge --lib "$$persistence_prefix" -- --test-threads=1; \

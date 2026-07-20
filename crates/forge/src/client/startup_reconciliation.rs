@@ -88,6 +88,7 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveApplyReconciliation,
     UsrRollbackArchivedCandidatePreserveDurableEffectAuthority,
+    UsrRollbackArchivedCandidatePreserveRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,

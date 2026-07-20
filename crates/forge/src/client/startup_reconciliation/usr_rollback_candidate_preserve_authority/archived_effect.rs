@@ -8,6 +8,7 @@ mod persistence;
 
 #[cfg(test)]
 pub(in crate::client) use persistence::arm_before_archived_candidate_preserve_persistence_durable_trailing_evidence;
+pub(in crate::client) use persistence::UsrRollbackArchivedCandidatePreserveRecordAdvanceError;
 
 use crate::{
     Installation, db,

@@ -55,6 +55,7 @@ pub(in crate::client) use archived_effect::{
     UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveApplyReconciliation,
     UsrRollbackArchivedCandidatePreserveDurableEffectAuthority, UsrRollbackArchivedCandidatePreserveEffectLease,
+    UsrRollbackArchivedCandidatePreserveRecordAdvanceError,
 };
 
 #[cfg(test)]

@@ -1,6 +1,11 @@
 //! Shared fixtures for ActivateArchived candidate-preservation persistence.
 
-use std::{fs, os::unix::fs::MetadataExt as _, path::PathBuf};
+use std::{
+    ffi::OsString,
+    fs,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+    path::{Path, PathBuf},
+};
 
 use crate::{
     client::{
@@ -175,7 +180,67 @@ pub(super) fn expected_post_events(
     ]
 }
 
-fn identity(path: impl AsRef<std::path::Path>) -> (u64, u64) {
+fn identity(path: impl AsRef<Path>) -> (u64, u64) {
     let metadata = fs::metadata(path).unwrap();
     (metadata.dev(), metadata.ino())
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct NonJournalNamespaceEntry {
+    relative: PathBuf,
+    kind: &'static str,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+    length: u64,
+    payload: Vec<u8>,
+}
+
+pub(super) fn non_journal_namespace_snapshot(
+    fixture: &CandidatePreserveFixture,
+) -> Vec<NonJournalNamespaceEntry> {
+    let root = &fixture.fixture.installation.root;
+    let mut entries = Vec::new();
+    snapshot_non_journal(root, root, &mut entries);
+    entries
+}
+
+fn snapshot_non_journal(root: &Path, path: &Path, entries: &mut Vec<NonJournalNamespaceEntry>) {
+    let relative = path.strip_prefix(root).unwrap();
+    if relative == Path::new(".cast/journal") || relative.starts_with(".cast/journal/") {
+        return;
+    }
+    let metadata = fs::symlink_metadata(path).unwrap();
+    let file_type = metadata.file_type();
+    let (kind, payload) = if file_type.is_dir() {
+        ("directory", Vec::new())
+    } else if file_type.is_symlink() {
+        (
+            "symlink",
+            fs::read_link(path).unwrap().as_os_str().as_encoded_bytes().to_vec(),
+        )
+    } else {
+        ("file", fs::read(path).unwrap())
+    };
+    entries.push(NonJournalNamespaceEntry {
+        relative: relative.to_owned(),
+        kind,
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.permissions().mode(),
+        links: metadata.nlink(),
+        length: metadata.len(),
+        payload,
+    });
+    if file_type.is_dir() {
+        let mut children = fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<OsString>>();
+        children.sort();
+        for child in children {
+            snapshot_non_journal(root, &path.join(child), entries);
+        }
+    }
 }

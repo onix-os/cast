@@ -14,6 +14,7 @@ use crate::{
 use super::super::candidate_test_support::CandidateSource;
 use super::support::{
     CandidateOrigin, Epoch, assert_preserved, durable_authority, expected_candidate_preserved, fixture_for_origin,
+    non_journal_namespace_snapshot,
 };
 
 fn exercise_matrix(origin: CandidateOrigin) {
@@ -26,6 +27,7 @@ fn exercise_matrix(origin: CandidateOrigin) {
                 let reservation = ActiveStateReservation::acquire().unwrap();
                 reset_archived_candidate_preserve_move_attempt_count();
                 let authority = durable_authority(&fixture, &journal, &reservation, origin);
+                let namespace_before = non_journal_namespace_snapshot(&fixture);
                 let expected = expected_candidate_preserved(&fixture, origin);
 
                 let result = persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, authority);
@@ -51,6 +53,7 @@ fn exercise_matrix(origin: CandidateOrigin) {
                 assert_eq!(reopened.load().unwrap(), Some(expected.clone()));
                 assert_eq!(fixture.fixture.canonical_record(), expected);
                 assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
                 assert_eq!(
                     archived_candidate_preserve_move_attempt_count(),
                     usize::from(origin == CandidateOrigin::Applied)
@@ -83,6 +86,7 @@ fn startup_archived_candidate_preserve_persistence_changes_only_journal_after_du
     let reservation = ActiveStateReservation::acquire().unwrap();
     let authority = durable_authority(&fixture, &journal, &reservation, CandidateOrigin::Applied);
     let database_before = fixture.fixture.database_snapshot();
+    let namespace_before = non_journal_namespace_snapshot(&fixture);
     let canonical_before = fixture.fixture.canonical_bytes();
 
     let result = persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, authority);
@@ -92,5 +96,6 @@ fn startup_archived_candidate_preserve_persistence_changes_only_journal_after_du
     assert_ne!(fixture.fixture.canonical_bytes(), canonical_before);
     assert_eq!(reopened.load().unwrap(), Some(actual));
     assert_eq!(fixture.fixture.database_snapshot(), database_before);
+    assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
     assert_preserved(&fixture);
 }
