@@ -264,11 +264,14 @@ closure remain authoritative in `PLAN.md`.
   NewState generation 10, ActiveReblit generation 8, or ActivateArchived
   generation 6, and retains the exact successor inode with every earlier
   authority. The complete coordinator lane passes 97/97, its focused publication
-  lane passes 15/15, and the startup normalizer remains at 19/19. This production
-  implementation is deliberately unwired from startup: a durable
-  `RootLinksComplete` entry remains unchanged at `RecoveryPending`. The next
-  slice is phase-specific dispatcher/recovery that consumes the already-complete
-  root ABI rather than republishing it.
+  lane passes 15/15, and the startup normalizer remains at 19/19. Startup now
+  consumes that durable successor through commit `a4f16351`. Exact
+  durable `RootLinksComplete` + `POST` consumes a non-Clone predecessor-record
+  binding and persists one `RollbackDecided` without replaying root-ABI
+  publication or synchronization. Exact successor binding and an independent
+  canonical reopen make predecessor or successor inode replacement fail closed.
+  The entry stops at `RecoveryPending`; rollback-resume routing for this exact
+  source remains closed and is the next boundary.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect

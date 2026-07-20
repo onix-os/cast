@@ -580,12 +580,19 @@ Commit `03c5fd13` adds the independently reviewed production in-process
 after full preflight, publishes and synchronizes the retained no-replace root
 ABI once, repeats operation-specific evidence, conditionally advances only to
 the exact successor, and retains that successor inode with every earlier
-authority. The full coordinator lane passes 97/97, the focused publication lane
-passes 15/15, and the normalizer remains at 19/19. The implementation is
-deliberately unwired from startup: durable `RootLinksComplete` remains unchanged
-at blocker-free `RecoveryPending`. The next slice is phase-specific
-dispatcher/recovery that consumes the already-complete root ABI rather than
-republishing it.
+authority. Commit `a4f16351` then admits exact durable `RootLinksComplete` +
+`POST` during startup for all three operations only when the complete root ABI
+is already present. It consumes the exact non-Clone predecessor-record binding
+to persist one `RollbackDecided` with source `RootLinksComplete` and pending
+`/usr`, invokes neither root-ABI publication nor complete-set synchronization,
+verifies the exact successor binding, drops the old store, and independently
+reopens the canonical journal. Same-byte predecessor or successor replacement
+and uncertain storage outcomes never authorize success or retry. That entry
+stops at `RecoveryPending`; a fresh entry deliberately leaves the decision
+unchanged because rollback-resume routing for this source remains closed. The
+decision, journal, coordinator, publication, and normalizer lanes pass 15/15,
+85/85, 97/97, 15/15, and 19/19. Extending this source through the later rollback
+suffix is next.
 
 ### Startup reconciliation and interruption campaign
 

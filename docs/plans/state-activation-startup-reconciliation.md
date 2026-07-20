@@ -69,17 +69,13 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Its bounded retained inventory of every noncanonical root entry detects regular-file, symlink, and installation-root replacement races.
   This startup normalizer still cannot emit `RootLinksComplete`; canonical links stay complete through rollback. Commit `04911701` proves one entry for an intent source versus two for an initially incomplete exchanged source; complete-at-entry exchanged evidence needs one.
   Independently reviewed commit `03c5fd13` lands the production in-process `UsrExchanged` -> `RootLinksComplete` transition, with 97/97 coordinator, 15/15 focused publication, and 19/19 normalizer tests passing.
-  It remains deliberately unwired from startup: observing durable `RootLinksComplete` leaves the exact record unchanged at blocker-free `RecoveryPending`.
-  Next is phase-specific dispatcher/recovery that consumes the already-complete root ABI and never republishes it.
-
-  After final database/namespace/database and journal revalidation, the executor
-  derives exactly one successor with `rollback_decision` and attempts exactly
-  one conditional `advance`. It performs no namespace or database mutation,
-  retries no uncertain write, and executes no rollback, roll-forward, cleanup,
-  or trigger effect. The old authority and lock-bearing store are dropped before
-  a descriptor-rooted reopen; the complete canonical record must reconcile to
-  the exact source or exact decision, including all error-after-application
-  outcomes, before startup reports the result.
+  Commit `a4f16351` admits exact durable `RootLinksComplete` + `POST` during startup for all three operations only when all five canonical links are already exact; incomplete or `PRE` evidence remains non-mutating, and the entry invokes neither root-ABI publication nor complete-set synchronization.
+  Before namespace and database evidence, the decision authority captures the exact canonical predecessor binding: per-open store identity, complete record value, and retained inode.
+  Revalidation checks store identity first and consumes the non-Clone binding through one conditional `advance_record_binding`, deriving exactly one `RollbackDecided` with source `RootLinksComplete` and pending `/usr` without a namespace, database, trigger, rollback, or retry effect.
+  After the advance it authenticates the exact successor binding, drops the old lock-bearing store, and independently reopens the canonical journal.
+  Same-byte predecessor or successor inode replacement never becomes success; reopen classifies only the exact durable source or decision.
+  The handled entry returns `RecoveryPending` and never redispatches its successor. A fresh entry currently leaves that decision unchanged because rollback-resume routing does not yet admit `RootLinksComplete`.
+  The focused decision and direct journal lanes pass 15/15 and 85/85; extending this exact source through routing and the later rollback suffix is next.
 
   Commit `911dcbc` separated rollback routing from decision persistence.
   Startup deliberately permits only one recovery journal mutation per entry.
