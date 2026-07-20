@@ -381,7 +381,12 @@ fn assert_factory_override_semantics(declaration: &PackageSpec, plan: &Derivatio
             .iter()
             .map(|dependency| dependency.canonical_name())
             .collect::<Vec<_>>(),
-        ["binary(ninja)", "pkgconfig(zlib)", "pkgconfig(libressl)"]
+        [
+            "binary(sh)",
+            "binary(ninja)",
+            "pkgconfig(zlib)",
+            "pkgconfig(libressl)",
+        ]
     );
     let frozen_tools = plan
         .outputs
@@ -489,7 +494,12 @@ fn assert_output_policy_factory_semantics(declaration: &PackageSpec, plan: &Deri
             .iter()
             .map(|dependency| dependency.canonical_name())
             .collect::<Vec<_>>(),
-        ["binary(ninja)", "pkgconfig(zlib)", "pkgconfig(libressl)"]
+        [
+            "binary(sh)",
+            "binary(ninja)",
+            "pkgconfig(zlib)",
+            "pkgconfig(libressl)",
+        ]
     );
     for output in ["out", "devel"] {
         let frozen = plan
@@ -602,6 +612,7 @@ fn assert_platform_factory_semantics(declaration: &PackageSpec, plan: &Derivatio
             .map(|dependency| dependency.canonical_name())
             .collect::<Vec<_>>(),
         [
+            "binary(sh)",
             "binary(ninja)",
             "binary(protocol-compiler)",
             "pkgconfig(zlib)",

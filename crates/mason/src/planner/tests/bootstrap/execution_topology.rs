@@ -325,7 +325,7 @@ fn assert_cmake_zlib_relations(plan: &stone_recipe::derivation::DerivationPlan) 
             .iter()
             .map(|relation| relation.canonical_name())
             .collect::<Vec<_>>(),
-        ["binary(ninja)", "cmake(zlib)"],
+        ["binary(sh)", "binary(ninja)", "cmake(zlib)"],
         "cmake: manifest BuildDepends inputs drifted"
     );
 
@@ -388,6 +388,68 @@ fn assert_cmake_zlib_relations(plan: &stone_recipe::derivation::DerivationPlan) 
     );
 }
 
+fn assert_ninja_builder_tool_relations(
+    name: &str,
+    plan: &stone_recipe::derivation::DerivationPlan,
+    shell_index: u32,
+    ninja_index: u32,
+) {
+    let request = |requirement: &str| {
+        let matches = plan
+            .build_lock
+            .requests
+            .iter()
+            .filter(|request| request.request == requirement)
+            .collect::<Vec<_>>();
+        let [request] = matches.as_slice() else {
+            panic!("{name}: build lock must contain exactly one {requirement} request");
+        };
+        *request
+    };
+    for (requirement, package_id, package_name, version, index) in [
+        (
+            "binary(sh)",
+            NINJA_SHELL_DASH_PACKAGE_ID,
+            "dash",
+            "0.5.13.4-19-1",
+            shell_index,
+        ),
+        (
+            "binary(ninja)",
+            NINJA_PACKAGE_ID,
+            "ninja",
+            "1.13.2-6-1",
+            ninja_index,
+        ),
+    ] {
+        let locked = request(requirement);
+        assert_eq!(locked.package_id, package_id, "{name}: {requirement} provider drifted");
+        assert_eq!(locked.output, "out");
+        assert_eq!(
+            locked.origins,
+            [stone_recipe::derivation::InputOrigin::BuilderTool {
+                selection: stone_recipe::derivation::PackageInputSelection::Package,
+                index,
+            }],
+            "{name}: {requirement} must remain an exact BuilderTool input"
+        );
+        let provider = plan
+            .build_lock
+            .packages
+            .iter()
+            .find(|package| package.package_id == package_id)
+            .unwrap_or_else(|| panic!("{name}: {requirement} provider package is absent"));
+        assert_eq!(provider.name, package_name);
+        assert_eq!(provider.version, version);
+        assert_eq!(provider.architecture, "x86_64");
+        assert_eq!(provider.repository, "bootstrap");
+        assert_eq!(
+            provider.outputs.iter().map(|output| output.name.as_str()).collect::<Vec<_>>(),
+            ["out"]
+        );
+    }
+}
+
 fn assert_meson_dependency_role_relations(plan: &stone_recipe::derivation::DerivationPlan) {
     assert_eq!(
         plan.manifest_build_inputs
@@ -396,6 +458,7 @@ fn assert_meson_dependency_role_relations(plan: &stone_recipe::derivation::Deriv
             .collect::<Vec<_>>(),
         [
             "binary(cmake)",
+            "binary(sh)",
             "binary(ninja)",
             "binary(pkgconf)",
             "pkgconfig(zlib)",
@@ -758,6 +821,12 @@ fi
         })
         .collect::<Vec<_>>();
     assert_eq!(actual, expected, "{name}: frozen builder phase topology drifted");
+    if CMAKE_DERIVED_EXECUTION_FIXTURES.contains(&name) {
+        assert_ninja_builder_tool_relations(name, plan, 0, 1);
+    }
+    if MESON_DERIVED_EXECUTION_FIXTURES.contains(&name) {
+        assert_ninja_builder_tool_relations(name, plan, 1, 2);
+    }
     if name == "userspace-profile" {
         assert_userspace_profile_relations(plan);
     }

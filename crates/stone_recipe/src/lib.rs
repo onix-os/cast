@@ -39,6 +39,24 @@ mod test {
         for (logical_name, input) in inputs {
             let evaluated = package::evaluate_gluon(&GluonSource::new(logical_name, input)).unwrap();
             evaluated.package.validate().unwrap();
+            if logical_name == "tests/fixtures/llvm-stone.glu" {
+                assert_eq!(
+                    evaluated
+                        .package
+                        .builder
+                        .required_tools()
+                        .iter()
+                        .map(|dependency| dependency.dependency().unwrap().to_name())
+                        .collect::<Vec<_>>(),
+                    [
+                        "binary(cmake)",
+                        "binary(sh)",
+                        "binary(ninja)",
+                        "binary(perl)",
+                        "binary(python3)",
+                    ]
+                );
+            }
         }
     }
 }

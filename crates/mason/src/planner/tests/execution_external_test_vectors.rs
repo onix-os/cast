@@ -35,7 +35,7 @@ fn validate_external_test_vectors_contract(
     {
         return Err("external-test-vectors must declare only native binary(cp)".to_owned());
     }
-    if dependency_names(&package.builder.required_tools) != ["binary(ninja)"] {
+    if dependency_names(&package.builder.required_tools) != ["binary(sh)", "binary(ninja)"] {
         return Err("external-test-vectors CMake tool declaration drifted".to_owned());
     }
     if package.builder.phases.setup.steps

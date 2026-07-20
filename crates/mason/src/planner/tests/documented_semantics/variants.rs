@@ -37,7 +37,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
             .iter()
             .map(|relation| relation.canonical_name())
             .collect::<Vec<_>>(),
-        ["binary(ninja)", "pkgconfig(libressl)"]
+        ["binary(sh)", "binary(ninja)", "pkgconfig(libressl)"]
     );
     assert_locked_request_origin(
         plan,

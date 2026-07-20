@@ -8,8 +8,9 @@ let defaults = {
 
 let builder = \config -> b.builder.structured {
     // CMake and CTest are bound by the selected policy commands. Ninja is an
-    // indirect generator dependency and therefore remains explicit here.
-    required_tools = [b.dep.binary "ninja"],
+    // indirect generator dependency, and its hardcoded /bin/sh interface must
+    // be resolved explicitly in the hermetic root.
+    required_tools = [b.dep.binary "sh", b.dep.binary "ninja"],
     environment = [b.environment.cmake],
     phases = b.scripts {
         setup = b.phase [b.step.cmake_configure config.flags],

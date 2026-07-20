@@ -28,7 +28,13 @@ pub(super) fn assert_contract(
             .iter()
             .map(|relation| relation.canonical_name())
             .collect::<Vec<_>>(),
-        ["binary(cmake)", "binary(ninja)", "binary(pkgconf)", "binary(cp)"],
+        [
+            "binary(cmake)",
+            "binary(sh)",
+            "binary(ninja)",
+            "binary(pkgconf)",
+            "binary(cp)",
+        ],
         "multiple-sources: explicit raw copy must remain a native build input"
     );
 

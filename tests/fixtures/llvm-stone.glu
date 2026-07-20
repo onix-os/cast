@@ -98,6 +98,8 @@ let lld_development = {
 {
     builder = b.builder.shell scripts [
         b.dep.binary "cmake",
+        // The selected Ninja generator spawns hardcoded /bin/sh.
+        b.dep.binary "sh",
         b.dep.binary "ninja",
         b.dep.binary "perl",
         b.dep.binary "python3",

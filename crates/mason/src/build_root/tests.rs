@@ -233,6 +233,7 @@ fn selected_root_features_combine_typed_policy_and_builder_tools() {
         "base-build",
         "base-check",
         "base-native",
+        "binary(sh)",
         "binary(ninja)",
         "binary(g++)",
         "binary(gcc)",
@@ -275,10 +276,17 @@ fn selected_root_features_combine_typed_policy_and_builder_tools() {
             },
         ),
         (
-            "binary(ninja)",
+            "binary(sh)",
             InputOrigin::BuilderTool {
                 selection: PackageInputSelection::Package,
                 index: 0,
+            },
+        ),
+        (
+            "binary(ninja)",
+            InputOrigin::BuilderTool {
+                selection: PackageInputSelection::Package,
+                index: 1,
             },
         ),
         (

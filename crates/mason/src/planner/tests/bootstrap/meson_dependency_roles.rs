@@ -13,8 +13,14 @@ fn assert_meson_dependency_role_bootstrap_contract(
             .unwrap_or_else(|| panic!("missing bootstrap fixture `{name}`"))
     };
     let meson = fixture("meson");
-    assert_eq!(meson.package_ids.len(), 98, "meson: package closure size drift");
-    for required in [ZLIB_DEVEL_PACKAGE_ID, ZLIB_RUNTIME_PACKAGE_ID, FILE_PACKAGE_ID, LIBSECCOMP_PACKAGE_ID] {
+    assert_eq!(meson.package_ids.len(), 99, "meson: package closure size drift");
+    for required in [
+        NINJA_SHELL_DASH_PACKAGE_ID,
+        ZLIB_DEVEL_PACKAGE_ID,
+        ZLIB_RUNTIME_PACKAGE_ID,
+        FILE_PACKAGE_ID,
+        LIBSECCOMP_PACKAGE_ID,
+    ] {
         assert!(
             meson.package_ids.iter().any(|id| id == required),
             "meson: dependency-role closure is missing {required}"
@@ -25,7 +31,27 @@ fn assert_meson_dependency_role_bootstrap_contract(
         .iter()
         .map(|id| indexed[id].download_size.unwrap())
         .sum::<u64>();
-    assert_eq!(meson_download_bytes, 235_857_108, "meson: closure download bytes drifted");
+    assert_eq!(meson_download_bytes, 235_944_987, "meson: closure download bytes drifted");
+
+    for name in MESON_DERIVED_EXECUTION_FIXTURES {
+        let derived = fixture(name);
+        let shell_providers = derived
+            .package_ids
+            .iter()
+            .filter(|id| {
+                indexed[*id]
+                    .providers
+                    .iter()
+                    .any(|provider| provider.to_name() == "binary(sh)")
+            })
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shell_providers,
+            [NINJA_SHELL_DASH_PACKAGE_ID],
+            "{name}: binary(sh) must have one exact provider in its frozen closure"
+        );
+    }
 
     for sibling in closure.fixtures.iter().filter(|fixture| fixture.name != "meson") {
         assert!(

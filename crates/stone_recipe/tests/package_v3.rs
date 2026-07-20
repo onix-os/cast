@@ -82,7 +82,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     ));
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(ninja)"]
+        ["binary(sh)", "binary(ninja)"]
     );
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());

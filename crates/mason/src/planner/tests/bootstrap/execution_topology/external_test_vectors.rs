@@ -31,7 +31,7 @@ pub(super) fn assert_contract(
             .iter()
             .map(|relation| relation.canonical_name())
             .collect::<Vec<_>>(),
-        ["binary(ninja)", "binary(cp)"],
+        ["binary(sh)", "binary(ninja)", "binary(cp)"],
         "external-test-vectors: raw copy must remain an explicit native build input"
     );
     let [primary, vectors] = plan.sources.as_slice() else {
@@ -163,6 +163,14 @@ pub(super) fn assert_contract(
     };
     for (name, provider_name, origins) in [
         (
+            "binary(sh)",
+            "dash",
+            vec![stone_recipe::derivation::InputOrigin::BuilderTool {
+                selection: stone_recipe::derivation::PackageInputSelection::Package,
+                index: 0,
+            }],
+        ),
+        (
             "binary(cmake)",
             "cmake",
             vec![
@@ -181,7 +189,7 @@ pub(super) fn assert_contract(
             "ninja",
             vec![stone_recipe::derivation::InputOrigin::BuilderTool {
                 selection: stone_recipe::derivation::PackageInputSelection::Package,
-                index: 0,
+                index: 1,
             }],
         ),
     ] {

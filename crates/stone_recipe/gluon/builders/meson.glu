@@ -7,8 +7,11 @@ let defaults = {
 }
 
 let builder = \config -> b.builder.structured {
+    // Meson delegates builds to Ninja. Resolve Ninja's hardcoded /bin/sh
+    // interface explicitly instead of relying on an ambient root shell.
     required_tools = [
         b.dep.binary "cmake",
+        b.dep.binary "sh",
         b.dep.binary "ninja",
         b.dep.binary "pkgconf",
     ],

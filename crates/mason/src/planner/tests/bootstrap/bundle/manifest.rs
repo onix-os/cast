@@ -35,14 +35,22 @@ fn assert_manifests(
     if fixture == "cmake" {
         assert_eq!(
             expected_build_dependencies,
-            BTreeSet::from(["binary(ninja)".to_owned(), "cmake(zlib)".to_owned()]),
+            BTreeSet::from([
+                "binary(sh)".to_owned(),
+                "binary(ninja)".to_owned(),
+                "cmake(zlib)".to_owned(),
+            ]),
             "cmake: exact manifest BuildDepends contract drifted"
         );
     }
     if fixture == "external-test-vectors" {
         assert_eq!(
             expected_build_dependencies,
-            BTreeSet::from(["binary(cp)".to_owned(), "binary(ninja)".to_owned()]),
+            BTreeSet::from([
+                "binary(cp)".to_owned(),
+                "binary(sh)".to_owned(),
+                "binary(ninja)".to_owned(),
+            ]),
             "external-test-vectors: exact raw-corpus BuildDepends contract drifted"
         );
     }
@@ -51,6 +59,7 @@ fn assert_manifests(
             expected_build_dependencies,
             BTreeSet::from([
                 "binary(cmake)".to_owned(),
+                "binary(sh)".to_owned(),
                 "binary(file)".to_owned(),
                 "binary(ninja)".to_owned(),
                 "binary(pkgconf)".to_owned(),

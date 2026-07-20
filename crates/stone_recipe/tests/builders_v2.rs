@@ -57,7 +57,12 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
 
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(cmake)", "binary(ninja)", "binary(pkgconf)"]
+        [
+            "binary(cmake)",
+            "binary(sh)",
+            "binary(ninja)",
+            "binary(pkgconf)",
+        ]
     );
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::Meson]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
@@ -93,7 +98,7 @@ fn cmake_builder_returns_tools_environment_phases_and_hooks() {
 
     assert_eq!(
         dependency_names(evaluated.package.builder.required_tools()),
-        ["binary(ninja)"]
+        ["binary(sh)", "binary(ninja)"]
     );
     assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
     assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());

@@ -16,10 +16,10 @@ fn assert_external_test_vectors_bootstrap_contract(
     };
     let external = fixture("external-test-vectors");
     let cmake = fixture("daemon-generated");
-    assert_eq!(external.package_ids.len(), 94, "external-test-vectors: CMake closure size drift");
+    assert_eq!(external.package_ids.len(), 95, "external-test-vectors: CMake closure size drift");
     assert_eq!(
         external.package_ids, cmake.package_ids,
-        "external-test-vectors: existing CMake closure must already cover Bash and the explicit copy tool"
+        "external-test-vectors: existing CMake closure must already cover Bash, Dash, and the explicit copy tool"
     );
 
     for (request, expected_name) in [
@@ -27,6 +27,7 @@ fn assert_external_test_vectors_bootstrap_contract(
         ("binary(cmake)", "cmake"),
         ("binary(cp)", "uutils-coreutils"),
         ("binary(ctest)", "cmake"),
+        ("binary(sh)", "dash"),
         ("binary(ninja)", "ninja"),
     ] {
         let providers = external
@@ -38,5 +39,8 @@ fn assert_external_test_vectors_bootstrap_contract(
             panic!("external-test-vectors: {request} must have one exact provider in its frozen closure");
         };
         assert_eq!(indexed[*provider].name.as_str(), expected_name);
+        if request == "binary(sh)" {
+            assert_eq!(provider.as_str(), NINJA_SHELL_DASH_PACKAGE_ID);
+        }
     }
 }

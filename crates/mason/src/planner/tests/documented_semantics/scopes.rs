@@ -43,7 +43,12 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
             .iter()
             .map(|relation| relation.canonical_name())
             .collect::<Vec<_>>(),
-        ["binary(ninja)", "pkgconfig(zlib)", "pkgconfig(libressl)"]
+        [
+            "binary(sh)",
+            "binary(ninja)",
+            "pkgconfig(zlib)",
+            "pkgconfig(libressl)",
+        ]
     );
     for (request, index) in [("pkgconfig(zlib)", 0), ("pkgconfig(libressl)", 1)] {
         assert_locked_request_origin(
