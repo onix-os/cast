@@ -80,8 +80,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
   to `BootRepairRequired`; a separately observed `BootRepairStarted` record is
   retained as terminal `BootRepairUnverified` without invoking boot again.
-  The v2 journal domain can now represent explicit `Applied` and
-  `AlreadySatisfied` repair completion, but no production path emits it.
+  The v2 journal domain can represent explicit `Applied` and
+  `AlreadySatisfied` repair completion, and commit `ffc32ce1` production-routes
+  an already durable `BootRepairComplete` record to `RollbackComplete`. No
+  production path performs the repair or emits that successful record.
   The complete ActivateArchived rollback suffix now reaches that same
   authenticated clean-startup handoff. Roll-forward execution, the actual boot
   repair effect and its durable publisher, and cleanup are not implemented.

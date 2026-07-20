@@ -36,7 +36,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   shared clean admission; the completion route never redispatches its successor. An exact `BootSyncStarted`
   rollback instead routes `CandidatePreserved` only to `BootRepairRequired`; the actual repair attempt remains
   unwired. A fresh startup observing `BootRepairStarted` invokes boot zero times and persists terminal
-  `BootRepairUnverified` rather than guessing whether an interrupted effect applied. Payload v2 can represent typed successful completion, but no production entry emits that domain.
+  `BootRepairUnverified` rather than guessing whether an interrupted effect applied. Payload v2 can represent typed successful completion, and commit `ffc32ce1` routes an already durable `BootRepairComplete` record to `RollbackComplete`; no production entry performs the repair or emits that completion domain.
   Each entry recaptures authority from the current canonical record and fresh
   database and namespace evidence, admits at most one preparation/effect
   checkpoint, at most one journal advance, or one terminal deletion, then

@@ -689,7 +689,11 @@ preserves the candidate, invalidates the exact fresh row, reaches `RollbackCompl
 journal absence. ActiveReblit with no required boot repair advances from `CandidatePreserved` to `RollbackComplete`, then
 finalizes separately. A `BootSyncStarted` rollback instead routes `CandidatePreserved` to `BootRepairRequired`; no boot
 effect is wired, and a fresh startup observing `BootRepairStarted` invokes boot zero times and retains terminal
-`BootRepairUnverified` evidence. Commit `406cabe5` adds the versioned, explicit `BootRepairComplete` success vocabulary without dispatching it; commit `19f60c51` adds the 28-case NewState candidate-move matrix.
+`BootRepairUnverified` evidence. Commit `406cabe5` adds the versioned, explicit
+`BootRepairComplete` success vocabulary. Commit `ffc32ce1` production-routes an
+already durable successful repair record to `RollbackComplete`, but no
+production path performs the repair or emits that successful record. Commit
+`19f60c51` adds the 28-case NewState candidate-move matrix.
 ActiveReblit retains its 12-case terminal and 32-case wrapper-exchange matrices; ActivateArchived retains its 12-case terminal and 28-case preservation matrices.
 Every process-death matrix remains same-boot `SIGKILL` evidence, not reboot or power-loss proof.
 
