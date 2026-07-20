@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, os::unix::fs::MetadataExt as _};
 
 use crate::{
     client::{
@@ -8,6 +8,7 @@ use crate::{
             usr_exchanged_root_abi_publication_attempts,
         },
     },
+    transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
     transition_journal::{
         Phase, RecoveryDisposition, TransitionJournalStore, arm_next_displaced_unlink_fault,
         arm_next_temporary_sync_fault, arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
@@ -23,24 +24,45 @@ use super::{
 };
 
 #[test]
-fn startup_root_links_complete_next_entry_stops_at_exact_decision_until_route_is_admitted() {
+fn startup_root_links_complete_next_entry_routes_exact_decision_without_reverse_effect() {
     for kind in OperationKind::ALL {
         let fixture = Fixture::new(kind, SourceCase::RootLinksCompletePost);
         reset_usr_exchanged_root_abi_effect_counts();
+        reset_retained_exchange_syscall_count();
         let first = fixture.enter();
         assert_eq!(pending(&first).phase(), Phase::RollbackDecided, "{kind:?}");
         drop(first);
         let decision = fixture.canonical_record();
         fixture.assert_exact_decision(&decision);
-        let decision_bytes = fixture.canonical_bytes();
+        let reverse_intent = decision.rollback_successor(None).unwrap();
+        assert_eq!(reverse_intent.phase, Phase::ReverseExchangeIntent, "{kind:?}");
+        let database_before = fixture.database_snapshot();
+        let usr_before = directory_identity(&fixture.installation.root.join("usr"));
 
         let second = fixture.enter();
-        assert_eq!(pending(&second).phase(), Phase::RollbackDecided, "{kind:?}");
-        assert_eq!(fixture.canonical_record(), decision, "{kind:?}");
-        assert_eq!(fixture.canonical_bytes(), decision_bytes, "{kind:?}");
+        assert_eq!(pending(&second).phase(), Phase::ReverseExchangeIntent, "{kind:?}");
+        assert_eq!(
+            pending(&second).disposition(),
+            RecoveryDisposition::ResumeRollback {
+                phase: Phase::ReverseExchangeIntent,
+            },
+            "{kind:?}"
+        );
+        assert!(pending(&second).blockers().is_empty(), "{kind:?}");
+        assert_eq!(fixture.canonical_record(), reverse_intent, "{kind:?}");
+        assert_eq!(fixture.database_snapshot(), database_before, "{kind:?}");
+        assert_eq!(directory_identity(&fixture.installation.root.join("usr")), usr_before, "{kind:?}");
+        assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?}");
         assert_eq!(usr_exchanged_root_abi_publication_attempts(), 0, "{kind:?}");
         assert_eq!(usr_exchanged_root_abi_complete_sync_attempts(), 0, "{kind:?}");
+        fixture.assert_complete_root_abi();
     }
+}
+
+fn directory_identity(path: &std::path::Path) -> (u64, u64) {
+    let metadata = fs::symlink_metadata(path).unwrap();
+    assert!(metadata.is_dir());
+    (metadata.dev(), metadata.ino())
 }
 
 #[test]

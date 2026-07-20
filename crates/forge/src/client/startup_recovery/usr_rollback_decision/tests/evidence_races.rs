@@ -25,7 +25,9 @@ use crate::{
 use super::{
     super::{
         DurableUsrRollbackDecisionRecord, UsrRollbackDecisionPersistenceError,
-        UsrRollbackDecisionSuccessorBindingError, arm_before_usr_rollback_decision_final_revalidation,
+        UsrRollbackDecisionSuccessorBindingError,
+        arm_after_usr_rollback_decision_successor_binding_check_before_reopen,
+        arm_before_usr_rollback_decision_final_revalidation,
         arm_before_usr_rollback_decision_successor_binding_revalidation,
     },
     fixture::{Fixture, OperationKind, SourceCase, canonical_journal, create_private_directory, pending},
@@ -85,6 +87,61 @@ fn startup_root_links_complete_successor_same_byte_replacement_reopens_but_never
     let retained = fs::symlink_metadata(displaced).unwrap();
     let replacement = fs::symlink_metadata(canonical).unwrap();
     assert_ne!((retained.dev(), retained.ino()), (replacement.dev(), replacement.ino()));
+}
+
+#[test]
+fn startup_root_links_complete_successor_same_byte_replacement_after_binding_before_reopen_never_succeeds() {
+    for historical in [false, true] {
+        for kind in OperationKind::ALL {
+            let fixture = if historical {
+                Fixture::historical(kind, SourceCase::RootLinksCompletePost)
+            } else {
+                Fixture::new(kind, SourceCase::RootLinksCompletePost)
+            };
+            let canonical = canonical_journal(&fixture.installation.root);
+            let displaced = fixture
+                .installation
+                .root
+                .join("root-links-complete-bound-successor-displaced");
+            let hook_canonical = canonical.clone();
+            let hook_displaced = displaced.clone();
+            arm_after_usr_rollback_decision_successor_binding_check_before_reopen(move || {
+                let bytes = fs::read(&hook_canonical).unwrap();
+                fs::rename(&hook_canonical, &hook_displaced).unwrap();
+                fs::write(&hook_canonical, bytes).unwrap();
+                fs::set_permissions(&hook_canonical, fs::Permissions::from_mode(0o600)).unwrap();
+            });
+
+            let error = fixture.enter();
+
+            assert!(
+                matches!(
+                    error,
+                    startup_gate::Error::UsrRollbackDecisionPersistence(
+                        UsrRollbackDecisionPersistenceError::SuccessorRecordBinding {
+                            durable: DurableUsrRollbackDecisionRecord::Decision,
+                            source: UsrRollbackDecisionSuccessorBindingError::Changed,
+                        }
+                    )
+                ),
+                "{kind:?} historical={historical}: {error:?}"
+            );
+            let decision = fixture.canonical_record();
+            fixture.assert_exact_decision(&decision);
+            assert_eq!(
+                fs::read(&displaced).unwrap(),
+                fixture.canonical_bytes(),
+                "{kind:?} historical={historical}"
+            );
+            let retained = fs::symlink_metadata(displaced).unwrap();
+            let replacement = fs::symlink_metadata(canonical).unwrap();
+            assert_ne!(
+                (retained.dev(), retained.ino()),
+                (replacement.dev(), replacement.ino()),
+                "{kind:?} historical={historical}"
+            );
+        }
+    }
 }
 
 #[test]

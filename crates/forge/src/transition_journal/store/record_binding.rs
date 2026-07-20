@@ -55,13 +55,38 @@ impl TransitionJournalStore {
         if !self.has_record_store_binding(expected) || expected.record != *record {
             return Ok(false);
         }
+        self.has_public_record_inode_binding(cast_directory, expected, record)
+    }
+
+    /// Reauthenticate a freshly reopened store against the exact public
+    /// record inode retained by a predecessor store's successful bound
+    /// advance. This deliberately does not compare the per-open store marker:
+    /// the old lock-bearing store must be gone before the new store can open.
+    pub(crate) fn has_reopened_record_binding(
+        &self,
+        cast_directory: &std::fs::File,
+        expected: &TransitionJournalRecordBinding,
+        record: &TransitionRecord,
+    ) -> Result<bool, StorageError> {
+        if expected.record != *record {
+            return Ok(false);
+        }
+        self.has_public_record_inode_binding(cast_directory, expected, record)
+    }
+
+    fn has_public_record_inode_binding(
+        &self,
+        cast_directory: &std::fs::File,
+        expected: &TransitionJournalRecordBinding,
+        record: &TransitionRecord,
+    ) -> Result<bool, StorageError> {
         let _operation = self.lock_operation()?;
         let Some(loaded) = self.load_pinned_revalidated_retained_cast_locked(cast_directory)? else {
             return Ok(false);
         };
         let retained = inode_identity(&expected.canonical)
             .map_err(|source| StorageError::ValidateCanonical { source })?;
-        Ok(loaded.record == expected.record && loaded.identity == retained)
+        Ok(loaded.record == expected.record && loaded.record == *record && loaded.identity == retained)
     }
 
     /// Consume one exact predecessor binding and durably publish one legal

@@ -11,7 +11,9 @@ use thiserror::Error;
 
 use crate::{
     installation,
-    transition_journal::{CodecError, StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        CodecError, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::super::startup_reconciliation::{
@@ -30,7 +32,7 @@ pub(in crate::client) enum DurableUsrRollbackDecisionRecord {
 }
 
 enum UsrRollbackDecisionAdvanceOutcome {
-    Published,
+    Published(TransitionJournalRecordBinding),
     StorageFailed(StorageError),
     SuccessorBindingFailed(UsrRollbackDecisionSuccessorBindingError),
 }
@@ -70,13 +72,18 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
                     .map_err(UsrRollbackDecisionSuccessorBindingError::Storage),
                 Err(source) => Err(UsrRollbackDecisionSuccessorBindingError::Installation(source)),
             };
-            drop(successor_binding);
             match exact {
-                Ok(true) => UsrRollbackDecisionAdvanceOutcome::Published,
-                Ok(false) => UsrRollbackDecisionAdvanceOutcome::SuccessorBindingFailed(
-                    UsrRollbackDecisionSuccessorBindingError::Changed,
-                ),
-                Err(source) => UsrRollbackDecisionAdvanceOutcome::SuccessorBindingFailed(source),
+                Ok(true) => UsrRollbackDecisionAdvanceOutcome::Published(successor_binding),
+                Ok(false) => {
+                    drop(successor_binding);
+                    UsrRollbackDecisionAdvanceOutcome::SuccessorBindingFailed(
+                        UsrRollbackDecisionSuccessorBindingError::Changed,
+                    )
+                }
+                Err(source) => {
+                    drop(successor_binding);
+                    UsrRollbackDecisionAdvanceOutcome::SuccessorBindingFailed(source)
+                }
             }
         }
         Err(UsrRollbackDecisionRecordAdvanceError::Authority(source)) => {
@@ -97,10 +104,38 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
     // alive would deadlock.
     drop(journal);
 
+    if let UsrRollbackDecisionAdvanceOutcome::Published(_) = &advance {
+        after_usr_rollback_decision_successor_binding_check_before_reopen();
+    }
     let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackDecisionReopenError::from);
     match advance {
-        UsrRollbackDecisionAdvanceOutcome::Published => match reopened {
-            Ok((reopened, Some(actual))) if actual == decision => Ok((reopened, decision)),
+        UsrRollbackDecisionAdvanceOutcome::Published(successor_binding) => match reopened {
+            Ok((reopened, Some(actual))) if actual == decision => {
+                let exact = revalidate_reopened_decision_binding(
+                    &installation,
+                    &reopened,
+                    &successor_binding,
+                    &decision,
+                );
+                drop(successor_binding);
+                match exact {
+                    Ok(true) => Ok((reopened, decision)),
+                    Ok(false) => {
+                        drop(reopened);
+                        Err(UsrRollbackDecisionPersistenceError::SuccessorRecordBinding {
+                            durable: DurableUsrRollbackDecisionRecord::Decision,
+                            source: UsrRollbackDecisionSuccessorBindingError::Changed,
+                        })
+                    }
+                    Err(source) => {
+                        drop(reopened);
+                        Err(UsrRollbackDecisionPersistenceError::SuccessorRecordBinding {
+                            durable: DurableUsrRollbackDecisionRecord::Decision,
+                            source,
+                        })
+                    }
+                }
+            }
             Ok((reopened, actual)) => {
                 drop(reopened);
                 Err(UsrRollbackDecisionPersistenceError::ReopenAfterSuccessfulAdvance {
@@ -166,6 +201,27 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
     }
 }
 
+fn revalidate_reopened_decision_binding(
+    installation: &crate::Installation,
+    journal: &TransitionJournalStore,
+    successor_binding: &TransitionJournalRecordBinding,
+    decision: &TransitionRecord,
+) -> Result<bool, UsrRollbackDecisionSuccessorBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackDecisionSuccessorBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(UsrRollbackDecisionSuccessorBindingError::Installation)?;
+    let exact = journal
+        .has_reopened_record_binding(cast, successor_binding, decision)
+        .map_err(UsrRollbackDecisionSuccessorBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackDecisionSuccessorBindingError::Installation)?;
+    Ok(exact)
+}
+
 fn unexpected_record(
     source: &TransitionRecord,
     decision: &TransitionRecord,
@@ -183,6 +239,8 @@ std::thread_local! {
     static BEFORE_FINAL_AUTHORITY_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
     static BEFORE_SUCCESSOR_BINDING_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -224,6 +282,27 @@ fn before_usr_rollback_decision_successor_binding_revalidation() {
 
 #[cfg(not(test))]
 fn before_usr_rollback_decision_successor_binding_revalidation() {}
+
+#[cfg(test)]
+pub(crate) fn arm_after_usr_rollback_decision_successor_binding_check_before_reopen(
+    hook: impl FnOnce() + 'static,
+) {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_usr_rollback_decision_successor_binding_check_before_reopen() {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_usr_rollback_decision_successor_binding_check_before_reopen() {}
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum UsrRollbackDecisionSuccessorBindingError {

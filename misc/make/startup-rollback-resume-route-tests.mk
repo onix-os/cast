@@ -5,7 +5,7 @@ forge-startup-usr-rollback-resume-route-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_recovery::usr_rollback_resume_route::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 20; \
+	timeout 10s test "$$count" = 21; \
 	for test in \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_pending_matrix_persists_reverse_exchange_intent \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_satisfied_matrix_skips_reverse_exchange \
@@ -25,6 +25,7 @@ forge-startup-usr-rollback-resume-route-test:
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_matrix::startup_root_links_complete_post_layout_defers_codec_valid_wrong_plans_across_operations_and_epochs \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_predecessor_replacement_breaks_exact_binding \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_successor_replacement_reopens_but_never_succeeds \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_successor_replacement_after_binding_before_reopen_never_succeeds \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_storage_faults::startup_root_links_complete_route_all_storage_faults_reopen_exact_record_across_operations_and_epochs \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_endpoint::startup_root_links_complete_fresh_entries_stop_at_exact_reverse_intent_across_operations_and_epochs \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored; do \
@@ -63,6 +64,9 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s test "$$clone_line" -lt "$$advance_line"; \
 	timeout 10s test "$$advance_line" -lt "$$drop_journal_line"; \
 	timeout 10s test "$$drop_journal_line" -lt "$$reopen_line"; \
+	seam_line="$$( timeout 10s grep -nF '        after_usr_rollback_resume_route_successor_binding_check_before_reopen();' "$$executor" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$drop_journal_line" -lt "$$seam_line"; \
+	timeout 10s test "$$seam_line" -lt "$$reopen_line"; \
 	suffix="$$( timeout 10s sed -n '/    let advance = match authority.advance_record_binding/,/    let reopened = reopen_canonical_journal/p' "$$executor" )"; \
 	if timeout 10s grep -Fq 'drop(authority)' <<<"$$suffix"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc '            drop(journal);' <<<"$$suffix" )" = 2; \
@@ -139,7 +143,8 @@ forge-startup-usr-rollback-resume-route-test:
 	if timeout 10s rg -n 'forward_successor|RollbackActionOutcome|transition_identity|linux_fs|std::fs|nix::|renameat|unlinkat|linkat|sync_all|sync_data|write_all|set_permissions|create_dir|remove_dir|remove_file|hard_link|symlink|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|exchange_forward|exchange_reverse|remove_exact_archived|add_with_transition|insert_fresh_metadata|delete_metadata_provenance|clear_transition_if_matches|remove_transition_if_matches|\.add\(|\.remove\(|\.batch_remove\(|\.execute\(|\.transaction\(|\.delete\(' "$$executor" "$$authority" "$$proof" "$$reopen"; then exit 1; fi; \
 	if timeout 10s rg -n 'PendingSystemTransition|ActivationNamespaceEvidence' "$$executor" "$$authority" "$$proof"; then exit 1; fi; \
 	timeout 10s awk '$$0 == "pub(in crate::client) fn persist_usr_rollback_resume_route_and_reopen(" { state = 1; next } state == 1 && $$0 == "    journal: TransitionJournalStore," { state = 2; next } state == 2 && $$0 ~ /authority: UsrRollbackResumeRouteAuthority/ { found = 1 } END { exit !found }' "$$executor"; \
-	if timeout 10s rg -n 'journal: &[[:space:]]*TransitionJournalStore' "$$executor"; then exit 1; fi; \
+	persist_signature="$$( timeout 10s sed -n '/^pub(in crate::client) fn persist_usr_rollback_resume_route_and_reopen(/,/^)/p' "$$executor" )"; \
+	if timeout 10s rg -n 'journal: &[[:space:]]*TransitionJournalStore' <<<"$$persist_signature"; then exit 1; fi; \
 	timeout 10s grep -Fq 'if actual == source_record' "$$executor"; \
 	timeout 10s grep -Fq 'if actual == successor' "$$executor"; \
 	seal_count="$$( timeout 10s rg -n '^pub\(in crate::client\) struct UsrRollbackResumeRouteSeal \{' "$$startup_gate" | timeout 10s wc -l )"; \
@@ -156,6 +161,13 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'require_journal_record_binding(' "$$authority" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'journal.has_record_binding(cast, binding, record)?' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.has_record_binding(cast, &successor_binding, &successor)' "$$executor" )" = 1; \
+	timeout 10s grep -Fqx '    Published(TransitionJournalRecordBinding),' "$$executor"; \
+	timeout 10s grep -Fqx '        UsrRollbackResumeRouteAdvanceOutcome::Published(successor_binding) => match reopened {' "$$executor"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.has_reopened_record_binding(cast, successor_binding, successor)' "$$executor" )" = 1; \
+	reopened_binding_helper="$$( timeout 10s sed -n '/^fn revalidate_reopened_route_binding(/,/^}/p' "$$executor" )"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.revalidate_mutable_namespace()' <<<"$$reopened_binding_helper" )" = 2; \
+	timeout 10s grep -Fq '.has_reopened_record_binding(cast, successor_binding, successor)' <<<"$$reopened_binding_helper"; \
+	timeout 10s grep -Fq 'arm_after_usr_rollback_resume_route_successor_binding_check_before_reopen' "$$executor"; \
 	binding_helper="$$( timeout 10s sed -n '/^fn require_journal_record_binding(/,/^}/p' "$$authority" )"; \
 	timeout 10s grep -Fq '    if !journal.has_record_store_binding(binding) {' <<<"$$binding_helper"; \
 	store_binding_line="$$( timeout 10s grep -nF '    if !journal.has_record_store_binding(binding) {' <<<"$$binding_helper" | timeout 10s cut -d: -f1 )"; \

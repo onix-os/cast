@@ -181,3 +181,49 @@ fn bound_record_advance_faults_expose_only_the_predecessor_or_successor() {
         assert_eq!(store.load().unwrap(), Some(if successor_visible { next } else { current }));
     }
 }
+
+#[test]
+fn reopened_record_binding_accepts_the_retained_exact_successor_after_old_store_drop() {
+    let (temporary, store, cast, current, binding) = bound_usr_exchanged_fixture();
+    let next = legal_forward_advance(&current);
+    let successor = store.advance_record_binding(&cast, binding, &next).unwrap();
+    drop(store);
+
+    let reopened = TransitionJournalStore::open_in_retained_cast(&cast, temporary.path()).unwrap();
+
+    assert!(
+        reopened
+            .has_reopened_record_binding(&cast, &successor, &next)
+            .unwrap()
+    );
+    assert!(!reopened.has_record_store_binding(&successor));
+    assert_eq!(reopened.load_revalidated_retained_cast(&cast).unwrap(), Some(next));
+}
+
+#[test]
+fn reopened_record_binding_rejects_same_bytes_successor_replacement_before_reopen() {
+    let (temporary, store, cast, current, binding) = bound_usr_exchanged_fixture();
+    let next = legal_forward_advance(&current);
+    let successor = store.advance_record_binding(&cast, binding, &next).unwrap();
+    let canonical_path = canonical(temporary.path());
+    let displaced = temporary.path().join("reopened-bound-successor-displaced");
+    let bytes = fs::read(&canonical_path).unwrap();
+    drop(store);
+    fs::rename(&canonical_path, &displaced).unwrap();
+    fs::write(&canonical_path, &bytes).unwrap();
+    fs::set_permissions(&canonical_path, fs::Permissions::from_mode(0o600)).unwrap();
+
+    let reopened = TransitionJournalStore::open_in_retained_cast(&cast, temporary.path()).unwrap();
+
+    assert!(
+        !reopened
+            .has_reopened_record_binding(&cast, &successor, &next)
+            .unwrap()
+    );
+    assert_eq!(reopened.load_revalidated_retained_cast(&cast).unwrap(), Some(next));
+    assert_eq!(fs::read(&displaced).unwrap(), bytes);
+    let retained = fs::symlink_metadata(displaced).unwrap();
+    let replacement = fs::symlink_metadata(canonical_path).unwrap();
+    assert_ne!((retained.dev(), retained.ino()), (replacement.dev(), replacement.ino()));
+    assert_no_journal_temporaries(temporary.path());
+}
