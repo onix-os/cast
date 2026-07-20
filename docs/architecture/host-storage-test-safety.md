@@ -105,3 +105,32 @@ must fail closed unless all of the following are true:
 The user supplies and destroys the VM. The repository must not auto-select a
 hypervisor, attach a host disk, probe the host ESP, or fall back from a missing
 VM to local execution.
+
+## Guest readiness and boot-mode proof
+
+A reachable VM is not automatically an admissible destructive test target.
+Before the first disk or boot mutation, the operator must record a bounded,
+read-only readiness inventory covering the guest OS and kernel, boot mode,
+privilege path, block topology, mounted filesystems, available capacity, and
+required build and storage tools. Inventory failure is a test-environment
+failure; it never permits a local fallback.
+
+The integration lane additionally requires:
+
+- a persistent checkout and build directory on the guest filesystem rather
+  than `/tmp`, `/dev/shm`, or another capacity-limited memory filesystem;
+- explicit noninteractive root authority provisioned for the dedicated lane;
+  group membership, an interactive password prompt, and container-manager
+  privileges are not substitutes;
+- a VM snapshot taken before destructive work and a separate disposable target
+  disk whose identity is authenticated independently of the guest system disk;
+- an explicit firmware claim: legacy BIOS exercises only the BIOS/GRUB lane,
+  while ESP or XBOOTLDR tests require a UEFI guest with an actual disposable
+  GPT/ESP topology; and
+- capture of the guest boot ID and selected disk identity before every run and
+  after every expected reboot, with reconnection failure reported rather than
+  repaired through an unrequested hypervisor reset.
+
+Repository transfer, compilation, and non-destructive systemd or namespace
+checks may precede destructive admission. They do not waive any disk, firmware,
+snapshot, privilege, or reboot requirement above.
