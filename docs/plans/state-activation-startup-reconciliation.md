@@ -67,10 +67,10 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   installation root before decision evidence is captured again from scratch.
   The authority authenticates exact public `.cast`, journal-directory, lock, and record identities, retaining the admitted record inode through `Arc<File>`.
   Its bounded retained inventory of every noncanonical root entry detects regular-file, symlink, and installation-root replacement races.
-  It cannot emit `RootLinksComplete`; canonical links stay complete through
-  rollback. Commit `04911701` proves one entry for an intent source versus two
-  for an initially incomplete exchanged source; complete-at-entry exchanged evidence needs one, with 82/82 coordinator and 19/19 normalizer tests.
-  Next is an exact bound-record advance and in-process `UsrExchanged` -> `RootLinksComplete`; startup cannot advance there before its dispatcher exists.
+  This startup normalizer still cannot emit `RootLinksComplete`; canonical links stay complete through rollback. Commit `04911701` proves one entry for an intent source versus two for an initially incomplete exchanged source; complete-at-entry exchanged evidence needs one.
+  Independently reviewed commit `03c5fd13` lands the production in-process `UsrExchanged` -> `RootLinksComplete` transition, with 97/97 coordinator, 15/15 focused publication, and 19/19 normalizer tests passing.
+  It remains deliberately unwired from startup: observing durable `RootLinksComplete` leaves the exact record unchanged at blocker-free `RecoveryPending`.
+  Next is phase-specific dispatcher/recovery that consumes the already-complete root ABI and never republishes it.
 
   After final database/namespace/database and journal revalidation, the executor
   derives exactly one successor with `rollback_decision` and attempts exactly

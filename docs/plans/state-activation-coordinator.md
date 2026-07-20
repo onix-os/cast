@@ -25,16 +25,17 @@ closure remain authoritative in `PLAN.md`.
 
 ## Operation-specific prefix and state machine
 
-  As of 2026-07-16, one intentionally unwired coordinator contract owns the
-  durable prefix through `CandidatePrepared` for all three operations. While
+  As of 2026-07-20, one intentionally unwired coordinator contract owns the
+  durable prefix through `RootLinksComplete` for all three operations. While
   that phase remains canonical, ActiveReblit must consume a sealed,
   non-trigger-ready typestate to reserve the exact replacement wrapper and
   park the authenticated previous-marker link. Both NewState and the reserved
   ActiveReblit path must then publish and retain the exact transaction-isolation
   ABI before acquiring trigger authority. The coordinator owns the internal
   transaction-trigger sequence through `TransactionTriggersComplete`, the
-  common intent-only boundary through `UsrExchangeIntent`, and the one-shot
-  exchange effect through durable `UsrExchanged`. A typed request makes the
+  common intent-only boundary through `UsrExchangeIntent`, the one-shot
+  exchange effect through durable `UsrExchanged`, and retained root-ABI
+  publication through its exact bound `RootLinksComplete` successor. A typed request makes the
   legal state relationships explicit: a new state has no
   candidate ID and classifies its previous tree as an active state,
   synthesized empty tree, or unmanaged tree; archived activation has distinct
@@ -255,12 +256,19 @@ closure remain authoritative in `PLAN.md`.
   recovery proof with that ordering: an `UsrExchangeIntent` source reaches its
   pending rollback decision in one startup entry, while an initially incomplete
   `UsrExchanged` source uses one normalization entry and a second decision entry;
-  complete-at-entry reaches the decision in one. The complete
-  coordinator lane passes 82/82 and the focused normalizer passes 19/19. The
-  next safe forward milestone is an exact bound-record journal advance followed
-  by an in-process `UsrExchanged` -> `RootLinksComplete` coordinator. Startup
-  must not make that forward advance until a `RootLinksComplete` dispatcher
-  exists.
+  complete-at-entry reaches the decision in one. Commit `03c5fd13` adds the
+  independently reviewed production in-process `UsrExchanged` ->
+  `RootLinksComplete` transition. It captures the exact bound predecessor after
+  full preflight, publishes and synchronizes the retained no-replace root ABI
+  once, repeats all operation-specific evidence, conditionally advances only to
+  NewState generation 10, ActiveReblit generation 8, or ActivateArchived
+  generation 6, and retains the exact successor inode with every earlier
+  authority. The complete coordinator lane passes 97/97, its focused publication
+  lane passes 15/15, and the startup normalizer remains at 19/19. This production
+  implementation is deliberately unwired from startup: a durable
+  `RootLinksComplete` entry remains unchanged at `RecoveryPending`. The next
+  slice is phase-specific dispatcher/recovery that consumes the already-complete
+  root ABI rather than republishing it.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect

@@ -574,11 +574,18 @@ canonical links deliberately stay complete through the existing rollback
 suffix. Commit `04911701` proves the integration model: an intent source needs
 one startup entry to reach the pending reverse decision, while an initially
 incomplete exchanged source needs one normalization entry and a second decision
-entry; complete-at-entry exchanged evidence reaches the decision in one. The full
-coordinator lane passes 82/82 and the focused normalizer passes 19/19. The next
-safe coordinator slice is an exact bound-record advance followed by in-process
-`UsrExchanged` -> `RootLinksComplete`; production startup must not advance to
-that phase until its dispatcher exists.
+entry; complete-at-entry exchanged evidence reaches the decision in one.
+Commit `03c5fd13` adds the independently reviewed production in-process
+`UsrExchanged` -> `RootLinksComplete` transition. It binds the exact predecessor
+after full preflight, publishes and synchronizes the retained no-replace root
+ABI once, repeats operation-specific evidence, conditionally advances only to
+the exact successor, and retains that successor inode with every earlier
+authority. The full coordinator lane passes 97/97, the focused publication lane
+passes 15/15, and the normalizer remains at 19/19. The implementation is
+deliberately unwired from startup: durable `RootLinksComplete` remains unchanged
+at blocker-free `RecoveryPending`. The next slice is phase-specific
+dispatcher/recovery that consumes the already-complete root ABI rather than
+republishing it.
 
 ### Startup reconciliation and interruption campaign
 
