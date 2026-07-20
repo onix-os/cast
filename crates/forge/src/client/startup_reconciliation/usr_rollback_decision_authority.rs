@@ -3,7 +3,7 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        InitialRollbackAction, Operation, Phase, RollbackObservations, TransitionJournalBinding,
+        InitialRollbackAction, Operation, Phase, RollbackObservations, StorageError, TransitionJournalRecordBinding,
         TransitionJournalStore, TransitionRecord,
     },
 };
@@ -58,7 +58,7 @@ struct UsrRollbackDecisionEvidence<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackDecisionNamespaceProof,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -98,7 +98,9 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
             return Ok(UsrRollbackDecisionAdmission::NotApplicable);
         }
 
-        let journal_binding = journal.binding();
+        installation.revalidate_mutable_namespace()?;
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let namespace_inspection = match UsrRollbackDecisionNamespaceInspection::begin(installation, journal, record) {
             Ok(inspection) => inspection,
@@ -141,6 +143,12 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
+            (Phase::RootLinksComplete, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),
+            (Phase::RootLinksComplete, UsrExchangeLayout::Pre) => {
+                return Ok(UsrRollbackDecisionAdmission::Deferred(
+                    UsrRollbackDecisionDeferral::IncompatibleEvidence,
+                ));
+            }
             (Phase::BootSyncStarted, UsrExchangeLayout::Post) if active_reblit_boot_sync => {
                 Some(InitialRollbackAction::Pending)
             }
@@ -154,13 +162,15 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
         installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(installation, journal, &journal_record_binding, record)?;
+        installation.revalidate_mutable_namespace()?;
         let evidence = UsrRollbackDecisionEvidence {
             installation: installation.clone(),
             state_db: retained_state_db,
             record: record.clone(),
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         };
         Ok(match usr_exchange {
@@ -194,10 +204,29 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
     pub(in crate::client) fn observations(&self) -> RollbackObservations {
         self.observations
     }
+
+    /// Revalidate, then consume this complete authority through the exact
+    /// predecessor-to-successor journal boundary. The database, namespace,
+    /// reservation, and record evidence remain owned until the one-shot store
+    /// call consumes the predecessor binding.
+    pub(in crate::client) fn advance_record_binding(
+        self,
+        journal: &TransitionJournalStore,
+        next: &TransitionRecord,
+    ) -> Result<TransitionJournalRecordBinding, UsrRollbackDecisionRecordAdvanceError> {
+        self.revalidate(journal)?;
+        let cast = self.evidence.installation.retained_mutable_cast_directory()?;
+        journal
+            .advance_record_binding(cast, self.evidence.journal_record_binding, next)
+            .map_err(UsrRollbackDecisionRecordAdvanceError::Storage)
+    }
 }
 
 fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
-    matches!(record.phase, Phase::UsrExchangeIntent | Phase::UsrExchanged)
+    matches!(
+        record.phase,
+        Phase::UsrExchangeIntent | Phase::UsrExchanged | Phase::RootLinksComplete
+    )
         || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
 }
 
@@ -210,19 +239,45 @@ impl UsrRollbackDecisionEvidence<'_> {
     /// Revalidate the owned source record, retained namespace inventories, and
     /// an exact database/namespace/database sandwich immediately around use.
     fn revalidate(&self, journal: &TransitionJournalStore) -> Result<(), UsrRollbackDecisionAuthorityError> {
-        // Per-open journal identity is deliberately the first check. No
-        // namespace, database, or durability action may run for a mixed store.
-        if !journal.has_binding(&self.journal_binding) {
-            return Err(UsrRollbackDecisionAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        // Exact public record identity is deliberately the first check. Equal
+        // bytes at a replacement inode cannot authorize persistence.
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
         self.namespace.revalidate(&self.installation, journal, &self.record)?;
         let database_after = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_after)?;
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
+    }
+}
+
+fn require_journal_record_binding(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackDecisionAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackDecisionAuthorityErrorKind::JournalRecordBindingMismatch.into());
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, binding, record)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackDecisionAuthorityErrorKind::JournalRecordBindingMismatch.into())
     }
 }
 
@@ -328,6 +383,16 @@ fn require_exact_database(
 #[error(transparent)]
 pub(in crate::client) struct UsrRollbackDecisionAuthorityError(#[from] UsrRollbackDecisionAuthorityErrorKind);
 
+#[derive(Debug, thiserror::Error)]
+pub(in crate::client) enum UsrRollbackDecisionRecordAdvanceError {
+    #[error("revalidate exact rollback-decision authority before the bound journal advance")]
+    Authority(#[from] UsrRollbackDecisionAuthorityError),
+    #[error("revalidate retained installation before the bound rollback-decision journal advance")]
+    Installation(#[from] crate::installation::Error),
+    #[error("advance the exact bound rollback-decision journal record")]
+    Storage(#[source] StorageError),
+}
+
 impl From<InspectionError> for UsrRollbackDecisionAuthorityError {
     fn from(source: InspectionError) -> Self {
         UsrRollbackDecisionAuthorityErrorKind::Inspection(source).into()
@@ -346,10 +411,16 @@ impl From<crate::installation::Error> for UsrRollbackDecisionAuthorityError {
     }
 }
 
+impl From<StorageError> for UsrRollbackDecisionAuthorityError {
+    fn from(source: StorageError) -> Self {
+        UsrRollbackDecisionAuthorityErrorKind::Journal(source).into()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackDecisionAuthorityErrorKind {
-    #[error("startup rollback-decision authority was paired with a different open journal store")]
-    JournalBindingMismatch,
+    #[error("startup rollback-decision authority lost its exact canonical journal record binding")]
+    JournalRecordBindingMismatch,
     #[error("startup parent-durability authority is not bound to exact UsrExchangeIntent + POST evidence")]
     ParentDurabilitySourceMismatch,
     #[error("inspect exact rollback-decision database evidence")]
@@ -358,6 +429,8 @@ enum UsrRollbackDecisionAuthorityErrorKind {
     Namespace(#[source] UsrRollbackDecisionNamespaceError),
     #[error("revalidate the retained mutable installation namespace around rollback-decision authority")]
     Installation(#[source] crate::installation::Error),
+    #[error("capture or revalidate the exact rollback-decision journal record binding")]
+    Journal(#[source] StorageError),
     #[error("rollback-decision database evidence is incompatible with the persisted source: {evidence:?}")]
     DatabaseIncompatible { evidence: Box<DatabaseEvidence> },
     #[error("rollback-decision database evidence changed from {expected:?} to {actual:?}")]

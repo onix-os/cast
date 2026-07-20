@@ -61,12 +61,10 @@ pub(crate) fn assert_usr_exchange_post_recovers_to_pending_reverse(
 }
 
 /// Re-enter the real mutable startup gate at coordinator-owned
-/// `RootLinksComplete`. Recovery classifies this phase as rollback-required,
-/// but the phase-specific rollback decision authority intentionally does not
-/// support it yet. The gate must therefore remain blocker-free and leave the
-/// exact durable record unchanged rather than guessing a forward or reverse
-/// effect.
-pub(crate) fn assert_root_links_complete_restart_is_pending(
+/// `RootLinksComplete` and require exactly one journal-only rollback decision.
+/// The already-complete root ABI is retained as evidence and is never
+/// republished by this recovery entry.
+pub(crate) fn assert_root_links_complete_restart_persists_rollback_decision(
     installation: &Installation,
     state_db: &db::state::Database,
     layout_db: &db::layout::Database,
@@ -86,10 +84,10 @@ pub(crate) fn assert_root_links_complete_restart_is_pending(
         startup_gate::Error::RecoveryPending(pending) => pending,
         other => panic!("expected RootLinksComplete recovery-pending result, got {other:?}"),
     };
-    assert_eq!(pending.phase(), Phase::RootLinksComplete);
+    assert_eq!(pending.phase(), Phase::RollbackDecided);
     assert!(
         pending.blockers().is_empty(),
-        "unexpected RootLinksComplete startup blockers: {:?}",
+        "unexpected RootLinksComplete rollback-decision blockers: {:?}",
         pending.blockers()
     );
 }

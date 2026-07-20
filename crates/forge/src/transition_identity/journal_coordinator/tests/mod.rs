@@ -8,7 +8,7 @@ use crate::{
     Installation,
     client::{
         JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight,
-        assert_root_links_complete_restart_is_pending,
+        assert_root_links_complete_restart_persists_rollback_decision,
         assert_reverse_exchange_intent_recovers_to_usr_restored,
         assert_usr_exchange_post_recovers_to_pending_reverse,
         assert_usr_restored_routes_to_candidate_preserve_intent,

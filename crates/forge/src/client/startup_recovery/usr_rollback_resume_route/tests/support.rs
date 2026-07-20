@@ -35,7 +35,9 @@ impl RouteFixture {
         let usr_exchange = match source {
             SourceCase::IntentPre => InitialRollbackAction::AlreadySatisfied,
             SourceCase::IntentPost | SourceCase::ExchangedPost => InitialRollbackAction::Pending,
-            SourceCase::ExchangedPre => unreachable!(),
+            SourceCase::ExchangedPre | SourceCase::RootLinksCompletePost | SourceCase::RootLinksCompletePre => {
+                unreachable!()
+            }
         };
         let decision = fixture
             .source

@@ -87,7 +87,7 @@ fn journal_coordinator_root_links_complete_journal_persistence_faults_expose_onl
 }
 
 #[test]
-fn journal_coordinator_root_links_complete_restart_composes_from_exact_source_and_stops_at_unsupported_successor() {
+fn journal_coordinator_root_links_complete_restart_composes_from_exact_source_and_successor() {
     {
         let (fixture, exchanged) = coordinator_ready_for_root_abi_publication(CandidateKind::NewState, 0);
         let source = exchanged.record().clone();
@@ -124,13 +124,14 @@ fn journal_coordinator_root_links_complete_restart_composes_from_exact_source_an
         assert_eq!(read_canonical(&fixture.installation.root), successor);
         assert_root_links_complete(&fixture);
 
-        assert_root_links_complete_restart_is_pending(
+        assert_root_links_complete_restart_persists_rollback_decision(
             &fixture.installation,
             &fixture.database,
             &fixture.layout_database,
         );
 
-        assert_eq!(read_canonical(&fixture.installation.root), successor);
+        let decision = read_canonical(&fixture.installation.root);
+        assert_exact_pending_reverse_decision(&successor, &decision);
         assert_root_links_complete(&fixture);
     }
 }

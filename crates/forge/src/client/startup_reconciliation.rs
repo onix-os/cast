@@ -108,7 +108,7 @@ pub(in crate::client) use usr_rollback_complete_route_authority::{
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;
 pub(in crate::client) use usr_rollback_decision_authority::{
     UsrExchangeParentDurabilityAuthority, UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority,
-    UsrRollbackDecisionAuthorityError,
+    UsrRollbackDecisionAuthorityError, UsrRollbackDecisionRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_finalization_authority::{
     UsrRollbackFinalizationAdmission, UsrRollbackFinalizationAuthority, UsrRollbackFinalizationAuthorityError,

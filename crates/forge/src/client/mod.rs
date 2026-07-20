@@ -171,7 +171,7 @@ pub(in crate::client) use mutable_system_capabilities::{
 pub(crate) use startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider;
 #[cfg(test)]
 pub(crate) use startup_recovery_forward_origin_test_support::{
-    assert_root_links_complete_restart_is_pending,
+    assert_root_links_complete_restart_persists_rollback_decision,
     assert_reverse_exchange_intent_recovers_to_usr_restored,
     assert_usr_exchange_post_recovers_to_pending_reverse,
     assert_usr_restored_routes_to_candidate_preserve_intent,

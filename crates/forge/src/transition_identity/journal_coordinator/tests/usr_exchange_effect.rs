@@ -121,6 +121,7 @@ fn assert_exact_pending_reverse_decision(source: &TransitionRecord, actual: &Tra
     let forward_source = match source.phase {
         Phase::UsrExchangeIntent => ForwardPhase::UsrExchangeIntent,
         Phase::UsrExchanged => ForwardPhase::UsrExchanged,
+        Phase::RootLinksComplete => ForwardPhase::RootLinksComplete,
         other => panic!("unexpected forward /usr rollback source {other:?}"),
     };
     assert_eq!(

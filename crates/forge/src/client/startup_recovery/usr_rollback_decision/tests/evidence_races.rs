@@ -1,6 +1,6 @@
 use std::{
     fs,
-    os::unix::fs::{MetadataExt as _, symlink},
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -23,50 +23,112 @@ use crate::{
 };
 
 use super::{
-    super::{UsrRollbackDecisionPersistenceError, arm_before_usr_rollback_decision_final_revalidation},
-    fixture::{Fixture, OperationKind, SourceCase, create_private_directory, pending},
+    super::{
+        DurableUsrRollbackDecisionRecord, UsrRollbackDecisionPersistenceError,
+        UsrRollbackDecisionSuccessorBindingError, arm_before_usr_rollback_decision_final_revalidation,
+        arm_before_usr_rollback_decision_successor_binding_revalidation,
+    },
+    fixture::{Fixture, OperationKind, SourceCase, canonical_journal, create_private_directory, pending},
 };
+
+#[test]
+fn startup_root_links_complete_same_byte_journal_replacement_breaks_record_binding() {
+    let fixture = Fixture::new(OperationKind::Archived, SourceCase::RootLinksCompletePost);
+    let canonical = canonical_journal(&fixture.installation.root);
+    let displaced = fixture.installation.root.join("root-links-complete-journal-displaced");
+    let before = fixture.canonical_bytes();
+    let hook_canonical = canonical.clone();
+    let hook_displaced = displaced.clone();
+    let hook_bytes = before.clone();
+    arm_before_usr_rollback_decision_final_revalidation(move || {
+        fs::rename(&hook_canonical, &hook_displaced).unwrap();
+        fs::write(&hook_canonical, hook_bytes).unwrap();
+        fs::set_permissions(&hook_canonical, fs::Permissions::from_mode(0o600)).unwrap();
+    });
+
+    assert_authority_failure(fixture.enter());
+
+    assert_eq!(fixture.canonical_bytes(), before);
+    assert_eq!(fs::read(&displaced).unwrap(), before);
+    let retained = fs::symlink_metadata(displaced).unwrap();
+    let replacement = fs::symlink_metadata(canonical).unwrap();
+    assert_ne!((retained.dev(), retained.ino()), (replacement.dev(), replacement.ino()));
+}
+
+#[test]
+fn startup_root_links_complete_successor_same_byte_replacement_reopens_but_never_succeeds() {
+    let fixture = Fixture::new(OperationKind::Archived, SourceCase::RootLinksCompletePost);
+    let canonical = canonical_journal(&fixture.installation.root);
+    let displaced = fixture.installation.root.join("root-links-complete-successor-displaced");
+    let hook_canonical = canonical.clone();
+    let hook_displaced = displaced.clone();
+    arm_before_usr_rollback_decision_successor_binding_revalidation(move || {
+        let bytes = fs::read(&hook_canonical).unwrap();
+        fs::rename(&hook_canonical, &hook_displaced).unwrap();
+        fs::write(&hook_canonical, bytes).unwrap();
+        fs::set_permissions(&hook_canonical, fs::Permissions::from_mode(0o600)).unwrap();
+    });
+
+    let error = fixture.enter();
+    assert!(matches!(
+        error,
+        startup_gate::Error::UsrRollbackDecisionPersistence(
+            UsrRollbackDecisionPersistenceError::SuccessorRecordBinding {
+                durable: DurableUsrRollbackDecisionRecord::Decision,
+                source: UsrRollbackDecisionSuccessorBindingError::Changed,
+            }
+        )
+    ));
+    let decision = fixture.canonical_record();
+    fixture.assert_exact_decision(&decision);
+    assert_eq!(fs::read(&displaced).unwrap(), fixture.canonical_bytes());
+    let retained = fs::symlink_metadata(displaced).unwrap();
+    let replacement = fs::symlink_metadata(canonical).unwrap();
+    assert_ne!((retained.dev(), retained.ino()), (replacement.dev(), replacement.ino()));
+}
 
 #[test]
 fn startup_usr_rollback_decision_database_and_provenance_conflicts_never_advance() {
     for kind in OperationKind::ALL {
-        let fixture = Fixture::new(kind, SourceCase::IntentPre);
-        let before = fixture.canonical_bytes();
-        if kind == OperationKind::NewState {
+        for source in [SourceCase::IntentPre, SourceCase::RootLinksCompletePost] {
+            let fixture = Fixture::new(kind, source);
+            let before = fixture.canonical_bytes();
+            if kind == OperationKind::NewState {
+                fixture
+                    .database
+                    .clear_transition_if_matches(fixture.candidate_state, &fixture.source.transition_id)
+                    .unwrap();
+            } else {
+                fixture.database.remove(&fixture.candidate_state).unwrap();
+            }
+            let error = fixture.enter();
+            assert_eq!(pending(&error).phase(), source.phase(), "{kind:?} {source:?}");
+            assert!(
+                pending(&error).blockers().contains(&RecoveryBlocker::DatabaseConflict),
+                "{kind:?} {source:?}: {:?}",
+                pending(&error).blockers()
+            );
+            assert_eq!(fixture.canonical_bytes(), before, "{kind:?} {source:?}");
+            fixture.assert_source_unchanged();
+
+            let fixture = Fixture::new(kind, source);
+            let before = fixture.canonical_bytes();
             fixture
                 .database
-                .clear_transition_if_matches(fixture.candidate_state, &fixture.source.transition_id)
+                .delete_metadata_provenance_for_test(fixture.candidate_state)
                 .unwrap();
-        } else {
-            fixture.database.remove(&fixture.candidate_state).unwrap();
+            let error = fixture.enter();
+            assert_eq!(pending(&error).phase(), source.phase(), "{kind:?} {source:?}");
+            assert!(
+                pending(&error)
+                    .blockers()
+                    .contains(&RecoveryBlocker::MetadataProvenanceConflict),
+                "{kind:?} {source:?}: {:?}",
+                pending(&error).blockers()
+            );
+            assert_eq!(fixture.canonical_bytes(), before, "{kind:?} {source:?}");
+            fixture.assert_source_unchanged();
         }
-        let error = fixture.enter();
-        assert_eq!(pending(&error).phase(), Phase::UsrExchangeIntent, "{kind:?}");
-        assert!(
-            pending(&error).blockers().contains(&RecoveryBlocker::DatabaseConflict),
-            "{kind:?}: {:?}",
-            pending(&error).blockers()
-        );
-        assert_eq!(fixture.canonical_bytes(), before, "{kind:?}");
-        fixture.assert_source_unchanged();
-
-        let fixture = Fixture::new(kind, SourceCase::IntentPre);
-        let before = fixture.canonical_bytes();
-        fixture
-            .database
-            .delete_metadata_provenance_for_test(fixture.candidate_state)
-            .unwrap();
-        let error = fixture.enter();
-        assert_eq!(pending(&error).phase(), Phase::UsrExchangeIntent, "{kind:?}");
-        assert!(
-            pending(&error)
-                .blockers()
-                .contains(&RecoveryBlocker::MetadataProvenanceConflict),
-            "{kind:?}: {:?}",
-            pending(&error).blockers()
-        );
-        assert_eq!(fixture.canonical_bytes(), before, "{kind:?}");
-        fixture.assert_source_unchanged();
     }
 }
 
@@ -77,6 +139,22 @@ fn startup_usr_rollback_decision_namespace_layout_and_abi_conflicts_never_advanc
         let before = fixture.canonical_bytes();
         let error = fixture.enter();
         assert_eq!(pending(&error).phase(), Phase::UsrExchanged, "{kind:?}");
+        assert!(
+            pending(&error)
+                .blockers()
+                .contains(&RecoveryBlocker::PhaseNamespaceConflict),
+            "{kind:?}: {:?}",
+            pending(&error).blockers()
+        );
+        assert_eq!(fixture.canonical_bytes(), before, "{kind:?}");
+    }
+
+    for kind in OperationKind::ALL {
+        let fixture = Fixture::new(kind, SourceCase::RootLinksCompletePost);
+        let before = fixture.canonical_bytes();
+        fs::remove_file(fixture.installation.root.join("bin")).unwrap();
+        let error = fixture.enter();
+        assert_eq!(pending(&error).phase(), Phase::RootLinksComplete, "{kind:?}");
         assert!(
             pending(&error)
                 .blockers()
@@ -188,24 +266,39 @@ fn startup_usr_rollback_decision_evidence_races_fail_before_advance() {
     });
     assert_authority_failure(fixture.enter());
     assert_eq!(fixture.canonical_bytes(), before);
+
+    let fixture = Fixture::new(OperationKind::Archived, SourceCase::RootLinksCompletePost);
+    let before = fixture.canonical_bytes();
+    let root_link = fixture.installation.root.join("bin");
+    arm_before_usr_rollback_decision_final_revalidation(move || {
+        fs::remove_file(root_link).unwrap();
+    });
+    assert_authority_failure(fixture.enter());
+    assert_eq!(fixture.canonical_bytes(), before);
 }
 
 #[test]
 fn startup_usr_rollback_decision_historical_epoch_uses_durable_identity() {
     for kind in OperationKind::ALL {
-        let fixture = Fixture::historical(kind, SourceCase::ExchangedPost);
-        let source_epoch = fixture.source.creation_epoch.clone();
-        let error = fixture.enter();
-        assert_eq!(pending(&error).phase(), Phase::RollbackDecided, "{kind:?}");
-        let decision = fixture.canonical_record();
-        fixture.assert_exact_decision(&decision);
-        assert_eq!(decision.creation_epoch, source_epoch, "{kind:?}");
+        for source in [SourceCase::ExchangedPost, SourceCase::RootLinksCompletePost] {
+            let fixture = Fixture::historical(kind, source);
+            let source_epoch = fixture.source.creation_epoch.clone();
+            let error = fixture.enter();
+            assert_eq!(pending(&error).phase(), Phase::RollbackDecided, "{kind:?} {source:?}");
+            let decision = fixture.canonical_record();
+            fixture.assert_exact_decision(&decision);
+            assert_eq!(decision.creation_epoch, source_epoch, "{kind:?} {source:?}");
+        }
     }
 }
 
 #[test]
 fn startup_usr_rollback_decision_active_reblit_uses_one_state_row_and_retains_reservation() {
-    for source in [SourceCase::IntentPre, SourceCase::ExchangedPost] {
+    for source in [
+        SourceCase::IntentPre,
+        SourceCase::ExchangedPost,
+        SourceCase::RootLinksCompletePost,
+    ] {
         let fixture = Fixture::new(OperationKind::ActiveReblit, source);
         assert_eq!(fixture.candidate_state, fixture.previous_state);
         assert_eq!(fixture.database.all().unwrap().len(), 1);

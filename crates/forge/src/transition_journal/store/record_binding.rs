@@ -16,6 +16,13 @@ pub(crate) struct TransitionJournalRecordBinding {
 }
 
 impl TransitionJournalStore {
+    /// Check only the in-process store identity carried by an exact record
+    /// binding. Authorities use this before consulting any installation,
+    /// database, or namespace evidence so a mixed store fails binding-first.
+    pub(crate) fn has_record_store_binding(&self, expected: &TransitionJournalRecordBinding) -> bool {
+        Arc::ptr_eq(&self.binding, &expected.store)
+    }
+
     /// Bind an expected record to this publicly authenticated store and retain
     /// its canonical inode. This is stricter than semantic record equality.
     pub(crate) fn record_binding(
@@ -45,7 +52,7 @@ impl TransitionJournalStore {
         expected: &TransitionJournalRecordBinding,
         record: &TransitionRecord,
     ) -> Result<bool, StorageError> {
-        if !Arc::ptr_eq(&self.binding, &expected.store) || expected.record != *record {
+        if !self.has_record_store_binding(expected) || expected.record != *record {
             return Ok(false);
         }
         let _operation = self.lock_operation()?;
@@ -66,7 +73,7 @@ impl TransitionJournalStore {
         expected: TransitionJournalRecordBinding,
         next: &TransitionRecord,
     ) -> Result<TransitionJournalRecordBinding, StorageError> {
-        if !Arc::ptr_eq(&self.binding, &expected.store) {
+        if !self.has_record_store_binding(&expected) {
             return Err(StorageError::CanonicalChanged);
         }
         let _operation = self.lock_operation()?;

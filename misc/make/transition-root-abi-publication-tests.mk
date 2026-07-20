@@ -19,7 +19,7 @@ forge-transition-root-abi-publication-test:
 		journal_coordinator_root_links_complete_same_byte_canonical_journal_inode_replacement_fails_stop \
 		journal_coordinator_root_links_complete_root_directory_sync_failure_keeps_usr_exchanged \
 		journal_coordinator_root_links_complete_journal_persistence_faults_expose_only_source_or_successor \
-		journal_coordinator_root_links_complete_restart_composes_from_exact_source_and_stops_at_unsupported_successor \
+		journal_coordinator_root_links_complete_restart_composes_from_exact_source_and_successor \
 		journal_coordinator_root_links_complete_failures_release_journal_and_writer_authorities_while_error_lives \
 		journal_coordinator_root_links_complete_success_revalidates_exact_successor_binding_without_replaying_publication; do \
 		timeout 10s grep -Fqx "transition_identity::journal_coordinator::tests::$$test: test" <<<"$$listed"; \
@@ -99,7 +99,7 @@ forge-transition-root-abi-publication-test:
 	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do \
 		timeout 10s grep -Fq "arm_next_$${fault}_fault" "$$persistence"; \
 	done; \
-	timeout 10s grep -Fq 'assert_root_links_complete_restart_is_pending(' "$$persistence"; \
+	timeout 10s grep -Fq 'assert_root_links_complete_restart_persists_rollback_decision(' "$$persistence"; \
 	timeout 900s $(CARGO) test -p forge --lib \
 		'transition_identity::journal_coordinator::tests::journal_coordinator_root_links_complete_' \
 		-- --test-threads=1

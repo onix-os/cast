@@ -1,7 +1,13 @@
 use std::fs;
 
 use crate::{
-    client::startup_gate,
+    client::{
+        startup_gate,
+        startup_reconciliation::{
+            reset_usr_exchanged_root_abi_effect_counts, usr_exchanged_root_abi_complete_sync_attempts,
+            usr_exchanged_root_abi_publication_attempts,
+        },
+    },
     transition_journal::{
         Phase, RecoveryDisposition, TransitionJournalStore, arm_next_displaced_unlink_fault,
         arm_next_temporary_sync_fault, arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
@@ -15,6 +21,27 @@ use super::{
     super::{DurableUsrRollbackDecisionRecord, UsrRollbackDecisionPersistenceError},
     fixture::{Fixture, OperationKind, SourceCase, pending},
 };
+
+#[test]
+fn startup_root_links_complete_next_entry_stops_at_exact_decision_until_route_is_admitted() {
+    for kind in OperationKind::ALL {
+        let fixture = Fixture::new(kind, SourceCase::RootLinksCompletePost);
+        reset_usr_exchanged_root_abi_effect_counts();
+        let first = fixture.enter();
+        assert_eq!(pending(&first).phase(), Phase::RollbackDecided, "{kind:?}");
+        drop(first);
+        let decision = fixture.canonical_record();
+        fixture.assert_exact_decision(&decision);
+        let decision_bytes = fixture.canonical_bytes();
+
+        let second = fixture.enter();
+        assert_eq!(pending(&second).phase(), Phase::RollbackDecided, "{kind:?}");
+        assert_eq!(fixture.canonical_record(), decision, "{kind:?}");
+        assert_eq!(fixture.canonical_bytes(), decision_bytes, "{kind:?}");
+        assert_eq!(usr_exchanged_root_abi_publication_attempts(), 0, "{kind:?}");
+        assert_eq!(usr_exchanged_root_abi_complete_sync_attempts(), 0, "{kind:?}");
+    }
+}
 
 #[test]
 fn startup_usr_rollback_decision_storage_faults_reopen_to_exact_source_or_decision() {
@@ -46,27 +73,38 @@ fn startup_usr_rollback_decision_storage_faults_reopen_to_exact_source_or_decisi
         ),
     ];
 
-    for (arm, assert_consumed, expected_durable) in cases {
-        let fixture = Fixture::new(OperationKind::NewState, SourceCase::IntentPre);
-        arm();
-        let error = fixture.enter();
-        assert_consumed();
-        assert!(matches!(
-            error,
-            startup_gate::Error::UsrRollbackDecisionPersistence(
-                UsrRollbackDecisionPersistenceError::Advance { durable, .. }
-            ) if durable == expected_durable
-        ));
-        let actual = fixture.canonical_record();
-        match expected_durable {
-            DurableUsrRollbackDecisionRecord::Source => assert_eq!(actual, fixture.source),
-            DurableUsrRollbackDecisionRecord::Decision => fixture.assert_exact_decision(&actual),
+    for (kind, source) in [
+        (OperationKind::NewState, SourceCase::IntentPre),
+        (OperationKind::NewState, SourceCase::RootLinksCompletePost),
+        (OperationKind::Archived, SourceCase::RootLinksCompletePost),
+        (OperationKind::ActiveReblit, SourceCase::RootLinksCompletePost),
+    ] {
+        for (arm, assert_consumed, expected_durable) in cases {
+            let fixture = Fixture::new(kind, source);
+            arm();
+            let error = fixture.enter();
+            assert_consumed();
+            assert!(matches!(
+                error,
+                startup_gate::Error::UsrRollbackDecisionPersistence(
+                    UsrRollbackDecisionPersistenceError::Advance { durable, .. }
+                ) if durable == expected_durable
+            ));
+            let actual = fixture.canonical_record();
+            match expected_durable {
+                DurableUsrRollbackDecisionRecord::Source => assert_eq!(actual, fixture.source),
+                DurableUsrRollbackDecisionRecord::Decision => fixture.assert_exact_decision(&actual),
+            }
+            let names = fs::read_dir(fixture.installation.root.join(".cast/journal"))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names.len(),
+                2,
+                "stale journal residue remained after reopen for {kind:?} {source:?}: {names:?}"
+            );
         }
-        let names = fs::read_dir(fixture.installation.root.join(".cast/journal"))
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name())
-            .collect::<Vec<_>>();
-        assert_eq!(names.len(), 2, "stale journal residue remained after reopen: {names:?}");
     }
 }
 

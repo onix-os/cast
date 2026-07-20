@@ -14,7 +14,9 @@ use crate::{
     transition_journal::{CodecError, StorageError, TransitionJournalStore, TransitionRecord},
 };
 
-use super::super::startup_reconciliation::{UsrRollbackDecisionAuthority, UsrRollbackDecisionAuthorityError};
+use super::super::startup_reconciliation::{
+    UsrRollbackDecisionAuthority, UsrRollbackDecisionAuthorityError, UsrRollbackDecisionRecordAdvanceError,
+};
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
 #[cfg(test)]
@@ -25,6 +27,12 @@ mod tests;
 pub(in crate::client) enum DurableUsrRollbackDecisionRecord {
     Source,
     Decision,
+}
+
+enum UsrRollbackDecisionAdvanceOutcome {
+    Published,
+    StorageFailed(StorageError),
+    SuccessorBindingFailed(UsrRollbackDecisionSuccessorBindingError),
 }
 
 /// Persist exactly one authenticated rollback decision, then independently
@@ -52,19 +60,46 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
     };
 
     before_usr_rollback_decision_final_revalidation();
-    authority.revalidate(&journal)?;
     let installation = authority.installation().clone();
-    let advance = journal.advance(&source_record, &decision);
+    let advance = match authority.advance_record_binding(&journal, &decision) {
+        Ok(successor_binding) => {
+            before_usr_rollback_decision_successor_binding_revalidation();
+            let exact = match installation.retained_mutable_cast_directory() {
+                Ok(cast) => journal
+                    .has_record_binding(cast, &successor_binding, &decision)
+                    .map_err(UsrRollbackDecisionSuccessorBindingError::Storage),
+                Err(source) => Err(UsrRollbackDecisionSuccessorBindingError::Installation(source)),
+            };
+            drop(successor_binding);
+            match exact {
+                Ok(true) => UsrRollbackDecisionAdvanceOutcome::Published,
+                Ok(false) => UsrRollbackDecisionAdvanceOutcome::SuccessorBindingFailed(
+                    UsrRollbackDecisionSuccessorBindingError::Changed,
+                ),
+                Err(source) => UsrRollbackDecisionAdvanceOutcome::SuccessorBindingFailed(source),
+            }
+        }
+        Err(UsrRollbackDecisionRecordAdvanceError::Authority(source)) => {
+            drop(journal);
+            return Err(UsrRollbackDecisionPersistenceError::Authority(source));
+        }
+        Err(UsrRollbackDecisionRecordAdvanceError::Installation(source)) => {
+            drop(journal);
+            return Err(UsrRollbackDecisionPersistenceError::Installation(source));
+        }
+        Err(UsrRollbackDecisionRecordAdvanceError::Storage(source)) => {
+            UsrRollbackDecisionAdvanceOutcome::StorageFailed(source)
+        }
+    };
 
-    // Neither branch below may retain or reuse the old lock-bearing store or
-    // its evidence authority. In particular, reopening while either remains
-    // alive would deadlock or authorize a second persistence attempt.
-    drop(authority);
+    // The evidence authority and its exact predecessor binding were consumed
+    // by the bound advance. Reopening while the old lock-bearing store remains
+    // alive would deadlock.
     drop(journal);
 
     let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackDecisionReopenError::from);
     match advance {
-        Ok(()) => match reopened {
+        UsrRollbackDecisionAdvanceOutcome::Published => match reopened {
             Ok((reopened, Some(actual))) if actual == decision => Ok((reopened, decision)),
             Ok((reopened, actual)) => {
                 drop(reopened);
@@ -74,7 +109,7 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
             }
             Err(source) => Err(UsrRollbackDecisionPersistenceError::ReopenAfterSuccessfulAdvance { source }),
         },
-        Err(advance_error) => match reopened {
+        UsrRollbackDecisionAdvanceOutcome::StorageFailed(advance_error) => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {
                 drop(reopened);
                 Err(UsrRollbackDecisionPersistenceError::Advance {
@@ -101,6 +136,33 @@ pub(in crate::client) fn persist_usr_rollback_decision_and_reopen(
                 reopen,
             }),
         },
+        UsrRollbackDecisionAdvanceOutcome::SuccessorBindingFailed(binding) => match reopened {
+            Ok((reopened, Some(actual))) if actual == source_record => {
+                drop(reopened);
+                Err(UsrRollbackDecisionPersistenceError::SuccessorRecordBinding {
+                    durable: DurableUsrRollbackDecisionRecord::Source,
+                    source: binding,
+                })
+            }
+            Ok((reopened, Some(actual))) if actual == decision => {
+                drop(reopened);
+                Err(UsrRollbackDecisionPersistenceError::SuccessorRecordBinding {
+                    durable: DurableUsrRollbackDecisionRecord::Decision,
+                    source: binding,
+                })
+            }
+            Ok((reopened, actual)) => {
+                drop(reopened);
+                Err(UsrRollbackDecisionPersistenceError::SuccessorRecordBindingAndReopen {
+                    binding,
+                    reopen: unexpected_record(&source_record, &decision, actual),
+                })
+            }
+            Err(reopen) => Err(UsrRollbackDecisionPersistenceError::SuccessorRecordBindingAndReopen {
+                binding,
+                reopen,
+            }),
+        },
     }
 }
 
@@ -119,6 +181,8 @@ fn unexpected_record(
 #[cfg(test)]
 std::thread_local! {
     static BEFORE_FINAL_AUTHORITY_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_SUCCESSOR_BINDING_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -142,6 +206,35 @@ fn before_usr_rollback_decision_final_revalidation() {
 #[cfg(not(test))]
 fn before_usr_rollback_decision_final_revalidation() {}
 
+#[cfg(test)]
+pub(crate) fn arm_before_usr_rollback_decision_successor_binding_revalidation(hook: impl FnOnce() + 'static) {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_usr_rollback_decision_successor_binding_revalidation() {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_usr_rollback_decision_successor_binding_revalidation() {}
+
+#[derive(Debug, Error)]
+pub(in crate::client) enum UsrRollbackDecisionSuccessorBindingError {
+    #[error("revalidate retained installation after publishing the rollback decision")]
+    Installation(#[source] installation::Error),
+    #[error("the published rollback-decision successor lost its exact record binding")]
+    Changed,
+    #[error("revalidate the published rollback-decision successor record binding")]
+    Storage(#[source] StorageError),
+}
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum UsrRollbackDecisionPersistenceError {
     #[error("revalidate exact startup /usr rollback-decision authority")]
@@ -150,6 +243,20 @@ pub(in crate::client) enum UsrRollbackDecisionPersistenceError {
     DecisionConstruction {
         #[source]
         source: CodecError,
+    },
+    #[error("revalidate retained installation before the exact rollback-decision record advance")]
+    Installation(#[from] installation::Error),
+    #[error("successor binding failed after reopening exact durable {durable:?} rollback-decision evidence")]
+    SuccessorRecordBinding {
+        durable: DurableUsrRollbackDecisionRecord,
+        #[source]
+        source: UsrRollbackDecisionSuccessorBindingError,
+    },
+    #[error("successor binding failed ({binding}) and its canonical record could not be reconciled")]
+    SuccessorRecordBindingAndReopen {
+        binding: UsrRollbackDecisionSuccessorBindingError,
+        #[source]
+        reopen: UsrRollbackDecisionReopenError,
     },
     #[error("journal advance failed after reopening exact durable {durable:?} record")]
     Advance {

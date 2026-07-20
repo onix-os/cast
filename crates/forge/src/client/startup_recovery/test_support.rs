@@ -58,10 +58,13 @@ impl OperationKind {
         match (self, phase) {
             (Self::NewState, Phase::UsrExchangeIntent) => 8,
             (Self::NewState, Phase::UsrExchanged) => 9,
+            (Self::NewState, Phase::RootLinksComplete) => 10,
             (Self::Archived, Phase::UsrExchangeIntent) => 4,
             (Self::Archived, Phase::UsrExchanged) => 5,
+            (Self::Archived, Phase::RootLinksComplete) => 6,
             (Self::ActiveReblit, Phase::UsrExchangeIntent) => 6,
             (Self::ActiveReblit, Phase::UsrExchanged) => 7,
+            (Self::ActiveReblit, Phase::RootLinksComplete) => 8,
             _ => panic!("unsupported rollback-decision source {self:?} at {phase:?}"),
         }
     }
@@ -74,6 +77,8 @@ pub(super) enum SourceCase {
     IntentPost,
     ExchangedPost,
     ExchangedPre,
+    RootLinksCompletePost,
+    RootLinksCompletePre,
 }
 
 impl SourceCase {
@@ -81,11 +86,15 @@ impl SourceCase {
         match self {
             Self::IntentPre | Self::IntentPost => Phase::UsrExchangeIntent,
             Self::ExchangedPost | Self::ExchangedPre => Phase::UsrExchanged,
+            Self::RootLinksCompletePost | Self::RootLinksCompletePre => Phase::RootLinksComplete,
         }
     }
 
     fn post_exchange(self) -> bool {
-        matches!(self, Self::IntentPost | Self::ExchangedPost)
+        matches!(
+            self,
+            Self::IntentPost | Self::ExchangedPost | Self::RootLinksCompletePost
+        )
     }
 }
 
@@ -128,7 +137,10 @@ impl Fixture {
 
     fn with_historical_epoch(kind: OperationKind, source: SourceCase, historical: bool) -> Self {
         let fixture = Self::with_forward_source(kind, source.phase(), source.post_exchange(), historical);
-        if source == SourceCase::ExchangedPost {
+        if matches!(
+            source,
+            SourceCase::ExchangedPost | SourceCase::RootLinksCompletePost | SourceCase::RootLinksCompletePre
+        ) {
             install_root_abi(&fixture.installation.root);
         }
         assert_eq!(
@@ -284,19 +296,16 @@ impl Fixture {
     }
 
     pub(super) fn expected_plan(&self) -> RollbackPlan {
-        let intent = self.source.phase == Phase::UsrExchangeIntent;
+        let (source, usr_exchange) = match self.source.phase {
+            Phase::UsrExchangeIntent => (ForwardPhase::UsrExchangeIntent, RollbackAction::AlreadySatisfied),
+            Phase::UsrExchanged => (ForwardPhase::UsrExchanged, RollbackAction::Pending),
+            Phase::RootLinksComplete => (ForwardPhase::RootLinksComplete, RollbackAction::Pending),
+            phase => panic!("unsupported rollback-decision plan source {phase:?}"),
+        };
         RollbackPlan {
-            source: if intent {
-                ForwardPhase::UsrExchangeIntent
-            } else {
-                ForwardPhase::UsrExchanged
-            },
+            source,
             previous_archive: RollbackAction::NotRequired,
-            usr_exchange: if intent {
-                RollbackAction::AlreadySatisfied
-            } else {
-                RollbackAction::Pending
-            },
+            usr_exchange,
             candidate: CandidateRollback {
                 action: RollbackAction::Pending,
                 disposition: if self.kind == OperationKind::Archived {
