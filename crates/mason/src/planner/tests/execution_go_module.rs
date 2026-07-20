@@ -13,6 +13,7 @@ while IFS= read -r line; do
     [[ ! $line =~ $replace_pattern ]] || exit 1
 done < go.mod"#;
 const GO_MODULE_BUILD_SCRIPT: &str = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOROOT=/usr/lib/golang
 export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
 export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
 export GOENV=off
@@ -28,8 +29,10 @@ export CGO_ENABLED=0
 export GOOS=linux
 export GOARCH=amd64
 export GOAMD64=v1
+go telemetry off
 go build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cast-go-module-fixture ./cmd/cast-go-module-fixture"#;
 const GO_MODULE_CHECK_SCRIPT: &str = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOROOT=/usr/lib/golang
 export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
 export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
 export GOENV=off
@@ -45,6 +48,7 @@ export CGO_ENABLED=0
 export GOOS=linux
 export GOARCH=amd64
 export GOAMD64=v1
+go telemetry off
 go test -mod=vendor -trimpath -count=1 ./..."#;
 const GO_MODULE_INSTALL_SCRIPT: &str = r#"install -Dm755 cast-go-module-fixture "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-go-module-fixture"
 install -Dm644 LICENSE "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-go-module-fixture/LICENSE""#;

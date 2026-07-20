@@ -26,6 +26,7 @@ done < go.mod"#,
             interpreter = bash,
             declared_programs = [go],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOROOT=/usr/lib/golang
 export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
 export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
 export GOENV=off
@@ -41,6 +42,7 @@ export CGO_ENABLED=0
 export GOOS=linux
 export GOARCH=amd64
 export GOAMD64=v1
+go telemetry off
 go build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cast-go-module-fixture ./cmd/cast-go-module-fixture"#,
         },
     ],
@@ -49,6 +51,7 @@ go build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cas
             interpreter = bash,
             declared_programs = [go],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOROOT=/usr/lib/golang
 export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
 export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
 export GOENV=off
@@ -64,6 +67,7 @@ export CGO_ENABLED=0
 export GOOS=linux
 export GOARCH=amd64
 export GOAMD64=v1
+go telemetry off
 go test -mod=vendor -trimpath -count=1 ./..."#,
         },
         b.step.run_built

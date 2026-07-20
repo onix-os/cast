@@ -243,8 +243,21 @@ fn assert_go_module_semantics(declaration: &PackageSpec, plan: &DerivationPlan) 
         panic!("go-module must retain one explicit shell build step");
     };
     for required in [
+        "HOME=\"${CAST_BUILD_ROOT}/home\"",
+        "GOROOT=/usr/lib/golang",
+        "GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"",
+        "GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"",
+        "GOENV=off",
+        "GOWORK=off",
+        "GOTOOLCHAIN=local",
         "GOPROXY=off",
         "GOSUMDB=off",
+        "GONOSUMDB='*'",
+        "GONOPROXY='*'",
+        "GOFLAGS=",
+        "GO111MODULE=on",
+        "CGO_ENABLED=0",
+        "go telemetry off",
         "-mod=vendor",
         "-trimpath",
         "-buildvcs=false",
@@ -257,7 +270,25 @@ fn assert_go_module_semantics(declaration: &PackageSpec, plan: &DerivationPlan) 
     let [StepSpec::Shell { script: check, .. }] = declaration.builder.phases.check.steps.as_slice() else {
         panic!("go-module must retain one explicit shell check step");
     };
-    for required in ["GOPROXY=off", "GOSUMDB=off", "-mod=vendor", "-trimpath"] {
+    for required in [
+        "HOME=\"${CAST_BUILD_ROOT}/home\"",
+        "GOROOT=/usr/lib/golang",
+        "GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"",
+        "GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"",
+        "GOENV=off",
+        "GOWORK=off",
+        "GOTOOLCHAIN=local",
+        "GOPROXY=off",
+        "GOSUMDB=off",
+        "GONOSUMDB='*'",
+        "GONOPROXY='*'",
+        "GOFLAGS=",
+        "GO111MODULE=on",
+        "CGO_ENABLED=0",
+        "go telemetry off",
+        "-mod=vendor",
+        "-trimpath",
+    ] {
         assert!(
             check.contains(required),
             "go-module check lost offline/reproducible setting {required}"

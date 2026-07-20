@@ -17,9 +17,21 @@ test -d vendor"#,
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [go],
-            script = r#"GOCACHE="${CAST_BUILD_ROOT}/go-cache" \
-GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache" \
-GOPROXY=off GOSUMDB=off CGO_ENABLED=0 \
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOROOT=/usr/lib/golang
+export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
+export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
+export GOENV=off
+export GOWORK=off
+export GOTOOLCHAIN=local
+export GOPROXY=off
+export GOSUMDB=off
+export GONOSUMDB='*'
+export GONOPROXY='*'
+export GOFLAGS=
+export GO111MODULE=on
+export CGO_ENABLED=0
+go telemetry off
 go build -mod=vendor -trimpath -buildvcs=false -o build/glyph ./cmd/glyph"#,
         },
     ],
@@ -27,9 +39,21 @@ go build -mod=vendor -trimpath -buildvcs=false -o build/glyph ./cmd/glyph"#,
         b.step.shell_with {
             interpreter = b.program.binary "bash",
             declared_programs = [go],
-            script = r#"GOCACHE="${CAST_BUILD_ROOT}/go-cache" \
-GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache" \
-GOPROXY=off GOSUMDB=off CGO_ENABLED=0 \
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export GOROOT=/usr/lib/golang
+export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
+export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
+export GOENV=off
+export GOWORK=off
+export GOTOOLCHAIN=local
+export GOPROXY=off
+export GOSUMDB=off
+export GONOSUMDB='*'
+export GONOPROXY='*'
+export GOFLAGS=
+export GO111MODULE=on
+export CGO_ENABLED=0
+go telemetry off
 go test -mod=vendor -trimpath ./..."#,
         },
     ],
