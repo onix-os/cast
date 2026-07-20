@@ -72,6 +72,18 @@ pub(in crate::client) struct UsrRollbackDecisionSeal {
     _private: (),
 }
 
+/// Unforgeable safe-code token limiting forward-`UsrExchanged` root ABI
+/// normalization authority to the writer-first startup gate.
+pub(in crate::client) struct UsrExchangedRootAbiNormalizationSeal {
+    _private: (),
+}
+
+impl UsrExchangedRootAbiNormalizationSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
 impl UsrRollbackDecisionSeal {
     fn new() -> Self {
         Self { _private: () }
@@ -156,6 +168,57 @@ impl CleanSystemStartup {
                 transition_identity::recover_active_reblit_replacement_residue(&mut mutation_authority)?;
             }
 
+            // Normalize the live root ABI before rollback-decision admission.
+            // Incomplete canonical subsets receive exactly one publication
+            // attempt and end this startup entry. Complete sets still cross a
+            // retained root-directory sync, after which decision evidence is
+            // captured from scratch below. Deferred normalization must never
+            // fall through to decision capture.
+            let root_abi_seal = UsrExchangedRootAbiNormalizationSeal::new();
+            let root_abi = startup_reconciliation::UsrExchangedRootAbiNormalizationAuthority::capture(
+                &root_abi_seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+                in_flight.clone(),
+            )?;
+            let decision_in_flight = match root_abi {
+                startup_reconciliation::UsrExchangedRootAbiNormalizationAdmission::NotApplicable => {
+                    in_flight.clone()
+                }
+                startup_reconciliation::UsrExchangedRootAbiNormalizationAdmission::Deferred => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+                startup_reconciliation::UsrExchangedRootAbiNormalizationAdmission::Normalize(authority) => {
+                    super::startup_recovery::normalize_usr_exchanged_root_abi(&journal, authority)?;
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+                startup_reconciliation::UsrExchangedRootAbiNormalizationAdmission::Synchronize(authority) => {
+                    super::startup_recovery::synchronize_usr_exchanged_root_abi(&journal, authority)?;
+                    state_db.audit_in_flight_transition()?
+                }
+            };
+
             let decision_seal = UsrRollbackDecisionSeal::new();
             let decision = startup_reconciliation::UsrRollbackDecisionAuthority::capture(
                 &decision_seal,
@@ -164,7 +227,7 @@ impl CleanSystemStartup {
                 state_db,
                 active_state_reservation,
                 &record,
-                in_flight.clone(),
+                decision_in_flight,
             )?;
             let authority = match decision {
                 startup_reconciliation::UsrRollbackDecisionAdmission::Ready(authority) => Some(authority),
@@ -487,6 +550,14 @@ pub(super) enum Error {
     ActiveReblitReplacementRecovery(#[from] transition_identity::ActiveReblitReplacementRecoveryError),
     #[error("capture exact startup /usr rollback-decision authority")]
     UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
+    #[error("capture exact startup UsrExchanged root ABI normalization authority")]
+    UsrExchangedRootAbiNormalizationAuthority(
+        #[from] startup_reconciliation::UsrExchangedRootAbiNormalizationAuthorityError,
+    ),
+    #[error("execute exact startup UsrExchanged root ABI normalization")]
+    UsrExchangedRootAbiNormalizationExecution(
+        #[from] super::startup_recovery::UsrExchangedRootAbiNormalizationExecutionError,
+    ),
     #[error("normalize exact startup /usr exchange-parent durability")]
     UsrExchangeParentDurability(#[from] super::startup_recovery::UsrExchangeParentDurabilityError),
     #[error("persist and reconcile the exact startup /usr rollback decision")]

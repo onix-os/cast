@@ -63,6 +63,7 @@ include misc/make/active-reblit-bls-renderer-tests.mk
 include misc/make/active-reblit-desired-publication-tests.mk
 include misc/make/active-reblit-boot-namespace-input-tests.mk
 include misc/make/startup-recovery-tests.mk
+include misc/make/startup-root-abi-normalization-tests.mk
 include misc/make/startup-exchange-durability-tests.mk
 include misc/make/startup-rollback-resume-route-tests.mk
 include misc/make/startup-candidate-preserve-admission-tests.mk

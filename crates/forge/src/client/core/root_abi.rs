@@ -44,6 +44,9 @@ std::thread_local! {
         const { std::cell::RefCell::new(None) };
     static BEFORE_STATEFUL_ROOT_ABI_PUBLICATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static BEFORE_RETAINED_ROOT_ABI_LINK_PUBLICATION: std::cell::RefCell<Option<(usize, Box<dyn FnOnce()>)>> =
+        const { std::cell::RefCell::new(None) };
+    static RETAINED_ROOT_ABI_SYNC_FAULT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static AFTER_STATEFUL_ISOLATION_ROOT_RETENTION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -78,6 +81,43 @@ fn before_stateful_root_abi_publication() {
             hook();
         }
     });
+}
+
+#[cfg(test)]
+pub(in crate::client) fn arm_before_retained_root_abi_link_publication(
+    index: usize,
+    hook: impl FnOnce() + 'static,
+) {
+    BEFORE_RETAINED_ROOT_ABI_LINK_PUBLICATION.with(|slot| {
+        assert!(slot.borrow_mut().replace((index, Box::new(hook))).is_none());
+    });
+}
+
+#[cfg(test)]
+pub(in crate::client) fn arm_retained_root_abi_sync_fault() {
+    RETAINED_ROOT_ABI_SYNC_FAULT.with(|fault| fault.set(true));
+}
+
+#[cfg(test)]
+fn before_retained_root_abi_link_publication(index: usize) {
+    BEFORE_RETAINED_ROOT_ABI_LINK_PUBLICATION.with(|slot| {
+        let armed = slot.borrow().as_ref().map(|(armed, _)| *armed);
+        if armed == Some(index) {
+            let (_, hook) = slot.borrow_mut().take().expect("matching root ABI link hook");
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_retained_root_abi_link_publication(_index: usize) {}
+
+fn sync_retained_root_abi(directory: &fs::File) -> io::Result<()> {
+    #[cfg(test)]
+    if RETAINED_ROOT_ABI_SYNC_FAULT.with(|fault| fault.replace(false)) {
+        return Err(io::Error::other("injected retained root ABI sync failure"));
+    }
+    directory.sync_all()
 }
 
 #[cfg(test)]
@@ -249,7 +289,7 @@ impl RootAbiPreflight {
     fn publish(self) -> Result<RetainedRootAbi, Error> {
         #[cfg(test)]
         before_stateful_root_abi_publication();
-        self.publish_with(&mut |_| {}, &mut |directory| directory.sync_all())
+        self.publish_with(&mut |_| {}, &mut sync_retained_root_abi)
     }
 
     fn publish_with<C, S>(mut self, checkpoint: &mut C, sync: &mut S) -> Result<RetainedRootAbi, Error>
@@ -257,9 +297,10 @@ impl RootAbiPreflight {
         C: FnMut(RootAbiLinkCheckpoint),
         S: FnMut(&fs::File) -> io::Result<()>,
     {
-        for (source, target, pinned) in &mut self.links {
+        for (index, (source, target, pinned)) in self.links.iter_mut().enumerate() {
             let source = *source;
             let target = *target;
+            before_retained_root_abi_link_publication(index);
             if pinned.is_some() {
                 continue;
             }

@@ -263,8 +263,23 @@ pub(super) struct RetainedRootAbi {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RootEntryFingerprint {
+    pub(super) name: Vec<u8>,
+    pub(super) device: u64,
+    pub(super) inode: u64,
+    pub(super) kind: u32,
+}
+
+#[derive(Debug)]
+pub(super) struct RetainedRootEntry {
+    pub(super) file: File,
+    pub(super) fingerprint: RootEntryFingerprint,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct NamespaceFingerprint {
     pub(super) root: InodeWitness,
+    pub(super) root_entries: Vec<RootEntryFingerprint>,
     pub(super) roots: InodeWitness,
     pub(super) quarantine: InodeWitness,
     pub(super) epoch: RuntimeEpoch,
@@ -281,6 +296,7 @@ pub(crate) struct NamespaceFingerprint {
 pub(crate) struct NamespaceSnapshot {
     pub(super) root: File,
     pub(super) root_path: PathBuf,
+    pub(super) root_entries: Vec<RetainedRootEntry>,
     pub(super) roots: File,
     pub(super) roots_path: PathBuf,
     pub(super) quarantine: File,
@@ -309,6 +325,59 @@ impl NamespaceSnapshot {
 
     pub(crate) fn isolation_abi(&self) -> &RootAbiFingerprint {
         &self.fingerprint.isolation_abi
+    }
+
+    /// Borrow the retained installation-root descriptor and its diagnostic
+    /// path. Callers may sync this descriptor, but must not reopen the path to
+    /// obtain mutation authority.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn retained_installation_root(
+        &self,
+    ) -> (&File, &Path) {
+        (&self.root, &self.root_path)
+    }
+
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn has_exact_fingerprint(
+        &self,
+        actual: &Self,
+    ) -> bool {
+        self.fingerprint == actual.fingerprint
+    }
+
+    /// Accept only the root-directory metadata delta caused by creating
+    /// symlinks and monotonic filling of absent canonical root ABI slots.
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn admits_only_root_abi_growth(
+        &self,
+        actual: &Self,
+    ) -> bool {
+        let before = &self.fingerprint;
+        let after = &actual.fingerprint;
+        let root_authority_stable = before.root.device == after.root.device
+            && before.root.inode == after.root.inode
+            && before.root.mode == after.root.mode
+            && before.root.owner == after.root.owner
+            && before.root.group == after.root.group
+            && before.root.links == after.root.links;
+        let non_root_stable = before.roots == after.roots
+            && before.root_entries == after.root_entries
+            && before.quarantine == after.quarantine
+            && before.epoch == after.epoch
+            && before.live == after.live
+            && before.isolation_abi == after.isolation_abi
+            && before.roots_entries == after.roots_entries
+            && before.quarantine_entries == after.quarantine_entries
+            && before.new_state_target_residue == after.new_state_target_residue;
+        let root_abi_monotonic = before.root_abi.links.len() == after.root_abi.links.len()
+            && before
+                .root_abi
+                .links
+                .iter()
+                .zip(&after.root_abi.links)
+                .all(|(before, after)| match (before, after) {
+                    (Some(before), Some(after)) => before == after,
+                    (None, None) | (None, Some(_)) => true,
+                    (Some(_), None) => false,
+                });
+        root_authority_stable && non_root_stable && root_abi_monotonic
     }
 
     pub(crate) fn wrappers(&self) -> impl Iterator<Item = &WrapperFingerprint> {
@@ -365,6 +434,7 @@ impl NamespaceSnapshot {
             self.fingerprint.root,
             &self.root_path,
         )?;
+        revalidate_root_entries(&self.root, &self.root_path, &self.root_entries, &mut budget)?;
         require_witness(
             controlled_directory_witness(&self.roots, &self.roots_path)?,
             self.fingerprint.roots,

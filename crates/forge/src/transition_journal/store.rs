@@ -250,6 +250,15 @@ pub(crate) struct TransitionJournalStore {
 #[derive(Clone, Debug)]
 pub(crate) struct TransitionJournalBinding(Arc<()>);
 
+/// Exact publicly named canonical-record inode retained by one open journal
+/// store. Equal bytes at the same name are not interchangeable with the inode
+/// that startup authority originally admitted.
+#[derive(Clone, Debug)]
+pub(crate) struct TransitionJournalRecordBinding {
+    store: Arc<()>,
+    canonical: Arc<std::fs::File>,
+}
+
 #[derive(Debug)]
 struct LoadedRecord {
     record: TransitionRecord,
@@ -366,6 +375,15 @@ impl TransitionJournalStore {
         cast_directory: &std::fs::File,
     ) -> Result<Option<TransitionRecord>, StorageError> {
         let _operation = self.lock_operation()?;
+        Ok(self
+            .load_pinned_revalidated_retained_cast_locked(cast_directory)?
+            .map(|loaded| loaded.record))
+    }
+
+    fn load_pinned_revalidated_retained_cast_locked(
+        &self,
+        cast_directory: &std::fs::File,
+    ) -> Result<Option<LoadedRecord>, StorageError> {
         let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
         let canonical_present = self.inspect_exact_public_entry_set(&journal, None)?;
         let loaded = self.load_pinned()?;
@@ -376,7 +394,7 @@ impl TransitionJournalStore {
         public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeLoadFinalBinding);
         let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
         self.revalidate_exact_public_state(&journal, loaded.as_ref())?;
-        Ok(loaded.map(|loaded| loaded.record))
+        Ok(loaded)
     }
 
     /// Capture an unforgeable token for this exact open store. A separately
@@ -390,6 +408,46 @@ impl TransitionJournalStore {
     /// substitute for the store captured by mutation authority.
     pub(crate) fn has_binding(&self, expected: &TransitionJournalBinding) -> bool {
         Arc::ptr_eq(&self.binding, &expected.0)
+    }
+
+    /// Bind an expected record to this publicly authenticated store and retain
+    /// its canonical inode. This is stricter than semantic record equality.
+    pub(crate) fn record_binding(
+        &self,
+        cast_directory: &std::fs::File,
+        expected: &TransitionRecord,
+    ) -> Result<TransitionJournalRecordBinding, StorageError> {
+        let _operation = self.lock_operation()?;
+        let loaded = self
+            .load_pinned_revalidated_retained_cast_locked(cast_directory)?
+            .ok_or(StorageError::CanonicalChanged)?;
+        if loaded.record != *expected {
+            return Err(StorageError::CanonicalChanged);
+        }
+        Ok(TransitionJournalRecordBinding {
+            store: Arc::clone(&self.binding),
+            canonical: Arc::new(loaded._file),
+        })
+    }
+
+    /// Reauthenticate the public store, record semantics, and retained
+    /// canonical inode captured by `record_binding`.
+    pub(crate) fn has_record_binding(
+        &self,
+        cast_directory: &std::fs::File,
+        expected: &TransitionJournalRecordBinding,
+        record: &TransitionRecord,
+    ) -> Result<bool, StorageError> {
+        if !Arc::ptr_eq(&self.binding, &expected.store) {
+            return Ok(false);
+        }
+        let _operation = self.lock_operation()?;
+        let Some(loaded) = self.load_pinned_revalidated_retained_cast_locked(cast_directory)? else {
+            return Ok(false);
+        };
+        let retained = inode_identity(&expected.canonical)
+            .map_err(|source| StorageError::ValidateCanonical { source })?;
+        Ok(loaded.record == *record && loaded.identity == retained)
     }
 
     /// Revalidate that this retained store is still publicly bound below the

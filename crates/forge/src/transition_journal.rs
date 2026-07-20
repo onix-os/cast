@@ -50,7 +50,7 @@ pub(crate) use store::{
     JournalDeleteDurabilityBoundary, JournalUpdateDurabilityBoundary, arm_journal_delete_durability_callback,
     arm_journal_update_durability_callback,
 };
-pub(crate) use store::{TransitionJournalBinding, TransitionJournalStore};
+pub(crate) use store::{TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalStore};
 #[allow(unused_imports)] // deliberate internal surface for the next durable coordinator slice
 pub(crate) use successors::{BootRepairOutcome, InitialRollbackAction, RollbackActionOutcome, RollbackObservations};
 

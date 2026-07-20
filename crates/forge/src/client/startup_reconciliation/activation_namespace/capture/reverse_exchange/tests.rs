@@ -75,6 +75,7 @@ fn fingerprint(layout: UsrExchangeLayout) -> NamespaceFingerprint {
     };
     NamespaceFingerprint {
         root: witness(10),
+        root_entries: Vec::new(),
         roots: witness(20),
         quarantine: witness(40),
         epoch: RuntimeEpoch {

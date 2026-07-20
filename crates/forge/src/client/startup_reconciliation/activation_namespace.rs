@@ -33,6 +33,7 @@ mod rollback_complete_route_proof;
 #[allow(dead_code)] // checkpoint A remains sealed from production dispatch
 mod rollback_finalization_proof;
 mod rollback_reverse_proof;
+mod usr_exchanged_root_abi_proof;
 
 #[cfg(test)]
 mod tests;
@@ -246,6 +247,18 @@ pub(super) use rollback_reverse_proof::{
     UsrRollbackReverseDurableNamespace, UsrRollbackReverseNamespaceApplyReconciliation,
     UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError, UsrRollbackReverseNamespaceInspection,
     UsrRollbackReverseNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use usr_exchanged_root_abi_proof::{
+    arm_after_usr_exchanged_root_abi_complete_sync, arm_after_usr_exchanged_root_abi_publication,
+    arm_before_usr_exchanged_root_abi_complete_sync, arm_before_usr_exchanged_root_abi_publication,
+    arm_usr_exchanged_root_abi_complete_sync_fault,
+    reset_usr_exchanged_root_abi_effect_counts, usr_exchanged_root_abi_complete_sync_attempts,
+    usr_exchanged_root_abi_publication_attempts,
+};
+pub(super) use usr_exchanged_root_abi_proof::{
+    UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError,
+    UsrExchangedRootAbiNamespaceInspection, UsrExchangedRootAbiNamespaceProof,
 };
 #[cfg(test)]
 pub(in crate::client) use rollback_reverse_proof::{

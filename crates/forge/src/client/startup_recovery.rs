@@ -8,6 +8,7 @@
 
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
+mod usr_exchanged_root_abi_normalization;
 mod usr_rollback_activate_archived_candidate_preserve_persistence;
 mod usr_rollback_activate_archived_complete_route;
 mod usr_rollback_activate_archived_finalization;
@@ -51,6 +52,10 @@ impl UsrRollbackReverseEffectSeal {
 pub(in crate::client) use usr_exchange_parent_durability::{
     UsrExchangeParentDurabilityCompletionSeal, UsrExchangeParentDurabilityError,
     normalize_usr_exchange_parent_durability,
+};
+pub(super) use usr_exchanged_root_abi_normalization::{
+    UsrExchangedRootAbiNormalizationExecutionError, normalize_usr_exchanged_root_abi,
+    synchronize_usr_exchanged_root_abi,
 };
 pub(in crate::client) use usr_rollback_reverse_durability::{
     UsrRollbackReverseDurabilityError, UsrRollbackReverseDurabilitySeal,

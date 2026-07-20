@@ -4,6 +4,7 @@ mod model;
 mod new_state_candidate_preserve;
 mod new_state_candidate_target_preparation;
 mod reverse_exchange;
+mod root_entries;
 mod wrappers;
 
 use std::{
@@ -97,6 +98,7 @@ pub(in crate::client) use archived_candidate_preserve::{
     take_archived_candidate_preserve_target_durability_events,
 };
 use model::*;
+use root_entries::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
 pub(in crate::client::startup_reconciliation::activation_namespace) use new_state_candidate_preserve::DurableNewStateCandidatePreservePostMoveNamespace;
 pub(super) use new_state_candidate_preserve::{
@@ -200,6 +202,7 @@ pub(super) fn capture_snapshot(
     let root_witness = controlled_directory_witness(&root, &root_path)?;
     let epoch_before = RuntimeEpoch::capture().map_err(CaptureError::RuntimeEpoch)?;
     let root_abi = inspect_root_abi(&root, &root_path, &mut budget)?;
+    let root_entries = inspect_root_entries(&root, &root_path, &mut budget)?;
 
     let live = inspect_usr(
         &root,
@@ -249,6 +252,10 @@ pub(super) fn capture_snapshot(
         .map(|residue| residue.fingerprint.clone());
     let fingerprint = NamespaceFingerprint {
         root: root_witness,
+        root_entries: root_entries
+            .iter()
+            .map(|entry| entry.fingerprint.clone())
+            .collect(),
         roots: roots_witness,
         quarantine: quarantine_witness,
         epoch: epoch_after,
@@ -262,6 +269,7 @@ pub(super) fn capture_snapshot(
     let snapshot = NamespaceSnapshot {
         root,
         root_path,
+        root_entries,
         roots,
         roots_path,
         quarantine,

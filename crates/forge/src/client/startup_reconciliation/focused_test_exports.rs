@@ -137,3 +137,11 @@ pub(in crate::client) use super::activation_namespace::{
 
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use super::activation_namespace::arm_before_usr_rollback_decision_fresh_namespace_capture;
+
+pub(in crate::client) use super::activation_namespace::{
+    arm_after_usr_exchanged_root_abi_complete_sync, arm_after_usr_exchanged_root_abi_publication,
+    arm_before_usr_exchanged_root_abi_complete_sync, arm_before_usr_exchanged_root_abi_publication,
+    arm_usr_exchanged_root_abi_complete_sync_fault,
+    reset_usr_exchanged_root_abi_effect_counts, usr_exchanged_root_abi_complete_sync_attempts,
+    usr_exchanged_root_abi_publication_attempts,
+};

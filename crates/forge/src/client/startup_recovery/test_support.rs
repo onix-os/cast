@@ -28,7 +28,7 @@ use crate::client::{
 
 const OS_RELEASE: &[u8] = b"NAME=Rollback Decision Test\nID=rollback-decision-test\n";
 const SYSTEM_MODEL: &[u8] = b"let system = { hostname = \"rollback-decision-test\" } in system\n";
-const ROOT_ABI: [(&str, &str); 5] = [
+pub(super) const ROOT_ABI: [(&str, &str); 5] = [
     ("bin", "usr/bin"),
     ("sbin", "usr/sbin"),
     ("lib", "usr/lib"),
@@ -128,6 +128,9 @@ impl Fixture {
 
     fn with_historical_epoch(kind: OperationKind, source: SourceCase, historical: bool) -> Self {
         let fixture = Self::with_forward_source(kind, source.phase(), source.post_exchange(), historical);
+        if source == SourceCase::ExchangedPost {
+            install_root_abi(&fixture.installation.root);
+        }
         assert_eq!(
             fixture.source.generation,
             kind.expected_source_generation(source.phase()),
@@ -256,6 +259,28 @@ impl Fixture {
 
     pub(super) fn canonical_bytes(&self) -> Vec<u8> {
         fs::read(canonical_journal(&self.installation.root)).unwrap()
+    }
+
+    #[allow(dead_code)] // only the root-ABI normalization test instantiation uses this helper
+    pub(super) fn set_root_abi_subset(&self, mask: u8) {
+        for (index, (name, target)) in ROOT_ABI.into_iter().enumerate() {
+            let path = self.installation.root.join(name);
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                Err(source) => panic!("remove fixture root ABI link {}: {source}", path.display()),
+            }
+            if mask & (1 << index) != 0 {
+                symlink(target, &path).unwrap();
+            }
+        }
+    }
+
+    #[allow(dead_code)] // only the root-ABI normalization test instantiation uses this helper
+    pub(super) fn assert_complete_root_abi(&self) {
+        for (name, target) in ROOT_ABI {
+            assert_eq!(fs::read_link(self.installation.root.join(name)).unwrap(), Path::new(target));
+        }
     }
 
     pub(super) fn expected_plan(&self) -> RollbackPlan {
@@ -498,6 +523,12 @@ fn create_marked_tree(path: &Path, state: state::Id) -> (TreeToken, RuntimeTreeI
 fn install_isolation_abi(root: &Path) {
     for (name, target) in ROOT_ABI {
         symlink(target, root.join(".cast/root/isolation").join(name)).unwrap();
+    }
+}
+
+pub(super) fn install_root_abi(root: &Path) {
+    for (name, target) in ROOT_ABI {
+        symlink(target, root.join(name)).unwrap();
     }
 }
 

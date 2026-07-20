@@ -45,6 +45,7 @@ mod usr_rollback_fresh_db_invalidation_authority;
 mod usr_rollback_fresh_db_invalidation_route_authority;
 mod usr_rollback_resume_route_authority;
 mod usr_rollback_reverse_authority;
+mod usr_exchanged_root_abi_authority;
 
 #[cfg(test)]
 pub(in crate::client) use focused_test_exports::*;
@@ -132,6 +133,10 @@ pub(in crate::client) use usr_rollback_reverse_authority::{
     UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError, UsrRollbackReverseDurableEffectAuthority,
     UsrRollbackReverseFinishAuthority,
 };
+pub(in crate::client) use usr_exchanged_root_abi_authority::{
+    UsrExchangedRootAbiDurabilityAuthority, UsrExchangedRootAbiNormalizationAdmission,
+    UsrExchangedRootAbiNormalizationAuthority, UsrExchangedRootAbiNormalizationAuthorityError,
+};
 
 use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
@@ -162,6 +167,8 @@ use activation_namespace::{
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
     UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
     UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
+    UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError,
+    UsrExchangedRootAbiNamespaceInspection, UsrExchangedRootAbiNamespaceProof,
 };
 use activation_namespace::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,

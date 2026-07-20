@@ -30,6 +30,7 @@ help:
 	@timeout 10s echo "  forge-startup-reconciliation-test  Run read-only startup recovery assessment tests"
 	@timeout 10s echo "  forge-startup-activation-namespace-test  Run authenticated startup activation-namespace inventory tests"
 	@timeout 10s echo "  forge-startup-usr-rollback-decision-test  Run exact journal-only startup rollback-decision contracts"
+	@timeout 10s echo "  forge-startup-usr-exchanged-root-abi-normalization-test  Run retained UsrExchanged root ABI convergence contracts"
 	@timeout 10s echo "  forge-startup-usr-exchange-parent-durability-test  Run exact descriptor-bound parent-durability contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-resume-route-test  Run exact journal-only rollback-resume routing contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-candidate-preserve-admission-test  Run sealed read-only candidate-preservation admission contracts"
