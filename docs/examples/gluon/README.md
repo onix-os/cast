@@ -196,11 +196,12 @@ conformance corpus as two independently locked inputs. The primary USTAR is
 the only extracted source; a typed pre-check Bash hook uses only its declared
 `cp` capability to admit the raw JSON into private build scratch before CTest.
 The frozen plan pins both source identities and proves that source order 1 is
-never interpreted as an archive. Its one-output bundle may contain only the
-installed frame-codec ELF: the corpus is check-only and must not enter the
-Stone or create a runtime relation. The supplemental hostile-host lane proves
-the check fails without the corpus, succeeds with the exact bytes, and rejects
-a mutated vector, but it is not delegated Stone execution evidence.
+never interpreted as an archive. Its manifest contains only the installed
+frame-codec ELF, while a non-manifest `dbginfo` output owns the analyzer's
+build-ID symbols under `/usr/lib/debug`. The corpus is check-only and must not
+enter either Stone or create a runtime relation. The supplemental hostile-host
+lane proves the check fails without the corpus, succeeds with the exact bytes,
+and rejects a mutated vector, but it is not delegated Stone execution evidence.
 The second CMake fixture turns the documented `post_install` pattern into an
 offline executable proof. Its ordinary check phase runs the build-tree target,
 then its post-install hook invokes only
@@ -396,7 +397,7 @@ optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
 all twenty-six fixtures complete both executions. It records exactly 52
-executions, 78 bundle validations, 131 Stones, 52 manifests, and 183 artifacts,
+executions, 78 bundle validations, 132 Stones, 52 manifests, and 184 artifacts,
 plus repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle

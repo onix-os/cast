@@ -651,8 +651,8 @@ the live items below remain open until a non-skipped required run proves them.
   capability boundary, before restoring the Stone bootstrap cache.
   The complete live execution, bundle decoding, and repeated-build assertions
   are implemented. Only a complete required matrix can atomically publish its
-  bounded v2 receipt: 52 executions, 78 bundle validations, 131 Stones,
-  52 manifests, and 183 artifacts, with each fixture's repeated plan and lock,
+  bounded v2 receipt: 52 executions, 78 bundle validations, 132 Stones,
+  52 manifests, and 184 artifacts, with each fixture's repeated plan and lock,
   publication outcomes, sorted artifact digests, and three matching bundle
   ledgers. Exact validation rejects duplicate keys, structural drift, unsafe
   bounds, and ledger-framing changes; a direct producer/validator test still

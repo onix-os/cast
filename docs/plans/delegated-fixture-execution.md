@@ -31,7 +31,9 @@ but remains supplemental rather than delegated Stone execution.
 
 The external-test-vectors fixture independently locks a deterministic primary
 USTAR and raw JSON corpus, admits that corpus only through a declared
-pre-check Bash/`cp` capability, and forbids it from the one-output Stone. Its
+pre-check Bash/`cp` capability, routes analyzer-generated build-ID symbols to
+an explicit non-manifest `dbginfo` output, and forbids the corpus from both
+emitted Stones. Its
 disposable supplemental host proof does not replace live delegated execution.
 
 All fixtures union to an exact 175-package, 385,535,265-byte bootstrap pool.

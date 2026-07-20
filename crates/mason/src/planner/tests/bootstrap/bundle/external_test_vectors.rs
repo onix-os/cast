@@ -7,14 +7,11 @@ fn assert_external_test_vectors_fixture(
     const VECTOR_MARKER: &[u8] = b"cast external test vectors fixture: 3 independently locked vectors verified";
     const SELF_TEST_MARKER: &[u8] = b"cast external test vectors fixture: codec self-test passed";
 
-    assert_eq!(packages.len(), 1, "{FIXTURE}: emitted bundle must contain exactly one package");
-    let (output_name, root) = packages.first_key_value().unwrap();
-    assert_eq!(output_name.as_str(), "cast-external-test-vectors-fixture");
-    let [root_plan] = planned.plan.outputs.as_slice() else {
-        panic!("{FIXTURE}: frozen plan must contain exactly one output");
-    };
+    assert_eq!(packages.len(), 2, "{FIXTURE}: emitted bundle must contain exactly two packages");
+    let (root_plan, root) = output(planned, packages, "out");
+    let (debug_plan, debug) = output(planned, packages, "dbginfo");
     assert_eq!(root_plan.name, "out");
-    assert_eq!(root_plan.package_name, *output_name);
+    assert_eq!(root_plan.package_name, "cast-external-test-vectors-fixture");
     assert!(root_plan.include_in_manifest);
     assert!(root_plan.runtime_inputs.is_empty(), "{FIXTURE}: build/check tools leaked into runtime relations");
     assert_eq!(
@@ -25,6 +22,11 @@ fn assert_external_test_vectors_fixture(
         root_plan.description.as_deref(),
         Some("A real CMake/CTest build whose check-only corpus never enters the installed output.")
     );
+    assert_eq!(debug_plan.name, "dbginfo");
+    assert_eq!(debug_plan.package_name, "cast-external-test-vectors-fixture-dbginfo");
+    assert!(!debug_plan.include_in_manifest);
+    assert!(debug_plan.runtime_inputs.is_empty());
+    assert_eq!(debug_plan.summary.as_deref(), Some("Frame codec debugging symbols"));
 
     assert_leaf_paths(FIXTURE, "out", root, [EXECUTABLE]);
     assert_no_directories(FIXTURE, "out", root);
@@ -58,5 +60,12 @@ fn assert_external_test_vectors_fixture(
             root_plan.package_name.clone(),
             "binary(cast-external-test-vectors-fixture)".to_owned(),
         ]),
+    );
+    assert_debug_output(FIXTURE, debug, &[executable_elf]);
+    assert_exact_relations(
+        FIXTURE,
+        debug,
+        planned_output_dependencies(planned, debug_plan),
+        BTreeSet::from([debug_plan.package_name.clone()]),
     );
 }

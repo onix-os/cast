@@ -4,6 +4,7 @@
 # corpus with host CMake/CTest in a disposable directory. It is not a Stone,
 # container, transaction, rollback, boot, or Nix-compatibility proof.
 set -eu
+umask 022
 
 root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"

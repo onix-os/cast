@@ -165,13 +165,12 @@ pub(super) fn expected_stones(fixture: &str) -> u64 {
         | "meson"
         | "multiple-sources"
         | "post-install-smoke-test" => 9,
-        "header-only-library" => 2,
+        "external-test-vectors" | "header-only-library" => 2,
         "daemon-generated" | "plugin-output" => 3,
         "split" => 5,
         "generated-config"
         | "generated-shell"
         | "desktop-integration"
-        | "external-test-vectors"
         | "font-family"
         | "gettext-localization"
         | "go-module"

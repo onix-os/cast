@@ -131,13 +131,20 @@ fn validate_external_test_vectors_contract(
     {
         return Err("external-test-vectors canonical lock identity or order drifted".to_owned());
     }
-    let [output] = package.outputs.as_slice() else {
-        return Err("external-test-vectors must publish exactly one output".to_owned());
+    let [output, debugging] = package.outputs.as_slice() else {
+        return Err("external-test-vectors must publish exactly out and dbginfo".to_owned());
     };
     if output.name != "out"
+        || !output.include_in_manifest
         || output.paths
             != [stone_recipe::PathSpec::Exe {
                 path: "/usr/bin/cast-external-test-vectors-fixture".to_owned(),
+            }]
+        || debugging.name != "dbginfo"
+        || debugging.include_in_manifest
+        || debugging.paths
+            != [stone_recipe::PathSpec::Any {
+                path: "/usr/lib/debug".to_owned(),
             }]
     {
         return Err("external-test-vectors output routing drifted".to_owned());
@@ -236,6 +243,16 @@ fn external_test_vectors_declaration_and_corpus_fail_closed() {
 
     let mut candidate = package.clone();
     candidate.options.networking = true;
+    assert!(validate_external_test_vectors_contract(&candidate, &lock, &raw).is_err());
+
+    let mut candidate = package.clone();
+    candidate.outputs[1].include_in_manifest = true;
+    assert!(validate_external_test_vectors_contract(&candidate, &lock, &raw).is_err());
+
+    let mut candidate = package.clone();
+    candidate.outputs[1].paths[0] = stone_recipe::PathSpec::Any {
+        path: "/usr/lib/debug/.build-id".to_owned(),
+    };
     assert!(validate_external_test_vectors_contract(&candidate, &lock, &raw).is_err());
 
     let mut candidate = lock.clone();

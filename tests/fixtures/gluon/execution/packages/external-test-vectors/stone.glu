@@ -14,6 +14,13 @@ let root = b.output_with {
     .. b.output "out"
 }
 
+let debugging = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Frame codec debugging symbols",
+    paths = [b.path.any "/usr/lib/debug"],
+    .. b.output "dbginfo"
+}
+
 let base = b.mk_package (b.meta {
     pname = "cast-external-test-vectors-fixture",
     version = "1.0.0",
@@ -35,7 +42,7 @@ let base = b.mk_package (b.meta {
         .. b.defaults.hooks
     },
     native_build_inputs = [b.dep.binary "cp"],
-    outputs = [root],
+    outputs = [root, debugging],
     options = b.options {
         networking = b.boolean.false,
         .. b.defaults.options

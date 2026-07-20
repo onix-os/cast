@@ -275,23 +275,39 @@ fn assert_external_test_vector_semantics(declaration: &PackageSpec, plan: &Deriv
         } if phase_name.eq_ignore_ascii_case("check")
     ));
 
-    let [output] = declaration.outputs.as_slice() else {
-        panic!("external-test-vectors must publish one exact output");
+    let [output, debugging] = declaration.outputs.as_slice() else {
+        panic!("external-test-vectors must publish exactly out and dbginfo");
     };
     assert_eq!(output.name, "out");
+    assert!(output.include_in_manifest);
     assert!(matches!(
         output.paths.as_slice(),
         [stone_recipe::PathSpec::Exe { path }] if path == "/usr/bin/frame-codec"
     ));
-    assert_eq!(plan.outputs.len(), 1);
+    assert_eq!(debugging.name, "dbginfo");
+    assert!(!debugging.include_in_manifest);
+    assert!(matches!(
+        debugging.paths.as_slice(),
+        [stone_recipe::PathSpec::Any { path }] if path == "/usr/lib/debug"
+    ));
+    assert_eq!(plan.outputs.len(), 2);
     assert_eq!(plan.outputs[0].name, "out");
+    assert_eq!(plan.outputs[1].name, "dbginfo");
+    assert!(!plan.outputs[1].include_in_manifest);
     assert_eq!(
         plan.collection_rules,
-        [CollectionRulePlan {
-            output: "out".to_owned(),
-            kind: PathRuleKind::Executable,
-            pattern: "/usr/bin/frame-codec".to_owned(),
-        }]
+        [
+            CollectionRulePlan {
+                output: "out".to_owned(),
+                kind: PathRuleKind::Executable,
+                pattern: "/usr/bin/frame-codec".to_owned(),
+            },
+            CollectionRulePlan {
+                output: "dbginfo".to_owned(),
+                kind: PathRuleKind::Any,
+                pattern: "/usr/lib/debug".to_owned(),
+            },
+        ]
     );
     assert_eq!(plan.execution.network, NetworkMode::Disabled);
     assert_x86_64_platform(plan);

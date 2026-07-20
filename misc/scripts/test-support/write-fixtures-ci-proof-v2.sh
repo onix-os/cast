@@ -93,10 +93,10 @@ stone_count_for_fixture() {
         autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|factory-override|hooks-patch|meson|multiple-sources|post-install-smoke-test)
             stone_count=9
             ;;
-        header-only-library) stone_count=2 ;;
+        external-test-vectors|header-only-library) stone_count=2 ;;
         daemon-generated|plugin-output) stone_count=3 ;;
         split) stone_count=5 ;;
-        desktop-integration|external-test-vectors|font-family|generated-config|generated-shell|gettext-localization|go-module|python-module|system-integration-assets|userspace-profile) stone_count=1 ;;
+        desktop-integration|font-family|generated-config|generated-shell|gettext-localization|go-module|python-module|system-integration-assets|userspace-profile) stone_count=1 ;;
         *) printf 'unknown test fixture proof fixture: %s\n' "$1" >&2; exit 1 ;;
     esac
 }
@@ -141,9 +141,9 @@ cat >>"$output" <<EOF_HEADER
     "fixture_count": 26,
     "execution_count": 52,
     "bundle_validation_count": 78,
-    "stone_count": 131,
+    "stone_count": 132,
     "manifest_count": 52,
-    "artifact_count": 183,
+    "artifact_count": 184,
     "artifact_bytes": $artifact_bytes
   },
   "fixtures": [

@@ -643,15 +643,17 @@ jq -e --arg commit "$fake_commit" '
         fixture_count: 26,
         execution_count: 52,
         bundle_validation_count: 78,
-        stone_count: 131,
+        stone_count: 132,
         manifest_count: 52,
-        artifact_count: 183,
+        artifact_count: 184,
         artifact_bytes: .totals.artifact_bytes
     }
     and (.fixtures | length) == 26
     and .fixtures[0].name == "autotools"
     and .fixtures[8].name == "desktop-integration"
     and .fixtures[9].name == "external-test-vectors"
+    and .fixtures[9].artifacts.stone_count == 2
+    and .fixtures[9].artifacts.artifact_count == 4
     and .fixtures[11].name == "font-family"
     and .fixtures[14].name == "gettext-localization"
     and .fixtures[15].name == "go-module"
@@ -661,9 +663,9 @@ jq -e --arg commit "$fake_commit" '
     and .fixtures[22].name == "python-module"
     and .fixtures[24].name == "system-integration-assets"
     and .fixtures[25].name == "userspace-profile"
-    and ([.fixtures[].artifacts.stone_count] | add) == 131
+    and ([.fixtures[].artifacts.stone_count] | add) == 132
     and ([.fixtures[].artifacts.manifest_count] | add) == 52
-    and ([.fixtures[].artifacts.artifact_count] | add) == 183
+    and ([.fixtures[].artifacts.artifact_count] | add) == 184
     and .result == "passed"
 ' "$proof" >/dev/null
 grep -Fqx -- "--setenv=CAST_FIXTURE_PROOF_PATH=$proof" "$state/systemd-run-args"

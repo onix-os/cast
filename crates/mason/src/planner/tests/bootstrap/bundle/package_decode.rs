@@ -117,7 +117,6 @@ pub(super) fn assert_fixture_bundle(
         "generated-config"
             | "generated-shell"
             | "desktop-integration"
-            | "external-test-vectors"
             | "font-family"
             | "gettext-localization"
             | "go-module"
@@ -126,6 +125,8 @@ pub(super) fn assert_fixture_bundle(
             | "userspace-profile"
     ) {
         assert_eq!(output_names, BTreeSet::from(["out"]));
+    } else if name == "external-test-vectors" {
+        assert_eq!(output_names, BTreeSet::from(["out", "dbginfo"]));
     } else if name == "header-only-library" {
         assert_eq!(output_names, BTreeSet::from(["out", "devel"]));
     } else if name == "plugin-output" {

@@ -26,6 +26,29 @@ pub(super) fn assert_contract(
     plan: &stone_recipe::derivation::DerivationPlan,
     job: &stone_recipe::derivation::JobPlan,
 ) {
+    let [root, debugging] = plan.outputs.as_slice() else {
+        panic!("external-test-vectors: frozen plan must contain exactly out and dbginfo");
+    };
+    assert_eq!(root.name, "out");
+    assert!(root.include_in_manifest);
+    assert_eq!(debugging.name, "dbginfo");
+    assert!(!debugging.include_in_manifest);
+    assert_eq!(
+        plan.collection_rules,
+        [
+            stone_recipe::derivation::CollectionRulePlan {
+                output: "out".to_owned(),
+                kind: stone_recipe::derivation::PathRuleKind::Executable,
+                pattern: "/usr/bin/cast-external-test-vectors-fixture".to_owned(),
+            },
+            stone_recipe::derivation::CollectionRulePlan {
+                output: "dbginfo".to_owned(),
+                kind: stone_recipe::derivation::PathRuleKind::Any,
+                pattern: "/usr/lib/debug".to_owned(),
+            },
+        ],
+        "external-test-vectors: frozen collector routing drifted"
+    );
     assert_eq!(
         plan.manifest_build_inputs
             .iter()
