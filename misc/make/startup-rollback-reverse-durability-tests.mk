@@ -17,6 +17,7 @@ forge-startup-usr-rollback-reverse-durability-test:
 	done; \
 	parent=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation/durability.rs; \
+	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof.rs; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_reverse_durability.rs; \
 	dispatcher=crates/forge/src/client/startup_recovery/usr_rollback_reverse_dispatch.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation/durability/tests/mod.rs; \
@@ -29,17 +30,32 @@ forge-startup-usr-rollback-reverse-durability-test:
 	timeout 10s grep -Fqx '    outcome: RollbackActionOutcome,' "$$authority"; \
 	timeout 10s grep -Fq 'outcome: RollbackActionOutcome::Applied,' "$$authority"; \
 	timeout 10s grep -Fq 'outcome: RollbackActionOutcome::AlreadySatisfied,' "$$authority"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'if !journal.has_binding(&self._effect.journal_binding) {' "$$authority" )" = 3; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'journal\.load\(\)' "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fqx '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'require_journal_record_binding(' "$$authority" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc '&self._effect.journal_record_binding,' "$$authority" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc '&effect.journal_record_binding,' "$$authority" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'namespace.complete_parent_durability(&installation, &record)' "$$authority" )" = 2; \
 	timeout 10s grep -Fqx '    pub(in crate::client) fn installation(&self) -> &Installation {' "$$authority"; \
 	timeout 10s grep -Fqx '    pub(in crate::client) fn record(&self) -> &TransitionRecord {' "$$authority"; \
-	timeout 10s grep -Fqx '    pub(in crate::client) fn usr_restored_successor(&self) -> Result<TransitionRecord, CodecError> {' "$$authority"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'self._effect.record.rollback_successor(Some(self.outcome))' "$$authority" )" = 1; \
+	if timeout 10s rg -n 'fn usr_restored_successor\(' "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s rg -U -q '    pub\(in crate::client\) fn advance_usr_restored_record_binding\(\n        self,\n        journal: &TransitionJournalStore,\n    \) -> Result<UsrRollbackReversePublishedRecord, UsrRollbackReverseRecordAdvanceError> \{' "$$authority"; \
+	advance_body="$$( timeout 10s sed -n '/fn advance_usr_restored_record_binding(/,/^    }/p' "$$authority" )"; \
+	if timeout 10s rg -n 'next:|&next|, next' <<<"$$advance_body"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq '.rollback_successor(Some(self.outcome))' <<<"$$advance_body"; \
+	timeout 10s grep -Fq 'if successor.phase != Phase::UsrRestored {' <<<"$$advance_body"; \
+	timeout 10s grep -Fq 'journal.advance_record_binding(cast, self._effect.journal_record_binding, &successor)' <<<"$$advance_body"; \
+	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackReversePublishedRecord {' "$$authority"; \
+	timeout 10s grep -Fqx '    record: TransitionRecord,' "$$authority"; \
+	timeout 10s grep -Fqx '    binding: TransitionJournalRecordBinding,' "$$authority"; \
+	advance_callers="$$( timeout 10s rg -n '\.advance_usr_restored_record_binding\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
+	timeout 10s test "$$advance_callers" = 1; \
 	if timeout 10s rg -n 'fn outcome\(' "$$authority"; then exit 1; fi; \
 	if timeout 10s rg -n '^[[:space:]]{8,}outcome: RollbackActionOutcome([,)]|$$)' "$$authority"; then exit 1; fi; \
 	timeout 10s rg -U -q '#\[cfg\(test\)\]\nimpl UsrRollbackReverseDurableEffectAuthority<'"'"'_> \{\n    pub\(in crate::client\) fn outcome_for_test\(&self\) -> RollbackActionOutcome \{' "$$authority"; \
 	revalidate_line="$$( timeout 10s grep -nF '    pub(in crate::client) fn revalidate(' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
-	binding_line="$$( timeout 10s grep -nF '        if !journal.has_binding(&self._effect.journal_binding) {' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
+	binding_line="$$( timeout 10s grep -nF '        require_journal_record_binding(' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
 	pre_line="$$( timeout 10s grep -nF '        require_pre_namespace_evidence(' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
 	namespace_line="$$( timeout 10s grep -nF '        let namespace_result = effect.namespace.revalidate(&effect.installation, &effect.record);' "$$authority" | timeout 10s cut -d: -f1 )"; \
 	trailing_line="$$( timeout 10s grep -nF '        let trailing_evidence = require_post_namespace_evidence(' "$$authority" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \

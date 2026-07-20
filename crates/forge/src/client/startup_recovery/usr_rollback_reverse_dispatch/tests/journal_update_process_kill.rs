@@ -29,8 +29,8 @@ use crate::{
 
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_usr_restored_pending,
-    expected_candidate_preserve_intent, open_layout_database, open_state_database, persistent_state_database,
-    release_fixture_handles, test_system_capabilities,
+    create_private_directory, expected_candidate_preserve_intent, open_layout_database, open_state_database,
+    persistent_state_database, release_fixture_handles, root_abi_snapshot_at, test_system_capabilities,
 };
 
 const TEST_NAME: &str = concat!(
@@ -359,7 +359,7 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
             .id
             .expect("ActivateArchived candidate must retain its state id");
         let wrapper = root.join(".cast/root").join(candidate.to_string());
-        fs::create_dir(&wrapper).unwrap();
+        create_private_directory(&wrapper);
         let candidate_marker = match layout {
             ProcessLayout::Post => root.join("usr/.cast-tree-id"),
             ProcessLayout::Pre => root.join(".cast/root/staging/usr/.cast-tree-id"),
@@ -370,6 +370,7 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
         ));
         fs::hard_link(candidate_marker, slot).unwrap();
     }
+    let root_abi_before = root_abi_snapshot_at(&root);
     let source_inode = file_identity(&root.join(".cast/journal").join(CANONICAL_NAME));
     let state_database = persistent_state_database(&fixture, kind);
     let states_before = state_database.all().unwrap();
@@ -403,7 +404,7 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
     );
 
     assert_eq!(RawUsrLayout::capture(&root), expected_pre_layout);
-    assert_root_links_absent_at(&root);
+    assert_eq!(root_abi_snapshot_at(&root), root_abi_before);
     assert_database_unchanged(&root, &states_before, &in_flight_before);
     assert_journal_after_kill(&root, boundary, &source, &published_successor, source_inode);
 
@@ -442,7 +443,7 @@ fn run_parent_case(kind: OperationKind, layout: ProcessLayout, boundary: Journal
     } else {
         assert_eq!(RawUsrLayout::capture(&root), expected_pre_layout);
     }
-    assert_root_links_absent_at(&root);
+    assert_eq!(root_abi_snapshot_at(&root), root_abi_before);
     assert_database_unchanged(&root, &states_before, &in_flight_before);
 
     drop(fixture);
@@ -499,6 +500,7 @@ fn run_recovery_child(
     );
     let states_before = state_database.all().unwrap();
     let in_flight_before = state_database.audit_in_flight_transition().unwrap();
+    let root_abi_before = root_abi_snapshot_at(&case.root);
     reset_retained_exchange_syscall_count();
     arm_before_reverse_exchange_reconciliation_capture(|| {
         panic!("PRE journal-update recovery attempted a second retained /usr exchange")
@@ -528,7 +530,7 @@ fn run_recovery_child(
     );
     assert_eq!(state_database.all().unwrap(), states_before);
     assert_eq!(state_database.audit_in_flight_transition().unwrap(), in_flight_before);
-    assert_root_links_absent_at(&case.root);
+    assert_eq!(root_abi_snapshot_at(&case.root), root_abi_before);
     assert_clean_journal_directory(&case.root);
     drop(recovered);
 
@@ -580,7 +582,7 @@ fn run_recovery_child(
     }
     assert_eq!(state_database.all().unwrap(), states_before);
     assert_eq!(state_database.audit_in_flight_transition().unwrap(), in_flight_before);
-    assert_root_links_absent_at(&case.root);
+    assert_eq!(root_abi_snapshot_at(&case.root), root_abi_before);
     assert_clean_journal_directory(&case.root);
 }
 
@@ -782,15 +784,6 @@ fn assert_database_unchanged(
     let state_database = open_state_database(&installation);
     assert_eq!(state_database.all().unwrap(), states_before);
     assert_eq!(&state_database.audit_in_flight_transition().unwrap(), in_flight_before);
-}
-
-fn assert_root_links_absent_at(root: &Path) {
-    for name in ["bin", "sbin", "lib", "lib32", "lib64"] {
-        assert!(
-            fs::symlink_metadata(root.join(name)).is_err(),
-            "rollback-reverse journal process recovery unexpectedly published root link {name}"
-        );
-    }
 }
 
 fn directory_identity(path: &Path) -> (u64, u64) {

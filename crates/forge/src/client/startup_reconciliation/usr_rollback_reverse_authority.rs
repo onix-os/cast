@@ -3,18 +3,19 @@
 //! Read-only POST/PRE evidence becomes disjoint opaque effect leases. A private
 //! child can consume either lease only with startup-recovery seals: POST may
 //! make one exchange attempt and PRE makes none, then both paths converge only
-//! after ordered parent durability and a final exact PRE proof. This module
-//! deliberately stops before journal advance, database mutation, cleanup,
-//! triggers, or production dispatch, and never exposes a namespace snapshot or
-//! raw retained descriptor.
+//! after ordered parent durability and a final exact PRE proof. The resulting
+//! authority chain is consumed by production startup-recovery dispatch and
+//! retains the exact record binding through the bound journal-advance boundary.
+//! It stops before database mutation, later cleanup, and triggers, and never
+//! exposes a namespace snapshot or raw retained descriptor.
 
 mod effect_reconciliation;
 
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
-        TransitionJournalStore, TransitionRecord,
+        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
+        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -31,6 +32,7 @@ use super::{
 pub(in crate::client) use effect_reconciliation::{
     UsrRollbackReverseAlreadySatisfiedEffectAuthority, UsrRollbackReverseAppliedEffectAuthority,
     UsrRollbackReverseApplyReconciliation, UsrRollbackReverseDurableEffectAuthority,
+    UsrRollbackReverseRecordAdvanceError,
 };
 
 /// Exact result of read-only reverse-effect admission.
@@ -48,7 +50,7 @@ pub(in crate::client) struct UsrRollbackReverseAuthority<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackReverseNamespaceProof,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -72,7 +74,7 @@ struct UsrRollbackReverseEffectLease<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackReverseNamespaceEffectEvidence,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -102,9 +104,11 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
             return Ok(UsrRollbackReverseAdmission::NotApplicable);
         }
 
-        let journal_binding = journal.binding();
         installation.revalidate_mutable_namespace()?;
-        let namespace_inspection = match UsrRollbackReverseNamespaceInspection::begin(installation, journal, record) {
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        installation.revalidate_mutable_namespace()?;
+        let namespace_inspection = match UsrRollbackReverseNamespaceInspection::begin(installation, record) {
             Ok(inspection) => inspection,
             Err(_) => return Ok(UsrRollbackReverseAdmission::Deferred),
         };
@@ -119,13 +123,15 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
         if !database_is_compatible(record, &database_after) || database != database_after {
             return Ok(UsrRollbackReverseAdmission::Deferred);
         }
-        let namespace = match namespace_inspection.finish(installation, journal, record) {
+        let namespace = match namespace_inspection.finish(installation, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackReverseAdmission::Deferred),
         };
 
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
+        installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(installation, journal, &journal_record_binding, record)?;
         installation.revalidate_mutable_namespace()?;
         let layout = namespace.layout();
         let authority = Self {
@@ -134,7 +140,7 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
             record: record.clone(),
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         };
         Ok(match layout {
@@ -152,20 +158,30 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
         journal: &TransitionJournalStore,
         expected_layout: UsrExchangeLayout,
     ) -> Result<(), UsrRollbackReverseAuthorityError> {
-        // Per-open binding must be the first observation. No namespace or
-        // database evidence may be consulted for a mixed journal store.
-        if !journal.has_binding(&self.journal_binding) {
-            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        // Exact public record identity is the first observation. Equal bytes
+        // at a replacement inode cannot authorize an effect.
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
-        self.namespace.revalidate(&self.installation, journal, &self.record)?;
+        self.namespace.revalidate(&self.installation, &self.record)?;
         let database_after = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_after)?;
         if !reverse_plan_is_exact(&self.record) || self.namespace.layout() != expected_layout {
             return Err(UsrRollbackReverseAuthorityErrorKind::ReverseEvidenceMismatch.into());
         }
+        self.installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -184,16 +200,20 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
+        let namespace = namespace.into_effect_evidence(expected_layout)?;
+        installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(&installation, journal, &journal_record_binding, &record)?;
+        installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackReverseEffectLease {
             installation,
             state_db,
             record,
             database,
-            namespace: namespace.into_effect_evidence(expected_layout)?,
-            journal_binding,
+            namespace,
+            journal_record_binding,
             _active_state_reservation,
         })
     }
@@ -251,7 +271,7 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     if record.phase != Phase::ReverseExchangeIntent
         || (!matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
         ) && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || rollback.usr_exchange != RollbackAction::Pending
@@ -276,6 +296,23 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     fresh_is_exact
         && candidate_disposition_is_exact
         && rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived)
+}
+
+fn require_journal_record_binding(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackReverseAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackReverseAuthorityErrorKind::JournalRecordBindingMismatch.into());
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, binding, record)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackReverseAuthorityErrorKind::JournalRecordBindingMismatch.into())
+    }
 }
 
 #[cfg(test)]
@@ -341,14 +378,16 @@ impl From<crate::installation::Error> for UsrRollbackReverseAuthorityError {
     }
 }
 
+impl From<StorageError> for UsrRollbackReverseAuthorityError {
+    fn from(source: StorageError) -> Self {
+        UsrRollbackReverseAuthorityErrorKind::Journal(source).into()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackReverseAuthorityErrorKind {
-    #[error("startup rollback-reverse authority was paired with a different open journal store")]
-    JournalBindingMismatch,
-    #[error("read the exact rollback-reverse journal during effect reconciliation")]
-    JournalReadDuringEffect(#[source] crate::transition_journal::StorageError),
-    #[error("the exact rollback-reverse journal changed during effect reconciliation")]
-    JournalChangedDuringEffect,
+    #[error("startup rollback-reverse authority lost its exact canonical journal record binding")]
+    JournalRecordBindingMismatch,
     #[error("exact startup rollback-reverse evidence no longer selects its retained typestate")]
     ReverseEvidenceMismatch,
     #[error("inspect exact rollback-reverse database evidence")]
@@ -357,6 +396,8 @@ enum UsrRollbackReverseAuthorityErrorKind {
     Namespace(#[source] UsrRollbackReverseNamespaceError),
     #[error("revalidate retained mutable installation namespace around rollback-reverse authority")]
     Installation(#[source] crate::installation::Error),
+    #[error("capture or revalidate the exact rollback-reverse journal record binding")]
+    Journal(#[source] StorageError),
     #[error("rollback-reverse database evidence is incompatible: {evidence:?}")]
     DatabaseIncompatible { evidence: Box<DatabaseEvidence> },
     #[error("rollback-reverse database evidence changed from {expected:?} to {actual:?}")]

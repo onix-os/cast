@@ -17,6 +17,7 @@ forge-startup-usr-rollback-reverse-effect-test:
 	done; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation.rs; \
 	namespace=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof/effect_reconciliation.rs; \
+	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/effect_reconciliation/tests/mod.rs; \
 	timeout 10s grep -Fqx 'mod effect_reconciliation;' crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority.rs; \
 	timeout 10s grep -Fqx 'mod effect_reconciliation;' crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof.rs; \
@@ -26,7 +27,12 @@ forge-startup-usr-rollback-reverse-effect-test:
 	if timeout 10s rg -n 'RollbackActionOutcome|outcome:' "$$authority"; then exit 1; fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc '        _effect_seal: &UsrRollbackReverseEffectSeal,' "$$authority" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc '        self,' "$$authority" )" -ge 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'if !journal.has_binding(&self.lease.journal_binding) {' "$$authority" )" = 2; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'journal\.load\(\)' "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fqx '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'require_journal_record_binding(' "$$authority" )" = 6; \
+	timeout 10s test "$$( timeout 10s grep -Fc '&self.lease.journal_record_binding,' "$$authority" )" = 2; \
+	timeout 10s awk 'pending { if ($$0 ~ /revalidate_mutable_namespace\(\)\?;/) pairs += 1; pending = 0 } /require_journal_record_binding\(/ { if (/\)\?;/) pending = 1; else in_call = 1; next } in_call && $$0 ~ /^[[:space:]]*\)\?;$$/ { in_call = 0; pending = 1; next } END { exit pairs != 4 }' "$$authority"; \
 	timeout 10s grep -Fq 'let pending = parents.attempt_usr_exchange_once();' "$$namespace"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'attempt_usr_exchange_once()' "$$namespace" )" = 1; \
 	finish_body="$$( timeout 10s sed -n '/fn reconcile_finish(/,/^    }/p' "$$namespace" )"; \

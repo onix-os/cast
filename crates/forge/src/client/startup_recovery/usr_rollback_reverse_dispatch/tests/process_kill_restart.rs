@@ -28,7 +28,7 @@ use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
     assert_layout_unchanged, assert_usr_restored_pending, expected_candidate_preserve_intent, expected_usr_restored,
     open_layout_database, open_state_database, persistent_state_database, release_fixture_handles,
-    test_system_capabilities, usr_layout, usr_layout_at,
+    root_abi_snapshot_at, test_system_capabilities, usr_layout, usr_layout_at,
 };
 
 const TEST_NAME: &str = concat!(
@@ -275,6 +275,7 @@ fn run_parent_case(kind: OperationKind, kill_point: KillPoint) {
     let preserve_intent = expected_candidate_preserve_intent(&restored);
     let post_layout = usr_layout(&fixture);
     let raw_post_layout = RawUsrLayout::capture(&root);
+    let root_abi_before = root_abi_snapshot_at(&root);
     let state_database = persistent_state_database(&fixture, kind);
     let states_before = state_database.all().unwrap();
     let in_flight_before = state_database.audit_in_flight_transition().unwrap();
@@ -305,7 +306,7 @@ fn run_parent_case(kind: OperationKind, kill_point: KillPoint) {
     assert_eq!(canonical_record(&root), source, "{operation:?} {kill_point:?}");
     assert_layout_reversed(post_layout, usr_layout_at(&root));
     assert_eq!(RawUsrLayout::capture(&root), raw_post_layout.reversed());
-    assert_root_links_absent_at(&root);
+    assert_eq!(root_abi_snapshot_at(&root), root_abi_before);
     assert_database_unchanged(&root, &states_before, &in_flight_before);
     let pre_layout = usr_layout_at(&root);
 
@@ -319,7 +320,7 @@ fn run_parent_case(kind: OperationKind, kill_point: KillPoint) {
     assert_eq!(canonical_record(&root), preserve_intent, "{operation:?} {kill_point:?}");
     assert_layout_unchanged(pre_layout, usr_layout_at(&root));
     assert_eq!(RawUsrLayout::capture(&root), raw_post_layout.reversed());
-    assert_root_links_absent_at(&root);
+    assert_eq!(root_abi_snapshot_at(&root), root_abi_before);
     assert_database_unchanged(&root, &states_before, &in_flight_before);
 
     drop(fixture);
@@ -366,6 +367,7 @@ fn run_recovery_child(
     let states_before = state_database.all().unwrap();
     let in_flight_before = state_database.audit_in_flight_transition().unwrap();
     let pre_layout = usr_layout_at(&case.root);
+    let root_abi_before = root_abi_snapshot_at(&case.root);
     reset_retained_exchange_syscall_count();
     arm_before_reverse_exchange_reconciliation_capture(|| {
         panic!("PRE recovery attempted a second retained /usr exchange")
@@ -380,7 +382,7 @@ fn run_recovery_child(
     assert_eq!(RawUsrLayout::capture(&case.root), post_layout.reversed());
     assert_eq!(state_database.all().unwrap(), states_before);
     assert_eq!(state_database.audit_in_flight_transition().unwrap(), in_flight_before);
-    assert_root_links_absent_at(&case.root);
+    assert_eq!(root_abi_snapshot_at(&case.root), root_abi_before);
     drop(recovered);
 
     let preserve_intent = expected_candidate_preserve_intent(&expected);
@@ -393,7 +395,7 @@ fn run_recovery_child(
     assert_eq!(RawUsrLayout::capture(&case.root), post_layout.reversed());
     assert_eq!(state_database.all().unwrap(), states_before);
     assert_eq!(state_database.audit_in_flight_transition().unwrap(), in_flight_before);
-    assert_root_links_absent_at(&case.root);
+    assert_eq!(root_abi_snapshot_at(&case.root), root_abi_before);
 }
 
 fn spawn_child(
@@ -441,15 +443,6 @@ fn assert_database_unchanged(
     let state_database = open_state_database(&installation);
     assert_eq!(state_database.all().unwrap(), states_before);
     assert_eq!(&state_database.audit_in_flight_transition().unwrap(), in_flight_before);
-}
-
-fn assert_root_links_absent_at(root: &Path) {
-    for name in ["bin", "sbin", "lib", "lib32", "lib64"] {
-        assert!(
-            fs::symlink_metadata(root.join(name)).is_err(),
-            "rollback-reverse process recovery unexpectedly published root link {name}"
-        );
-    }
 }
 
 fn directory_identity(path: &Path) -> (u64, u64) {

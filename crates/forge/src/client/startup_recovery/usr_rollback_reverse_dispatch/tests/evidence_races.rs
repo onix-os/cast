@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::support::{
-    Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged, assert_root_links_absent,
+    Fixture, OperationKind, ReverseLayout, assert_layout_reversed, assert_layout_unchanged,
     assert_usr_restored_pending, enter, expected_usr_restored, namespace_snapshot, pending, usr_layout,
 };
 
@@ -107,6 +107,13 @@ fn assert_dispatch_authority(error: &startup_gate::Error) {
     );
 }
 
+fn assert_admission_authority(error: &startup_gate::Error) {
+    assert!(
+        matches!(error, startup_gate::Error::UsrRollbackReverseAuthority(_)),
+        "expected typed admission authority error, got {error:?}"
+    );
+}
+
 fn assert_final_persistence_authority(error: &startup_gate::Error) {
     assert!(
         matches!(
@@ -154,6 +161,7 @@ fn restore_source_and_finish(
     expected_outcome: RollbackActionOutcome,
     expected_exchange_count: usize,
 ) {
+    let root_abi_before = fixture.root_abi_snapshot();
     restore();
     assert_eq!(fixture.fixture.canonical_record(), fixture.record);
 
@@ -165,7 +173,7 @@ fn restore_source_and_finish(
         expected_usr_restored(fixture, expected_outcome)
     );
     assert_eq!(retained_exchange_syscall_count(), expected_exchange_count);
-    assert_root_links_absent(fixture);
+    fixture.assert_root_abi_unchanged(&root_abi_before);
 }
 
 #[test]
@@ -178,6 +186,7 @@ fn startup_usr_rollback_reverse_dispatch_admission_races_are_zero_effect_zero_ad
                 let database_before = fixture.fixture.database_snapshot();
                 let namespace_before = namespace_snapshot(&fixture);
                 let layout_before = usr_layout(&fixture);
+                let root_abi_before = fixture.root_abi_snapshot();
                 let (inject, restore) = evidence_hooks(
                     &fixture,
                     race,
@@ -189,8 +198,13 @@ fn startup_usr_rollback_reverse_dispatch_admission_races_are_zero_effect_zero_ad
 
                 let error = enter(&fixture);
 
-                assert_eq!(pending(&error).phase(), Phase::ReverseExchangeIntent);
-                assert!(!pending(&error).blockers().is_empty());
+                match race {
+                    EvidenceRace::Journal => assert_admission_authority(&error),
+                    EvidenceRace::Database | EvidenceRace::Namespace => {
+                        assert_eq!(pending(&error).phase(), Phase::ReverseExchangeIntent);
+                        assert!(!pending(&error).blockers().is_empty());
+                    }
+                }
                 assert_eq!(retained_exchange_syscall_count(), 0, "{race:?} {kind:?} {layout:?}");
                 assert_layout_unchanged(layout_before, usr_layout(&fixture));
                 let database_after = fixture.fixture.database_snapshot();
@@ -204,7 +218,7 @@ fn startup_usr_rollback_reverse_dispatch_admission_races_are_zero_effect_zero_ad
                     &namespace_before,
                     &namespace_after,
                 );
-                assert_root_links_absent(&fixture);
+                fixture.assert_root_abi_unchanged(&root_abi_before);
                 drop(error);
 
                 if let Some(restore) = restore {
@@ -234,6 +248,7 @@ fn startup_usr_rollback_reverse_dispatch_effect_boundary_races_never_advance_or_
                 let database_before = fixture.fixture.database_snapshot();
                 let namespace_before = namespace_snapshot(&fixture);
                 let layout_before = usr_layout(&fixture);
+                let root_abi_before = fixture.root_abi_snapshot();
                 let (inject, restore) = evidence_hooks(
                     &fixture,
                     race,
@@ -259,7 +274,7 @@ fn startup_usr_rollback_reverse_dispatch_effect_boundary_races_never_advance_or_
                     &namespace_before,
                     &namespace_after,
                 );
-                assert_root_links_absent(&fixture);
+                fixture.assert_root_abi_unchanged(&root_abi_before);
                 drop(error);
 
                 if let Some(restore) = restore {
@@ -288,6 +303,7 @@ fn startup_usr_rollback_reverse_dispatch_effect_boundary_races_never_advance_or_
             let database_before = fixture.fixture.database_snapshot();
             let namespace_before = namespace_snapshot(&fixture);
             let layout_before = usr_layout(&fixture);
+            let root_abi_before = fixture.root_abi_snapshot();
             let (inject, restore) = evidence_hooks(
                 &fixture,
                 race,
@@ -322,7 +338,7 @@ fn startup_usr_rollback_reverse_dispatch_effect_boundary_races_never_advance_or_
                 &namespace_before,
                 &namespace_after,
             );
-            assert_root_links_absent(&fixture);
+            fixture.assert_root_abi_unchanged(&root_abi_before);
             drop(error);
 
             restore_source_and_finish(
@@ -348,6 +364,7 @@ fn startup_usr_rollback_reverse_dispatch_final_durable_revalidation_races_leave_
                 let database_before = fixture.fixture.database_snapshot();
                 let namespace_before = namespace_snapshot(&fixture);
                 let layout_before = usr_layout(&fixture);
+                let root_abi_before = fixture.root_abi_snapshot();
                 let (inject, restore) = evidence_hooks(
                     &fixture,
                     race,
@@ -387,7 +404,7 @@ fn startup_usr_rollback_reverse_dispatch_final_durable_revalidation_races_leave_
                     &namespace_before,
                     &namespace_after,
                 );
-                assert_root_links_absent(&fixture);
+                fixture.assert_root_abi_unchanged(&root_abi_before);
                 drop(error);
 
                 restore_source_and_finish(

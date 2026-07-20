@@ -19,8 +19,8 @@ use crate::{
 
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
-    assert_layout_unchanged, assert_root_links_absent, assert_usr_restored_pending, enter,
-    expected_candidate_preserve_intent, expected_usr_restored, namespace_snapshot, usr_layout,
+    assert_layout_unchanged, assert_usr_restored_pending, enter, expected_candidate_preserve_intent,
+    expected_usr_restored, namespace_snapshot, usr_layout,
 };
 
 #[derive(Clone, Copy)]
@@ -73,6 +73,7 @@ fn startup_usr_rollback_reverse_dispatch_journal_faults_restart_to_exact_source_
                 let database_before = fixture.fixture.database_snapshot();
                 let namespace_before = namespace_snapshot(&fixture);
                 let layout_before = usr_layout(&fixture);
+                let root_abi_before = fixture.root_abi_snapshot();
                 reset_retained_exchange_syscall_count();
                 (fault.arm)();
 
@@ -107,7 +108,7 @@ fn startup_usr_rollback_reverse_dispatch_journal_faults_restart_to_exact_source_
                     ReverseLayout::Post => assert_layout_reversed(layout_before, usr_layout(&fixture)),
                     ReverseLayout::Pre => assert_layout_unchanged(layout_before, usr_layout(&fixture)),
                 }
-                assert_root_links_absent(&fixture);
+                fixture.assert_root_abi_unchanged(&root_abi_before);
                 assert_clean_journal_directory(&fixture);
                 let namespace_after_fault = namespace_snapshot(&fixture);
                 let layout_after_fault = usr_layout(&fixture);
@@ -158,7 +159,7 @@ fn startup_usr_rollback_reverse_dispatch_journal_faults_restart_to_exact_source_
                     fault.durable
                 );
                 assert_layout_unchanged(layout_after_fault, usr_layout(&fixture));
-                assert_root_links_absent(&fixture);
+                fixture.assert_root_abi_unchanged(&root_abi_before);
                 assert_clean_journal_directory(&fixture);
                 drop(restart);
             }

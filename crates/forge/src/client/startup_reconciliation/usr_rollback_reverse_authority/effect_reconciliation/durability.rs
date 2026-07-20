@@ -8,7 +8,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        CodecError, RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord,
+        CodecError, Phase, RollbackActionOutcome, StorageError, TransitionJournalRecordBinding,
+        TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -24,7 +25,7 @@ use crate::client::{
             UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,
             UsrRollbackReverseDurableNamespace,
         },
-        usr_rollback_reverse_authority::UsrRollbackReverseAuthorityErrorKind,
+        usr_rollback_reverse_authority::require_journal_record_binding,
     },
     startup_recovery::UsrRollbackReverseDurabilitySeal,
 };
@@ -39,13 +40,25 @@ pub(in crate::client) struct UsrRollbackReverseDurableEffectAuthority<'reservati
     outcome: RollbackActionOutcome,
 }
 
+/// Exact authority-derived `UsrRestored` publication and its new inode binding.
+pub(in crate::client) struct UsrRollbackReversePublishedRecord {
+    record: TransitionRecord,
+    binding: TransitionJournalRecordBinding,
+}
+
+impl UsrRollbackReversePublishedRecord {
+    pub(in crate::client) fn into_parts(self) -> (TransitionRecord, TransitionJournalRecordBinding) {
+        (self.record, self.binding)
+    }
+}
+
 struct DurableReverseEffect<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackReverseDurableNamespace,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -55,17 +68,20 @@ impl UsrRollbackReverseDurableEffectAuthority<'_> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackReverseAuthorityError> {
-        // The per-open binding is the first retained evidence observation.
-        if !journal.has_binding(&self._effect.journal_binding) {
-            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
-        }
-
         let effect = &self._effect;
+        // Exact record identity is the first retained evidence observation.
+        require_journal_record_binding(
+            &effect.installation,
+            journal,
+            &effect.journal_record_binding,
+            &effect.record,
+        )?;
         require_pre_namespace_evidence(
             &effect.installation,
             &effect.state_db,
             &effect.record,
             &effect.database,
+            &effect.journal_record_binding,
             journal,
         )?;
         let namespace_result = effect.namespace.revalidate(&effect.installation, &effect.record);
@@ -75,6 +91,7 @@ impl UsrRollbackReverseDurableEffectAuthority<'_> {
             &effect.state_db,
             &effect.record,
             &effect.database,
+            &effect.journal_record_binding,
             journal,
         );
         namespace_result?;
@@ -91,11 +108,51 @@ impl UsrRollbackReverseDurableEffectAuthority<'_> {
         &self._effect.record
     }
 
-    /// Derive the sole legal `UsrRestored` successor from the outcome fixed
-    /// by this authority's construction path.
-    pub(in crate::client) fn usr_restored_successor(&self) -> Result<TransitionRecord, CodecError> {
-        self._effect.record.rollback_successor(Some(self.outcome))
+    /// Revalidate, then consume the durable authority through the exact
+    /// `ReverseExchangeIntent` to `UsrRestored` journal boundary. The caller
+    /// cannot supply or override the successor fixed by the private outcome.
+    pub(in crate::client) fn advance_usr_restored_record_binding(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<UsrRollbackReversePublishedRecord, UsrRollbackReverseRecordAdvanceError> {
+        self.revalidate(journal)?;
+        let successor = self
+            ._effect
+            .record
+            .rollback_successor(Some(self.outcome))
+            .map_err(UsrRollbackReverseRecordAdvanceError::Successor)?;
+        if successor.phase != Phase::UsrRestored {
+            return Err(UsrRollbackReverseRecordAdvanceError::UnexpectedSuccessor {
+                phase: successor.phase,
+            });
+        }
+        let cast = self._effect.installation.retained_mutable_cast_directory()?;
+        match journal.advance_record_binding(cast, self._effect.journal_record_binding, &successor) {
+            Ok(binding) => Ok(UsrRollbackReversePublishedRecord {
+                record: successor,
+                binding,
+            }),
+            Err(source) => Err(UsrRollbackReverseRecordAdvanceError::Storage { source, successor }),
+        }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(in crate::client) enum UsrRollbackReverseRecordAdvanceError {
+    #[error("revalidate exact durable rollback-reverse authority before the bound journal advance")]
+    Authority(#[from] UsrRollbackReverseAuthorityError),
+    #[error("revalidate retained installation before the bound rollback-reverse journal advance")]
+    Installation(#[from] crate::installation::Error),
+    #[error("derive the authority-owned rollback-reverse successor")]
+    Successor(#[source] CodecError),
+    #[error("authority-owned rollback-reverse successor has unexpected phase {phase:?}")]
+    UnexpectedSuccessor { phase: Phase },
+    #[error("advance the exact bound rollback-reverse journal record")]
+    Storage {
+        #[source]
+        source: StorageError,
+        successor: TransitionRecord,
+    },
 }
 
 #[cfg(test)]
@@ -130,10 +187,13 @@ impl<'reservation> UsrRollbackReverseAppliedEffectAuthority<'reservation> {
         _seal: &UsrRollbackReverseDurabilitySeal,
         journal: &TransitionJournalStore,
     ) -> Result<UsrRollbackReverseDurableEffectAuthority<'reservation>, UsrRollbackReverseAuthorityError> {
-        // The per-open binding is the first retained evidence observation.
-        if !journal.has_binding(&self._effect.journal_binding) {
-            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        // Exact record identity is the first retained evidence observation.
+        require_journal_record_binding(
+            &self._effect.installation,
+            journal,
+            &self._effect.journal_record_binding,
+            &self._effect.record,
+        )?;
         let effect = self._effect.complete_parent_durability_after_binding(journal)?;
         Ok(UsrRollbackReverseDurableEffectAuthority {
             _effect: effect,
@@ -149,10 +209,13 @@ impl<'reservation> UsrRollbackReverseAlreadySatisfiedEffectAuthority<'reservatio
         _seal: &UsrRollbackReverseDurabilitySeal,
         journal: &TransitionJournalStore,
     ) -> Result<UsrRollbackReverseDurableEffectAuthority<'reservation>, UsrRollbackReverseAuthorityError> {
-        // The per-open binding is the first retained evidence observation.
-        if !journal.has_binding(&self._effect.journal_binding) {
-            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        // Exact record identity is the first retained evidence observation.
+        require_journal_record_binding(
+            &self._effect.installation,
+            journal,
+            &self._effect.journal_record_binding,
+            &self._effect.record,
+        )?;
         let effect = self._effect.complete_parent_durability_after_binding(journal)?;
         Ok(UsrRollbackReverseDurableEffectAuthority {
             _effect: effect,
@@ -172,13 +235,27 @@ impl<'reservation> ReconciledReverseEffect<'reservation, UsrRollbackReverseAppli
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
 
-        require_pre_namespace_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_pre_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace_result = namespace.complete_parent_durability(&installation, &record);
-        let trailing_evidence = require_post_namespace_evidence(&installation, &state_db, &record, &database, journal);
+        let trailing_evidence = require_post_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        );
         let namespace = namespace_result?;
         trailing_evidence?;
 
@@ -188,7 +265,7 @@ impl<'reservation> ReconciledReverseEffect<'reservation, UsrRollbackReverseAppli
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         })
     }
@@ -205,13 +282,27 @@ impl<'reservation> ReconciledReverseEffect<'reservation, UsrRollbackReverseAlrea
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
 
-        require_pre_namespace_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_pre_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace_result = namespace.complete_parent_durability(&installation, &record);
-        let trailing_evidence = require_post_namespace_evidence(&installation, &state_db, &record, &database, journal);
+        let trailing_evidence = require_post_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        );
         let namespace = namespace_result?;
         trailing_evidence?;
 
@@ -221,7 +312,7 @@ impl<'reservation> ReconciledReverseEffect<'reservation, UsrRollbackReverseAlrea
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         })
     }

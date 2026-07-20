@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, os::unix::fs::MetadataExt as _, path::PathBuf};
 
 use crate::{
     client::{
@@ -12,7 +12,9 @@ use crate::{
     },
 };
 
-use super::test_fixture::{DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, SourceCase};
+use super::test_fixture::{DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, ROOT_ABI};
+
+pub(super) use super::test_fixture::SourceCase;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ReverseLayout {
@@ -46,23 +48,42 @@ pub(super) struct ReverseFixture {
     initial_database: DatabaseSnapshot,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+#[allow(dead_code)] // used when this support file is path-included by startup-recovery suites
+pub(super) struct RootAbiLinkSnapshot {
+    name: &'static str,
+    target: PathBuf,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
+}
+
 impl ReverseFixture {
     pub(super) fn new(kind: OperationKind, layout: ReverseLayout) -> Self {
         Self::from_source(kind, SourceCase::ExchangedPost, layout)
     }
 
     pub(super) fn from_source(kind: OperationKind, source: SourceCase, layout: ReverseLayout) -> Self {
-        assert!(matches!(source, SourceCase::IntentPost | SourceCase::ExchangedPost));
-        Self::build(Fixture::new(kind, source), kind, layout, false)
+        Self::from_source_epoch(kind, source, layout, false)
     }
 
-    pub(super) fn historical(kind: OperationKind, layout: ReverseLayout) -> Self {
-        Self::build(
-            Fixture::historical(kind, SourceCase::ExchangedPost),
-            kind,
-            layout,
-            false,
-        )
+    pub(super) fn from_source_epoch(
+        kind: OperationKind,
+        source: SourceCase,
+        layout: ReverseLayout,
+        historical: bool,
+    ) -> Self {
+        assert!(matches!(
+            source,
+            SourceCase::IntentPost | SourceCase::ExchangedPost | SourceCase::RootLinksCompletePost
+        ));
+        let fixture = if historical {
+            Fixture::historical(kind, source)
+        } else {
+            Fixture::new(kind, source)
+        };
+        Self::build(fixture, kind, layout, false)
     }
 
     pub(super) fn restored(kind: OperationKind) -> Self {
@@ -76,6 +97,16 @@ impl ReverseFixture {
 
     pub(super) fn for_effect(kind: EffectOperationKind, layout: ReverseLayout) -> Self {
         Self::new(kind.fixture_kind(), layout)
+    }
+
+    #[allow(dead_code)] // used when path-included by startup-recovery suites
+    pub(super) fn for_effect_source(
+        kind: EffectOperationKind,
+        source: SourceCase,
+        layout: ReverseLayout,
+        historical: bool,
+    ) -> Self {
+        Self::from_source_epoch(kind.fixture_kind(), source, layout, historical)
     }
 
     fn build(fixture: Fixture, kind: OperationKind, layout: ReverseLayout, restored: bool) -> Self {
@@ -183,6 +214,32 @@ impl ReverseFixture {
 
     pub(super) fn durability_parent_identities(&self) -> ((u64, u64), (u64, u64)) {
         self.fixture.durability_parent_identities()
+    }
+
+    #[allow(dead_code)] // used when path-included by startup-recovery suites
+    pub(super) fn root_abi_snapshot(&self) -> Vec<RootAbiLinkSnapshot> {
+        self.fixture.assert_complete_root_abi();
+        ROOT_ABI
+            .into_iter()
+            .map(|(name, _)| {
+                let path = self.fixture.installation.root.join(name);
+                let metadata = fs::symlink_metadata(&path).unwrap();
+                assert!(metadata.file_type().is_symlink());
+                RootAbiLinkSnapshot {
+                    name,
+                    target: fs::read_link(path).unwrap(),
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                    mode: metadata.mode(),
+                    links: metadata.nlink(),
+                }
+            })
+            .collect()
+    }
+
+    #[allow(dead_code)] // used when path-included by startup-recovery suites
+    pub(super) fn assert_root_abi_unchanged(&self, expected: &[RootAbiLinkSnapshot]) {
+        assert_eq!(self.root_abi_snapshot(), expected);
     }
 }
 

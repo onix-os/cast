@@ -18,8 +18,8 @@ use crate::{
 use super::super::UsrRollbackReverseDispatchError;
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
-    assert_layout_unchanged, assert_root_links_absent, assert_usr_restored_pending, enter,
-    expected_candidate_preserve_intent, expected_usr_restored, usr_layout,
+    assert_layout_unchanged, assert_usr_restored_pending, enter, expected_candidate_preserve_intent,
+    expected_usr_restored, usr_layout,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -58,6 +58,7 @@ fn startup_usr_rollback_reverse_dispatch_durability_faults_restart_as_pre_withou
                     let source = fixture.record.clone();
                     let database_before = fixture.fixture.database_snapshot();
                     let layout_before = usr_layout(&fixture);
+                    let root_abi_before = fixture.root_abi_snapshot();
                     let expected_exchange_count = usize::from(layout == ReverseLayout::Post);
                     reset_retained_exchange_syscall_count();
                     reset_usr_rollback_reverse_namespace_durability_events();
@@ -102,7 +103,7 @@ fn startup_usr_rollback_reverse_dispatch_durability_faults_restart_as_pre_withou
                             failure_events(&fixture, fault),
                             "{kind:?} {layout:?} {fault:?} raw_error={raw_error}"
                         );
-                        assert_root_links_absent(&fixture);
+                        fixture.assert_root_abi_unchanged(&root_abi_before);
                         drop(first);
                     }
 
@@ -134,7 +135,7 @@ fn startup_usr_rollback_reverse_dispatch_durability_faults_restart_as_pre_withou
                         success_events(&fixture),
                         "{kind:?} {layout:?} {fault:?} raw_error={raw_error}"
                     );
-                    assert_root_links_absent(&fixture);
+                    fixture.assert_root_abi_unchanged(&root_abi_before);
                     drop(second);
 
                     let preserve_intent = expected_candidate_preserve_intent(&restored);
@@ -153,7 +154,7 @@ fn startup_usr_rollback_reverse_dispatch_durability_faults_restart_as_pre_withou
                     assert_eq!(fixture.fixture.database_snapshot(), database_before);
                     assert_layout_unchanged(pre_layout, usr_layout(&fixture));
                     assert!(take_usr_rollback_reverse_namespace_durability_events().is_empty());
-                    assert_root_links_absent(&fixture);
+                    fixture.assert_root_abi_unchanged(&root_abi_before);
                 }
             }
         }

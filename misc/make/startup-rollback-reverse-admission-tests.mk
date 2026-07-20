@@ -36,17 +36,26 @@ forge-startup-usr-rollback-reverse-admission-test:
 	timeout 10s grep -Fqx '            let reverse_seal = UsrRollbackReverseSeal::new();' "$$startup_gate"; \
 	timeout 10s grep -Fqx '            let reverse = startup_reconciliation::UsrRollbackReverseAuthority::capture(' "$$startup_gate"; \
 	timeout 10s grep -Fqx '        _startup_gate_seal: &UsrRollbackReverseSeal,' "$$authority"; \
-	timeout 10s grep -Fqx '    journal_binding: TransitionJournalBinding,' "$$authority"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority" )" = 2; \
 	timeout 10s grep -Fqx "    _active_state_reservation: &'reservation ActiveStateReservation," "$$authority"; \
-	timeout 10s test "$$( timeout 10s rg -n 'let journal_binding = journal\.binding\(\);' "$$authority" | timeout 10s wc -l )" = 1; \
-	timeout 10s test "$$( timeout 10s rg -n 'journal\.has_binding\(&self\.journal_binding\)' "$$authority" | timeout 10s wc -l )" = 1; \
-	timeout 10s awk '$$0 == "    fn revalidate(" { active = 1; next } active && $$0 == "        if !journal.has_binding(&self.journal_binding) {" { found = 1; exit } active && ($$0 ~ /self\.installation/ || $$0 ~ /inspect_current_database/ || $$0 ~ /self\.namespace/) { exit 1 } END { exit !found }' "$$authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' "$$authority" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'require_journal_record_binding(' "$$authority" )" = 5; \
+	timeout 10s grep -Fq '    if !journal.has_record_store_binding(binding) {' "$$authority"; \
+	timeout 10s grep -Fq '    if journal.has_record_binding(cast, binding, record)? {' "$$authority"; \
+	capture_line="$$( timeout 10s grep -nF 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' "$$authority" | timeout 10s cut -d: -f1 )"; \
+	namespace_line="$$( timeout 10s grep -nF 'let namespace_inspection = match UsrRollbackReverseNamespaceInspection::begin' "$$authority" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$capture_line" -lt "$$namespace_line"; \
+	timeout 10s awk '$$0 == "    fn revalidate(" { active = 1; next } active && /require_journal_record_binding\(/ { found = 1; exit } active && ($$0 ~ /inspect_current_database/ || $$0 ~ /self\.namespace/) { exit 1 } END { exit !found }' "$$authority"; \
+	timeout 10s awk 'pending { if ($$0 ~ /revalidate_mutable_namespace\(\)\?;/) pairs += 1; pending = 0 } /require_journal_record_binding\(/ { if (/\)\?;/) pending = 1; else in_call = 1; next } in_call && $$0 ~ /^[[:space:]]*\)\?;$$/ { in_call = 0; pending = 1; next } END { exit pairs < 4 }' "$$authority"; \
 	timeout 10s grep -Fq 'if record.phase != Phase::ReverseExchangeIntent {' "$$authority"; \
 	timeout 10s grep -Fq '|| rollback.usr_exchange != RollbackAction::Pending' "$$authority"; \
 	timeout 10s grep -Fq 'UsrExchangeLayout::Post =>' "$$authority"; \
 	timeout 10s grep -Fq 'UsrRollbackReverseAdmission::Apply(UsrRollbackReverseApplyAuthority' "$$authority"; \
 	timeout 10s grep -Fq 'UsrExchangeLayout::Pre =>' "$$authority"; \
 	timeout 10s grep -Fq 'UsrRollbackReverseAdmission::Finish(UsrRollbackReverseFinishAuthority' "$$authority"; \
+	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$authority"; \
+	timeout 10s grep -Fq 'SourceCase::RootLinksCompletePost' crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/tests/admission.rs; \
 	timeout 10s grep -Fq 'self.evidence.revalidate(journal, UsrExchangeLayout::Post)' "$$authority"; \
 	timeout 10s grep -Fq 'self.evidence.revalidate(journal, UsrExchangeLayout::Pre)' "$$authority"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackReverseEffectSeal {' "$$startup_recovery"; \
@@ -62,7 +71,7 @@ forge-startup-usr-rollback-reverse-admission-test:
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackReverseApplyEffectLease<'\''reservation> {" { state = 1; next } state == 1 && $$0 == "    lease: UsrRollbackReverseEffectLease<'\''reservation>," { field = 1; next } state == 1 && $$0 ~ /^    [A-Za-z_][A-Za-z0-9_]*:/ { exit 1 } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$authority"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackReverseFinishEffectLease<'\''reservation> {" { state = 1; next } state == 1 && $$0 == "    lease: UsrRollbackReverseEffectLease<'\''reservation>," { field = 1; next } state == 1 && $$0 ~ /^    [A-Za-z_][A-Za-z0-9_]*:/ { exit 1 } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$authority"; \
 	timeout 10s awk '$$0 == "pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespaceEffectEvidence {" { state = 1; next } state == 1 && $$0 == "    baseline: NamespaceSnapshot," { baseline = 1; fields++; next } state == 1 && $$0 == "    projection: ProjectedReverseNamespace," { projection = 1; fields++; next } state == 1 && $$0 == "    parents: RetainedReverseExchangeParents," { parents = 1; fields++; next } state == 1 && $$0 == "    layout: UsrExchangeLayout," { layout = 1; fields++; next } state == 1 && $$0 ~ /^    [A-Za-z_][A-Za-z0-9_]*:/ { exit 1 } state == 1 && $$0 == "}" { found = baseline && projection && parents && layout && fields == 4; exit !found } END { exit !found }' "$$proof"; \
-	timeout 10s grep -Fq 'namespace: namespace.into_effect_evidence(expected_layout)?,' "$$authority"; \
+	timeout 10s rg -U -q 'let namespace = namespace\.into_effect_evidence\(expected_layout\)\?;\n        installation\.revalidate_mutable_namespace\(\)\?;\n        require_journal_record_binding\(&installation, journal, &journal_record_binding, &record\)\?;\n        installation\.revalidate_mutable_namespace\(\)\?;\n        Ok\(UsrRollbackReverseEffectLease \{' "$$authority"; \
 	timeout 10s grep -Fq 'self.projection.layout() != expected_layout' "$$proof"; \
 	timeout 10s grep -Fqx 'mod xattr_races;' crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/tests.rs; \
 	timeout 10s grep -Fq 'arm_before_usr_rollback_reverse_fresh_namespace_capture(move || {' crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority/tests/xattr_races.rs; \

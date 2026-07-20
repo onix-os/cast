@@ -17,6 +17,7 @@ forge-startup-usr-rollback-reverse-namespace-durability-test:
 	done; \
 	low=crates/forge/src/client/startup_reconciliation/activation_namespace/capture/reverse_exchange/durability.rs; \
 	bridge=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof/effect_reconciliation/durability.rs; \
+	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof.rs; \
 	tests=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof/effect_reconciliation/durability/tests.rs; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.sync_all()' "$$low" )" = 2; \
 	timeout 10s rg -U -q 'self\.staging\n[[:space:]]*\.sync_all\(\)' "$$low"; \
@@ -31,6 +32,7 @@ forge-startup-usr-rollback-reverse-namespace-durability-test:
 	timeout 10s grep -Fq 'final_pre_projection.layout() != UsrExchangeLayout::Pre' "$$low"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'pub(in crate::client::startup_reconciliation::activation_namespace) fn revalidate(' "$$low" )" = 1; \
 	timeout 10s grep -Fq 'run_before_durable_revalidation_capture();' "$$low"; \
+	if timeout 10s rg -n 'journal\.load\(\)' "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'renameat2|RENAME_EXCHANGE|exchange_retained_usr_once|attempt_usr_exchange_once|unlinkat|linkat|symlinkat|create_root_links|std::process|Command::new|\.advance[[:space:]]*\(|rollback_successor|forward_successor|state_db|Database' "$$low" "$$bridge"; then exit 1; fi; \
 	if timeout 10s rg -n 'AsRawFd|IntoRawFd|FromRawFd|AsFd|RawFd|BorrowedFd|OwnedFd|as_raw_fd|into_raw_fd|from_raw_fd|as_fd[[:space:]]*\(|unsafe[[:space:]]*\{' "$$low" "$$bridge"; then exit 1; fi; \
 	if timeout 10s rg -n 'File::open|OpenOptions|open_beneath|openat2|openat[[:space:]]*\(' "$$low" "$$bridge"; then exit 1; fi; \

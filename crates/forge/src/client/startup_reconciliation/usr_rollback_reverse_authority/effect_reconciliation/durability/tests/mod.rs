@@ -28,7 +28,7 @@ use crate::{
         },
     },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
-    transition_journal::{Phase, RollbackActionOutcome, TransitionJournalStore},
+    transition_journal::{RollbackActionOutcome, TransitionJournalStore},
 };
 
 use super::super::super::test_support::{EffectOperationKind, ReverseFixture, ReverseLayout};
@@ -89,18 +89,10 @@ fn assert_durable_surface(
     fixture: &ReverseFixture,
     journal: &TransitionJournalStore,
     durable: &UsrRollbackReverseDurableEffectAuthority<'_>,
-    expected_outcome: RollbackActionOutcome,
 ) {
     durable.revalidate(journal).unwrap();
     assert_eq!(durable.installation().root, fixture.fixture.installation.root);
     assert_eq!(durable.record(), &fixture.record);
-
-    let successor = durable.usr_restored_successor().unwrap();
-    assert_eq!(successor.phase, Phase::UsrRestored);
-    assert_eq!(
-        successor,
-        fixture.record.rollback_successor(Some(expected_outcome)).unwrap()
-    );
 }
 
 fn reset_events() {
@@ -309,7 +301,7 @@ fn reverse_durability_constructs_outcome_only_after_both_parent_barriers_for_eve
         let durable = complete_applied_usr_rollback_reverse_durability(&journal, authority).unwrap();
 
         assert_eq!(durable.outcome_for_test(), RollbackActionOutcome::Applied, "{kind:?}");
-        assert_durable_surface(&fixture, &journal, &durable, RollbackActionOutcome::Applied);
+        assert_durable_surface(&fixture, &journal, &durable);
         assert_eq!(take_events(), success_events(&fixture), "{kind:?}");
         assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?}");
         fixture.assert_non_namespace_unchanged();
@@ -331,7 +323,7 @@ fn reverse_durability_constructs_outcome_only_after_both_parent_barriers_for_eve
             RollbackActionOutcome::AlreadySatisfied,
             "{kind:?}"
         );
-        assert_durable_surface(&fixture, &journal, &durable, RollbackActionOutcome::AlreadySatisfied);
+        assert_durable_surface(&fixture, &journal, &durable);
         assert_eq!(take_events(), success_events(&fixture), "{kind:?}");
         assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?}");
         fixture.assert_non_namespace_unchanged();

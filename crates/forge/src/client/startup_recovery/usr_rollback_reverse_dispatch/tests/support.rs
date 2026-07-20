@@ -1,4 +1,8 @@
-use std::{fs, os::unix::fs::MetadataExt as _, path::Path};
+use std::{
+    fs,
+    os::unix::fs::MetadataExt as _,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     Installation,
@@ -17,14 +21,29 @@ use crate::{
 };
 
 use super::super::UsrRollbackReverseDispatchError;
+pub(super) use super::super::test_fixture::create_private_directory;
+use super::super::test_fixture::ROOT_ABI;
 pub(super) use super::super::reverse_test_support::{
-    EffectOperationKind as OperationKind, ReverseFixture as Fixture, ReverseLayout,
+    EffectOperationKind as OperationKind, ReverseFixture as Fixture, ReverseLayout, SourceCase,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct UsrLayout {
     live: (u64, u64),
     staged: (u64, u64),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct RootAbiSnapshot(Vec<RootAbiLinkSnapshot>);
+
+#[derive(Debug, Eq, PartialEq)]
+struct RootAbiLinkSnapshot {
+    name: &'static str,
+    target: PathBuf,
+    device: u64,
+    inode: u64,
+    mode: u32,
+    links: u64,
 }
 
 pub(super) fn enter(fixture: &Fixture) -> startup_gate::Error {
@@ -141,13 +160,27 @@ pub(super) fn namespace_snapshot(fixture: &Fixture) -> impl std::fmt::Debug + Eq
     snapshot_startup_recovery_namespace(&fixture.fixture.installation.root)
 }
 
-pub(super) fn assert_root_links_absent(fixture: &Fixture) {
-    for name in ["bin", "sbin", "lib", "lib32", "lib64"] {
-        assert!(
-            fs::symlink_metadata(fixture.fixture.installation.root.join(name)).is_err(),
-            "rollback-reverse dispatch unexpectedly published root link {name}"
-        );
-    }
+pub(super) fn root_abi_snapshot_at(root: &Path) -> RootAbiSnapshot {
+    RootAbiSnapshot(
+        ROOT_ABI
+            .into_iter()
+            .map(|(name, expected_target)| {
+                let path = root.join(name);
+                let metadata = fs::symlink_metadata(&path).unwrap();
+                assert!(metadata.file_type().is_symlink(), "{} is not a symlink", path.display());
+                let target = fs::read_link(&path).unwrap();
+                assert_eq!(target, PathBuf::from(expected_target));
+                RootAbiLinkSnapshot {
+                    name,
+                    target,
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                    mode: metadata.mode(),
+                    links: metadata.nlink(),
+                }
+            })
+            .collect(),
+    )
 }
 
 pub(super) fn persistent_state_database(fixture: &Fixture, kind: OperationKind) -> db::state::Database {

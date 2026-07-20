@@ -5,9 +5,8 @@ use crate::{
 
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_candidate_preserve_intent_pending, assert_layout_reversed,
-    assert_layout_unchanged, assert_root_links_absent, assert_usr_restored_pending, enter,
-    expected_candidate_preserve_intent, expected_usr_restored, namespace_snapshot, persist_usr_restored_fixture,
-    usr_layout,
+    assert_layout_unchanged, assert_usr_restored_pending, enter, expected_candidate_preserve_intent,
+    expected_usr_restored, namespace_snapshot, persist_usr_restored_fixture, usr_layout,
 };
 
 #[test]
@@ -23,6 +22,7 @@ fn startup_usr_rollback_reverse_dispatch_post_and_pre_matrix_reaches_exact_usr_r
             let database_before = fixture.fixture.database_snapshot();
             let namespace_before = namespace_snapshot(&fixture);
             let layout_before = usr_layout(&fixture);
+            let root_abi_before = fixture.root_abi_snapshot();
             reset_retained_exchange_syscall_count();
 
             let error = enter(&fixture);
@@ -56,7 +56,7 @@ fn startup_usr_rollback_reverse_dispatch_post_and_pre_matrix_reaches_exact_usr_r
                 }
             }
             assert_eq!(fixture.fixture.canonical_record().phase, Phase::UsrRestored);
-            assert_root_links_absent(&fixture);
+            fixture.assert_root_abi_unchanged(&root_abi_before);
         }
     }
 }
@@ -71,6 +71,7 @@ fn startup_usr_rollback_reverse_dispatch_usr_restored_routes_without_reverse_red
             let database_before = fixture.fixture.database_snapshot();
             let namespace_before = namespace_snapshot(&fixture);
             let layout_before = usr_layout(&fixture);
+            let root_abi_before = fixture.root_abi_snapshot();
             reset_retained_exchange_syscall_count();
 
             let error = enter(&fixture);
@@ -89,7 +90,7 @@ fn startup_usr_rollback_reverse_dispatch_usr_restored_routes_without_reverse_red
             assert_eq!(namespace_snapshot(&fixture), namespace_before, "{kind:?} {outcome:?}");
             assert_layout_unchanged(layout_before, usr_layout(&fixture));
             assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?} {outcome:?}");
-            assert_root_links_absent(&fixture);
+            fixture.assert_root_abi_unchanged(&root_abi_before);
         }
     }
 }

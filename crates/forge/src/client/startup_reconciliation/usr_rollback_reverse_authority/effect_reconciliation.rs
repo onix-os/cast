@@ -9,13 +9,13 @@ mod durability;
 
 use crate::{
     Installation, db,
-    transition_journal::{TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
     DatabaseEvidence, UsrRollbackReverseApplyEffectLease, UsrRollbackReverseAuthorityError,
     UsrRollbackReverseAuthorityErrorKind, UsrRollbackReverseEffectLease, UsrRollbackReverseFinishEffectLease,
-    inspect_current_database, require_exact_database, reverse_plan_is_exact,
+    inspect_current_database, require_exact_database, require_journal_record_binding, reverse_plan_is_exact,
 };
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
@@ -26,7 +26,9 @@ use crate::client::{
     startup_recovery::UsrRollbackReverseEffectSeal,
 };
 
-pub(in crate::client) use durability::UsrRollbackReverseDurableEffectAuthority;
+pub(in crate::client) use durability::{
+    UsrRollbackReverseDurableEffectAuthority, UsrRollbackReverseRecordAdvanceError,
+};
 
 /// Result of consuming one POST effect lease.
 ///
@@ -61,7 +63,7 @@ struct ReconciledReverseEffect<'reservation, Namespace> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: Namespace,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -72,10 +74,13 @@ impl<'reservation> UsrRollbackReverseApplyEffectLease<'reservation> {
         _effect_seal: &UsrRollbackReverseEffectSeal,
         journal: &TransitionJournalStore,
     ) -> Result<UsrRollbackReverseApplyReconciliation<'reservation>, UsrRollbackReverseAuthorityError> {
-        // This binding check is intentionally the first evidence observation.
-        if !journal.has_binding(&self.lease.journal_binding) {
-            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        // Exact record identity is intentionally the first observation.
+        require_journal_record_binding(
+            &self.lease.installation,
+            journal,
+            &self.lease.journal_record_binding,
+            &self.lease.record,
+        )?;
         self.lease.reconcile_apply_after_binding(journal)
     }
 }
@@ -87,10 +92,13 @@ impl<'reservation> UsrRollbackReverseFinishEffectLease<'reservation> {
         _effect_seal: &UsrRollbackReverseEffectSeal,
         journal: &TransitionJournalStore,
     ) -> Result<UsrRollbackReverseAlreadySatisfiedEffectAuthority<'reservation>, UsrRollbackReverseAuthorityError> {
-        // This binding check is intentionally the first evidence observation.
-        if !journal.has_binding(&self.lease.journal_binding) {
-            return Err(UsrRollbackReverseAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        // Exact record identity is intentionally the first observation.
+        require_journal_record_binding(
+            &self.lease.installation,
+            journal,
+            &self.lease.journal_record_binding,
+            &self.lease.record,
+        )?;
         self.lease.reconcile_finish_after_binding(journal)
     }
 }
@@ -106,13 +114,27 @@ impl<'reservation> UsrRollbackReverseEffectLease<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
 
-        require_pre_namespace_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_pre_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace_result = namespace.reconcile_apply(&installation, &record);
-        let trailing_evidence = require_post_namespace_evidence(&installation, &state_db, &record, &database, journal);
+        let trailing_evidence = require_post_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        );
         let namespace_result = namespace_result?;
         trailing_evidence?;
 
@@ -125,7 +147,7 @@ impl<'reservation> UsrRollbackReverseEffectLease<'reservation> {
                         record,
                         database,
                         namespace,
-                        journal_binding,
+                        journal_record_binding,
                         _active_state_reservation,
                     },
                 })
@@ -149,13 +171,27 @@ impl<'reservation> UsrRollbackReverseEffectLease<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
 
-        require_pre_namespace_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_pre_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace_result = namespace.reconcile_finish(&installation, &record);
-        let trailing_evidence = require_post_namespace_evidence(&installation, &state_db, &record, &database, journal);
+        let trailing_evidence = require_post_namespace_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        );
         let namespace = namespace_result?;
         trailing_evidence?;
 
@@ -166,7 +202,7 @@ impl<'reservation> UsrRollbackReverseEffectLease<'reservation> {
                 record,
                 database,
                 namespace,
-                journal_binding,
+                journal_record_binding,
                 _active_state_reservation,
             },
         })
@@ -178,12 +214,15 @@ fn require_pre_namespace_evidence(
     state_db: &db::state::Database,
     record: &TransitionRecord,
     expected_database: &DatabaseEvidence,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
 ) -> Result<(), UsrRollbackReverseAuthorityError> {
+    require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     require_exact_database(expected_database, inspect_current_database(record, state_db)?)?;
-    require_exact_journal(journal, record)?;
     require_exact_reverse_plan(record)?;
+    installation.revalidate_mutable_namespace()?;
+    require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     Ok(())
 }
@@ -193,25 +232,17 @@ fn require_post_namespace_evidence(
     state_db: &db::state::Database,
     record: &TransitionRecord,
     expected_database: &DatabaseEvidence,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
 ) -> Result<(), UsrRollbackReverseAuthorityError> {
+    require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
-    require_exact_journal(journal, record)?;
     require_exact_reverse_plan(record)?;
     require_exact_database(expected_database, inspect_current_database(record, state_db)?)?;
     installation.revalidate_mutable_namespace()?;
+    require_journal_record_binding(installation, journal, journal_record_binding, record)?;
+    installation.revalidate_mutable_namespace()?;
     Ok(())
-}
-
-fn require_exact_journal(
-    journal: &TransitionJournalStore,
-    expected: &TransitionRecord,
-) -> Result<(), UsrRollbackReverseAuthorityError> {
-    match journal.load() {
-        Ok(Some(actual)) if actual == *expected => Ok(()),
-        Ok(Some(_)) | Ok(None) => Err(UsrRollbackReverseAuthorityErrorKind::JournalChangedDuringEffect.into()),
-        Err(source) => Err(UsrRollbackReverseAuthorityErrorKind::JournalReadDuringEffect(source).into()),
-    }
 }
 
 fn require_exact_reverse_plan(record: &TransitionRecord) -> Result<(), UsrRollbackReverseAuthorityError> {

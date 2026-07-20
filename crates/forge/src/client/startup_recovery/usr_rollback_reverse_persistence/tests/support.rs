@@ -20,10 +20,10 @@ use crate::{
     transition_journal::{RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
 };
 
-use super::super::reverse_test_support::{EffectOperationKind, ReverseFixture, ReverseLayout};
+use super::super::reverse_test_support::{EffectOperationKind, ReverseFixture};
 
 pub(super) use super::super::reverse_test_support::{
-    EffectOperationKind as OperationKind, ReverseFixture as Fixture, capture_record,
+    EffectOperationKind as OperationKind, ReverseFixture as Fixture, ReverseLayout, SourceCase, capture_record,
 };
 
 pub(super) fn fixture_for_outcome(kind: EffectOperationKind, outcome: RollbackActionOutcome) -> ReverseFixture {

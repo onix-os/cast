@@ -9,10 +9,7 @@
 
 mod effect_reconciliation;
 
-use crate::{
-    Installation,
-    transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
-};
+use crate::{Installation, transition_journal::TransitionRecord};
 
 use super::{
     capture::{
@@ -65,10 +62,8 @@ pub(in crate::client::startup_reconciliation) struct UsrRollbackReverseNamespace
 impl UsrRollbackReverseNamespaceInspection {
     pub(in crate::client::startup_reconciliation) fn begin(
         installation: &Installation,
-        journal: &TransitionJournalStore,
         expected: &TransitionRecord,
     ) -> Result<Self, UsrRollbackReverseNamespaceError> {
-        require_exact_journal(journal, expected)?;
         let before = capture_snapshot(installation, expected)?;
         Ok(Self { before })
     }
@@ -76,7 +71,6 @@ impl UsrRollbackReverseNamespaceInspection {
     pub(in crate::client::startup_reconciliation) fn finish(
         self,
         installation: &Installation,
-        journal: &TransitionJournalStore,
         expected: &TransitionRecord,
     ) -> Result<UsrRollbackReverseNamespaceProof, UsrRollbackReverseNamespaceError> {
         let after = capture_snapshot(installation, expected)?;
@@ -95,7 +89,6 @@ impl UsrRollbackReverseNamespaceInspection {
         }
         let parents = RetainedReverseExchangeParents::capture(&after, expected)?;
         parents.revalidate_value_identity(installation)?;
-        require_exact_journal(journal, expected)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackReverseNamespaceProof {
             before: self.before,
@@ -115,7 +108,6 @@ impl UsrRollbackReverseNamespaceProof {
     pub(in crate::client::startup_reconciliation) fn revalidate(
         &self,
         installation: &Installation,
-        journal: &TransitionJournalStore,
         expected: &TransitionRecord,
     ) -> Result<(), UsrRollbackReverseNamespaceError> {
         installation.revalidate_mutable_namespace()?;
@@ -127,7 +119,6 @@ impl UsrRollbackReverseNamespaceProof {
         self.parents.revalidate_value_identity(installation)?;
         require_layout(expected, &self.before, self.layout)?;
         require_layout(expected, &self.after, self.layout)?;
-        require_exact_journal(journal, expected)?;
 
         run_before_fresh_namespace_capture();
         let fresh = capture_snapshot(installation, expected)?;
@@ -136,7 +127,6 @@ impl UsrRollbackReverseNamespaceProof {
         require_projection(expected, &fresh, &self.projection)?;
         require_layout(expected, &fresh, self.layout)?;
 
-        require_exact_journal(journal, expected)?;
         self.parents.revalidate_value_identity(installation)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
@@ -207,26 +197,12 @@ fn require_matching_fingerprints(
     }
 }
 
-fn require_exact_journal(
-    journal: &TransitionJournalStore,
-    expected: &TransitionRecord,
-) -> Result<(), UsrRollbackReverseNamespaceError> {
-    match journal.load()? {
-        Some(actual) if actual == *expected => Ok(()),
-        Some(_) | None => Err(UsrRollbackReverseNamespaceError::JournalChanged),
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub(in crate::client::startup_reconciliation) enum UsrRollbackReverseNamespaceError {
     #[error("capture or revalidate the exact rollback-reverse namespace")]
     Capture(#[from] CaptureError),
     #[error("assess the exact rollback-reverse namespace against the journal phase")]
     Policy(#[from] NamespacePolicyConflict),
-    #[error("read the retained canonical transition journal")]
-    Journal(#[from] StorageError),
-    #[error("the retained canonical transition journal changed during rollback-reverse proof")]
-    JournalChanged,
     #[error("the rollback-reverse activation namespace changed during proof")]
     NamespaceChanged,
     #[error("capture the exact normalized rollback-reverse namespace")]

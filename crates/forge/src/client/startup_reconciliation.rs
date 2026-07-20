@@ -132,7 +132,7 @@ pub(in crate::client) use usr_rollback_reverse_authority::{
     UsrRollbackReverseAdmission, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
     UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyReconciliation,
     UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError, UsrRollbackReverseDurableEffectAuthority,
-    UsrRollbackReverseFinishAuthority,
+    UsrRollbackReverseFinishAuthority, UsrRollbackReverseRecordAdvanceError,
 };
 pub(in crate::client) use usr_exchanged_root_abi_authority::{
     UsrExchangedRootAbiDurabilityAuthority, UsrExchangedRootAbiNormalizationAdmission,

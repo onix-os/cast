@@ -27,7 +27,7 @@ forge-startup-usr-rollback-resume-route-test:
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_successor_replacement_reopens_but_never_succeeds \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_successor_replacement_after_binding_before_reopen_never_succeeds \
 		client::startup_recovery::usr_rollback_resume_route::tests::root_links_storage_faults::startup_root_links_complete_route_all_storage_faults_reopen_exact_record_across_operations_and_epochs \
-		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_endpoint::startup_root_links_complete_fresh_entries_stop_at_exact_reverse_intent_across_operations_and_epochs \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_endpoint::startup_root_links_complete_fresh_entries_reach_usr_restored_once_then_remain_byte_stable \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
@@ -35,6 +35,7 @@ forge-startup-usr-rollback-resume-route-test:
 	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_resume_route_authority.rs; \
 	reverse_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority.rs; \
+	reverse_proof=crates/forge/src/client/startup_reconciliation/activation_namespace/rollback_reverse_proof.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/resume_route_proof.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	journal_store=crates/forge/src/transition_journal/store.rs; \
@@ -42,12 +43,14 @@ forge-startup-usr-rollback-resume-route-test:
 	coordinator_test=crates/forge/src/transition_identity/journal_coordinator/tests/usr_exchange_effect.rs; \
 	forward_support=crates/forge/src/client/startup_recovery/forward_origin_test_support.rs; \
 	end_to_end=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/end_to_end.rs; \
+	root_links_endpoint=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/root_links_route_endpoint.rs; \
 	timeout 10s grep -Fqx '            if kind == OperationKind::ActiveReblit && expected.phase == Phase::CandidatePreserveIntent {' "$$end_to_end"; \
 	timeout 10s grep -Fq 'This resume-route end-to-end test stops before crossing into' "$$end_to_end"; \
 	successor_count="$$( timeout 10s rg -n '\.rollback_successor\(' "$$executor" "$$authority" "$$proof" | timeout 10s wc -l )"; \
 	timeout 10s test "$$successor_count" = 1; \
 	timeout 10s grep -Fqx '    let successor = match source_record.rollback_successor(None) {' "$$executor"; \
 	if timeout 10s rg -n 'journal\.advance\(' "$$executor" "$$authority" "$$proof" "$$reopen"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'journal\.load\(\)' "$$reverse_proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'authority.advance_record_binding(&journal, &successor)' "$$executor" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc '.advance_record_binding(cast, self.journal_record_binding, next)' "$$authority" )" = 1; \
 	timeout 10s grep -Fqx 'mod canonical_journal_reopen;' crates/forge/src/client/startup_recovery.rs; \
@@ -183,7 +186,10 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s grep -Fq 'if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored)' "$$authority"; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$authority"; \
 	timeout 10s grep -Fq 'record.phase == Phase::RollbackDecided && rollback.source == ForwardPhase::RootLinksComplete' "$$authority"; \
-	if timeout 10s rg -n 'ForwardPhase::RootLinksComplete' "$$reverse_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$reverse_authority"; \
+	timeout 10s grep -Fq 'let restored = reverse_intent' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq 'assert_eq!(retained_exchange_syscall_count(), 1, "{case}");' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq 'assert_eq!(fixture.canonical_bytes(), restored_bytes, "{case}");' "$$root_links_endpoint"; \
 	timeout 10s grep -Fq '(RollbackAction::Pending, UsrExchangeLayout::Post)' "$$authority"; \
 	timeout 10s grep -Fq '(RollbackAction::AlreadySatisfied, UsrExchangeLayout::Pre)' "$$authority"; \
 	timeout 10s grep -Fq 'RollbackAction::Applied | RollbackAction::AlreadySatisfied' "$$authority"; \
@@ -194,7 +200,7 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s grep -Fq 'decision.rollback_successor(None).unwrap()' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'retained_exchange_syscall_count() == 1' "$$coordinator_test"; \
 	timeout 10s grep -Fq 'assert_eq!(pending.phase(), Phase::ReverseExchangeIntent);' "$$forward_support"; \
-	for file in "$$executor" "$$authority" "$$proof" "$$reopen" misc/make/startup-rollback-resume-route-tests.mk; do \
+	for file in "$$executor" "$$authority" "$$proof" "$$reopen" "$$root_links_endpoint" misc/make/startup-rollback-resume-route-tests.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \

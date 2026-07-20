@@ -9,8 +9,7 @@ use crate::{
 
 use super::support::{
     Fixture, OperationKind, ReverseLayout, assert_ambiguous, assert_layout_reversed, assert_layout_unchanged,
-    assert_not_applied, assert_root_links_absent, assert_usr_restored_pending, enter, expected_usr_restored,
-    namespace_snapshot, usr_layout,
+    assert_not_applied, assert_usr_restored_pending, enter, expected_usr_restored, namespace_snapshot, usr_layout,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +55,7 @@ fn startup_usr_rollback_reverse_dispatch_classifies_all_raw_syscall_reports_by_f
             let database_before = fixture.fixture.database_snapshot();
             let namespace_before = namespace_snapshot(&fixture);
             let layout_before = usr_layout(&fixture);
+            let root_abi_before = fixture.root_abi_snapshot();
             case.arm();
 
             let error = enter(&fixture);
@@ -81,7 +81,7 @@ fn startup_usr_rollback_reverse_dispatch_classifies_all_raw_syscall_reports_by_f
                 assert_layout_unchanged(layout_before, usr_layout(&fixture));
                 assert_eq!(namespace_snapshot(&fixture), namespace_before, "{kind:?} {case:?}");
             }
-            assert_root_links_absent(&fixture);
+            fixture.assert_root_abi_unchanged(&root_abi_before);
         }
     }
 }
@@ -94,6 +94,7 @@ fn startup_usr_rollback_reverse_dispatch_ambiguous_post_attempt_evidence_consume
             let source = fixture.record.clone();
             let database_before = fixture.fixture.database_snapshot();
             let layout_before = usr_layout(&fixture);
+            let root_abi_before = fixture.root_abi_snapshot();
             arm_before_reverse_exchange_reconciliation_capture(
                 fixture.namespace_change_hook(format!("real-reverse-dispatch-ambiguous-{kind:?}-{raw_error}")),
             );
@@ -118,7 +119,7 @@ fn startup_usr_rollback_reverse_dispatch_ambiguous_post_attempt_evidence_consume
             );
             assert_layout_reversed(layout_before, usr_layout(&fixture));
             assert_eq!(retained_exchange_syscall_count(), 1, "{kind:?} raw_error={raw_error}");
-            assert_root_links_absent(&fixture);
+            fixture.assert_root_abi_unchanged(&root_abi_before);
         }
     }
 }

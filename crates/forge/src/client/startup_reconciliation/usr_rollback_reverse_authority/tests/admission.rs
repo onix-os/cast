@@ -8,7 +8,9 @@ use crate::{
         },
         startup_recovery::UsrRollbackReverseEffectSeal,
     },
-    transition_journal::{InitialRollbackAction, Phase, RollbackAction, RollbackObservations, TransitionJournalStore},
+    transition_journal::{
+        ForwardPhase, InitialRollbackAction, Phase, RollbackAction, RollbackObservations, TransitionJournalStore,
+    },
 };
 
 use super::{
@@ -19,7 +21,11 @@ use super::{
 #[test]
 fn startup_usr_rollback_reverse_admission_splits_post_apply_from_pre_finish() {
     for kind in OperationKind::ALL {
-        for source in [SourceCase::IntentPost, SourceCase::ExchangedPost] {
+        for source in [
+            SourceCase::IntentPost,
+            SourceCase::ExchangedPost,
+            SourceCase::RootLinksCompletePost,
+        ] {
             for layout in [ReverseLayout::Post, ReverseLayout::Pre] {
                 let fixture = ReverseFixture::from_source(kind, source, layout);
                 let before = fixture.evidence_snapshots();
@@ -48,21 +54,23 @@ fn startup_usr_rollback_reverse_admission_splits_post_apply_from_pre_finish() {
 #[test]
 fn startup_usr_rollback_reverse_admission_accepts_historical_runtime_evidence() {
     for kind in OperationKind::ALL {
-        for layout in [ReverseLayout::Post, ReverseLayout::Pre] {
-            let fixture = ReverseFixture::historical(kind, layout);
-            let creation_epoch = fixture.record.creation_epoch.clone();
-            let journal = fixture.open_journal();
-            let reservation = ActiveStateReservation::acquire().unwrap();
-            match (layout, fixture.capture(&journal, &reservation)) {
-                (ReverseLayout::Post, UsrRollbackReverseAdmission::Apply(authority)) => {
-                    authority.revalidate(&journal).unwrap();
+        for source in [SourceCase::ExchangedPost, SourceCase::RootLinksCompletePost] {
+            for layout in [ReverseLayout::Post, ReverseLayout::Pre] {
+                let fixture = ReverseFixture::from_source_epoch(kind, source, layout, true);
+                let creation_epoch = fixture.record.creation_epoch.clone();
+                let journal = fixture.open_journal();
+                let reservation = ActiveStateReservation::acquire().unwrap();
+                match (layout, fixture.capture(&journal, &reservation)) {
+                    (ReverseLayout::Post, UsrRollbackReverseAdmission::Apply(authority)) => {
+                        authority.revalidate(&journal).unwrap();
+                    }
+                    (ReverseLayout::Pre, UsrRollbackReverseAdmission::Finish(authority)) => {
+                        authority.revalidate(&journal).unwrap();
+                    }
+                    _ => panic!("historical {kind:?} {source:?} {layout:?} evidence did not admit"),
                 }
-                (ReverseLayout::Pre, UsrRollbackReverseAdmission::Finish(authority)) => {
-                    authority.revalidate(&journal).unwrap();
-                }
-                _ => panic!("historical {kind:?} {layout:?} evidence did not admit"),
+                assert_eq!(fixture.record.creation_epoch, creation_epoch);
             }
-            assert_eq!(fixture.record.creation_epoch, creation_epoch);
         }
     }
 }
@@ -121,6 +129,16 @@ fn startup_usr_rollback_reverse_admission_bypasses_usr_restored_and_other_phases
 fn startup_usr_rollback_reverse_plan_requires_exact_pending_usr_action() {
     let fixture = ReverseFixture::new(OperationKind::NewState, ReverseLayout::Post);
     assert!(super::super::reverse_plan_is_exact(&fixture.reverse_intent));
+    let root_links = ReverseFixture::from_source(
+        OperationKind::NewState,
+        SourceCase::RootLinksCompletePost,
+        ReverseLayout::Post,
+    );
+    assert!(super::super::reverse_plan_is_exact(&root_links.reverse_intent));
+
+    let mut non_admitted_source = root_links.reverse_intent.clone();
+    non_admitted_source.rollback.as_mut().unwrap().source = ForwardPhase::SystemTriggersStarted;
+    assert!(!super::super::reverse_plan_is_exact(&non_admitted_source));
 
     for action in [
         RollbackAction::NotRequired,
