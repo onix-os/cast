@@ -121,7 +121,8 @@ fn assert_external_patch_source_semantics(declaration: &PackageSpec, plan: &Deri
             .collect::<Vec<_>>(),
         ["/usr/bin/patch"]
     );
-    assert!(script.contains("${CAST_SOURCE_DIR}/portable-check"));
+    assert!(script.contains("patch -d ."));
+    assert!(!script.contains("${CAST_SOURCE_DIR}/portable-check"));
     assert!(script.contains("${CAST_SOURCE_DIR}/portability.patch"));
     assert!(matches!(
         extraction_steps(plan).as_slice(),

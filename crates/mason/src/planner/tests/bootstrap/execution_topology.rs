@@ -794,7 +794,7 @@ fi
                 vec![FrozenStepShape::Shell {
                     interpreter: "/usr/bin/bash".to_owned(),
                     declared_programs: vec!["/usr/bin/patch".to_owned()],
-                    script: r#"patch -d "${CAST_SOURCE_DIR}/cast-hooks-fixture" -p1 -i "${CAST_SOURCE_DIR}/pre-setup.patch""#
+                    script: r#"patch -d . -p1 -i "${CAST_SOURCE_DIR}/pre-setup.patch""#
                         .to_owned(),
                 }],
                 vec![run("cmake", "-G")],
@@ -842,6 +842,7 @@ fi
     if name == "multiple-sources" {
         multiple_sources_topology::assert_contract(plan, job);
     }
+    assert_hooks_patch_working_directory(name, job);
     if name == "desktop-integration" {
         desktop_integration_topology::assert_contract(plan, job);
     }

@@ -6,6 +6,6 @@ let b = import! cast.package.v3
     b.step.shell_with {
         interpreter = b.program.binary "bash",
         declared_programs = [b.program.binary "patch"],
-        script = r#"patch -d "${CAST_SOURCE_DIR}/portable-check" -p1 -i "${CAST_SOURCE_DIR}/portability.patch""#,
+        script = r#"patch -d . -p1 -i "${CAST_SOURCE_DIR}/portability.patch""#,
     },
 ]
