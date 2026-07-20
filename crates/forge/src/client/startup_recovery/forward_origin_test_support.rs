@@ -13,9 +13,10 @@ use super::{
 };
 
 /// Enter the real mutable startup gate after a coordinator-owned exchange
-/// fault and require the exact recovery-pending boundary reached by the
-/// parent-durability normalizer.
-pub(crate) fn assert_usr_exchange_intent_post_recovers_to_pending_reverse(
+/// fault and require the exact recovery-pending rollback decision. A durable
+/// `UsrExchanged` source first consumes the separate root-ABI normalization
+/// entry; an intent source reaches the decision directly.
+pub(crate) fn assert_usr_exchange_post_recovers_to_pending_reverse(
     installation: &Installation,
     state_db: &db::state::Database,
     layout_db: &db::layout::Database,
@@ -31,10 +32,26 @@ pub(crate) fn assert_usr_exchange_intent_post_recovers_to_pending_reverse(
         Ok(_) => panic!("startup unexpectedly admitted an unresolved forward-exchange residue"),
         Err(error) => error,
     };
-    let pending = match error {
+    let mut pending = match error {
         startup_gate::Error::RecoveryPending(pending) => pending,
         other => panic!("expected recovery-pending startup result, got {other:?}"),
     };
+    if pending.phase() == Phase::UsrExchanged {
+        assert!(
+            pending.blockers().is_empty(),
+            "unexpected root-ABI normalization blockers: {:?}",
+            pending.blockers()
+        );
+        drop(pending);
+        let error = match CleanSystemStartup::enter(&system, &reservation) {
+            Ok(_) => panic!("startup unexpectedly admitted an unresolved root-ABI durability boundary"),
+            Err(error) => error,
+        };
+        pending = match error {
+            startup_gate::Error::RecoveryPending(pending) => pending,
+            other => panic!("expected post-normalization recovery-pending result, got {other:?}"),
+        };
+    }
     assert_eq!(pending.phase(), Phase::RollbackDecided);
     assert!(
         pending.blockers().is_empty(),
@@ -162,6 +179,19 @@ pub(crate) fn snapshot_startup_recovery_namespace(root: &Path) -> Vec<StartupRec
     let mut entries = Vec::new();
     snapshot_directory(root, root, &mut entries);
     entries
+}
+
+pub(crate) fn snapshot_startup_recovery_namespace_without_root_abi(
+    root: &Path,
+) -> Vec<StartupRecoveryNamespaceEntry> {
+    snapshot_startup_recovery_namespace(root)
+        .into_iter()
+        .filter(|entry| {
+            !["bin", "sbin", "lib", "lib32", "lib64"]
+                .into_iter()
+                .any(|name| entry.relative == Path::new(name))
+        })
+        .collect()
 }
 
 fn snapshot_directory(root: &Path, directory: &Path, output: &mut Vec<StartupRecoveryNamespaceEntry>) {

@@ -132,7 +132,8 @@ forge-transition-journal-coordinator-test:
 	fi; \
 	timeout 10s grep -Fqx '            Operation::NewState | Operation::ActiveReblit => {' "$$prepare_contract"; \
 	timeout 10s grep -Fq 'RetainedTreeStateId::publish_absent' "$$prepare_contract"; \
-	if timeout 10s grep -RInE 'prepare_(retained_)?active_reblit_candidate' crates/forge/src/client; then \
+	if timeout 10s rg -n 'prepare_(retained_)?active_reblit_candidate' crates/forge/src/client \
+		--glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**'; then \
 		timeout 10s printf '%s\n' 'known-ID/absent candidate authority gained a live callsite before startup recovery exists' >&2; exit 1; \
 	else \
 		status="$$?"; timeout 10s test "$$status" = 1; \
