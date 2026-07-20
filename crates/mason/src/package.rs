@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
+use std::path::PathBuf;
 
 use stone::{
     StoneDigestWriterHasher,
@@ -13,7 +14,11 @@ use stone_recipe::{
     package::OutputSpec,
 };
 
-use crate::{Paths, Recipe, Timing, paths::ExecutionLock, timing};
+use crate::{
+    Paths, Recipe, Timing,
+    paths::{FrozenPackagingBinding, FrozenPackagingPermit},
+    timing,
+};
 
 use self::collect::Collector;
 
@@ -51,9 +56,16 @@ pub(crate) struct ResolvedOutput {
     pub(crate) conflicts: Vec<Provider>,
 }
 
-pub struct FrozenPackager<'a> {
-    paths: &'a Paths,
-    plan: &'a DerivationPlan,
+/// Child-side packaging state prepared before frozen activation.
+///
+/// This value must remain descriptor-free: payload setup deliberately closes
+/// every inherited host descriptor before this state is used. Host workspace
+/// authentication belongs to the supervising process and crosses the boundary
+/// only as [`FrozenPackagingPermit`].
+pub struct FrozenPackager {
+    packaging_binding: FrozenPackagingBinding,
+    install_root: PathBuf,
+    artifact_root: PathBuf,
     identity: PackageIdentity,
     packages: BTreeMap<String, ResolvedOutput>,
     collector: Collector,
@@ -66,12 +78,17 @@ pub struct FrozenPackager<'a> {
     derivation_id: DerivationId,
 }
 
-impl<'a> FrozenPackager<'a> {
-    pub fn from_plan(paths: &'a Paths, plan: &'a DerivationPlan) -> Result<Self, Error> {
+impl FrozenPackager {
+    pub fn from_plan(paths: &Paths, plan: &DerivationPlan) -> Result<Self, Error> {
         plan.validate().map_err(Error::InvalidFrozenPlan)?;
         if paths.layout() != &plan.layout {
             return Err(Error::FrozenLayoutMismatch);
         }
+        let packaging_binding = paths
+            .frozen_packaging_binding(plan)
+            .map_err(Error::InvalidFrozenPaths)?;
+        let install_root = PathBuf::from(&plan.layout.install_dir);
+        let artifact_root = PathBuf::from(&plan.layout.artifacts_dir);
         let output_packages = plan
             .outputs
             .iter()
@@ -107,7 +124,7 @@ impl<'a> FrozenPackager<'a> {
             })
             .collect::<Result<BTreeMap<_, _>, Error>>()?;
 
-        let mut collector = Collector::new(&plan.layout.install_dir);
+        let mut collector = Collector::new(&install_root);
         for rule in &plan.collection_rules {
             let package = output_packages
                 .get(rule.output.as_str())
@@ -124,8 +141,9 @@ impl<'a> FrozenPackager<'a> {
             .collect();
 
         Ok(Self {
-            paths,
-            plan,
+            packaging_binding,
+            install_root,
+            artifact_root,
             identity: plan.package.clone(),
             packages,
             collector,
@@ -139,20 +157,20 @@ impl<'a> FrozenPackager<'a> {
         })
     }
 
-    /// Analyze and emit while holding the exact derivation workspace lock.
-    pub fn package(&self, execution_lock: &ExecutionLock, timing: &mut Timing) -> Result<(), Error> {
+    /// Analyze and emit under the supervisor-authorized frozen packaging binding.
+    pub(crate) fn package(&self, permit: &FrozenPackagingPermit<'_>, timing: &mut Timing) -> Result<(), Error> {
         // This must remain the first fallible operation. Collection, analyzers,
         // and emission all interact with derivation-owned filesystem state.
-        self.paths
-            .require_execution_lock(execution_lock, self.plan)
-            .map_err(Error::InvalidExecutionLock)?;
+        permit
+            .require_for(&self.packaging_binding)
+            .map_err(Error::InvalidPackagingPermit)?;
         let mut hasher = StoneDigestWriterHasher::new();
         let timer = timing.begin(timing::Kind::Analyze);
         let paths = self
             .collector
             .enumerate_paths(None, &mut hasher)
             .map_err(Error::CollectPaths)?;
-        let mut analysis = analysis::Chain::new(self.paths, &self.analysis, &self.collector, &mut hasher);
+        let mut analysis = analysis::Chain::new(&self.install_root, &self.analysis, &self.collector, &mut hasher);
         let sealed = analysis.process(paths).map_err(Error::Analysis)?;
         timing.finish(timer);
 
@@ -177,7 +195,7 @@ impl<'a> FrozenPackager<'a> {
             return Err(Error::UnexpectedAnalyzedOutput(name.to_string()));
         }
         emit::emit_frozen(
-            self.paths,
+            &self.artifact_root,
             &self.identity,
             &self.recipe_fingerprint,
             self.manifest_build_inputs.clone(),
@@ -331,8 +349,10 @@ pub enum Error {
     },
     #[error("invalid frozen derivation plan")]
     InvalidFrozenPlan(#[source] stone_recipe::derivation::DerivationValidationError),
-    #[error("packaging does not hold the execution lock for the frozen derivation")]
-    InvalidExecutionLock(#[source] std::io::Error),
+    #[error("invalid frozen runtime paths")]
+    InvalidFrozenPaths(#[source] std::io::Error),
+    #[error("packaging is not authorized for the frozen packaging binding")]
+    InvalidPackagingPermit(#[source] std::io::Error),
     #[error("frozen output {0} is missing")]
     MissingFrozenOutput(String),
     #[error("analysis produced undeclared output {0}")]

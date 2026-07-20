@@ -697,7 +697,7 @@ mason-paths-test:
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^paths::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 25; \
+	timeout 10s test "$$count" = 28; \
 	timeout 900s $(CARGO) test -p mason --lib "paths::tests::" -- --test-threads=1
 
 mason-executor-test:

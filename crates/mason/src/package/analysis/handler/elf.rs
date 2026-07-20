@@ -222,7 +222,7 @@ mod tests {
             providers: &mut providers,
             dependencies: &mut dependencies,
             analysis: &plan.analysis,
-            paths: &paths,
+            install_root: Path::new(&plan.layout.install_dir),
         };
 
         assert!(
@@ -281,7 +281,7 @@ mod tests {
             providers: &mut providers,
             dependencies: &mut dependencies,
             analysis: &plan.analysis,
-            paths: &paths,
+            install_root: Path::new(&plan.layout.install_dir),
         };
 
         let response = elf(&mut bucket, &mut info).unwrap();
@@ -346,7 +346,7 @@ mod tests {
             providers: &mut providers,
             dependencies: &mut dependencies,
             analysis: &plan.analysis,
-            paths: &paths,
+            install_root: Path::new(&plan.layout.install_dir),
         };
 
         let response = elf(&mut bucket, &mut info).unwrap();
@@ -413,7 +413,7 @@ mod tests {
             providers: &mut providers,
             dependencies: &mut dependencies,
             analysis: &plan.analysis,
-            paths: &paths,
+            install_root: Path::new(&plan.layout.install_dir),
         };
 
         assert!(elf(&mut bucket, &mut info).is_err());
@@ -520,7 +520,7 @@ fn parse_dynamic_section(
             .find(|p| p.ends_with("usr"))
             .and_then(|p| p.parent())
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| bucket.paths.install().host);
+            .unwrap_or_else(|| bucket.install_root.to_path_buf());
 
         for rpath in runpath_offset
             .iter()

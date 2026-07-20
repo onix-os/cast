@@ -21,10 +21,7 @@ use super::execution::{
 use super::input::AnalyzerInputError;
 use super::sandbox::{SandboxSnapshot, empty_sandbox_directory, sandbox_directory_entries, verify_sandbox_inventory};
 use super::*;
-use crate::{
-    Paths, Recipe,
-    package::{collect::Collector, test_derivation_plan},
-};
+use crate::package::{collect::Collector, test_derivation_plan};
 
 fn collect_path(root: &Path, path: &Path) -> PathInfo {
     let mut collector = Collector::new(root);
@@ -360,10 +357,6 @@ fn pkg_config_handler_runs_real_tool_without_original_or_proc_path() {
     collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
     let mut hasher = StoneDigestWriterHasher::new();
     let mut info = collector.path(&path, &mut hasher).unwrap();
-    let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-    let runtime = crate::private_tempdir();
-    let output = tempfile::tempdir().unwrap();
     let mut plan = test_derivation_plan();
     let program = pkg_config_program();
     plan.analysis.tools.pkg_config = Some(ExecutablePlan {
@@ -373,14 +366,13 @@ fn pkg_config_handler_runs_real_tool_without_original_or_proc_path() {
             name: "pkg-config".to_owned(),
         },
     });
-    let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
     let mut providers = BTreeSet::new();
     let mut dependencies = BTreeSet::new();
     let mut bucket = BucketMut {
         providers: &mut providers,
         dependencies: &mut dependencies,
         analysis: &plan.analysis,
-        paths: &paths,
+        install_root: install.path(),
     };
 
     let response = pkg_config(&mut bucket, &mut info).unwrap();
@@ -405,20 +397,15 @@ fn compressman_declares_regular_output_then_collector_publishes_it() {
     collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
     let mut hasher = StoneDigestWriterHasher::new();
     let mut info = collector.path(&path, &mut hasher).unwrap();
-    let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-    let runtime = crate::private_tempdir();
-    let output = tempfile::tempdir().unwrap();
     let mut plan = test_derivation_plan();
     plan.analysis.compress_man = true;
-    let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
     let mut providers = BTreeSet::new();
     let mut dependencies = BTreeSet::new();
     let mut bucket = BucketMut {
         providers: &mut providers,
         dependencies: &mut dependencies,
         analysis: &plan.analysis,
-        paths: &paths,
+        install_root: install.path(),
     };
 
     let response = compressman(&mut bucket, &mut info).unwrap();
@@ -460,20 +447,15 @@ fn compressman_symlink_publication_does_not_eagerly_mutate_its_target() {
     collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
     let mut hasher = StoneDigestWriterHasher::new();
     let mut link_info = collector.path(&link, &mut hasher).unwrap();
-    let recipe =
-        Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-    let runtime = crate::private_tempdir();
-    let output = tempfile::tempdir().unwrap();
     let mut plan = test_derivation_plan();
     plan.analysis.compress_man = true;
-    let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
     let mut providers = BTreeSet::new();
     let mut dependencies = BTreeSet::new();
     let mut bucket = BucketMut {
         providers: &mut providers,
         dependencies: &mut dependencies,
         analysis: &plan.analysis,
-        paths: &paths,
+        install_root: install.path(),
     };
 
     let link_response = compressman(&mut bucket, &mut link_info).unwrap();

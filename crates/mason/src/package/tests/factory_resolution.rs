@@ -131,7 +131,6 @@ fn frozen_packager_uses_only_plan_outputs_rules_analysis_and_identity() {
     let runtime = crate::private_tempdir();
     let output = tempfile::tempdir().unwrap();
     let mut plan = test_derivation_plan();
-    let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
     plan.package.name = "frozen".to_owned();
     plan.package.homepage = "https://frozen.invalid".to_owned();
     plan.package.architecture = "x86".to_owned();
@@ -191,8 +190,12 @@ fn frozen_packager_uses_only_plan_outputs_rules_analysis_and_identity() {
     ];
     plan.validate().unwrap();
     let expected_id = plan.derivation_id();
+    let mut paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
+    paths.bind_to_plan(&plan).unwrap();
 
     let packager = FrozenPackager::from_plan(&paths, &plan).unwrap();
+    assert_eq!(packager.install_root, Path::new(&plan.layout.install_dir));
+    assert_eq!(packager.artifact_root, Path::new(&plan.layout.artifacts_dir));
     assert_eq!(packager.identity.name, "frozen");
     assert_eq!(packager.identity.homepage, "https://frozen.invalid");
     assert_eq!(packager.architecture, crate::Architecture::X86);

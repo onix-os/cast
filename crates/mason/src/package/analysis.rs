@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::{
     collections::{BTreeSet, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use stone::{
@@ -14,8 +14,6 @@ use stone_recipe::build_policy::AnalyzerKind;
 use stone_recipe::derivation::AnalysisPlan;
 use tui::{ProgressBar, ProgressStyle, Styled};
 
-use crate::Paths;
-
 use super::collect::{Collector, Error as CollectError, GeneratedArtifact, PathInfo, SealedTree};
 
 mod handler;
@@ -25,7 +23,7 @@ pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 pub struct Chain<'a> {
     handlers: Vec<HandlerEntry>,
     analysis: &'a AnalysisPlan,
-    paths: &'a Paths,
+    install_root: &'a Path,
     collector: &'a Collector,
     hasher: &'a mut StoneDigestWriterHasher,
     pub buckets: BTreeMap<std::sync::Arc<str>, Bucket>,
@@ -33,14 +31,14 @@ pub struct Chain<'a> {
 
 impl<'a> Chain<'a> {
     pub fn new(
-        paths: &'a Paths,
+        install_root: &'a Path,
         analysis: &'a AnalysisPlan,
         collector: &'a Collector,
         hasher: &'a mut StoneDigestWriterHasher,
     ) -> Self {
         Self {
             handlers: analysis.handlers.iter().copied().map(HandlerEntry::new).collect(),
-            paths,
+            install_root,
             analysis,
             collector,
             hasher,
@@ -89,7 +87,7 @@ impl<'a> Chain<'a> {
                         providers: &mut bucket.providers,
                         dependencies: &mut bucket.dependencies,
                         analysis: self.analysis,
-                        paths: self.paths,
+                        install_root: self.install_root,
                     };
 
                     entry.handler.handle(&mut bucket_mut, &mut path)?
@@ -254,7 +252,7 @@ pub struct BucketMut<'a> {
     pub providers: &'a mut BTreeSet<Provider>,
     pub dependencies: &'a mut BTreeSet<Dependency>,
     pub analysis: &'a AnalysisPlan,
-    pub paths: &'a Paths,
+    pub install_root: &'a Path,
 }
 
 pub struct Response {
@@ -299,7 +297,7 @@ mod tests {
     use stone_recipe::derivation::PathRuleKind;
 
     use super::*;
-    use crate::{Recipe, package::test_derivation_plan};
+    use crate::package::test_derivation_plan;
 
     struct ReplaceWith(PathBuf);
 
@@ -362,12 +360,7 @@ mod tests {
 
     #[test]
     fn replacement_is_routed_to_the_output_selected_for_the_new_path() {
-        let recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = crate::private_tempdir();
-        let output = tempfile::tempdir().unwrap();
         let plan = test_derivation_plan();
-        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
 
         let install = tempfile::tempdir().unwrap();
         let original = install.path().join("original");
@@ -383,7 +376,7 @@ mod tests {
         let mut hasher = StoneDigestWriterHasher::new();
         let original = collector.path(&original, &mut hasher).unwrap();
         assert_eq!(original.package.as_ref(), "root-output");
-        let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        let mut chain = Chain::new(install.path(), &plan.analysis, &collector, &mut hasher);
         chain.handlers = vec![HandlerEntry {
             kind: AnalyzerKind::IncludeAny,
             handler: Box::new(ReplaceWith(replacement)),
@@ -401,12 +394,7 @@ mod tests {
 
     #[test]
     fn generated_replacement_is_published_then_routed_to_its_selected_output() {
-        let recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = crate::private_tempdir();
-        let output = tempfile::tempdir().unwrap();
         let plan = test_derivation_plan();
-        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
 
         let install = tempfile::tempdir().unwrap();
         let original_path = install.path().join("original");
@@ -420,7 +408,7 @@ mod tests {
 
         let mut hasher = StoneDigestWriterHasher::new();
         let original = collector.path(&original_path, &mut hasher).unwrap();
-        let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        let mut chain = Chain::new(install.path(), &plan.analysis, &collector, &mut hasher);
         chain.handlers = vec![HandlerEntry {
             kind: AnalyzerKind::IncludeAny,
             handler: Box::new(GenerateReplacement {
@@ -442,12 +430,7 @@ mod tests {
 
     #[test]
     fn any_failure_after_generated_admission_poisons_the_inventory() {
-        let recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = crate::private_tempdir();
-        let output = tempfile::tempdir().unwrap();
         let plan = test_derivation_plan();
-        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
 
         let install = tempfile::tempdir().unwrap();
         let original_path = install.path().join("original");
@@ -457,7 +440,7 @@ mod tests {
 
         let mut hasher = StoneDigestWriterHasher::new();
         let original = collector.path(&original_path, &mut hasher).unwrap();
-        let mut chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        let mut chain = Chain::new(install.path(), &plan.analysis, &collector, &mut hasher);
         chain.handlers = vec![HandlerEntry {
             kind: AnalyzerKind::IncludeAny,
             handler: Box::new(GenerateThenFail {
@@ -473,12 +456,7 @@ mod tests {
 
     #[test]
     fn chain_uses_only_the_declared_handlers_in_exact_order() {
-        let recipe =
-            Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-        let runtime = crate::private_tempdir();
-        let output = tempfile::tempdir().unwrap();
         let mut plan = test_derivation_plan();
-        let paths = Paths::new(&recipe, plan.layout.clone(), runtime.path(), output.path()).unwrap();
         let install = tempfile::tempdir().unwrap();
         let collector = Collector::new(install.path());
         let mut hasher = StoneDigestWriterHasher::new();
@@ -494,7 +472,7 @@ mod tests {
             AnalyzerKind::IncludeAny,
         ];
         plan.analysis.handlers = all.clone();
-        let chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        let chain = Chain::new(install.path(), &plan.analysis, &collector, &mut hasher);
         assert_eq!(chain.handlers.iter().map(|entry| entry.kind).collect::<Vec<_>>(), all);
         assert_eq!(chain.handlers.len(), plan.analysis.handlers.len());
         drop(chain);
@@ -505,7 +483,7 @@ mod tests {
             AnalyzerKind::IncludeAny,
         ];
         plan.analysis.handlers = first.clone();
-        let chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        let chain = Chain::new(install.path(), &plan.analysis, &collector, &mut hasher);
         assert_eq!(chain.handlers.iter().map(|entry| entry.kind).collect::<Vec<_>>(), first);
         assert_eq!(chain.handlers.len(), plan.analysis.handlers.len());
         drop(chain);
@@ -516,7 +494,7 @@ mod tests {
             AnalyzerKind::IncludeAny,
         ];
         plan.analysis.handlers = second.clone();
-        let chain = Chain::new(&paths, &plan.analysis, &collector, &mut hasher);
+        let chain = Chain::new(install.path(), &plan.analysis, &collector, &mut hasher);
         assert_eq!(
             chain.handlers.iter().map(|entry| entry.kind).collect::<Vec<_>>(),
             second

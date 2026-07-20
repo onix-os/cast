@@ -16,7 +16,10 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::Paths;
+use crate::{
+    Paths,
+    paths::{ExecutionLock, FrozenPackagingPermit},
+};
 use container::{
     Container, DevPolicy, LoopbackPolicy, ProcPolicy, PseudoFilesystemPolicy, RootFilesystemPolicy, SysPolicy,
     TmpPolicy, TmpfsLimits,
@@ -74,9 +77,10 @@ where
 pub(crate) fn exec_frozen<E>(
     paths: &Paths,
     plan: &DerivationPlan,
+    execution_lock: &ExecutionLock,
     sandbox: &FrozenSandbox,
     guard: &forge::FrozenRootGuard,
-    f: impl FnMut() -> Result<(), E>,
+    mut f: impl FnMut(&FrozenPackagingPermit<'_>) -> Result<(), E>,
 ) -> Result<(), Error>
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -119,8 +123,22 @@ where
         .map_err(Error::CreateDerivationCgroup)?;
 
     // Frozen execution has no legacy-clone or post-clone migration path. The
-    // kernel must place the child in this authenticated leaf atomically.
-    container.run_in_cgroup::<E>(leaf, f)?;
+    // kernel must place the child in this authenticated leaf atomically. Mint
+    // the descriptor-free permit only after every fallible activation input
+    // has been prepared. Its borrow keeps the supervisor's real lock alive,
+    // while the child can close every inherited host descriptor before using
+    // the permit for pure packaging authorization.
+    let permit = paths
+        .issue_frozen_packaging_permit(execution_lock, plan)
+        .map_err(Error::AuthorizeFrozenPackaging)?;
+    container.run_in_cgroup::<E>(leaf, || f(&permit))?;
+
+    // A successful payload is accepted only if the supervisor still holds the
+    // exact workspace and derivation locks. Publication performs the same full
+    // validation again before making any staged artifact visible.
+    paths
+        .require_execution_lock(execution_lock, plan)
+        .map_err(Error::RevalidateFrozenPackaging)?;
     Ok(())
 }
 

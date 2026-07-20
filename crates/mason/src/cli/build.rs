@@ -138,14 +138,21 @@ pub fn handle(command: Command, env: Env) -> Result<(), Error> {
 
     // Build & package from within container
     prepared.require_for(paths, &plan)?;
-    container::exec_frozen::<Error>(paths, &plan, prepared.sandbox(), prepared.root_guard(), || {
-        executor.run(&mut timing)?;
-        packager.package(&execution_lock, &mut timing)?;
+    container::exec_frozen::<Error>(
+        paths,
+        &plan,
+        &execution_lock,
+        prepared.sandbox(),
+        prepared.root_guard(),
+        |permit| {
+            executor.run(&mut timing)?;
+            packager.package(permit, &mut timing)?;
 
-        timing.print_table();
+            timing.print_table();
 
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
 
     // Publish the complete derivation bundle without replacing an existing one.
     let verification = verify_against.as_deref().map_or(

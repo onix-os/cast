@@ -22,7 +22,7 @@ use forge::util;
 #[cfg(test)]
 use fs_err::File;
 use nix::fcntl::{FlockArg, flock};
-use stone_recipe::derivation::{BuilderLayout, DerivationPlan};
+use stone_recipe::derivation::{BuilderLayout, DerivationId, DerivationPlan};
 
 use crate::{Recipe, linux_fs::chmod_path_descriptor};
 
@@ -55,6 +55,7 @@ impl Id {
 pub struct Paths {
     id: Id,
     host_root: PathBuf,
+    workspace_identity: (u64, u64),
     host_root_anchor: Arc<StdFile>,
     host_root_path_anchor: Arc<StdFile>,
     layout: BuilderLayout,
@@ -81,10 +82,12 @@ impl Paths {
         let host_root_anchor = Arc::new(open_directory_nofollow(&host_root)?);
         require_controlled_directory(&host_root_anchor, &host_root, false)?;
         let host_root_path_anchor = Arc::new(pin_matching_workspace_root(&host_root_anchor, &host_root)?);
+        let workspace_identity = directory_identity(&host_root_anchor)?;
 
         let job = Self {
             id,
             host_root,
+            workspace_identity,
             host_root_anchor,
             host_root_path_anchor,
             layout,
@@ -285,6 +288,37 @@ impl Paths {
             )));
         }
         self.revalidate_host_root()
+    }
+
+    /// Describe the exact frozen workspace using immutable scalar state only.
+    /// This remains safe to inspect after the payload closes every inherited
+    /// host descriptor.
+    /// Build the immutable, descriptor-free identity expected by packaging.
+    ///
+    /// Keep this operation purely comparative: a copied `Paths` value contains
+    /// intentionally closed descriptors after payload activation and must
+    /// never reopen or inspect them in the child.
+    pub(crate) fn frozen_packaging_binding(&self, plan: &DerivationPlan) -> io::Result<FrozenPackagingBinding> {
+        self.require_plan(plan)?;
+        Ok(FrozenPackagingBinding {
+            workspace: self.host_root.clone(),
+            workspace_identity: self.workspace_identity,
+            derivation_id: plan.derivation_id(),
+            lock_path: self.execution_lock_path(plan)?,
+        })
+    }
+
+    /// Fully revalidate the parent-owned kernel lock before issuing its
+    /// descriptor-free, lifetime-scoped payload authority.
+    /// Fully authenticate the supervisor-held lock before issuing child-safe
+    /// packaging authority tied to that guard's lifetime.
+    pub(crate) fn issue_frozen_packaging_permit<'lock>(
+        &self,
+        lock: &'lock ExecutionLock,
+        plan: &DerivationPlan,
+    ) -> io::Result<FrozenPackagingPermit<'lock>> {
+        self.require_execution_lock(lock, plan)?;
+        Ok(FrozenPackagingPermit::new(self.frozen_packaging_binding(plan)?))
     }
 
     fn execution_lock_dir(&self) -> PathBuf {
@@ -647,6 +681,7 @@ const EXECUTION_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const EXECUTION_LOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
 
 include!("paths/execution_lock_files.rs");
+include!("paths/packaging_permit.rs");
 include!("paths/workspace_preparation.rs");
 include!("paths/bounded_cleanup.rs");
 include!("paths/workspace_identity.rs");

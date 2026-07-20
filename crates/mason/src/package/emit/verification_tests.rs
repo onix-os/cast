@@ -380,18 +380,11 @@ fn reserved_system_metadata_target_is_rejected_before_artifact_sink_creation() {
         1,
     );
 
-    let runtime = crate::private_tempdir();
-    let output = tempfile::tempdir().unwrap();
     let artifact_root = tempfile::tempdir().unwrap();
-    let recipe =
-        crate::Recipe::load(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/stone.glu")).unwrap();
-    let mut layout = plan.layout.clone();
-    layout.artifacts_dir = artifact_root.path().to_string_lossy().into_owned();
-    let paths = Paths::new(&recipe, layout, runtime.path(), output.path()).unwrap();
 
     assert!(matches!(
         emit_frozen(
-            &paths,
+            artifact_root.path(),
             &plan.package,
             &plan.provenance.recipe.sha256,
             std::iter::empty(),

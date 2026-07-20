@@ -56,6 +56,10 @@ pub enum Error {
     FrozenRootMismatch { expected: PathBuf, found: PathBuf },
     #[error("runtime paths are not bound to the frozen derivation")]
     InvalidFrozenPaths(#[source] io::Error),
+    #[error("authorize frozen packaging under the exact supervisor-held lock")]
+    AuthorizeFrozenPackaging(#[source] io::Error),
+    #[error("revalidate the exact supervisor-held lock after frozen packaging")]
+    RevalidateFrozenPackaging(#[source] io::Error),
     #[error("open the retained frozen workspace {path:?} without following links")]
     OpenFrozenWorkspace {
         path: PathBuf,

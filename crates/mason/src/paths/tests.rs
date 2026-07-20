@@ -172,6 +172,73 @@ fn execution_guard_exclusively_locks_the_derivation_path() {
 }
 
 #[test]
+fn frozen_packaging_permit_authorizes_only_its_exact_descriptor_free_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = test_derivation_plan();
+    let mut paths = test_paths(&root, &plan);
+    paths.bind_to_plan(&plan).unwrap();
+    let execution_lock = paths.acquire_execution_lock(&plan).unwrap();
+    let binding = paths.frozen_packaging_binding(&plan).unwrap();
+    let permit = paths
+        .issue_frozen_packaging_permit(&execution_lock, &plan)
+        .unwrap();
+
+    assert_eq!(binding.workspace, root.path().canonicalize().unwrap());
+    let workspace = std::fs::metadata(root.path()).unwrap();
+    assert_eq!(binding.workspace_identity, (workspace.dev(), workspace.ino()));
+    assert_eq!(binding.derivation_id, plan.derivation_id());
+    assert_eq!(binding.lock_path, paths.execution_lock_path(&plan).unwrap());
+    permit.require_for(&binding).unwrap();
+    paths.require_execution_lock(&execution_lock, &plan).unwrap();
+}
+
+#[test]
+fn frozen_packaging_permit_rejects_other_workspace_and_derivation_bindings() {
+    let root = tempfile::tempdir().unwrap();
+    let other_root = tempfile::tempdir().unwrap();
+    let plan = test_derivation_plan();
+    let mut paths = test_paths(&root, &plan);
+    let mut other_workspace = test_paths(&other_root, &plan);
+    paths.bind_to_plan(&plan).unwrap();
+    other_workspace.bind_to_plan(&plan).unwrap();
+    let execution_lock = paths.acquire_execution_lock(&plan).unwrap();
+    let permit = paths
+        .issue_frozen_packaging_permit(&execution_lock, &plan)
+        .unwrap();
+
+    let other_workspace_binding = other_workspace.frozen_packaging_binding(&plan).unwrap();
+    assert!(permit.require_for(&other_workspace_binding).is_err());
+
+    let mut other_plan = plan.clone();
+    other_plan.source_date_epoch += 1;
+    other_plan.validate().unwrap();
+    let mut other_derivation = test_paths(&root, &other_plan);
+    other_derivation.bind_to_plan(&other_plan).unwrap();
+    let other_derivation_binding = other_derivation.frozen_packaging_binding(&other_plan).unwrap();
+    assert!(permit.require_for(&other_derivation_binding).is_err());
+}
+
+#[test]
+fn frozen_packaging_permit_issuance_revalidates_the_complete_lock_first() {
+    let root = tempfile::tempdir().unwrap();
+    let plan = test_derivation_plan();
+    let mut paths = test_paths(&root, &plan);
+    paths.bind_to_plan(&plan).unwrap();
+    let execution_lock = paths.acquire_execution_lock(&plan).unwrap();
+    let lock_path = execution_lock.path().to_owned();
+
+    std::fs::remove_file(&lock_path).unwrap();
+    std::fs::write(&lock_path, b"replacement").unwrap();
+    std::fs::set_permissions(&lock_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    let error = paths
+        .issue_frozen_packaging_permit(&execution_lock, &plan)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(error.to_string().contains("execution lock is not one private regular file"));
+}
+
+#[test]
 fn execution_lock_immediately_times_out_under_real_contention() {
     let root = tempfile::tempdir().unwrap();
     let plan = test_derivation_plan();

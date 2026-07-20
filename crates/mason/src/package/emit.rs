@@ -31,7 +31,7 @@ use tui::{ProgressBar, ProgressStyle, Styled};
 
 use self::{artifact_sink::ArtifactSink, manifest::Manifest};
 use super::{ResolvedOutput, analysis, collect};
-use crate::{Architecture, Paths};
+use crate::Architecture;
 
 mod artifact_directory;
 mod artifact_sink;
@@ -365,7 +365,7 @@ impl Ord for Package<'_> {
 }
 
 pub fn emit_frozen(
-    paths: &Paths,
+    artifact_root: &Path,
     identity: &PackageIdentity,
     recipe_fingerprint: &str,
     build_deps: impl IntoIterator<Item = Dependency>,
@@ -404,7 +404,7 @@ pub fn emit_frozen(
     specs.extend(packages.iter().map(|package| ArtifactSpec::stone(package.filename())));
     specs.push(ArtifactSpec::manifest(binary_manifest_name.clone()));
     specs.push(ArtifactSpec::manifest(json_manifest_name.clone()));
-    let mut sink = ArtifactSink::new(&paths.artefacts().guest, specs).context(ArtifactSnafu)?;
+    let mut sink = ArtifactSink::new(artifact_root, specs).context(ArtifactSnafu)?;
 
     println!("Packaging");
 

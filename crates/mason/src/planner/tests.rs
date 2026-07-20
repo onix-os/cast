@@ -750,11 +750,12 @@ fn execute_and_publish(planned: &Planned) -> Result<Publication, Box<dyn StdErro
     crate::container::exec_frozen::<FrozenExamplePayloadError>(
         &planned.runtime.paths,
         &planned.plan,
+        &execution_lock,
         prepared.sandbox(),
         prepared.root_guard(),
-        || {
+        |permit| {
             executor.run(&mut timing)?;
-            packager.package(&execution_lock, &mut timing)?;
+            packager.package(permit, &mut timing)?;
             Ok(())
         },
     )?;
