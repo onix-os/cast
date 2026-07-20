@@ -78,7 +78,7 @@ let repository = {
         { name = "userspace-profile", package_ids = package_sets.userspace_profile },
     ],
     packages = {
-        total_download_bytes = 383747528,
+        total_download_bytes = 385535265,
         sha256 = package_sets.all,
     },
 }

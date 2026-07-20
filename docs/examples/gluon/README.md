@@ -342,7 +342,7 @@ make fixtures-ci
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
 source artifacts, validates the pinned Stone index and closure declaration, and
 proves that each recipe resolves to its own exact, sorted package-ID closure
-and that their union is the exact 172-package, 383,747,528-byte aggregate
+and that their union is the exact 175-package, 385,535,265-byte aggregate
 bootstrap closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
 materializes the production-format root mirror, then attempts to build,

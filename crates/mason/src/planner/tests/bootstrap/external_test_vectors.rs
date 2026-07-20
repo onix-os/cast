@@ -2,9 +2,9 @@ fn assert_external_test_vectors_bootstrap_contract(
     closure: &BootstrapClosure,
     indexed: &BTreeMap<String, Meta>,
 ) {
-    assert_eq!(closure.packages.sha256.len(), 172, "bootstrap package count drift");
+    assert_eq!(closure.packages.sha256.len(), 175, "bootstrap package count drift");
     assert_eq!(
-        closure.packages.total_download_bytes, 383_747_528,
+        closure.packages.total_download_bytes, 385_535_265,
         "bootstrap download byte total drift"
     );
     let fixture = |name: &str| {

@@ -24,7 +24,10 @@ fn assert_manifests(
                 "binary(autoconf)".to_owned(),
                 "binary(automake)".to_owned(),
                 "binary(autoreconf)".to_owned(),
+                "binary(awk)".to_owned(),
+                "binary(grep)".to_owned(),
                 "binary(install)".to_owned(),
+                "binary(sed)".to_owned(),
             ]),
             "autotools: exact regeneration BuildDepends contract drifted"
         );

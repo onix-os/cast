@@ -152,7 +152,7 @@ help:
 	@echo "  delegated-execution-fixtures  Run selected contentful fixtures in a harness-free delegated unit"
 	@echo "  delegated-fixture-runner-test  Test delegated-unit cleanup and bounded CI evidence"
 	@echo "  bootstrap-fixtures  Prepare the pinned closure, then run the offline fixture lane"
-	@echo "  bootstrap-fixtures-prepare  Fetch and verify the pinned 172-package Stone closure"
+	@echo "  bootstrap-fixtures-prepare  Fetch and verify the pinned 175-package Stone closure"
 	@echo "  bootstrap-fixtures-offline  Build selected fixtures twice without downloading"
 	@echo "                    Set FIXTURE=all (default) or one of the twenty-six fixture names"
 	@echo "                    Set REQUIRE_EXECUTION=1 to reject namespace-capability skips"

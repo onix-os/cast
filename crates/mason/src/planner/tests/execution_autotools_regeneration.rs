@@ -60,7 +60,10 @@ fn validate_autotools_regeneration_dependency_contract(package: &PackageSpec) ->
         != [
             DependencySpec::Binary("autoconf".to_owned()),
             DependencySpec::Binary("automake".to_owned()),
+            DependencySpec::Binary("awk".to_owned()),
+            DependencySpec::Binary("grep".to_owned()),
             DependencySpec::Binary("install".to_owned()),
+            DependencySpec::Binary("sed".to_owned()),
         ]
     {
         return Err("the structural Autotools builder tool contract drifted".to_owned());
@@ -143,6 +146,18 @@ fn assert_autotools_regeneration_fixture_contract(package: &PackageSpec, source_
         validate_autotools_regeneration_dependency_contract(&wrong_origin).is_err(),
         "moving autoreconf to the target input role must fail closed"
     );
+
+    for child_tool in ["awk", "grep", "sed"] {
+        let mut missing_child_tool = package.clone();
+        missing_child_tool
+            .builder
+            .required_tools
+            .retain(|dependency| dependency != &DependencySpec::Binary(child_tool.to_owned()));
+        assert!(
+            validate_autotools_regeneration_dependency_contract(&missing_child_tool).is_err(),
+            "removing the standard Autotools child tool {child_tool} must fail closed"
+        );
+    }
 
     let mut missing_hook = package.clone();
     missing_hook.hooks.pre_setup.clear();

@@ -8,9 +8,9 @@ const PYTHON_TYPING_EXTENSIONS_BOOTSTRAP_PACKAGE_ID: &str =
 const PYTHON_WHEEL_BOOTSTRAP_PACKAGE_ID: &str = "e0c9c5ca56eebce15488d3032746e84fa44c7ab1815ff07a0f5a365c9ed43736";
 
 fn assert_python_module_bootstrap_contract(closure: &BootstrapClosure, indexed: &BTreeMap<String, Meta>) {
-    assert_eq!(closure.packages.sha256.len(), 172, "bootstrap package count drift");
+    assert_eq!(closure.packages.sha256.len(), 175, "bootstrap package count drift");
     assert_eq!(
-        closure.packages.total_download_bytes, 383_747_528,
+        closure.packages.total_download_bytes, 385_535_265,
         "bootstrap download byte total drift"
     );
 

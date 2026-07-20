@@ -622,8 +622,8 @@ the live items below remain open until a non-skipped required run proves them.
   execution fixture containing its declared tools and runtime dependencies.
   Test-only command shims, undeclared host tools, and a mounted host or Nix
   store do not count as frozen execution. The offline fixture lane verifies
-  each of the twenty-six exact closure declarations and their exact 172-package,
-  383,747,528-byte aggregate bootstrap pool before the delegated runner materializes
+  each of the twenty-six exact closure declarations and their exact 175-package,
+  385,535,265-byte aggregate bootstrap pool before the delegated runner materializes
   the production-format root.
 - [x] Before entering the container, require every frozen executable binding's
   entry point to belong to its declared provider and resolve to a regular

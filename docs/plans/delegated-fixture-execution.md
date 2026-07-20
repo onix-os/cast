@@ -34,7 +34,7 @@ USTAR and raw JSON corpus, admits that corpus only through a declared
 pre-check Bash/`cp` capability, and forbids it from the one-output Stone. Its
 disposable supplemental host proof does not replace live delegated execution.
 
-All fixtures union to an exact 172-package, 383,747,528-byte bootstrap pool.
+All fixtures union to an exact 175-package, 385,535,265-byte bootstrap pool.
 Offline and hostile-host contracts pin bytes, modes, providers, behavior,
 metadata, and syntax without claiming host deployment, a transaction, or
 rollback.
