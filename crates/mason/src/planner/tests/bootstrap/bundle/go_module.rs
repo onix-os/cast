@@ -104,6 +104,9 @@ fn assert_go_module_fixture(planned: &super::super::Planned, packages: &BTreeMap
         FIXTURE,
         root,
         planned_output_dependencies(planned, root_plan),
-        BTreeSet::from([root_plan.package_name.clone()]),
+        BTreeSet::from([
+            root_plan.package_name.clone(),
+            "binary(cast-go-module-fixture)".to_owned(),
+        ]),
     );
 }
