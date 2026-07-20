@@ -12,11 +12,14 @@ use thiserror::Error;
 
 use crate::{
     installation,
-    transition_journal::{CodecError, Phase, StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::super::startup_reconciliation::{
     UsrRollbackFreshDbInvalidationRouteAuthority, UsrRollbackFreshDbInvalidationRouteAuthorityError,
+    UsrRollbackFreshDbInvalidationRouteRecordAdvanceError,
 };
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
@@ -38,17 +41,19 @@ pub(in crate::client) enum DurableUsrRollbackFreshDbInvalidationRouteRecord {
     FreshDbInvalidationIntent,
 }
 
+enum UsrRollbackFreshDbInvalidationRouteAdvanceOutcome {
+    Published(TransitionJournalRecordBinding),
+    StorageFailed(StorageError),
+    SuccessorBindingFailed(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError),
+}
+
 /// Persist the sole fresh-database invalidation intent, then independently
 /// reopen and compare the complete canonical record.
 pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_route_and_reopen(
     journal: TransitionJournalStore,
     authority: UsrRollbackFreshDbInvalidationRouteAuthority<'_>,
 ) -> Result<(TransitionJournalStore, TransitionRecord), UsrRollbackFreshDbInvalidationRoutePersistenceError> {
-    if let Err(source) = authority.revalidate(&journal) {
-        drop(authority);
-        drop(journal);
-        return Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::Authority(source));
-    }
+    authority.revalidate(&journal)?;
     let source_record = authority.record().clone();
     let successor = match source_record.rollback_successor(None) {
         Ok(successor) if successor.phase == Phase::FreshDbInvalidationIntent => successor,
@@ -67,24 +72,84 @@ pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_route_and_re
     };
 
     before_usr_rollback_fresh_db_invalidation_route_final_revalidation();
-    if let Err(source) = authority.revalidate(&journal) {
-        drop(authority);
-        drop(journal);
-        return Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::Authority(source));
-    }
     let installation = authority.installation().clone();
-    let advance = journal.advance(&source_record, &successor);
+    let advance = match authority.advance_record_binding(&journal, &successor) {
+        Ok(successor_binding) => {
+            before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation();
+            let exact = revalidate_published_route_binding(
+                &installation,
+                &journal,
+                &successor_binding,
+                &successor,
+            );
+            match exact {
+                Ok(true) => UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::Published(successor_binding),
+                Ok(false) => {
+                    drop(successor_binding);
+                    UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::SuccessorBindingFailed(
+                        UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Changed,
+                    )
+                }
+                Err(source) => {
+                    drop(successor_binding);
+                    UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::SuccessorBindingFailed(source)
+                }
+            }
+        }
+        Err(UsrRollbackFreshDbInvalidationRouteRecordAdvanceError::Authority(source)) => {
+            drop(journal);
+            return Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::Authority(source));
+        }
+        Err(UsrRollbackFreshDbInvalidationRouteRecordAdvanceError::Installation(source)) => {
+            drop(journal);
+            return Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::Installation(source));
+        }
+        Err(UsrRollbackFreshDbInvalidationRouteRecordAdvanceError::Storage(source)) => {
+            UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::StorageFailed(source)
+        }
+    };
 
-    // Canonical reopen starts only after the authority and old lock-bearing
-    // store are destroyed. Neither capability can authorize a second attempt.
-    drop(authority);
+    // The exact predecessor binding and complete authority were consumed by
+    // the bound advance. Destroy the old lock-bearing store before reopen.
     drop(journal);
 
+    if let UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::Published(_) = &advance {
+        after_usr_rollback_fresh_db_invalidation_route_successor_binding_check_before_reopen();
+    }
     let reopened =
         reopen_canonical_journal(&installation).map_err(UsrRollbackFreshDbInvalidationRouteReopenError::from);
     match advance {
-        Ok(()) => match reopened {
-            Ok((reopened, Some(actual))) if actual == successor => Ok((reopened, successor)),
+        UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::Published(successor_binding) => match reopened {
+            Ok((reopened, Some(actual))) if actual == successor => {
+                let exact = revalidate_reopened_route_binding(
+                    &installation,
+                    &reopened,
+                    &successor_binding,
+                    &successor,
+                );
+                drop(successor_binding);
+                match exact {
+                    Ok(true) => Ok((reopened, successor)),
+                    Ok(false) => {
+                        drop(reopened);
+                        Err(
+                            UsrRollbackFreshDbInvalidationRoutePersistenceError::SuccessorRecordBinding {
+                                durable: DurableUsrRollbackFreshDbInvalidationRouteRecord::FreshDbInvalidationIntent,
+                                source: UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Changed,
+                            },
+                        )
+                    }
+                    Err(source) => {
+                        drop(reopened);
+                        Err(
+                            UsrRollbackFreshDbInvalidationRoutePersistenceError::SuccessorRecordBinding {
+                                durable: DurableUsrRollbackFreshDbInvalidationRouteRecord::FreshDbInvalidationIntent,
+                                source,
+                            },
+                        )
+                    }
+                }
+            }
             Ok((reopened, actual)) => {
                 drop(reopened);
                 Err(
@@ -97,7 +162,7 @@ pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_route_and_re
                 Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::ReopenAfterSuccessfulAdvance { source })
             }
         },
-        Err(advance_error) => match reopened {
+        UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::StorageFailed(advance_error) => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {
                 drop(reopened);
                 Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::Advance {
@@ -124,7 +189,84 @@ pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_route_and_re
                 reopen,
             }),
         },
+        UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::SuccessorBindingFailed(binding) => match reopened {
+            Ok((reopened, Some(actual))) if actual == source_record => {
+                drop(reopened);
+                Err(
+                    UsrRollbackFreshDbInvalidationRoutePersistenceError::SuccessorRecordBinding {
+                        durable: DurableUsrRollbackFreshDbInvalidationRouteRecord::CandidatePreserved,
+                        source: binding,
+                    },
+                )
+            }
+            Ok((reopened, Some(actual))) if actual == successor => {
+                drop(reopened);
+                Err(
+                    UsrRollbackFreshDbInvalidationRoutePersistenceError::SuccessorRecordBinding {
+                        durable: DurableUsrRollbackFreshDbInvalidationRouteRecord::FreshDbInvalidationIntent,
+                        source: binding,
+                    },
+                )
+            }
+            Ok((reopened, actual)) => {
+                drop(reopened);
+                Err(
+                    UsrRollbackFreshDbInvalidationRoutePersistenceError::SuccessorRecordBindingAndReopen {
+                        binding,
+                        reopen: unexpected_record(&source_record, &successor, actual),
+                    },
+                )
+            }
+            Err(reopen) => Err(
+                UsrRollbackFreshDbInvalidationRoutePersistenceError::SuccessorRecordBindingAndReopen {
+                    binding,
+                    reopen,
+                },
+            ),
+        },
     }
+}
+
+fn revalidate_published_route_binding(
+    installation: &crate::Installation,
+    journal: &TransitionJournalStore,
+    successor_binding: &TransitionJournalRecordBinding,
+    successor: &TransitionRecord,
+) -> Result<bool, UsrRollbackFreshDbInvalidationRouteSuccessorBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Installation)?;
+    let exact = journal
+        .has_record_binding(cast, successor_binding, successor)
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Installation)?;
+    Ok(exact)
+}
+
+fn revalidate_reopened_route_binding(
+    installation: &crate::Installation,
+    journal: &TransitionJournalStore,
+    successor_binding: &TransitionJournalRecordBinding,
+    successor: &TransitionRecord,
+) -> Result<bool, UsrRollbackFreshDbInvalidationRouteSuccessorBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Installation)?;
+    let exact = journal
+        .has_reopened_record_binding(cast, successor_binding, successor)
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackFreshDbInvalidationRouteSuccessorBindingError::Installation)?;
+    Ok(exact)
 }
 
 fn unexpected_record(
@@ -142,6 +284,10 @@ fn unexpected_record(
 #[cfg(test)]
 std::thread_local! {
     static BEFORE_FINAL_AUTHORITY_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_SUCCESSOR_BINDING_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -164,10 +310,62 @@ fn before_usr_rollback_fresh_db_invalidation_route_final_revalidation() {
 #[cfg(not(test))]
 fn before_usr_rollback_fresh_db_invalidation_route_final_revalidation() {}
 
+#[cfg(test)]
+pub(crate) fn arm_before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation(
+    hook: impl FnOnce() + 'static,
+) {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation() {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation() {}
+
+#[cfg(test)]
+pub(crate) fn arm_after_usr_rollback_fresh_db_invalidation_route_successor_binding_check_before_reopen(
+    hook: impl FnOnce() + 'static,
+) {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_usr_rollback_fresh_db_invalidation_route_successor_binding_check_before_reopen() {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_usr_rollback_fresh_db_invalidation_route_successor_binding_check_before_reopen() {}
+
+#[derive(Debug, Error)]
+pub(in crate::client) enum UsrRollbackFreshDbInvalidationRouteSuccessorBindingError {
+    #[error("revalidate retained installation after publishing FreshDbInvalidationIntent")]
+    Installation(#[source] installation::Error),
+    #[error("the published FreshDbInvalidationIntent successor lost its exact record binding")]
+    Changed,
+    #[error("revalidate the published FreshDbInvalidationIntent successor record binding")]
+    Storage(#[source] StorageError),
+}
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum UsrRollbackFreshDbInvalidationRoutePersistenceError {
     #[error("revalidate exact CandidatePreserved fresh-database invalidation routing authority")]
-    Authority(#[source] UsrRollbackFreshDbInvalidationRouteAuthorityError),
+    Authority(#[from] UsrRollbackFreshDbInvalidationRouteAuthorityError),
     #[error("derive the sole legal FreshDbInvalidationIntent successor")]
     RouteConstruction {
         #[source]
@@ -175,6 +373,20 @@ pub(in crate::client) enum UsrRollbackFreshDbInvalidationRoutePersistenceError {
     },
     #[error("fresh-database invalidation routing selected unexpected successor phase {phase:?}")]
     UnexpectedSuccessor { phase: Phase },
+    #[error("revalidate retained installation before the exact FreshDbInvalidationIntent record advance")]
+    Installation(#[from] installation::Error),
+    #[error("published successor binding failed with exact durable {durable:?} fresh-database route evidence")]
+    SuccessorRecordBinding {
+        durable: DurableUsrRollbackFreshDbInvalidationRouteRecord,
+        #[source]
+        source: UsrRollbackFreshDbInvalidationRouteSuccessorBindingError,
+    },
+    #[error("successor binding failed ({binding}) and its canonical record could not be reconciled")]
+    SuccessorRecordBindingAndReopen {
+        binding: UsrRollbackFreshDbInvalidationRouteSuccessorBindingError,
+        #[source]
+        reopen: UsrRollbackFreshDbInvalidationRouteReopenError,
+    },
     #[error("journal advance failed after reopening exact durable {durable:?} record")]
     Advance {
         durable: DurableUsrRollbackFreshDbInvalidationRouteRecord,

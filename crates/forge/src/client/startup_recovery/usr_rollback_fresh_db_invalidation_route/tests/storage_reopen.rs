@@ -49,39 +49,41 @@ fn startup_usr_rollback_fresh_db_invalidation_route_storage_faults_reopen_exact_
         ),
     ];
 
-    for source in CandidateSource::ALL {
-        for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
-            for candidate_outcome in CandidateOutcome::ALL {
-                for (arm, assert_consumed, expected_durable) in cases {
-                    let fixture = RouteFixture::new(source, usr_outcome, candidate_outcome);
-                    let journal = fixture.open_journal();
-                    let reservation = ActiveStateReservation::acquire().unwrap();
-                    let authority = fixture.capture_ready(&journal, &reservation);
-                    let successor = fixture.expected_successor();
-                    arm();
+    for historical in [false, true] {
+        for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
+            for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                for candidate_outcome in CandidateOutcome::ALL {
+                    for (arm, assert_consumed, expected_durable) in cases {
+                        let fixture = RouteFixture::at_epoch(historical, source, usr_outcome, candidate_outcome);
+                        let journal = fixture.open_journal();
+                        let reservation = ActiveStateReservation::acquire().unwrap();
+                        let authority = fixture.capture_ready(&journal, &reservation);
+                        let successor = fixture.expected_successor();
+                        arm();
 
-                    let error =
-                        persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority).unwrap_err();
+                        let error = persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)
+                            .unwrap_err();
 
-                    assert_consumed();
-                    assert!(matches!(
-                        error,
-                        UsrRollbackFreshDbInvalidationRoutePersistenceError::Advance { durable, .. }
-                            if durable == expected_durable
-                    ));
-                    match expected_durable {
-                        DurableUsrRollbackFreshDbInvalidationRouteRecord::CandidatePreserved => {
-                            assert_eq!(fixture.canonical_record(), fixture.source)
+                        assert_consumed();
+                        assert!(matches!(
+                            error,
+                            UsrRollbackFreshDbInvalidationRoutePersistenceError::Advance { durable, .. }
+                                if durable == expected_durable
+                        ));
+                        match expected_durable {
+                            DurableUsrRollbackFreshDbInvalidationRouteRecord::CandidatePreserved => {
+                                assert_eq!(fixture.canonical_record(), fixture.source)
+                            }
+                            DurableUsrRollbackFreshDbInvalidationRouteRecord::FreshDbInvalidationIntent => {
+                                assert_eq!(fixture.canonical_record(), successor)
+                            }
                         }
-                        DurableUsrRollbackFreshDbInvalidationRouteRecord::FreshDbInvalidationIntent => {
-                            assert_eq!(fixture.canonical_record(), successor)
-                        }
+                        let names = fs::read_dir(fixture.fixture.fixture.installation.root.join(".cast/journal"))
+                            .unwrap()
+                            .map(|entry| entry.unwrap().file_name())
+                            .collect::<Vec<_>>();
+                        assert_eq!(names.len(), 2, "stale journal residue remained after reopen: {names:?}");
                     }
-                    let names = fs::read_dir(fixture.fixture.fixture.installation.root.join(".cast/journal"))
-                        .unwrap()
-                        .map(|entry| entry.unwrap().file_name())
-                        .collect::<Vec<_>>();
-                    assert_eq!(names.len(), 2, "stale journal residue remained after reopen: {names:?}");
                 }
             }
         }

@@ -15,7 +15,7 @@ use super::{
 #[test]
 fn startup_usr_rollback_fresh_db_invalidation_route_admits_exact_current_and_historical_evidence() {
     for historical in [false, true] {
-        for source in CandidateSource::ALL {
+        for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 for candidate_outcome in CandidateOutcome::ALL {
                     let fixture = if historical {

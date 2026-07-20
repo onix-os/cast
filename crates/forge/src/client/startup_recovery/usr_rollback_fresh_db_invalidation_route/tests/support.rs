@@ -1,4 +1,7 @@
+use std::path::Path;
+
 use crate::{
+    Installation, db,
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackFreshDbInvalidationRouteSeal,
@@ -7,8 +10,13 @@ use crate::{
             UsrRollbackFreshDbInvalidationRouteAuthorityError,
         },
     },
+    installation::DatabaseKind,
+    test_support::private_installation_tempdir,
     transition_journal::{Phase, RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
 };
+
+const OS_RELEASE: &[u8] = b"NAME=Rollback Decision Test\nID=rollback-decision-test\n";
+const SYSTEM_MODEL: &[u8] = b"let system = { hostname = \"rollback-decision-test\" } in system\n";
 
 use super::super::{
     candidate_test_support::{CandidateLayout, CandidatePreserveFixture},
@@ -41,6 +49,19 @@ pub(super) struct RouteFixture {
 }
 
 impl RouteFixture {
+    pub(super) fn at_epoch(
+        historical: bool,
+        source: CandidateSource,
+        usr_outcome: RollbackActionOutcome,
+        candidate_outcome: CandidateOutcome,
+    ) -> Self {
+        if historical {
+            Self::historical(source, usr_outcome, candidate_outcome)
+        } else {
+            Self::new(source, usr_outcome, candidate_outcome)
+        }
+    }
+
     pub(super) fn new(
         source: CandidateSource,
         usr_outcome: RollbackActionOutcome,
@@ -128,6 +149,92 @@ impl RouteFixture {
             _ => panic!("exact CandidatePreserved evidence did not admit the route"),
         }
     }
+
+    pub(super) fn install_persistent_database(&mut self) {
+        let database = open_state_database(&self.fixture.fixture.installation);
+        let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
+        let candidate = database
+            .add_with_transition(
+                &self.source.transition_id,
+                &[],
+                Some("rollback fresh candidate"),
+                None,
+            )
+            .unwrap()
+            .id;
+        assert_eq!(previous, self.fixture.fixture.previous_state);
+        assert_eq!(candidate, self.fixture.fixture.candidate_state);
+        let provenance = db::state::MetadataProvenance::from_outputs(OS_RELEASE, SYSTEM_MODEL);
+        database
+            .insert_fresh_metadata_provenance_if_transition_matches(
+                candidate,
+                &self.source.transition_id,
+                &provenance,
+            )
+            .unwrap();
+        let old = std::mem::replace(&mut self.fixture.fixture.database, database);
+        drop(old);
+    }
+
+    pub(super) fn release_handles(mut self) -> tempfile::TempDir {
+        let retained = std::mem::replace(
+            &mut self.fixture.fixture._temporary,
+            private_installation_tempdir(),
+        );
+        drop(self);
+        retained
+    }
+}
+
+pub(super) struct FreshRouteHandles {
+    pub(super) installation: Installation,
+    pub(super) database: db::state::Database,
+    pub(super) journal: TransitionJournalStore,
+    pub(super) record: TransitionRecord,
+}
+
+impl FreshRouteHandles {
+    pub(super) fn open(root: &Path) -> Self {
+        let installation = Installation::open(root, None).unwrap();
+        let database = open_state_database(&installation);
+        let journal = TransitionJournalStore::open_retained(installation.root_directory(), root).unwrap();
+        let record = journal
+            .load()
+            .unwrap()
+            .expect("fresh-handle reopen requires a durable route record");
+        Self {
+            installation,
+            database,
+            journal,
+            record,
+        }
+    }
+
+    pub(super) fn capture<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> Result<
+        UsrRollbackFreshDbInvalidationRouteAdmission<'reservation>,
+        UsrRollbackFreshDbInvalidationRouteAuthorityError,
+    > {
+        capture_parts(
+            &self.installation,
+            &self.database,
+            &self.journal,
+            reservation,
+            &self.record,
+        )
+    }
+
+    pub(super) fn capture_ready<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
+        match self.capture(reservation).unwrap() {
+            UsrRollbackFreshDbInvalidationRouteAdmission::Ready(authority) => authority,
+            _ => panic!("fresh exact CandidatePreserved handles did not admit the route"),
+        }
+    }
 }
 
 pub(super) fn capture_record<'reservation>(
@@ -137,15 +244,41 @@ pub(super) fn capture_record<'reservation>(
     record: &TransitionRecord,
 ) -> Result<UsrRollbackFreshDbInvalidationRouteAdmission<'reservation>, UsrRollbackFreshDbInvalidationRouteAuthorityError>
 {
+    capture_parts(
+        &fixture.fixture.installation,
+        &fixture.fixture.database,
+        journal,
+        reservation,
+        record,
+    )
+}
+
+fn capture_parts<'reservation>(
+    installation: &Installation,
+    database: &db::state::Database,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> Result<UsrRollbackFreshDbInvalidationRouteAdmission<'reservation>, UsrRollbackFreshDbInvalidationRouteAuthorityError>
+{
     let seal = UsrRollbackFreshDbInvalidationRouteSeal::new_for_test();
-    let initial_in_flight = fixture.fixture.database.audit_in_flight_transition().unwrap();
+    let initial_in_flight = database.audit_in_flight_transition().unwrap();
     UsrRollbackFreshDbInvalidationRouteAuthority::capture(
         &seal,
-        &fixture.fixture.installation,
+        installation,
         journal,
-        &fixture.fixture.database,
+        database,
         reservation,
         record,
         initial_in_flight,
     )
+}
+
+fn open_state_database(installation: &Installation) -> db::state::Database {
+    let location = installation.mutable_database_location(DatabaseKind::State).unwrap();
+    let (url, anchor) = location.parts();
+    let database = db::state::Database::new_anchored(url, anchor).unwrap();
+    location.revalidate().unwrap();
+    installation.revalidate_mutable_namespace().unwrap();
+    database
 }

@@ -3,8 +3,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
-        TransitionJournalStore, TransitionRecord,
+        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
+        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -34,7 +34,7 @@ pub(in crate::client) struct UsrRollbackFreshDbInvalidationRouteAuthority<'reser
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackFreshDbInvalidationRouteNamespaceProof,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -62,18 +62,24 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         };
         if !matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
         ) {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::NotApplicable);
         }
 
-        let journal_binding = journal.binding();
         installation.revalidate_mutable_namespace()?;
-        let namespace_inspection =
-            match UsrRollbackFreshDbInvalidationRouteNamespaceInspection::begin(installation, journal, record) {
-                Ok(inspection) => inspection,
-                Err(_) => return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred),
-            };
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        installation.revalidate_mutable_namespace()?;
+        let namespace_inspection = match UsrRollbackFreshDbInvalidationRouteNamespaceInspection::begin(
+            installation,
+            journal,
+            &journal_record_binding,
+            record,
+        ) {
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred),
+        };
         let database = inspect_database(record, state_db, initial_in_flight)?;
         if !database_is_exact(record, &database) || !route_plan_is_exact(record) {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
@@ -85,7 +91,12 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         if !database_is_exact(record, &database_after) || database != database_after {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
         }
-        let namespace = match namespace_inspection.finish(installation, journal, record) {
+        let namespace = match namespace_inspection.finish(
+            installation,
+            journal,
+            &journal_record_binding,
+            record,
+        ) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred),
         };
@@ -93,35 +104,51 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
         installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(installation, journal, &journal_record_binding, record)?;
+        installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Ready(Self {
             installation: installation.clone(),
             state_db: retained_state_db,
             record: record.clone(),
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         }))
     }
 
-    /// Revalidate the exact DB -> namespace -> DB sandwich. Per-open journal
-    /// binding is deliberately the first retained-evidence observation.
+    /// Revalidate the exact DB -> namespace -> DB sandwich. The exact journal
+    /// record binding is deliberately the first retained-evidence observation.
     pub(in crate::client) fn revalidate(
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackFreshDbInvalidationRouteAuthorityError> {
-        if !journal.has_binding(&self.journal_binding) {
-            return Err(UsrRollbackFreshDbInvalidationRouteAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
-        self.namespace.revalidate(&self.installation, journal, &self.record)?;
+        self.namespace.revalidate(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         let database_after = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_after)?;
         if !route_plan_is_exact(&self.record) {
             return Err(UsrRollbackFreshDbInvalidationRouteAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -133,6 +160,37 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
     pub(in crate::client) fn record(&self) -> &TransitionRecord {
         &self.record
     }
+
+    /// Consume this complete authority through the exact bound journal
+    /// predecessor-to-successor boundary.
+    pub(in crate::client) fn advance_record_binding(
+        self,
+        journal: &TransitionJournalStore,
+        next: &TransitionRecord,
+    ) -> Result<TransitionJournalRecordBinding, UsrRollbackFreshDbInvalidationRouteRecordAdvanceError> {
+        self.revalidate(journal)?;
+        let cast = self.installation.retained_mutable_cast_directory()?;
+        journal
+            .advance_record_binding(cast, self.journal_record_binding, next)
+            .map_err(UsrRollbackFreshDbInvalidationRouteRecordAdvanceError::Storage)
+    }
+}
+
+fn require_journal_record_binding(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackFreshDbInvalidationRouteAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackFreshDbInvalidationRouteAuthorityErrorKind::JournalRecordBindingMismatch.into());
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, binding, record)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackFreshDbInvalidationRouteAuthorityErrorKind::JournalRecordBindingMismatch.into())
+    }
 }
 
 fn route_plan_is_exact(record: &TransitionRecord) -> bool {
@@ -143,7 +201,7 @@ fn route_plan_is_exact(record: &TransitionRecord) -> bool {
         && record.phase == Phase::CandidatePreserved
         && matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
         )
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
@@ -229,10 +287,28 @@ impl From<crate::installation::Error> for UsrRollbackFreshDbInvalidationRouteAut
     }
 }
 
+impl From<StorageError> for UsrRollbackFreshDbInvalidationRouteAuthorityError {
+    fn from(source: StorageError) -> Self {
+        UsrRollbackFreshDbInvalidationRouteAuthorityErrorKind::Journal(source).into()
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(in crate::client) enum UsrRollbackFreshDbInvalidationRouteRecordAdvanceError {
+    #[error("revalidate exact fresh-database invalidation route authority before the bound journal advance")]
+    Authority(#[from] UsrRollbackFreshDbInvalidationRouteAuthorityError),
+    #[error("revalidate retained installation before the bound fresh-database invalidation route advance")]
+    Installation(#[from] crate::installation::Error),
+    #[error("advance the exact bound fresh-database invalidation route record")]
+    Storage(#[source] StorageError),
+}
+
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackFreshDbInvalidationRouteAuthorityErrorKind {
-    #[error("fresh-database invalidation route authority was paired with a different open journal store")]
-    JournalBindingMismatch,
+    #[error("fresh-database invalidation route authority lost its exact journal record binding")]
+    JournalRecordBindingMismatch,
+    #[error("capture or revalidate the exact fresh-database invalidation route journal record")]
+    Journal(#[source] StorageError),
     #[error("exact fresh-database invalidation route evidence no longer selects the persisted first intent")]
     RouteEvidenceMismatch,
     #[error("inspect exact fresh-database invalidation route database evidence")]

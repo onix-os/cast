@@ -229,7 +229,12 @@ pub(in crate::client) use usr_rollback_finalization::{
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_persistence::DurableUsrRollbackFreshDbInvalidationRecord;
 
 #[cfg(test)]
-pub(in crate::client) use usr_rollback_fresh_db_invalidation_route::DurableUsrRollbackFreshDbInvalidationRouteRecord;
+pub(in crate::client) use usr_rollback_fresh_db_invalidation_route::{
+    DurableUsrRollbackFreshDbInvalidationRouteRecord,
+    UsrRollbackFreshDbInvalidationRouteSuccessorBindingError,
+    arm_after_usr_rollback_fresh_db_invalidation_route_successor_binding_check_before_reopen,
+    arm_before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation,
+};
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_reverse_persistence::DurableUsrRollbackReverseRecord;
