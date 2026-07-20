@@ -1,6 +1,6 @@
 use std::{
     fs,
-    os::unix::fs::{PermissionsExt as _, symlink},
+    os::unix::fs::PermissionsExt as _,
     path::Path,
 };
 
@@ -21,7 +21,7 @@ use crate::{
     db,
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
-    transition_journal::{ForwardPhase, Phase, RollbackActionOutcome, TransitionRecord, decode},
+    transition_journal::{Phase, RollbackActionOutcome, TransitionRecord, decode},
 };
 
 use super::super::{
@@ -35,14 +35,6 @@ use super::super::{
 
 const OS_RELEASE: &[u8] = b"NAME=Rollback Dispatch Test\nID=rollback-dispatch-test\n";
 const SYSTEM_MODEL: &[u8] = b"let system = { hostname = \"rollback-dispatch-test\" } in system\n";
-const ROOT_ABI: [(&str, &str); 5] = [
-    ("bin", "usr/bin"),
-    ("sbin", "usr/sbin"),
-    ("lib", "usr/lib"),
-    ("lib32", "usr/lib32"),
-    ("lib64", "usr/lib"),
-];
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Epoch {
     Current,
@@ -151,9 +143,6 @@ pub(super) fn build_candidate(
         Epoch::Current => CandidatePreserveFixture::new(OperationKind::NewState, source, usr_outcome, layout),
         Epoch::Historical => CandidatePreserveFixture::historical(OperationKind::NewState, source, usr_outcome, layout),
     };
-    if source == CandidateSource::Exchanged {
-        install_live_root_abi(&fixture.fixture.installation);
-    }
     if matches!(prefix, TargetPrefix::Residue | TargetPrefix::Canonical) {
         let target = transition_quarantine_path(&fixture.fixture, &fixture.candidate_intent);
         create_private_directory(&target);
@@ -234,9 +223,6 @@ pub(super) fn persist_rollback_complete(
     let journal = fixture.open_journal();
     journal.advance(invalidated, &successor).unwrap();
     drop(journal);
-    if successor.rollback.as_ref().unwrap().source == ForwardPhase::UsrExchanged {
-        install_live_root_abi(&fixture.fixture.fixture.installation);
-    }
     successor
 }
 
@@ -459,10 +445,4 @@ pub(super) fn canonical_record(root: &Path) -> TransitionRecord {
 
 pub(super) fn assert_canonical_absent(root: &Path) {
     assert!(!root.join(".cast/journal/state-transition").exists());
-}
-
-fn install_live_root_abi(installation: &Installation) {
-    for (name, target) in ROOT_ABI {
-        symlink(target, installation.root.join(name)).unwrap();
-    }
 }

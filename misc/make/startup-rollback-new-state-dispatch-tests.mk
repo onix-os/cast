@@ -106,7 +106,9 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fqx 'mod storage_faults;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod support;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod terminal_delete_process_kill;' "$$tests/mod.rs"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(installation, database, &reservation)' "$$tests/support.rs" )" = 1; \
+	timeout 10s grep -Fqx 'fn enter_result(system: &MutableSystemCapabilities) -> Result<CleanSystemStartup, startup_gate::Error> {' "$$tests/support.rs"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(system, &reservation)' "$$tests/support.rs" )" = 1; \
+	if timeout 10s rg -n 'CleanSystemStartup::enter\(installation, database,' "$$tests/support.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$tests/support.rs" )" = 1; \
 	if timeout 10s rg -n 'new_for_test|usr_rollback_new_state::dispatch|dispatch_usr_rollback_.*_and_reopen|persist_usr_rollback_.*_and_reopen' "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx 'pub(super) fn dispatch<'\''reservation>(' "$$orchestrator"; \
@@ -181,12 +183,15 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s rg -n -F 'complete_post_move_durability(&durability_seal, &journal)?' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$candidate_leaf:" "$$inventory" )" = 4; \
-	timeout 10s rg -n -F 'return_exact_unchanged_source(journal, source_record)' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
+	timeout 10s rg -n -F 'return_exact_unchanged_source(journal, source_record, authority)' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$inventory"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$inventory" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc "$$candidate_leaf:" "$$inventory" )" = 2; \
+	timeout 10s grep -Fq "fn return_exact_unchanged_source<'reservation>(" "$$candidate_leaf"; \
+	timeout 10s grep -Fq "    authority: UsrRollbackCandidatePreserveRestartAuthority<'reservation>," "$$candidate_leaf"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'authority.into_exact_source_record(&journal)?' "$$candidate_leaf" )" = 1; \
 	effect_line="$$( timeout 10s grep -nF 'let effect_seal = UsrRollbackCandidatePreserveEffectSeal::new();' "$$candidate_leaf" | timeout 10s cut -d: -f1 )"; \
 	selection_line="$$( timeout 10s grep -nF 'authority.into_effect_selection(&effect_seal, &journal)?' "$$candidate_leaf" | timeout 10s cut -d: -f1 )"; \
-	preparation_return_line="$$( timeout 10s grep -nF 'return return_exact_unchanged_source(journal, source_record);' "$$candidate_leaf" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
+	preparation_return_line="$$( timeout 10s grep -nF 'return return_exact_unchanged_source(journal, source_record, authority);' "$$candidate_leaf" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
 	durability_line="$$( timeout 10s grep -nF 'let durability_seal = UsrRollbackCandidatePreserveDurabilitySeal::new();' "$$candidate_leaf" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$effect_line" -lt "$$selection_line"; \
 	timeout 10s test "$$selection_line" -lt "$$preparation_return_line"; \
