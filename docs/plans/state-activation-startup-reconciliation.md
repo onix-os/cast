@@ -20,30 +20,20 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Admitted startup recovery ladder
 
-  As of 2026-07-19, startup's diagnostic checkpoint remains deliberately
-  read-only and fail closed. Immediately before it, the mutable startup gate has
-  one sealed, bounded recovery ladder: the ActiveReblit restrictive
-  replacement-mode normalizer, descriptor-bound forward exchange-parent
-  durability normalization, rollback-decision persistence, journal-only
-  rollback-resume routing, and the exact `/usr` reverse dispatcher. Separate
-  later entries route exact `UsrRestored` to `CandidatePreserveIntent`. NewState
-  entries prepare the quarantine target, preserve the candidate, invalidate the
-  exact fresh database row, advance through `FreshDbInvalidated` to
-  `RollbackComplete`, and finally authenticate terminal journal absence.
-  ActiveReblit first preserves its whole replacement wrapper. With no required boot repair, exact cleared
-  existing-state provenance and preserved-wrapper proof authorize the direct `CandidatePreserved` to
-  `RollbackComplete` route. A later entry may finalize that record and pass the same locked journal store into
-  shared clean admission; the completion route never redispatches its successor. An exact `BootSyncStarted`
-  rollback instead routes `CandidatePreserved` only to `BootRepairRequired`; the actual repair attempt remains
-  unwired. A fresh startup observing `BootRepairStarted` invokes boot zero times and persists terminal
-  `BootRepairUnverified` rather than guessing whether an interrupted effect applied. Payload v2 can represent typed successful completion, and commit `ffc32ce1` routes an already durable `BootRepairComplete` record to `RollbackComplete`; no production entry performs the repair or emits that completion domain.
-  Each entry recaptures authority from the current canonical record and fresh
-  database and namespace evidence, admits at most one preparation/effect
-  checkpoint, at most one journal advance, or one terminal deletion, then
-  returns without dispatching its successor. Inexact NewState or ActiveReblit
-  terminal evidence and terminal records for unsupported operations remain
-  diagnostic and fail closed; diagnostic inventory is never converted into
-  mutation authority.
+  As of 2026-07-20, startup's diagnostic checkpoint remains read-only and fail closed.
+  Immediately before it, the mutable gate has one sealed, bounded ladder: ActiveReblit replacement-mode repair,
+  forward exchange-parent durability, exact `UsrExchanged` root-ABI normalization, rollback-decision persistence and routing, and `/usr` reversal. Later entries route exact
+  `UsrRestored` to candidate preservation. NewState then prepares its
+  quarantine target, preserves the candidate, invalidates its exact fresh row,
+  reaches `RollbackComplete`, and authenticates terminal journal absence.
+  ActiveReblit preserves its whole replacement wrapper; exact cleared ownership and provenance can route the no-boot case through `RollbackComplete` and a
+  later same-lock finalization. `BootSyncStarted` instead routes only to
+  `BootRepairRequired`; observed `BootRepairStarted` becomes terminal
+  `BootRepairUnverified` without invoking boot. Commit `ffc32ce1` routes an
+  already durable `BootRepairComplete` to `RollbackComplete`, but no production
+  entry performs or records that repair. Every entry recaptures fresh authority,
+  crosses at most one effect, journal advance, or deletion boundary, and never
+  redispatches its successor; unsupported or inexact evidence stays diagnostic.
 
   Commit `3e1ba34` introduced the journal-only rollback-decision boundary. The
   decision path applies to NewState, ActivateArchived, and ActiveReblit.
@@ -59,18 +49,28 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   source record. An opaque per-open binding also prevents equal-looking or
   byte-identical journals from another root from consuming that authority.
 
-  Commit `72511b3` added the separate consuming parent-durability path. The
-  durability normalizer checks that per-open binding before any filesystem
-  effect, then syncs the retained `.cast/root/staging` directory followed by the
-  retained installation root: the two exact parents of the atomic exchange.
-  It never reopens either parent by path and contains no rename, exchange,
-  reverse, database, trigger, cleanup, or root-link operation. After both
-  barriers it repeats the complete journal/namespace/database evidence
-  sandwich and converts through a private completion seal into ordinary
-  rollback-decision authority with `/usr` reversal pending. A sync error or
-  evidence race consumes the authority and leaves the exact
-  `UsrExchangeIntent` record for a fresh startup to retry the idempotent
-  durability suffix; it cannot retry the exchange in process.
+  Commit `72511b3` added the consuming exchange-parent durability path. After
+  checking its per-open binding, it syncs retained `.cast/root/staging` and the
+  retained installation root, never reopening either parent or exposing a
+  rename, exchange, reverse, database, trigger, cleanup, or root-link effect.
+  Both barriers precede a full evidence recapture and private conversion to
+  rollback-decision authority. A fault consumes the authority and leaves exact
+  `UsrExchangeIntent` for a fresh idempotent durability entry, never a retry.
+
+  Commit `035d0843` inserts a separate root-ABI boundary for exact forward
+  `UsrExchanged` before rollback-decision capture. Across all three operations,
+  every one of the 32 subsets of `bin`, `sbin`, `lib`, `lib32`, and `lib64`
+  admits at most one retained publisher invocation in an entry. An incomplete
+  set remains at the exact source and returns `RecoveryPending`; a publisher
+  error is possibly applied, returns no retry authority, and requires fresh
+  reconciliation. A set already complete at entry always syncs the retained
+  installation root before decision evidence is captured again from scratch.
+  The authority authenticates exact public `.cast`, journal-directory, lock, and record identities, retaining the admitted record inode through `Arc<File>`.
+  Its bounded retained inventory of every noncanonical root entry detects regular-file, symlink, and installation-root replacement races.
+  It cannot emit `RootLinksComplete`; canonical links stay complete through
+  rollback. Commit `04911701` proves one entry for an intent source versus two
+  for an initially incomplete exchanged source; complete-at-entry exchanged evidence needs one, with 82/82 coordinator and 19/19 normalizer tests.
+  Next is an exact bound-record advance and in-process `UsrExchanged` -> `RootLinksComplete`; startup cannot advance there before its dispatcher exists.
 
   After final database/namespace/database and journal revalidation, the executor
   derives exactly one successor with `rollback_decision` and attempts exactly

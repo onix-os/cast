@@ -233,6 +233,35 @@ closure remain authoritative in `PLAN.md`.
   coordinator or authority and leaves only `UsrExchangeIntent` or its legal
   `UsrExchanged` successor durable.
 
+  Commit `035d0843` adds the startup-side boundary which makes that durable
+  `UsrExchanged` successor safe to inspect when merged-/usr publication was
+  interrupted. For NewState, ActiveReblit, and ActivateArchived, each incomplete
+  subset of the five canonical root links admits at most one retained publisher
+  invocation per startup entry. An incomplete result leaves the exact `UsrExchanged` record
+  canonical and returns `RecoveryPending`; a publisher error is treated as
+  possibly applied and requires fresh reconciliation rather than an in-process
+  retry. A set which is already complete at entry always synchronizes the
+  retained installation root before rollback-decision evidence is captured
+  again from scratch; complete-at-entry invokes the publisher zero times and
+  synchronizes that root once. Exact public `.cast`, journal-directory, lock, and record
+  identities remain authenticated around the effect, with the admitted record
+  inode held open by `Arc<File>`. A bounded retained inventory of every
+  noncanonical installation-root entry detects regular-file, symlink, and root
+  replacement races which canonical-link inspection alone would miss.
+
+  This startup normalizer deliberately has no journal-advance capability and
+  never emits `RootLinksComplete`; the links remain complete while the existing
+  rollback ladder reverses `/usr`. Commit `04911701` aligns the coordinator
+  recovery proof with that ordering: an `UsrExchangeIntent` source reaches its
+  pending rollback decision in one startup entry, while an initially incomplete
+  `UsrExchanged` source uses one normalization entry and a second decision entry;
+  complete-at-entry reaches the decision in one. The complete
+  coordinator lane passes 82/82 and the focused normalizer passes 19/19. The
+  next safe forward milestone is an exact bound-record journal advance followed
+  by an in-process `UsrExchanged` -> `RootLinksComplete` coordinator. Startup
+  must not make that forward advance until a `RootLinksComplete` dispatcher
+  exists.
+
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
   reserves the exact empty replacement wrapper and parks an authenticated

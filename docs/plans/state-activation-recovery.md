@@ -554,6 +554,32 @@ validation evidence continue in the
 That document owns the operation state machines, metadata and provenance
 authority, trigger sequencing, and one-shot forward exchange contract.
 
+Commit `035d0843` closes the startup normalization prefix after an exact
+forward `UsrExchanged` record without claiming the next durable phase. Across
+NewState, ActiveReblit, and ActivateArchived, every one of the 32 subsets of
+the five canonical merged-/usr links converges through at most one retained
+publisher invocation per startup entry. An incomplete set remains at the exact
+source record and returns `RecoveryPending`; publisher errors are possibly
+applied and must be classified by a fresh entry. A set complete at entry always
+syncs the retained installation root before rollback-decision authority is
+captured again from fresh evidence. The authority authenticates the exact
+public `.cast`, journal directory, lock, and record identities throughout and
+retains the admitted record inode as an `Arc<File>`. Its bounded inventory of
+all noncanonical installation-root entries detects file, symlink, and root
+replacement races which would be invisible if only the five link names were
+tracked.
+
+The normalizer cannot advance the journal to `RootLinksComplete`, and the
+canonical links deliberately stay complete through the existing rollback
+suffix. Commit `04911701` proves the integration model: an intent source needs
+one startup entry to reach the pending reverse decision, while an initially
+incomplete exchanged source needs one normalization entry and a second decision
+entry; complete-at-entry exchanged evidence reaches the decision in one. The full
+coordinator lane passes 82/82 and the focused normalizer passes 19/19. The next
+safe coordinator slice is an exact bound-record advance followed by in-process
+`UsrExchanged` -> `RootLinksComplete`; production startup must not advance to
+that phase until its dispatcher exists.
+
 ### Startup reconciliation and interruption campaign
 
 The open startup-reconciliation and interruption work items, including the
