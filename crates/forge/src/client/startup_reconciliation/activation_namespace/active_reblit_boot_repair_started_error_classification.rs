@@ -1,8 +1,8 @@
-//! Fail-closed classification for `BootRepairStarted` namespace admission.
+//! Fail-closed classification for boot-repair namespace admission.
 //!
-//! A stable semantic mismatch may defer the journal-only retention route to a
-//! later startup. Operational failures must remain visible: permission and I/O
-//! errors, deadlines, bounded-work exhaustion, retry exhaustion, journal
+//! A stable semantic mismatch may defer a phase-specific journal-only route to
+//! a later startup. Operational failures must remain visible: permission and
+//! I/O errors, deadlines, bounded-work exhaustion, retry exhaustion, journal
 //! storage errors, and installation revalidation errors are never converted
 //! into `Deferred`.
 
@@ -11,9 +11,28 @@ use std::io;
 use crate::{transition_journal::RuntimeEvidenceError, tree_marker::TreeMarkerError};
 
 use super::{
+    active_reblit_boot_repair_complete_proof::UsrRollbackActiveReblitBootRepairCompleteNamespaceError,
     active_reblit_boot_repair_started_proof::UsrRollbackActiveReblitBootRepairStartedNamespaceError,
     candidate_preserve_proof::UsrRollbackCandidatePreserveNamespaceError, capture::CaptureError,
 };
+
+pub(in crate::client::startup_reconciliation) fn complete_namespace_error_is_structural(
+    error: &UsrRollbackActiveReblitBootRepairCompleteNamespaceError,
+) -> bool {
+    match error {
+        UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Capture(source) => {
+            capture_error_is_structural(source)
+        }
+        UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Topology(source) => {
+            topology_error_is_structural(source)
+        }
+        UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Journal(_)
+        | UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Installation(_) => false,
+        UsrRollbackActiveReblitBootRepairCompleteNamespaceError::JournalChanged
+        | UsrRollbackActiveReblitBootRepairCompleteNamespaceError::NamespaceChanged
+        | UsrRollbackActiveReblitBootRepairCompleteNamespaceError::WrapperIndexChanged { .. } => false,
+    }
+}
 
 pub(in crate::client::startup_reconciliation) fn started_namespace_error_is_structural(
     error: &UsrRollbackActiveReblitBootRepairStartedNamespaceError,
@@ -84,6 +103,7 @@ fn topology_error_is_structural(error: &UsrRollbackCandidatePreserveNamespaceErr
         | UsrRollbackCandidatePreserveNamespaceError::WrongCandidatePreservedPhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitCompleteRoutePhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitBootRepairStartedPhase
+        | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitBootRepairCompletePhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitFinalizationPhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongFreshDbInvalidationPhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongFreshDbInvalidatedPhase
@@ -195,5 +215,20 @@ mod tests {
         };
         assert!(capture_error_is_structural(&missing));
         assert!(!capture_error_is_structural(&denied));
+    }
+
+    #[test]
+    fn complete_route_uses_the_same_fail_closed_operational_boundary() {
+        assert!(complete_namespace_error_is_structural(
+            &UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Topology(
+                UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch,
+            ),
+        ));
+        assert!(!complete_namespace_error_is_structural(
+            &UsrRollbackActiveReblitBootRepairCompleteNamespaceError::JournalChanged,
+        ));
+        assert!(!complete_namespace_error_is_structural(
+            &UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Capture(CaptureError::Deadline),
+        ));
     }
 }

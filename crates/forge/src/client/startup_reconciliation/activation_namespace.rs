@@ -15,6 +15,7 @@
 
 mod activate_archived_complete_route_proof;
 mod activate_archived_finalization_proof;
+mod active_reblit_boot_repair_complete_proof;
 mod active_reblit_boot_repair_required_proof;
 mod active_reblit_boot_repair_started_error_classification;
 mod active_reblit_boot_repair_started_proof;
@@ -55,13 +56,25 @@ pub(super) use activate_archived_finalization_proof::{
     UsrRollbackActivateArchivedFinalizationNamespaceProof,
 };
 #[cfg(test)]
+pub(in crate::client) use active_reblit_boot_repair_complete_proof::{
+    ActiveReblitBootRepairCompleteCaptureFault, arm_active_reblit_boot_repair_complete_capture_fault,
+    arm_before_usr_rollback_active_reblit_boot_repair_complete_fresh_namespace_capture,
+};
+pub(super) use active_reblit_boot_repair_complete_proof::{
+    UsrRollbackActiveReblitBootRepairCompleteNamespaceError,
+    UsrRollbackActiveReblitBootRepairCompleteNamespaceInspection,
+    UsrRollbackActiveReblitBootRepairCompleteNamespaceProof,
+};
+#[cfg(test)]
 pub(in crate::client) use active_reblit_boot_repair_required_proof::arm_before_usr_rollback_active_reblit_boot_repair_required_fresh_namespace_capture;
 pub(super) use active_reblit_boot_repair_required_proof::{
     UsrRollbackActiveReblitBootRepairRequiredNamespaceError,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceInspection,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceProof,
 };
-pub(super) use active_reblit_boot_repair_started_error_classification::started_namespace_error_is_structural;
+pub(super) use active_reblit_boot_repair_started_error_classification::{
+    complete_namespace_error_is_structural, started_namespace_error_is_structural,
+};
 #[cfg(test)]
 pub(in crate::client) use active_reblit_boot_repair_started_proof::{
     ActiveReblitBootRepairStartedCaptureFault, arm_active_reblit_boot_repair_started_capture_fault,

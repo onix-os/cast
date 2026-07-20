@@ -1,8 +1,9 @@
 //! Shared non-effect evidence for the ActiveReblit boot-repair suffix.
 //!
-//! Required and Started authorities remain phase-specific. This module only
-//! centralizes their identical exact database, complete target-state, active
-//! selection, and rollback-plan predicates so those checks cannot drift.
+//! Required, Started, and Complete authorities remain phase-specific. This
+//! module only centralizes their identical exact database, complete
+//! target-state, active selection, and rollback-plan predicates so those
+//! checks cannot drift.
 
 use crate::{
     State, db, state,
@@ -140,6 +141,30 @@ pub(super) fn active_reblit_pending_boot_repair_plan_is_exact(record: &Transitio
         && rollback.candidate.disposition == AbortDisposition::Quarantine
         && rollback.fresh_db == RollbackAction::NotRequired
         && rollback.boot == BootRollback::PendingUnverifiable
+        && rollback.external_effects_may_remain
+}
+
+pub(super) fn active_reblit_completed_boot_repair_plan_is_exact(record: &TransitionRecord) -> bool {
+    let Some(rollback) = record.rollback.as_ref() else {
+        return false;
+    };
+    record.operation == Operation::ActiveReblit
+        && record.phase == Phase::BootRepairComplete
+        && record.candidate.id.is_some()
+        && record.candidate.id == record.previous.id
+        && rollback.source == ForwardPhase::BootSyncStarted
+        && rollback.previous_archive == RollbackAction::NotRequired
+        && matches!(
+            rollback.usr_exchange,
+            RollbackAction::Applied | RollbackAction::AlreadySatisfied
+        )
+        && matches!(
+            rollback.candidate.action,
+            RollbackAction::Applied | RollbackAction::AlreadySatisfied
+        )
+        && rollback.candidate.disposition == AbortDisposition::Quarantine
+        && rollback.fresh_db == RollbackAction::NotRequired
+        && matches!(rollback.boot, BootRollback::Applied | BootRollback::AlreadySatisfied)
         && rollback.external_effects_may_remain
 }
 

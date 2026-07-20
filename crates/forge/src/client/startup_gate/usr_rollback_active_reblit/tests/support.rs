@@ -10,8 +10,13 @@ use crate::{
         MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
         active_state_snapshot::ActiveStateReservation,
         boot,
-        startup_gate::{self, CleanSystemStartup, UsrRollbackActiveReblitFinalizationSeal},
+        startup_gate::{
+            self, CleanSystemStartup, UsrRollbackActiveReblitBootRepairCompleteSeal,
+            UsrRollbackActiveReblitFinalizationSeal,
+        },
         startup_reconciliation::{
+            UsrRollbackActiveReblitBootRepairCompleteAdmission,
+            UsrRollbackActiveReblitBootRepairCompleteAuthority,
             UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
             active_reblit_candidate_preserve_exchange_attempt_count,
             reset_active_reblit_candidate_preserve_exchange_attempt_count,
@@ -19,8 +24,10 @@ use crate::{
             take_active_reblit_candidate_preserve_post_exchange_durability_events,
         },
         startup_recovery::{
+            DurableUsrRollbackActiveReblitBootRepairCompleteRecord,
             DurableUsrRollbackActiveReblitBootRepairRequiredRecord,
             DurableUsrRollbackActiveReblitCandidatePreserveRecord, DurableUsrRollbackActiveReblitCompleteRouteRecord,
+            UsrRollbackActiveReblitBootRepairCompletePersistenceError,
             UsrRollbackActiveReblitBootRepairRequiredPersistenceError,
             UsrRollbackActiveReblitCandidatePreservePersistenceError,
             UsrRollbackActiveReblitCompleteRoutePersistenceError, UsrRollbackCandidatePreserveDispatchError,
@@ -30,8 +37,8 @@ use crate::{
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
     transition_journal::{
-        BootRollback, ForwardPhase, Operation, Phase, RollbackAction, RollbackActionOutcome, TransitionJournalStore,
-        TransitionRecord, decode,
+        BootRepairOutcome, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, RollbackActionOutcome,
+        TransitionJournalStore, TransitionRecord, decode,
     },
 };
 
@@ -205,6 +212,25 @@ pub(super) fn expected_boot_repair_unverified(boot_repair_started: &TransitionRe
     successor
 }
 
+pub(super) fn expected_boot_repair_complete(
+    boot_repair_started: &TransitionRecord,
+    outcome: BootRepairOutcome,
+) -> TransitionRecord {
+    let successor = boot_repair_started.boot_repair_complete_successor(outcome).unwrap();
+    assert_eq!(successor.phase, Phase::BootRepairComplete);
+    successor
+}
+
+pub(super) fn expected_boot_repair_rollback_complete(boot_repair_complete: &TransitionRecord) -> TransitionRecord {
+    let successor = boot_repair_complete.boot_repair_rollback_complete_successor().unwrap();
+    assert_eq!(successor.phase, Phase::RollbackComplete);
+    assert_eq!(
+        successor.rollback.as_ref().unwrap().boot,
+        boot_repair_complete.rollback.as_ref().unwrap().boot
+    );
+    successor
+}
+
 /// Seed the durable post-attempt checkpoint without invoking a boot worker.
 /// The production Required -> Started edge remains deliberately disconnected
 /// until the descriptor-safe publisher consumes all hardened preclaims.
@@ -223,6 +249,24 @@ pub(super) fn seed_boot_repair_started_for_test(
     drop(journal);
     assert_eq!(fixture.fixture.canonical_record(), started);
     started
+}
+
+pub(super) fn seed_boot_repair_complete_for_test(
+    fixture: &BootRepairFixture,
+    boot_repair_required: &TransitionRecord,
+    outcome: BootRepairOutcome,
+) -> TransitionRecord {
+    let started = seed_boot_repair_started_for_test(fixture, boot_repair_required);
+    let complete = expected_boot_repair_complete(&started, outcome);
+    let journal = TransitionJournalStore::open_retained(
+        fixture.fixture.installation.root_directory(),
+        &fixture.fixture.installation.root,
+    )
+    .unwrap();
+    journal.advance(&started, &complete).unwrap();
+    drop(journal);
+    assert_eq!(fixture.fixture.canonical_record(), complete);
+    complete
 }
 
 pub(super) fn persist_candidate_preserved(
@@ -345,6 +389,28 @@ pub(super) fn capture_finalization_ready<'reservation>(
     authority
 }
 
+pub(super) fn capture_boot_repair_complete_ready<'system, 'reservation>(
+    fixture: &'system BootRepairFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> UsrRollbackActiveReblitBootRepairCompleteAuthority<'system, 'reservation> {
+    let seal = UsrRollbackActiveReblitBootRepairCompleteSeal::new_for_test();
+    let admission = UsrRollbackActiveReblitBootRepairCompleteAuthority::capture(
+        &seal,
+        &fixture.fixture.installation,
+        &fixture.fixture.database,
+        journal,
+        reservation,
+        record,
+    )
+    .unwrap();
+    let UsrRollbackActiveReblitBootRepairCompleteAdmission::Ready(authority) = admission else {
+        panic!("exact ActiveReblit BootRepairComplete evidence did not admit completion routing");
+    };
+    authority
+}
+
 pub(super) fn reset_candidate_effect_observers() {
     reset_active_reblit_candidate_preserve_exchange_attempt_count();
     reset_active_reblit_candidate_preserve_post_exchange_durability_events();
@@ -366,7 +432,7 @@ pub(super) fn assert_no_boot_synchronize_attempts() {
     assert_eq!(
         boot::boot_synchronize_attempt_count(),
         0,
-        "the journal-only boot-repair-required route attempted boot synchronization"
+        "a journal-only boot-repair route attempted boot synchronization"
     );
 }
 
@@ -543,6 +609,40 @@ pub(super) fn assert_boot_required_persistence_authority_error(error: &startup_g
             )
         ),
         "expected exact ActiveReblit boot-required persistence authority error, got {error:?}"
+    );
+}
+
+pub(super) fn assert_boot_complete_persistence_advance(
+    error: &startup_gate::Error,
+    expected: DurableUsrRollbackActiveReblitBootRepairCompleteRecord,
+) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActiveReblitDispatch(
+                ActiveReblitDispatchError::BootRepairCompletePersistence(
+                    UsrRollbackActiveReblitBootRepairCompletePersistenceError::Advance {
+                        durable,
+                        ..
+                    }
+                )
+            ) if *durable == expected
+        ),
+        "expected durable {expected:?} ActiveReblit boot-complete advance failure, got {error:?}"
+    );
+}
+
+pub(super) fn assert_boot_complete_persistence_authority_error(error: &startup_gate::Error) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActiveReblitDispatch(
+                ActiveReblitDispatchError::BootRepairCompletePersistence(
+                    UsrRollbackActiveReblitBootRepairCompletePersistenceError::Authority(_)
+                )
+            )
+        ),
+        "expected exact ActiveReblit boot-complete persistence authority error, got {error:?}"
     );
 }
 

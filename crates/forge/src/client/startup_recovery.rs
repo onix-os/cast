@@ -11,6 +11,7 @@ mod usr_exchange_parent_durability;
 mod usr_rollback_activate_archived_candidate_preserve_persistence;
 mod usr_rollback_activate_archived_complete_route;
 mod usr_rollback_activate_archived_finalization;
+mod usr_rollback_active_reblit_boot_repair_complete;
 mod usr_rollback_active_reblit_boot_repair_required;
 mod usr_rollback_active_reblit_boot_repair_unverified;
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
@@ -112,6 +113,11 @@ pub(super) use usr_rollback_active_reblit_complete_route::{
     UsrRollbackActiveReblitCompleteRoutePersistenceError, persist_usr_rollback_active_reblit_complete_route_and_reopen,
 };
 
+pub(super) use usr_rollback_active_reblit_boot_repair_complete::{
+    UsrRollbackActiveReblitBootRepairCompletePersistenceError,
+    persist_usr_rollback_active_reblit_boot_repair_complete_and_reopen,
+};
+
 pub(super) use usr_rollback_active_reblit_boot_repair_required::{
     UsrRollbackActiveReblitBootRepairRequiredPersistenceError,
     persist_usr_rollback_active_reblit_boot_repair_required_and_reopen,
@@ -151,6 +157,12 @@ pub(in crate::client) use usr_rollback_activate_archived_candidate_preserve_pers
 pub(in crate::client) use usr_rollback_active_reblit_complete_route::{
     DurableUsrRollbackActiveReblitCompleteRouteRecord,
     arm_before_usr_rollback_active_reblit_complete_route_final_revalidation,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_active_reblit_boot_repair_complete::{
+    DurableUsrRollbackActiveReblitBootRepairCompleteRecord,
+    arm_before_usr_rollback_active_reblit_boot_repair_complete_final_revalidation,
 };
 
 #[cfg(test)]

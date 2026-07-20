@@ -32,6 +32,7 @@ mod metadata_provenance;
 mod replacement_mutation_authority;
 mod usr_rollback_activate_archived_complete_route_authority;
 mod usr_rollback_activate_archived_finalization_authority;
+mod usr_rollback_active_reblit_boot_repair_complete_authority;
 mod usr_rollback_active_reblit_boot_repair_required_authority;
 mod usr_rollback_active_reblit_boot_repair_unverified_authority;
 mod usr_rollback_active_reblit_complete_route_authority;
@@ -56,6 +57,10 @@ pub(in crate::client) use usr_rollback_activate_archived_complete_route_authorit
 pub(in crate::client) use usr_rollback_activate_archived_finalization_authority::{
     UsrRollbackActivateArchivedFinalizationAdmission, UsrRollbackActivateArchivedFinalizationAuthority,
     UsrRollbackActivateArchivedFinalizationAuthorityError,
+};
+pub(in crate::client) use usr_rollback_active_reblit_boot_repair_complete_authority::{
+    UsrRollbackActiveReblitBootRepairCompleteAdmission, UsrRollbackActiveReblitBootRepairCompleteAuthority,
+    UsrRollbackActiveReblitBootRepairCompleteAuthorityError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_required_authority::{
     UsrRollbackActiveReblitBootRepairRequiredAdmission, UsrRollbackActiveReblitBootRepairRequiredAuthority,
@@ -134,7 +139,9 @@ use activation_namespace::{
     UsrRollbackActivateArchivedCompleteRouteNamespaceInspection,
     UsrRollbackActivateArchivedCompleteRouteNamespaceProof, UsrRollbackActivateArchivedFinalizationNamespaceError,
     UsrRollbackActivateArchivedFinalizationNamespaceInspection, UsrRollbackActivateArchivedFinalizationNamespaceProof,
-    UsrRollbackActiveReblitBootRepairRequiredNamespaceError,
+    UsrRollbackActiveReblitBootRepairCompleteNamespaceError,
+    UsrRollbackActiveReblitBootRepairCompleteNamespaceInspection,
+    UsrRollbackActiveReblitBootRepairCompleteNamespaceProof, UsrRollbackActiveReblitBootRepairRequiredNamespaceError,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceInspection,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceProof, UsrRollbackActiveReblitBootRepairStartedNamespaceError,
     UsrRollbackActiveReblitBootRepairStartedNamespaceInspection,
@@ -160,13 +167,15 @@ use activation_namespace::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,
     UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
     UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
-    UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence, started_namespace_error_is_structural,
+    UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence, complete_namespace_error_is_structural,
+    started_namespace_error_is_structural,
 };
 use active_reblit_boot_repair_evidence::{
     ActiveReblitBootRepairDatabaseEvidence, ActiveReblitBootRepairDatabaseInspection,
-    ActiveReblitBootRepairEvidenceError, active_reblit_pending_boot_repair_plan_is_exact,
-    capture_active_reblit_boot_repair_active_state, inspect_active_reblit_boot_repair_database,
-    require_exact_active_reblit_boot_repair_active_state, require_exact_active_reblit_boot_repair_database,
+    ActiveReblitBootRepairEvidenceError, active_reblit_completed_boot_repair_plan_is_exact,
+    active_reblit_pending_boot_repair_plan_is_exact, capture_active_reblit_boot_repair_active_state,
+    inspect_active_reblit_boot_repair_database, require_exact_active_reblit_boot_repair_active_state,
+    require_exact_active_reblit_boot_repair_database,
 };
 #[cfg(test)]
 use database_evidence::{

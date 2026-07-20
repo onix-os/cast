@@ -1,5 +1,10 @@
 //! Real startup-entry contracts for the ActiveReblit rollback suffix.
 
+mod boot_repair_complete_route_capture_faults;
+mod boot_repair_complete_route_evidence_races;
+mod boot_repair_complete_route_exclusions;
+mod boot_repair_complete_route_matrix;
+mod boot_repair_complete_route_storage_faults;
 mod boot_repair_required_authority_binding;
 mod boot_repair_required_evidence_races;
 mod boot_repair_required_exclusions;

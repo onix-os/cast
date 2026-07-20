@@ -23,6 +23,7 @@ pub(in crate::client) use super::usr_rollback_reverse_authority::{
 pub(in crate::client) use super::{
     usr_rollback_activate_archived_complete_route_authority::arm_between_usr_rollback_activate_archived_complete_route_database_captures,
     usr_rollback_activate_archived_finalization_authority::arm_between_usr_rollback_activate_archived_finalization_database_captures,
+    usr_rollback_active_reblit_boot_repair_complete_authority::arm_between_usr_rollback_active_reblit_boot_repair_complete_database_captures,
     usr_rollback_active_reblit_boot_repair_required_authority::arm_between_usr_rollback_active_reblit_boot_repair_required_database_captures,
     usr_rollback_active_reblit_complete_route_authority::arm_between_usr_rollback_active_reblit_complete_route_database_captures,
     usr_rollback_active_reblit_finalization_authority::arm_between_usr_rollback_active_reblit_finalization_database_captures,
@@ -36,7 +37,8 @@ pub(in crate::client) use super::{
 };
 
 pub(in crate::client) use super::activation_namespace::{
-    ActiveReblitBootRepairStartedCaptureFault, ActiveReblitCandidatePreserveExchangeFault,
+    ActiveReblitBootRepairCompleteCaptureFault, ActiveReblitBootRepairStartedCaptureFault,
+    ActiveReblitCandidatePreserveExchangeFault,
     ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
     ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, ArchivedCandidatePreserveMoveFault,
     ArchivedCandidatePreservePostMoveDurabilityEvent, ArchivedCandidatePreservePostMoveDurabilityFaultPoint,
@@ -47,7 +49,8 @@ pub(in crate::client) use super::activation_namespace::{
     NewStateTargetNormalizeDurabilityEvent, NewStateTargetNormalizeDurabilityFaultPoint, NewStateTargetNormalizeFault,
     UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
     active_reblit_candidate_preserve_exchange_attempt_count, archived_candidate_preserve_move_attempt_count,
-    arm_active_reblit_boot_repair_started_capture_fault, arm_active_reblit_candidate_preserve_exchange_fault,
+    arm_active_reblit_boot_repair_complete_capture_fault, arm_active_reblit_boot_repair_started_capture_fault,
+    arm_active_reblit_candidate_preserve_exchange_fault,
     arm_active_reblit_candidate_preserve_post_exchange_durability_fault, arm_archived_candidate_preserve_move_fault,
     arm_archived_candidate_preserve_post_move_durability_fault,
     arm_archived_candidate_preserve_target_durability_fault,
@@ -92,6 +95,7 @@ pub(in crate::client) use super::activation_namespace::{
     arm_before_reverse_exchange_reconciliation_capture,
     arm_before_usr_rollback_activate_archived_complete_route_fresh_namespace_capture,
     arm_before_usr_rollback_activate_archived_finalization_fresh_namespace_capture,
+    arm_before_usr_rollback_active_reblit_boot_repair_complete_fresh_namespace_capture,
     arm_before_usr_rollback_active_reblit_boot_repair_required_fresh_namespace_capture,
     arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture,
     arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture,
