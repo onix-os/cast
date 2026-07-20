@@ -302,7 +302,7 @@ frozen Bash provider, then installs the exact script with an explicit runtime
 interpreter relation. It likewise has no source lock, archive, network access,
 host shim, or mounted recipe input.
 `relation-policy` generates a real configuration payload while exercising all
-four typed dependency roles: `ldconfig` as a build-only system binary, the
+four typed dependency relations: `ldconfig` as a build-only system binary, the
 32-bit `zlib` pkg-config relation as a build input, and the x86_64 dynamic
 loader plus `libz.so.1` as runtime relations. Its exact pinned providers prove
 that relation kind and role remain distinct through planning, packaging, Stone
