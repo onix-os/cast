@@ -1,6 +1,6 @@
 .PHONY: stone-read-test forge-read-only-installation-test forge-installation-test \
 	forge-mutable-startup-namespace-test forge-candidate-pre-journal-durability-test \
-	forge-transition-journal-coordinator-test forge-transition-recovery-classifier-test \
+	forge-transition-journal-coordinator-test forge-transition-root-abi-publication-test forge-transition-recovery-classifier-test \
 	forge-startup-reconciliation-test \
 	forge-linux-fs-test forge-cache-test forge-client-direct-test \
 	forge-package-request-hardening-test \

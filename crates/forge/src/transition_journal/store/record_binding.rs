@@ -60,7 +60,6 @@ impl TransitionJournalStore {
     /// Consume one exact predecessor binding and durably publish one legal
     /// successor while the same operation lock protects the complete public
     /// predecessor-to-successor authentication boundary.
-    #[allow(dead_code)] // consumed by the next durable forward-coordinator slice
     pub(crate) fn advance_record_binding(
         &self,
         cast_directory: &std::fs::File,

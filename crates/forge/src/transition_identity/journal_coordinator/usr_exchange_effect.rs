@@ -179,7 +179,7 @@ fn require_pre_exchange_sandwich(
     readiness.require_staged(&coordinator.identity)
 }
 
-fn require_applied_exchange_sandwich(
+pub(super) fn require_applied_exchange_sandwich(
     coordinator: &StatefulTransitionCoordinator,
     metadata: &CandidateMetadataProof,
     provenance: &db::state::MetadataProvenance,
@@ -233,7 +233,7 @@ fn require_applied_exchange_evidence(
     readiness.require_live(&coordinator.identity)
 }
 
-fn require_active_reblit_snapshot(
+pub(super) fn require_active_reblit_snapshot(
     coordinator: &StatefulTransitionCoordinator,
     active_reblit: Option<&crate::State>,
     installation: &crate::Installation,
@@ -250,6 +250,24 @@ fn require_active_reblit_snapshot(
 }
 
 impl UsrExchangedCoordinator {
+    pub(super) fn into_root_abi_publication_parts(
+        self,
+    ) -> (
+        StatefulTransitionCoordinator,
+        CandidateMetadataProof,
+        db::state::MetadataProvenance,
+        AppliedJournalUsrExchangeAuthority,
+        UsrExchangeReadiness,
+    ) {
+        (
+            self.coordinator,
+            self.metadata,
+            self.provenance,
+            self.authority,
+            self.readiness,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn record(&self) -> &crate::transition_journal::TransitionRecord {
         let _metadata = &self.metadata;

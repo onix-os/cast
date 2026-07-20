@@ -14,8 +14,8 @@ use crate::{
 };
 
 use super::{
-    Error as ClientError, RootAbiPreflight, active_state_authority::ActiveStateAuthority,
-    active_state_authority::AppliedActiveStateWriterAuthority,
+    Error as ClientError, RetainedRootAbi, RootAbiPreflight,
+    active_state_authority::ActiveStateAuthority, active_state_authority::AppliedActiveStateWriterAuthority,
 };
 
 #[derive(Debug, Error)]
@@ -106,6 +106,21 @@ pub(crate) struct AppliedJournalUsrExchangeAuthority {
     installation: Installation,
     _active_state_writer: AppliedActiveStateWriterAuthority,
     root_abi: RootAbiPreflight,
+    active_reblit: Option<State>,
+}
+
+/// Post-publication authority for the exact merged-/usr root ABI.
+///
+/// This value can be obtained only by consuming the pre-journal root-ABI
+/// preflight carried through the `/usr` exchange.  It retains the same
+/// Installation and cooperating-writer lease together with descriptor-pinned
+/// evidence for all five public links; no caller can reconstruct it by
+/// reopening the installation root after the exchange.
+#[derive(Debug)]
+pub(crate) struct PublishedJournalRootAbiAuthority {
+    installation: Installation,
+    _active_state_writer: AppliedActiveStateWriterAuthority,
+    root_abi: RetainedRootAbi,
     active_reblit: Option<State>,
 }
 
@@ -349,5 +364,59 @@ impl AppliedJournalUsrExchangeAuthority {
 
     pub(crate) fn active_reblit(&self) -> Option<&State> {
         self.active_reblit.as_ref()
+    }
+
+    /// Consume the original pre-journal authorization and publish the public
+    /// merged-/usr links through its already-retained installation root.
+    /// Publication is monotonic and may have partially applied when an error
+    /// is returned, so neither this authority nor its writer lease is returned
+    /// on failure.
+    pub(crate) fn publish_root_abi(self) -> Result<PublishedJournalRootAbiAuthority, ClientError> {
+        let Self {
+            installation,
+            _active_state_writer,
+            root_abi,
+            active_reblit,
+        } = self;
+        let root_abi = root_abi.publish()?;
+        Ok(PublishedJournalRootAbiAuthority {
+            installation,
+            _active_state_writer,
+            root_abi,
+            active_reblit,
+        })
+    }
+}
+
+impl PublishedJournalRootAbiAuthority {
+    /// Revalidate the exchanged namespace and every descriptor-pinned public
+    /// root link without reacquiring mutation authority through a pathname.
+    pub(crate) fn require_post_exchange(&self) -> Result<(), JournalUsrExchangeAuthorityError> {
+        self.installation
+            .revalidate_mutable_namespace()
+            .map_err(ClientError::from)
+            .map_err(JournalUsrExchangeAuthorityError::Client)?;
+        self.root_abi()
+            .revalidate()
+            .map_err(JournalUsrExchangeAuthorityError::Client)?;
+        self.installation
+            .revalidate_mutable_namespace()
+            .map_err(ClientError::from)
+            .map_err(JournalUsrExchangeAuthorityError::Client)?;
+        self.root_abi()
+            .revalidate()
+            .map_err(JournalUsrExchangeAuthorityError::Client)
+    }
+
+    pub(crate) fn installation(&self) -> &Installation {
+        &self.installation
+    }
+
+    pub(crate) fn active_reblit(&self) -> Option<&State> {
+        self.active_reblit.as_ref()
+    }
+
+    pub(crate) fn root_abi(&self) -> &RetainedRootAbi {
+        &self.root_abi
     }
 }

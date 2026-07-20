@@ -60,6 +60,40 @@ pub(crate) fn assert_usr_exchange_post_recovers_to_pending_reverse(
     );
 }
 
+/// Re-enter the real mutable startup gate at coordinator-owned
+/// `RootLinksComplete`. Recovery classifies this phase as rollback-required,
+/// but the phase-specific rollback decision authority intentionally does not
+/// support it yet. The gate must therefore remain blocker-free and leave the
+/// exact durable record unchanged rather than guessing a forward or reverse
+/// effect.
+pub(crate) fn assert_root_links_complete_restart_is_pending(
+    installation: &Installation,
+    state_db: &db::state::Database,
+    layout_db: &db::layout::Database,
+) {
+    let system = MutableSystemCapabilities::from_test_parts(
+        &MutableSystemCapabilitiesTestSeal::new(),
+        installation.clone(),
+        state_db.clone(),
+        layout_db.clone(),
+    );
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let error = match CleanSystemStartup::enter(&system, &reservation) {
+        Ok(_) => panic!("startup unexpectedly admitted durable RootLinksComplete"),
+        Err(error) => error,
+    };
+    let pending = match error {
+        startup_gate::Error::RecoveryPending(pending) => pending,
+        other => panic!("expected RootLinksComplete recovery-pending result, got {other:?}"),
+    };
+    assert_eq!(pending.phase(), Phase::RootLinksComplete);
+    assert!(
+        pending.blockers().is_empty(),
+        "unexpected RootLinksComplete startup blockers: {:?}",
+        pending.blockers()
+    );
+}
+
 /// Re-enter the real mutable startup gate at the exact decision produced by
 /// the helper above and require its journal-only route to the reverse intent.
 pub(crate) fn assert_usr_rollback_decision_routes_to_reverse_exchange_intent(

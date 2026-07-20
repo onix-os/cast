@@ -40,6 +40,13 @@ pub(crate) enum StatefulTransitionCoordinatorError {
         expected_phase: Phase,
         actual: Option<TransitionRecord>,
     },
+    #[error(
+        "canonical journal inode binding for transition {transition_id} changed while {expected_phase:?} authority was retained"
+    )]
+    CanonicalRecordBindingChanged {
+        transition_id: TransitionId,
+        expected_phase: Phase,
+    },
     #[error("publish or revalidate exact candidate metadata under CandidatePrepareStarted authority")]
     CandidateMetadata(#[from] CandidateMetadataError),
     #[error("bind exact generated-metadata provenance to coordinator-owned candidate preparation")]

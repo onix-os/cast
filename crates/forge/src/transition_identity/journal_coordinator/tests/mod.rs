@@ -8,6 +8,7 @@ use crate::{
     Installation,
     client::{
         JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityPreflight,
+        assert_root_links_complete_restart_is_pending,
         assert_reverse_exchange_intent_recovers_to_usr_restored,
         assert_usr_exchange_post_recovers_to_pending_reverse,
         assert_usr_restored_routes_to_candidate_preserve_intent,
@@ -26,6 +27,7 @@ use crate::{
 };
 
 use super::*;
+use super::root_abi_publication::RootAbiPublicationFailure;
 use crate::db::state::TransitionOwnership;
 use crate::transition_identity::StatefulTreeIdentity;
 use crate::transition_identity::{
@@ -99,6 +101,26 @@ fn fixture_parts(
     StatefulTreeIdentity,
     Option<JournalUsrExchangeAuthority>,
 ) {
+    fixture_parts_with_root_abi_mask(
+        candidate_kind,
+        previous_kind,
+        retain_exchange_authority,
+        retain_previous_slot,
+        0,
+    )
+}
+
+fn fixture_parts_with_root_abi_mask(
+    candidate_kind: CandidateKind,
+    previous_kind: PreviousKind,
+    retain_exchange_authority: bool,
+    retain_previous_slot: bool,
+    root_abi_mask: u8,
+) -> (
+    CoordinatorFixture,
+    StatefulTreeIdentity,
+    Option<JournalUsrExchangeAuthority>,
+) {
     let temporary = private_installation_tempdir();
     let mut installation = Installation::open(temporary.path(), None).unwrap();
     let database = db::state::Database::new(":memory:").unwrap();
@@ -118,6 +140,7 @@ fn fixture_parts(
 
     prepare_previous_tree(&installation, previous_kind, previous_state);
     installation.active_state = (previous_kind == PreviousKind::Active).then_some(previous_state);
+    install_root_abi_subset(&installation.root, root_abi_mask);
 
     if retain_previous_slot {
         assert_eq!(candidate_kind, CandidateKind::ActiveReblit);
@@ -405,6 +428,11 @@ include!("transaction_triggers.rs");
 include!("metadata_proof.rs");
 include!("usr_exchange_intent.rs");
 include!("usr_exchange_effect.rs");
+include!("root_abi_publication_support.rs");
+include!("root_abi_publication_success.rs");
+include!("root_abi_publication_collisions.rs");
+include!("root_abi_publication_evidence_races.rs");
+include!("root_abi_publication_persistence.rs");
 include!("metadata_provenance.rs");
 include!("active_reblit_reservation.rs");
 include!("active_reblit_readiness.rs");

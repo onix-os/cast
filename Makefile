@@ -47,6 +47,7 @@ include misc/make/draft-hardening-tests.mk
 include misc/make/state-request-tests.mk
 include misc/make/exact-fresh-transition-removal-tests.mk
 include misc/make/transition-coordinator-tests.mk
+include misc/make/transition-root-abi-publication-tests.mk
 include misc/make/activation-namespace-tests.mk
 include misc/make/startup-gate-tests.mk
 include misc/make/mutable-system-capabilities-tests.mk

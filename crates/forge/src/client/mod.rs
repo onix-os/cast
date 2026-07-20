@@ -171,6 +171,7 @@ pub(in crate::client) use mutable_system_capabilities::{
 pub(crate) use startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider;
 #[cfg(test)]
 pub(crate) use startup_recovery_forward_origin_test_support::{
+    assert_root_links_complete_restart_is_pending,
     assert_reverse_exchange_intent_recovers_to_usr_restored,
     assert_usr_exchange_post_recovers_to_pending_reverse,
     assert_usr_restored_routes_to_candidate_preserve_intent,
@@ -184,7 +185,7 @@ mod verify;
 #[allow(unused_imports)] // contract-only until the journal coordinator is live-wired
 pub(crate) use journal_usr_exchange_authority::{
     AppliedJournalUsrExchangeAuthority, JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityError,
-    JournalUsrExchangeAuthorityPreflight, JournalUsrExchangePreparationSeal,
+    JournalUsrExchangeAuthorityPreflight, JournalUsrExchangePreparationSeal, PublishedJournalRootAbiAuthority,
 };
 
 pub mod extract;

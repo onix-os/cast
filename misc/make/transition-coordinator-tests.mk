@@ -3,7 +3,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 82; \
+	timeout 10s test "$$count" = 97; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \

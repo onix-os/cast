@@ -84,7 +84,7 @@ fn before_stateful_root_abi_publication() {
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_before_retained_root_abi_link_publication(
+pub(crate) fn arm_before_retained_root_abi_link_publication(
     index: usize,
     hook: impl FnOnce() + 'static,
 ) {
@@ -94,8 +94,22 @@ pub(in crate::client) fn arm_before_retained_root_abi_link_publication(
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_retained_root_abi_sync_fault() {
+pub(crate) fn assert_before_retained_root_abi_link_publication_consumed() {
+    BEFORE_RETAINED_ROOT_ABI_LINK_PUBLICATION.with(|slot| {
+        assert!(slot.borrow().is_none(), "armed retained root ABI link callback was not reached");
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn arm_retained_root_abi_sync_fault() {
     RETAINED_ROOT_ABI_SYNC_FAULT.with(|fault| fault.set(true));
+}
+
+#[cfg(test)]
+pub(crate) fn assert_retained_root_abi_sync_fault_consumed() {
+    RETAINED_ROOT_ABI_SYNC_FAULT.with(|fault| {
+        assert!(!fault.get(), "armed retained root ABI sync fault was not reached");
+    });
 }
 
 #[cfg(test)]
