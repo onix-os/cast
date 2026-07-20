@@ -80,13 +80,21 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 fakebin="$work/bin"
+hostile_bash_bin="$work/hostile-bash-bin"
 evidence="$work/evidence"
 outer_state="$work/outer-state"
 gates="$work/gates"
 real_tee=$(command -v tee)
 real_jq=$(command -v jq)
+real_bash=$(command -v bash)
+case "$real_bash" in
+    /*) ;;
+    *) printf 'test Bash must resolve absolutely: %s\n' "$real_bash" >&2; exit 1 ;;
+esac
+test -f "$real_bash"
+test -x "$real_bash"
 fake_commit=$(timeout 10s git -C "$root" rev-parse --verify HEAD)
-mkdir -p "$fakebin" "$evidence" "$outer_state" "$gates"
+mkdir -p "$fakebin" "$hostile_bash_bin" "$evidence" "$outer_state" "$gates"
 chmod 700 "$evidence"
 if [ -L "$proof_generator" ] || [ ! -f "$proof_generator" ] \
     || [ ! -x "$proof_generator" ]; then
@@ -105,6 +113,37 @@ timeout 120s "$proof_validator" "$canonical_proof" "$fake_commit"
 test -f "$canonical_proof"
 test ! -L "$canonical_proof"
 test "$(timeout 10s stat -c '%a' "$canonical_proof")" = 644
+
+unavailable_shebang_root="$work/unavailable-shebang-root"
+unavailable_shebang_scripts="$unavailable_shebang_root/misc/scripts"
+unavailable_shebang_runner="$unavailable_shebang_scripts/run-fixtures-ci-with-evidence.sh"
+missing_bash="$work/unavailable-bin/bash"
+mkdir -p "$unavailable_shebang_scripts"
+for helper in \
+    run-latched-command.sh \
+    stop-owned-fixture-unit.sh \
+    validate-fixtures-ci-proof.sh \
+    calculate-fixtures-ci-ledger.sh
+do
+    install -m 0755 "$root/misc/scripts/$helper" \
+        "$unavailable_shebang_scripts/$helper"
+done
+install -m 0644 "$root/misc/scripts/validate-fixtures-ci-proof.jq" \
+    "$unavailable_shebang_scripts/validate-fixtures-ci-proof.jq"
+{
+    printf '#!%s\n' "$missing_bash"
+    tail -n +2 "$runner"
+} >"$unavailable_shebang_runner"
+chmod 755 "$unavailable_shebang_runner"
+
+cat >"$hostile_bash_bin/bash" <<'EOF'
+#!/bin/sh
+set -eu
+: "${FAKE_OUTER_STATE:?}"
+: >"$FAKE_OUTER_STATE/hostile-bash-used"
+exit 97
+EOF
+chmod 755 "$hostile_bash_bin/bash"
 
 grep -Fq 'CAST_FIXTURE_EVIDENCE_DIR="$${CAST_FIXTURE_EVIDENCE_DIR:-$(TOP_DIR)/target/fixture-evidence}"' \
     "$root/Makefile"
@@ -126,8 +165,14 @@ set -eu
 : "${CAST_FIXTURE_EVIDENCE_DIR:?}"
 test "${1-}" = --no-print-directory
 test "${2-}" = -C
-test "${4-}" = fixtures-ci
-test "$#" -eq 4
+case "${4-}" in
+    SHELL=/*) fixture_shell=${4#SHELL=} ;;
+    *) exit 2 ;;
+esac
+test -f "$fixture_shell"
+test -x "$fixture_shell"
+test "${5-}" = fixtures-ci
+test "$#" -eq 5
 repository=$3
 
 emit_proof() {
@@ -689,10 +734,16 @@ run_wrapper() {
     fi
     wrapper_case=$1
     wrapper_timeout=$2
+    wrapper_program=${RUN_WRAPPER_TEST_PROGRAM-$runner}
+    wrapper_interpreter=${RUN_WRAPPER_TEST_INTERPRETER-$real_bash}
+    wrapper_path="$fakebin:$PATH"
+    if [ -n "${RUN_WRAPPER_TEST_PATH_PREFIX-}" ]; then
+        wrapper_path="$RUN_WRAPPER_TEST_PATH_PREFIX:$wrapper_path"
+    fi
     current_case=$wrapper_case
     rm -f "$outer_state"/*
     set -- env \
-        PATH="$fakebin:$PATH" \
+        PATH="$wrapper_path" \
         MAKE="$fakebin/make" \
         FIXTURE_EVIDENCE_DIR="$evidence" \
         CAST_FIXTURE_LOG_MAX_BYTES=256 \
@@ -717,8 +768,11 @@ run_wrapper() {
         CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE="${CAST_FIXTURE_TEST_LATCHED_RELEASE_GATE-}" \
         REAL_JQ="$real_jq" \
         REAL_TEE="$real_tee" \
-        FAKE_MAKE_MODE="$wrapper_case" \
-        "$runner"
+        FAKE_MAKE_MODE="$wrapper_case"
+    if [ -n "$wrapper_interpreter" ]; then
+        set -- "$@" "$wrapper_interpreter"
+    fi
+    set -- "$@" "$wrapper_program"
     if [ "$wrapper_launch" = exec ]; then
         exec "$@"
     fi
@@ -787,6 +841,22 @@ require_receipt() {
         return 1
     fi
 }
+
+current_case=path-bash-bypasses-unavailable-shebang
+set +e
+"$unavailable_shebang_runner" --capture-log /dev/null 1 \
+    "$work/direct-capture.log" >/dev/null 2>&1
+direct_capture_status=$?
+set -e
+test "$direct_capture_status" -ne 0
+test ! -e "$work/direct-capture.log"
+RUN_WRAPPER_TEST_PROGRAM="$unavailable_shebang_runner" \
+RUN_WRAPPER_TEST_INTERPRETER="$real_bash" \
+RUN_WRAPPER_TEST_PATH_PREFIX="$hostile_bash_bin" \
+    run_wrapper success 10 >"$work/path-bash-capture.out" 2>&1
+jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
+test ! -e "$outer_state/hostile-bash-used"
+assert_bounded_inventory
 
 . "$root/misc/scripts/test-run-fixtures-ci-lifecycle-cases.sh"
 . "$root/misc/scripts/test-run-fixtures-ci-result-cases.sh"

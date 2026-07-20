@@ -119,6 +119,17 @@ command -v "$make_command" >/dev/null 2>&1 || {
     printf 'Make executable is unavailable: %s\n' "$make_command" >&2
     exit 1
 }
+readonly bash_executable=${BASH-}
+case "$bash_executable" in
+    /*) ;;
+    *) printf 'Running Bash must have an absolute executable: %s\n' \
+        "$bash_executable" >&2; exit 1 ;;
+esac
+if [[ ! -f $bash_executable || ! -x $bash_executable ]]; then
+    printf 'Bash executable is unavailable or unsafe: %s\n' \
+        "$bash_executable" >&2
+    exit 1
+fi
 command -v setsid >/dev/null 2>&1 || {
     printf 'setsid is required to own fixture CI process groups\n' >&2
     exit 1
@@ -260,7 +271,7 @@ validate_proof() {
 wait_group_exit() {
     local pid=$1
     timeout --kill-after=1s -- "${kill_after_seconds}s" \
-        bash -c '
+        "$bash_executable" -c '
             target_group=$1
             while :; do
                 live_member=0
@@ -434,12 +445,13 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$kill_after_seconds" setsid "$latched_runner" \
     --property="TimeoutStopSec=${kill_after_seconds}s" \
     --property=SendSIGKILL=yes \
     -- \
-    "$make_executable" --no-print-directory -C "$root" fixtures-ci \
+    "$make_executable" --no-print-directory -C "$root" \
+    "SHELL=$bash_executable" fixtures-ci \
     >"$output_fifo" 2>&1 5>&- 6>&- &
 execution_launch_pid=$!
 log_timeout_seconds=$((client_timeout_seconds + kill_after_seconds + 5))
 setsid timeout --kill-after="${kill_after_seconds}s" -- "${log_timeout_seconds}s" \
-    "$root/misc/scripts/run-fixtures-ci-with-evidence.sh" \
+    "$bash_executable" "$root/misc/scripts/run-fixtures-ci-with-evidence.sh" \
     --capture-log "$output_fifo" "$maximum_log_bytes" \
     "$bounded_temporary" 5>&- 6>&- &
 log_pipeline_pid=$!

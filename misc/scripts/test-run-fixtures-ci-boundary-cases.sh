@@ -37,7 +37,7 @@ env \
     REAL_JQ="$real_jq" \
     REAL_TEE="$real_tee" \
     FAKE_MAKE_MODE=success \
-    "$runner" >"$work/hostile-evidence.out" 2>&1
+    "$real_bash" "$runner" >"$work/hostile-evidence.out" 2>&1
 test ! -e "$hostile_marker"
 jq -e '.result == "passed"' "$hostile_evidence/fixtures-ci-proof.json" >/dev/null
 rm -rf "$hostile_evidence"
@@ -50,7 +50,7 @@ env \
     CAST_FIXTURE_LOG_MAX_BYTES=1048577 \
     CAST_FIXTURE_CI_TIMEOUT_SECONDS=10 \
     FAKE_MAKE_MODE=success \
-    "$runner" >"$work/oversized.out" 2>&1
+    "$real_bash" "$runner" >"$work/oversized.out" 2>&1
 status=$?
 set -e
 test "$status" -eq 2
