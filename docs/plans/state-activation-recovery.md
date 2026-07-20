@@ -75,9 +75,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix, RootLinks NewState through exact
-  `FreshDbInvalidationIntent`, RootLinks ActivateArchived through exact
-  `RollbackComplete`, and RootLinks ActiveReblit through exact
-  `CandidatePreserved`; the complete pre-existing NewState suffix reaches
+  `FreshDbInvalidationIntent`, and RootLinks ActivateArchived and ActiveReblit
+  through exact `RollbackComplete`; the complete pre-existing NewState suffix reaches
   authenticated terminal journal absence, and the ActiveReblit no-boot-repair
   suffix through the same clean-startup handoff. An ActiveReblit
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
@@ -697,10 +696,26 @@ seams. Database state, archived-wrapper and state-slot identities, and all five
 canonical root-link identities remain unchanged. The journal-only entry invokes
 no database or non-journal effect, cleanup, finalization, or boot action. A
 later entry leaves generation 12 byte-identical because the RootLinks terminal-
-finalization source axis remains closed. NewState remains at generation 16 and
-ActiveReblit at `CandidatePreserved` generation 13. Fresh-handle reopen is not
-process-death evidence; RootLinks process death, terminal finalization, boot
-repair, cleanup, reboot, and power-loss durability remain unclaimed.
+finalization source axis remains closed.
+
+Accepted commit `a05997d8`, with acceptance-gate follow-up `cfb5a70d`, admits
+only exact RootLinks-sourced ActiveReblit `CandidatePreserved` generation 13.
+It carries the exact record-inode binding from capture through one bound advance
+to `RollbackComplete` generation 14, validates the successor in the same store,
+destroys the old lock-bearing store, and requires an independent canonical
+reopen. Its proof covers 24 successes, 120 storage faults, 96 predecessor or
+successor binding substitutions, and 48 fresh-handle reopens. Another 240 cases
+mutate all five root-ABI links: exactly 120 at `CaptureSandwich` and 120 at
+`FinalRevalidation`; the legacy fresh-namespace-capture race remains a separate
+focused contract. The full RootLinks endpoint performs exactly one reverse
+`/usr` exchange and one ActiveReblit wrapper exchange. This entry performs no
+boot, database, non-journal namespace, finalization, or cleanup effect. Exact
+`BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
+NewState remains byte-stable at generation 16, ActivateArchived at generation
+12, and ActiveReblit at generation 14 because all RootLinks finalization gates
+remain closed. Fresh-handle reopen is not process-death evidence; RootLinks
+process death, terminal finalization, reboot, and power-loss durability remain
+unclaimed.
 
 ### Startup reconciliation and interruption campaign
 

@@ -358,11 +358,26 @@ closure remain authoritative in `PLAN.md`.
   identities, and all five canonical root-link identities remain unchanged.
   The entry performs no database or non-journal effect, cleanup, finalization,
   or boot action. A later entry leaves generation 12 byte-stable because the
-  RootLinks finalization source axis remains closed. NewState remains at
-  generation 16 and ActiveReblit at `CandidatePreserved` generation 13.
-  Fresh-handle reopen is not process-death evidence; RootLinks process death,
-  terminal finalization, boot repair, cleanup, reboot, and power-loss durability
-  remain unclaimed.
+  RootLinks finalization source axis remains closed.
+
+  Accepted commit `a05997d8`, with acceptance-gate follow-up `cfb5a70d`,
+  independently admits exact RootLinks-sourced ActiveReblit
+  `CandidatePreserved` generation 13 and carries its record-inode binding from
+  capture through one bound advance to `RollbackComplete` generation 14,
+  same-store successor validation, and independent canonical reopen. Its proof
+  covers 24 successes, 120 storage faults, 96 predecessor or successor binding
+  substitutions, and 48 fresh-handle reopens. Another 240 cases mutate all five
+  root-ABI links: exactly 120 at `CaptureSandwich` and 120 at
+  `FinalRevalidation`; the legacy fresh-namespace-capture race remains a
+  separate focused contract. The complete RootLinks endpoint performs exactly
+  one reverse `/usr` exchange and one ActiveReblit wrapper exchange. It invokes
+  no boot, database, non-journal namespace, finalization, or cleanup effect.
+  `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
+  NewState stays byte-stable at generation 16, ActivateArchived at generation
+  12, and ActiveReblit at generation 14 because every RootLinks finalization
+  gate remains closed. Fresh-handle reopen is not process-death evidence;
+  RootLinks process death, terminal finalization, reboot, and power-loss
+  durability remain unclaimed.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
