@@ -187,7 +187,10 @@ pub(in crate::client) use usr_rollback_active_reblit_finalization::{
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_activate_archived_complete_route::{
     DurableUsrRollbackActivateArchivedCompleteRouteRecord,
+    UsrRollbackActivateArchivedCompleteRouteSuccessorBindingError,
+    arm_after_usr_rollback_activate_archived_complete_route_successor_binding_check_before_reopen,
     arm_before_usr_rollback_activate_archived_complete_route_final_revalidation,
+    arm_before_usr_rollback_activate_archived_complete_route_successor_binding_revalidation,
 };
 
 #[cfg(test)]

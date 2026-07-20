@@ -202,11 +202,18 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s grep -Fq '                    let invalidation_intent = candidate_preserved.rollback_successor(None).unwrap();' "$$root_links_endpoint"; \
 	timeout 10s grep -Fq '                    assert_eq!(invalidation_intent.generation, 16, "{case}");' "$$root_links_endpoint"; \
 	timeout 10s grep -Fq '                    assert_eq!(fixture.canonical_bytes(), invalidation_bytes, "{case}");' "$$root_links_endpoint"; \
-	timeout 10s grep -Fq '                OperationKind::Archived | OperationKind::ActiveReblit => {' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq '                OperationKind::Archived => {' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq '                    assert_eq!(candidate_preserved.generation, 11, "{case}");' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq '                    let rollback_complete = candidate_preserved.rollback_successor(None).unwrap();' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq '                    assert_eq!(rollback_complete.generation, 12, "{case}");' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq '                    assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq '                OperationKind::ActiveReblit => {' "$$root_links_endpoint"; \
+	timeout 10s grep -Fq '                    assert_eq!(candidate_preserved.generation, 13, "{case}");' "$$root_links_endpoint"; \
 	timeout 10s grep -Fq 'assert_eq!(pending(&stable_entry).phase(), Phase::CandidatePreserved, "{case}");' "$$root_links_endpoint"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'Phase::FreshDbInvalidationIntent' "$$root_links_endpoint" )" = 3; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(retained_exchange_syscall_count(), 1, "{case}");' "$$root_links_endpoint" )" = 7; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");' "$$root_links_endpoint" )" = 7; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'Phase::RollbackComplete' "$$root_links_endpoint" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(retained_exchange_syscall_count(), 1, "{case}");' "$$root_links_endpoint" )" = 9; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");' "$$root_links_endpoint" )" = 9; \
 	timeout 10s grep -Fq 'for seam in RootAbiRouteSeam::ALL {' "$$evidence_races"; \
 	timeout 10s grep -Fq 'for historical in [false, true] {' "$$evidence_races"; \
 	timeout 10s grep -Fq 'for kind in OperationKind::ALL {' "$$evidence_races"; \

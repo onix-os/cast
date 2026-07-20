@@ -12,10 +12,8 @@ use crate::{
 };
 
 use super::support::{
-    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_canonical_absent,
-    assert_complete_persistence_advance, assert_pending_phase, candidate_move_count, canonical_record_from_root,
-    enter_candidate_with_fresh_handles, enter_clean_fresh_handles, enter_route, install_persistent_route_database,
-    release_route_handles, reset_candidate_observers,
+    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_complete_persistence_advance,
+    candidate_move_count, enter_route, reset_candidate_observers,
 };
 
 #[derive(Clone, Copy)]
@@ -55,51 +53,42 @@ const JOURNAL_FAULTS: [JournalFault; 5] = [
 
 #[test]
 fn startup_activate_archived_complete_route_all_five_journal_faults_reopen_exact_durable_record() {
-    for fault in JOURNAL_FAULTS {
-        let mut fixture = RouteFixture::new(
-            Epoch::Current,
-            CandidateSource::Exchanged,
-            RollbackActionOutcome::AlreadySatisfied,
-            CandidateOutcome::Applied,
-        );
-        install_persistent_route_database(&mut fixture);
-        let expected = fixture.expected_successor();
-        let database_before = fixture.database_snapshot();
-        let namespace_before = fixture.namespace_snapshot();
-        reset_candidate_observers();
-        (fault.arm)();
+    let mut cases = 0;
+    for epoch in Epoch::ALL {
+        for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
+            for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                for candidate_outcome in CandidateOutcome::ALL {
+                    for fault in JOURNAL_FAULTS {
+                        let case = (epoch, source, usr_outcome, candidate_outcome);
+                        let fixture = RouteFixture::new(epoch, source, usr_outcome, candidate_outcome);
+                        let expected = fixture.expected_successor();
+                        let database_before = fixture.database_snapshot();
+                        let namespace_before = fixture.namespace_snapshot();
+                        reset_candidate_observers();
+                        (fault.arm)();
 
-        let error = enter_route(&fixture);
+                        let error = enter_route(&fixture);
 
-        (fault.assert_consumed)();
-        assert_complete_persistence_advance(&error, fault.durable);
-        match fault.durable {
-            DurableUsrRollbackActivateArchivedCompleteRouteRecord::CandidatePreserved => {
-                assert_eq!(fixture.canonical_record(), fixture.source)
-            }
-            DurableUsrRollbackActivateArchivedCompleteRouteRecord::RollbackComplete => {
-                assert_eq!(fixture.canonical_record(), expected)
+                        (fault.assert_consumed)();
+                        assert_complete_persistence_advance(&error, fault.durable);
+                        match fault.durable {
+                            DurableUsrRollbackActivateArchivedCompleteRouteRecord::CandidatePreserved => {
+                                assert_eq!(fixture.canonical_record(), fixture.source, "{case:?}")
+                            }
+                            DurableUsrRollbackActivateArchivedCompleteRouteRecord::RollbackComplete => {
+                                assert_eq!(fixture.canonical_record(), expected, "{case:?}")
+                            }
+                        }
+                        assert_eq!(fixture.database_snapshot(), database_before, "{case:?}");
+                        assert_eq!(fixture.namespace_snapshot(), namespace_before, "{case:?}");
+                        fixture.assert_exact_database_pair();
+                        fixture.assert_exact_archived_topology();
+                        assert_eq!(candidate_move_count(), 0, "{case:?}");
+                        cases += 1;
+                    }
+                }
             }
         }
-        assert_eq!(fixture.database_snapshot(), database_before);
-        assert_eq!(fixture.namespace_snapshot(), namespace_before);
-        fixture.assert_exact_database_pair();
-        fixture.assert_exact_archived_topology();
-        assert_eq!(candidate_move_count(), 0);
-
-        let retained = release_route_handles(fixture);
-        match fault.durable {
-            DurableUsrRollbackActivateArchivedCompleteRouteRecord::CandidatePreserved => {
-                let second = enter_candidate_with_fresh_handles(retained.path());
-                assert_pending_phase(&second, crate::transition_journal::Phase::RollbackComplete);
-                assert_eq!(canonical_record_from_root(retained.path()), expected);
-            }
-            DurableUsrRollbackActivateArchivedCompleteRouteRecord::RollbackComplete => {
-                let clean = enter_clean_fresh_handles(retained.path());
-                assert_canonical_absent(retained.path());
-                drop(clean);
-            }
-        }
-        assert_eq!(candidate_move_count(), 0);
     }
+    assert_eq!(cases, 120);
 }

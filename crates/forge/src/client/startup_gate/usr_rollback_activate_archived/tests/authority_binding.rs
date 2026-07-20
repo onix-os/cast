@@ -33,7 +33,7 @@ fn startup_activate_archived_complete_route_rejects_reopened_and_cross_root_jour
     let reopened_error = authority.revalidate(&reopened).unwrap_err();
     assert_eq!(
         reopened_error.to_string(),
-        "ActivateArchived rollback-completion authority was paired with a different open journal store"
+        "ActivateArchived rollback-completion authority lost its exact journal record binding"
     );
     drop(reopened);
 
@@ -41,7 +41,7 @@ fn startup_activate_archived_complete_route_rejects_reopened_and_cross_root_jour
     let foreign_error = authority.revalidate(&foreign).unwrap_err();
     assert_eq!(
         foreign_error.to_string(),
-        "ActivateArchived rollback-completion authority was paired with a different open journal store"
+        "ActivateArchived rollback-completion authority lost its exact journal record binding"
     );
 
     assert_eq!(fixture.canonical_record(), fixture.source);

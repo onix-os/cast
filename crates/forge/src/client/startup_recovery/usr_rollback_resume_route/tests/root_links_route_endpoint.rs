@@ -152,7 +152,34 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
                 }
-                OperationKind::Archived | OperationKind::ActiveReblit => {
+                OperationKind::Archived => {
+                    assert_eq!(candidate_preserved.generation, 11, "{case}");
+                    let complete_entry = fixture.enter();
+                    let rollback_complete = candidate_preserved.rollback_successor(None).unwrap();
+                    assert_eq!(rollback_complete.phase, Phase::RollbackComplete, "{case}");
+                    assert_eq!(rollback_complete.generation, 12, "{case}");
+                    assert_eq!(pending(&complete_entry).phase(), Phase::RollbackComplete, "{case}");
+                    assert!(pending(&complete_entry).blockers().is_empty(), "{case}");
+                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
+                    assert_ne!(fixture.canonical_bytes(), preserved_bytes, "{case}");
+                    assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+                    assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
+                    assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+
+                    let complete_bytes = fixture.canonical_bytes();
+                    drop(complete_entry);
+                    let stable_entry = fixture.enter();
+                    assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");
+                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
+                    assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");
+                    assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+                    assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
+                    assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+                }
+                OperationKind::ActiveReblit => {
+                    assert_eq!(candidate_preserved.generation, 13, "{case}");
                     let stable_entry = fixture.enter();
                     assert_eq!(pending(&stable_entry).phase(), Phase::CandidatePreserved, "{case}");
                     assert_eq!(fixture.canonical_record(), candidate_preserved, "{case}");

@@ -54,6 +54,7 @@ pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAu
 pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::{
     UsrRollbackActivateArchivedCompleteRouteAdmission, UsrRollbackActivateArchivedCompleteRouteAuthority,
     UsrRollbackActivateArchivedCompleteRouteAuthorityError,
+    UsrRollbackActivateArchivedCompleteRouteRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_activate_archived_finalization_authority::{
     UsrRollbackActivateArchivedFinalizationAdmission, UsrRollbackActivateArchivedFinalizationAuthority,

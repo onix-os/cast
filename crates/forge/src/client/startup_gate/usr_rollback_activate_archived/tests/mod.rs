@@ -19,6 +19,7 @@ mod finalization_public_binding_races;
 mod finalization_restart;
 mod finalization_storage_faults;
 mod matrix;
+mod record_binding;
 mod restart;
 mod storage_faults;
 mod support;

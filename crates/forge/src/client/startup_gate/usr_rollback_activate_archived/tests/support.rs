@@ -291,7 +291,17 @@ pub(super) fn open_layout_database(installation: &Installation) -> db::layout::D
 
 fn install_live_root_abi(installation: &Installation) {
     for (name, target) in ROOT_ABI {
-        symlink(target, installation.root.join(name)).unwrap();
+        let link = installation.root.join(name);
+        match fs::symlink_metadata(&link) {
+            Ok(metadata) => {
+                assert!(metadata.file_type().is_symlink());
+                assert_eq!(fs::read_link(link).unwrap(), Path::new(target));
+            }
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                symlink(target, link).unwrap();
+            }
+            Err(source) => panic!("inspect ActivateArchived fixture root ABI link {name}: {source}"),
+        }
     }
 }
 
@@ -459,6 +469,57 @@ impl RouteFixture {
     }
 }
 
+pub(super) struct FreshRouteHandles {
+    pub(super) installation: Installation,
+    pub(super) database: db::state::Database,
+    pub(super) journal: TransitionJournalStore,
+    pub(super) record: TransitionRecord,
+}
+
+impl FreshRouteHandles {
+    pub(super) fn open(root: &Path) -> Self {
+        let installation = Installation::open(root, None).unwrap();
+        let database = open_state_database(&installation);
+        let journal = TransitionJournalStore::open_retained(installation.root_directory(), root).unwrap();
+        let record = journal
+            .load()
+            .unwrap()
+            .expect("fresh-handle reopen requires a durable ActivateArchived route record");
+        Self {
+            installation,
+            database,
+            journal,
+            record,
+        }
+    }
+
+    pub(super) fn capture<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> Result<
+        UsrRollbackActivateArchivedCompleteRouteAdmission<'reservation>,
+        UsrRollbackActivateArchivedCompleteRouteAuthorityError,
+    > {
+        capture_parts(
+            &self.installation,
+            &self.database,
+            &self.journal,
+            reservation,
+            &self.record,
+        )
+    }
+
+    pub(super) fn capture_ready<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> UsrRollbackActivateArchivedCompleteRouteAuthority<'reservation> {
+        match self.capture(reservation).unwrap() {
+            UsrRollbackActivateArchivedCompleteRouteAdmission::Ready(authority) => authority,
+            _ => panic!("fresh exact ActivateArchived CandidatePreserved handles did not admit completion routing"),
+        }
+    }
+}
+
 pub(super) fn enter_route(fixture: &RouteFixture) -> startup_gate::Error {
     enter_candidate(&fixture.fixture)
 }
@@ -588,12 +649,31 @@ pub(super) fn capture_record<'reservation>(
     UsrRollbackActivateArchivedCompleteRouteAdmission<'reservation>,
     UsrRollbackActivateArchivedCompleteRouteAuthorityError,
 > {
+    capture_parts(
+        &fixture.fixture.fixture.installation,
+        &fixture.fixture.fixture.database,
+        journal,
+        reservation,
+        record,
+    )
+}
+
+fn capture_parts<'reservation>(
+    installation: &Installation,
+    database: &db::state::Database,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> Result<
+    UsrRollbackActivateArchivedCompleteRouteAdmission<'reservation>,
+    UsrRollbackActivateArchivedCompleteRouteAuthorityError,
+> {
     let seal = UsrRollbackActivateArchivedCompleteRouteSeal::new_for_test();
     UsrRollbackActivateArchivedCompleteRouteAuthority::capture(
         &seal,
-        &fixture.fixture.fixture.installation,
+        installation,
         journal,
-        &fixture.fixture.fixture.database,
+        database,
         reservation,
         record,
     )
