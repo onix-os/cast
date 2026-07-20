@@ -295,9 +295,6 @@ closure remain authoritative in `PLAN.md`.
   canonical root links remain unchanged, and a later entry leaves the restored
   record byte-identical.
 
-  RootLinks is still intentionally excluded from candidate admission and from
-  the `UsrRestored` candidate route.
-
   Commit `7b3770b1` carries one exact non-Clone
   `TransitionJournalRecordBinding` through the common candidate-preservation
   coordinator passage. Capture occurs before namespace or database evidence
@@ -311,11 +308,21 @@ closure remain authoritative in `PLAN.md`.
   The same-byte/different-inode gate covers 44 pre-effect, 44 post-effect, and
   16 restart cases, or 104 total. It crosses current and historical records,
   both `/usr` outcomes, all common sources, and `BootSyncStarted` only for
-  ActiveReblit. RootLinks remains excluded, while the existing candidate writer
-  persistence, conditional advance, and canonical reopen are deliberately
-  unchanged. Exact binding through that writer boundary is the next blocker;
-  candidate completion, boot repair, cleanup, reboot, and power-loss durability
-  remain unclaimed.
+  ActiveReblit. Commits `fec890ad`, `c9140a88`, and `043a3c24` then complete
+  exact candidate persistence for NewState, ActivateArchived, and ActiveReblit
+  respectively. Each writer consumes the exact predecessor binding, derives
+  its sole `CandidatePreserved` successor from the private operation origin,
+  validates that successor in the same store, destroys the old lock-bearing
+  store, and requires an independently reopened canonical store to match the
+  exact successor inode and record inside an installation-revalidation
+  sandwich. Covered storage faults, same-byte/different-inode replacements,
+  and fresh restarts remain fail closed without changing the established
+  database, non-journal namespace, or one-checkpoint dispatch effects.
+
+  RootLinks is still excluded from candidate admission and the `UsrRestored`
+  candidate route. Widening the `RootLinksComplete` source through these exact
+  operation-specific writers is the next blocker. That widening, boot repair,
+  cleanup, reboot, and power-loss durability remain unclaimed.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect

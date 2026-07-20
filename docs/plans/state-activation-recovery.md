@@ -620,8 +620,7 @@ Fresh RootLinks entries now progress exactly from `RootLinksComplete` to
 `RollbackDecided`, then `ReverseExchangeIntent`, then `UsrRestored`; the reverse
 entry performs exactly one exchange and the five canonical root links retain
 their targets and identities. A following entry leaves that exact
-`UsrRestored` record byte-identical. RootLinks remains intentionally excluded
-from candidate admission and the `UsrRestored` candidate route.
+`UsrRestored` record byte-identical.
 
 Commit `7b3770b1` hardens the common candidate-preservation passage without
 widening that RootLinks gate. It captures one exact non-Clone
@@ -640,10 +639,23 @@ and historical epochs, both recorded `/usr` outcomes, and all common candidate
 sources, with `BootSyncStarted` admitted only for ActiveReblit. The pre-effect
 matrix authorizes no operation; the post-effect matrix never converts an inode
 substitution into success; and the restart matrix rejects the same bytes at a
-successor inode. Candidate writer persistence, conditional journal advance,
-and canonical reopen are intentionally unchanged. Carrying exact identity
-through that writer boundary is the next blocker. Candidate completion, boot
-repair, cleanup, reboot, and power-loss durability remain unclaimed.
+successor inode.
+
+Commits `fec890ad`, `c9140a88`, and `043a3c24` complete exact candidate-writer
+persistence for NewState, ActivateArchived, and ActiveReblit respectively.
+Each operation consumes its exact predecessor binding, derives the sole
+`CandidatePreserved` successor from its private effect origin, validates that
+successor in the same store, destroys the old lock-bearing store, and requires
+an independently reopened canonical store to match the exact successor inode
+and record inside an installation-revalidation sandwich. The operation-specific
+success, storage-fault, same-byte/different-inode, and fresh-restart matrices
+remain fail closed without changing established database or non-journal
+namespace effects and without redispatching a new checkpoint.
+
+RootLinks remains intentionally excluded from candidate admission and the
+`UsrRestored` candidate route. Widening the `RootLinksComplete` source through
+the three exact operation-specific writers is the next blocker. That widening,
+boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
 
 ### Startup reconciliation and interruption campaign
 
