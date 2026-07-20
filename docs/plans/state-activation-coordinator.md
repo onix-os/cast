@@ -336,23 +336,33 @@ closure remain authoritative in `PLAN.md`.
   fault executions, 96 predecessor/successor binding substitutions, and 48
   fresh restarts; ActiveReblit covers 32, 160, 128, and 64 respectively.
 
-  Accepted commit `e35a2183` now admits only exact RootLinks-sourced NewState
+  Accepted commit `e35a2183` admits only exact RootLinks-sourced NewState
   `CandidatePreserved` generation 15 to the existing journal-only route. One
   non-Clone record-inode binding crosses the bound advance to
   `FreshDbInvalidationIntent` generation 16, same-store successor validation,
   destruction of the old lock-bearing store, and independent canonical reopen.
   Its matrices cover 24 successes, 120 storage faults, 96 predecessor or
-  successor binding substitutions, and 48 fresh-handle reopens. Another 240
-  races mutate each of the five canonical root links at capture or final
-  revalidation. Fresh-handle reopen is not process-death evidence.
+  successor binding substitutions, 48 fresh-handle reopens, and 240 all-five-
+  root-ABI mutations across capture and final revalidation. A later NewState
+  entry leaves generation 16 byte-stable because its downstream RootLinks
+  invalidation, completion, and finalization gates remain closed.
 
-  A subsequent NewState entry leaves generation 16 byte-stable because the
-  downstream invalidation, completion, and finalization source gates still
-  exclude RootLinks. The end-to-end route retains exactly one reverse exchange;
-  this journal-only entry performs no database mutation or other non-journal
-  effect, trigger, boot, completion, or finalization. ActivateArchived and
-  ActiveReblit still stop at exact `CandidatePreserved`. RootLinks process-death coverage, boot repair,
-  cleanup, reboot, and power-loss durability remain unclaimed.
+  Accepted commit `a3fb25d3` independently admits exact RootLinks-sourced
+  ActivateArchived `CandidatePreserved` generation 11 and carries its exact
+  non-Clone record-inode binding from capture through one bound advance to
+  `RollbackComplete` generation 12, same-store successor validation, and an
+  independent canonical reopen. Its proof covers 24 successes, 120 storage
+  faults, 96 predecessor or successor binding substitutions, 48 fresh-handle
+  reopens, and 360 all-five-root-ABI mutations across capture, fresh namespace,
+  and final-revalidation seams. Database state, archived-wrapper and state-slot
+  identities, and all five canonical root-link identities remain unchanged.
+  The entry performs no database or non-journal effect, cleanup, finalization,
+  or boot action. A later entry leaves generation 12 byte-stable because the
+  RootLinks finalization source axis remains closed. NewState remains at
+  generation 16 and ActiveReblit at `CandidatePreserved` generation 13.
+  Fresh-handle reopen is not process-death evidence; RootLinks process death,
+  terminal finalization, boot repair, cleanup, reboot, and power-loss durability
+  remain unclaimed.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -479,7 +489,9 @@ closure remain authoritative in `PLAN.md`.
   runtime witness, not a reboot simulation, and no power-loss claim is made.
   Phase 11 and its broad interruption campaign therefore remain open.
   Commit `c8c5ea41` production-wires ActivateArchived's bounded completion
-  suffix. Commit `32bf8589` adds its separate deterministic terminal deletion
+  suffix. Commit `a3fb25d3` widens only that exact completion entry to the
+  RootLinks source and deliberately leaves its terminal finalizer closed.
+  Commit `32bf8589` adds its separate deterministic terminal deletion
   and same-lock clean handoff. Commit `c6362aae` adds its exact 12-case
   real-process terminal `SIGKILL` matrix across both epochs, both rollback
   sources, and the three deletion boundaries. The newer bounded boot
