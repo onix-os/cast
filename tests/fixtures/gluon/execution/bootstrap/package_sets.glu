@@ -19,7 +19,9 @@ let tooling = import! "./tooling_package_sets.glu"
     hooks_patch = tooling.hooks_patch,
     meson = tooling.meson,
     multiple_sources = build_systems.multiple_sources,
+    pgo_workload = specialized.pgo_workload,
     python_module = specialized.python_module,
+    relation_policy = specialized.relation_policy,
     system_integration_assets = system_integration,
     userspace_profile = specialized.userspace_profile,
 }

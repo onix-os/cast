@@ -64,6 +64,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
             "cast-hooks-fixture-1.0.0",
             "cast-meson-fixture-1.0.0",
             "cast-multiple-sources-fixture-1.0.0",
+            "cast-pgo-workload-fixture-1.0.0",
             "cast-plugin-output-fixture-1.0.0",
             "cast-post-install-smoke-test-fixture-1.0.0",
             "cast-python-module-fixture-1.0.0",
@@ -153,6 +154,15 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
                 &recipe.declaration,
                 &source_trees.join("cast-python-module-fixture-1.0.0"),
             );
+        }
+        if name == "pgo-workload" {
+            assert_pgo_workload_fixture_contract(
+                &recipe.declaration,
+                &source_trees.join("cast-pgo-workload-fixture-1.0.0"),
+            );
+        }
+        if name == "relation-policy" {
+            assert_relation_policy_fixture_contract(&recipe.declaration);
         }
         if name == "meson" {
             assert_meson_dependency_role_fixture_contract(
@@ -507,6 +517,14 @@ install -Dm644 build/cast-plugin-output.so \
             assert_eq!(
                 dependency_names(&output.runtime_inputs),
                 ["bash", "uutils-coreutils", "findutils", "ca-certificates", "xz"]
+            );
+            continue;
+        }
+        if name == "relation-policy" {
+            source_less_fixtures += 1;
+            assert!(
+                !lock_path.exists(),
+                "relation-policy: a source-less fixture must not gain a source lock"
             );
             continue;
         }
@@ -875,6 +893,12 @@ install -Dm644 build/cast-plugin-output.so \
                 &published,
             );
         }
+        if name == "pgo-workload" {
+            assert_pgo_workload_archive_matches_tracked_sources(
+                &source_trees.join("cast-pgo-workload-fixture-1.0.0"),
+                &published,
+            );
+        }
         if name == "system-integration-assets" {
             assert_system_integration_assets_archive_matches_tracked_sources(
                 &source_trees.join("cast-system-integration-assets-fixture-1.0.0"),
@@ -900,12 +924,12 @@ install -Dm644 build/cast-plugin-output.so \
         .map(|entry| entry.file_name().into_string().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(present_git_bundles, admitted_git_bundles, "orphaned execution Git bundle");
-    assert_eq!(locked_source_count, 27, "locked execution source inventory drift");
+    assert_eq!(locked_source_count, 28, "locked execution source inventory drift");
     assert_eq!(
         archive_format_counts,
-        [18, 1, 2, 2],
-        "execution fixtures must cover eighteen plain tar streams, two XZ, one gzip, and two Zstandard"
+        [19, 1, 2, 2],
+        "execution fixtures must cover nineteen plain tar streams, two XZ, one gzip, and two Zstandard"
     );
-    assert_eq!(sourceful_fixtures, 23, "execution source inventory drift");
-    assert_eq!(source_less_fixtures, 3, "source-less execution fixture inventory drift");
+    assert_eq!(sourceful_fixtures, 24, "execution source inventory drift");
+    assert_eq!(source_less_fixtures, 4, "source-less execution fixture inventory drift");
 }

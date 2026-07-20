@@ -23,7 +23,9 @@ let base = b.mk_package (b.meta {
     // corpus data without gaining network access.
     hooks = b.hooks {
         pre_workload = [
-            b.step.shell r#""${CAST_INSTALL_ROOT}${CAST_BINDIR}/vector-search" --train "training/corpus.txt""#,
+            b.step.run_built
+                (b.program.built "aerynos-builddir/vector-search")
+                ["--train", "training/corpus.txt"],
         ],
         .. b.defaults.hooks
     },

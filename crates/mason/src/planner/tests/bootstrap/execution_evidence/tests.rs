@@ -89,15 +89,15 @@ fn proof_v2_serializes_the_exact_complete_matrix_and_totals_within_its_bound() {
     assert_eq!(value["schema"], "cast.fixtures-ci-proof.v2");
     assert_eq!(value["git_commit"], TEST_COMMIT);
     assert_eq!(value["bundle_ledger_schema"], "cast.fixtures-ci.bundle.v1");
-    assert_eq!(value["totals"]["fixture_count"], 26);
-    assert_eq!(value["totals"]["execution_count"], 52);
-    assert_eq!(value["totals"]["bundle_validation_count"], 78);
-    assert_eq!(value["totals"]["stone_count"], 132);
-    assert_eq!(value["totals"]["manifest_count"], 52);
-    assert_eq!(value["totals"]["artifact_count"], 184);
+    assert_eq!(value["totals"]["fixture_count"], 28);
+    assert_eq!(value["totals"]["execution_count"], 56);
+    assert_eq!(value["totals"]["bundle_validation_count"], 84);
+    assert_eq!(value["totals"]["stone_count"], 134);
+    assert_eq!(value["totals"]["manifest_count"], 56);
+    assert_eq!(value["totals"]["artifact_count"], 190);
     assert!(value["totals"]["artifact_bytes"].as_u64().unwrap() > 0);
     let fixtures = value["fixtures"].as_array().unwrap();
-    assert_eq!(fixtures.len(), 26);
+    assert_eq!(fixtures.len(), 28);
     assert_eq!(fixtures[0]["name"], "autotools");
     assert_eq!(fixtures[8]["name"], "desktop-integration");
     assert_eq!(fixtures[9]["name"], "external-test-vectors");
@@ -108,10 +108,16 @@ fn proof_v2_serializes_the_exact_complete_matrix_and_totals_within_its_bound() {
     assert_eq!(fixtures[15]["name"], "go-module");
     assert_eq!(fixtures[16]["name"], "header-only-library");
     assert_eq!(fixtures[19]["name"], "multiple-sources");
-    assert_eq!(fixtures[21]["name"], "post-install-smoke-test");
-    assert_eq!(fixtures[22]["name"], "python-module");
-    assert_eq!(fixtures[24]["name"], "system-integration-assets");
-    assert_eq!(fixtures[25]["name"], "userspace-profile");
+    assert_eq!(fixtures[20]["name"], "pgo-workload");
+    assert_eq!(fixtures[20]["artifacts"]["stone_count"], 1);
+    assert_eq!(fixtures[20]["artifacts"]["artifact_count"], 3);
+    assert_eq!(fixtures[22]["name"], "post-install-smoke-test");
+    assert_eq!(fixtures[23]["name"], "python-module");
+    assert_eq!(fixtures[24]["name"], "relation-policy");
+    assert_eq!(fixtures[24]["artifacts"]["stone_count"], 1);
+    assert_eq!(fixtures[24]["artifacts"]["artifact_count"], 3);
+    assert_eq!(fixtures[26]["name"], "system-integration-assets");
+    assert_eq!(fixtures[27]["name"], "userspace-profile");
     for fixture in fixtures {
         assert_eq!(fixture["plans"]["first"], fixture["plans"]["repeat"]);
         assert_eq!(

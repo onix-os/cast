@@ -2,9 +2,9 @@ const GO_COMPILER_PACKAGE_ID: &str =
     "210231d9f3f937bf6190d7900ef197268dcc0b37b048d186661a84b5adf26c43";
 
 fn assert_go_module_bootstrap_contract(closure: &BootstrapClosure, indexed: &BTreeMap<String, Meta>) {
-    assert_eq!(closure.packages.sha256.len(), 175, "bootstrap package count drift");
+    assert_eq!(closure.packages.sha256.len(), 179, "bootstrap package count drift");
     assert_eq!(
-        closure.packages.total_download_bytes, 385_535_265,
+        closure.packages.total_download_bytes, 388_713_448,
         "bootstrap download byte total drift"
     );
     let fixture = closure

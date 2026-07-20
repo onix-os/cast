@@ -424,4 +424,6 @@ include!("bundle/font_family.rs");
 include!("bundle/gettext_localization.rs");
 include!("bundle/go_module.rs");
 include!("bundle/python_module.rs");
+include!("bundle/pgo_workload.rs");
+include!("bundle/relation_policy.rs");
 include!("bundle/system_integration_assets.rs");

@@ -39,9 +39,11 @@ pub(super) fn assert_fixture_bundle(
                 | "hooks-patch"
                 | "meson"
                 | "multiple-sources"
+                | "pgo-workload"
                 | "plugin-output"
                 | "post-install-smoke-test"
                 | "python-module"
+                | "relation-policy"
                 | "split"
                 | "system-integration-assets"
                 | "userspace-profile"
@@ -84,7 +86,11 @@ pub(super) fn assert_fixture_bundle(
             ["MPL-2.0"]
         }
     );
-    assert!(planned.plan.analysis.debug, "{name}: fixtures exercise debug splitting");
+    assert_eq!(
+        planned.plan.analysis.debug,
+        name != "pgo-workload",
+        "{name}: debug policy drifted"
+    );
     assert!(
         planned.plan.analysis.strip,
         "{name}: fixtures exercise deterministic stripping"
@@ -120,7 +126,9 @@ pub(super) fn assert_fixture_bundle(
             | "font-family"
             | "gettext-localization"
             | "go-module"
+            | "pgo-workload"
             | "python-module"
+            | "relation-policy"
             | "system-integration-assets"
             | "userspace-profile"
     ) {
@@ -179,6 +187,10 @@ pub(super) fn assert_fixture_bundle(
         assert_go_module_fixture(planned, &packages);
     } else if name == "python-module" {
         assert_python_module_fixture(planned, &packages);
+    } else if name == "pgo-workload" {
+        assert_pgo_workload_fixture(planned, &packages);
+    } else if name == "relation-policy" {
+        assert_relation_policy_fixture(planned, &packages);
     } else if name == "desktop-integration" {
         assert_desktop_integration_fixture(planned, &packages);
     } else if name == "external-test-vectors" {

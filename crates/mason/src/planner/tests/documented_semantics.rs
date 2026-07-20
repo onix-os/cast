@@ -463,11 +463,11 @@ fn assert_pgo_workload_semantics(declaration: &PackageSpec, plan: &DerivationPla
             .collect::<Vec<_>>(),
         ["harden", "lto", "optimize"]
     );
-    let [StepSpec::Shell { script, .. }] = declaration.hooks.pre_workload.as_slice() else {
-        panic!("PGO workload must remain one explicit shell hook");
+    let [StepSpec::RunBuilt { program, args }] = declaration.hooks.pre_workload.as_slice() else {
+        panic!("PGO workload must remain one structural build-tree execution");
     };
-    assert!(script.contains("${CAST_INSTALL_ROOT}${CAST_BINDIR}/vector-search"));
-    assert!(script.contains("training/corpus.txt"));
+    assert_eq!(program.path, "aerynos-builddir/vector-search");
+    assert_eq!(args.as_slice(), ["--train", "training/corpus.txt"]);
     assert_eq!(plan.execution.network, NetworkMode::Disabled);
     assert_x86_64_platform(plan);
 }

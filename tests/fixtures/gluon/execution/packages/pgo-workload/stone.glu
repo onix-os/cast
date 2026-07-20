@@ -1,0 +1,91 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+    ],
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "clang"],
+            script = r#"set -eu
+case "${PGO_STAGE}" in
+    ONE)
+        test ! -e build/stage1-only.marker
+        : > build/stage1-only.marker
+        ;;
+    USE)
+        test ! -e build/stage1-only.marker
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+"${CC}" ${CFLAGS} -std=c11 -Wall -Wextra -Werror main.c ${LDFLAGS} -o build/cast-pgo-workload-fixture"#,
+        },
+    ],
+    workload = b.phase [
+        b.step.run_built
+            (b.program.built "build/cast-pgo-workload-fixture")
+            ["--train", "profile-guided-build-2026"],
+    ],
+    check = b.phase [
+        b.step.run_built
+            (b.program.built "build/cast-pgo-workload-fixture")
+            ["--self-test"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm755 build/cast-pgo-workload-fixture "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-pgo-workload-fixture""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Offline LLVM profile-guided optimization fixture",
+    description = b.optional.set "A two-job custom build trained structurally before its isolated profile-use rebuild.",
+    paths = [b.path.exe "/usr/bin/cast-pgo-workload-fixture"],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-pgo-workload-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-pgo-workload-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.binary "clang",
+        b.dep.binary "dash",
+        b.dep.binary "install",
+    ],
+    outputs = [root],
+    options = b.options {
+        toolchain = b.toolchain.llvm,
+        cspgo = b.boolean.false,
+        samplepgo = b.boolean.false,
+        debug = b.boolean.false,
+        networking = b.boolean.false,
+        .. b.defaults.options
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-pgo-workload-fixture-1.0.0.tar",
+            hash = "84b8b4011b5cff63cb53cb1180cc4550d3e762233c121dfa8490d55fe4035f34",
+            rename = b.optional.set "cast-pgo-workload-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-pgo-workload-fixture",
+        },
+    ],
+    architectures = ["x86_64"],
+    mold = b.boolean.false,
+    .. base
+}

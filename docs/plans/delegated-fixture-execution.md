@@ -6,12 +6,13 @@ remain in that file.
 
 ## Matrix inventory
 
-By 2026-07-19, the matrix contains twenty-six fixtures spanning
+By 2026-07-20, the matrix contains twenty-eight fixtures spanning
 standard/custom builders, mixed archive/Git/raw sources, generated payloads,
 an empty userspace profile, plugin/split outputs, localization,
 system/desktop integration, fonts, a vendored Go module, an offline PEP 517
 Python wheel, and a CMake/CTest executable checked against an independently
-locked raw vector corpus.
+locked raw vector corpus. The two newest contracts add a genuine two-stage PGO
+workload and a source-less typed-relation policy fixture.
 
 Commit `4c59473d` adds a self-authored Regular/Bold family as a deterministic
 30,720-byte USTAR with SHA-256
@@ -36,7 +37,7 @@ an explicit non-manifest `dbginfo` output, and forbids the corpus from both
 emitted Stones. Its
 disposable supplemental host proof does not replace live delegated execution.
 
-All fixtures union to an exact 175-package, 385,535,265-byte bootstrap pool.
+All fixtures union to an exact 179-package, 388,713,448-byte bootstrap pool.
 Offline and hostile-host contracts pin bytes, modes, providers, behavior,
 metadata, and syntax without claiming host deployment, a transaction, or
 rollback.
@@ -126,7 +127,7 @@ status caps are respectively 18,665 and 22,215 seconds.
 An explicitly shorter outer deadline remains valid for bounded fault-injection
 and cleanup tests. It deliberately may expire before the requested inner
 runtime and therefore cannot produce accepted complete-campaign evidence.
-The full twenty-six-fixture campaign and its v2 receipt still require a clean,
+The full twenty-eight-fixture campaign and its v2 receipt still require a clean,
 non-skipped rerun from an accepted commit on a capacity-proven persistent
 guest; that rerun has not yet occurred.
 

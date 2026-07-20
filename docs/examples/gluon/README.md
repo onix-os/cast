@@ -293,7 +293,7 @@ contract pins the console script, module, metadata, license, entry points, and
 RECORD. The hostile-host lane rebuilds two byte-identical wheels, executes the
 extracted wheel module, and proves a missing module fails; it remains supplemental
 and does not claim a delegated Stone build.
-The other three fixtures are deliberately source-less.
+The other four fixtures are deliberately source-less.
 `generated-config` authors deterministic configuration bytes
 and installs them with only its frozen `bash` and `install` providers. It has no
 source lock, archive, network access, host shim, or mounted recipe input.
@@ -301,18 +301,24 @@ source lock, archive, network access, host shim, or mounted recipe input.
 frozen Bash provider, then installs the exact script with an explicit runtime
 interpreter relation. It likewise has no source lock, archive, network access,
 host shim, or mounted recipe input.
+`relation-policy` generates a real configuration payload while exercising all
+four typed dependency roles: `ldconfig` as a build-only system binary, the
+32-bit `zlib` pkg-config relation as a build input, and the x86_64 dynamic
+loader plus `libz.so.1` as runtime relations. Its exact pinned providers prove
+that relation kind and role remain distinct through planning, packaging, Stone
+decoding, and reproduction without host discovery.
 `userspace-profile` goes further: it has no build tools and all five authored
 phases are empty. Its one empty `out` package carries only the exact runtime
 package relations `bash`, `uutils-coreutils`, `findutils`, `ca-certificates`,
 and `xz`. Run the proof lanes from the repository root:
 
-The checked-in source matrix has twenty-three deterministic tar streams: eighteen
+The checked-in source matrix has twenty-four deterministic tar streams: nineteen
 plain USTAR archives, vendored Cargo as deterministic gzip, two deterministic
 XZ archives, and the generated-daemon and Go fixtures as deterministic
 Zstandard. It
 also contains three independently locked raw files and one deterministic Git
 bundle.
-`make fixture-sources` rebuilds all twenty-six archive/raw artifacts plus that one
+`make fixture-sources` rebuilds all twenty-seven archive/raw artifacts plus that one
 bundle; the offline lane rejects any format, filename, order, unpack policy,
 commit, normalized Git tree, or digest drift. The source generator fixes Git's
 identity, timestamps, refs, and configuration before producing the bundle.
@@ -330,7 +336,9 @@ make bootstrap-fixtures FIXTURE=font-family
 make bootstrap-fixtures FIXTURE=gettext-localization
 make bootstrap-fixtures FIXTURE=go-module
 make bootstrap-fixtures FIXTURE=multiple-sources
+make bootstrap-fixtures FIXTURE=pgo-workload
 make bootstrap-fixtures FIXTURE=python-module
+make bootstrap-fixtures FIXTURE=relation-policy
 make bootstrap-fixtures FIXTURE=system-integration-assets
 make delegated-execution-fixtures FIXTURE=cmake
 make external-test-vectors-fixture-test
@@ -343,7 +351,7 @@ make fixtures-ci
 `make execution-fixtures` is the offline lane: it byte-checks the deterministic
 source artifacts, validates the pinned Stone index and closure declaration, and
 proves that each recipe resolves to its own exact, sorted package-ID closure
-and that their union is the exact 175-package, 385,535,265-byte aggregate
+and that their union is the exact 179-package, 388,713,448-byte aggregate
 bootstrap closure. `make
 bootstrap-fixtures` fetches and verifies any missing pinned Stone files,
 materializes the production-format root mirror, then attempts to build,
@@ -352,8 +360,8 @@ one of `autotools`, `autotools-options`, `cargo`, `cargo-features`,
 `cargo-vendored`, `cmake`, `custom`, `daemon-generated`, `desktop-integration`,
 `external-test-vectors`, `factory-override`, `font-family`,
 `generated-config`, `generated-shell`, `gettext-localization`, `go-module`, `header-only-library`, `hooks-patch`,
-`meson`, `multiple-sources`, `plugin-output`,
-`post-install-smoke-test`, `python-module`, `split`, `system-integration-assets`, or
+`meson`, `multiple-sources`, `pgo-workload`, `plugin-output`,
+`post-install-smoke-test`, `python-module`, `relation-policy`, `split`, `system-integration-assets`, or
 `userspace-profile`;
 `FIXTURE=all` is the default, and any other value is rejected before execution.
 The selector also
@@ -362,7 +370,7 @@ been prepared. Execution may skip when the host
 cannot create the required namespaces; pass `REQUIRE_EXECUTION=1` to reject
 that skip. A skipped developer run is not evidence that contentful execution or
 bundle reproduction succeeded. `make fixtures-ci` ignores developer fixture
-selection, runs all twenty-six, and always requires execution.
+selection, runs all twenty-eight, and always requires execution.
 
 `make delegated-execution-preflight` is the required-only, pre-download host
 gate. It builds the harness-free probe but neither fetches nor reads the Stone
@@ -371,7 +379,7 @@ ID-map, credential, mount, and pinned-bind boundary used by real execution.
 CI runs it before restoring the bootstrap cache, so an incapable host fails
 quickly rather than downloading packages it cannot execute.
 
-Every selected fixture, including all three source-less fixtures, goes through
+Every selected fixture, including all four source-less fixtures, goes through
 the same real execution, Stone package decoding, manifest decoding, and locked
 reproduction path. The generated configuration golden freezes its exact
 `/usr/share/cast/generated-config.conf` bytes, `0644` mode, package metadata,
@@ -396,8 +404,8 @@ content bytes, and exactly the five frozen runtime relations. An
 optional-capability `SKIP` remains explicitly non-success.
 
 The required all-fixture lane publishes one bounded v2 JSON receipt only after
-all twenty-six fixtures complete both executions. It records exactly 52
-executions, 78 bundle validations, 132 Stones, 52 manifests, and 184 artifacts,
+all twenty-eight fixtures complete both executions. It records exactly 56
+executions, 84 bundle validations, 134 Stones, 56 manifests, and 190 artifacts,
 plus repeated plan and lock identities, actual publication outcomes, the
 sorted Stone/manifest inventory, and three matching bundle-ledger observations
 per fixture. Mason derives those ledgers from the authenticated raw bundle

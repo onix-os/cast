@@ -71,7 +71,9 @@ def expected_stone_count($fixture):
   elif $fixture == "font-family" then 1
   elif $fixture == "gettext-localization" then 1
   elif $fixture == "go-module" then 1
+  elif $fixture == "pgo-workload" then 1
   elif $fixture == "python-module" then 1
+  elif $fixture == "relation-policy" then 1
   elif $fixture == "plugin-output" then 3
   elif $fixture == "split" then 5
   elif $fixture == "system-integration-assets" then 1
@@ -176,9 +178,11 @@ def fixture_names:
     "hooks-patch",
     "meson",
     "multiple-sources",
+    "pgo-workload",
     "plugin-output",
     "post-install-smoke-test",
     "python-module",
+    "relation-policy",
     "split",
     "system-integration-assets",
     "userspace-profile"
@@ -215,12 +219,12 @@ and (
       "artifact_count",
       "artifact_bytes"
     ]))
-  and $proof.totals.fixture_count == 26
-  and $proof.totals.execution_count == 52
-  and $proof.totals.bundle_validation_count == 78
-  and $proof.totals.stone_count == 132
-  and $proof.totals.manifest_count == 52
-  and $proof.totals.artifact_count == 184
+  and $proof.totals.fixture_count == 28
+  and $proof.totals.execution_count == 56
+  and $proof.totals.bundle_validation_count == 84
+  and $proof.totals.stone_count == 134
+  and $proof.totals.manifest_count == 56
+  and $proof.totals.artifact_count == 190
   and ($proof.totals.artifact_bytes | bounded_positive_integer(4294967296))
   and ($proof.fixtures | type == "array")
   and ($proof.fixtures | map(.name)) == $fixture_names

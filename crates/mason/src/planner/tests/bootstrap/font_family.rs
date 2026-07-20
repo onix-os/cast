@@ -8,9 +8,9 @@ const LIBPNG_PACKAGE_ID: &str =
     "81a0304440fa51734e83e3b4c24cde4a2c0bfbb58290ccc0c3c5c408788929b5";
 
 fn assert_font_family_bootstrap_contract(closure: &BootstrapClosure, indexed: &BTreeMap<String, Meta>) {
-    assert_eq!(closure.packages.sha256.len(), 175, "bootstrap package count drift");
+    assert_eq!(closure.packages.sha256.len(), 179, "bootstrap package count drift");
     assert_eq!(
-        closure.packages.total_download_bytes, 385_535_265,
+        closure.packages.total_download_bytes, 388_713_448,
         "bootstrap download byte total drift"
     );
     let fixture = closure

@@ -43,6 +43,8 @@ include!("bootstrap/font_family.rs");
 include!("bootstrap/gettext_localization.rs");
 include!("bootstrap/go_module.rs");
 include!("bootstrap/meson_dependency_roles.rs");
+include!("bootstrap/pgo_workload.rs");
+include!("bootstrap/relation_policy.rs");
 include!("bootstrap/python_module.rs");
 include!("bootstrap/system_integration_assets.rs");
 
@@ -527,6 +529,8 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
     assert_gettext_localization_bootstrap_contract(&closure, &indexed);
     assert_go_module_bootstrap_contract(&closure, &indexed);
     assert_meson_dependency_role_bootstrap_contract(&closure, &indexed);
+    assert_pgo_workload_bootstrap_contract(&closure, &indexed);
+    assert_relation_policy_bootstrap_contract(&closure, &indexed);
     assert_python_module_bootstrap_contract(&closure, &indexed);
     assert_system_integration_assets_bootstrap_contract(&closure, &indexed);
 
@@ -768,7 +772,10 @@ cast.profiles [
         // to the deliberately unreachable HTTPS fixture URL.
         let storage_dir = planned.runtime.paths.upstreams().host;
         let expected_sources = match planned.plan.package.name.as_str() {
-            "cast-generated-config-fixture" | "cast-generated-shell-fixture" | "cast-userspace-profile-fixture" => 0,
+            "cast-generated-config-fixture"
+            | "cast-generated-shell-fixture"
+            | "cast-relation-policy-fixture"
+            | "cast-userspace-profile-fixture" => 0,
             "cast-external-test-vectors-fixture" | "cast-hooks-fixture" => 2,
             "cast-multiple-sources-fixture" => 3,
             _ => 1,

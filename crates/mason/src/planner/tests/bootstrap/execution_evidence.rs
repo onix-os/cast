@@ -17,11 +17,11 @@ mod ledger;
 #[path = "execution_evidence/proof.rs"]
 mod proof;
 
-const EXPECTED_EXECUTIONS: u64 = 52;
-const EXPECTED_BUNDLE_VALIDATIONS: u64 = 78;
-const EXPECTED_STONES: u64 = 132;
-const EXPECTED_MANIFESTS: u64 = 52;
-const EXPECTED_ARTIFACTS: u64 = 184;
+const EXPECTED_EXECUTIONS: u64 = 56;
+const EXPECTED_BUNDLE_VALIDATIONS: u64 = 84;
+const EXPECTED_STONES: u64 = 134;
+const EXPECTED_MANIFESTS: u64 = 56;
+const EXPECTED_ARTIFACTS: u64 = 190;
 const MAX_CANONICAL_PLAN_BYTES: usize = 16 * 1024 * 1024;
 
 /// Opaque result of the contentful execution path.

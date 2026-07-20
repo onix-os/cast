@@ -70,15 +70,17 @@ let repository = {
         { name = "hooks-patch", package_ids = package_sets.hooks_patch },
         { name = "meson", package_ids = package_sets.meson },
         { name = "multiple-sources", package_ids = package_sets.multiple_sources },
+        { name = "pgo-workload", package_ids = package_sets.pgo_workload },
         { name = "plugin-output", package_ids = package_sets.custom },
         { name = "post-install-smoke-test", package_ids = package_sets.cmake },
         { name = "python-module", package_ids = package_sets.python_module },
+        { name = "relation-policy", package_ids = package_sets.relation_policy },
         { name = "split", package_ids = package_sets.cmake },
         { name = "system-integration-assets", package_ids = package_sets.system_integration_assets },
         { name = "userspace-profile", package_ids = package_sets.userspace_profile },
     ],
     packages = {
-        total_download_bytes = 385535265,
+        total_download_bytes = 388713448,
         sha256 = package_sets.all,
     },
 }

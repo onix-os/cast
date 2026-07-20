@@ -241,6 +241,24 @@ let generated_config_packages = [
     "f9ca3142d2264f46d387e0af1136ec5f85d917ee1f0c7fb5c8ba08861d77dfa5"
 ]
 
+let relation_policy_packages =
+    arrays.append (arrays.slice generated_config_packages 0 6)
+        (arrays.append ["0d5c833db4a2874dd09368215ed24cd45e3f9850102720926dbd8f10e7ea9a15"]
+        (arrays.append (arrays.slice generated_config_packages 6 31)
+        (arrays.append ["597a9aee2c90fdb7c8eeb388b5b069906988e3ca2956e5e811d652206e51f6f5"]
+        (arrays.append (arrays.slice generated_config_packages 31 39)
+        (arrays.append ["81f83043804d36dda99e50754801bd9dad01e264965f088481e26d3bc5986338"]
+        (arrays.append (arrays.slice generated_config_packages 39 47)
+        (arrays.append [
+            "b2e2a7432b1cf38d517ad07bf72d90db6c20078ee0323f2a163553922ad6b02a",
+            "b78129859b6ddac37c881ab977a36078397cf3613e8e76fe03e5a33dc3a318d6",
+        ] (arrays.slice generated_config_packages 47 59))))))))
+
+let pgo_workload_packages =
+    arrays.append (arrays.slice custom_packages 0 15)
+        (arrays.append ["20a6cfc76001152c45a7f77f1ee50bfdb816d0b67408cd6857f023022f37f0d9"]
+            (arrays.slice custom_packages 15 59))
+
 let gettext_localization_packages =
     arrays.append (arrays.slice generated_config_packages 0 19)
         (arrays.append ["2fd48ed7722fb7ec4da4fcc6ec9e8709915a6b5b17f5c58499a32d3303e76891"]
@@ -422,5 +440,7 @@ let python_module_packages = [
     gettext_localization = gettext_localization_packages,
     go_module = go_module_packages,
     python_module = python_module_packages,
+    pgo_workload = pgo_workload_packages,
+    relation_policy = relation_policy_packages,
     userspace_profile = userspace_profile_packages,
 }

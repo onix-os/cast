@@ -138,7 +138,7 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     )
     .unwrap();
 }
-const EXECUTION_FIXTURES: [&str; 26] = [
+const EXECUTION_FIXTURES: [&str; 28] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -159,15 +159,17 @@ const EXECUTION_FIXTURES: [&str; 26] = [
     "hooks-patch",
     "meson",
     "multiple-sources",
+    "pgo-workload",
     "plugin-output",
     "post-install-smoke-test",
     "python-module",
+    "relation-policy",
     "split",
     "system-integration-assets",
     "userspace-profile",
 ];
 
-const EXECUTION_PACKAGE_DIRECTORIES: [&str; 25] = [
+const EXECUTION_PACKAGE_DIRECTORIES: [&str; 27] = [
     "autotools",
     "autotools-options",
     "cargo",
@@ -188,9 +190,11 @@ const EXECUTION_PACKAGE_DIRECTORIES: [&str; 25] = [
     "hooks-patch",
     "meson",
     "multiple-sources",
+    "pgo-workload",
     "plugin-output",
     "post-install-smoke-test",
     "python-module",
+    "relation-policy",
     "split",
     "system-integration-assets",
 ];
@@ -246,7 +250,9 @@ include!("tests/execution_header_only_library.rs");
 include!("tests/execution_meson_dependency_roles.rs");
 include!("tests/execution_multiple_sources.rs");
 include!("tests/execution_post_install_smoke.rs");
+include!("tests/execution_pgo_workload.rs");
 include!("tests/execution_python_module.rs");
+include!("tests/execution_relation_policy.rs");
 include!("tests/execution_system_integration_assets.rs");
 include!("tests/frozen_runtime.rs");
 include!("tests/package_examples.rs");

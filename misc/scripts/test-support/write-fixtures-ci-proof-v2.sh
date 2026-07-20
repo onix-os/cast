@@ -81,9 +81,11 @@ set -- \
     hooks-patch \
     meson \
     multiple-sources \
+    pgo-workload \
     plugin-output \
     post-install-smoke-test \
     python-module \
+    relation-policy \
     split \
     system-integration-assets \
     userspace-profile
@@ -96,7 +98,7 @@ stone_count_for_fixture() {
         external-test-vectors|header-only-library) stone_count=2 ;;
         daemon-generated|plugin-output) stone_count=3 ;;
         split) stone_count=5 ;;
-        desktop-integration|font-family|generated-config|generated-shell|gettext-localization|go-module|python-module|system-integration-assets|userspace-profile) stone_count=1 ;;
+        desktop-integration|font-family|generated-config|generated-shell|gettext-localization|go-module|pgo-workload|python-module|relation-policy|system-integration-assets|userspace-profile) stone_count=1 ;;
         *) printf 'unknown test fixture proof fixture: %s\n' "$1" >&2; exit 1 ;;
     esac
 }
@@ -138,12 +140,12 @@ cat >>"$output" <<EOF_HEADER
   "required_execution": true,
   "bundle_ledger_schema": "cast.fixtures-ci.bundle.v1",
   "totals": {
-    "fixture_count": 26,
-    "execution_count": 52,
-    "bundle_validation_count": 78,
-    "stone_count": 132,
-    "manifest_count": 52,
-    "artifact_count": 184,
+    "fixture_count": 28,
+    "execution_count": 56,
+    "bundle_validation_count": 84,
+    "stone_count": 134,
+    "manifest_count": 56,
+    "artifact_count": 190,
     "artifact_bytes": $artifact_bytes
   },
   "fixtures": [
@@ -229,7 +231,7 @@ EOF_FIXTURE
       ]
     }
 EOF_ENTRIES
-    if [ "$fixture_number" -lt 26 ]; then
+    if [ "$fixture_number" -lt 28 ]; then
         printf '    ,\n' >>"$output"
     fi
     fixture_number=$((fixture_number + 1))

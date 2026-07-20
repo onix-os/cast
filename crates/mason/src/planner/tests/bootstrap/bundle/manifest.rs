@@ -68,6 +68,18 @@ fn assert_manifests(
             "meson: exact role-separated manifest BuildDepends contract drifted"
         );
     }
+    if fixture == "relation-policy" {
+        assert_eq!(
+            expected_build_dependencies,
+            BTreeSet::from([
+                "binary(bash)".to_owned(),
+                "binary(install)".to_owned(),
+                "sysbinary(ldconfig)".to_owned(),
+                "pkgconfig32(zlib)".to_owned(),
+            ]),
+            "relation-policy: exact typed-role BuildDepends contract drifted"
+        );
+    }
 
     let binary_name = format!("manifest.{}.bin", planned.plan.package.architecture);
     let binary = &artefacts[&binary_name];

@@ -56,14 +56,14 @@ for entry in "$package_root"/*; do
     }
     fixture=$(timeout 10s basename -- "$entry")
     case "$fixture" in
-        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|external-test-vectors|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|plugin-output|post-install-smoke-test|python-module|split|system-integration-assets) ;;
+        autotools|autotools-options|cargo|cargo-features|cargo-vendored|cmake|custom|daemon-generated|desktop-integration|external-test-vectors|factory-override|font-family|generated-config|generated-shell|gettext-localization|go-module|header-only-library|hooks-patch|meson|multiple-sources|pgo-workload|plugin-output|post-install-smoke-test|python-module|relation-policy|split|system-integration-assets) ;;
         *) printf 'unexpected execution fixture package: %s\n' "$entry" >&2; exit 1 ;;
     esac
     test -f "$entry/stone.glu" && test ! -L "$entry/stone.glu" || {
         printf 'execution fixture recipe is not a regular authored file: %s\n' "$entry/stone.glu" >&2
         exit 1
     }
-    if [ "$fixture" = generated-config ] || [ "$fixture" = generated-shell ]; then
+    if [ "$fixture" = generated-config ] || [ "$fixture" = generated-shell ] || [ "$fixture" = relation-policy ]; then
         test ! -e "$entry/sources.lock.glu" && test ! -L "$entry/sources.lock.glu" || {
             printf 'source-less execution fixture must not have a source lock: %s\n' "$entry/sources.lock.glu" >&2
             exit 1
@@ -78,12 +78,12 @@ for entry in "$package_root"/*; do
     package_count=$((package_count + 1))
 done
 
-test "$package_count" -eq 25 || {
-    printf 'expected exactly twenty-five source-matrix package directories, found %s\n' "$package_count" >&2
+test "$package_count" -eq 27 || {
+    printf 'expected exactly twenty-seven source-matrix package directories, found %s\n' "$package_count" >&2
     exit 1
 }
-test "$source_less_count" -eq 2 || {
-    printf 'expected exactly two source-less archive-matrix fixtures, found %s\n' "$source_less_count" >&2
+test "$source_less_count" -eq 3 || {
+    printf 'expected exactly three source-less archive-matrix fixtures, found %s\n' "$source_less_count" >&2
     exit 1
 }
 
@@ -130,6 +130,7 @@ for entry in "$source_root"/*; do
         cast-hooks-fixture-1.0.0|\
         cast-meson-fixture-1.0.0|\
         cast-multiple-sources-fixture-1.0.0|\
+        cast-pgo-workload-fixture-1.0.0|\
         cast-plugin-output-fixture-1.0.0|\
         cast-post-install-smoke-test-fixture-1.0.0|\
         cast-python-module-fixture-1.0.0|\
@@ -140,8 +141,8 @@ for entry in "$source_root"/*; do
     source_tree_count=$((source_tree_count + 1))
 done
 
-test "$source_tree_count" -eq 23 || {
-    printf 'expected exactly twenty-three archive-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
+test "$source_tree_count" -eq 24 || {
+    printf 'expected exactly twenty-four archive-backed execution fixture trees, found %s\n' "$source_tree_count" >&2
     exit 1
 }
 
@@ -241,6 +242,7 @@ for fixture in \
     cast-hooks-fixture-1.0.0 \
     cast-meson-fixture-1.0.0 \
     cast-multiple-sources-fixture-1.0.0 \
+    cast-pgo-workload-fixture-1.0.0 \
     cast-plugin-output-fixture-1.0.0 \
     cast-post-install-smoke-test-fixture-1.0.0 \
     cast-python-module-fixture-1.0.0 \
@@ -512,6 +514,7 @@ for entry in "$archive_root"/*; do
         cast-meson-fixture-1.0.0.tar|\
         cast-multiple-sources-fixture-1.0.0.tar.xz|\
         cast-multiple-sources-schema-1.0.0.h|\
+        cast-pgo-workload-fixture-1.0.0.tar|\
         cast-plugin-output-fixture-1.0.0.tar|\
         cast-post-install-smoke-test-fixture-1.0.0.tar|\
         cast-python-module-fixture-1.0.0.tar|\
@@ -522,8 +525,8 @@ for entry in "$archive_root"/*; do
     count=$((count + 1))
 done
 
-test "$count" -eq 26 || {
-    printf 'expected exactly twenty-six archive/raw execution fixture artifacts, found %s\n' "$count" >&2
+test "$count" -eq 27 || {
+    printf 'expected exactly twenty-seven archive/raw execution fixture artifacts, found %s\n' "$count" >&2
     exit 1
 }
 

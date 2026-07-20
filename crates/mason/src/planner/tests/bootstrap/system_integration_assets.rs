@@ -10,9 +10,9 @@ fn assert_system_integration_assets_bootstrap_contract(
     closure: &BootstrapClosure,
     indexed: &BTreeMap<String, Meta>,
 ) {
-    assert_eq!(closure.packages.sha256.len(), 175, "bootstrap package count drift");
+    assert_eq!(closure.packages.sha256.len(), 179, "bootstrap package count drift");
     assert_eq!(
-        closure.packages.total_download_bytes, 385_535_265,
+        closure.packages.total_download_bytes, 388_713_448,
         "bootstrap download byte total drift"
     );
     let system = closure

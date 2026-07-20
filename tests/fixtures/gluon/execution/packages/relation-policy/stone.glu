@@ -1,0 +1,53 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+printf '%s\n' \
+    'schema = 1' \
+    'native-build = "sysbinary(ldconfig)"' \
+    'build = "pkgconfig32(zlib)"' \
+    'runtime-interpreter = "interpreter(/usr/lib/ld-linux-x86-64.so.2(x86_64))"' \
+    'runtime-library = "soname(libz.so.1(x86_64))"' \
+    > relation-policy.conf
+install -Dm644 relation-policy.conf \
+    "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/relation-policy.conf"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-relation-policy-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-relation-policy-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "bash",
+        b.dep.binary "install",
+    ],
+    native_build_inputs = [b.dep.system_binary "ldconfig"],
+    build_inputs = [b.dep.pkgconfig32 "zlib"],
+    outputs = [
+        b.output_with {
+            summary = b.optional.set "Typed dependency-role policy fixture",
+            description = b.optional.set "Pinned build and runtime capabilities with exact provider identities.",
+            runtime_inputs = [
+                b.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)",
+                b.dep.soname "libz.so.1(x86_64)",
+            ],
+            paths = [b.path.any "/usr/share/cast/relation-policy.conf"],
+            .. b.output "out"
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}
