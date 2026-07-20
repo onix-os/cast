@@ -5,13 +5,11 @@ use std::{
     fmt,
     fs::{File, Metadata},
     io::Read,
-    os::unix::fs::{FileTypeExt, MetadataExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
-use glob::Pattern;
 use nix::libc::{self, S_IFDIR, S_IRGRP, S_IROTH, S_IRWXU, S_IXGRP, S_IXOTH};
 use stone::StoneDigestWriterHasher;
 #[cfg(test)]
@@ -22,6 +20,7 @@ mod filesystem;
 mod inventory;
 mod mutation;
 mod publication;
+mod routing;
 mod traversal;
 mod verified_path;
 
@@ -49,6 +48,8 @@ use filesystem::{
 };
 
 pub(crate) use publication::{GeneratedArtifact, GeneratedTimes};
+pub use routing::Rule;
+pub(crate) use routing::ProjectedPathKind;
 
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
 const MIB: u64 = 1024 * 1024;
@@ -95,47 +96,6 @@ impl Default for CollectionLimits {
             max_total_regular_bytes: 1024 * GIB,
             max_duration: Duration::from_secs(2 * 60 * 60),
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct Rule {
-    pattern: String,
-    package: Arc<str>,
-    kind: PathRuleKind,
-    exact: Pattern,
-    descendant: Pattern,
-}
-
-impl Rule {
-    pub fn pattern(&self) -> &str {
-        &self.pattern
-    }
-
-    pub fn package(&self) -> &str {
-        &self.package
-    }
-
-    pub fn kind(&self) -> PathRuleKind {
-        self.kind
-    }
-
-    fn matches(&self, path: &str, metadata: &Metadata) -> bool {
-        let pattern_matches = self.pattern == path || self.exact.matches(path) || self.descendant.matches(path);
-
-        pattern_matches
-            && match self.kind {
-                PathRuleKind::Any => true,
-                PathRuleKind::Executable => metadata.is_file() && metadata.mode() & 0o111 != 0,
-                PathRuleKind::Symlink => metadata.file_type().is_symlink(),
-                PathRuleKind::Special => {
-                    let file_type = metadata.file_type();
-                    file_type.is_char_device()
-                        || file_type.is_block_device()
-                        || file_type.is_fifo()
-                        || file_type.is_socket()
-                }
-            }
     }
 }
 
@@ -236,27 +196,14 @@ impl Collector {
             detail: source.to_string(),
         })?;
         descendant_owned.push_str("/**");
-        let exact = Pattern::new(&pattern_owned).map_err(|source| Error::InvalidRulePattern {
-            pattern: pattern_owned.clone(),
-            detail: source.to_string(),
-        })?;
-        let descendant = Pattern::new(&descendant_owned).map_err(|source| Error::InvalidRulePattern {
-            pattern: descendant_owned,
-            detail: source.to_string(),
-        })?;
+        let compiled = Rule::compile(pattern_owned, descendant_owned, kind)?;
         let package = if let Some(rule) = self.rules.iter().find(|rule| rule.package.as_ref() == package) {
             Arc::clone(&rule.package)
         } else {
             Arc::<str>::from(copy_string(package, "rule package bytes")?)
         };
         reserve(&mut self.rules, 1, "collection rules")?;
-        self.rules.push(Rule {
-            pattern: pattern_owned,
-            package,
-            kind,
-            exact,
-            descendant,
-        });
+        self.rules.push(compiled.bind_package(package));
         self.total_rule_pattern_bytes = total_pattern;
         self.total_rule_package_bytes = total_package;
         Ok(())
@@ -316,24 +263,6 @@ impl Collector {
         if let Some(witness) = self.witness.get() {
             witness.poison();
         }
-    }
-
-    fn matching_package(
-        &self,
-        context: &CollectionContext,
-        path: &str,
-        metadata: &Metadata,
-        display_path: &Path,
-    ) -> Result<Option<Arc<str>>, Error> {
-        for rule in self.rules.iter().rev() {
-            context.check_time(display_path)?;
-            if rule.matches(path, metadata) {
-                context.check_time(display_path)?;
-                return Ok(Some(Arc::clone(&rule.package)));
-            }
-        }
-        context.check_time(display_path)?;
-        Ok(None)
     }
 
     /// Produce a verified [`PathInfo`] for a path beneath this collector's root.
@@ -764,23 +693,6 @@ impl Collector {
                 Arc::clone(&context.deadline),
             ),
         ))
-    }
-
-    fn package_for(
-        &self,
-        context: &CollectionContext,
-        relative: &Path,
-        metadata: &Metadata,
-        display_path: &Path,
-    ) -> Result<Arc<str>, Error> {
-        let target_path = Path::new("/").join(relative);
-        let target = target_path.to_str().ok_or_else(|| Error::NonUtf8Path {
-            path: display_path.to_owned(),
-        })?;
-        self.matching_package(context, target, metadata, display_path)?
-            .ok_or_else(|| Error::NoMatchingRule {
-                path: display_path.to_owned(),
-            })
     }
 
     fn hash_regular(

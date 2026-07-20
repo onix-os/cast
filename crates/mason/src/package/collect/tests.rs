@@ -11,6 +11,7 @@ use std::{
 };
 
 use fs_err as fs;
+use glob::Pattern;
 
 use super::*;
 

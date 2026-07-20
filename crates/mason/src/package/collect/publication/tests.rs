@@ -311,3 +311,78 @@ fn failure_after_admission_is_ambiguous_and_poisons_without_deleting_committed_p
     assert_eq!(fs::read(root.path().join("output")).unwrap(), b"generated");
     assert!(matches!(collector.seal(), Err(Error::InventoryPoisoned)));
 }
+
+#[test]
+fn one_unrouted_generated_artifact_rejects_the_whole_batch_before_publication() {
+    let root = tempfile::tempdir().unwrap();
+    let mut collector = Collector::new_with_limits(root.path(), CollectionLimits::default());
+    collector
+        .add_rule("/usr/bin/*", "executables", PathRuleKind::Executable)
+        .unwrap();
+    let artifacts = [
+        GeneratedArtifact::regular(PathBuf::from("usr/bin/tool"), b"tool".to_vec(), 0o755, None, false),
+        GeneratedArtifact::regular(PathBuf::from("usr/share/data"), b"data".to_vec(), 0o644, None, false),
+    ];
+
+    let mut entered_effect_boundary = false;
+    let result = publish_generated_at_checkpoint(
+        &collector,
+        &artifacts,
+        &mut StoneDigestWriterHasher::new(),
+        |_, _| {
+            entered_effect_boundary = true;
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(Error::NoMatchingRule { path }) if path == root.path().join("usr/share/data")
+    ));
+    assert!(!entered_effect_boundary);
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    collector.seal().unwrap();
+}
+
+#[test]
+fn generated_route_preflight_uses_projected_kind_and_regular_mode() {
+    let non_executable_root = tempfile::tempdir().unwrap();
+    let mut non_executable = Collector::new_with_limits(non_executable_root.path(), CollectionLimits::default());
+    non_executable
+        .add_rule("/usr/bin/tool", "executables", PathRuleKind::Executable)
+        .unwrap();
+    let regular = GeneratedArtifact::regular(PathBuf::from("usr/bin/tool"), b"tool".to_vec(), 0o644, None, false);
+    assert!(matches!(
+        non_executable.publish_generated(&[regular], &mut StoneDigestWriterHasher::new()),
+        Err(Error::NoMatchingRule { .. })
+    ));
+    assert_eq!(fs::read_dir(non_executable_root.path()).unwrap().count(), 0);
+    non_executable.seal().unwrap();
+
+    let executable_root = tempfile::tempdir().unwrap();
+    let mut executable = Collector::new_with_limits(executable_root.path(), CollectionLimits::default());
+    executable
+        .add_rule("/usr/bin/tool", "executables", PathRuleKind::Executable)
+        .unwrap();
+    let regular = GeneratedArtifact::regular(PathBuf::from("usr/bin/tool"), b"tool".to_vec(), 0o755, None, false);
+    let info = executable
+        .publish_generated(&[regular], &mut StoneDigestWriterHasher::new())
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(info.package.as_ref(), "executables");
+    executable.seal().unwrap();
+
+    let symlink_root = tempfile::tempdir().unwrap();
+    let mut symlink_collector = Collector::new_with_limits(symlink_root.path(), CollectionLimits::default());
+    symlink_collector
+        .add_rule("/usr/lib/current", "links", PathRuleKind::Symlink)
+        .unwrap();
+    let link = GeneratedArtifact::symlink(PathBuf::from("usr/lib/current"), "libfixture.so.1".to_owned(), None, false);
+    let info = symlink_collector
+        .publish_generated(&[link], &mut StoneDigestWriterHasher::new())
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(info.package.as_ref(), "links");
+    symlink_collector.seal().unwrap();
+}

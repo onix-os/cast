@@ -20,7 +20,8 @@ use stone::StoneDigestWriterHasher;
 
 use super::{
     CollectionContext, Collector, Error, FileSnapshot, HASH_BUFFER_BYTES, NodeIdentity, PathInfo, VerifiedKind,
-    WitnessGraph, c_name, changed, copy_os_string, enforce_u64_limit, metadata, open_entry, open_entry_handle, reserve,
+    ProjectedPathKind, WitnessGraph, c_name, changed, copy_os_string, enforce_u64_limit, metadata, open_entry,
+    open_entry_handle, reserve,
 };
 
 const STAGE_ATTEMPTS: u64 = 128;
@@ -80,6 +81,7 @@ impl GeneratedArtifact {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PublicationCheckpoint {
+    BeforeParentPreparation,
     BeforePublish,
     AfterPublish,
     BeforeAdmission,
@@ -89,6 +91,7 @@ pub(super) enum PublicationCheckpoint {
 #[cfg(not(test))]
 #[derive(Clone, Copy)]
 enum PublicationCheckpoint {
+    BeforeParentPreparation,
     BeforePublish,
     AfterPublish,
     BeforeAdmission,
@@ -128,10 +131,12 @@ fn publish_generated_with(
     let witness = collector.witness()?;
     let mut declarations = Vec::new();
     let mut display_paths = Vec::new();
+    let mut projected_packages = Vec::new();
     let mut order = Vec::new();
     let mut parent_components = 0usize;
     reserve(&mut declarations, artifacts.len(), "generated publication declarations")?;
     reserve(&mut display_paths, artifacts.len(), "generated publication paths")?;
+    reserve(&mut projected_packages, artifacts.len(), "generated publication routes")?;
     reserve(&mut order, artifacts.len(), "generated publication order")?;
     enforce_u64_limit(
         "generated package declarations",
@@ -143,16 +148,19 @@ fn publish_generated_with(
     for (index, artifact) in artifacts.iter().enumerate() {
         let display = collector.root.join(&artifact.destination);
         validate_destination(&context, &artifact.destination, &display)?;
-        match &artifact.kind {
-            GeneratedKind::Regular { bytes, .. } => enforce_u64_limit(
-                "regular file bytes",
-                collector.limits.max_file_bytes,
-                u64::try_from(bytes.len()).map_err(|_| Error::ArithmeticOverflow {
-                    resource: "regular file bytes",
-                    path: display.clone(),
-                })?,
-                &display,
-            )?,
+        let projected_kind = match &artifact.kind {
+            GeneratedKind::Regular { bytes, mode } => {
+                enforce_u64_limit(
+                    "regular file bytes",
+                    collector.limits.max_file_bytes,
+                    u64::try_from(bytes.len()).map_err(|_| Error::ArithmeticOverflow {
+                        resource: "regular file bytes",
+                        path: display.clone(),
+                    })?,
+                    &display,
+                )?;
+                ProjectedPathKind::Regular { mode: *mode }
+            }
             GeneratedKind::Symlink { target } => {
                 if target.as_bytes().contains(&0) {
                     return Err(Error::InvalidPath {
@@ -166,8 +174,11 @@ fn publish_generated_with(
                     target.len(),
                     &display,
                 )?;
+                ProjectedPathKind::Symlink
             }
-        }
+        };
+        let projected_package =
+            collector.package_for_projected(&context, &artifact.destination, projected_kind, &display)?;
         parent_components = parent_components
             .checked_add(artifact.destination.components().count().saturating_sub(1))
             .ok_or(Error::ArithmeticOverflow {
@@ -176,6 +187,7 @@ fn publish_generated_with(
             })?;
         declarations.push(artifact.destination.clone());
         display_paths.push(display);
+        projected_packages.push(projected_package);
         order.push(index);
     }
     order.sort_unstable_by(|left, right| declarations[*left].cmp(&declarations[*right]));
@@ -206,6 +218,16 @@ fn publish_generated_with(
     reserve(&mut output, artifacts.len(), "generated path information")?;
 
     for (artifact, display) in artifacts.iter().zip(&display_paths) {
+        if let Err(primary) = hook(PublicationCheckpoint::BeforeParentPreparation, display) {
+            return Err(rollback_publication(
+                &witness,
+                &mut published,
+                &mut created_directories,
+                transitioned,
+                primary,
+                display,
+            ));
+        }
         let parent_relative = artifact.destination.parent().unwrap_or_else(|| Path::new(""));
         let parent = match ensure_parent(
             &witness,
@@ -293,8 +315,12 @@ fn publish_generated_with(
         });
     }
 
-    for (((display, relative), owner), artifact) in
-        display_paths.iter().zip(declarations).zip(&published).zip(artifacts)
+    for ((((display, relative), owner), artifact), projected_package) in display_paths
+        .iter()
+        .zip(declarations)
+        .zip(&published)
+        .zip(artifacts)
+        .zip(projected_packages)
     {
         let info = match collector.witnessed_path_info(&witness, display, relative, hasher) {
             Ok(info) => info,
@@ -307,6 +333,16 @@ fn publish_generated_with(
             }
         };
         let verified = info.verified.as_ref().expect("published paths are verified");
+        if info.package != projected_package {
+            witness.poison();
+            return Err(Error::GeneratedPublicationCommitAmbiguous {
+                path: display.clone(),
+                primary: Box::new(changed(
+                    display,
+                    "published path no longer resolves to its preflighted output route",
+                )),
+            });
+        }
         let content_matches = match (&artifact.kind, &verified.kind) {
             (GeneratedKind::Regular { bytes, .. }, VerifiedKind::Regular { hash }) => {
                 let mut expected = StoneDigestWriterHasher::new();

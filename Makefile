@@ -102,6 +102,7 @@ include misc/make/startup-rollback-reverse-dispatch-tests.mk
 include misc/make/userspace-profile-fixture.mk
 include misc/make/fixture-proof-tests.mk
 include misc/make/git-source-hardening-tests.mk
+include misc/make/mason-generated-routing-tests.mk
 include misc/make/multiple-sources-fixture-tests.mk
 include misc/make/gettext-localization-fixture-tests.mk
 include misc/make/go-module-fixture-tests.mk
@@ -193,7 +194,7 @@ source-loc-test:
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
 # separately by harness-free container and delegated Mason integration targets.
-test: host-storage-safety-test lint config-formats-test examples-gate-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test
+test: host-storage-safety-test lint config-formats-test examples-gate-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test mason-generated-routing-test
 	@echo "Running tests in all packages..."
 	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
 
