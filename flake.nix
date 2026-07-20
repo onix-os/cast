@@ -54,7 +54,7 @@
       {
         devShells.default = pkgs.mkShell {
           packages = [
-            pkgs.bash
+            pkgs.bashNonInteractive
             rustToolchain
             pkgs.clang
             pkgs.cmake
