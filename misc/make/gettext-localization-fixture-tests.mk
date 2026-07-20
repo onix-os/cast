@@ -16,7 +16,7 @@ gettext-localization-contract-test:
 	done
 
 gettext-localization-supplemental-host-test:
-	@timeout 180s bash "$(TOP_DIR)/misc/scripts/test-gettext-localization-host.sh"
+	@timeout 180s "$(SHELL)" "$(TOP_DIR)/misc/scripts/test-gettext-localization-host.sh"
 
 gettext-localization-fixture-test: gettext-localization-contract-test \
 	gettext-localization-supplemental-host-test

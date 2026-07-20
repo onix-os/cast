@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 MOUNT_DEVTMPFS_POLICY_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

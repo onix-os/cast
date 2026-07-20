@@ -19,7 +19,7 @@ multiple-sources-contract-test:
 # delegated reproduction coverage. It is a fast host-side cross-compiler
 # sanity check over the same exact offline source artifacts.
 multiple-sources-supplemental-compiler-test:
-	@timeout 180s bash "$(TOP_DIR)/misc/scripts/test-multiple-sources-compilers.sh"
+	@timeout 180s "$(SHELL)" "$(TOP_DIR)/misc/scripts/test-multiple-sources-compilers.sh"
 
 multiple-sources-fixture-test: multiple-sources-contract-test \
 	multiple-sources-supplemental-compiler-test

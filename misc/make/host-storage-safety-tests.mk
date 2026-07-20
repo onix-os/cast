@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 HOST_STORAGE_SAFETY_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 
 .PHONY: host-storage-safety-test

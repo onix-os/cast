@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 AUTH_MOUNTINFO_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

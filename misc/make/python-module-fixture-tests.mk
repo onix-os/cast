@@ -16,7 +16,7 @@ python-module-contract-test:
 	done
 
 python-module-supplemental-host-test:
-	@timeout 300s bash "$(TOP_DIR)/misc/scripts/test-python-module-host.sh"
+	@timeout 300s "$(SHELL)" "$(TOP_DIR)/misc/scripts/test-python-module-host.sh"
 
 python-module-fixture-test: python-module-contract-test \
 	python-module-supplemental-host-test

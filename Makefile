@@ -1,4 +1,4 @@
-SHELL := /bin/bash
+SHELL := bash
 
 TOP_DIR := $(CURDIR)
 CARGO ?= cargo
@@ -109,7 +109,7 @@ include misc/make/system-integration-assets-fixture-tests.mk
 include misc/make/external-test-vectors-fixture-tests.mk
 include misc/make/help.mk
 
-.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test cast-example-process-supervision-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-preflight delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check source-loc source-loc-test check fmt clean \
+.PHONY: build cast get-started licenses fix lint test config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test cast-example-process-supervision-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-preflight delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check make-shell-portability-test source-loc source-loc-test check fmt clean \
 	binary-layout product-names config-formats config-formats-test migrate migrate-redo \
 	libstone
 
@@ -178,11 +178,14 @@ binary-layout:
 product-names:
 	@"$(TOP_DIR)/misc/scripts/check-product-names.sh"
 
+make-shell-portability-test:
+	@timeout 120s "$(TOP_DIR)/misc/scripts/test-make-shell-portability.sh"
+
 source-loc:
-	@timeout 120s bash "$(TOP_DIR)/misc/scripts/check-source-loc.sh"
+	@timeout 120s "$(SHELL)" "$(TOP_DIR)/misc/scripts/check-source-loc.sh"
 
 source-loc-test:
-	@timeout 120s bash "$(TOP_DIR)/misc/scripts/test-check-source-loc.sh"
+	@timeout 120s "$(SHELL)" "$(TOP_DIR)/misc/scripts/test-check-source-loc.sh"
 
 # Container activation uses fork-like namespace creation. Keep each libtest
 # process to one active test worker; production single-task behavior is proved
@@ -927,7 +930,7 @@ fixtures-ci: execution-fixtures
 	@$(MAKE) --no-print-directory bootstrap-fixtures-prepare
 	@$(MAKE) --no-print-directory bootstrap-fixtures-offline REQUIRE_EXECUTION=1 FIXTURE=all
 
-check: host-storage-safety-test
+check: host-storage-safety-test make-shell-portability-test
 	@$(CARGO) check --workspace --all-targets
 	@$(CARGO) check -p mason --features cache-clean-test-support \
 		--test cache_clean

@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 DESCRIPTOR_BOOT_NAMESPACE_PRODUCTION_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

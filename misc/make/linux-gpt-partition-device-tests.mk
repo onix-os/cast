@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 GPT_PARTITION_DEVICE_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

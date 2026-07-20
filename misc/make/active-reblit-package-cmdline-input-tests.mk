@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 PACKAGE_CMDLINE_INPUT_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

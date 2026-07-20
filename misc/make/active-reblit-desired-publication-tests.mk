@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 DESIRED_PUBLICATION_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 MOUNT_BOOT_POLICY_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

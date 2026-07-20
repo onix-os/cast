@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 SYSFS_IDENTITY_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 

@@ -1,5 +1,3 @@
-SHELL := /bin/bash
-
 BOOT_RENDER_INPUT_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 
