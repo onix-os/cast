@@ -130,6 +130,24 @@ if [[ ! -f $bash_executable || ! -x $bash_executable ]]; then
         "$bash_executable" >&2
     exit 1
 fi
+locale_archive_is_set=0
+locale_archive=
+if [[ -v LOCALE_ARCHIVE ]]; then
+    locale_archive=$LOCALE_ARCHIVE
+    case "$locale_archive" in
+        /*) ;;
+        *) printf 'LOCALE_ARCHIVE must name an absolute path: %s\n' \
+            "$locale_archive" >&2; exit 2 ;;
+    esac
+    if [[ -L $locale_archive || ! -f $locale_archive \
+        || ! -r $locale_archive ]]; then
+        printf 'LOCALE_ARCHIVE must name a readable regular non-symlink file: %s\n' \
+            "$locale_archive" >&2
+        exit 1
+    fi
+    locale_archive_is_set=1
+fi
+readonly locale_archive locale_archive_is_set
 command -v setsid >/dev/null 2>&1 || {
     printf 'setsid is required to own fixture CI process groups\n' >&2
     exit 1
@@ -394,7 +412,14 @@ service_environment=(
     "--setenv=CAST_FIXTURE_WRAPPER_PID=$$"
     "--setenv=FIXTURE_EVIDENCE_DIR="
     "--setenv=$unit_marker"
+    "--property=UnsetEnvironment=LOCPATH"
+    "--property=UnsetEnvironment=LOCALE_ARCHIVE_2_27"
 )
+if (( locale_archive_is_set )); then
+    service_environment+=("--setenv=LOCALE_ARCHIVE=$locale_archive")
+else
+    service_environment+=("--property=UnsetEnvironment=LOCALE_ARCHIVE")
+fi
 for environment_name in HOME CARGO_HOME RUSTUP_HOME XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS; do
     if [[ -v $environment_name ]]; then
         service_environment+=("--setenv=$environment_name=${!environment_name}")

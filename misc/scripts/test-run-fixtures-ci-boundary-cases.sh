@@ -17,6 +17,73 @@ test -d "$evidence/.fixtures-ci.log.tmp"
 rm -rf "$evidence/.fixtures-ci.log.tmp"
 test ! -e "$evidence/fixtures-ci.log"
 
+locale_archive_directory="$work/locale archives=valid"
+valid_locale_archive="$locale_archive_directory/locale-archive"
+locale_archive_symlink="$locale_archive_directory/locale-archive-link"
+mkdir -p "$locale_archive_directory"
+printf '%s\n' 'test locale archive' >"$valid_locale_archive"
+chmod 444 "$valid_locale_archive"
+ln -s "$valid_locale_archive" "$locale_archive_symlink"
+
+LOCALE_ARCHIVE="$valid_locale_archive" \
+FAKE_REQUIRE_LOCALE_ARCHIVE=1 \
+FAKE_EXPECTED_LOCALE_ARCHIVE="$valid_locale_archive" \
+    run_wrapper success 10 >"$work/locale-archive-valid.out" 2>&1
+test "$(grep -Fxc -- "--setenv=LOCALE_ARCHIVE=$valid_locale_archive" \
+    "$outer_state/systemd-run-args" || :)" -eq 1
+test "$(grep -Fxc -- '--property=UnsetEnvironment=LOCALE_ARCHIVE' \
+    "$outer_state/systemd-run-args" || :)" -eq 0
+test "$(grep -Fxc -- '--property=UnsetEnvironment=LOCPATH' \
+    "$outer_state/systemd-run-args" || :)" -eq 1
+test "$(grep -Fxc -- '--property=UnsetEnvironment=LOCALE_ARCHIVE_2_27' \
+    "$outer_state/systemd-run-args" || :)" -eq 1
+test "$(cat "$outer_state/locale-archive-effective")" = "$valid_locale_archive"
+jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
+assert_bounded_inventory
+
+(
+    unset LOCALE_ARCHIVE
+    FAKE_REQUIRE_LOCALE_ARCHIVE_UNSET=1 \
+        run_wrapper success 10 >"$work/locale-archive-unset.out" 2>&1
+)
+test "$(grep -Fxc -- '--property=UnsetEnvironment=LOCALE_ARCHIVE' \
+    "$outer_state/systemd-run-args" || :)" -eq 1
+test "$(grep -Fc -- '--setenv=LOCALE_ARCHIVE=' \
+    "$outer_state/systemd-run-args" || :)" -eq 0
+test "$(cat "$outer_state/locale-archive-effective")" = '<unset>'
+jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
+assert_bounded_inventory
+
+set +e
+LOCALE_ARCHIVE=relative/locale-archive \
+    run_wrapper success 10 >"$work/locale-archive-relative.out" 2>&1
+status=$?
+set -e
+test "$status" -eq 2
+grep -Fq 'LOCALE_ARCHIVE must name an absolute path: relative/locale-archive' \
+    "$work/locale-archive-relative.out"
+test ! -e "$outer_state/environment"
+
+set +e
+LOCALE_ARCHIVE="$locale_archive_directory/missing" \
+    run_wrapper success 10 >"$work/locale-archive-missing.out" 2>&1
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'LOCALE_ARCHIVE must name a readable regular non-symlink file:' \
+    "$work/locale-archive-missing.out"
+test ! -e "$outer_state/environment"
+
+set +e
+LOCALE_ARCHIVE="$locale_archive_symlink" \
+    run_wrapper success 10 >"$work/locale-archive-symlink.out" 2>&1
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'LOCALE_ARCHIVE must name a readable regular non-symlink file:' \
+    "$work/locale-archive-symlink.out"
+test ! -e "$outer_state/environment"
+
 hostile_marker="$work/make-expansion-ran"
 hostile_evidence="$work/\$(shell touch $hostile_marker)"
 rm -f "$outer_state"/*

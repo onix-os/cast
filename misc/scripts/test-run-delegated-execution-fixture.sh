@@ -42,9 +42,16 @@ private_tmp="$work/tmp"
 package_store="$work/packages"
 artifact="$work/delegated_execution_fixture"
 evidence="$work/evidence"
+locale_archive_directory="$work/locale archives=valid"
+valid_locale_archive="$locale_archive_directory/locale-archive"
+locale_archive_symlink="$locale_archive_directory/locale-archive-link"
 fake_commit=0123456789abcdef0123456789abcdef01234567
-mkdir -p "$fakebin" "$state" "$private_tmp" "$package_store" "$evidence"
+mkdir -p "$fakebin" "$state" "$private_tmp" "$package_store" "$evidence" \
+    "$locale_archive_directory"
 chmod 700 "$private_tmp" "$evidence"
+printf '%s\n' 'test locale archive' >"$valid_locale_archive"
+chmod 444 "$valid_locale_archive"
+ln -s "$valid_locale_archive" "$locale_archive_symlink"
 if [ -L "$proof_generator" ] || [ ! -f "$proof_generator" ] \
     || [ ! -x "$proof_generator" ]; then
     printf 'fixture proof test generator is unavailable or unsafe: %s\n' \
@@ -165,6 +172,12 @@ cat >"$fakebin/systemd-run" <<'EOF'
 #!/bin/sh
 set -eu
 : "${FAKE_STATE:?}"
+LOCALE_ARCHIVE=/poisoned-manager-locale-archive
+export LOCALE_ARCHIVE
+LOCPATH=/poisoned-manager-locpath
+export LOCPATH
+LOCALE_ARCHIVE_2_27=/poisoned-manager-legacy-locale-archive
+export LOCALE_ARCHIVE_2_27
 unit=
 marker=
 proof=
@@ -176,8 +189,15 @@ for argument in "$@"; do
     case "$argument" in
         --unit=*) unit=${argument#--unit=} ;;
         --setenv=CAST_DELEGATED_FIXTURE_TOKEN=*) marker=${argument#--setenv=} ;;
+        --setenv=LOCALE_ARCHIVE=*)
+            LOCALE_ARCHIVE=${argument#--setenv=LOCALE_ARCHIVE=}
+            export LOCALE_ARCHIVE
+            ;;
         --setenv=CAST_FIXTURE_PROOF_PATH=*) proof=${argument#--setenv=CAST_FIXTURE_PROOF_PATH=} ;;
         --setenv=CAST_FIXTURE_GIT_COMMIT=*) commit=${argument#--setenv=CAST_FIXTURE_GIT_COMMIT=} ;;
+        --property=UnsetEnvironment=LOCALE_ARCHIVE) unset LOCALE_ARCHIVE ;;
+        --property=UnsetEnvironment=LOCPATH) unset LOCPATH ;;
+        --property=UnsetEnvironment=LOCALE_ARCHIVE_2_27) unset LOCALE_ARCHIVE_2_27 ;;
         '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT')
             unset_proof_count=$((unset_proof_count + 1))
             ;;
@@ -191,6 +211,22 @@ if test -n "$proof"; then
 else
     test -z "$commit"
     test "$unset_proof_count" -eq 1
+fi
+if test "${LOCALE_ARCHIVE+x}" = x; then
+    printf '%s\n' "$LOCALE_ARCHIVE" >"$FAKE_STATE/locale-archive-effective"
+else
+    printf '%s\n' '<unset>' >"$FAKE_STATE/locale-archive-effective"
+fi
+if test "${LOCPATH+x}" = x; then
+    printf '%s\n' "$LOCPATH" >"$FAKE_STATE/locpath-effective"
+else
+    printf '%s\n' '<unset>' >"$FAKE_STATE/locpath-effective"
+fi
+if test "${LOCALE_ARCHIVE_2_27+x}" = x; then
+    printf '%s\n' "$LOCALE_ARCHIVE_2_27" \
+        >"$FAKE_STATE/legacy-locale-archive-effective"
+else
+    printf '%s\n' '<unset>' >"$FAKE_STATE/legacy-locale-archive-effective"
 fi
 printf '%s\n' "$unit" >"$FAKE_STATE/unit"
 
@@ -395,7 +431,7 @@ find_descendant_with_marker() {
 }
 
 reset_state
-run_fixture custom 1 ready success
+LOCALE_ARCHIVE="$valid_locale_archive" run_fixture custom 1 ready success
 args="$state/systemd-run-args"
 unit=$(cat "$state/unit")
 case "$unit" in
@@ -421,6 +457,66 @@ grep -Fqx -- "--unit=$unit" "$args"
 grep -Fqx -- "$unit" "$state/stops"
 assert_argument_count "$args" \
     '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
+assert_argument_count "$args" \
+    "--setenv=LOCALE_ARCHIVE=$valid_locale_archive" 1
+test "$(grep -Fc -- '--setenv=LOCALE_ARCHIVE=' "$args" || :)" -eq 1
+assert_argument_count "$args" \
+    '--property=UnsetEnvironment=LOCALE_ARCHIVE' 0
+assert_argument_count "$args" '--property=UnsetEnvironment=LOCPATH' 1
+assert_argument_count "$args" \
+    '--property=UnsetEnvironment=LOCALE_ARCHIVE_2_27' 1
+test "$(cat "$state/locale-archive-effective")" = "$valid_locale_archive"
+test "$(cat "$state/locpath-effective")" = '<unset>'
+test "$(cat "$state/legacy-locale-archive-effective")" = '<unset>'
+
+reset_state
+(
+    unset LOCALE_ARCHIVE
+    run_fixture custom 1 ready success
+)
+args="$state/systemd-run-args"
+test "$(grep -Fc -- '--setenv=LOCALE_ARCHIVE=' "$args" || :)" -eq 0
+assert_argument_count "$args" '--property=UnsetEnvironment=LOCALE_ARCHIVE' 1
+assert_argument_count "$args" '--property=UnsetEnvironment=LOCPATH' 1
+assert_argument_count "$args" \
+    '--property=UnsetEnvironment=LOCALE_ARCHIVE_2_27' 1
+test "$(cat "$state/locale-archive-effective")" = '<unset>'
+test "$(cat "$state/locpath-effective")" = '<unset>'
+test "$(cat "$state/legacy-locale-archive-effective")" = '<unset>'
+
+reset_state
+set +e
+LOCALE_ARCHIVE=relative/locale-archive run_fixture custom 1 ready success \
+    >"$work/locale-archive-relative.out" 2>"$work/locale-archive-relative.err"
+status=$?
+set -e
+test "$status" -eq 2
+grep -Fq 'LOCALE_ARCHIVE must name an absolute path: relative/locale-archive' \
+    "$work/locale-archive-relative.err"
+test ! -e "$state/systemd-run-args"
+
+reset_state
+set +e
+LOCALE_ARCHIVE="$locale_archive_directory/missing" \
+    run_fixture custom 1 ready success \
+    >"$work/locale-archive-missing.out" 2>"$work/locale-archive-missing.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'LOCALE_ARCHIVE must name a readable regular non-symlink file:' \
+    "$work/locale-archive-missing.err"
+test ! -e "$state/systemd-run-args"
+
+reset_state
+set +e
+LOCALE_ARCHIVE="$locale_archive_symlink" run_fixture custom 1 ready success \
+    >"$work/locale-archive-symlink.out" 2>"$work/locale-archive-symlink.err"
+status=$?
+set -e
+test "$status" -eq 1
+grep -Fq 'LOCALE_ARCHIVE must name a readable regular non-symlink file:' \
+    "$work/locale-archive-symlink.err"
+test ! -e "$state/systemd-run-args"
 
 reset_state
 run_preflight 1 ready success

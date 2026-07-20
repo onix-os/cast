@@ -174,6 +174,15 @@ test -x "$fixture_shell"
 test "${5-}" = fixtures-ci
 test "$#" -eq 5
 repository=$3
+if [ "${FAKE_REQUIRE_LOCALE_ARCHIVE-}" = 1 ]; then
+    : "${FAKE_EXPECTED_LOCALE_ARCHIVE:?}"
+    test "${LOCALE_ARCHIVE-}" = "$FAKE_EXPECTED_LOCALE_ARCHIVE"
+fi
+if [ "${FAKE_REQUIRE_LOCALE_ARCHIVE_UNSET-}" = 1 ]; then
+    test "${LOCALE_ARCHIVE+x}" != x
+fi
+test "${LOCPATH+x}" != x
+test "${LOCALE_ARCHIVE_2_27+x}" != x
 
 emit_proof() {
     commit=$(git -C "$repository" rev-parse --verify HEAD)
@@ -488,6 +497,14 @@ cat >"$fakebin/systemd-run" <<'EOF'
 #!/bin/sh
 set -eu
 : "${FAKE_OUTER_STATE:?}"
+# Start from a poisoned user-manager value so only an explicit set-or-unset
+# boundary can give the service the caller's intended locale state.
+LOCALE_ARCHIVE=/poisoned-manager-locale-archive
+export LOCALE_ARCHIVE
+LOCPATH=/poisoned-manager-locpath
+export LOCPATH
+LOCALE_ARCHIVE_2_27=/poisoned-manager-legacy-locale-archive
+export LOCALE_ARCHIVE_2_27
 
 process_is_live() {
     process_pid=$1
@@ -507,7 +524,9 @@ kill_mode=
 runtime_max=
 stop_timeout=
 : >"$FAKE_OUTER_STATE/environment"
+: >"$FAKE_OUTER_STATE/systemd-run-args"
 while [ "$#" -gt 0 ]; do
+    printf '%s\n' "$1" >>"$FAKE_OUTER_STATE/systemd-run-args"
     case "$1" in
         --user|--wait|--pipe|--collect|--no-ask-password|--expand-environment=no|--service-type=exec)
             shift
@@ -525,6 +544,9 @@ while [ "$#" -gt 0 ]; do
         --property=RuntimeMaxSec=*) runtime_max=${1#--property=RuntimeMaxSec=}; shift ;;
         --property=TimeoutStopSec=*) stop_timeout=${1#--property=TimeoutStopSec=}; shift ;;
         --property=SendSIGKILL=yes) shift ;;
+        --property=UnsetEnvironment=LOCALE_ARCHIVE) unset LOCALE_ARCHIVE; shift ;;
+        --property=UnsetEnvironment=LOCPATH) unset LOCPATH; shift ;;
+        --property=UnsetEnvironment=LOCALE_ARCHIVE_2_27) unset LOCALE_ARCHIVE_2_27; shift ;;
         --) shift; break ;;
         *) printf 'unexpected fake systemd-run argument: %s\n' "$1" >&2; exit 2 ;;
     esac
@@ -538,6 +560,11 @@ case "$runtime_seconds" in ''|0|*[!0-9]*) exit 2 ;; esac
 case "$stop_timeout" in *s) stop_seconds=${stop_timeout%s} ;; *) exit 2 ;; esac
 case "$stop_seconds" in ''|0|*[!0-9]*) exit 2 ;; esac
 test "$#" -gt 0
+if [ "${LOCALE_ARCHIVE+x}" = x ]; then
+    printf '%s\n' "$LOCALE_ARCHIVE" >"$FAKE_OUTER_STATE/locale-archive-effective"
+else
+    printf '%s\n' '<unset>' >"$FAKE_OUTER_STATE/locale-archive-effective"
+fi
 printf '%s\n' "$unit" >"$FAKE_OUTER_STATE/unit"
 : >"$FAKE_OUTER_STATE/active"
 (

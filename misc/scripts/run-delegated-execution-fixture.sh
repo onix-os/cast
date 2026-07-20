@@ -47,6 +47,24 @@ client_status_timeout_seconds=${CAST_DELEGATED_STATUS_TIMEOUT_SECONDS:-}
 proof_path=
 proof_temporary=
 git_commit=
+locale_archive_is_set=0
+locale_archive=
+
+if [ "${LOCALE_ARCHIVE+x}" = x ]; then
+    locale_archive=$LOCALE_ARCHIVE
+    case "$locale_archive" in
+        /*) ;;
+        *) printf 'LOCALE_ARCHIVE must name an absolute path: %s\n' \
+            "$locale_archive" >&2; exit 2 ;;
+    esac
+    if [ -L "$locale_archive" ] || [ ! -f "$locale_archive" ] \
+        || [ ! -r "$locale_archive" ]; then
+        printf 'LOCALE_ARCHIVE must name a readable regular non-symlink file: %s\n' \
+            "$locale_archive" >&2
+        exit 1
+    fi
+    locale_archive_is_set=1
+fi
 
 if [ -L "$latched_runner" ] || [ ! -f "$latched_runner" ] || [ ! -x "$latched_runner" ]; then
     printf 'latched command runner is unavailable or unsafe: %s\n' "$latched_runner" >&2
@@ -445,6 +463,13 @@ trap 'launch_signal_status=129' HUP
 trap 'launch_signal_status=130' INT
 trap 'launch_signal_status=143' TERM
 set -- "$executable"
+set -- "--property=UnsetEnvironment=LOCPATH" "$@"
+set -- "--property=UnsetEnvironment=LOCALE_ARCHIVE_2_27" "$@"
+if [ "$locale_archive_is_set" -eq 1 ]; then
+    set -- "--setenv=LOCALE_ARCHIVE=$locale_archive" "$@"
+else
+    set -- "--property=UnsetEnvironment=LOCALE_ARCHIVE" "$@"
+fi
 if [ "$mode" = preflight ]; then
     set -- \
         "--setenv=CAST_DELEGATED_PREFLIGHT_ONLY=1" \
