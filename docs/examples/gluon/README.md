@@ -271,8 +271,9 @@ its authentic checked-in vendor tree. Its typed custom builder disables the
 network, module proxy, checksum database, workspace discovery, toolchain
 downloads, CGO, and ambient Go configuration; it selects the frozen local
 toolchain, declares its `/usr/lib/golang` root explicitly for the proc-free
-sandbox, disables Go telemetry inside disposable build state, and requires
-`-mod=vendor`. Both Go tests and the installed command's
+sandbox, pins Go configuration and telemetry beneath disposable build state,
+blocks both proxy and direct module resolution, and requires `-mod=vendor`.
+Both Go tests and the installed command's
 self-test run before publication. The resulting one-output Stone contains the
 exact static ELF plus its MIT license, carries no runtime dependency, and must
 not retain module sources or vendor contents. Its exact 71-package closure is

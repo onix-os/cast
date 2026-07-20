@@ -244,6 +244,7 @@ fn assert_go_module_semantics(declaration: &PackageSpec, plan: &DerivationPlan) 
     };
     for required in [
         "HOME=\"${CAST_BUILD_ROOT}/home\"",
+        "XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"",
         "GOROOT=/usr/lib/golang",
         "GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"",
         "GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"",
@@ -253,7 +254,7 @@ fn assert_go_module_semantics(declaration: &PackageSpec, plan: &DerivationPlan) 
         "GOPROXY=off",
         "GOSUMDB=off",
         "GONOSUMDB='*'",
-        "GONOPROXY='*'",
+        "GONOPROXY=none",
         "GOFLAGS=",
         "GO111MODULE=on",
         "CGO_ENABLED=0",
@@ -272,6 +273,7 @@ fn assert_go_module_semantics(declaration: &PackageSpec, plan: &DerivationPlan) 
     };
     for required in [
         "HOME=\"${CAST_BUILD_ROOT}/home\"",
+        "XDG_CONFIG_HOME=\"${CAST_BUILD_ROOT}/xdg-config\"",
         "GOROOT=/usr/lib/golang",
         "GOCACHE=\"${CAST_BUILD_ROOT}/go-cache\"",
         "GOMODCACHE=\"${CAST_BUILD_ROOT}/go-mod-cache\"",
@@ -281,7 +283,7 @@ fn assert_go_module_semantics(declaration: &PackageSpec, plan: &DerivationPlan) 
         "GOPROXY=off",
         "GOSUMDB=off",
         "GONOSUMDB='*'",
-        "GONOPROXY='*'",
+        "GONOPROXY=none",
         "GOFLAGS=",
         "GO111MODULE=on",
         "CGO_ENABLED=0",

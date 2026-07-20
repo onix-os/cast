@@ -26,6 +26,7 @@ done < go.mod"#,
             interpreter = bash,
             declared_programs = [go],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export XDG_CONFIG_HOME="${CAST_BUILD_ROOT}/xdg-config"
 export GOROOT=/usr/lib/golang
 export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
 export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
@@ -35,7 +36,7 @@ export GOTOOLCHAIN=local
 export GOPROXY=off
 export GOSUMDB=off
 export GONOSUMDB='*'
-export GONOPROXY='*'
+export GONOPROXY=none
 export GOFLAGS=
 export GO111MODULE=on
 export CGO_ENABLED=0
@@ -51,6 +52,7 @@ go build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cas
             interpreter = bash,
             declared_programs = [go],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export XDG_CONFIG_HOME="${CAST_BUILD_ROOT}/xdg-config"
 export GOROOT=/usr/lib/golang
 export GOCACHE="${CAST_BUILD_ROOT}/go-cache"
 export GOMODCACHE="${CAST_BUILD_ROOT}/go-mod-cache"
@@ -60,7 +62,7 @@ export GOTOOLCHAIN=local
 export GOPROXY=off
 export GOSUMDB=off
 export GONOSUMDB='*'
-export GONOPROXY='*'
+export GONOPROXY=none
 export GOFLAGS=
 export GO111MODULE=on
 export CGO_ENABLED=0
