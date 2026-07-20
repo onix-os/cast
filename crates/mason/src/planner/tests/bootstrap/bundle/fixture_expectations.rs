@@ -56,7 +56,13 @@ fn assert_simple_fixture(fixture: &str, planned: &super::super::Planned, package
     assert_no_directories(fixture, "out", root);
     let bytes = regular_bytes(fixture, root, &executable);
     assert_eq!(root.layouts[&executable].mode & 0o777, 0o755);
-    let executable_elf = assert_runtime_elf(fixture, &executable, bytes, RuntimeElfKind::Executable);
+    let executable_elf = assert_runtime_elf(
+        fixture,
+        &executable,
+        bytes,
+        RuntimeElfKind::Executable,
+        &planned.plan.analysis,
+    );
     if matches!(fixture, "cmake" | "meson") {
         assert!(
             executable_elf.dependencies.contains("soname(libz.so.1(x86_64))"),
@@ -159,7 +165,13 @@ fn assert_cargo_features_fixture(planned: &super::super::Planned, packages: &BTr
             contains_bytes(bytes, marker.as_bytes()),
             "{FIXTURE}: /usr/{target} omits its feature-selected role marker"
         );
-        let elf = assert_runtime_elf(FIXTURE, target, bytes, RuntimeElfKind::Executable);
+        let elf = assert_runtime_elf(
+            FIXTURE,
+            target,
+            bytes,
+            RuntimeElfKind::Executable,
+            &planned.plan.analysis,
+        );
         dependencies.extend(elf.dependencies.iter().cloned());
         providers.insert(format!(
             "binary({})",
@@ -317,8 +329,20 @@ fn assert_plugin_output_fixture(planned: &super::super::Planned, packages: &BTre
         "{FIXTURE}: plugin omits its exact identity marker"
     );
 
-    let host_elf = assert_runtime_elf(FIXTURE, HOST, host_bytes, RuntimeElfKind::Executable);
-    let plugin_elf = assert_runtime_elf(FIXTURE, PLUGIN, plugin_bytes, RuntimeElfKind::SharedLibrary);
+    let host_elf = assert_runtime_elf(
+        FIXTURE,
+        HOST,
+        host_bytes,
+        RuntimeElfKind::Executable,
+        &planned.plan.analysis,
+    );
+    let plugin_elf = assert_runtime_elf(
+        FIXTURE,
+        PLUGIN,
+        plugin_bytes,
+        RuntimeElfKind::SharedLibrary,
+        &planned.plan.analysis,
+    );
     assert_eq!(
         host_elf.elf_type, ET_DYN,
         "{FIXTURE}: host must be an ET_DYN position-independent executable"
@@ -478,7 +502,13 @@ fn assert_daemon_fixture(planned: &super::super::Planned, packages: &BTreeMap<St
         ),
         "{FIXTURE}: compiled daemon omits its configured default path"
     );
-    let executable_elf = assert_runtime_elf(FIXTURE, executable, executable_bytes, RuntimeElfKind::Executable);
+    let executable_elf = assert_runtime_elf(
+        FIXTURE,
+        executable,
+        executable_bytes,
+        RuntimeElfKind::Executable,
+        &planned.plan.analysis,
+    );
     let mut root_dependencies = planned_output_dependencies(planned, root_plan);
     root_dependencies.extend(executable_elf.dependencies.iter().cloned());
     assert_exact_relations(
@@ -706,6 +736,7 @@ fn assert_split_fixture(planned: &super::super::Planned, packages: &BTreeMap<Str
         "bin/cast-split-fixture",
         executable,
         RuntimeElfKind::Executable,
+        &planned.plan.analysis,
     );
     assert_regular(
         FIXTURE,
@@ -722,6 +753,7 @@ fn assert_split_fixture(planned: &super::super::Planned, packages: &BTreeMap<Str
         "lib/libcast-split.so.1.0.0",
         library,
         RuntimeElfKind::SharedLibrary,
+        &planned.plan.analysis,
     );
     assert!(
         contains_bytes(library, b"cast split fixture"),
@@ -857,12 +889,16 @@ fn assert_debug_output(fixture: &str, image: &PackageImage, originals: &[NativeE
             .file_name()
             .and_then(|name| name.to_str())
             .expect("validated UTF-8 build-ID target");
+        let debug_link = original
+            .debug_link
+            .as_ref()
+            .unwrap_or_else(|| panic!("{fixture}: debug output is paired with a debug-disabled runtime ELF"));
         assert_eq!(
-            original.debug_link.basename, filename,
+            debug_link.basename, filename,
             "{fixture}: runtime ELF .gnu_debuglink does not name its build-ID debug file"
         );
         assert_eq!(
-            original.debug_link.crc32,
+            debug_link.crc32,
             gnu_debuglink_crc32(debug_bytes),
             "{fixture}: runtime ELF .gnu_debuglink CRC does not authenticate its debug file"
         );

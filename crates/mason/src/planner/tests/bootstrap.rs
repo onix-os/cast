@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    io::Read,
-    os::unix::fs::{MetadataExt as _, OpenOptionsExt, symlink},
+    io::{self, Read},
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt, PermissionsExt as _, symlink},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -47,6 +47,7 @@ include!("bootstrap/pgo_workload.rs");
 include!("bootstrap/relation_policy.rs");
 include!("bootstrap/python_module.rs");
 include!("bootstrap/system_integration_assets.rs");
+include!("bootstrap/temp_root.rs");
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct BootstrapClosure {
@@ -476,7 +477,7 @@ fn indexed_packages(index_bytes: &[u8]) -> BTreeMap<String, Meta> {
 fn package_file_matches(path: &Path, expected_hash: &str, expected_size: u64) -> bool {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return false,
         Err(error) => panic!("inspect cached bootstrap package {path:?}: {error}"),
     };
     if !metadata.file_type().is_file() || metadata.len() != expected_size {
@@ -589,7 +590,7 @@ fn validated_bootstrap() -> (BootstrapClosure, BTreeMap<String, Meta>) {
 }
 
 struct BootstrapPlanningMatrix {
-    _root: tempfile::TempDir,
+    _root: BootstrapTempRoot,
     cache_dir: PathBuf,
     config_dir: PathBuf,
     data_dir: PathBuf,
@@ -602,7 +603,7 @@ struct BootstrapPlanningMatrix {
 
 impl BootstrapPlanningMatrix {
     fn new(closure: &BootstrapClosure) -> Self {
-        let root = crate::private_tempdir();
+        let root = BootstrapTempRoot::new(crate::private_tempdir());
         let cache_dir = root.path().join("cache");
         let config_dir = root.path().join("config");
         let data_dir = root.path().join("data");
@@ -625,7 +626,7 @@ impl BootstrapPlanningMatrix {
         fs::create_dir_all(config_dir.join("profile.d")).unwrap();
         fs::create_dir_all(&recipes_dir).unwrap();
         fs::create_dir_all(&history_dir).unwrap();
-        fs::create_dir_all(&output_dir).unwrap();
+        root.create_private_directory(Path::new("output"), &output_dir);
         let index_path = history_dir.join("stone.index");
         fs::copy(bootstrap_root().join("stone.index"), &index_path).unwrap();
         fs::write(

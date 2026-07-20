@@ -57,7 +57,13 @@ fn assert_pgo_workload_fixture(planned: &super::super::Planned, packages: &BTree
         );
     }
 
-    let native = assert_runtime_elf(FIXTURE, EXECUTABLE, executable, RuntimeElfKind::Executable);
+    let native = assert_runtime_elf(
+        FIXTURE,
+        EXECUTABLE,
+        executable,
+        RuntimeElfKind::Executable,
+        &planned.plan.analysis,
+    );
     let mut dependencies = planned_output_dependencies(planned, root_plan);
     dependencies.extend(native.dependencies.iter().cloned());
     for build_only in ["binary(bash)", "binary(clang)", "binary(cp)", "binary(llvm-profdata)"] {

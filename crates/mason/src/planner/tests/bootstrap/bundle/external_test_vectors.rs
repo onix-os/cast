@@ -49,7 +49,13 @@ fn assert_external_test_vectors_fixture(
         );
     }
 
-    let executable_elf = assert_runtime_elf(FIXTURE, EXECUTABLE, executable, RuntimeElfKind::Executable);
+    let executable_elf = assert_runtime_elf(
+        FIXTURE,
+        EXECUTABLE,
+        executable,
+        RuntimeElfKind::Executable,
+        &planned.plan.analysis,
+    );
     let mut dependencies = planned_output_dependencies(planned, root_plan);
     dependencies.extend(executable_elf.dependencies.iter().cloned());
     assert_exact_relations(

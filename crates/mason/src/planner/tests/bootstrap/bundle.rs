@@ -36,7 +36,7 @@ use stone::{
     StonePayloadMetaPrimitive, StonePayloadMetaRecord, StonePayloadMetaTag,
     relation::{Dependency, Kind, Provider},
 };
-use stone_recipe::derivation::{OutputPlan, OutputRelation};
+use stone_recipe::derivation::{AnalysisPlan, OutputPlan, OutputRelation};
 
 const MAX_FIXTURE_ARTEFACT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_FIXTURE_BUNDLE_BYTES: u64 = 256 * 1024 * 1024;

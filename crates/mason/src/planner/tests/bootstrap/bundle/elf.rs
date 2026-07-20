@@ -27,7 +27,7 @@ struct NativeElf {
     gnu_stack_executable: Option<bool>,
     has_rpath_or_runpath: bool,
     has_text_relocations: bool,
-    debug_link: DebugLink,
+    debug_link: Option<DebugLink>,
 }
 
 #[derive(Debug)]
@@ -145,7 +145,13 @@ fn interpreter_path_must_be_exactly_normalized() {
     }
 }
 
-fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeElfKind) -> NativeElf {
+fn assert_runtime_elf(
+    fixture: &str,
+    target: &str,
+    bytes: &[u8],
+    kind: RuntimeElfKind,
+    analysis: &AnalysisPlan,
+) -> NativeElf {
     let elf = parse_structural_elf(fixture, target, bytes);
     match kind {
         RuntimeElfKind::Executable => {
@@ -322,7 +328,12 @@ fn assert_runtime_elf(fixture: &str, target: &str, bytes: &[u8], kind: RuntimeEl
         gnu_stack_executable,
         has_rpath_or_runpath: dynamic.has_rpath_or_runpath,
         has_text_relocations: dynamic.has_text_relocations,
-        debug_link: parse_debug_link(fixture, target, &elf),
+        debug_link: enforce_runtime_debug_link_policy(
+            fixture,
+            target,
+            analysis,
+            parse_debug_link(fixture, target, &elf),
+        ),
     }
 }
 
@@ -424,11 +435,13 @@ fn elf_build_id(fixture: &str, target: &str, elf: &ElfBytes<'_, AnyEndian>) -> S
     build_ids.into_iter().next().unwrap()
 }
 
-fn parse_debug_link(fixture: &str, target: &str, elf: &ElfBytes<'_, AnyEndian>) -> DebugLink {
+fn parse_debug_link(fixture: &str, target: &str, elf: &ElfBytes<'_, AnyEndian>) -> Option<DebugLink> {
     let section = elf
         .section_header_by_name(".gnu_debuglink")
-        .unwrap_or_else(|error| panic!("{fixture}: inspect /usr/{target} .gnu_debuglink: {error}"))
-        .unwrap_or_else(|| panic!("{fixture}: analyzed runtime ELF /usr/{target} has no .gnu_debuglink"));
+        .unwrap_or_else(|error| panic!("{fixture}: inspect /usr/{target} .gnu_debuglink: {error}"));
+    let Some(section) = section else {
+        return None;
+    };
     let (data, compression) = elf
         .section_data(&section)
         .unwrap_or_else(|error| panic!("{fixture}: read /usr/{target} .gnu_debuglink: {error}"));
@@ -461,10 +474,75 @@ fn parse_debug_link(fixture: &str, target: &str, elf: &ElfBytes<'_, AnyEndian>) 
         "{fixture}: /usr/{target} .gnu_debuglink padding is not zeroed"
     );
     let crc32 = u32::from_le_bytes(data[crc_offset..].try_into().unwrap());
-    DebugLink {
+    Some(DebugLink {
         basename: basename.to_owned(),
         crc32,
+    })
+}
+
+fn enforce_runtime_debug_link_policy(
+    fixture: &str,
+    target: &str,
+    analysis: &AnalysisPlan,
+    debug_link: Option<DebugLink>,
+) -> Option<DebugLink> {
+    match (analysis.debug, debug_link) {
+        (true, Some(debug_link)) => Some(debug_link),
+        (true, None) => panic!("{fixture}: debug-enabled runtime ELF /usr/{target} has no .gnu_debuglink"),
+        (false, None) => None,
+        (false, Some(_)) => panic!("{fixture}: debug-disabled runtime ELF /usr/{target} retained .gnu_debuglink"),
     }
+}
+
+#[test]
+fn runtime_elf_debug_link_is_required_when_plan_debug_is_enabled() {
+    let analysis = AnalysisPlan {
+        debug: true,
+        ..AnalysisPlan::default()
+    };
+    let accepted = enforce_runtime_debug_link_policy(
+        "enabled",
+        "bin/tool",
+        &analysis,
+        Some(DebugLink {
+            basename: "tool.debug".to_owned(),
+            crc32: 7,
+        }),
+    )
+    .expect("debug-enabled policy rejected an authenticated debug link");
+    assert_eq!(accepted.basename, "tool.debug");
+    assert_eq!(accepted.crc32, 7);
+    assert!(
+        std::panic::catch_unwind(|| {
+            enforce_runtime_debug_link_policy("enabled", "bin/tool", &analysis, None);
+        })
+        .is_err(),
+        "debug-enabled policy accepted a missing .gnu_debuglink"
+    );
+}
+
+#[test]
+fn runtime_elf_debug_link_is_forbidden_when_plan_debug_is_disabled() {
+    let analysis = AnalysisPlan {
+        debug: false,
+        ..AnalysisPlan::default()
+    };
+    assert!(enforce_runtime_debug_link_policy("disabled", "bin/tool", &analysis, None).is_none());
+    assert!(
+        std::panic::catch_unwind(|| {
+            enforce_runtime_debug_link_policy(
+                "disabled",
+                "bin/tool",
+                &analysis,
+                Some(DebugLink {
+                    basename: "tool.debug".to_owned(),
+                    crc32: 7,
+                }),
+            );
+        })
+        .is_err(),
+        "debug-disabled policy accepted a retained .gnu_debuglink"
+    );
 }
 
 fn assert_debug_elf(fixture: &str, target: &str, bytes: &[u8], original: &NativeElf) {

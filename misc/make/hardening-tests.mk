@@ -774,7 +774,15 @@ mason-planner-bootstrap-test:
 		'/^planner::hermetic_tests::bootstrap::.*: test$$/ && \
 		 !/^planner::hermetic_tests::bootstrap::execution_evidence::tests::/ \
 		 { count += 1 } END { print count + 0 }' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 15; \
+	timeout 10s test "$$count" = 20; \
+	for test in \
+		planner::hermetic_tests::bootstrap::bootstrap_planning_matrix_normalizes_output_root_under_umask_0002 \
+		planner::hermetic_tests::bootstrap::bootstrap_temp_root_cleanup_failure_never_follows_a_replacement_symlink \
+		planner::hermetic_tests::bootstrap::bootstrap_temp_root_cleanup_removes_read_only_published_trees \
+		planner::hermetic_tests::bootstrap::bundle::runtime_elf_debug_link_is_required_when_plan_debug_is_enabled \
+		planner::hermetic_tests::bootstrap::bundle::runtime_elf_debug_link_is_forbidden_when_plan_debug_is_disabled; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
 	timeout 1200s $(CARGO) test -p mason --lib \
 		"planner::hermetic_tests::bootstrap::" -- \
 		--skip "planner::hermetic_tests::bootstrap::execution_evidence::tests::" \

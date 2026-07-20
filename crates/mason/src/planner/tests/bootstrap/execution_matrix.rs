@@ -6,6 +6,98 @@ fn contentful_bootstrap_materializes_a_complete_offline_root_mirror() {
     matrix.materialize_package_pool(&closure, &indexed);
 }
 
+#[test]
+fn bootstrap_planning_matrix_normalizes_output_root_under_umask_0002() {
+    const CHILD: &str = "MASON_BOOTSTRAP_MATRIX_UMASK_0002_CHILD";
+    const TEST: &str =
+        "planner::hermetic_tests::bootstrap::bootstrap_planning_matrix_normalizes_output_root_under_umask_0002";
+
+    if std::env::var_os(CHILD).is_some() {
+        // umask is process-global. This branch is the sole exact test in an
+        // isolated child, so it cannot perturb parallel filesystem tests.
+        // SAFETY: no other test runs in this exact child process.
+        let previous = unsafe { nix::libc::umask(0o002) };
+        let (closure, _) = validated_bootstrap();
+        let matrix = BootstrapPlanningMatrix::new(&closure);
+        let metadata = fs::symlink_metadata(&matrix.output_dir).unwrap();
+        // SAFETY: geteuid has no preconditions and does not mutate process state.
+        let owner = unsafe { nix::libc::geteuid() };
+        assert!(metadata.file_type().is_dir());
+        assert_eq!(metadata.uid(), owner);
+        assert_eq!(metadata.mode() & 0o7777, 0o700);
+        drop(matrix);
+        // SAFETY: restore the isolated child's original mask before returning.
+        unsafe { nix::libc::umask(previous) };
+        return;
+    }
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg(TEST)
+        .arg("--nocapture")
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "umask-0002 bootstrap matrix child failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn bootstrap_temp_root_cleanup_removes_read_only_published_trees() {
+    let temporary = BootstrapTempRoot::new(crate::private_tempdir());
+    let retained_path = temporary.path().to_owned();
+    let outside = crate::private_tempdir();
+    let sentinel = outside.path().join("must-survive");
+    fs::write(&sentinel, b"outside").unwrap();
+    let published = retained_path.join("output/derivation");
+    let nested = published.join("nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("fixture.stone"), b"published").unwrap();
+    symlink(outside.path(), nested.join("outside-link")).unwrap();
+    fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o555)).unwrap();
+    fs::set_permissions(&published, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    temporary.close().unwrap();
+    assert!(
+        !retained_path.exists(),
+        "bootstrap cleanup guard leaked a read-only published tree"
+    );
+    assert_eq!(fs::read(sentinel).unwrap(), b"outside");
+}
+
+#[test]
+fn bootstrap_temp_root_cleanup_failure_never_follows_a_replacement_symlink() {
+    let temporary = BootstrapTempRoot::new(crate::private_tempdir());
+    let retained_path = temporary.path().to_owned();
+    let detached_path = retained_path.with_extension("detached");
+    let outside = crate::private_tempdir();
+    let sentinel = outside.path().join("must-survive");
+    fs::write(&sentinel, b"outside").unwrap();
+    fs::write(retained_path.join("owned"), b"retained").unwrap();
+
+    fs::rename(&retained_path, &detached_path).unwrap();
+    symlink(outside.path(), &retained_path).unwrap();
+    let error = temporary
+        .close()
+        .expect_err("detached bootstrap root must fail closed instead of following its replacement");
+    assert!(error.to_string().contains("no longer denotes"));
+    assert!(fs::symlink_metadata(&retained_path).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read(&sentinel).unwrap(), b"outside");
+    assert_eq!(fs::read(detached_path.join("owned")).unwrap(), b"retained");
+
+    fs::remove_file(&retained_path).unwrap();
+    fs::rename(&detached_path, &retained_path).unwrap();
+    crate::paths::BoundedTempTree::retain(&retained_path)
+        .unwrap()
+        .remove()
+        .unwrap();
+    assert!(!retained_path.exists());
+}
+
 #[cfg(feature = "delegated-fixture-test-support")]
 pub(super) fn run_delegated_execution_fixture() -> DelegatedExecutionOutcome {
     run_execution_fixtures_from_contentful_closure()

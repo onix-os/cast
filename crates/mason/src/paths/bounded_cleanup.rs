@@ -4,6 +4,111 @@ const MAX_PURGE_NAME_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PURGE_DEPTH: usize = 128;
 const PURGE_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+pub(crate) struct BoundedTempTree {
+    path: PathBuf,
+    parent: StdFile,
+    root: StdFile,
+    name: CString,
+    identity: (u64, u64),
+}
+
+#[cfg(any(test, feature = "delegated-fixture-test-support"))]
+impl BoundedTempTree {
+    pub(crate) fn retain(path: &Path) -> io::Result<Self> {
+        let absolute = std::path::absolute(path)?;
+        let parent_path = absolute
+            .parent()
+            .ok_or_else(|| invalid_binding(format!("temporary tree has no parent: {absolute:?}")))?;
+        let name = match absolute.file_name() {
+            Some(name) if !name.is_empty() => CString::new(name.as_bytes())
+                .map_err(|_| invalid_binding(format!("temporary tree name contains NUL: {absolute:?}")))?,
+            _ => return Err(invalid_binding(format!("temporary tree has no normal leaf: {absolute:?}"))),
+        };
+        let parent = pin_workspace_root(parent_path)?;
+        let pinned = open_path_child(&parent, &name)?;
+        let metadata = pinned.metadata()?;
+        // SAFETY: geteuid has no preconditions and does not mutate process state.
+        let owner = unsafe { nix::libc::geteuid() };
+        if !metadata.file_type().is_dir()
+            || metadata.uid() != owner
+            || metadata.mode() & 0o7777 != 0o700
+            || metadata.dev() != parent.metadata()?.dev()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "temporary tree is not one exact private same-device directory: {absolute:?} \
+                     (uid={}, mode={:#06o}, device={})",
+                    metadata.uid(),
+                    metadata.mode() & 0o7777,
+                    metadata.dev()
+                ),
+            ));
+        }
+        let root = open_private_child(&parent, &name)?;
+        let identity = directory_identity(&pinned)?;
+        if identity != directory_identity(&root)? {
+            return Err(io::Error::other(format!(
+                "temporary tree changed while its cleanup descriptor was retained: {absolute:?}"
+            )));
+        }
+        Ok(Self {
+            path: absolute,
+            parent,
+            root,
+            name,
+            identity,
+        })
+    }
+
+    pub(crate) fn create_private_directory(&self, relative: &Path, display: &Path) -> io::Result<()> {
+        ensure_private_directory_at(&self.root, relative, display).map(drop)
+    }
+
+    pub(crate) fn remove(self) -> io::Result<()> {
+        self.require_attached()?;
+        chmod_path_descriptor(&self.root, 0o700)?;
+        let mut budget = PurgeBudget::new(&self.root)?;
+        for child in sorted_directory_names(&self.root, &mut budget)? {
+            purge_named_entry(&self.root, &child, &mut budget, 1, &self.path)?;
+        }
+        self.require_attached()?;
+        budget.account(0, false)?;
+        // SAFETY: parent and name remain live. The retained identity was
+        // reauthenticated immediately above and the directory is now empty.
+        if unsafe { nix::libc::unlinkat(self.parent.as_raw_fd(), self.name.as_ptr(), nix::libc::AT_REMOVEDIR) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        match metadata_at(&self.parent, &self.name) {
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(source),
+            Ok(_) => Err(io::Error::other(format!(
+                "temporary tree remained named after bounded cleanup: {:?}",
+                self.path
+            ))),
+        }
+    }
+
+    fn require_attached(&self) -> io::Result<()> {
+        let metadata = metadata_at(&self.parent, &self.name)?;
+        // SAFETY: geteuid has no preconditions and does not mutate process state.
+        let owner = unsafe { nix::libc::geteuid() };
+        if metadata.st_dev == self.identity.0
+            && metadata.st_ino == self.identity.1
+            && metadata.st_uid == owner
+            && metadata.st_mode & nix::libc::S_IFMT == nix::libc::S_IFDIR
+        {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "temporary tree name no longer denotes its retained cleanup directory: {:?}",
+                self.path
+            )))
+        }
+    }
+}
+
 struct PurgeBudget {
     entries: usize,
     operations: usize,
