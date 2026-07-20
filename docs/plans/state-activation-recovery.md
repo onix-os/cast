@@ -596,9 +596,35 @@ every mutation uncertainty. Its 20 focused tests cover all three operations,
 current and historical epochs, exact and conflicting plans, same-byte
 predecessor and successor replacement, and all five journal fault points. The
 route changes no namespace or database state and invokes no reverse exchange or
-root-ABI effect. A fresh entry leaves `ReverseExchangeIntent` byte-identical
-because RootLinks admission remains closed in the coarse-bound reverse-effect
-chain. Hardening that full effect, durability, and persistence chain is next.
+root-ABI effect. Commit `66e3cf6b` closes the residual reopen identity window
+in both the decision and route boundaries. After same-store successor
+validation, each keeps the non-Clone binding alive across destruction of the
+old lock-bearing store; the independently reopened canonical store must then
+match that exact successor inode and record inside an installation-
+revalidation sandwich. Same-byte replacement between binding validation and
+reopen cannot become success.
+
+Commit `1b34d718` extends that exact binding discipline through reverse
+admission, the physical effect, parent durability, and journal persistence,
+and admits the RootLinks source across all three operations and both current
+and historical record epochs. `Applied` is sealed inside the durable authority
+only after one reconciled reverse exchange; exact `PRE` evidence instead seals
+`AlreadySatisfied`, and the persistence caller cannot supply either outcome.
+The bound `UsrRestored` publication checks its successor binding in the same
+store, retains it across destruction of that store, and checks the exact inode
+and record again after canonical reopen. Focused matrices cover both outcomes,
+all five bound-update faults, predecessor and successor replacement seams, and
+fresh restart convergence without a second effect.
+
+Fresh RootLinks entries now progress exactly from `RootLinksComplete` to
+`RollbackDecided`, then `ReverseExchangeIntent`, then `UsrRestored`; the reverse
+entry performs exactly one exchange and the five canonical root links retain
+their targets and identities. A following entry leaves that exact
+`UsrRestored` record byte-identical. RootLinks remains intentionally excluded
+from candidate admission and the `UsrRestored` candidate route until the
+complete candidate-preservation chain carries the same exact authority. That
+is the next safe boundary. Candidate completion, boot repair, cleanup, reboot,
+and power-loss durability remain unclaimed.
 
 ### Startup reconciliation and interruption campaign
 

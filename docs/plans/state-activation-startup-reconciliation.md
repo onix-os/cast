@@ -22,8 +22,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   As of 2026-07-20, startup's diagnostic checkpoint remains read-only and fail closed.
   Immediately before it, the mutable gate has one sealed, bounded ladder: ActiveReblit replacement-mode repair,
-  forward exchange-parent durability, exact `UsrExchanged` root-ABI normalization, rollback-decision persistence and routing, and `/usr` reversal. Later entries route exact
-  `UsrRestored` to candidate preservation. NewState then prepares its
+  forward exchange-parent durability, exact `UsrExchanged` root-ABI normalization, rollback-decision persistence and routing, and `/usr` reversal. Existing non-RootLinks sources may route exact
+  `UsrRestored` to candidate preservation; RootLinks-sourced `UsrRestored` remains byte-stable until that full chain is hardened. NewState then prepares its
   quarantine target, preserves the candidate, invalidates its exact fresh row,
   reaches `RollbackComplete`, and authenticates terminal journal absence.
   ActiveReblit preserves its whole replacement wrapper; exact cleared ownership and provenance can route the no-boot case through `RollbackComplete` and a
@@ -74,8 +74,10 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Revalidation checks store identity first and consumes the non-Clone binding through one conditional `advance_record_binding`, deriving exactly one `RollbackDecided` with source `RootLinksComplete` and pending `/usr` without a namespace, database, trigger, rollback, or retry effect.
   After the advance it authenticates the exact successor binding, drops the old lock-bearing store, and independently reopens the canonical journal.
   Same-byte predecessor or successor inode replacement never becomes success; reopen classifies only the exact durable source or decision.
-  The handled entry returns `RecoveryPending` and never redispatches its successor. Commit `2201a24b` admits only the resulting exact RootLinks decision through the journal-only resume route.
-  That route captures a non-Clone record binding before namespace or database evidence, advances once to exact `ReverseExchangeIntent`, validates the returned successor binding, and independently reopens after every mutation uncertainty. Its 20 focused cases span all operations, both epochs, plan conflicts, same-byte predecessor and successor replacement, and all five journal fault points. A third startup leaves that intent byte-identical and invokes zero reverse exchanges because RootLinks remains excluded from the still-coarse reverse-effect chain; hardening that entire chain is next.
+  The handled entry returns `RecoveryPending` and never redispatches its successor. Commit `2201a24b` admits only the resulting exact RootLinks decision through the journal-only resume route; commit `66e3cf6b` retains each non-Clone successor binding across old-store destruction and requires an independent canonical reopen to authenticate that exact inode and record inside an installation-revalidation sandwich.
+  Commit `1b34d718` carries that exact non-Clone record binding through reverse admission, one reconciled effect, ordered parent durability, and bound persistence. Its durable authority privately seals `Applied` after one exchange or `AlreadySatisfied` from exact `PRE`, validates the successor in the same store and across canonical reopen, and never accepts an outcome from its caller.
+  Fresh entries now move RootLinks exactly through `RollbackDecided` -> `ReverseExchangeIntent` -> `UsrRestored`; the reverse entry exchanges once and a later entry leaves the restored record byte-identical. Operation/epoch/outcome, five-fault, and same-byte replacement matrices converge without a second effect while all five canonical root links retain their exact targets and identities.
+  RootLinks remains intentionally excluded from candidate admission and the `UsrRestored` candidate route until exact candidate preservation is hardened end to end. Candidate completion, boot repair, cleanup, reboot, and power-loss durability remain unclaimed.
 
   Commit `911dcbc` separated rollback routing from decision persistence.
   Startup deliberately permits only one recovery journal mutation per entry.
@@ -120,7 +122,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   private reverse seal. Exact `POST` evidence yields a consuming Apply
   authority; exact `PRE` evidence yields a consuming Finish authority because
   the namespace is already restored. Both authorities retain the installation,
-  journal binding, cooperating-writer reservation, complete source record,
+  non-Clone record binding, cooperating-writer reservation, complete source record,
   stable database ownership and provenance, and descriptor-rooted namespace
   proof. Apply makes exactly one retained descriptor-relative exchange attempt
   and recaptures the layout rather than trusting the raw syscall report. An
@@ -129,21 +131,21 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   no reusable effect or journal authority. Finish makes no exchange attempt.
 
   Both successful paths complete staging-parent and installation-root
-  durability in that order, revalidate all evidence, and derive the sole legal
-  `UsrRestored` successor. The persisted outcome is exact: an exchange applied
-  by this entry records `Applied`, while an already restored PRE layout records
-  `AlreadySatisfied`. Persistence performs one conditional journal advance,
-  then destroys the old effect authority and lock-bearing store before a
-  descriptor-rooted canonical reopen. A storage error remains an error even
-  when reopen proves whether the exact source or exact `UsrRestored` successor
-  is durable; it never authorizes an in-process retry or later rollback action.
+  durability in that order and revalidate all evidence before the resulting
+  private authority seals the sole legal outcome. An exchange applied by this
+  entry seals `Applied`; exact PRE seals `AlreadySatisfied`, with no caller
+  override. Persistence consumes the non-Clone source binding in one bound
+  advance, validates the successor binding in the same store, retains it after
+  destroying the old store, and authenticates the exact reopened inode and
+  record inside an installation sandwich. A storage error remains an error and
+  never authorizes an in-process retry or later rollback action.
 
   The one-recovery-journal-mutation-per-entry rule therefore remains intact.
   One entry may persist `RollbackDecided`, a later one may persist
   `ReverseExchangeIntent`, and a later one may perform the admitted reverse and
   persist `UsrRestored`. Because the journal-only route ran earlier in that
   startup entry, the reverse entry stops there and returns `RecoveryPending`.
-  One fresh later entry may route exact `UsrRestored` to
+  For an admitted non-RootLinks source, one fresh later entry may route exact `UsrRestored` to
   `CandidatePreserveIntent`, again returns `RecoveryPending`, and performs no
   preservation effect. Thus no startup entry advances more than one phase.
 

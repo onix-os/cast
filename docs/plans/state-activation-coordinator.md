@@ -274,9 +274,31 @@ closure remain authoritative in `PLAN.md`.
   fresh exact decision through a separately record-bound journal-only route to
   `ReverseExchangeIntent`; all five journal fault points, both epochs, and all
   three operations reopen to only the exact source or successor without a
-  reverse, root-ABI, namespace, or database effect. A third entry remains at
-  that byte-identical intent because RootLinks is still excluded from the
-  coarse-bound reverse-effect chain, whose exact-binding hardening is next.
+  reverse, root-ABI, namespace, or database effect. Commit `66e3cf6b` closes
+  the remaining decision/route cross-reopen identity window: after same-store
+  successor validation, the non-Clone binding survives destruction of the old
+  store and an independent canonical reopen must authenticate the exact
+  successor inode and record inside an installation-revalidation sandwich.
+
+  Commit `1b34d718` then admits this RootLinks source through the complete exact
+  reverse-effect chain. The same non-Clone record binding crosses admission,
+  one reconciled physical effect, ordered parent durability, and bound journal
+  persistence. The durable authority itself seals `Applied` after exactly one
+  reverse exchange or `AlreadySatisfied` from exact `PRE` evidence; callers
+  cannot choose the successor outcome. Publication validates its successor
+  binding in the same store and again by exact inode and record after canonical
+  reopen. The focused operation/epoch/outcome matrices cover all three
+  operations, current and historical records, all five bound-update faults,
+  same-byte replacement seams, and restart convergence without a second
+  exchange. Fresh entries now take RootLinks exactly through
+  `RollbackDecided` -> `ReverseExchangeIntent` -> `UsrRestored` while the five
+  canonical root links remain unchanged, and a later entry leaves the restored
+  record byte-identical.
+
+  RootLinks is still intentionally excluded from candidate admission and from
+  the `UsrRestored` candidate route. Exact candidate preservation is the next
+  safe hardening boundary; these commits do not claim candidate completion,
+  boot repair, cleanup, reboot, or power-loss durability.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
