@@ -337,15 +337,24 @@ closure remain authoritative in `PLAN.md`.
   fresh restarts; ActiveReblit covers 32, 160, 128, and 64 respectively.
 
   Accepted commit `e35a2183` admits only exact RootLinks-sourced NewState
-  `CandidatePreserved` generation 15 to the existing journal-only route. One
-  non-Clone record-inode binding crosses the bound advance to
-  `FreshDbInvalidationIntent` generation 16, same-store successor validation,
-  destruction of the old lock-bearing store, and independent canonical reopen.
-  Its matrices cover 24 successes, 120 storage faults, 96 predecessor or
-  successor binding substitutions, 48 fresh-handle reopens, and 240 all-five-
-  root-ABI mutations across capture and final revalidation. A later NewState
-  entry leaves generation 16 byte-stable because its downstream RootLinks
-  invalidation, completion, and finalization gates remain closed.
+  `CandidatePreserved` generation 15 and carries its non-Clone record-inode
+  binding through a bound advance to `FreshDbInvalidationIntent` generation 16,
+  same-store validation, old-store destruction, and canonical reopen. Accepted
+  commit `7457b259` then admits that exact generation-16 source through the
+  production invalidation boundary. The binding remains exact across capture,
+  Apply-or-Finish effect reconciliation, the bound advance to
+  `FreshDbInvalidated` generation 17, same-store successor validation, and
+  independent canonical reopen. Present evidence permits at most one exact
+  fresh-transition removal; proved joint absence performs zero removals.
+
+  Its success, storage-fault, predecessor-or-successor binding-substitution,
+  and fresh-handle matrices cover 48, 240, 192, and 96 executions. Five all-
+  link mutation seams reject 240 capture, 240 pre-effect, 120 Applied post-
+  attempt, 240 initial-persistence, and 240 final-revalidation races. The
+  endpoint still performs exactly one reverse `/usr` exchange and preserves
+  the targets and identities of all five canonical root links. A later
+  NewState entry leaves generation 17 byte-stable because RootLinks completion
+  and terminal finalization remain closed.
 
   Accepted commit `a3fb25d3` independently admits exact RootLinks-sourced
   ActivateArchived `CandidatePreserved` generation 11 and carries its exact
@@ -373,11 +382,12 @@ closure remain authoritative in `PLAN.md`.
   one reverse `/usr` exchange and one ActiveReblit wrapper exchange. It invokes
   no boot, database, non-journal namespace, finalization, or cleanup effect.
   `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
-  NewState stays byte-stable at generation 16, ActivateArchived at generation
+  NewState stays byte-stable at generation 17, ActivateArchived at generation
   12, and ActiveReblit at generation 14 because every RootLinks finalization
   gate remains closed. Fresh-handle reopen is not process-death evidence;
-  RootLinks process death, terminal finalization, reboot, and power-loss
-  durability remain unclaimed.
+  RootLinks same-boot `SIGKILL`, terminal finalization, reboot, and power-loss
+  durability remain unclaimed. NewState next requires the separately admitted
+  generation-17 `FreshDbInvalidated` -> generation-18 `RollbackComplete` edge.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -493,9 +503,12 @@ closure remain authoritative in `PLAN.md`.
   capability through two revalidations, one authority-owned
   `FreshDbInvalidated` successor, one conditional journal advance, and exact
   canonical reopen. Source-side restart uses zero-removal Finish; successor-
-  side restart skips invalidation. Production dispatch, namespace mutation,
-  later rollback actions, roll-forward, triggers, and cleanup are not executed,
-  so this item remains open. ActiveReblit's terminal finalizer now has an exact
+  side restart skips invalidation. Accepted commit `7457b259` makes this exact
+  effect and persistence boundary production-reachable for the RootLinks
+  source, while leaving generation-17 completion and finalization closed.
+  Same-boot process death at this boundary, later rollback actions,
+  roll-forward, triggers, and cleanup remain open. ActiveReblit's terminal
+  finalizer now has an exact
   12-case real-process matrix across current/historical record epochs, both
   rollback sources, and final-PRE source retention, kernel-observed post-unlink
   absence, and post-directory-sync absence. Each crash is a genuine same-boot

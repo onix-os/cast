@@ -75,7 +75,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix, RootLinks NewState through exact
-  `FreshDbInvalidationIntent`, and RootLinks ActivateArchived and ActiveReblit
+  `FreshDbInvalidated`, and RootLinks ActivateArchived and ActiveReblit
   through exact `RollbackComplete`; the complete pre-existing NewState suffix reaches
   authenticated terminal journal absence, and the ActiveReblit no-boot-repair
   suffix through the same clean-startup handoff. An ActiveReblit
@@ -672,18 +672,27 @@ predecessor/successor binding-substitution, and 48 fresh-restart writer
 executions. ActiveReblit covers 32, 160, 128, and 64 respectively.
 
 Accepted commit `e35a2183` admits only exact RootLinks-sourced NewState
-`CandidatePreserved` generation 15 into the existing journal-only route. It
-carries the non-Clone record-inode binding through one bound advance to
-`FreshDbInvalidationIntent` generation 16, validates the exact successor in the
-same store, destroys the old lock-bearing store, and independently reopens the
-canonical journal. Its matrices cover 24 successes, 120 storage faults, 96
-binding substitutions, and 48 fresh-handle reopens. Another 240 cases mutate
-all five canonical root links at the capture or final-revalidation seam.
+`CandidatePreserved` generation 15 into the journal-only route and carries the
+non-Clone record-inode binding through a bound advance to
+`FreshDbInvalidationIntent` generation 16, same-store validation, old-store
+destruction, and independent canonical reopen.
+
+Accepted commit `7457b259` admits that exact generation-16 source into the
+production invalidation boundary. One record-inode binding crosses capture,
+Apply-or-Finish effect reconciliation, the bound advance to
+`FreshDbInvalidated` generation 17, same-store successor validation, old-store
+destruction, and independent canonical reopen. A present exact fresh transition
+is removed at most once; proved joint absence performs zero removals. The
+success, storage-fault, predecessor-or-successor binding-substitution, and
+fresh-handle matrices cover 48, 240, 192, and 96 executions respectively.
 Fresh-handle reopen is explicitly not process-death evidence.
 
-A later NewState entry leaves generation 16 byte-identical because its
-downstream RootLinks invalidation, completion, and finalization gates remain
-closed.
+Five all-link mutation seams fail closed: 240 capture, 240 pre-effect, 120
+Applied post-attempt, 240 initial-persistence, and 240 final-revalidation
+executions. The endpoint performs exactly one reverse `/usr` exchange and
+leaves all five canonical root-link targets and identities unchanged. A later
+NewState entry leaves generation 17 byte-identical because its RootLinks
+completion and terminal-finalization gates remain closed.
 
 Accepted commit `a3fb25d3` independently admits exact RootLinks-sourced
 ActivateArchived `CandidatePreserved` generation 11 and carries the exact
@@ -711,11 +720,13 @@ focused contract. The full RootLinks endpoint performs exactly one reverse
 `/usr` exchange and one ActiveReblit wrapper exchange. This entry performs no
 boot, database, non-journal namespace, finalization, or cleanup effect. Exact
 `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
-NewState remains byte-stable at generation 16, ActivateArchived at generation
+NewState remains byte-stable at generation 17, ActivateArchived at generation
 12, and ActiveReblit at generation 14 because all RootLinks finalization gates
 remain closed. Fresh-handle reopen is not process-death evidence; RootLinks
-process death, terminal finalization, reboot, and power-loss durability remain
-unclaimed.
+same-boot `SIGKILL`, terminal finalization, reboot, and power-loss durability
+remain unclaimed. The next NewState widening is the exact generation-17
+`FreshDbInvalidated` -> generation-18 `RollbackComplete` boundary; it must not
+silently admit terminal deletion.
 
 ### Startup reconciliation and interruption campaign
 
