@@ -93,7 +93,7 @@ fn startup_new_state_target_creation_reconciles_raw_reports_semantically_and_req
                     "{source:?} {usr_outcome:?} {fault:?}"
                 );
                 match (expect_restart, result) {
-                    (true, UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired) => {
+                    (true, UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(_)) => {
                         let metadata = fs::symlink_metadata(&target).unwrap();
                         assert!(metadata.file_type().is_dir());
                         assert_eq!(metadata.uid(), nix::unistd::Uid::effective().as_raw());
@@ -109,7 +109,7 @@ fn startup_new_state_target_creation_reconciles_raw_reports_semantically_and_req
                     (true, UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::NotApplied) => {
                         panic!("created target was classified NotApplied for {source:?} {usr_outcome:?} {fault:?}");
                     }
-                    (false, UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired) => {
+                    (false, UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(_)) => {
                         panic!("absent target was classified RestartRequired for {source:?} {usr_outcome:?} {fault:?}");
                     }
                 }
@@ -157,7 +157,7 @@ fn startup_new_state_target_creation_eexist_exact_post_state_requires_restart_wi
 
         assert!(matches!(
             lease.reconcile(&seal, &journal).unwrap(),
-            UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired
+            UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(_)
         ));
         assert_eq!(new_state_target_create_attempt_count(), 1, "{existing:?}");
         assert_eq!(
@@ -198,7 +198,7 @@ fn startup_new_state_target_creation_accepts_every_restrictive_umask_residue_onl
 
         assert!(matches!(
             result.unwrap(),
-            UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired
+            UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(_)
         ));
         assert_eq!(new_state_target_create_attempt_count(), 1);
         assert_eq!(fs::symlink_metadata(target).unwrap().mode() & 0o7777, 0o700 & !mask);
@@ -256,7 +256,7 @@ fn startup_new_state_target_creation_keeps_restrictive_residue_payload_opaque_an
 
         assert!(matches!(
             result.unwrap(),
-            UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired
+            UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(_)
         ));
         assert_eq!(new_state_target_create_attempt_count(), 1);
         assert_eq!(fs::symlink_metadata(&target).unwrap().mode() & 0o7777, 0o300);
@@ -455,7 +455,7 @@ fn startup_new_state_target_creation_accepts_an_exact_empty_replacement_only_as_
 
     assert!(matches!(
         lease.reconcile(&seal, &journal).unwrap(),
-        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired
+        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(_)
     ));
     assert_eq!(new_state_target_create_attempt_count(), 1);
     assert!(target.is_dir());
@@ -483,7 +483,7 @@ fn startup_new_state_target_creation_records_but_does_not_authorize_arbitrary_xa
 
     assert!(matches!(
         lease.reconcile(&seal, &journal).unwrap(),
-        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired
+        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(_)
     ));
     assert_eq!(new_state_target_create_attempt_count(), 1);
     if !installed.load(Ordering::Relaxed) {

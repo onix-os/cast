@@ -11,9 +11,12 @@ use crate::{
 
 use super::{
     ArchivedDurabilityOrigin, UsrRollbackArchivedCandidatePreserveDurableEffectAuthority,
-    require_archived_post_effect_evidence, require_archived_pre_effect_evidence, require_binding,
+    require_archived_post_effect_evidence, require_archived_pre_effect_evidence,
 };
-use crate::client::startup_reconciliation::UsrRollbackCandidatePreserveAuthorityError;
+use crate::client::startup_reconciliation::{
+    UsrRollbackCandidatePreserveAuthorityError,
+    usr_rollback_candidate_preserve_authority::require_journal_record_binding,
+};
 
 impl UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'_> {
     /// Revalidate complete durable authority without repeating movement or
@@ -23,22 +26,35 @@ impl UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'_> {
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
         let effect = &self.effect;
-        require_binding(&effect.journal_binding, journal)?;
+        require_journal_record_binding(
+            &effect.installation,
+            journal,
+            &effect.journal_record_binding,
+            &effect.record,
+        )?;
         require_archived_pre_effect_evidence(
             &effect.installation,
             &effect.state_db,
             &effect.record,
             &effect.database,
+            &effect.journal_record_binding,
             journal,
         )?;
         let namespace_result = effect.namespace.revalidate(&effect.installation, &effect.record);
         run_before_persistence_durable_trailing_evidence();
-        let trailing = require_binding(&effect.journal_binding, journal).and_then(|()| {
+        let trailing = require_journal_record_binding(
+            &effect.installation,
+            journal,
+            &effect.journal_record_binding,
+            &effect.record,
+        )
+        .and_then(|()| {
             require_archived_post_effect_evidence(
                 &effect.installation,
                 &effect.state_db,
                 &effect.record,
                 &effect.database,
+                &effect.journal_record_binding,
                 journal,
             )
         });

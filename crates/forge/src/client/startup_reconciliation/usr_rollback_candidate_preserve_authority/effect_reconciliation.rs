@@ -9,7 +9,7 @@ mod post_move_durability;
 
 use crate::{
     Installation, db,
-    transition_journal::{TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -64,7 +64,7 @@ struct ReconciledNewStateCandidatePreserveEffect<'reservation, Namespace> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: Namespace,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -82,7 +82,12 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffectLease<'reservation>
         // The per-open binding is intentionally the first evidence
         // observation. A mixed store cannot trigger namespace revalidation or
         // the candidate move.
-        require_effect_binding(&self.effect.journal_binding, journal)?;
+        require_effect_binding(
+            &self.effect.installation,
+            &self.effect.journal_record_binding,
+            &self.effect.record,
+            journal,
+        )?;
         self.effect.reconcile_after_binding(journal)
     }
 }
@@ -101,17 +106,31 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
 
-        require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let prepared_namespace = namespace.prepare_move(&installation, &record);
         if prepared_namespace.is_err() {
             // Preserve the existing trailing evidence observation even when
             // final namespace preparation fails before the move authority is
             // produced. The namespace error remains the primary result.
-            let _ = require_post_effect_evidence(&installation, &state_db, &record, &database, journal);
+            let _ = require_post_effect_evidence(
+                &installation,
+                &state_db,
+                &record,
+                &database,
+                &journal_record_binding,
+                journal,
+            );
         }
         let prepared_namespace = prepared_namespace?;
 
@@ -119,11 +138,25 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
         // barriers plus a fresh PRE1 capture. Repeat the binding-first
         // non-namespace sandwich afterward so a journal or database change
         // during that work cannot reach rename.
-        require_effect_binding(&journal_binding, journal)?;
-        require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_effect_binding(&installation, &journal_record_binding, &record, journal)?;
+        require_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
 
         let namespace_result = prepared_namespace.reconcile_move(&installation, &record);
-        let trailing_evidence = require_post_effect_evidence(&installation, &state_db, &record, &database, journal);
+        let trailing_evidence = require_post_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        );
         let namespace_result = namespace_result?;
         trailing_evidence?;
 
@@ -137,7 +170,7 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
                             record,
                             database,
                             namespace,
-                            journal_binding,
+                            journal_record_binding,
                             _active_state_reservation,
                         },
                     },

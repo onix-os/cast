@@ -28,22 +28,35 @@ impl UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'_> {
         let effect = &self._effect;
         // The per-open binding remains the first retained-evidence
         // observation at the persistence boundary.
-        require_effect_binding(&effect.journal_binding, journal)?;
+        require_effect_binding(
+            &effect.installation,
+            &effect.journal_record_binding,
+            &effect.record,
+            journal,
+        )?;
         require_active_reblit_pre_effect_evidence(
             &effect.installation,
             &effect.state_db,
             &effect.record,
             &effect.database,
+            &effect.journal_record_binding,
             journal,
         )?;
         let namespace_result = effect.namespace.revalidate(&effect.installation, &effect.record);
         run_before_persistence_durable_trailing_evidence();
-        let trailing_evidence = require_effect_binding(&effect.journal_binding, journal).and_then(|()| {
+        let trailing_evidence = require_effect_binding(
+            &effect.installation,
+            &effect.journal_record_binding,
+            &effect.record,
+            journal,
+        )
+        .and_then(|()| {
             require_active_reblit_post_effect_evidence(
                 &effect.installation,
                 &effect.state_db,
                 &effect.record,
                 &effect.database,
+                &effect.journal_record_binding,
                 journal,
             )
         });

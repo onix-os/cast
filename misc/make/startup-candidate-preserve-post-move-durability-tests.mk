@@ -63,6 +63,8 @@ forge-startup-usr-rollback-candidate-preserve-post-move-durability-test:
 	timeout 10s awk '/UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved/ { active = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::ActiveReblit\(/ { active_selection = NR } /UsrRollbackCandidatePreserveTopology::ArchivedPreserved/ { archived = NR } /Ok\(UsrRollbackCandidatePreserveFinishDurabilitySelection::Archived\(/ { archived_selection = NR } END { exit !(active && active_selection && archived && archived_selection && active < active_selection && active_selection < archived && archived < archived_selection) }' "$$authority_post"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: RollbackActionOutcome::Applied,' "$$authority_post" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: RollbackActionOutcome::AlreadySatisfied,' "$$authority_post" )" = 1; \
+	timeout 10s grep -Fq '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority_post"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority" "$$authority_effect" "$$authority_post" "$$proof_effect" "$$proof_post"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -U -n 'fn[^\(]*\([^\)]*(origin|outcome)[^\)]*\)' "$$authority_post"; then exit 1; fi; \
 	production_post_code="$$( timeout 10s sed -E 's,//.*$$,,' "$$authority_post" "$$proof_post" "$$namespace_post" )"; \
 	if timeout 10s rg -n 'renameat|std::fs::rename[[:space:]]*\(|(^|[^_[:alnum:]])fs::rename[[:space:]]*\(|attempt_move|reconcile_move|move_attempt|mkdir|create_dir|set_permissions|chmod|unlink|remove_dir|remove_file' <<<"$$production_post_code"; then exit 1; fi; \

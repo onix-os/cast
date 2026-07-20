@@ -16,7 +16,9 @@ mod target_normalization;
 
 use crate::{
     Installation,
-    transition_journal::{Operation, Phase, StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::{
@@ -155,9 +157,11 @@ impl UsrRollbackCandidatePreserveNamespaceInspection {
     pub(in crate::client::startup_reconciliation) fn begin(
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<Self, UsrRollbackCandidatePreserveNamespaceError> {
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
+        installation.revalidate_mutable_namespace()?;
         let before = capture_snapshot(installation, expected)?;
         let topology = candidate_preserve_topology(expected, &before)?;
         Ok(Self { before, topology })
@@ -167,6 +171,7 @@ impl UsrRollbackCandidatePreserveNamespaceInspection {
         self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<UsrRollbackCandidatePreserveNamespaceProof, UsrRollbackCandidatePreserveNamespaceError> {
         let after = capture_snapshot(installation, expected)?;
@@ -175,7 +180,8 @@ impl UsrRollbackCandidatePreserveNamespaceInspection {
         require_matching_fingerprints(&self.before, &after)?;
         require_topology(expected, &self.before, self.topology)?;
         require_topology(expected, &after, self.topology)?;
-        require_exact_journal(journal, expected)?;
+        installation.revalidate_mutable_namespace()?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackCandidatePreserveNamespaceProof {
             before: self.before,
@@ -194,6 +200,7 @@ impl UsrRollbackCandidatePreserveNamespaceProof {
         &self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
         installation.revalidate_mutable_namespace()?;
@@ -202,7 +209,8 @@ impl UsrRollbackCandidatePreserveNamespaceProof {
         require_matching_fingerprints(&self.before, &self.after)?;
         require_topology(expected, &self.before, self.topology)?;
         require_topology(expected, &self.after, self.topology)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
+        installation.revalidate_mutable_namespace()?;
 
         run_before_fresh_namespace_capture();
         let fresh = capture_snapshot(installation, expected)?;
@@ -210,7 +218,8 @@ impl UsrRollbackCandidatePreserveNamespaceProof {
         require_matching_fingerprints(&self.before, &fresh)?;
         require_topology(expected, &fresh, self.topology)?;
 
-        require_exact_journal(journal, expected)?;
+        installation.revalidate_mutable_namespace()?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
@@ -767,12 +776,19 @@ fn require_matching_fingerprints(
 }
 
 fn require_exact_journal(
+    installation: &Installation,
     journal: &TransitionJournalStore,
+    journal_record_binding: &TransitionJournalRecordBinding,
     expected: &TransitionRecord,
 ) -> Result<(), UsrRollbackCandidatePreserveNamespaceError> {
-    match journal.load()? {
-        Some(actual) if actual == *expected => Ok(()),
-        Some(_) | None => Err(UsrRollbackCandidatePreserveNamespaceError::JournalChanged),
+    if !journal.has_record_store_binding(journal_record_binding) {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::JournalChanged);
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, journal_record_binding, expected)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveNamespaceError::JournalChanged)
     }
 }
 

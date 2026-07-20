@@ -37,12 +37,14 @@ forge-startup-usr-rollback-candidate-preserve-target-creation-test:
 	timeout 10s grep -Fqx 'mod create;' "$$namespace"; \
 	timeout 10s grep -Fqx 'mod reconciliation;' "$$namespace_create"; \
 	timeout 10s grep -Fqx '    CreateNewStateTarget(UsrRollbackNewStateCandidatePreserveCreateTargetLease<'\''reservation>),' "$$authority"; \
-	timeout 10s grep -Fqx '    RestartRequired,' "$$authority_create"; \
+	timeout 10s grep -Fqx '    RestartRequired(UsrRollbackCandidatePreserveRestartAuthority<'\''reservation>),' "$$authority_create"; \
 	timeout 10s grep -Fqx '    NotApplied,' "$$authority_create"; \
 	timeout 10s grep -Fqx '    Ambiguous,' "$$authority_create"; \
 	timeout 10s grep -Fqx '    effect_evidence::{require_effect_binding, require_post_effect_evidence, require_pre_effect_evidence},' "$$authority_create"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation {" { active = 1; seen = 1; next } active && $$0 == "}" { closed = 1; active = 0; next } active && /[(][^)]|[{][^}]/ { payload = 1 } END { exit !(seen && closed && !payload) }' "$$authority_create"; \
-	timeout 10s grep -Fq 'require_effect_binding(&self.effect.journal_binding, journal)?;' "$$authority_create"; \
+	timeout 10s grep -Fqx "pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation<'reservation> {" "$$authority_create"; \
+	timeout 10s grep -Fq '            &self.effect.journal_record_binding,' "$$authority_create"; \
+	timeout 10s grep -Fq '                    UsrRollbackCandidatePreserveRestartAuthority {' "$$authority_create"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority" "$$authority_create" "$$effect_evidence" "$$proof" "$$proof_create"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'arm_before_usr_rollback_new_state_target_create_final_pre_capture' "$$proof_create"; \
 	timeout 10s grep -Fq 'arm_before_new_state_target_create_attempt' "$$namespace_create"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'mkdirat_once(' "$$namespace_create" )" = 1; \
@@ -60,7 +62,15 @@ forge-startup-usr-rollback-candidate-preserve-target-creation-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$production_dispatch" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveApplyEffectSelection::CreateNewStateTarget(lease) =>' "$$production_dispatch" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired =>' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(' "$$production_dispatch" )" = 1; \
+	create_restart_branch="$$( timeout 10s sed -n '/^                        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(/,/^                        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::NotApplied =>/p' "$$production_dispatch" | timeout 10s sed '$$d' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$create_restart_branch" )" = 5; \
+	timeout 10s grep -Fqx '                        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(' <<<"$$create_restart_branch"; \
+	timeout 10s grep -Fqx '                            authority,' <<<"$$create_restart_branch"; \
+	timeout 10s grep -Fqx '                        ) => {' <<<"$$create_restart_branch"; \
+	timeout 10s grep -Fqx '                            return return_exact_unchanged_source(journal, source_record, authority);' <<<"$$create_restart_branch"; \
+	timeout 10s grep -Fqx '                        }' <<<"$$create_restart_branch"; \
+	if timeout 10s rg -n 'drop|retry|reconcile|lease|DurabilityReady|persist_|journal\.advance' <<<"$$create_restart_branch"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'NewStateTargetCreateFault::ErrorAfterApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateTargetCreateFault::ErrorWithoutApply' "$$tests"; \
 	timeout 10s grep -Fq 'NewStateTargetCreateFault::SuccessWithoutApply' "$$tests"; \

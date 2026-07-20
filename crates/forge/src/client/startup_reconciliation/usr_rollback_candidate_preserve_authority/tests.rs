@@ -4,6 +4,7 @@ mod admission;
 mod archived_effect;
 mod evidence;
 mod post_move_durability;
+mod record_binding;
 pub(super) use super::{test_fixture as fixture, test_support as support};
 mod target_creation;
 mod target_normalization;

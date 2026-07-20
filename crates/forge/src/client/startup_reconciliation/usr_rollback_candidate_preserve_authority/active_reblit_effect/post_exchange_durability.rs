@@ -9,7 +9,7 @@ pub(in crate::client) use persistence::arm_before_active_reblit_candidate_preser
 use crate::transition_journal::RollbackActionOutcome;
 use crate::{
     Installation, db,
-    transition_journal::{TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -42,7 +42,7 @@ struct DurableActiveReblitCandidatePreserveEffect<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackActiveReblitCandidatePreserveDurableNamespace,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -63,7 +63,12 @@ impl<'reservation> UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthorit
         UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        require_effect_binding(&self._effect._journal_binding, journal)?;
+        require_effect_binding(
+            &self._effect._installation,
+            &self._effect._journal_record_binding,
+            &self._effect._record,
+            journal,
+        )?;
         let effect = complete_after_binding(self._effect, journal, |namespace, installation, record| {
             namespace.complete_post_exchange_durability(installation, record)
         })?;
@@ -85,7 +90,12 @@ impl<'reservation> UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffec
         UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        require_effect_binding(&self._effect._journal_binding, journal)?;
+        require_effect_binding(
+            &self._effect._installation,
+            &self._effect._journal_record_binding,
+            &self._effect._record,
+            journal,
+        )?;
         let effect = complete_after_binding(self._effect, journal, |namespace, installation, record| {
             namespace.complete_post_exchange_durability(installation, record)
         })?;
@@ -114,16 +124,31 @@ fn complete_after_binding<'reservation, Namespace>(
         _record: record,
         _database: database,
         _namespace: namespace,
-        _journal_binding: journal_binding,
+        _journal_record_binding: journal_record_binding,
         _active_state_reservation,
     } = effect;
 
-    require_active_reblit_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+    require_active_reblit_pre_effect_evidence(
+        &installation,
+        &state_db,
+        &record,
+        &database,
+        &journal_record_binding,
+        journal,
+    )?;
     let namespace_result = complete_namespace(namespace, &installation, &record);
     run_before_durable_trailing_evidence();
-    let trailing_evidence = require_effect_binding(&journal_binding, journal).and_then(|()| {
-        require_active_reblit_post_effect_evidence(&installation, &state_db, &record, &database, journal)
-    });
+    let trailing_evidence = require_effect_binding(&installation, &journal_record_binding, &record, journal)
+        .and_then(|()| {
+            require_active_reblit_post_effect_evidence(
+                &installation,
+                &state_db,
+                &record,
+                &database,
+                &journal_record_binding,
+                journal,
+            )
+        });
     let namespace = namespace_result?;
     trailing_evidence?;
 
@@ -133,7 +158,7 @@ fn complete_after_binding<'reservation, Namespace>(
         record,
         database,
         namespace,
-        journal_binding,
+        journal_record_binding,
         _active_state_reservation,
     })
 }

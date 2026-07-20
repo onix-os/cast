@@ -69,14 +69,15 @@ forge-startup-usr-rollback-candidate-preserve-effect-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveTopology::NewStateStagedWithEmptyQuarantine' "$$authority"; \
 	timeout 10s grep -Fq '.with_active_reblit_wrapper_index(7)' "$$tests"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'active_reblit_candidate_preserve_exchange_attempt_count()' "$$tests" )" = 4; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'self.require_journal_binding(journal)?;' "$$authority" )" -ge 2; \
-	timeout 10s grep -Fq '        require_effect_binding(&self.effect.journal_binding, journal)?;' "$$authority_effect"; \
-	timeout 10s grep -Fq '    if journal.has_binding(expected) {' "$$effect_evidence"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'self.require_journal_record_binding(journal)?;' "$$authority" )" -ge 2; \
+	timeout 10s grep -Fq '            &self.effect.journal_record_binding,' "$$authority_effect"; \
+	timeout 10s grep -Fq '    require_journal_record_binding(installation, journal, expected, record)' "$$effect_evidence"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|\.advance[[:space:]]*\(' "$$authority" "$$proof" "$$effect_evidence" "$$production_dispatch" crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs'; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'let trailing_evidence = require_post_effect_evidence' "$$authority_effect"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '        require_pre_effect_evidence(' "$$authority_effect" )" = 2; \
 	prepared_line="$$( timeout 10s grep -nF '        let prepared_namespace = namespace.prepare_move(&installation, &record);' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
-	second_binding_line="$$( timeout 10s grep -nF '        require_effect_binding(&journal_binding, journal)?;' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
-	second_evidence_line="$$( timeout 10s grep -nF '        require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;' "$$authority_effect" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
+	second_binding_line="$$( timeout 10s grep -nF '        require_effect_binding(&installation, &journal_record_binding, &record, journal)?;' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
+	second_evidence_line="$$( timeout 10s grep -nF '        require_pre_effect_evidence(' "$$authority_effect" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
 	attempt_call_line="$$( timeout 10s grep -nF '        let namespace_result = prepared_namespace.reconcile_move(&installation, &record);' "$$authority_effect" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test -n "$$prepared_line"; \
 	timeout 10s test -n "$$second_binding_line"; \

@@ -9,7 +9,7 @@
 
 use thiserror::Error;
 
-use crate::transition_journal::{Phase, StorageError, TransitionJournalStore, TransitionRecord};
+use crate::transition_journal::{Phase, TransitionJournalStore, TransitionRecord};
 
 use super::super::startup_reconciliation::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
@@ -20,6 +20,7 @@ use super::super::startup_reconciliation::{
     UsrRollbackArchivedCandidatePreserveApplyReconciliation, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthorityError,
     UsrRollbackCandidatePreserveFinishAuthority, UsrRollbackCandidatePreserveFinishDurabilitySelection,
+    UsrRollbackCandidatePreserveRestartAuthority,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
@@ -110,6 +111,18 @@ pub(in crate::client) enum UsrRollbackCandidatePreserveReady<'reservation> {
     Finish(UsrRollbackCandidatePreserveFinishAuthority<'reservation>),
 }
 
+impl UsrRollbackCandidatePreserveReady<'_> {
+    fn exact_source_record(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<TransitionRecord, UsrRollbackCandidatePreserveAuthorityError> {
+        match self {
+            Self::Apply(authority) => authority.exact_source_record(journal),
+            Self::Finish(authority) => authority.exact_source_record(journal),
+        }
+    }
+}
+
 /// Capability which may enter the shared post-move durability suffix.
 ///
 /// Finish admission remains opaque until every preparation-only branch has
@@ -143,7 +156,8 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
     source_record: TransitionRecord,
     ready: UsrRollbackCandidatePreserveReady<'reservation>,
 ) -> Result<(TransitionJournalStore, TransitionRecord), UsrRollbackCandidatePreserveDispatchError> {
-    require_exact_source(&journal, &source_record)?;
+    let actual_source = ready.exact_source_record(&journal)?;
+    require_exact_source(&source_record, actual_source)?;
 
     let effect_seal = UsrRollbackCandidatePreserveEffectSeal::new();
     let durability_ready = match ready {
@@ -151,8 +165,10 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
             match authority.into_effect_selection(&effect_seal, &journal)? {
                 UsrRollbackCandidatePreserveApplyEffectSelection::CreateNewStateTarget(lease) => {
                     match lease.reconcile(&effect_seal, &journal)? {
-                        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired => {
-                            return return_exact_unchanged_source(journal, source_record);
+                        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(
+                            authority,
+                        ) => {
+                            return return_exact_unchanged_source(journal, source_record, authority);
                         }
                         UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::NotApplied => {
                             drop(journal);
@@ -166,8 +182,10 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
                 }
                 UsrRollbackCandidatePreserveApplyEffectSelection::NormalizeNewStateTarget(lease) => {
                     match lease.reconcile(&effect_seal, &journal)? {
-                        UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired => {
-                            return return_exact_unchanged_source(journal, source_record);
+                        UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(
+                            authority,
+                        ) => {
+                            return return_exact_unchanged_source(journal, source_record, authority);
                         }
                         UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::NotApplied => {
                             drop(journal);
@@ -301,55 +319,38 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
 }
 
 fn require_exact_source(
-    journal: &TransitionJournalStore,
     expected: &TransitionRecord,
+    actual: TransitionRecord,
 ) -> Result<(), UsrRollbackCandidatePreserveDispatchError> {
-    let actual = journal
-        .load()
-        .map_err(UsrRollbackCandidatePreserveDispatchError::JournalRead)?;
-    match actual {
-        Some(actual) if actual == *expected && actual.phase == Phase::CandidatePreserveIntent => Ok(()),
-        Some(actual) => Err(UsrRollbackCandidatePreserveDispatchError::UnexpectedSource {
+    if actual == *expected && actual.phase == Phase::CandidatePreserveIntent {
+        Ok(())
+    } else {
+        Err(UsrRollbackCandidatePreserveDispatchError::UnexpectedSource {
             expected: Box::new(expected.clone()),
             actual: Some(Box::new(actual)),
-        }),
-        None => Err(UsrRollbackCandidatePreserveDispatchError::UnexpectedSource {
-            expected: Box::new(expected.clone()),
-            actual: None,
-        }),
+        })
     }
 }
 
-fn return_exact_unchanged_source(
+fn return_exact_unchanged_source<'reservation>(
     journal: TransitionJournalStore,
     expected: TransitionRecord,
+    authority: UsrRollbackCandidatePreserveRestartAuthority<'reservation>,
 ) -> Result<(TransitionJournalStore, TransitionRecord), UsrRollbackCandidatePreserveDispatchError> {
-    let actual = journal
-        .load()
-        .map_err(UsrRollbackCandidatePreserveDispatchError::JournalRead)?;
-    match actual {
-        Some(actual) if actual == expected && actual.phase == Phase::CandidatePreserveIntent => Ok((journal, actual)),
-        Some(actual) => {
-            drop(journal);
-            Err(UsrRollbackCandidatePreserveDispatchError::UnexpectedSource {
-                expected: Box::new(expected),
-                actual: Some(Box::new(actual)),
-            })
-        }
-        None => {
-            drop(journal);
-            Err(UsrRollbackCandidatePreserveDispatchError::UnexpectedSource {
-                expected: Box::new(expected),
-                actual: None,
-            })
-        }
+    let actual = authority.into_exact_source_record(&journal)?;
+    if actual == expected && actual.phase == Phase::CandidatePreserveIntent {
+        Ok((journal, actual))
+    } else {
+        drop(journal);
+        Err(UsrRollbackCandidatePreserveDispatchError::UnexpectedSource {
+            expected: Box::new(expected),
+            actual: Some(Box::new(actual)),
+        })
     }
 }
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum UsrRollbackCandidatePreserveDispatchError {
-    #[error("read the exact CandidatePreserveIntent source around a preparation-only effect")]
-    JournalRead(#[source] StorageError),
     #[error("candidate-preservation leaf was paired with an unexpected canonical source record")]
     UnexpectedSource {
         expected: Box<TransitionRecord>,

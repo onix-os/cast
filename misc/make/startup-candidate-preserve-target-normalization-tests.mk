@@ -40,11 +40,13 @@ forge-startup-usr-rollback-candidate-preserve-target-normalization-test:
 	timeout 10s grep -Fqx 'mod durability;' "$$namespace_normalize"; \
 	timeout 10s grep -Fqx 'mod reconciliation;' "$$namespace_normalize"; \
 	timeout 10s grep -Fqx '    NormalizeNewStateTarget(UsrRollbackNewStateCandidatePreserveNormalizeTargetLease<'\''reservation>),' "$$authority"; \
-	timeout 10s grep -Fqx '    RestartRequired,' "$$authority_normalize"; \
+	timeout 10s grep -Fqx '    RestartRequired(UsrRollbackCandidatePreserveRestartAuthority<'\''reservation>),' "$$authority_normalize"; \
 	timeout 10s grep -Fqx '    NotApplied,' "$$authority_normalize"; \
 	timeout 10s grep -Fqx '    Ambiguous,' "$$authority_normalize"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation {" { active = 1; seen = 1; next } active && $$0 == "}" { closed = 1; active = 0; next } active && /[(][^)]|[{][^}]/ { payload = 1 } END { exit !(seen && closed && !payload) }' "$$authority_normalize"; \
-	timeout 10s grep -Fq 'require_effect_binding(&self.effect.journal_binding, journal)?;' "$$authority_normalize"; \
+	timeout 10s grep -Fqx "pub(in crate::client) enum UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation<'reservation> {" "$$authority_normalize"; \
+	timeout 10s grep -Fq '            &self.effect.journal_record_binding,' "$$authority_normalize"; \
+	timeout 10s grep -Fq '                    UsrRollbackCandidatePreserveRestartAuthority {' "$$authority_normalize"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority" "$$authority_normalize" "$$effect_evidence" "$$proof" "$$proof_normalize"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'let prepared_namespace = namespace.prepare_target_normalization(&installation, &record);' "$$authority_normalize"; \
 	timeout 10s grep -Fq 'let namespace_result = prepared_namespace.reconcile_target_normalization(&installation, &record);' "$$authority_normalize"; \
 	timeout 10s grep -Fq 'arm_before_usr_rollback_new_state_target_normalize_final_pre_capture' "$$proof_normalize"; \
@@ -72,7 +74,15 @@ forge-startup-usr-rollback-candidate-preserve-target-normalization-test:
 	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveReady,' "$$startup_recovery"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveEffectSeal::new();' "$$production_dispatch" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCandidatePreserveApplyEffectSelection::NormalizeNewStateTarget(lease) =>' "$$production_dispatch" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired =>' "$$production_dispatch" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(' "$$production_dispatch" )" = 1; \
+	normalize_restart_branch="$$( timeout 10s sed -n '/^                        UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(/,/^                        UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::NotApplied =>/p' "$$production_dispatch" | timeout 10s sed '$$d' )"; \
+	timeout 10s test "$$( timeout 10s grep -c . <<<"$$normalize_restart_branch" )" = 5; \
+	timeout 10s grep -Fqx '                        UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(' <<<"$$normalize_restart_branch"; \
+	timeout 10s grep -Fqx '                            authority,' <<<"$$normalize_restart_branch"; \
+	timeout 10s grep -Fqx '                        ) => {' <<<"$$normalize_restart_branch"; \
+	timeout 10s grep -Fqx '                            return return_exact_unchanged_source(journal, source_record, authority);' <<<"$$normalize_restart_branch"; \
+	timeout 10s grep -Fqx '                        }' <<<"$$normalize_restart_branch"; \
+	if timeout 10s rg -n 'drop|retry|reconcile|lease|DurabilityReady|persist_|journal\.advance' <<<"$$normalize_restart_branch"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'NewStateTargetNormalizeFault::ErrorAfterApply' "$$tests/semantics.rs"; \
 	timeout 10s grep -Fq 'NewStateTargetNormalizeFault::ErrorWithoutApply' "$$tests/semantics.rs"; \
 	timeout 10s grep -Fq 'NewStateTargetNormalizeFault::SuccessWithoutApply' "$$tests/semantics.rs"; \

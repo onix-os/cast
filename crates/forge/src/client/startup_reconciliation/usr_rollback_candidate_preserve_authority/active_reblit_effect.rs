@@ -11,7 +11,7 @@ pub(in crate::client) use post_exchange_durability::{
 
 use crate::{
     Installation, db,
-    transition_journal::{Operation, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{Operation, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -37,7 +37,7 @@ struct UsrRollbackActiveReblitCandidatePreserveEffect<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackActiveReblitCandidatePreserveNamespaceEffectEvidence,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -53,7 +53,7 @@ struct ReconciledActiveReblitCandidatePreserveEffect<'reservation, Namespace> {
     _record: TransitionRecord,
     _database: DatabaseEvidence,
     _namespace: Namespace,
-    _journal_binding: TransitionJournalBinding,
+    _journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -102,7 +102,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
         let namespace = namespace.into_active_reblit_apply_effect_evidence(&record, wrapper_index)?;
@@ -113,7 +113,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                 record,
                 database,
                 namespace,
-                journal_binding,
+                journal_record_binding,
                 _active_state_reservation,
             },
         })
@@ -143,14 +143,28 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = evidence;
-        require_active_reblit_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_active_reblit_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace = namespace
             .into_active_reblit_finish_effect_evidence(&record, wrapper_index)?
             .reconcile_finish(&installation, &record)?;
-        require_active_reblit_post_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_active_reblit_post_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         Ok(
             UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority {
                 _effect: ReconciledActiveReblitCandidatePreserveEffect {
@@ -159,7 +173,7 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
                     _record: record,
                     _database: database,
                     _namespace: namespace,
-                    _journal_binding: journal_binding,
+                    _journal_record_binding: journal_record_binding,
                     _active_state_reservation,
                 },
             },
@@ -177,7 +191,12 @@ impl<'reservation> UsrRollbackActiveReblitCandidatePreserveEffectLease<'reservat
         UsrRollbackActiveReblitCandidatePreserveApplyReconciliation<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        require_effect_binding(&self.effect.journal_binding, journal)?;
+        require_effect_binding(
+            &self.effect.installation,
+            &self.effect.journal_record_binding,
+            &self.effect.record,
+            journal,
+        )?;
         self.effect.reconcile_after_binding(journal)
     }
 }
@@ -196,20 +215,47 @@ impl<'reservation> UsrRollbackActiveReblitCandidatePreserveEffect<'reservation> 
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
-        require_active_reblit_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_active_reblit_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let prepared = namespace.prepare_exchange(&installation, &record);
         if prepared.is_err() {
-            let _ = require_active_reblit_post_effect_evidence(&installation, &state_db, &record, &database, journal);
+            let _ = require_active_reblit_post_effect_evidence(
+                &installation,
+                &state_db,
+                &record,
+                &database,
+                &journal_record_binding,
+                journal,
+            );
         }
         let prepared = prepared?;
-        require_effect_binding(&journal_binding, journal)?;
-        require_active_reblit_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_effect_binding(&installation, &journal_record_binding, &record, journal)?;
+        require_active_reblit_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace_result = prepared.reconcile_exchange(&installation, &record);
-        let trailing =
-            require_active_reblit_post_effect_evidence(&installation, &state_db, &record, &database, journal);
+        let trailing = require_active_reblit_post_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        );
         let namespace_result = namespace_result?;
         trailing?;
         Ok(match namespace_result {
@@ -222,7 +268,7 @@ impl<'reservation> UsrRollbackActiveReblitCandidatePreserveEffect<'reservation> 
                             _record: record,
                             _database: database,
                             _namespace: namespace,
-                            _journal_binding: journal_binding,
+                            _journal_record_binding: journal_record_binding,
                             _active_state_reservation,
                         },
                     },
@@ -243,12 +289,15 @@ fn require_active_reblit_pre_effect_evidence(
     state_db: &db::state::Database,
     record: &TransitionRecord,
     expected_database: &DatabaseEvidence,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
 ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     require_exact_database(expected_database, inspect_current_database(record, state_db)?)?;
-    require_exact_active_reblit_journal(journal, record)?;
     require_exact_active_reblit_plan(record)?;
+    installation.revalidate_mutable_namespace()?;
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     Ok(())
 }
@@ -258,27 +307,17 @@ fn require_active_reblit_post_effect_evidence(
     state_db: &db::state::Database,
     record: &TransitionRecord,
     expected_database: &DatabaseEvidence,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
 ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
-    require_exact_active_reblit_journal(journal, record)?;
     require_exact_active_reblit_plan(record)?;
     require_exact_database(expected_database, inspect_current_database(record, state_db)?)?;
     installation.revalidate_mutable_namespace()?;
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
+    installation.revalidate_mutable_namespace()?;
     Ok(())
-}
-
-fn require_exact_active_reblit_journal(
-    journal: &TransitionJournalStore,
-    expected: &TransitionRecord,
-) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
-    match journal.load() {
-        Ok(Some(actual)) if actual == *expected => Ok(()),
-        Ok(Some(_)) | Ok(None) => {
-            Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalChangedDuringEffect.into())
-        }
-        Err(source) => Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalReadDuringEffect(source).into()),
-    }
 }
 
 fn require_exact_active_reblit_plan(

@@ -56,7 +56,7 @@ fn startup_new_state_target_normalization_reconciles_raw_reports_semantically_an
 
                 assert_effect_attempts(&fixture, 1);
                 match (expect_restart, result) {
-                    (true, UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired) => {
+                    (true, UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(_)) => {
                         assert_eq!(target_identity(&target).mode, 0o700)
                     }
                     (false, UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::NotApplied) => {
@@ -70,7 +70,7 @@ fn startup_new_state_target_normalization_reconciles_raw_reports_semantically_an
                             "applied normalization was classified NotApplied for {source:?} {usr_outcome:?} {fault:?}"
                         );
                     }
-                    (false, UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired) => {
+                    (false, UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(_)) => {
                         panic!(
                             "unapplied normalization was classified RestartRequired for {source:?} {usr_outcome:?} {fault:?}"
                         );
@@ -100,7 +100,7 @@ fn startup_new_state_target_normalization_accepts_every_restrictive_mode_for_eve
 
                 assert!(matches!(
                     lease.reconcile(&seal, &journal).unwrap(),
-                    UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired
+                    UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(_)
                 ));
                 assert_effect_attempts(&fixture, 1);
                 let after = target_identity(&target);
@@ -130,7 +130,7 @@ fn startup_new_state_target_normalization_accepts_concurrent_same_inode_canonica
 
     assert!(matches!(
         lease.reconcile(&seal, &journal).unwrap(),
-        UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired
+        UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(_)
     ));
     assert_effect_attempts(&fixture, 1);
     let after = target_identity(&target);
@@ -229,7 +229,7 @@ fn startup_new_state_target_normalization_enforces_payload_acl_and_xattr_boundar
             PostNormalizeBoundary::ArbitraryUserXattr => {
                 assert!(matches!(
                     result,
-                    UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired
+                    UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(_)
                 ));
                 if !user_xattr_installed.load(Ordering::Relaxed) {
                     eprintln!("skipping arbitrary-xattr boundary assertion: fixture filesystem has no user xattrs");

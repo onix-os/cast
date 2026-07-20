@@ -11,7 +11,7 @@ pub(in crate::client) use persistence::arm_before_archived_candidate_preserve_pe
 
 use crate::{
     Installation, db,
-    transition_journal::{Operation, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{Operation, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -37,7 +37,7 @@ struct ArchivedEffect<'reservation, Namespace> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: Namespace,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -89,7 +89,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self;
         let namespace = namespace.into_archived_apply_effect_evidence(&record)?;
@@ -100,7 +100,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                 record,
                 database,
                 namespace,
-                journal_binding,
+                journal_record_binding,
                 _active_state_reservation,
             },
         })
@@ -124,14 +124,28 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self.evidence;
-        require_archived_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_archived_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace = namespace
             .into_archived_finish_effect_evidence(&record)?
             .reconcile_finish(&installation, &record)?;
-        require_archived_post_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_archived_post_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         Ok(UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority {
             effect: ArchivedEffect {
                 installation,
@@ -139,7 +153,7 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
                 record,
                 database,
                 namespace,
-                journal_binding,
+                journal_record_binding,
                 _active_state_reservation,
             },
         })
@@ -155,26 +169,59 @@ impl<'reservation> UsrRollbackArchivedCandidatePreserveEffectLease<'reservation>
         UsrRollbackArchivedCandidatePreserveApplyReconciliation<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        require_binding(&self.effect.journal_binding, journal)?;
+        super::require_journal_record_binding(
+            &self.effect.installation,
+            journal,
+            &self.effect.journal_record_binding,
+            &self.effect.record,
+        )?;
         let ArchivedEffect {
             installation,
             state_db,
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         } = self.effect;
-        require_archived_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        require_archived_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let prepared = namespace.prepare_move(&installation, &record);
         if prepared.is_err() {
-            let _ = require_archived_post_effect_evidence(&installation, &state_db, &record, &database, journal);
+            let _ = require_archived_post_effect_evidence(
+                &installation,
+                &state_db,
+                &record,
+                &database,
+                &journal_record_binding,
+                journal,
+            );
         }
         let prepared = prepared?;
-        require_binding(&journal_binding, journal)?;
-        require_archived_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+        super::require_journal_record_binding(&installation, journal, &journal_record_binding, &record)?;
+        require_archived_pre_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        )?;
         let namespace_result = prepared.reconcile_move(&installation, &record);
-        let trailing = require_archived_post_effect_evidence(&installation, &state_db, &record, &database, journal);
+        let trailing = require_archived_post_effect_evidence(
+            &installation,
+            &state_db,
+            &record,
+            &database,
+            &journal_record_binding,
+            journal,
+        );
         let namespace_result = namespace_result?;
         trailing?;
         Ok(match namespace_result {
@@ -187,7 +234,7 @@ impl<'reservation> UsrRollbackArchivedCandidatePreserveEffectLease<'reservation>
                             record,
                             database,
                             namespace,
-                            journal_binding,
+                            journal_record_binding,
                             _active_state_reservation,
                         },
                     },
@@ -240,12 +287,18 @@ fn complete_post_move<'reservation, Namespace>(
 where
     Namespace: CompleteArchivedPostMove,
 {
-    require_binding(&effect.journal_binding, journal)?;
+    super::require_journal_record_binding(
+        &effect.installation,
+        journal,
+        &effect.journal_record_binding,
+        &effect.record,
+    )?;
     require_archived_pre_effect_evidence(
         &effect.installation,
         &effect.state_db,
         &effect.record,
         &effect.database,
+        &effect.journal_record_binding,
         journal,
     )?;
     let ArchivedEffect {
@@ -254,12 +307,21 @@ where
         record,
         database,
         namespace,
-        journal_binding,
+        journal_record_binding,
         _active_state_reservation,
     } = effect;
     let namespace_result = namespace.complete(&installation, &record);
-    let trailing = require_binding(&journal_binding, journal)
-        .and_then(|()| require_archived_post_effect_evidence(&installation, &state_db, &record, &database, journal));
+    let trailing = super::require_journal_record_binding(&installation, journal, &journal_record_binding, &record)
+        .and_then(|()| {
+            require_archived_post_effect_evidence(
+                &installation,
+                &state_db,
+                &record,
+                &database,
+                &journal_record_binding,
+                journal,
+            )
+        });
     let namespace = namespace_result?;
     trailing?;
     Ok(UsrRollbackArchivedCandidatePreserveDurableEffectAuthority {
@@ -269,7 +331,7 @@ where
             record,
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation,
         },
         origin,
@@ -304,28 +366,20 @@ impl CompleteArchivedPostMove for UsrRollbackArchivedCandidatePreserveAlreadySat
     }
 }
 
-fn require_binding(
-    expected: &TransitionJournalBinding,
-    journal: &TransitionJournalStore,
-) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
-    if journal.has_binding(expected) {
-        Ok(())
-    } else {
-        Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalBindingMismatch.into())
-    }
-}
-
 fn require_archived_pre_effect_evidence(
     installation: &Installation,
     state_db: &db::state::Database,
     record: &TransitionRecord,
     expected_database: &DatabaseEvidence,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
 ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     require_exact_database(expected_database, inspect_current_database(record, state_db)?)?;
-    require_exact_archived_journal(journal, record)?;
     require_exact_archived_plan(record)?;
+    installation.revalidate_mutable_namespace()?;
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
     Ok(())
 }
@@ -335,27 +389,17 @@ fn require_archived_post_effect_evidence(
     state_db: &db::state::Database,
     record: &TransitionRecord,
     expected_database: &DatabaseEvidence,
+    journal_record_binding: &TransitionJournalRecordBinding,
     journal: &TransitionJournalStore,
 ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
     installation.revalidate_mutable_namespace()?;
-    require_exact_archived_journal(journal, record)?;
     require_exact_archived_plan(record)?;
     require_exact_database(expected_database, inspect_current_database(record, state_db)?)?;
     installation.revalidate_mutable_namespace()?;
+    super::require_journal_record_binding(installation, journal, journal_record_binding, record)?;
+    installation.revalidate_mutable_namespace()?;
     Ok(())
-}
-
-fn require_exact_archived_journal(
-    journal: &TransitionJournalStore,
-    expected: &TransitionRecord,
-) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
-    match journal.load() {
-        Ok(Some(actual)) if actual == *expected => Ok(()),
-        Ok(Some(_)) | Ok(None) => {
-            Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalChangedDuringEffect.into())
-        }
-        Err(source) => Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalReadDuringEffect(source).into()),
-    }
 }
 
 fn require_exact_archived_plan(record: &TransitionRecord) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {

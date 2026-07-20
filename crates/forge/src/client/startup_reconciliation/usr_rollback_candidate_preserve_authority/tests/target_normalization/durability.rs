@@ -58,7 +58,7 @@ fn startup_new_state_target_normalization_syncs_target_then_parent_then_proves_c
 
             assert!(matches!(
                 lease.reconcile(&seal, &journal).unwrap(),
-                UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired
+                UsrRollbackNewStateCandidatePreserveNormalizeTargetReconciliation::RestartRequired(_)
             ));
 
             assert_eq!(take_new_state_target_normalize_durability_events(), expected);

@@ -19,7 +19,7 @@ mod target_normalization;
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
+        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalRecordBinding,
         TransitionJournalStore, TransitionRecord,
     },
 };
@@ -84,7 +84,7 @@ pub(in crate::client) struct UsrRollbackCandidatePreserveAuthority<'reservation>
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackCandidatePreserveNamespaceProof,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -118,7 +118,7 @@ struct UsrRollbackNewStateCandidatePreserveCreateTargetEffect<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackNewStateTargetCreateNamespaceEvidence,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -135,7 +135,7 @@ struct UsrRollbackNewStateCandidatePreserveNormalizeTargetEffect<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -153,7 +153,7 @@ struct UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -164,6 +164,18 @@ struct UsrRollbackNewStateCandidatePreserveEffect<'reservation> {
 #[must_use = "a NewState candidate-preservation move lease must be reconciled"]
 pub(in crate::client) struct UsrRollbackNewStateCandidatePreserveEffectLease<'reservation> {
     effect: UsrRollbackNewStateCandidatePreserveEffect<'reservation>,
+}
+
+/// Consumed preparation-only authority which can prove that the exact source
+/// record is still current, but cannot retry creation, normalization, or move.
+#[must_use = "a candidate-preservation restart authority must be consumed exactly once"]
+pub(in crate::client) struct UsrRollbackCandidatePreserveRestartAuthority<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    journal_record_binding: TransitionJournalRecordBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
 impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
@@ -192,10 +204,17 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
 
-        let journal_binding = journal.binding();
+        installation.revalidate_mutable_namespace()?;
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let namespace_inspection =
-            match UsrRollbackCandidatePreserveNamespaceInspection::begin(installation, journal, record) {
+            match UsrRollbackCandidatePreserveNamespaceInspection::begin(
+                installation,
+                journal,
+                &journal_record_binding,
+                record,
+            ) {
                 Ok(inspection) => inspection,
                 Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
             };
@@ -210,13 +229,20 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         if !database_is_compatible(record, &database_after) || database != database_after {
             return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
         }
-        let namespace = match namespace_inspection.finish(installation, journal, record) {
+        let namespace = match namespace_inspection.finish(
+            installation,
+            journal,
+            &journal_record_binding,
+            record,
+        ) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
         };
 
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
+        installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(installation, journal, &journal_record_binding, record)?;
         installation.revalidate_mutable_namespace()?;
         let topology = namespace.topology();
         let authority = Self {
@@ -225,7 +251,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
             record: record.clone(),
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         };
         Ok(if topology.is_preserved() {
@@ -239,15 +265,16 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         })
     }
 
-    fn require_journal_binding(
+    fn require_journal_record_binding(
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
-        if journal.has_binding(&self.journal_binding) {
-            Ok(())
-        } else {
-            Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalBindingMismatch.into())
-        }
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )
     }
 
     /// Revalidate every retained authority after the caller has proved the
@@ -262,12 +289,19 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
-        self.namespace.revalidate(&self.installation, journal, &self.record)?;
+        self.namespace.revalidate(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         let database_after = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_after)?;
         if !candidate_preserve_plan_is_exact(&self.record) || self.namespace.topology() != expected_topology {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
         }
+        self.installation.revalidate_mutable_namespace()?;
+        self.require_journal_record_binding(journal)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -279,7 +313,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         expect_preserved: bool,
     ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
         // This must remain the first retained-evidence observation.
-        self.require_journal_binding(journal)?;
+        self.require_journal_record_binding(journal)?;
         let topology = self.namespace.topology();
         if topology.is_preserved() != expect_preserved {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
@@ -296,7 +330,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
     > {
         // Do not inspect `namespace.topology()` until the per-open journal
         // binding succeeds. A mixed store must never select an effect type.
-        self.require_journal_binding(journal)?;
+        self.require_journal_record_binding(journal)?;
         let topology = self.namespace.topology();
         if topology.is_preserved() {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
@@ -311,7 +345,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                     record,
                     database,
                     namespace,
-                    journal_binding,
+                    journal_record_binding,
                     _active_state_reservation,
                 } = self;
                 let namespace = namespace.into_new_state_target_create_evidence(&record)?;
@@ -323,7 +357,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                             record,
                             database,
                             namespace,
-                            journal_binding,
+                            journal_record_binding,
                             _active_state_reservation,
                         },
                     },
@@ -336,7 +370,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                     record,
                     database,
                     namespace,
-                    journal_binding,
+                    journal_record_binding,
                     _active_state_reservation,
                 } = self;
                 let namespace = namespace.into_new_state_target_normalize_evidence(&record)?;
@@ -349,7 +383,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                                 record,
                                 database,
                                 namespace,
-                                journal_binding,
+                                journal_record_binding,
                                 _active_state_reservation,
                             },
                         },
@@ -363,7 +397,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                     record,
                     database,
                     namespace,
-                    journal_binding,
+                    journal_record_binding,
                     _active_state_reservation,
                 } = self;
                 let namespace = namespace.into_new_state_move_effect_evidence(&record)?;
@@ -375,7 +409,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
                             record,
                             database,
                             namespace,
-                            journal_binding,
+                            journal_record_binding,
                             _active_state_reservation,
                         },
                     },
@@ -415,6 +449,13 @@ impl<'reservation> UsrRollbackCandidatePreserveApplyAuthority<'reservation> {
         self.evidence.revalidate_kind(journal, false)
     }
 
+    pub(in crate::client) fn exact_source_record(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<TransitionRecord, UsrRollbackCandidatePreserveAuthorityError> {
+        self.evidence.exact_source_record(journal)
+    }
+
     /// Consume generic Apply admission into one exact target-prefix lease or a
     /// fieldless unsupported result. Possessing admission is insufficient:
     /// only the operation-generic candidate-preservation leaf can construct
@@ -444,6 +485,59 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
         self.evidence.revalidate_kind(journal, true)
+    }
+
+    pub(in crate::client) fn exact_source_record(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<TransitionRecord, UsrRollbackCandidatePreserveAuthorityError> {
+        self.evidence.exact_source_record(journal)
+    }
+}
+
+impl UsrRollbackCandidatePreserveAuthority<'_> {
+    fn exact_source_record(
+        &self,
+        journal: &TransitionJournalStore,
+    ) -> Result<TransitionRecord, UsrRollbackCandidatePreserveAuthorityError> {
+        self.require_journal_record_binding(journal)?;
+        self.installation.revalidate_mutable_namespace()?;
+        let record = self.record.clone();
+        self.installation.revalidate_mutable_namespace()?;
+        self.require_journal_record_binding(journal)?;
+        self.installation.revalidate_mutable_namespace()?;
+        Ok(record)
+    }
+}
+
+impl UsrRollbackCandidatePreserveRestartAuthority<'_> {
+    pub(in crate::client) fn into_exact_source_record(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<TransitionRecord, UsrRollbackCandidatePreserveAuthorityError> {
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
+        self.installation.revalidate_mutable_namespace()?;
+        require_exact_database(
+            &self.database,
+            inspect_current_database(&self.record, &self.state_db)?,
+        )?;
+        if !candidate_preserve_plan_is_exact(&self.record) {
+            return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
+        }
+        self.installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
+        self.installation.revalidate_mutable_namespace()?;
+        Ok(self.record)
     }
 }
 
@@ -526,6 +620,23 @@ fn require_exact_database(
     }
 }
 
+pub(super) fn require_journal_record_binding(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalBindingMismatch.into());
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    match journal.has_record_binding(cast, binding, record) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalBindingMismatch.into()),
+        Err(source) => Err(UsrRollbackCandidatePreserveAuthorityErrorKind::JournalReadDuringEffect(source).into()),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
 pub(in crate::client) struct UsrRollbackCandidatePreserveAuthorityError(
@@ -544,6 +655,12 @@ impl From<UsrRollbackCandidatePreserveNamespaceError> for UsrRollbackCandidatePr
     }
 }
 
+impl From<crate::transition_journal::StorageError> for UsrRollbackCandidatePreserveAuthorityError {
+    fn from(source: crate::transition_journal::StorageError) -> Self {
+        UsrRollbackCandidatePreserveAuthorityErrorKind::JournalReadDuringEffect(source).into()
+    }
+}
+
 impl From<crate::installation::Error> for UsrRollbackCandidatePreserveAuthorityError {
     fn from(source: crate::installation::Error) -> Self {
         UsrRollbackCandidatePreserveAuthorityErrorKind::Installation(source).into()
@@ -552,12 +669,10 @@ impl From<crate::installation::Error> for UsrRollbackCandidatePreserveAuthorityE
 
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackCandidatePreserveAuthorityErrorKind {
-    #[error("candidate-preservation authority was paired with a different open journal store")]
+    #[error("candidate-preservation authority no longer names its exact canonical journal record")]
     JournalBindingMismatch,
-    #[error("read the exact candidate-preservation journal during effect reconciliation")]
+    #[error("authenticate the exact candidate-preservation journal record")]
     JournalReadDuringEffect(#[source] crate::transition_journal::StorageError),
-    #[error("the exact candidate-preservation journal changed during effect reconciliation")]
-    JournalChangedDuringEffect,
     #[error("exact candidate-preservation evidence no longer selects its retained typestate")]
     EvidenceMismatch,
     #[error("inspect exact candidate-preservation database evidence")]

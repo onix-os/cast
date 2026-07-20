@@ -28,22 +28,35 @@ impl UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'_> {
         let effect = &self._effect;
         // The per-open binding is deliberately the first retained-evidence
         // observation on every persistence-side revalidation.
-        require_effect_binding(&effect.journal_binding, journal)?;
+        require_effect_binding(
+            &effect.installation,
+            &effect.journal_record_binding,
+            &effect.record,
+            journal,
+        )?;
         require_pre_effect_evidence(
             &effect.installation,
             &effect.state_db,
             &effect.record,
             &effect.database,
+            &effect.journal_record_binding,
             journal,
         )?;
         let namespace_result = effect.namespace.revalidate(&effect.installation, &effect.record);
         before_durable_trailing_evidence();
-        let trailing_evidence = require_effect_binding(&effect.journal_binding, journal).and_then(|()| {
+        let trailing_evidence = require_effect_binding(
+            &effect.installation,
+            &effect.journal_record_binding,
+            &effect.record,
+            journal,
+        )
+        .and_then(|()| {
             require_post_effect_evidence(
                 &effect.installation,
                 &effect.state_db,
                 &effect.record,
                 &effect.database,
+                &effect.journal_record_binding,
                 journal,
             )
         });

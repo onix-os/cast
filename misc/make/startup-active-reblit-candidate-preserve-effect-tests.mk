@@ -37,6 +37,9 @@ forge-startup-usr-rollback-active-reblit-preserve-effect-test:
 	done; \
 	timeout 10s grep -Fqx '    ExchangeActiveReblit(UsrRollbackActiveReblitCandidatePreserveEffectLease<'\''reservation>),' "$$authority"; \
 	timeout 10s grep -Fqx '    Unsupported,' "$$authority"; \
+	timeout 10s grep -Fq '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority_effect"; \
+	timeout 10s grep -Fq 'super::require_journal_record_binding(' "$$authority_effect"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority" "$$authority_effect" "$$proof" "$$proof_effect"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s test "$$( timeout 10s rg -n -F 'renameat2_exchange_once(' "$$namespace" "$$namespace_pre" "$$namespace_effect" "$$namespace_reconciliation" | timeout 10s wc -l )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'renameat2_exchange_once(&parents.roots' "$$namespace_effect" )" = 2; \
 	timeout 10s awk 'previous == "#[cfg(not(test))]" && $$0 ~ /^fn attempt_raw_exchange_once/ { production = 1; production_functions++ } previous == "#[cfg(test)]" && $$0 ~ /^fn attempt_raw_exchange_once/ { test = 1; test_functions++ } production && /renameat2_exchange_once\(&parents\.roots/ { production_calls++ } test && /renameat2_exchange_once\(&parents\.roots/ { test_calls++ } (production || test) && $$0 == "}" { production = 0; test = 0 } { previous = $$0 } END { exit !(production_functions == 1 && test_functions == 1 && production_calls == 1 && test_calls == 1) }' "$$namespace_effect"; \

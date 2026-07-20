@@ -6,7 +6,9 @@
 
 use crate::{
     Installation, db,
-    transition_journal::{RollbackActionOutcome, TransitionJournalBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        RollbackActionOutcome, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 mod persistence;
@@ -68,7 +70,7 @@ struct DurableNewStateCandidatePreserveEffect<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackNewStateCandidatePreserveDurableNamespace,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -84,7 +86,7 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
         UsrRollbackCandidatePreserveAuthorityError,
     > {
         // The binding is deliberately the first retained-evidence observation.
-        self.evidence.require_journal_binding(journal)?;
+        self.evidence.require_journal_record_binding(journal)?;
         let topology = self.evidence.namespace.topology();
         if !topology.is_preserved() {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
@@ -105,7 +107,7 @@ impl<'reservation> UsrRollbackCandidatePreserveFinishAuthority<'reservation> {
                             record: evidence.record,
                             database: evidence.database,
                             namespace,
-                            journal_binding: evidence.journal_binding,
+                            journal_record_binding: evidence.journal_record_binding,
                             _active_state_reservation: evidence._active_state_reservation,
                         },
                     },
@@ -142,7 +144,12 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority<'r
         UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        require_effect_binding(&self._effect.journal_binding, journal)?;
+        require_effect_binding(
+            &self._effect.installation,
+            &self._effect.journal_record_binding,
+            &self._effect.record,
+            journal,
+        )?;
         let effect = complete_applied_after_binding(self._effect, journal)?;
         Ok(UsrRollbackNewStateCandidatePreserveDurableEffectAuthority {
             _effect: effect,
@@ -161,7 +168,12 @@ impl<'reservation> UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAut
         UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'reservation>,
         UsrRollbackCandidatePreserveAuthorityError,
     > {
-        require_effect_binding(&self._effect.journal_binding, journal)?;
+        require_effect_binding(
+            &self._effect.installation,
+            &self._effect.journal_record_binding,
+            &self._effect.record,
+            journal,
+        )?;
         let effect = complete_already_satisfied_after_binding(self._effect, journal)?;
         Ok(UsrRollbackNewStateCandidatePreserveDurableEffectAuthority {
             _effect: effect,
@@ -183,14 +195,30 @@ fn complete_applied_after_binding<'reservation>(
         record,
         database,
         namespace,
-        journal_binding,
+        journal_record_binding,
         _active_state_reservation,
     } = effect;
 
-    require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+    require_pre_effect_evidence(
+        &installation,
+        &state_db,
+        &record,
+        &database,
+        &journal_record_binding,
+        journal,
+    )?;
     let namespace_result = namespace.complete_post_move_durability(&installation, &record);
-    let trailing_evidence = require_effect_binding(&journal_binding, journal)
-        .and_then(|()| require_post_effect_evidence(&installation, &state_db, &record, &database, journal));
+    let trailing_evidence = require_effect_binding(&installation, &journal_record_binding, &record, journal)
+        .and_then(|()| {
+            require_post_effect_evidence(
+                &installation,
+                &state_db,
+                &record,
+                &database,
+                &journal_record_binding,
+                journal,
+            )
+        });
     let namespace = namespace_result?;
     trailing_evidence?;
 
@@ -200,7 +228,7 @@ fn complete_applied_after_binding<'reservation>(
         record,
         database,
         namespace,
-        journal_binding,
+        journal_record_binding,
         _active_state_reservation,
     })
 }
@@ -218,14 +246,30 @@ fn complete_already_satisfied_after_binding<'reservation>(
         record,
         database,
         namespace,
-        journal_binding,
+        journal_record_binding,
         _active_state_reservation,
     } = effect;
 
-    require_pre_effect_evidence(&installation, &state_db, &record, &database, journal)?;
+    require_pre_effect_evidence(
+        &installation,
+        &state_db,
+        &record,
+        &database,
+        &journal_record_binding,
+        journal,
+    )?;
     let namespace_result = namespace.complete_post_move_durability(&installation, &record);
-    let trailing_evidence = require_effect_binding(&journal_binding, journal)
-        .and_then(|()| require_post_effect_evidence(&installation, &state_db, &record, &database, journal));
+    let trailing_evidence = require_effect_binding(&installation, &journal_record_binding, &record, journal)
+        .and_then(|()| {
+            require_post_effect_evidence(
+                &installation,
+                &state_db,
+                &record,
+                &database,
+                &journal_record_binding,
+                journal,
+            )
+        });
     let namespace = namespace_result?;
     trailing_evidence?;
 
@@ -235,7 +279,7 @@ fn complete_already_satisfied_after_binding<'reservation>(
         record,
         database,
         namespace,
-        journal_binding,
+        journal_record_binding,
         _active_state_reservation,
     })
 }

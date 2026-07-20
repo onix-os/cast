@@ -60,6 +60,8 @@ forge-startup-active-reblit-candidate-preserve-post-exchange-durability-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'fn complete_post_exchange_durability(' "$$authority_post" )" = 2; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: ActiveReblitDurabilityOrigin::Applied,' "$$authority_post" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'origin: ActiveReblitDurabilityOrigin::AlreadySatisfied,' "$$authority_post" )" = 1; \
+	timeout 10s grep -Fq '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority_post"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority" "$$authority_active" "$$authority_post" "$$authority_finish" "$$proof" "$$proof_active" "$$proof_post"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -U -n 'fn[^\(]*\([^\)]*(origin|outcome)[^\)]*\)' "$$authority_post"; then exit 1; fi; \
 	timeout 10s test "$$( timeout 10s rg -l -F 'renameat2_exchange_once(' crates/forge/src/client/startup_reconciliation/activation_namespace/capture/active_reblit_candidate_preserve --glob '*.rs' )" = "$$namespace_effect"; \
 	durability_code="$$( timeout 10s sed -E 's,//.*$$,,' "$$authority_post" "$$proof_post" "$$namespace_post" )"; \

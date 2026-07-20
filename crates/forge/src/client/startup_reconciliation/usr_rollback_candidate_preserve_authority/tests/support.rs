@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use super::test_fixture::{DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, SourceCase};
+use super::test_fixture::{BootSyncStartedLayout, DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, SourceCase};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CandidateSource {
@@ -67,6 +67,21 @@ impl CandidatePreserveFixture {
         Self::build(
             Fixture::historical(kind, source.fixture_source()),
             kind,
+            usr_reverse_outcome,
+            layout,
+        )
+    }
+
+    pub(super) fn active_reblit_boot_sync_started(
+        historical: bool,
+        usr_reverse_outcome: RollbackActionOutcome,
+        layout: CandidateLayout,
+    ) -> Self {
+        let fixture = Fixture::active_reblit_boot_sync_started(BootSyncStartedLayout::Post, historical);
+        super::test_fixture::install_root_abi(&fixture.installation.root);
+        Self::build(
+            fixture,
+            OperationKind::ActiveReblit,
             usr_reverse_outcome,
             layout,
         )
@@ -131,12 +146,29 @@ impl CandidatePreserveFixture {
         source: CandidateSource,
         usr_reverse_outcome: RollbackActionOutcome,
     ) -> Self {
-        let fixture = Self::new(
-            OperationKind::NewState,
-            source,
-            usr_reverse_outcome,
-            CandidateLayout::Staged,
-        );
+        Self::new_state_empty_quarantine_prefix_at_epoch(false, source, usr_reverse_outcome)
+    }
+
+    pub(super) fn new_state_empty_quarantine_prefix_at_epoch(
+        historical: bool,
+        source: CandidateSource,
+        usr_reverse_outcome: RollbackActionOutcome,
+    ) -> Self {
+        let fixture = if historical {
+            Self::historical(
+                OperationKind::NewState,
+                source,
+                usr_reverse_outcome,
+                CandidateLayout::Staged,
+            )
+        } else {
+            Self::new(
+                OperationKind::NewState,
+                source,
+                usr_reverse_outcome,
+                CandidateLayout::Staged,
+            )
+        };
         create_quarantine_wrapper(&fixture.fixture, &fixture.candidate_intent);
         fixture
     }
@@ -146,12 +178,30 @@ impl CandidatePreserveFixture {
         usr_reverse_outcome: RollbackActionOutcome,
         mode: u32,
     ) -> Self {
-        let fixture = Self::new(
-            OperationKind::NewState,
-            source,
-            usr_reverse_outcome,
-            CandidateLayout::Staged,
-        );
+        Self::new_state_target_residue_at_epoch(false, source, usr_reverse_outcome, mode)
+    }
+
+    pub(super) fn new_state_target_residue_at_epoch(
+        historical: bool,
+        source: CandidateSource,
+        usr_reverse_outcome: RollbackActionOutcome,
+        mode: u32,
+    ) -> Self {
+        let fixture = if historical {
+            Self::historical(
+                OperationKind::NewState,
+                source,
+                usr_reverse_outcome,
+                CandidateLayout::Staged,
+            )
+        } else {
+            Self::new(
+                OperationKind::NewState,
+                source,
+                usr_reverse_outcome,
+                CandidateLayout::Staged,
+            )
+        };
         let target = create_quarantine_wrapper(&fixture.fixture, &fixture.candidate_intent);
         fs::set_permissions(target, fs::Permissions::from_mode(mode)).unwrap();
         fixture
