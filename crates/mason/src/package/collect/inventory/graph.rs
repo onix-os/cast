@@ -9,7 +9,7 @@ use nix::libc;
 use stone::StoneDigestWriterHasher;
 
 use super::super::{
-    CollectionLimits, Error,
+    CollectionLimits, Error, WitnessedTargetState,
     filesystem::{
         CollectionContext, CollectionUsage, Deadline, add_admission_delta_for_relative, capture_entry_witness, changed,
         commit_admission, compare_exact_inventory, directory_relative, find_child, hash_inventory_regular,
@@ -223,6 +223,48 @@ impl WitnessGraph {
                 })
             )
         }))
+    }
+
+    pub(in crate::package::collect) fn target_state(
+        &self,
+        relative: &Path,
+    ) -> Result<WitnessedTargetState, Error> {
+        let state = self.state.lock().map_err(|_| Error::StatePoisoned)?;
+        match state.phase {
+            WitnessPhase::AdmissionsOpen => {}
+            WitnessPhase::Poisoned => return Err(Error::InventoryPoisoned),
+            phase => {
+                return Err(Error::InvalidInventoryPhase {
+                    operation: "query package inventory target state",
+                    phase: phase.name(),
+                });
+            }
+        }
+        let mut parent = 0;
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            let std::path::Component::Normal(name) = component else {
+                return Ok(WitnessedTargetState::Other);
+            };
+            let terminal = components.peek().is_none();
+            match find_child(&state.directories, parent, name) {
+                None => return Ok(WitnessedTargetState::Absent),
+                Some(WitnessChild {
+                    kind: WitnessChildKind::Directory(directory),
+                    ..
+                }) if !terminal => parent = *directory,
+                Some(WitnessChild {
+                    kind:
+                        WitnessChildKind::Entry(EntryWitness {
+                            kind: WitnessEntryKind::Regular { .. },
+                            ..
+                        }),
+                    ..
+                }) if terminal => return Ok(WitnessedTargetState::Regular),
+                Some(_) => return Ok(WitnessedTargetState::Other),
+            }
+        }
+        Ok(WitnessedTargetState::Other)
     }
 
     pub(in crate::package::collect) fn child_directory_id(

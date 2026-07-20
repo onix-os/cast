@@ -2,6 +2,7 @@
 
 use std::{
     ffi::CStr,
+    fs::File,
     path::{Path, PathBuf},
 };
 
@@ -12,30 +13,27 @@ use elf::{
     note::Note,
     to_str,
 };
-use fs_err::File;
 use path_clean::clean;
 
 use stone::relation::{Dependency, Kind, Provider};
 
-use super::{ExternalAnalyzerMutation, VerifiedAnalyzerInput, analyzer_command, checked_output_for};
+use super::{ExternalAnalyzerMutation, VerifiedElf, analyzer_command, checked_output_for};
 use crate::package::{
     analysis::{BoxError, BucketMut, Decision, Response},
-    collect::{GeneratedArtifact, PathInfo},
+    collect::{Error as CollectError, GeneratedArtifact, PathInfo, WitnessedTargetState},
 };
 
 pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
     let file_name = info.file_name();
 
-    if file_name.ends_with(".debug") && info.has_component("debug") {
-        return Ok(Decision::NextHandler.into());
-    }
-    if !info.is_file() {
+    if !is_elf_candidate(info) {
         return Ok(Decision::NextHandler.into());
     }
 
-    let Ok(mut elf) = parse_elf(&info.path) else {
+    let Some(mut verified_elf) = VerifiedElf::from_path_info(info)? else {
         return Ok(Decision::NextHandler.into());
     };
+    let elf = verified_elf.stream_mut();
 
     let machine_isa = to_str::e_machine_to_str(elf.ehdr.e_machine)
         .map(|s| s.strip_prefix("EM_").unwrap_or(s))
@@ -57,20 +55,17 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
         });
     }
 
-    parse_dynamic_section(&mut elf, bucket, &machine_isa, bit_size, info, file_name);
-    parse_interp_section(&mut elf, bucket, &machine_isa);
-
-    let build_id = parse_build_id(&mut elf);
+    parse_dynamic_section(elf, bucket, &machine_isa, bit_size, info, file_name);
+    parse_interp_section(elf, bucket, &machine_isa);
 
     let mut publications = vec![];
 
-    if let Some(build_id) = build_id {
-        let debug_destination = bucket
-            .analysis
-            .debug
-            .then(|| pending_debug_destination(info, bit_size, &build_id))
-            .transpose()?
-            .flatten();
+    if let Some(build_id) = parse_build_id(elf) {
+        let debug_destination = if bucket.analysis.debug {
+            pending_debug_destination(info, bit_size, &build_id)?
+        } else {
+            None
+        };
         if !bucket.analysis.strip && debug_destination.is_none() {
             return Ok(Response {
                 decision: Decision::IncludeFile,
@@ -78,8 +73,8 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
             });
         }
         let byte_limit = info.regular_file_byte_limit()?;
-        let input = VerifiedAnalyzerInput::from_path_info(info, info.size)?;
-        let sandbox = ExternalAnalyzerMutation::new(&input, &info.target_path, "input.elf", ".elf-mutation")?;
+        let sandbox =
+            ExternalAnalyzerMutation::new(verified_elf.input(), &info.target_path, "input.elf", ".elf-mutation")?;
         let debug_output = debug_destination
             .as_ref()
             .map(|path| {
@@ -115,6 +110,10 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
     })
 }
 
+pub(in crate::package::analysis) fn is_elf_candidate(info: &PathInfo) -> bool {
+    info.is_file() && !(info.file_name().ends_with(".debug") && info.has_component("debug"))
+}
+
 fn is_interpreter_candidate(elf_type: u16, mode: u32, has_interp: bool) -> bool {
     elf_type == ET_DYN && mode & 0o111 != 0 && !has_interp
 }
@@ -137,7 +136,7 @@ mod tests {
         path::{Path, PathBuf},
     };
 
-    use super::{elf, parse_build_id, parse_elf};
+    use super::{elf, parse_build_id};
     use crate::{
         Paths, Recipe,
         package::{
@@ -157,8 +156,9 @@ mod tests {
         candidates
             .into_iter()
             .find(|path| {
-                parse_elf(path)
+                std::fs::File::open(path)
                     .ok()
+                    .and_then(|file| elf::ElfStream::open_stream(file).ok())
                     .and_then(|mut parsed| parse_build_id(&mut parsed))
                     .is_some()
             })
@@ -466,11 +466,6 @@ mod tests {
     }
 }
 
-fn parse_elf(path: &Path) -> Result<elf::ElfStream<AnyEndian, File>, BoxError> {
-    let file = File::open(path)?;
-    Ok(elf::ElfStream::open_stream(file)?)
-}
-
 fn parse_dynamic_section(
     elf: &mut elf::ElfStream<AnyEndian, File>,
     bucket: &mut BucketMut<'_>,
@@ -660,7 +655,7 @@ fn parse_interp_section(elf: &mut elf::ElfStream<AnyEndian, File>, bucket: &mut 
     }
 }
 
-fn parse_build_id(elf: &mut elf::ElfStream<AnyEndian, File>) -> Option<String> {
+pub(in crate::package::analysis) fn parse_build_id(elf: &mut elf::ElfStream<AnyEndian, File>) -> Option<String> {
     let section = *elf.section_header_by_name(".note.gnu.build-id").ok()??;
     let notes = elf.section_data_as_notes(&section).ok()?;
 
@@ -674,18 +669,31 @@ fn parse_build_id(elf: &mut elf::ElfStream<AnyEndian, File>) -> Option<String> {
     None
 }
 
-fn pending_debug_destination(info: &PathInfo, bit_size: Class, build_id: &str) -> Result<Option<PathBuf>, BoxError> {
+pub(in crate::package::analysis) fn debug_destination(bit_size: Class, build_id: &str) -> Option<PathBuf> {
     if build_id.len() < 2 {
-        return Ok(None);
+        return None;
     }
-    let debug_dir = if matches!(bit_size, Class::ELF64) {
-        Path::new("usr/lib/debug/.build-id")
-    } else {
-        Path::new("usr/lib32/debug/.build-id")
+    let debug_dir = match bit_size {
+        Class::ELF64 => Path::new("usr/lib/debug/.build-id"),
+        Class::ELF32 => Path::new("usr/lib32/debug/.build-id"),
     };
-    let destination = debug_dir.join(&build_id[..2]).join(format!("{}.debug", &build_id[2..]));
+    Some(debug_dir.join(&build_id[..2]).join(format!("{}.debug", &build_id[2..])))
+}
+
+pub(in crate::package::analysis) fn pending_debug_destination(
+    info: &PathInfo,
+    bit_size: Class,
+    build_id: &str,
+) -> Result<Option<PathBuf>, BoxError> {
+    let Some(destination) = debug_destination(bit_size, build_id) else {
+        return Ok(None);
+    };
     let target = Path::new("/").join(&destination);
-    Ok((!info.inventory_contains_regular_target(&target)?).then_some(destination))
+    match info.inventory_target_state(&target)? {
+        WitnessedTargetState::Absent => Ok(Some(destination)),
+        WitnessedTargetState::Regular => Ok(None),
+        WitnessedTargetState::Other => Err(Box::new(CollectError::ExistingAdmission { path: target })),
+    }
 }
 
 fn split_debug(

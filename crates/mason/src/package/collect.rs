@@ -50,6 +50,7 @@ use filesystem::{
 pub(crate) use publication::{GeneratedArtifact, GeneratedTimes};
 pub use routing::Rule;
 pub(crate) use routing::ProjectedPathKind;
+pub(crate) use verified_path::WitnessedTargetState;
 
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
 const MIB: u64 = 1024 * 1024;

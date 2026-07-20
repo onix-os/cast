@@ -170,6 +170,7 @@ impl FrozenPackager {
             .collector
             .enumerate_paths(None, &mut hasher)
             .map_err(Error::CollectPaths)?;
+        analysis::preflight_elf_debug_routes(&self.analysis, &self.collector, &paths).map_err(Error::Analysis)?;
         let mut analysis = analysis::Chain::new(&self.install_root, &self.analysis, &self.collector, &mut hasher);
         let sealed = analysis.process(paths).map_err(Error::Analysis)?;
         timing.finish(timer);

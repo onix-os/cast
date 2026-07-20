@@ -133,6 +133,16 @@ impl From<ProjectedPathKind> for RoutedPathKind {
 }
 
 impl Collector {
+    pub(crate) fn projected_package_for(
+        &self,
+        relative: &Path,
+        kind: ProjectedPathKind,
+    ) -> Result<Arc<str>, Error> {
+        let display_path = self.root.join(relative);
+        let context = CollectionContext::detached(self.limits, self.deadline());
+        self.package_for_projected(&context, relative, kind, &display_path)
+    }
+
     fn matching_package(
         &self,
         context: &CollectionContext,

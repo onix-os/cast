@@ -17,6 +17,9 @@ use tui::{ProgressBar, ProgressStyle, Styled};
 use super::collect::{Collector, Error as CollectError, GeneratedArtifact, PathInfo, SealedTree};
 
 mod handler;
+mod elf_debug_route;
+
+pub(super) use elf_debug_route::preflight_elf_debug_routes;
 
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
 

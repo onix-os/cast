@@ -23,6 +23,13 @@ use super::{
     traversal::{DirectoryHandle, FileSnapshot, NodeIdentity, RootAnchor},
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WitnessedTargetState {
+    Absent,
+    Regular,
+    Other,
+}
+
 #[derive(Debug, Clone)]
 pub(super) enum VerifiedKind {
     Regular { hash: u128 },
@@ -264,6 +271,22 @@ impl PathInfo {
             return Ok(false);
         }
         verified.witness.contains_symlink(relative)
+    }
+
+    pub(crate) fn inventory_target_state(&self, target: &Path) -> Result<WitnessedTargetState, Error> {
+        let verified = self.verified.as_ref().ok_or_else(|| Error::UnverifiedContent {
+            path: self.path.clone(),
+        })?;
+        verified.deadline.check(target)?;
+        let relative = target.strip_prefix("/").unwrap_or(target);
+        if relative.as_os_str().is_empty()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Ok(WitnessedTargetState::Other);
+        }
+        verified.witness.target_state(relative)
     }
 
     pub(crate) fn symlink_target(&self) -> Result<&str, Error> {

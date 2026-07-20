@@ -28,6 +28,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 use stone::relation::{Dependency, Kind, Provider};
+use stone_recipe::derivation::AnalysisPlan;
 use thiserror::Error;
 
 use crate::package::collect::{GeneratedArtifact, GeneratedTimes, PathInfo};
@@ -37,15 +38,21 @@ pub use self::python::python;
 use super::{BoxError, BucketMut, Decision, Response};
 
 mod elf;
+mod elf_input;
 mod execution;
 mod input;
 mod python;
 mod sandbox;
 
 pub(super) use self::{
+    elf::{is_elf_candidate, parse_build_id, pending_debug_destination},
+    elf_input::VerifiedElf,
     execution::{analyzer_command, checked_output_for},
     input::{ExternalAnalyzerInput, ExternalAnalyzerMutation, VerifiedAnalyzerInput},
 };
+
+#[cfg(test)]
+pub(super) use self::elf::debug_destination;
 
 const ANALYZER_LIMITS: execution::AnalyzerLimits = execution::AnalyzerLimits {
     // llvm-objcopy and llvm-strip can legitimately process very large debug
@@ -73,26 +80,24 @@ pub fn include_any(_bucket: &mut BucketMut<'_>, _info: &mut PathInfo) -> Result<
 }
 
 pub fn ignore_blocked(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
-    // non-/usr = bad
-    if !info.target_path.starts_with("/usr") {
-        return Ok(Decision::IgnoreFile {
-            reason: "non /usr/ file".into(),
-        }
-        .into());
-    }
-
-    // libtool files break the world but very rarely a package will need them to function correctly
-    if info.file_name().ends_with(".la")
-        && (info.target_path.starts_with("/usr/lib") || info.target_path.starts_with("/usr/lib32"))
-        && bucket.analysis.remove_libtool
-    {
-        return Ok(Decision::IgnoreFile {
-            reason: "libtool file".into(),
-        }
-        .into());
+    if let Some(reason) = blocked_reason(bucket.analysis, info) {
+        return Ok(Decision::IgnoreFile { reason: reason.into() }.into());
     }
 
     Ok(Decision::NextHandler.into())
+}
+
+pub(super) fn blocked_reason(analysis: &AnalysisPlan, info: &PathInfo) -> Option<&'static str> {
+    if !info.target_path.starts_with("/usr") {
+        return Some("non /usr/ file");
+    }
+    if info.file_name().ends_with(".la")
+        && (info.target_path.starts_with("/usr/lib") || info.target_path.starts_with("/usr/lib32"))
+        && analysis.remove_libtool
+    {
+        return Some("libtool file");
+    }
+    None
 }
 
 pub fn binary(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
@@ -390,18 +395,7 @@ pub fn cmake(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response
 
 /// Ensure that man and info files are zst compressed for on-disk space savings.
 pub fn compressman(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, BoxError> {
-    /* if the compressman option is turned off, exit early */
-    if !bucket.analysis.compress_man {
-        return Ok(Decision::NextHandler.into());
-    }
-
-    let is_man_file = info.path.components().contains(&Component::Normal("man".as_ref()))
-        && info.file_name().ends_with(|c| ('1'..'9').contains(&c));
-    let is_info_file =
-        info.path.components().contains(&Component::Normal("info".as_ref())) && info.file_name().ends_with(".info");
-
-    /* we only care about compressing man and info files here */
-    if !(is_man_file || is_info_file) {
+    if !compressman_candidate(bucket.analysis, info) {
         return Ok(Decision::NextHandler.into());
     }
 
@@ -442,6 +436,23 @@ pub fn compressman(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Re
         decision: Decision::ReplaceFile { newpath },
         publications: artifact.into_iter().collect(),
     })
+}
+
+pub(super) fn compressman_candidate(analysis: &AnalysisPlan, info: &PathInfo) -> bool {
+    if !analysis.compress_man || !(info.is_file() || info.is_symlink()) {
+        return false;
+    }
+    let is_man_file = info
+        .target_path
+        .components()
+        .contains(&Component::Normal("man".as_ref()))
+        && info.file_name().ends_with(|character| ('1'..'9').contains(&character));
+    let is_info_file = info
+        .target_path
+        .components()
+        .contains(&Component::Normal("info".as_ref()))
+        && info.file_name().ends_with(".info");
+    is_man_file || is_info_file
 }
 
 fn compress_zstd(info: &PathInfo) -> Result<Vec<u8>, BoxError> {
