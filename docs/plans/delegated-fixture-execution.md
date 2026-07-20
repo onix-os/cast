@@ -87,8 +87,10 @@ mounts, and run staging were removed before the failed recovery experiment.
 
 Moving an already-populated Cargo target between two memory filesystems was
 not a valid recovery: the duplicate allocation caused guest OOM pressure and
-loss of SSH service. No block device was opened, no installed-system disk was
-used, and the VM was not rebooted or reset. This incident is environment
+loss of SSH service. No block device or installed-system disk was modified, and
+the VM was not rebooted or reset. The guest's post-relocation boot identity,
+filesystem headroom, partial relocation state, and cleanup are not currently
+authenticated, so another run on that boot is unsafe. This incident is environment
 evidence, not package evidence. A replacement campaign must prove sufficient
 persistent build-space and inode headroom before compilation, keep bounded
 evidence separate from disposable build artifacts, and fail before launching

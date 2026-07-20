@@ -660,7 +660,7 @@ the live items below remain open until a non-skipped required run proves them.
   At exact commit `10d51fb9`, the disposable NixOS VM completed both runs for 19/26
   fixtures; `hooks-patch` passed twice, while `multiple-sources` passed once with nine
   Stones before its second run hit the former two-hour limit. A clean `7b3770b1` rerun
-  proved the new budgets but filled the live-root tmpfs during pre-fixture compilation: zero fixtures ran, no receipt was published, and a cross-tmpfs recovery caused OOM service loss without disk access or reboot. The three live items remain open pending a capacity-proven persistent guest.
+  proved the new budgets but filled the live-root tmpfs during pre-fixture compilation: zero fixtures ran, no receipt was published, and a cross-tmpfs recovery caused OOM service loss without disk modification or reboot. The three live items remain open pending a capacity-proven persistent guest.
   CI covers `develop`, matching the required untouched-`main` integration workflow.
 
 **Exit gate:** every example is checked and frozen through public production
