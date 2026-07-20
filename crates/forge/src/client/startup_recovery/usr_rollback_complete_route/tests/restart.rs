@@ -21,7 +21,7 @@ use super::support::{CandidateResult, FreshDbOutcome, RouteFixture, Source, capt
 #[test]
 fn startup_usr_rollback_complete_route_source_fault_restart_retries_only_the_completion_route() {
     for origin in FreshDbOutcome::ALL {
-        for source in Source::ALL {
+        for source in Source::THROUGH_ROLLBACK_COMPLETE {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 for candidate_outcome in CandidateResult::ALL {
                     let case = (origin, source, usr_outcome, candidate_outcome);
@@ -82,7 +82,7 @@ fn startup_usr_rollback_complete_route_source_fault_restart_retries_only_the_com
 #[test]
 fn startup_usr_rollback_complete_route_rollback_complete_fault_restart_skips_route_and_invalidation() {
     for origin in FreshDbOutcome::ALL {
-        for source in Source::ALL {
+        for source in Source::THROUGH_ROLLBACK_COMPLETE {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 for candidate_outcome in CandidateResult::ALL {
                     let case = (origin, source, usr_outcome, candidate_outcome);

@@ -223,7 +223,11 @@ pub(super) use usr_rollback_fresh_db_invalidation_route::{
 pub(in crate::client) use usr_rollback_candidate_preserve_persistence::DurableUsrRollbackCandidatePreserveRecord;
 
 #[cfg(test)]
-pub(in crate::client) use usr_rollback_complete_route::DurableUsrRollbackCompleteRouteRecord;
+pub(in crate::client) use usr_rollback_complete_route::{
+    DurableUsrRollbackCompleteRouteRecord, UsrRollbackCompleteRouteSuccessorBindingError,
+    arm_after_usr_rollback_complete_route_successor_binding_check_before_reopen,
+    arm_before_usr_rollback_complete_route_successor_binding_revalidation,
+};
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_finalization::{

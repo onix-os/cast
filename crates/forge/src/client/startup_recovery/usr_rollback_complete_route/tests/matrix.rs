@@ -10,10 +10,12 @@ use crate::{
 use super::support::{CandidateResult, FreshDbOutcome, RouteFixture, Source};
 
 fn exercise_success_matrix(origin: FreshDbOutcome) {
+    let mut cases = 0;
     for historical in [false, true] {
-        for source in Source::ALL {
+        for source in Source::THROUGH_ROLLBACK_COMPLETE {
             for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                 for candidate_outcome in CandidateResult::ALL {
+                    cases += 1;
                     let case = (origin, historical, source, usr_outcome, candidate_outcome);
                     let fixture = if historical {
                         RouteFixture::historical(origin, source, usr_outcome, candidate_outcome)
@@ -52,6 +54,7 @@ fn exercise_success_matrix(origin: FreshDbOutcome) {
             }
         }
     }
+    assert_eq!(cases, 24, "{origin:?}");
 }
 
 #[test]

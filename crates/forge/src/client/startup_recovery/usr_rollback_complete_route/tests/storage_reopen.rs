@@ -49,54 +49,65 @@ fn startup_usr_rollback_complete_route_storage_faults_reopen_exact_fresh_db_inva
         ),
     ];
 
-    for origin in FreshDbOutcome::ALL {
-        for source in Source::ALL {
-            for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
-                for candidate_outcome in CandidateResult::ALL {
-                    for (arm, assert_consumed, expected_durable) in cases {
-                        let case = (origin, source, usr_outcome, candidate_outcome, expected_durable);
-                        let fixture = RouteFixture::new(origin, source, usr_outcome, candidate_outcome);
-                        let journal = fixture.open_journal();
-                        let reservation = ActiveStateReservation::acquire().unwrap();
-                        let authority = fixture.capture_ready(&journal, &reservation);
-                        let expected = fixture.expected_successor();
-                        let database_before = fixture.database_snapshot();
-                        let namespace_before = fixture.namespace_snapshot();
-                        arm();
+    let mut executions = 0;
+    for historical in [false, true] {
+        for origin in FreshDbOutcome::ALL {
+            for source in Source::THROUGH_ROLLBACK_COMPLETE {
+                for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
+                    for candidate_outcome in CandidateResult::ALL {
+                        for (arm, assert_consumed, expected_durable) in cases {
+                            executions += 1;
+                            let case = (origin, source, usr_outcome, candidate_outcome, expected_durable);
+                            let fixture = if historical {
+                                RouteFixture::historical(origin, source, usr_outcome, candidate_outcome)
+                            } else {
+                                RouteFixture::new(origin, source, usr_outcome, candidate_outcome)
+                            };
+                            let journal = fixture.open_journal();
+                            let reservation = ActiveStateReservation::acquire().unwrap();
+                            let authority = fixture.capture_ready(&journal, &reservation);
+                            let expected = fixture.expected_successor();
+                            let database_before = fixture.database_snapshot();
+                            let namespace_before = fixture.namespace_snapshot();
+                            arm();
 
-                        let error = persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
+                            let error =
+                                persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
 
-                        assert_consumed();
-                        assert!(
-                            matches!(
-                                error,
-                                UsrRollbackCompleteRoutePersistenceError::Advance { durable, .. }
-                                    if durable == expected_durable
-                            ),
-                            "{case:?}: {error:?}"
-                        );
-                        match expected_durable {
-                            DurableUsrRollbackCompleteRouteRecord::FreshDbInvalidated => {
-                                assert_eq!(fixture.canonical_record(), fixture.source, "{case:?}")
+                            assert_consumed();
+                            assert!(
+                                matches!(
+                                    error,
+                                    UsrRollbackCompleteRoutePersistenceError::Advance { durable, .. }
+                                        if durable == expected_durable
+                                ),
+                                "{case:?}: {error:?}"
+                            );
+                            match expected_durable {
+                                DurableUsrRollbackCompleteRouteRecord::FreshDbInvalidated => {
+                                    assert_eq!(fixture.canonical_record(), fixture.source, "{case:?}")
+                                }
+                                DurableUsrRollbackCompleteRouteRecord::RollbackComplete => {
+                                    assert_eq!(fixture.canonical_record(), expected, "{case:?}")
+                                }
                             }
-                            DurableUsrRollbackCompleteRouteRecord::RollbackComplete => {
-                                assert_eq!(fixture.canonical_record(), expected, "{case:?}")
-                            }
+                            assert_eq!(fixture.database_snapshot(), database_before, "{case:?}");
+                            assert_eq!(fixture.namespace_snapshot(), namespace_before, "{case:?}");
+                            fixture.assert_no_second_removal();
+                            let names = fs::read_dir(
+                                fixture.fixture.fixture.fixture.installation.root.join(".cast/journal"),
+                            )
+                            .unwrap()
+                            .map(|entry| entry.unwrap().file_name())
+                            .collect::<Vec<_>>();
+                            assert_eq!(names.len(), 2, "{case:?}: stale journal residue: {names:?}");
                         }
-                        assert_eq!(fixture.database_snapshot(), database_before, "{case:?}");
-                        assert_eq!(fixture.namespace_snapshot(), namespace_before, "{case:?}");
-                        fixture.assert_no_second_removal();
-                        let names =
-                            fs::read_dir(fixture.fixture.fixture.fixture.installation.root.join(".cast/journal"))
-                                .unwrap()
-                                .map(|entry| entry.unwrap().file_name())
-                                .collect::<Vec<_>>();
-                        assert_eq!(names.len(), 2, "{case:?}: stale journal residue: {names:?}");
                     }
                 }
             }
         }
     }
+    assert_eq!(executions, 240);
 }
 
 #[test]

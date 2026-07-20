@@ -1,5 +1,3 @@
-use std::os::unix::fs::symlink;
-
 use crate::{
     Installation,
     client::{
@@ -19,13 +17,6 @@ pub(super) use super::super::invalidation_test_support::{
 };
 use super::route_support::RouteFixture;
 
-const ROOT_ABI: [(&str, &str); 5] = [
-    ("bin", "usr/bin"),
-    ("sbin", "usr/sbin"),
-    ("lib", "usr/lib"),
-    ("lib32", "usr/lib32"),
-    ("lib64", "usr/lib"),
-];
 pub(super) use super::route_support::{
     DatabaseSnapshot, FreshDbOutcome, NamespaceEntry, canonical_journal, transition_quarantine_path,
 };
@@ -66,9 +57,6 @@ impl FinalizationFixture {
         } else {
             RouteFixture::new(origin, source, usr_outcome, candidate_outcome)
         };
-        if source == Source::Exchanged {
-            install_live_root_abi(&route.fixture.fixture.fixture.installation);
-        }
         let journal = route.open_journal();
         let reservation = ActiveStateReservation::acquire().unwrap();
         let authority = route.capture_ready(&journal, &reservation);
@@ -149,11 +137,5 @@ impl FinalizationFixture {
 
     pub(super) fn assert_no_second_removal(&self) {
         self.route.assert_no_second_removal();
-    }
-}
-
-fn install_live_root_abi(installation: &Installation) {
-    for (name, target) in ROOT_ABI {
-        symlink(target, installation.root.join(name)).unwrap();
     }
 }

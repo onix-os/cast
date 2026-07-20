@@ -1,22 +1,28 @@
-//! Persist the journal-only route from `FreshDbInvalidated` to
+//! Persist the journal-only NewState route from `FreshDbInvalidated` to
 //! `RollbackComplete`.
 //!
 //! The supplied authority retains exact jointly-absent database evidence and
-//! exact namespace, journal, plan, installation, and active-state reservation
-//! evidence. This boundary revalidates that authority twice, derives the sole
-//! `RollbackComplete` successor, performs exactly one conditional journal
-//! advance, and drops both the authority and old store before canonical
-//! reopen. It performs no database, namespace, trigger, cleanup, retry,
+//! exact namespace, journal-record, plan, installation, and active-state
+//! reservation evidence. This boundary revalidates that authority twice,
+//! consumes its exact predecessor binding through one conditional journal
+//! advance, validates the published successor against the same store, destroys
+//! the old store, and independently reopens the same successor inode and
+//! record. It performs no database, namespace, trigger, cleanup, retry,
 //! finalizer, or journal-delete effect.
 
 use thiserror::Error;
 
 use crate::{
     installation,
-    transition_journal::{CodecError, Phase, StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
-use super::super::startup_reconciliation::{UsrRollbackCompleteRouteAuthority, UsrRollbackCompleteRouteAuthorityError};
+use super::super::startup_reconciliation::{
+    UsrRollbackCompleteRouteAuthority, UsrRollbackCompleteRouteAuthorityError,
+    UsrRollbackCompleteRouteRecordAdvanceError,
+};
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
 #[cfg(test)]
@@ -41,17 +47,19 @@ pub(in crate::client) enum DurableUsrRollbackCompleteRouteRecord {
     RollbackComplete,
 }
 
+enum UsrRollbackCompleteRouteAdvanceOutcome {
+    Published(TransitionJournalRecordBinding),
+    StorageFailed(StorageError),
+    SuccessorBindingFailed(UsrRollbackCompleteRouteSuccessorBindingError),
+}
+
 /// Persist the sole rollback-completion successor, then independently reopen
-/// and compare the complete canonical record.
+/// and compare its complete canonical record and exact inode binding.
 pub(in crate::client) fn persist_usr_rollback_complete_route_and_reopen(
     journal: TransitionJournalStore,
     authority: UsrRollbackCompleteRouteAuthority<'_>,
 ) -> Result<(TransitionJournalStore, TransitionRecord), UsrRollbackCompleteRoutePersistenceError> {
-    if let Err(source) = authority.revalidate(&journal) {
-        drop(authority);
-        drop(journal);
-        return Err(UsrRollbackCompleteRoutePersistenceError::Authority(source));
-    }
+    authority.revalidate(&journal)?;
     let source_record = authority.record().clone();
     let successor = match source_record.rollback_successor(None) {
         Ok(successor) if successor.phase == Phase::RollbackComplete => successor,
@@ -68,23 +76,80 @@ pub(in crate::client) fn persist_usr_rollback_complete_route_and_reopen(
     };
 
     before_usr_rollback_complete_route_final_revalidation();
-    if let Err(source) = authority.revalidate(&journal) {
-        drop(authority);
-        drop(journal);
-        return Err(UsrRollbackCompleteRoutePersistenceError::Authority(source));
-    }
     let installation = authority.installation().clone();
-    let advance = journal.advance(&source_record, &successor);
+    let advance = match authority.advance_record_binding(&journal, &successor) {
+        Ok(successor_binding) => {
+            before_usr_rollback_complete_route_successor_binding_revalidation();
+            let exact = revalidate_published_route_binding(
+                &installation,
+                &journal,
+                &successor_binding,
+                &successor,
+            );
+            match exact {
+                Ok(true) => UsrRollbackCompleteRouteAdvanceOutcome::Published(successor_binding),
+                Ok(false) => {
+                    drop(successor_binding);
+                    UsrRollbackCompleteRouteAdvanceOutcome::SuccessorBindingFailed(
+                        UsrRollbackCompleteRouteSuccessorBindingError::Changed,
+                    )
+                }
+                Err(source) => {
+                    drop(successor_binding);
+                    UsrRollbackCompleteRouteAdvanceOutcome::SuccessorBindingFailed(source)
+                }
+            }
+        }
+        Err(UsrRollbackCompleteRouteRecordAdvanceError::Authority(source)) => {
+            drop(journal);
+            return Err(UsrRollbackCompleteRoutePersistenceError::Authority(source));
+        }
+        Err(UsrRollbackCompleteRouteRecordAdvanceError::Installation(source)) => {
+            drop(journal);
+            return Err(UsrRollbackCompleteRoutePersistenceError::Installation(source));
+        }
+        Err(UsrRollbackCompleteRouteRecordAdvanceError::Storage(source)) => {
+            UsrRollbackCompleteRouteAdvanceOutcome::StorageFailed(source)
+        }
+    };
 
-    // Canonical reopen starts only after the source-bound authority and old
-    // lock-bearing store are destroyed. Neither can authorize another route.
-    drop(authority);
+    // The predecessor binding and complete authority were consumed by the
+    // bound advance. Destroy the old lock-bearing store before canonical
+    // reopen so neither old per-open identity can be reused.
     drop(journal);
 
+    if let UsrRollbackCompleteRouteAdvanceOutcome::Published(_) = &advance {
+        after_usr_rollback_complete_route_successor_binding_check_before_reopen();
+    }
     let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackCompleteRouteReopenError::from);
     match advance {
-        Ok(()) => match reopened {
-            Ok((reopened, Some(actual))) if actual == successor => Ok((reopened, successor)),
+        UsrRollbackCompleteRouteAdvanceOutcome::Published(successor_binding) => match reopened {
+            Ok((reopened, Some(actual))) if actual == successor => {
+                let exact = revalidate_reopened_route_binding(
+                    &installation,
+                    &reopened,
+                    &successor_binding,
+                    &successor,
+                );
+                drop(successor_binding);
+                match exact {
+                    Ok(true) => Ok((reopened, successor)),
+                    Ok(false) => {
+                        drop(reopened);
+                        Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBinding {
+                            durable: DurableUsrRollbackCompleteRouteRecord::RollbackComplete,
+                            source: UsrRollbackCompleteRouteSuccessorBindingError::Changed,
+                        })
+                    }
+                    Err(source) => {
+                        drop(reopened);
+                        Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBinding {
+                            durable: DurableUsrRollbackCompleteRouteRecord::RollbackComplete,
+                            source,
+                        })
+                    }
+                }
+            }
             Ok((reopened, actual)) => {
                 drop(reopened);
                 Err(UsrRollbackCompleteRoutePersistenceError::ReopenAfterSuccessfulAdvance {
@@ -93,7 +158,7 @@ pub(in crate::client) fn persist_usr_rollback_complete_route_and_reopen(
             }
             Err(source) => Err(UsrRollbackCompleteRoutePersistenceError::ReopenAfterSuccessfulAdvance { source }),
         },
-        Err(advance_error) => match reopened {
+        UsrRollbackCompleteRouteAdvanceOutcome::StorageFailed(advance_error) => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {
                 drop(reopened);
                 Err(UsrRollbackCompleteRoutePersistenceError::Advance {
@@ -120,7 +185,76 @@ pub(in crate::client) fn persist_usr_rollback_complete_route_and_reopen(
                 reopen,
             }),
         },
+        UsrRollbackCompleteRouteAdvanceOutcome::SuccessorBindingFailed(binding) => match reopened {
+            Ok((reopened, Some(actual))) if actual == source_record => {
+                drop(reopened);
+                Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBinding {
+                    durable: DurableUsrRollbackCompleteRouteRecord::FreshDbInvalidated,
+                    source: binding,
+                })
+            }
+            Ok((reopened, Some(actual))) if actual == successor => {
+                drop(reopened);
+                Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBinding {
+                    durable: DurableUsrRollbackCompleteRouteRecord::RollbackComplete,
+                    source: binding,
+                })
+            }
+            Ok((reopened, actual)) => {
+                drop(reopened);
+                Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBindingAndReopen {
+                    binding,
+                    reopen: unexpected_record(&source_record, &successor, actual),
+                })
+            }
+            Err(reopen) => Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBindingAndReopen {
+                binding,
+                reopen,
+            }),
+        },
     }
+}
+
+fn revalidate_published_route_binding(
+    installation: &crate::Installation,
+    journal: &TransitionJournalStore,
+    successor_binding: &TransitionJournalRecordBinding,
+    successor: &TransitionRecord,
+) -> Result<bool, UsrRollbackCompleteRouteSuccessorBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Installation)?;
+    let exact = journal
+        .has_record_binding(cast, successor_binding, successor)
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Installation)?;
+    Ok(exact)
+}
+
+fn revalidate_reopened_route_binding(
+    installation: &crate::Installation,
+    journal: &TransitionJournalStore,
+    successor_binding: &TransitionJournalRecordBinding,
+    successor: &TransitionRecord,
+) -> Result<bool, UsrRollbackCompleteRouteSuccessorBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Installation)?;
+    let exact = journal
+        .has_reopened_record_binding(cast, successor_binding, successor)
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(UsrRollbackCompleteRouteSuccessorBindingError::Installation)?;
+    Ok(exact)
 }
 
 fn unexpected_record(
@@ -138,6 +272,10 @@ fn unexpected_record(
 #[cfg(test)]
 std::thread_local! {
     static BEFORE_FINAL_AUTHORITY_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static BEFORE_SUCCESSOR_BINDING_REVALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+    static AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -160,10 +298,62 @@ fn before_usr_rollback_complete_route_final_revalidation() {
 #[cfg(not(test))]
 fn before_usr_rollback_complete_route_final_revalidation() {}
 
+#[cfg(test)]
+pub(crate) fn arm_before_usr_rollback_complete_route_successor_binding_revalidation(
+    hook: impl FnOnce() + 'static,
+) {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_usr_rollback_complete_route_successor_binding_revalidation() {
+    BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_usr_rollback_complete_route_successor_binding_revalidation() {}
+
+#[cfg(test)]
+pub(crate) fn arm_after_usr_rollback_complete_route_successor_binding_check_before_reopen(
+    hook: impl FnOnce() + 'static,
+) {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn after_usr_rollback_complete_route_successor_binding_check_before_reopen() {
+    AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_usr_rollback_complete_route_successor_binding_check_before_reopen() {}
+
+#[derive(Debug, Error)]
+pub(in crate::client) enum UsrRollbackCompleteRouteSuccessorBindingError {
+    #[error("revalidate retained installation after publishing NewState RollbackComplete")]
+    Installation(#[source] installation::Error),
+    #[error("the published NewState RollbackComplete successor lost its exact record binding")]
+    Changed,
+    #[error("revalidate the published NewState RollbackComplete successor record binding")]
+    Storage(#[source] StorageError),
+}
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum UsrRollbackCompleteRoutePersistenceError {
     #[error("revalidate exact FreshDbInvalidated rollback-completion routing authority")]
-    Authority(#[source] UsrRollbackCompleteRouteAuthorityError),
+    Authority(#[from] UsrRollbackCompleteRouteAuthorityError),
     #[error("derive the sole legal RollbackComplete successor")]
     RouteConstruction {
         #[source]
@@ -171,6 +361,20 @@ pub(in crate::client) enum UsrRollbackCompleteRoutePersistenceError {
     },
     #[error("rollback-completion routing selected unexpected successor phase {phase:?}")]
     UnexpectedSuccessor { phase: Phase },
+    #[error("revalidate retained installation before the exact NewState RollbackComplete record advance")]
+    Installation(#[from] installation::Error),
+    #[error("published successor binding failed with exact durable {durable:?} NewState route evidence")]
+    SuccessorRecordBinding {
+        durable: DurableUsrRollbackCompleteRouteRecord,
+        #[source]
+        source: UsrRollbackCompleteRouteSuccessorBindingError,
+    },
+    #[error("successor binding failed ({binding}) and its canonical record could not be reconciled")]
+    SuccessorRecordBindingAndReopen {
+        binding: UsrRollbackCompleteRouteSuccessorBindingError,
+        #[source]
+        reopen: UsrRollbackCompleteRouteReopenError,
+    },
     #[error("journal advance failed after reopening exact durable {durable:?} record")]
     Advance {
         durable: DurableUsrRollbackCompleteRouteRecord,

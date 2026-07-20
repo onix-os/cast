@@ -13,7 +13,7 @@ use crate::{
     },
     db::state::exact_fresh_transition_removal_transaction_attempts,
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
-    transition_journal::{Phase, RollbackActionOutcome, decode, encode},
+    transition_journal::{RollbackActionOutcome, decode, encode},
 };
 
 use super::{
@@ -136,18 +136,19 @@ fn run_parent_case(epoch: Epoch, boundary: FreshDbInvalidationProcessBoundary) {
     );
     assert_eq!(recovery_status.signal(), None);
 
-    let expected = expected_after_recovery(boundary, &applied, &already_satisfied);
-    RawJournalInventory::capture(&root).assert_clean_successor(&encode(expected).unwrap());
+    let invalidated = expected_after_recovery(boundary, &applied, &already_satisfied);
+    let expected_entry = expected_after_recovery_entry(boundary, invalidated);
+    RawJournalInventory::capture(&root).assert_clean_successor(&encode(&expected_entry).unwrap());
     public_before.assert_same_anchors(PublicJournalIdentity::capture(&root));
     assert_eq!(RootAbiSnapshot::capture(&root), root_abi_before);
     assert_eq!(StableNamespaceSnapshot::capture(&root), namespace_before);
 
     let installation = Installation::open(&root, None).unwrap();
     let database = reopen_persistent_state_database(&installation);
-    database_before.assert_recovered(&database, expected);
+    database_before.assert_recovered(&database, invalidated);
     drop(database);
     drop(installation);
-    assert_journal_reopenable(&root, expected);
+    assert_journal_reopenable(&root, &expected_entry);
 
     drop(retained_root);
     drop(control);
@@ -164,6 +165,22 @@ fn expected_after_recovery<'record>(
         already_satisfied
     } else {
         applied
+    }
+}
+
+fn expected_after_recovery_entry(
+    boundary: FreshDbInvalidationProcessBoundary,
+    invalidated: &crate::transition_journal::TransitionRecord,
+) -> crate::transition_journal::TransitionRecord {
+    if boundary.canonical_is_source() {
+        invalidated.clone()
+    } else {
+        // The crash already made generation 17 canonical, so the recovery
+        // child's one startup entry observes that durable checkpoint and takes
+        // the ordinary journal-only generation-17 -> generation-18 route.
+        // SIGKILL coverage in this test remains exclusively generation 16 ->
+        // generation 17; it does not claim a completion-route kill boundary.
+        invalidated.rollback_successor(None).unwrap()
     }
 }
 
@@ -223,7 +240,8 @@ fn run_recovery_child(
     let applied = expected_fresh_db_invalidated(source, RollbackActionOutcome::Applied);
     let already_satisfied =
         expected_fresh_db_invalidated(source, RollbackActionOutcome::AlreadySatisfied);
-    let expected = expected_after_recovery(case.boundary, &applied, &already_satisfied);
+    let invalidated = expected_after_recovery(case.boundary, &applied, &already_satisfied);
+    let expected_entry = expected_after_recovery_entry(case.boundary, invalidated);
     let expected_start = if case.boundary.canonical_is_source() {
         source
     } else {
@@ -241,7 +259,7 @@ fn run_recovery_child(
     reset_unrelated_effect_observers();
     assert_zero_unrelated_effects();
     arm_before_usr_rollback_finalization_final_revalidation(|| {
-        panic!("generation-16 invalidation recovery attempted terminal finalization")
+        panic!("invalidation process recovery entry attempted terminal finalization")
     });
 
     let reservation = ActiveStateReservation::acquire().unwrap();
@@ -250,11 +268,11 @@ fn run_recovery_child(
         Err(error) => error,
     };
     let startup_gate::Error::RecoveryPending(pending) = &error else {
-        panic!("expected generation-17 recovery-pending result, got {error:?}");
+        panic!("expected exact post-recovery pending result, got {error:?}");
     };
-    assert_eq!(pending.transition_id(), &expected.transition_id);
-    assert_eq!(pending.phase(), Phase::FreshDbInvalidated);
-    assert_eq!(pending.disposition(), expected.recovery_disposition());
+    assert_eq!(pending.transition_id(), &expected_entry.transition_id);
+    assert_eq!(pending.phase(), expected_entry.phase);
+    assert_eq!(pending.disposition(), expected_entry.recovery_disposition());
     assert!(pending.blockers().is_empty(), "unexpected blockers: {:?}", pending.blockers());
     assert!(pending.retains_database(system.state_db()));
 
@@ -272,9 +290,9 @@ fn run_recovery_child(
     assert_eq!(effects.candidate_move, 0);
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert_eq!(boot_synchronize_attempt_count(), 0);
-    assert_joint_absence(system.state_db(), expected);
-    assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *expected);
-    RawJournalInventory::capture(&case.root).assert_clean_successor(&encode(expected).unwrap());
+    assert_joint_absence(system.state_db(), invalidated);
+    assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), expected_entry);
+    RawJournalInventory::capture(&case.root).assert_clean_successor(&encode(&expected_entry).unwrap());
     assert_eq!(RootAbiSnapshot::capture(&case.root), root_abi_before);
     assert_eq!(StableNamespaceSnapshot::capture(&case.root), namespace_before);
     drop(error);

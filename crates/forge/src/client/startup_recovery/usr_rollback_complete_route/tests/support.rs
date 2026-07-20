@@ -1,4 +1,7 @@
+use std::path::Path;
+
 use crate::{
+    Installation, db,
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackCompleteRouteSeal,
@@ -11,6 +14,8 @@ use crate::{
             UsrRollbackFreshDbInvalidationEffectSeal, persist_usr_rollback_fresh_db_invalidation_and_reopen,
         },
     },
+    installation::DatabaseKind,
+    test_support::private_installation_tempdir,
     transition_journal::{Phase, RollbackAction, RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
 };
 
@@ -226,3 +231,108 @@ pub(super) fn capture_record<'reservation>(
 pub(super) use super::super::invalidation_test_support::{
     CandidateOutcome as CandidateResult, CandidateSource as Source,
 };
+
+const OS_RELEASE: &[u8] = b"NAME=Rollback Completion Test\nID=rollback-completion-test\n";
+const SYSTEM_MODEL: &[u8] = b"let system = { hostname = \"rollback-completion-test\" } in system\n";
+
+pub(super) fn install_persistent_joint_absence_database(fixture: &mut RouteFixture) {
+    let database = open_state_database(&fixture.fixture.fixture.fixture.installation);
+    let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
+    let candidate = database
+        .add_with_transition(
+            &fixture.source.transition_id,
+            &[],
+            Some("rollback fresh candidate"),
+            None,
+        )
+        .unwrap()
+        .id;
+    assert_eq!(previous, fixture.fixture.fixture.fixture.previous_state);
+    assert_eq!(candidate, fixture.fixture.fixture.fixture.candidate_state);
+    let provenance = db::state::MetadataProvenance::from_outputs(OS_RELEASE, SYSTEM_MODEL);
+    database
+        .insert_fresh_metadata_provenance_if_transition_matches(
+            candidate,
+            &fixture.source.transition_id,
+            &provenance,
+        )
+        .unwrap();
+    let observation = database
+        .inspect_exact_fresh_transition(candidate, &fixture.source.transition_id)
+        .unwrap();
+    let db::state::ExactFreshTransitionObservation::Present(preimage) = observation else {
+        panic!("persistent completion-route fixture expected one exact fresh preimage");
+    };
+    database.remove_exact_fresh_transition(preimage).unwrap();
+    let old = std::mem::replace(&mut fixture.fixture.fixture.fixture.database, database);
+    drop(old);
+    fixture.fixture.assert_exact_joint_absence();
+}
+
+pub(super) fn release_route_handles(mut fixture: RouteFixture) -> tempfile::TempDir {
+    let retained = std::mem::replace(
+        &mut fixture.fixture.fixture.fixture._temporary,
+        private_installation_tempdir(),
+    );
+    drop(fixture);
+    retained
+}
+
+pub(super) struct FreshCompleteRouteHandles {
+    pub(super) installation: Installation,
+    pub(super) database: db::state::Database,
+    pub(super) journal: TransitionJournalStore,
+    pub(super) record: TransitionRecord,
+}
+
+impl FreshCompleteRouteHandles {
+    pub(super) fn open(root: &Path) -> Self {
+        let installation = Installation::open(root, None).unwrap();
+        let database = open_state_database(&installation);
+        let journal = TransitionJournalStore::open_retained(installation.root_directory(), root).unwrap();
+        let record = journal
+            .load()
+            .unwrap()
+            .expect("fresh-handle reopen requires one durable completion-route record");
+        Self {
+            installation,
+            database,
+            journal,
+            record,
+        }
+    }
+
+    pub(super) fn capture<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> Result<UsrRollbackCompleteRouteAdmission<'reservation>, UsrRollbackCompleteRouteAuthorityError> {
+        let seal = UsrRollbackCompleteRouteSeal::new_for_test();
+        UsrRollbackCompleteRouteAuthority::capture(
+            &seal,
+            &self.installation,
+            &self.journal,
+            &self.database,
+            reservation,
+            &self.record,
+        )
+    }
+
+    pub(super) fn capture_ready<'reservation>(
+        &self,
+        reservation: &'reservation ActiveStateReservation,
+    ) -> UsrRollbackCompleteRouteAuthority<'reservation> {
+        match self.capture(reservation).unwrap() {
+            UsrRollbackCompleteRouteAdmission::Ready(authority) => authority,
+            _ => panic!("fresh exact FreshDbInvalidated joint absence did not admit completion"),
+        }
+    }
+}
+
+fn open_state_database(installation: &Installation) -> db::state::Database {
+    let location = installation.mutable_database_location(DatabaseKind::State).unwrap();
+    let (url, anchor) = location.parts();
+    let database = db::state::Database::new_anchored(url, anchor).unwrap();
+    location.revalidate().unwrap();
+    installation.revalidate_mutable_namespace().unwrap();
+    database
+}

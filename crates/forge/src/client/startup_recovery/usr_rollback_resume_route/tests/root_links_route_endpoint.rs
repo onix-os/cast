@@ -174,16 +174,38 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
 
                     let invalidated_bytes = fixture.canonical_bytes();
                     drop(invalidated_entry);
-                    let stable_entry = fixture.enter();
-                    assert_eq!(pending(&stable_entry).phase(), Phase::FreshDbInvalidated, "{case}");
-                    assert_eq!(fixture.canonical_record(), invalidated, "{case}");
-                    assert_eq!(fixture.canonical_bytes(), invalidated_bytes, "{case}");
+                    let complete_entry = fixture.enter();
+                    let rollback_complete = invalidated.rollback_successor(None).unwrap();
+                    assert_eq!(rollback_complete.phase, Phase::RollbackComplete, "{case}");
+                    assert_eq!(rollback_complete.generation, 18, "{case}");
+                    assert_eq!(pending(&complete_entry).phase(), Phase::RollbackComplete, "{case}");
+                    assert!(pending(&complete_entry).blockers().is_empty(), "{case}");
+                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
+                    assert_ne!(fixture.canonical_bytes(), invalidated_bytes, "{case}");
                     assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
                     assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
                     assert!(matches!(
                         fixture.database.inspect_exact_fresh_transition(
                             fixture.candidate_state,
                             &invalidated.transition_id,
+                        ),
+                        Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
+                    ));
+                    assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
+                    assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+
+                    let complete_bytes = fixture.canonical_bytes();
+                    drop(complete_entry);
+                    let stable_entry = fixture.enter();
+                    assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");
+                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
+                    assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");
+                    assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
+                    assert!(matches!(
+                        fixture.database.inspect_exact_fresh_transition(
+                            fixture.candidate_state,
+                            &rollback_complete.transition_id,
                         ),
                         Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
                     ));

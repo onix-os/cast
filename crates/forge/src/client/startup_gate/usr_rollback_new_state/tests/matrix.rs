@@ -81,11 +81,13 @@ fn startup_new_state_suffix_invalidates_present_or_accepts_joint_absence_for_eve
 
 #[test]
 fn startup_new_state_suffix_completes_every_exact_invalidated_outcome_without_repeating_effects() {
+    let mut cases = 0;
     for epoch in Epoch::ALL {
-        for source in CandidateSource::ALL {
+        for source in CandidateSource::THROUGH_ROLLBACK_COMPLETE {
             for usr_outcome in USR_OUTCOMES {
                 for candidate_outcome in CandidateOutcome::ALL {
                     for fresh_outcome in FreshOutcome::ALL {
+                        cases += 1;
                         let fixture = build_fresh_invalidation(
                             epoch,
                             source,
@@ -115,6 +117,7 @@ fn startup_new_state_suffix_completes_every_exact_invalidated_outcome_without_re
             }
         }
     }
+    assert_eq!(cases, 48);
 }
 
 #[test]

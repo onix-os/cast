@@ -190,7 +190,7 @@ forge-startup-usr-rollback-finalization-test:
 	{ \
 		timeout 10s sed -n '/^    pub(crate) fn load_revalidated_retained_cast/,/^    pub(crate) fn binding/p' "$$journal_store" | timeout 10s sed '$$d'; \
 		timeout 10s sed -n '/^    pub(crate) fn revalidate_retained_cast_binding/,/^    pub(crate) fn create/p' "$$journal_store" | timeout 10s sed '$$d'; \
-		timeout 10s sed -n '/^    fn load_pinned/,/^    pub(super) fn create_temporary/p' "$$journal_store" | timeout 10s sed '$$d'; \
+		timeout 10s sed -n '/^    fn load_pinned(/,/^    pub(super) fn create_temporary/p' "$$journal_store" | timeout 10s sed '$$d'; \
 	} | timeout 10s sed -E 's,//.*$$,,' > "$$store_read_code"; \
 	timeout 10s grep -Fq 'pub(crate) fn load_revalidated_retained_cast' "$$store_read_code"; \
 	timeout 10s grep -Fq 'pub(crate) fn revalidate_retained_cast_binding' "$$store_read_code"; \

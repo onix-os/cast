@@ -1,5 +1,3 @@
-use std::os::unix::fs::symlink;
-
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
@@ -16,14 +14,6 @@ use crate::{
     },
     transition_journal::{Phase, RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
 };
-
-const ROOT_ABI: [(&str, &str); 5] = [
-    ("bin", "usr/bin"),
-    ("sbin", "usr/sbin"),
-    ("lib", "usr/lib"),
-    ("lib32", "usr/lib32"),
-    ("lib64", "usr/lib"),
-];
 
 use super::super::invalidation_test_support::{
     CandidateOutcome, CandidateSource, FreshDbInvalidationFixture, FreshRowLayout,
@@ -92,9 +82,6 @@ impl FinalizationFixture {
         } else {
             FreshDbInvalidationFixture::new(source, usr_outcome, candidate_outcome, origin.row())
         };
-        if source == CandidateSource::Exchanged {
-            install_live_root_abi(&fixture.fixture.fixture.installation);
-        }
         let journal = fixture.open_journal();
         let reservation = ActiveStateReservation::acquire().unwrap();
         let effect_seal = UsrRollbackFreshDbInvalidationEffectSeal::new_for_test();
@@ -218,12 +205,6 @@ impl FinalizationFixture {
             fresh_db_invalidation_removal_call_count(),
             self.origin.expected_removals()
         );
-    }
-}
-
-fn install_live_root_abi(installation: &crate::Installation) {
-    for (name, target) in ROOT_ABI {
-        symlink(target, installation.root.join(name)).unwrap();
     }
 }
 

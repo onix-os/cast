@@ -2,32 +2,35 @@
 
 forge-startup-usr-rollback-complete-route-test:
 	@set -euo pipefail; \
-	timeout 10s mkdir -p "$(TOP_DIR)/target"; \
-	listed="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-complete-route-list.XXXXXXXXXXXX" )"; \
-	production_code="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-complete-route-code.XXXXXXXXXXXX" )"; \
-	symbol_refs="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-complete-route-symbols.XXXXXXXXXXXX" )"; \
-	capture_body="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-complete-route-capture.XXXXXXXXXXXX" )"; \
-	revalidate_body="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-complete-route-revalidate.XXXXXXXXXXXX" )"; \
-	inspection_body="$$( timeout 10s mktemp "$(TOP_DIR)/target/rollback-complete-route-inspection.XXXXXXXXXXXX" )"; \
-	trap 'timeout 10s rm -f "$$listed" "$$production_code" "$$symbol_refs" "$$capture_body" "$$revalidate_body" "$$inspection_body"' EXIT; \
-	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
-	timeout 10s grep -q . "$$listed"; \
+	mkdir -p "$(TOP_DIR)/target"; \
+	listed="$$( mktemp "$(TOP_DIR)/target/rollback-complete-route-list.XXXXXXXXXXXX" )"; \
+	production_code="$$( mktemp "$(TOP_DIR)/target/rollback-complete-route-code.XXXXXXXXXXXX" )"; \
+	trap 'rm -f "$$listed" "$$production_code"' EXIT; \
+	$(CARGO) test -p forge --lib -- --list | tee "$$listed" >/dev/null; \
+	grep -q . "$$listed"; \
 	prefix='client::startup_recovery::usr_rollback_complete_route::tests::'; \
-	count="$$( timeout 10s awk -v prefix="$$prefix" 'index($$0, prefix) == 1 && $$0 ~ /: test$$/ { count += 1 } END { print count + 0 }' "$$listed" )"; \
-	timeout 10s test "$$count" = 11; \
+	count="$$( awk -v prefix="$$prefix" 'index($$0, prefix) == 1 && $$0 ~ /: test$$/ { count += 1 } END { print count + 0 }' "$$listed" )"; \
+	test "$$count" = 18; \
 	for name in \
 		admission::startup_usr_rollback_complete_route_admits_exact_current_and_historical_joint_absence \
 		admission::startup_usr_rollback_complete_route_defers_inexact_phase_plan_and_non_absent_database \
 		evidence_races::startup_usr_rollback_complete_route_rejects_reopened_and_cross_root_journals \
 		evidence_races::startup_usr_rollback_complete_route_capture_and_final_evidence_races_never_advance \
 		evidence_races::startup_usr_rollback_complete_route_refuses_namespace_lookalikes \
+		fresh_reopen::startup_usr_rollback_complete_route_source_durable_fresh_handle_reopen_retries_only_the_route \
+		fresh_reopen::startup_usr_rollback_complete_route_successor_durable_fresh_handle_reopen_skips_the_route \
 		matrix::startup_usr_rollback_complete_route_applied_matrix_persists_exact_rollback_complete \
 		matrix::startup_usr_rollback_complete_route_already_satisfied_matrix_persists_exact_rollback_complete \
-		storage_reopen::startup_usr_rollback_complete_route_storage_faults_reopen_exact_fresh_db_invalidated_or_rollback_complete \
-		storage_reopen::startup_usr_rollback_complete_route_consumes_old_store_and_returns_canonical_reopen \
+		record_binding::startup_usr_rollback_complete_route_bound_advance_same_byte_replacements_never_succeed \
+		record_binding::startup_usr_rollback_complete_route_same_byte_successor_replacement_fails_reopened_binding \
+		record_binding::startup_usr_rollback_complete_route_same_byte_successor_replacement_fails_same_store_binding \
 		restart::startup_usr_rollback_complete_route_source_fault_restart_retries_only_the_completion_route \
-		restart::startup_usr_rollback_complete_route_rollback_complete_fault_restart_skips_route_and_invalidation; do \
-		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
+		restart::startup_usr_rollback_complete_route_rollback_complete_fault_restart_skips_route_and_invalidation \
+		root_abi_races::startup_root_links_complete_route_initial_revalidation_rejects_all_root_abi_mutations \
+		root_abi_races::startup_root_links_complete_route_final_revalidation_rejects_all_root_abi_mutations \
+		storage_reopen::startup_usr_rollback_complete_route_storage_faults_reopen_exact_fresh_db_invalidated_or_rollback_complete \
+		storage_reopen::startup_usr_rollback_complete_route_consumes_old_store_and_returns_canonical_reopen; do \
+		grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_complete_route.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_complete_route_authority.rs; \
@@ -40,173 +43,130 @@ forge-startup-usr-rollback-complete-route-test:
 	reconciliation_root=crates/forge/src/client/startup_reconciliation.rs; \
 	production_dispatch=crates/forge/src/client/startup_gate/usr_rollback_new_state.rs; \
 	namespace_root=crates/forge/src/client/startup_reconciliation/activation_namespace.rs; \
-	tests=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests.rs; \
-	support=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests/support.rs; \
-	admission=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests/admission.rs; \
-	races=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests/evidence_races.rs; \
-	matrix=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests/matrix.rs; \
-	storage=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests/storage_reopen.rs; \
-	restart=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests/restart.rs; \
-	timeout 10s grep -Fqx 'mod usr_rollback_complete_route;' "$$recovery_root"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'mod usr_rollback_complete_route;' "$$recovery_root" )" = 1; \
-	timeout 10s grep -Fqx 'mod usr_rollback_complete_route_authority;' "$$reconciliation_root"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'mod usr_rollback_complete_route_authority;' "$$reconciliation_root" )" = 1; \
-	timeout 10s grep -Fqx 'mod rollback_complete_route_proof;' "$$namespace_root"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'mod rollback_complete_route_proof;' "$$namespace_root" )" = 1; \
-	for module in admission evidence_races matrix restart storage_reopen support; do \
-		timeout 10s grep -Fqx "mod $$module;" "$$tests"; \
+	tests=crates/forge/src/client/startup_recovery/usr_rollback_complete_route/tests; \
+	candidate_support=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs; \
+	dispatch_tests=crates/forge/src/client/startup_gate/usr_rollback_new_state/tests; \
+	finalization_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_finalization_authority.rs; \
+	root_links_endpoint=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/root_links_route_endpoint.rs; \
+	new_state_endpoint=crates/forge/src/client/startup_recovery/usr_rollback_fresh_db_invalidation_route/tests/endpoint.rs; \
+	resume_make=misc/make/startup-rollback-resume-route-tests.mk; \
+	test "$$( grep -Fc 'mod usr_rollback_complete_route;' "$$recovery_root" )" = 1; \
+	test "$$( grep -Fc 'mod usr_rollback_complete_route_authority;' "$$reconciliation_root" )" = 1; \
+	test "$$( grep -Fc 'mod rollback_complete_route_proof;' "$$namespace_root" )" = 1; \
+	for module in admission evidence_races fresh_reopen matrix record_binding restart root_abi_races storage_reopen support; do \
+		grep -Fqx "mod $$module;" "$$tests.rs"; \
 	done; \
-	timeout 10s test "$$( timeout 10s grep -Ec '^mod [a-z_]+;' "$$tests" )" = 6; \
-	timeout 10s rg -U -q '^pub\(in crate::client\) fn persist_usr_rollback_complete_route_and_reopen\(\n    journal: TransitionJournalStore,\n    authority: UsrRollbackCompleteRouteAuthority<'\''_>,\n\) -> Result<\(TransitionJournalStore, TransitionRecord\), UsrRollbackCompleteRoutePersistenceError> \{' "$$executor"; \
-	timeout 10s grep -Fqx '    UsrRollbackCompleteRoutePersistenceError, persist_usr_rollback_complete_route_and_reopen,' "$$recovery_root"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_complete_route_and_reopen,' "$$recovery_root" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_complete_route_and_reopen(journal, authority)?' "$$production_dispatch" )" = 1; \
-	timeout 10s rg -n -F 'persist_usr_rollback_complete_route_and_reopen' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' --glob '!**/usr_rollback_complete_route.rs' > "$$symbol_refs"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 3; \
-	timeout 10s test "$$( timeout 10s grep -Fc "$$recovery_root:" "$$symbol_refs" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc "$$production_dispatch:" "$$symbol_refs" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_complete_route_and_reopen(' "$$executor" )" = 1; \
-	timeout 10s grep -Fqx 'pub(in crate::client) enum UsrRollbackCompleteRouteAdmission<'\''reservation> {' "$$authority"; \
-	for variant in '    NotApplicable,' '    Deferred,' '    Ready(UsrRollbackCompleteRouteAuthority<'\''reservation>),'; do \
-		timeout 10s grep -Fqx "$$variant" "$$authority"; \
+	test "$$( grep -Ec '^mod [a-z_]+;' "$$tests.rs" )" = 9; \
+	grep -Fqx 'pub(in crate::client) struct UsrRollbackCompleteRouteSeal {' "$$production_dispatch"; \
+	grep -Fq 'UsrRollbackCompleteRouteSeal' "$$startup_gate"; \
+	test "$$( grep -Fc 'UsrRollbackCompleteRouteSeal::new();' "$$production_dispatch" )" = 1; \
+	test "$$( grep -Fc 'UsrRollbackCompleteRouteAuthority::capture(' "$$production_dispatch" )" = 1; \
+	test "$$( grep -Fc 'persist_usr_rollback_complete_route_and_reopen(journal, authority)?' "$$production_dispatch" )" = 1; \
+	capture_call_count="$$( rg -n 'UsrRollbackCompleteRouteAuthority::capture\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | wc -l )"; \
+	test "$$capture_call_count" = 1; \
+	persist_call_count="$$( rg -n 'persist_usr_rollback_complete_route_and_reopen\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | wc -l )"; \
+	test "$$persist_call_count" = 2; \
+	grep -Fqx "pub(in crate::client) enum UsrRollbackCompleteRouteAdmission<'reservation> {" "$$authority"; \
+	for variant in '    NotApplicable,' '    Deferred,' "    Ready(UsrRollbackCompleteRouteAuthority<'reservation>),"; do \
+		grep -Fqx "$$variant" "$$authority"; \
 	done; \
-	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCompleteRouteSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$production_dispatch"; \
-	timeout 10s grep -Fq 'UsrRollbackCompleteRouteSeal' "$$startup_gate"; \
-	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCompleteRouteSeal {' "$$production_dispatch"; \
-	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCompleteRouteSeal {" { state = 1; next } state == 1 && $$0 == "    _private: ()," { field = 1; next } state == 1 && $$0 == "}" { found = field; exit !found } END { exit !found }' "$$production_dispatch"; \
-	seal_impl="$$( timeout 10s sed -n '/^impl UsrRollbackCompleteRouteSeal {/,/^}/p' "$$production_dispatch" )"; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    fn new() -> Self {' <<<"$$seal_impl" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    pub(in crate::client) fn new_for_test() -> Self {' <<<"$$seal_impl" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCompleteRouteSeal::new();' "$$production_dispatch" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCompleteRouteAuthority::capture(' "$$production_dispatch" )" = 1; \
-	timeout 10s rg -n -F 'UsrRollbackCompleteRouteSeal::new();' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$symbol_refs"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$symbol_refs" )" = "$$production_dispatch"; \
-	timeout 10s rg -n -F 'UsrRollbackCompleteRouteAuthority::capture(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' > "$$symbol_refs"; \
-	timeout 10s test "$$( timeout 10s wc -l < "$$symbol_refs" )" = 1; \
-	timeout 10s test "$$( timeout 10s cut -d: -f1 "$$symbol_refs" )" = "$$production_dispatch"; \
-	if timeout 10s rg -U -n '#\[derive\([^]]*Clone[^]]*\)\]\n(?:#\[[^\n]*\]\n)*(?:pub\([^)]*\)[[:space:]]+)?(?:struct|enum)[[:space:]]+(UsrRollbackCompleteRoute(?:Authority|DatabaseEvidence)|ExactFreshTransitionAbsence)' "$$authority" "$$exact"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'impl Clone for (UsrRollbackCompleteRoute(?:Authority|DatabaseEvidence)|ExactFreshTransitionAbsence)' "$$authority" "$$exact"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s grep -Fqx '    context: DatabaseEvidence,' "$$authority"; \
-	timeout 10s grep -Fqx '    absence: db::state::ExactFreshTransitionAbsence,' "$$authority"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'inspect_exact_fresh_transition' "$$authority" )" = 2; \
-	timeout 10s sed -n '/^fn inspect_current_database(/,/^}/p' "$$authority" > "$$inspection_body"; \
-	timeout 10s grep -q . "$$inspection_body"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'inspect_exact_fresh_transition' "$$inspection_body" )" = 2; \
-	exact_before_line="$$( timeout 10s grep -nF 'let exact_before = state_db.inspect_exact_fresh_transition' "$$inspection_body" | timeout 10s cut -d: -f1 )"; \
-	context_line="$$( timeout 10s grep -nF 'let context = inspect_database(record, state_db, in_flight)?;' "$$inspection_body" | timeout 10s cut -d: -f1 )"; \
-	exact_after_line="$$( timeout 10s grep -nF 'let exact_after = state_db.inspect_exact_fresh_transition' "$$inspection_body" | timeout 10s cut -d: -f1 )"; \
-	timeout 10s test "$$exact_before_line" -lt "$$context_line"; \
-	timeout 10s test "$$context_line" -lt "$$exact_after_line"; \
-	timeout 10s grep -Fq 'ExactFreshTransitionObservation::JointlyAbsent(absence)' "$$inspection_body"; \
-	if timeout 10s rg -n 'ExactFreshTransitionObservation::Present' "$$inspection_body"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s grep -Fq 'ownership: db::state::TransitionOwnership::Missing,' "$$authority"; \
-	timeout 10s grep -Fq 'provenance: None,' "$$authority"; \
-	timeout 10s grep -Fq 'evidence.absence.state_id() == candidate' "$$authority"; \
-	timeout 10s grep -Fq 'evidence.absence.transition_id() == &record.transition_id' "$$authority"; \
-	timeout 10s sed -n '/^    pub(in crate::client) fn capture(/,/^    }/p' "$$authority" > "$$capture_body"; \
-	timeout 10s grep -q . "$$capture_body"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'journal.has_binding(&journal_binding)' "$$capture_body" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'inspect_current_database(record, state_db)?' "$$capture_body" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackCompleteRouteNamespaceInspection::begin' "$$capture_body" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'namespace_inspection.finish(installation, journal, record)' "$$capture_body" )" = 1; \
-	capture_binding_line="$$( timeout 10s grep -nF 'journal.has_binding(&journal_binding)' "$$capture_body" | timeout 10s cut -d: -f1 )"; \
-	capture_installation_line="$$( timeout 10s grep -nF 'installation.revalidate_mutable_namespace()?;' "$$capture_body" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
-	capture_database_before_line="$$( timeout 10s grep -nF 'let database_before =' "$$capture_body" | timeout 10s cut -d: -f1 )"; \
-	capture_namespace_begin_line="$$( timeout 10s grep -nF 'UsrRollbackCompleteRouteNamespaceInspection::begin' "$$capture_body" | timeout 10s cut -d: -f1 )"; \
-	capture_namespace_finish_line="$$( timeout 10s grep -nF 'namespace_inspection.finish(installation, journal, record)' "$$capture_body" | timeout 10s cut -d: -f1 )"; \
-	capture_database_after_line="$$( timeout 10s grep -nF 'let database_after =' "$$capture_body" | timeout 10s cut -d: -f1 )"; \
-	timeout 10s test "$$capture_binding_line" -lt "$$capture_installation_line"; \
-	timeout 10s test "$$capture_installation_line" -lt "$$capture_database_before_line"; \
-	timeout 10s test "$$capture_database_before_line" -lt "$$capture_namespace_begin_line"; \
-	timeout 10s test "$$capture_namespace_begin_line" -lt "$$capture_namespace_finish_line"; \
-	timeout 10s test "$$capture_namespace_finish_line" -lt "$$capture_database_after_line"; \
-	timeout 10s sed -n '/^    pub(in crate::client) fn revalidate(/,/^    }/p' "$$authority" > "$$revalidate_body"; \
-	timeout 10s grep -q . "$$revalidate_body"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'journal.has_binding(&self.journal_binding)' "$$revalidate_body" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'inspect_current_database(&self.record, &self.state_db)?' "$$revalidate_body" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'require_exact_database(' "$$revalidate_body" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc '.revalidate(&self.installation, journal, &self.record)?;' "$$revalidate_body" )" = 1; \
-	binding_line="$$( timeout 10s grep -nF 'journal.has_binding(&self.journal_binding)' "$$revalidate_body" | timeout 10s cut -d: -f1 )"; \
-	database_before_line="$$( timeout 10s grep -nF 'let database_before =' "$$revalidate_body" | timeout 10s cut -d: -f1 )"; \
-	namespace_line="$$( timeout 10s grep -nF '.revalidate(&self.installation, journal, &self.record)?;' "$$revalidate_body" | timeout 10s cut -d: -f1 )"; \
-	database_after_line="$$( timeout 10s grep -nF 'let database_after =' "$$revalidate_body" | timeout 10s cut -d: -f1 )"; \
-	timeout 10s test "$$binding_line" -lt "$$database_before_line"; \
-	timeout 10s test "$$database_before_line" -lt "$$namespace_line"; \
-	timeout 10s test "$$namespace_line" -lt "$$database_after_line"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'rollback_complete_route_plan_is_exact' "$$revalidate_body" )" = 1; \
+	if rg -U -n '#\[derive\([^]]*Clone[^]]*\)\]\n(?:#\[[^\n]*\]\n)*(?:pub\([^)]*\)[[:space:]]+)?(?:struct|enum)[[:space:]]+(UsrRollbackCompleteRoute(?:Authority|DatabaseEvidence|NamespaceProof)|ExactFreshTransitionAbsence|TransitionJournalRecordBinding)' "$$authority" "$$proof" "$$exact" crates/forge/src/transition_journal/store/record_binding.rs; then exit 1; else test "$$?" = 1; fi; \
 	for field in \
 		'record.operation == Operation::NewState' \
 		'record.phase == Phase::FreshDbInvalidated' \
 		'record.candidate.id.is_some()' \
+		'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' \
 		'rollback.previous_archive == RollbackAction::NotRequired' \
 		'rollback.candidate.disposition == AbortDisposition::Quarantine' \
 		'rollback.boot == BootRollback::NotRequired' \
 		'rollback.external_effects_may_remain'; do \
-		timeout 10s grep -Fq "$$field" "$$authority"; \
+		grep -Fq "$$field" "$$authority"; \
 	done; \
-	for marker in 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' 'rollback.usr_exchange,' 'rollback.candidate.action,' 'rollback.fresh_db,'; do \
-		timeout 10s grep -Fq "$$marker" "$$authority"; \
+	grep -Fqx '    context: DatabaseEvidence,' "$$authority"; \
+	grep -Fqx '    absence: db::state::ExactFreshTransitionAbsence,' "$$authority"; \
+	test "$$( grep -Fc 'inspect_exact_fresh_transition' "$$authority" )" = 2; \
+	grep -Fq 'ownership: db::state::TransitionOwnership::Missing,' "$$authority"; \
+	grep -Fq 'provenance: None,' "$$authority"; \
+	if rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(|journal\.load\(\)|journal\.advance\(' "$$authority" "$$proof" "$$executor"; then exit 1; else test "$$?" = 1; fi; \
+	grep -Fqx '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority"; \
+	test "$$( grep -Fc 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' "$$authority" )" = 1; \
+	test "$$( grep -Fc 'require_journal_record_binding(' "$$authority" )" = 4; \
+	binding_helper="$$( sed -n '/^fn require_journal_record_binding(/,/^}/p' "$$authority" )"; \
+	grep -Fq '    if !journal.has_record_store_binding(binding) {' <<<"$$binding_helper"; \
+	grep -Fq 'journal.has_record_binding(cast, binding, record)?' <<<"$$binding_helper"; \
+	capture="$$( sed -n '/pub(in crate::client) fn capture(/,/pub(in crate::client) fn revalidate(/p' "$$authority" )"; \
+	capture_binding="$$( grep -nF 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' <<<"$$capture" | cut -d: -f1 )"; \
+	capture_db_before="$$( grep -nF 'let database_before =' <<<"$$capture" | cut -d: -f1 )"; \
+	capture_namespace="$$( grep -nF 'UsrRollbackCompleteRouteNamespaceInspection::begin' <<<"$$capture" | cut -d: -f1 )"; \
+	capture_db_after="$$( grep -nF 'let database_after =' <<<"$$capture" | cut -d: -f1 )"; \
+	test "$$capture_binding" -lt "$$capture_db_before"; \
+	test "$$capture_db_before" -lt "$$capture_namespace"; \
+	test "$$capture_namespace" -lt "$$capture_db_after"; \
+	revalidate="$$( sed -n '/pub(in crate::client) fn revalidate(/,/pub(in crate::client) fn installation(/p' "$$authority" )"; \
+	revalidate_first_binding="$$( grep -nF 'require_journal_record_binding(' <<<"$$revalidate" | head -n 1 | cut -d: -f1 )"; \
+	revalidate_db_before="$$( grep -nF 'let database_before =' <<<"$$revalidate" | cut -d: -f1 )"; \
+	revalidate_namespace="$$( grep -nF 'self.namespace.revalidate' <<<"$$revalidate" | cut -d: -f1 )"; \
+	revalidate_db_after="$$( grep -nF 'let database_after =' <<<"$$revalidate" | cut -d: -f1 )"; \
+	revalidate_last_binding="$$( grep -nF 'require_journal_record_binding(' <<<"$$revalidate" | tail -n 1 | cut -d: -f1 )"; \
+	test "$$revalidate_first_binding" -lt "$$revalidate_db_before"; \
+	test "$$revalidate_db_before" -lt "$$revalidate_namespace"; \
+	test "$$revalidate_namespace" -lt "$$revalidate_db_after"; \
+	test "$$revalidate_db_after" -lt "$$revalidate_last_binding"; \
+	grep -Fq 'require_exact_new_state_fresh_db_invalidated_topology(expected, &before)?' "$$proof"; \
+	grep -Fq 'run_before_fresh_namespace_capture();' "$$proof"; \
+	grep -Fq 'journal.has_record_binding(cast, journal_record_binding, expected)?' "$$proof"; \
+	test "$$( grep -Fc 'authority.revalidate(&journal)' "$$executor" )" = 1; \
+	test "$$( grep -Fc 'authority.advance_record_binding(&journal, &successor)' "$$executor" )" = 1; \
+	grep -Fqx '    Published(TransitionJournalRecordBinding),' "$$executor"; \
+	test "$$( grep -Fc '.has_record_binding(cast, successor_binding, successor)' "$$executor" )" = 1; \
+	test "$$( grep -Fc '.has_reopened_record_binding(cast, successor_binding, successor)' "$$executor" )" = 1; \
+	advance_line="$$( grep -nF 'let advance = match authority.advance_record_binding(&journal, &successor) {' "$$executor" | cut -d: -f1 )"; \
+	drop_journal="$$( grep -nF '    drop(journal);' "$$executor" | tail -n 1 | cut -d: -f1 )"; \
+	reopen_line="$$( grep -nF 'reopen_canonical_journal(&installation)' "$$executor" | cut -d: -f1 )"; \
+	test "$$advance_line" -lt "$$drop_journal"; \
+	test "$$drop_journal" -lt "$$reopen_line"; \
+	sed -E 's,//.*$$,,' "$$authority" "$$proof" "$$executor" > "$$production_code"; \
+	if rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|diesel::|SqliteConnection|run_(transaction|system)_triggers|journal\.delete|remove_exact_fresh_transition|std::fs|(^|[^[:alnum:]_])fs::|(^|[^[:alnum:]_])nix::|transition_identity|linux_fs|rename(at)?|unlink(at)?|linkat|hard_link|symlink|sync_(all|data)|write_all|set_permissions|chmod|mkdir|create_dir|remove_(dir|file)|attempt_move|reconcile_move|finalize_usr_rollback|dispatch|retry|boot::|synchronize_boot' "$$production_code"; then exit 1; else test "$$?" = 1; fi; \
+	grep -Fqx '    pub(super) const ALL: [Self; 2] = [Self::Intent, Self::Exchanged];' "$$candidate_support"; \
+	rg -U -q '^    pub\(super\) const THROUGH_ROLLBACK_COMPLETE: \[Self; 3\] = \[\n        Self::Intent,\n        Self::Exchanged,\n        Self::RootLinksComplete,\n    \];' "$$candidate_support"; \
+	for file in admission.rs matrix.rs restart.rs storage_reopen.rs record_binding.rs fresh_reopen.rs; do \
+		grep -Fq 'Source::THROUGH_ROLLBACK_COMPLETE' "$$tests/$$file"; \
 	done; \
-	timeout 10s grep -Fqx 'pub(in crate::client::startup_reconciliation) struct UsrRollbackCompleteRouteNamespaceProof {' "$$proof"; \
-	timeout 10s grep -Fq 'require_exact_new_state_fresh_db_invalidated_topology' "$$proof"; \
-	timeout 10s grep -Fq 'record.phase != Phase::FreshDbInvalidated' "$$candidate_proof"; \
-	timeout 10s grep -Fq 'UsrRollbackCandidatePreserveTopology::NewStatePreserved' "$$candidate_proof"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'authority.revalidate(&journal)' "$$executor" )" = 2; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'source_record.rollback_successor(None)' "$$executor" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'successor.phase == Phase::RollbackComplete' "$$executor" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'journal.advance(&source_record, &successor)' "$$executor" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'before_usr_rollback_complete_route_final_revalidation();' "$$executor" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'authority.installation()' "$$executor" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'drop(authority);' "$$executor" )" = 5; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'drop(journal);' "$$executor" )" = 5; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' "$$executor" )" = 1; \
-	first_revalidate_line="$$( timeout 10s grep -nF 'authority.revalidate(&journal)' "$$executor" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
-	successor_line="$$( timeout 10s grep -nF 'source_record.rollback_successor(None)' "$$executor" | timeout 10s cut -d: -f1 )"; \
-	seam_line="$$( timeout 10s grep -nF 'before_usr_rollback_complete_route_final_revalidation();' "$$executor" | timeout 10s cut -d: -f1 )"; \
-	final_revalidate_line="$$( timeout 10s grep -nF 'authority.revalidate(&journal)' "$$executor" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
-	advance_line="$$( timeout 10s grep -nF 'journal.advance(&source_record, &successor)' "$$executor" | timeout 10s cut -d: -f1 )"; \
-	drop_authority_line="$$( timeout 10s grep -nF '    drop(authority);' "$$executor" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
-	drop_journal_line="$$( timeout 10s grep -nF '    drop(journal);' "$$executor" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
-	reopen_line="$$( timeout 10s grep -nF 'reopen_canonical_journal(&installation)' "$$executor" | timeout 10s cut -d: -f1 )"; \
-	timeout 10s test "$$first_revalidate_line" -lt "$$successor_line"; \
-	timeout 10s test "$$successor_line" -lt "$$seam_line"; \
-	timeout 10s test "$$seam_line" -lt "$$final_revalidate_line"; \
-	timeout 10s test "$$final_revalidate_line" -lt "$$advance_line"; \
-	timeout 10s test "$$advance_line" -lt "$$drop_authority_line"; \
-	timeout 10s test "$$drop_authority_line" -lt "$$drop_journal_line"; \
-	timeout 10s test "$$drop_journal_line" -lt "$$reopen_line"; \
-	timeout 10s grep -Fqx 'pub(in crate::client) enum DurableUsrRollbackCompleteRouteRecord {' "$$executor"; \
-	timeout 10s grep -Fqx '    FreshDbInvalidated,' "$$executor"; \
-	timeout 10s grep -Fqx '    RollbackComplete,' "$$executor"; \
-	timeout 10s grep -Fqx '                    durable: DurableUsrRollbackCompleteRouteRecord::FreshDbInvalidated,' "$$executor"; \
-	timeout 10s grep -Fqx '                    durable: DurableUsrRollbackCompleteRouteRecord::RollbackComplete,' "$$executor"; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'Ok((reopened, Some(actual))) if actual == source_record => {' "$$executor" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'Ok((reopened, Some(actual))) if actual == successor => {' "$$executor" )" = 1; \
-	timeout 10s grep -Fqx '            Ok((reopened, Some(actual))) if actual == successor => Ok((reopened, successor)),' "$$executor"; \
-	if timeout 10s rg -n 'retained_mutable_cast_directory|open_in_retained_cast|journal\.load\(' "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s sed -E 's,//.*$$,,' "$$executor" "$$authority" "$$proof" > "$$production_code"; \
-	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'RollbackActionOutcome|UsrRollbackFreshDbInvalidation|persist_usr_rollback_fresh_db_invalidation_and_reopen|fresh_db_invalidation_removal_call_count' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'retry|forward_successor|rollback_decision|RecoveryDisposition|FinalizeRollback|finalize_rollback|journal\.delete|run_transaction_triggers|run_system_triggers|root_links|archive_previous|rearchive_archived|preserve_failed|cleanup|dispatch' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'diesel::|SqliteConnection|sql_query|\.execute[[:space:]]*\(|\.transaction[[:space:]]*\(|insert_fresh_metadata|delete_metadata|clear_transition_if_matches|remove_transition_if_matches|remove_exact_fresh_transition|\.add[[:space:]]*\(|\.create[[:space:]]*\(|\.remove[[:space:]]*\(|\.batch_remove[[:space:]]*\(|\.delete[[:space:]]*\(' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'renameat|std::fs|(^|[^_[:alnum:]])fs::|rename[[:space:]]*\(|unlink(at)?[[:space:]]*\(|linkat[[:space:]]*\(|sync_(all|data)|write_all|set_permissions|chmod|create_dir|remove_(dir|file)|hard_link|symlink|attempt_move|reconcile_move' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s grep -Fq 'for historical in [false, true]' "$$admission"; \
-	timeout 10s grep -Fq 'FreshDbOutcome::Applied' "$$matrix"; \
-	timeout 10s grep -Fq 'FreshDbOutcome::AlreadySatisfied' "$$matrix"; \
-	timeout 10s grep -Fq 'TransitionJournalStore::open_retained(' "$$races"; \
-	timeout 10s grep -Fq 'arm_between_usr_rollback_complete_route_database_captures' "$$races"; \
-	timeout 10s grep -Fq 'arm_before_usr_rollback_complete_route_fresh_namespace_capture' "$$races"; \
-	timeout 10s grep -Fq 'arm_before_usr_rollback_complete_route_final_revalidation' "$$races"; \
-	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do \
-		timeout 10s grep -Fq "arm_next_$${fault}_fault" "$$storage"; \
+	test "$$( grep -Fc 'assert_eq!(cases, 24, "{origin:?}");' "$$tests/matrix.rs" )" = 1; \
+	grep -Fq 'assert_eq!(executions, 240);' "$$tests/storage_reopen.rs"; \
+	grep -Fq 'assert_eq!(executions, 96);' "$$tests/record_binding.rs"; \
+	test "$$( grep -Fc 'assert_eq!(executions, 48);' "$$tests/record_binding.rs" )" = 2; \
+	for hook in BeforeBoundAdvancePublish BeforeBoundAdvanceFinalBinding arm_before_usr_rollback_complete_route_successor_binding_revalidation arm_after_usr_rollback_complete_route_successor_binding_check_before_reopen; do \
+		grep -Fq "$$hook" "$$tests/record_binding.rs"; \
 	done; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'drop(reservation);' "$$restart" )" = 2; \
-	timeout 10s awk '/drop\(reservation\);/ { dropped += 1; awaiting = 1; next } awaiting && /ActiveStateReservation::acquire\(\)\.unwrap\(\);/ { reacquired += 1; awaiting = 0 } END { exit !(dropped == 2 && reacquired == 2 && awaiting == 0) }' "$$restart"; \
-	timeout 10s grep -Fq 'DurableUsrRollbackCompleteRouteRecord::FreshDbInvalidated' "$$restart"; \
-	timeout 10s grep -Fq 'DurableUsrRollbackCompleteRouteRecord::RollbackComplete' "$$restart"; \
-	timeout 10s grep -Fq 'UsrRollbackCompleteRouteAdmission::NotApplicable' "$$restart"; \
-	for file in "$$executor" "$$authority" "$$proof" "$$candidate_proof" "$$exact" "$$reopen" "$$startup_gate" "$$recovery_root" "$$reconciliation_root" "$$namespace_root" "$$tests" "$$support" "$$admission" "$$races" "$$matrix" "$$storage" "$$restart" misc/make/startup-rollback-complete-route-tests.mk misc/make/exact-fresh-transition-removal-tests.mk misc/make/startup-recovery-tests.mk Makefile misc/make/help.mk; do \
-		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
+	test "$$( grep -Fc 'assert_eq!(executions, 48);' "$$tests/fresh_reopen.rs" )" = 2; \
+	test "$$( grep -Fc 'FreshCompleteRouteHandles::open(retained.path())' "$$tests/fresh_reopen.rs" )" = 2; \
+	if rg -n 'Command::new|SIGKILL|process::' "$$tests/fresh_reopen.rs"; then exit 1; else test "$$?" = 1; fi; \
+	test "$$( grep -Fc 'assert_eq!(executions, 240);' "$$tests/root_abi_races.rs" )" = 2; \
+	for loop in 'for historical in [false, true] {' 'for origin in FreshDbOutcome::ALL {' 'for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {' 'for candidate_outcome in CandidateResult::ALL {' 'for (name, target) in ROOT_ABI {' 'for mutation in RootAbiMutation::ALL {'; do \
+		test "$$( grep -Fc "$$loop" "$$tests/root_abi_races.rs" )" = 2; \
 	done; \
-	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1
+	grep -Fq 'assert!(!displaced_directory.path().starts_with(&root));' "$$tests/root_abi_races.rs"; \
+	test "$$( grep -Fc 'assert_exact_root_abi_mutation(' "$$tests/root_abi_races.rs" )" = 3; \
+	for hook in arm_before_usr_rollback_complete_route_final_revalidation arm_before_usr_rollback_complete_route_fresh_namespace_capture; do \
+		grep -Fq "$$hook" "$$tests/root_abi_races.rs"; \
+	done; \
+	grep -Fq 'for source in CandidateSource::THROUGH_ROLLBACK_COMPLETE {' "$$dispatch_tests/matrix.rs"; \
+	grep -Fq 'assert_eq!(cases, 48);' "$$dispatch_tests/matrix.rs"; \
+	grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$finalization_authority"; \
+	if rg -n 'RootLinksComplete' "$$finalization_authority"; then exit 1; else test "$$?" = 1; fi; \
+	grep -Fq 'for source in CandidateSource::ALL {' "$$dispatch_tests/matrix.rs"; \
+	grep -Fq 'for source in CandidateSource::ALL {' "$$dispatch_tests/terminal_delete_process_kill.rs"; \
+	grep -Fq 'for source in CandidateSource::ALL {' "$$dispatch_tests/candidate_move_process_kill.rs"; \
+	if rg -n 'THROUGH_ROLLBACK_COMPLETE' "$$dispatch_tests/finalization.rs" "$$dispatch_tests/terminal_delete_process_kill.rs" "$$dispatch_tests/candidate_move_process_kill.rs"; then exit 1; else test "$$?" = 1; fi; \
+	grep -Fq 'assert_eq!(rollback_complete.generation, 18, "{case}");' "$$root_links_endpoint"; \
+	grep -Fq 'assert_eq!(rollback_complete.generation, 12, "{case}");' "$$root_links_endpoint"; \
+	grep -Fq 'assert_eq!(rollback_complete.generation, 14, "{case}");' "$$root_links_endpoint"; \
+	grep -Fq 'assert_eq!(complete.generation, 18, "{case}");' "$$new_state_endpoint"; \
+	grep -Fq 'assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");' "$$new_state_endpoint"; \
+	grep -Fq 'assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");' "$$new_state_endpoint"; \
+	grep -Fq 'assert_eq!(rollback_complete.generation, 18, "{case}");' "$$resume_make"; \
+	for file in "$$executor" "$$authority" "$$proof" "$$candidate_proof" "$$exact" "$$reopen" "$$startup_gate" "$$recovery_root" "$$reconciliation_root" "$$namespace_root" "$$tests.rs" "$$tests"/*.rs "$$candidate_support" "$$dispatch_tests/matrix.rs" "$$dispatch_tests/finalization.rs" "$$dispatch_tests/terminal_delete_process_kill.rs" "$$dispatch_tests/candidate_move_process_kill.rs" "$$finalization_authority" "$$root_links_endpoint" "$$new_state_endpoint" misc/make/startup-rollback-complete-route-tests.mk "$$resume_make"; do \
+		test "$$( wc -l < "$$file" )" -le 1000; \
+	done; \
+	$(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1

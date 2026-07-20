@@ -12,11 +12,13 @@ use super::support::{CandidateResult, FreshDbOutcome, RouteFixture, Source, cano
 
 #[test]
 fn startup_usr_rollback_complete_route_admits_exact_current_and_historical_joint_absence() {
+    let mut cases = 0;
     for historical in [false, true] {
         for origin in FreshDbOutcome::ALL {
-            for source in Source::ALL {
+            for source in Source::THROUGH_ROLLBACK_COMPLETE {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     for candidate_outcome in CandidateResult::ALL {
+                        cases += 1;
                         let case = (historical, origin, source, usr_outcome, candidate_outcome);
                         let fixture = if historical {
                             RouteFixture::historical(origin, source, usr_outcome, candidate_outcome)
@@ -35,6 +37,7 @@ fn startup_usr_rollback_complete_route_admits_exact_current_and_historical_joint
             }
         }
     }
+    assert_eq!(cases, 48);
 }
 
 #[test]

@@ -107,6 +107,7 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
 };
 pub(in crate::client) use usr_rollback_complete_route_authority::{
     UsrRollbackCompleteRouteAdmission, UsrRollbackCompleteRouteAuthority, UsrRollbackCompleteRouteAuthorityError,
+    UsrRollbackCompleteRouteRecordAdvanceError,
 };
 #[allow(unused_imports)] // retained for structured startup diagnostics and focused contracts
 pub(in crate::client) use usr_rollback_decision_authority::UsrRollbackDecisionDeferral;

@@ -235,6 +235,11 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	if timeout 10s rg -n 'std::fs|(^|[^_[:alnum:]])fs::|diesel::|SqliteConnection|sql_query|\.execute[[:space:]]*\(|\.transaction[[:space:]]*\(|\.advance[[:space:]]*\(|journal\.delete|\.delete[[:space:]]*\(|remove_exact_fresh_transition|renameat|rename[[:space:]]*\(|unlink|mkdir|create_dir|set_permissions|chmod|sync_(all|data)|run_transaction_triggers|run_system_triggers|root_links|archive_previous|cleanup' "$$production"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$tests/sequence.rs" "$$tests/matrix.rs"; \
 	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$tests/sequence.rs" "$$tests/matrix.rs"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::THROUGH_ROLLBACK_COMPLETE {' "$$tests/matrix.rs"; \
+	timeout 10s grep -Fq 'assert_eq!(cases, 48);' "$$tests/matrix.rs"; \
+	finalization_matrix="$$( timeout 10s sed -n '/^fn startup_new_state_suffix_finalizes_every_exact_terminal_matrix_without_later_effects/,/^}/p' "$$tests/matrix.rs" )"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' <<<"$$finalization_matrix"; \
+	if timeout 10s grep -Fq 'THROUGH_ROLLBACK_COMPLETE' <<<"$$finalization_matrix"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'for prefix in TargetPrefix::ALL {' "$$tests/sequence.rs"; \
 	timeout 10s grep -Fq 'for candidate_outcome in CandidateOutcome::ALL {' "$$tests/matrix.rs"; \
 	timeout 10s grep -Fq 'for fresh_outcome in FreshOutcome::ALL {' "$$tests/matrix.rs"; \

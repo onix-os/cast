@@ -34,6 +34,12 @@ impl CandidateSource {
         Self::Exchanged,
         Self::RootLinksComplete,
     ];
+    #[allow(dead_code)] // path-included later suites deliberately retain narrower axes
+    pub(super) const THROUGH_ROLLBACK_COMPLETE: [Self; 3] = [
+        Self::Intent,
+        Self::Exchanged,
+        Self::RootLinksComplete,
+    ];
 
     fn fixture_source(self) -> SourceCase {
         match self {

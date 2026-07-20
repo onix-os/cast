@@ -10,7 +10,7 @@
 
 use crate::{
     Installation,
-    transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -35,9 +35,10 @@ impl UsrRollbackCompleteRouteNamespaceInspection {
     pub(in crate::client::startup_reconciliation) fn begin(
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<Self, UsrRollbackCompleteRouteNamespaceError> {
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         let before = capture_snapshot(installation, expected)?;
         require_exact_new_state_fresh_db_invalidated_topology(expected, &before)?;
         Ok(Self { before })
@@ -47,6 +48,7 @@ impl UsrRollbackCompleteRouteNamespaceInspection {
         self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<UsrRollbackCompleteRouteNamespaceProof, UsrRollbackCompleteRouteNamespaceError> {
         let after = capture_snapshot(installation, expected)?;
@@ -55,7 +57,7 @@ impl UsrRollbackCompleteRouteNamespaceInspection {
         require_matching_fingerprints(&self.before, &after)?;
         require_exact_new_state_fresh_db_invalidated_topology(expected, &self.before)?;
         require_exact_new_state_fresh_db_invalidated_topology(expected, &after)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackCompleteRouteNamespaceProof {
             before: self.before,
@@ -69,6 +71,7 @@ impl UsrRollbackCompleteRouteNamespaceProof {
         &self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        journal_record_binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<(), UsrRollbackCompleteRouteNamespaceError> {
         installation.revalidate_mutable_namespace()?;
@@ -77,7 +80,7 @@ impl UsrRollbackCompleteRouteNamespaceProof {
         require_matching_fingerprints(&self.before, &self.after)?;
         require_exact_new_state_fresh_db_invalidated_topology(expected, &self.before)?;
         require_exact_new_state_fresh_db_invalidated_topology(expected, &self.after)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
 
         run_before_fresh_namespace_capture();
         let fresh = capture_snapshot(installation, expected)?;
@@ -85,7 +88,7 @@ impl UsrRollbackCompleteRouteNamespaceProof {
         require_matching_fingerprints(&self.before, &fresh)?;
         require_exact_new_state_fresh_db_invalidated_topology(expected, &fresh)?;
 
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, journal_record_binding, expected)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
@@ -105,12 +108,19 @@ fn require_matching_fingerprints(
 }
 
 fn require_exact_journal(
+    installation: &Installation,
     journal: &TransitionJournalStore,
+    journal_record_binding: &TransitionJournalRecordBinding,
     expected: &TransitionRecord,
 ) -> Result<(), UsrRollbackCompleteRouteNamespaceError> {
-    match journal.load()? {
-        Some(actual) if actual == *expected => Ok(()),
-        Some(_) | None => Err(UsrRollbackCompleteRouteNamespaceError::JournalChanged),
+    if !journal.has_record_store_binding(journal_record_binding) {
+        return Err(UsrRollbackCompleteRouteNamespaceError::JournalChanged);
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, journal_record_binding, expected)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackCompleteRouteNamespaceError::JournalChanged)
     }
 }
 
