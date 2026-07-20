@@ -923,6 +923,7 @@ delegated-execution-fixtures: bootstrap-fixture-selection bootstrap-execution-re
 		"$(TOP_DIR)/misc/scripts/run-delegated-execution-fixture.sh" "$(FIXTURE_SELECTION)"
 
 delegated-fixture-runner-test: fixture-proof-test
+	@"$(TOP_DIR)/misc/scripts/test-fixture-runtime-budgets.sh"
 	@"$(TOP_DIR)/misc/scripts/test-stop-owned-fixture-unit.sh"
 	@"$(TOP_DIR)/misc/scripts/test-latched-command-faults.sh"
 	@"$(TOP_DIR)/misc/scripts/test-run-delegated-execution-fixture.sh"

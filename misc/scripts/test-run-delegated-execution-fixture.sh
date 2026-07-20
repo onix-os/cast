@@ -444,7 +444,7 @@ for expected in \
     --collect \
     --property=ExitType=cgroup \
     --property=KillMode=control-group \
-    --property=RuntimeMaxSec=2h \
+    --property=RuntimeMaxSec=7200s \
     --property=TimeoutStartSec=30s \
     --property=TimeoutStopSec=30s \
     --property=SendSIGKILL=yes \
@@ -614,7 +614,8 @@ test "$fixture_count" -eq 26
 test ! -e "$evidence/fixtures-ci-proof.json"
 
 reset_state
-run_fixture custom 0 ready success
+CAST_DELEGATED_RUNTIME_MAX_SECONDS=18000 run_fixture custom 0 ready success
+grep -Fqx -- '--property=RuntimeMaxSec=7200s' "$state/systemd-run-args"
 assert_argument_count "$state/systemd-run-args" \
     '--property=UnsetEnvironment=CAST_FIXTURE_PROOF_PATH CAST_FIXTURE_GIT_COMMIT' 1
 if grep -Fq -- '--setenv=CAST_FIXTURE_PROOF_PATH=' "$state/systemd-run-args" \
@@ -625,7 +626,8 @@ fi
 
 rm -f "$evidence"/*
 reset_state
-run_fixture all 1 ready success
+CAST_DELEGATED_RUNTIME_MAX_SECONDS= run_fixture all 1 ready success
+grep -Fqx -- '--property=RuntimeMaxSec=14400s' "$state/systemd-run-args"
 proof="$evidence/fixtures-ci-proof.json"
 test -f "$proof"
 test ! -L "$proof"
@@ -704,10 +706,13 @@ test -e "$state/systemd-run-args"
 rm -f "$evidence"/*
 reset_state
 set +e
-run_fixture all 1 ready success success missing >"$work/missing-proof.out" 2>"$work/missing-proof.err"
+CAST_DELEGATED_RUNTIME_MAX_SECONDS=18000 \
+    run_fixture all 1 ready success success missing \
+    >"$work/missing-proof.out" 2>"$work/missing-proof.err"
 status=$?
 set -e
 test "$status" -eq 1
+grep -Fqx -- '--property=RuntimeMaxSec=18000s' "$state/systemd-run-args"
 grep -Fq 'did not emit one regular completion proof' "$work/missing-proof.err"
 test ! -e "$proof"
 

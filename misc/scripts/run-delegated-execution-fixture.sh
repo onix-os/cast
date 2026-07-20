@@ -24,6 +24,7 @@ case "$1" in
 esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+runtime_budgets="$root/misc/scripts/fixture-runtime-budgets.sh"
 latched_runner="$root/misc/scripts/run-latched-command.sh"
 owned_unit_stopper="$root/misc/scripts/stop-owned-fixture-unit.sh"
 proof_validator="$root/misc/scripts/validate-fixtures-ci-proof.sh"
@@ -33,14 +34,42 @@ require_execution=${CAST_REQUIRE_EXECUTION-}
 cargo_command=${CARGO:-cargo}
 evidence_dir=${CAST_FIXTURE_EVIDENCE_DIR:-$root/target/fixture-evidence}
 test_signal_after_reap=${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}
+if [ -L "$runtime_budgets" ] || [ ! -f "$runtime_budgets" ] \
+    || [ ! -r "$runtime_budgets" ]; then
+    printf 'fixture runtime budgets are unavailable or unsafe: %s\n' \
+        "$runtime_budgets" >&2
+    exit 1
+fi
+. "$runtime_budgets"
 if [ "$mode" = preflight ]; then
     default_client_kill_after_seconds=5
-    service_runtime_max=30s
-    systemd_client_timeout_seconds=40
+    service_runtime_seconds=$fixture_budget_preflight_runtime_seconds
+    client_completion_margin_seconds=$fixture_budget_preflight_client_completion_margin_seconds
 else
     default_client_kill_after_seconds=30
-    service_runtime_max=2h
-    systemd_client_timeout_seconds=7290
+    client_completion_margin_seconds=$fixture_budget_delegated_client_completion_margin_seconds
+    if [ "$fixture" = all ]; then
+        service_runtime_seconds=${CAST_DELEGATED_RUNTIME_MAX_SECONDS:-$fixture_budget_all_default_runtime_seconds}
+        case "$service_runtime_seconds" in
+            ''|*[!0-9]*)
+                printf 'CAST_DELEGATED_RUNTIME_MAX_SECONDS must be decimal\n' >&2
+                exit 2
+                ;;
+            0|0*|??????*)
+                printf 'CAST_DELEGATED_RUNTIME_MAX_SECONDS must be between 1 and %s\n' \
+                    "$fixture_budget_all_max_runtime_seconds" >&2
+                exit 2
+                ;;
+        esac
+        if [ "$service_runtime_seconds" -lt 1 ] \
+            || [ "$service_runtime_seconds" -gt "$fixture_budget_all_max_runtime_seconds" ]; then
+            printf 'CAST_DELEGATED_RUNTIME_MAX_SECONDS must be between 1 and %s\n' \
+                "$fixture_budget_all_max_runtime_seconds" >&2
+            exit 2
+        fi
+    else
+        service_runtime_seconds=$fixture_budget_single_runtime_seconds
+    fi
 fi
 client_kill_after_seconds=${CAST_DELEGATED_KILL_AFTER_SECONDS:-$default_client_kill_after_seconds}
 client_status_timeout_seconds=${CAST_DELEGATED_STATUS_TIMEOUT_SECONDS:-}
@@ -91,27 +120,41 @@ case "$client_kill_after_seconds" in
 esac
 case "$client_kill_after_seconds" in
     0|0*|????*)
-        printf 'CAST_DELEGATED_KILL_AFTER_SECONDS must be between 1 and 300\n' >&2
+        printf 'CAST_DELEGATED_KILL_AFTER_SECONDS must be between 1 and %s\n' \
+            "$fixture_budget_max_kill_after_seconds" >&2
         exit 2
         ;;
 esac
-if [ "$client_kill_after_seconds" -lt 1 ] || [ "$client_kill_after_seconds" -gt 300 ]; then
-    printf 'CAST_DELEGATED_KILL_AFTER_SECONDS must be between 1 and 300\n' >&2
+if [ "$client_kill_after_seconds" -lt 1 ] \
+    || [ "$client_kill_after_seconds" -gt "$fixture_budget_max_kill_after_seconds" ]; then
+    printf 'CAST_DELEGATED_KILL_AFTER_SECONDS must be between 1 and %s\n' \
+        "$fixture_budget_max_kill_after_seconds" >&2
     exit 2
 fi
+systemd_client_timeout_seconds=$((
+    service_runtime_seconds + client_kill_after_seconds + client_completion_margin_seconds
+))
+maximum_client_status_timeout_seconds=$((
+    systemd_client_timeout_seconds
+        + client_kill_after_seconds
+        + fixture_budget_status_delivery_margin_seconds
+))
 if [ -z "$client_status_timeout_seconds" ]; then
-    client_status_timeout_seconds=$((systemd_client_timeout_seconds + client_kill_after_seconds + 5))
+    client_status_timeout_seconds=$maximum_client_status_timeout_seconds
 fi
 case "$client_status_timeout_seconds" in
     ''|*[!0-9]*) printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be decimal\n' >&2; exit 2 ;;
-    0|0*|?????*)
-        printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be between 1 and 8000\n' >&2
+    0|0*|??????*)
+        printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be between 1 and %s\n' \
+            "$maximum_client_status_timeout_seconds" >&2
         exit 2
         ;;
 esac
 if [ "$client_status_timeout_seconds" -lt 1 ] \
-    || [ "$client_status_timeout_seconds" -gt 8000 ]; then
-    printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be between 1 and 8000\n' >&2
+    || [ "$client_status_timeout_seconds" \
+        -gt "$maximum_client_status_timeout_seconds" ]; then
+    printf 'CAST_DELEGATED_STATUS_TIMEOUT_SECONDS must be between 1 and %s\n' \
+        "$maximum_client_status_timeout_seconds" >&2
     exit 2
 fi
 
@@ -522,7 +565,7 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$client_kill_after_seconds" setsid "$latched_ru
     --property=DelegateSubgroup=cast-supervisor \
     --property=ExitType=cgroup \
     --property=KillMode=control-group \
-    --property="RuntimeMaxSec=$service_runtime_max" \
+    --property="RuntimeMaxSec=${service_runtime_seconds}s" \
     --property=TimeoutStartSec=30s \
     --property="TimeoutStopSec=${client_kill_after_seconds}s" \
     --property=SendSIGKILL=yes \

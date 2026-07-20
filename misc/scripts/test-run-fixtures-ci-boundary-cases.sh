@@ -237,6 +237,7 @@ env \
     FAKE_GIT_STATUS_MODE=clean \
     FAKE_JQ_SIGNAL_CALL= \
     FAKE_OUTER_STATE="$outer_state" \
+    FAKE_EXPECTED_DELEGATED_RUNTIME_MAX_SECONDS=14400 \
     FAKE_PROOF_GENERATOR="$proof_generator" \
     FAKE_TEE_MODE=pass \
     REAL_JQ="$real_jq" \
@@ -264,6 +265,9 @@ grep -Fq 'must be between 1 and 1048576' "$work/oversized.out"
 # Individually valid maxima must compose into the default status-channel bound
 # rather than rejecting a production configuration at its documented edge.
 CAST_FIXTURE_CI_KILL_AFTER_SECONDS=300 \
+CAST_DELEGATED_RUNTIME_MAX_SECONDS=18000 \
     run_wrapper success 21600 >"$work/maximum-bounds.out" 2>&1
 jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
+grep -Fqx -- '--setenv=CAST_DELEGATED_RUNTIME_MAX_SECONDS=18000' \
+    "$outer_state/systemd-run-args"
 assert_bounded_inventory

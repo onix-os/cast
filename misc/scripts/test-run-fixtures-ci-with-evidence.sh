@@ -144,6 +144,8 @@ do
 done
 install -m 0644 "$root/misc/scripts/validate-fixtures-ci-proof.jq" \
     "$unavailable_shebang_scripts/validate-fixtures-ci-proof.jq"
+install -m 0644 "$root/misc/scripts/fixture-runtime-budgets.sh" \
+    "$unavailable_shebang_scripts/fixture-runtime-budgets.sh"
 {
     printf '#!%s\n' "$missing_bash"
     tail -n +2 "$runner"
@@ -177,6 +179,9 @@ cat >"$fakebin/make" <<'EOF'
 set -eu
 : "${FAKE_MAKE_MODE:?}"
 : "${CAST_FIXTURE_EVIDENCE_DIR:?}"
+: "${FAKE_EXPECTED_DELEGATED_RUNTIME_MAX_SECONDS:?}"
+test "${CAST_DELEGATED_RUNTIME_MAX_SECONDS-}" \
+    = "$FAKE_EXPECTED_DELEGATED_RUNTIME_MAX_SECONDS"
 test "${1-}" = --no-print-directory
 test "${2-}" = -C
 case "${4-}" in
@@ -802,7 +807,7 @@ run_wrapper() {
         MAKE="$fakebin/make" \
         FIXTURE_EVIDENCE_DIR="$evidence" \
         CAST_FIXTURE_LOG_MAX_BYTES=256 \
-        CAST_FIXTURE_CI_TIMEOUT_SECONDS="$wrapper_timeout" \
+        CAST_DELEGATED_RUNTIME_MAX_SECONDS="${CAST_DELEGATED_RUNTIME_MAX_SECONDS-}" \
         CAST_FIXTURE_CI_KILL_AFTER_SECONDS="${CAST_FIXTURE_CI_KILL_AFTER_SECONDS-1}" \
         CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS="${CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS-}" \
         FAKE_LATE_PID_FILE="$work/late-child.pid" \
@@ -817,6 +822,7 @@ run_wrapper() {
         FAKE_FINALIZE_STOP_GATE="${FAKE_FINALIZE_STOP_GATE-}" \
         FAKE_LOAD_STATE_GATE="${FAKE_LOAD_STATE_GATE-}" \
         FAKE_OUTER_STATE="$wrapper_outer_state" \
+        FAKE_EXPECTED_DELEGATED_RUNTIME_MAX_SECONDS="${CAST_DELEGATED_RUNTIME_MAX_SECONDS:-14400}" \
         FAKE_PUBLIC_EVIDENCE_DIR="$evidence" \
         FAKE_TEE_MODE="${FAKE_TEE_MODE-pass}" \
         CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP="${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}" \
@@ -825,6 +831,9 @@ run_wrapper() {
         REAL_CHMOD="$real_chmod" \
         REAL_TEE="$real_tee" \
         FAKE_MAKE_MODE="$wrapper_case"
+    if [ "$wrapper_timeout" != default ]; then
+        set -- "$@" "CAST_FIXTURE_CI_TIMEOUT_SECONDS=$wrapper_timeout"
+    fi
     if [ -n "$wrapper_interpreter" ]; then
         set -- "$@" "$wrapper_interpreter"
     fi
@@ -912,8 +921,12 @@ test ! -e "$work/direct-capture.log"
 RUN_WRAPPER_TEST_PROGRAM="$unavailable_shebang_runner" \
 RUN_WRAPPER_TEST_INTERPRETER="$real_bash" \
 RUN_WRAPPER_TEST_PATH_PREFIX="$hostile_bash_bin" \
-    run_wrapper success 10 >"$work/path-bash-capture.out" 2>&1
+    run_wrapper success default >"$work/path-bash-capture.out" 2>&1
 jq -e '.result == "passed"' "$evidence/fixtures-ci-proof.json" >/dev/null
+grep -Fqx -- '--property=RuntimeMaxSec=21600s' \
+    "$outer_state/systemd-run-args"
+grep -Fqx -- '--setenv=CAST_DELEGATED_RUNTIME_MAX_SECONDS=14400' \
+    "$outer_state/systemd-run-args"
 test ! -e "$outer_state/hostile-bash-used"
 assert_bounded_inventory
 

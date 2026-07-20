@@ -210,12 +210,20 @@ trap '[[ -n "$launch_signal_status" ]] || launch_signal_status=130' INT
 trap '[[ -n "$launch_signal_status" ]] || launch_signal_status=143' TERM
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
+runtime_budgets="$root/misc/scripts/fixture-runtime-budgets.sh"
 latched_runner="$root/misc/scripts/run-latched-command.sh"
 owned_unit_stopper="$root/misc/scripts/stop-owned-fixture-unit.sh"
 proof_validator="$root/misc/scripts/validate-fixtures-ci-proof.sh"
 evidence_dir=${FIXTURE_EVIDENCE_DIR:-$root/target/fixture-evidence}
 maximum_log_bytes=${CAST_FIXTURE_LOG_MAX_BYTES:-1048576}
-timeout_seconds=${CAST_FIXTURE_CI_TIMEOUT_SECONDS:-10800}
+if [[ -L $runtime_budgets || ! -f $runtime_budgets || ! -r $runtime_budgets ]]; then
+    printf 'fixture runtime budgets are unavailable or unsafe: %s\n' "$runtime_budgets" >&2; exit 1
+fi
+. "$runtime_budgets"
+timeout_seconds=${CAST_FIXTURE_CI_TIMEOUT_SECONDS:-$fixture_budget_ci_default_runtime_seconds}
+delegated_runtime_seconds=${CAST_DELEGATED_RUNTIME_MAX_SECONDS:-$fixture_budget_all_default_runtime_seconds}
+# Shared defaults/maxima guarantee containment; an explicit outer timeout is an
+# operator/test kill bound and may intentionally be shorter for cleanup tests.
 kill_after_seconds=${CAST_FIXTURE_CI_KILL_AFTER_SECONDS:-30}
 make_command=${MAKE:-make}
 test_signal_after_reap=${CAST_FIXTURE_TEST_SIGNAL_AFTER_LATCHED_REAP-}
@@ -267,12 +275,28 @@ case "$timeout_seconds" in
 esac
 case "$timeout_seconds" in
     0|0*|??????*)
-        printf 'CAST_FIXTURE_CI_TIMEOUT_SECONDS must be between 1 and 21600\n' >&2
+        printf 'CAST_FIXTURE_CI_TIMEOUT_SECONDS must be between 1 and %s\n' \
+            "$fixture_budget_ci_max_runtime_seconds" >&2
         exit 2
         ;;
 esac
-if (( timeout_seconds < 1 || timeout_seconds > 21600 )); then
-    printf 'CAST_FIXTURE_CI_TIMEOUT_SECONDS must be between 1 and 21600\n' >&2
+if (( timeout_seconds < 1 || timeout_seconds > fixture_budget_ci_max_runtime_seconds )); then
+    printf 'CAST_FIXTURE_CI_TIMEOUT_SECONDS must be between 1 and %s\n' \
+        "$fixture_budget_ci_max_runtime_seconds" >&2
+    exit 2
+fi
+case "$delegated_runtime_seconds" in
+    ''|*[!0-9]*) printf 'CAST_DELEGATED_RUNTIME_MAX_SECONDS must be decimal\n' >&2; exit 2 ;;
+    0|0*|??????*)
+        printf 'CAST_DELEGATED_RUNTIME_MAX_SECONDS must be between 1 and %s\n' \
+            "$fixture_budget_all_max_runtime_seconds" >&2
+        exit 2
+        ;;
+esac
+if (( delegated_runtime_seconds < 1 \
+    || delegated_runtime_seconds > fixture_budget_all_max_runtime_seconds )); then
+    printf 'CAST_DELEGATED_RUNTIME_MAX_SECONDS must be between 1 and %s\n' \
+        "$fixture_budget_all_max_runtime_seconds" >&2
     exit 2
 fi
 case "$kill_after_seconds" in
@@ -280,12 +304,15 @@ case "$kill_after_seconds" in
 esac
 case "$kill_after_seconds" in
     0|0*|????*)
-        printf 'CAST_FIXTURE_CI_KILL_AFTER_SECONDS must be between 1 and 300\n' >&2
+        printf 'CAST_FIXTURE_CI_KILL_AFTER_SECONDS must be between 1 and %s\n' \
+            "$fixture_budget_max_kill_after_seconds" >&2
         exit 2
         ;;
 esac
-if (( kill_after_seconds < 1 || kill_after_seconds > 300 )); then
-    printf 'CAST_FIXTURE_CI_KILL_AFTER_SECONDS must be between 1 and 300\n' >&2
+if (( kill_after_seconds < 1 \
+    || kill_after_seconds > fixture_budget_max_kill_after_seconds )); then
+    printf 'CAST_FIXTURE_CI_KILL_AFTER_SECONDS must be between 1 and %s\n' \
+        "$fixture_budget_max_kill_after_seconds" >&2
     exit 2
 fi
 case "$make_command" in
@@ -646,6 +673,7 @@ service_environment=(
     "--setenv=PATH=$PATH"
     "--setenv=CAST_FIXTURE_EVIDENCE_DIR=$run_directory"
     "--setenv=CAST_FIXTURE_WRAPPER_PID=$$"
+    "--setenv=CAST_DELEGATED_RUNTIME_MAX_SECONDS=$delegated_runtime_seconds"
     "--setenv=FIXTURE_EVIDENCE_DIR="
     "--setenv=$unit_marker"
     "--property=UnsetEnvironment=LOCPATH"
@@ -661,9 +689,11 @@ for environment_name in HOME CARGO_HOME RUSTUP_HOME XDG_RUNTIME_DIR DBUS_SESSION
         service_environment+=("--setenv=$environment_name=${!environment_name}")
     fi
 done
-client_timeout_seconds=$((timeout_seconds + kill_after_seconds + 10))
+client_timeout_seconds=$((
+    timeout_seconds + kill_after_seconds + fixture_budget_ci_client_completion_margin_seconds
+))
 status_timeout_seconds=${CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS:-$((
-    client_timeout_seconds + kill_after_seconds + 5
+    client_timeout_seconds + kill_after_seconds + fixture_budget_status_delivery_margin_seconds
 ))}
 case "$status_timeout_seconds" in
     ''|*[!0-9]*)
@@ -671,12 +701,15 @@ case "$status_timeout_seconds" in
         exit 2
         ;;
     0|0*|??????*)
-        printf 'CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS must be between 1 and 22215\n' >&2
+        printf 'CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS must be between 1 and %s\n' \
+            "$fixture_budget_ci_max_status_timeout_seconds" >&2
         exit 2
         ;;
 esac
-if (( status_timeout_seconds < 1 || status_timeout_seconds > 22215 )); then
-    printf 'CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS must be between 1 and 22215\n' >&2
+if (( status_timeout_seconds < 1 \
+    || status_timeout_seconds > fixture_budget_ci_max_status_timeout_seconds )); then
+    printf 'CAST_FIXTURE_CI_STATUS_TIMEOUT_SECONDS must be between 1 and %s\n' \
+        "$fixture_budget_ci_max_status_timeout_seconds" >&2
     exit 2
 fi
 # No asynchronous launch child may inherit the destructive EXIT finalizer.
@@ -711,7 +744,9 @@ CAST_LATCHED_KILL_AFTER_SECONDS="$kill_after_seconds" setsid "$latched_runner" \
     "SHELL=$bash_executable" fixtures-ci \
     >"$output_fifo" 2>&1 5>&- 6>&- &
 execution_launch_pid=$!
-log_timeout_seconds=$((client_timeout_seconds + kill_after_seconds + 5))
+log_timeout_seconds=$((
+    client_timeout_seconds + kill_after_seconds + fixture_budget_status_delivery_margin_seconds
+))
 setsid timeout --kill-after="${kill_after_seconds}s" -- "${log_timeout_seconds}s" \
     "$bash_executable" --noprofile --norc -p \
     "$root/misc/scripts/run-fixtures-ci-with-evidence.sh" \
