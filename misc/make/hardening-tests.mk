@@ -248,7 +248,7 @@ forge-client-direct-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -Ec '^client::tests::[^:]+: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 213; \
+	timeout 10s test "$$count" = 214; \
 	timeout 1200s $(CARGO) test -p forge --lib "client::tests::" -- --test-threads=1
 
 forge-package-request-hardening-test:
