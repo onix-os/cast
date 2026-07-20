@@ -583,7 +583,7 @@ fn frozen_script_interpreters_are_closure_owned_confined_and_race_checked() {
         interpreter_package.clone(),
         loader_package.clone(),
     ];
-    let script_bytes = b"#!/bin/interpreter\nexit 0\n";
+    let script_bytes = b"#! /bin/interpreter\nexit 0\n";
     let native_bytes = test_elf(Some("/lib64/ld-frozen.so"), 2);
     let loader_bytes = test_elf(None, 1);
     let script_digest = xxhash_rust::xxh3::xxh3_128(script_bytes);

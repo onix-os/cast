@@ -268,6 +268,26 @@ fn frozen_shebang_limits_accept_n_and_reject_n_plus_one() {
         Err(FrozenShebangParseError::LineTooLong)
     );
 
+    let padded_path = format!(
+        "{prefix}{}",
+        "a".repeat(MAX_FROZEN_SHEBANG_INTERPRETER_BYTES - prefix.len() - 2)
+    );
+    let padded = format!("#! {padded_path} \n");
+    assert_eq!(padded.len(), MAX_FROZEN_SHEBANG_LINE_BYTES);
+    assert_eq!(
+        parse_frozen_shebang(padded.as_bytes()).unwrap(),
+        Some(FrozenShebangInterpreter {
+            path: PathBuf::from(padded_path.clone()),
+            root_alias: None,
+        })
+    );
+    let padded_rejected = format!("#!  {padded_path} \n");
+    assert_eq!(padded_rejected.len(), MAX_FROZEN_SHEBANG_LINE_BYTES + 1);
+    assert_eq!(
+        parse_frozen_shebang(padded_rejected.as_bytes()),
+        Err(FrozenShebangParseError::LineTooLong)
+    );
+
     let binding = FrozenExecutableBinding {
         package: package::Id::from("script-provider"),
         path: PathBuf::from("/usr/bin/script"),
@@ -356,16 +376,46 @@ fn frozen_shebang_parser_accepts_only_one_absolute_frozen_path() {
     );
     assert_eq!(parse_frozen_shebang(b"\x7fELFnot-a-script").unwrap(), None);
     assert_eq!(
+        parse_frozen_shebang(b"#! /usr/bin/perl\n").unwrap(),
+        Some(FrozenShebangInterpreter {
+            path: PathBuf::from("/usr/bin/perl"),
+            root_alias: None,
+        })
+    );
+    assert_eq!(
+        parse_frozen_shebang(b"#! \t/usr/bin/perl \t\n").unwrap(),
+        Some(FrozenShebangInterpreter {
+            path: PathBuf::from("/usr/bin/perl"),
+            root_alias: None,
+        })
+    );
+    assert_eq!(
+        parse_frozen_shebang(b"#!   \t\n"),
+        Err(FrozenShebangParseError::EmptyInterpreter)
+    );
+    assert_eq!(
         parse_frozen_shebang(b"#!/usr/bin/env\n"),
         Err(FrozenShebangParseError::EnvironmentLookup)
     );
     assert_eq!(
+        parse_frozen_shebang(b"#! /bin/env \t\n"),
+        Err(FrozenShebangParseError::EnvironmentLookup)
+    );
+    assert_eq!(
         parse_frozen_shebang(b"#!/usr/bin/env bash\n"),
-        Err(FrozenShebangParseError::WhitespaceOrOptions)
+        Err(FrozenShebangParseError::InterpreterOptions)
+    );
+    assert_eq!(
+        parse_frozen_shebang(b"#!/usr/bin/env -S bash -e\n"),
+        Err(FrozenShebangParseError::InterpreterOptions)
     );
     assert_eq!(
         parse_frozen_shebang(b"#!/usr/bin/bash -e\n"),
-        Err(FrozenShebangParseError::WhitespaceOrOptions)
+        Err(FrozenShebangParseError::InterpreterOptions)
+    );
+    assert_eq!(
+        parse_frozen_shebang(b"#!/usr/bin/bash\r\n"),
+        Err(FrozenShebangParseError::UnsupportedWhitespace)
     );
     assert_eq!(
         parse_frozen_shebang(b"#!relative/interpreter\n"),

@@ -12,7 +12,10 @@ fn parse_frozen_shebang(probe: &[u8]) -> Result<Option<FrozenShebangInterpreter>
     if newline + 1 > MAX_FROZEN_SHEBANG_LINE_BYTES {
         return Err(FrozenShebangParseError::LineTooLong);
     }
-    let interpreter = &probe[2..newline];
+    // Linux treats only horizontal ASCII space and tab around the interpreter
+    // path as shebang padding. Preserve the original line-length bound, but
+    // discard that semantically inert padding before binding the exact path.
+    let interpreter = trim_frozen_shebang_padding(&probe[2..newline]);
     if interpreter.is_empty() {
         return Err(FrozenShebangParseError::EmptyInterpreter);
     }
@@ -22,8 +25,11 @@ fn parse_frozen_shebang(probe: &[u8]) -> Result<Option<FrozenShebangInterpreter>
     if interpreter.contains(&0) {
         return Err(FrozenShebangParseError::Nul);
     }
+    if interpreter.iter().any(|byte| matches!(*byte, b' ' | b'\t')) {
+        return Err(FrozenShebangParseError::InterpreterOptions);
+    }
     if interpreter.iter().any(|byte| byte.is_ascii_whitespace()) {
-        return Err(FrozenShebangParseError::WhitespaceOrOptions);
+        return Err(FrozenShebangParseError::UnsupportedWhitespace);
     }
     if interpreter.first() != Some(&b'/') {
         return Err(FrozenShebangParseError::Relative);
@@ -34,6 +40,22 @@ fn parse_frozen_shebang(probe: &[u8]) -> Result<Option<FrozenShebangInterpreter>
         return Err(FrozenShebangParseError::EnvironmentLookup);
     }
     Ok(Some(interpreter))
+}
+
+fn trim_frozen_shebang_padding(mut bytes: &[u8]) -> &[u8] {
+    while bytes
+        .first()
+        .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+    {
+        bytes = &bytes[1..];
+    }
+    while bytes
+        .last()
+        .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+    {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    bytes
 }
 
 fn normalize_frozen_interpreter_path(path: &str) -> Option<FrozenShebangInterpreter> {
