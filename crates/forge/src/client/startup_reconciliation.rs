@@ -125,6 +125,7 @@ pub(in crate::client) use usr_rollback_fresh_db_invalidation_route_authority::{
 };
 pub(in crate::client) use usr_rollback_resume_route_authority::{
     UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority, UsrRollbackResumeRouteAuthorityError,
+    UsrRollbackResumeRouteRecordAdvanceError,
 };
 
 pub(in crate::client) use usr_rollback_reverse_authority::{

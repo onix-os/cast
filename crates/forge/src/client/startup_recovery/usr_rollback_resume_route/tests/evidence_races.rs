@@ -1,6 +1,5 @@
 use std::{
     fs,
-    os::unix::fs::symlink,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -13,9 +12,8 @@ use std::{
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_gate::{self, UsrRollbackResumeRouteSeal},
+        startup_gate,
         startup_reconciliation::{
-            UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority,
             arm_before_usr_rollback_resume_route_fresh_namespace_capture,
             arm_between_usr_rollback_resume_route_database_captures,
         },
@@ -24,11 +22,11 @@ use crate::{
             persist_usr_rollback_resume_route_and_reopen,
         },
     },
-    transition_journal::{ForwardPhase, Phase, RollbackActionOutcome, encode},
+    transition_journal::{Phase, RollbackActionOutcome},
 };
 
 use super::{
-    fixture::{OperationKind, SourceCase, canonical_journal, create_private_directory, pending},
+    fixture::{OperationKind, SourceCase, create_private_directory, pending},
     support::RouteFixture,
 };
 
@@ -129,49 +127,6 @@ fn startup_usr_rollback_resume_route_database_and_provenance_conflicts_never_adv
         .unwrap();
     let error = persist_usr_rollback_resume_route_and_reopen(journal, authority).unwrap_err();
     assert!(matches!(error, UsrRollbackResumeRoutePersistenceError::Authority(_)));
-    assert_eq!(fixture.fixture.canonical_bytes(), before);
-}
-
-fn assert_non_usr_restored_source_is_not_applicable() {
-    let mut fixture = RouteFixture::usr_restored(
-        OperationKind::NewState,
-        SourceCase::ExchangedPost,
-        RollbackActionOutcome::Applied,
-    );
-    fixture.source.rollback.as_mut().unwrap().source = ForwardPhase::RootLinksComplete;
-    let encoded = encode(&fixture.source).expect("later rollback source must remain a valid journal record");
-    fs::write(canonical_journal(&fixture.fixture.installation.root), encoded).unwrap();
-    for (name, target) in [
-        ("bin", "usr/bin"),
-        ("sbin", "usr/sbin"),
-        ("lib", "usr/lib"),
-        ("lib32", "usr/lib32"),
-        ("lib64", "usr/lib"),
-    ] {
-        symlink(target, fixture.fixture.installation.root.join(name)).unwrap();
-    }
-
-    let journal = fixture.open_journal();
-    let reservation = ActiveStateReservation::acquire().unwrap();
-    let seal = UsrRollbackResumeRouteSeal::new_for_test();
-    let in_flight = fixture.fixture.database.audit_in_flight_transition().unwrap();
-    let admission = UsrRollbackResumeRouteAuthority::capture(
-        &seal,
-        &fixture.fixture.installation,
-        &journal,
-        &fixture.fixture.database,
-        &reservation,
-        &fixture.source,
-        in_flight,
-    )
-    .unwrap();
-    assert!(matches!(admission, UsrRollbackResumeRouteAdmission::NotApplicable));
-    drop(journal);
-    drop(reservation);
-
-    let before = fixture.fixture.canonical_bytes();
-    let error = fixture.enter();
-    assert_eq!(pending(&error).phase(), Phase::UsrRestored);
     assert_eq!(fixture.fixture.canonical_bytes(), before);
 }
 
@@ -277,8 +232,6 @@ fn startup_usr_rollback_resume_route_capture_and_final_revalidation_races_fail_b
 
 #[test]
 fn startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remain_exact() {
-    assert_non_usr_restored_source_is_not_applicable();
-
     for kind in OperationKind::ALL {
         let fixture = RouteFixture::historical(kind, SourceCase::ExchangedPost);
         let epoch = fixture.source.creation_epoch.clone();
@@ -289,7 +242,11 @@ fn startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remai
         assert_eq!(actual.creation_epoch, epoch, "{kind:?}");
     }
 
-    for source in [SourceCase::IntentPre, SourceCase::ExchangedPost] {
+    for source in [
+        SourceCase::IntentPre,
+        SourceCase::ExchangedPost,
+        SourceCase::RootLinksCompletePost,
+    ] {
         let fixture = RouteFixture::new(OperationKind::ActiveReblit, source);
         assert_eq!(fixture.fixture.candidate_state, fixture.fixture.previous_state);
         assert_eq!(fixture.fixture.database.all().unwrap().len(), 1);

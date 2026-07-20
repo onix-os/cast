@@ -5,7 +5,7 @@ forge-startup-usr-rollback-resume-route-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_recovery::usr_rollback_resume_route::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 12; \
+	timeout 10s test "$$count" = 20; \
 	for test in \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_pending_matrix_persists_reverse_exchange_intent \
 		client::startup_recovery::usr_rollback_resume_route::tests::matrix::startup_usr_rollback_resume_route_satisfied_matrix_skips_reverse_exchange \
@@ -19,15 +19,25 @@ forge-startup-usr-rollback-resume-route-test:
 		client::startup_recovery::usr_rollback_resume_route::tests::storage_reopen::startup_usr_rollback_resume_route_storage_faults_reopen_to_exact_source_or_successor \
 		client::startup_recovery::usr_rollback_resume_route::tests::storage_reopen::startup_usr_rollback_resume_route_rejects_cross_root_authority_and_reopens_success \
 		client::startup_recovery::usr_rollback_resume_route::tests::end_to_end::startup_usr_rollback_resume_route_decision_route_and_reverse_use_one_persistence_boundary_per_entry \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_matrix::root_links_complete_pre_layout_cannot_construct_a_route_fixture \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_matrix::startup_root_links_complete_post_routes_exactly_across_operations_and_epochs \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_matrix::startup_root_links_complete_pre_layout_defers_pending_reverse_plan_across_operations_and_epochs \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_matrix::startup_root_links_complete_post_layout_defers_codec_valid_wrong_plans_across_operations_and_epochs \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_predecessor_replacement_breaks_exact_binding \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_record_binding::startup_root_links_complete_route_same_byte_successor_replacement_reopens_but_never_succeeds \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_storage_faults::startup_root_links_complete_route_all_storage_faults_reopen_exact_record_across_operations_and_epochs \
+		client::startup_recovery::usr_rollback_resume_route::tests::root_links_route_endpoint::startup_root_links_complete_fresh_entries_stop_at_exact_reverse_intent_across_operations_and_epochs \
 		transition_identity::journal_coordinator::tests::journal_coordinator_usr_exchange_effect_durability_faults_recover_through_exact_usr_restored; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_resume_route.rs; \
 	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_resume_route_authority.rs; \
+	reverse_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/resume_route_proof.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	journal_store=crates/forge/src/transition_journal/store.rs; \
+	record_binding=crates/forge/src/transition_journal/store/record_binding.rs; \
 	coordinator_test=crates/forge/src/transition_identity/journal_coordinator/tests/usr_exchange_effect.rs; \
 	forward_support=crates/forge/src/client/startup_recovery/forward_origin_test_support.rs; \
 	end_to_end=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/end_to_end.rs; \
@@ -36,9 +46,9 @@ forge-startup-usr-rollback-resume-route-test:
 	successor_count="$$( timeout 10s rg -n '\.rollback_successor\(' "$$executor" "$$authority" "$$proof" | timeout 10s wc -l )"; \
 	timeout 10s test "$$successor_count" = 1; \
 	timeout 10s grep -Fqx '    let successor = match source_record.rollback_successor(None) {' "$$executor"; \
-	advance_count="$$( timeout 10s rg -n '\.advance\(' "$$executor" "$$authority" "$$proof" "$$reopen" | timeout 10s wc -l )"; \
-	timeout 10s test "$$advance_count" = 1; \
-	timeout 10s grep -Fqx '    let advance = journal.advance(&source_record, &successor);' "$$executor"; \
+	if timeout 10s rg -n 'journal\.advance\(' "$$executor" "$$authority" "$$proof" "$$reopen"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'authority.advance_record_binding(&journal, &successor)' "$$executor" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.advance_record_binding(cast, self.journal_record_binding, next)' "$$authority" )" = 1; \
 	timeout 10s grep -Fqx 'mod canonical_journal_reopen;' crates/forge/src/client/startup_recovery.rs; \
 	timeout 10s test "$$( timeout 10s rg -n 'canonical_journal_reopen' crates/forge/src/client/startup_recovery.rs | timeout 10s wc -l )" = 1; \
 	timeout 10s test "$$( timeout 10s rg -n '^pub\(super\) fn reopen_canonical_journal\(' "$$reopen" | timeout 10s wc -l )" = 1; \
@@ -47,19 +57,77 @@ forge-startup-usr-rollback-resume-route-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' "$$executor" )" = 1; \
 	timeout 10s grep -Fqx '    let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackResumeRouteReopenError::from);' "$$executor"; \
 	clone_line="$$( timeout 10s grep -nF '    let installation = authority.installation().clone();' "$$executor" | timeout 10s cut -d: -f1 )"; \
-	advance_line="$$( timeout 10s grep -nF '    let advance = journal.advance(&source_record, &successor);' "$$executor" | timeout 10s cut -d: -f1 )"; \
-	drop_authority_line="$$( timeout 10s grep -nF '    drop(authority);' "$$executor" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
+	advance_line="$$( timeout 10s grep -nF '    let advance = match authority.advance_record_binding(&journal, &successor) {' "$$executor" | timeout 10s cut -d: -f1 )"; \
 	drop_journal_line="$$( timeout 10s grep -nF '    drop(journal);' "$$executor" | timeout 10s tail -n 1 | timeout 10s cut -d: -f1 )"; \
 	reopen_line="$$( timeout 10s grep -nF '    let reopened = reopen_canonical_journal(&installation).map_err(UsrRollbackResumeRouteReopenError::from);' "$$executor" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$clone_line" -lt "$$advance_line"; \
-	timeout 10s test "$$advance_line" -lt "$$drop_authority_line"; \
-	timeout 10s test "$$drop_authority_line" -lt "$$drop_journal_line"; \
+	timeout 10s test "$$advance_line" -lt "$$drop_journal_line"; \
 	timeout 10s test "$$drop_journal_line" -lt "$$reopen_line"; \
-	suffix="$$( timeout 10s sed -n '/    let advance = journal.advance(&source_record, &successor);/,/    let reopened = reopen_canonical_journal/p' "$$executor" )"; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    drop(authority);' <<<"$$suffix" )" = 1; \
-	timeout 10s test "$$( timeout 10s grep -Fc '    drop(journal);' <<<"$$suffix" )" = 1; \
+	suffix="$$( timeout 10s sed -n '/    let advance = match authority.advance_record_binding/,/    let reopened = reopen_canonical_journal/p' "$$executor" )"; \
+	if timeout 10s grep -Fq 'drop(authority)' <<<"$$suffix"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s test "$$( timeout 10s grep -Fc '            drop(journal);' <<<"$$suffix" )" = 2; \
+	timeout 10s test "$$( timeout 10s grep -Fc '    drop(journal);' <<<"$$suffix" )" = 3; \
+	timeout 10s rg -U -q 'Err\(UsrRollbackResumeRouteRecordAdvanceError::Authority\(source\)\) => \{\n            drop\(journal\);\n            return Err\(UsrRollbackResumeRoutePersistenceError::Authority\(source\)\);\n        \}' <<<"$$suffix"; \
+	timeout 10s rg -U -q 'Err\(UsrRollbackResumeRouteRecordAdvanceError::Installation\(source\)\) => \{\n            drop\(journal\);\n            return Err\(UsrRollbackResumeRoutePersistenceError::Installation\(source\)\);\n        \}' <<<"$$suffix"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'reopen_canonical_journal(&installation)' <<<"$$suffix" )" = 1; \
-	if timeout 10s rg -n 'retained_mutable_cast_directory|open_in_retained_cast|journal\.load\(' "$$executor"; then exit 1; fi; \
+	timeout 10s awk ' \
+		function fail() { bad = 1; exit } \
+		$$0 == "        Ok(successor_binding) => {" { if (active || seen) fail(); active = 1; seen = 1; next } \
+		active && $$0 == "        Err(UsrRollbackResumeRouteRecordAdvanceError::Authority(source)) => {" { active = 0; closed = 1; next } \
+		active { \
+			if ($$0 ~ /(^|[^[:alnum:]_])return([^[:alnum:]_]|$$)/ || index($$0, "?") || $$0 ~ /[[:alpha:]_][[:alnum:]_]*![[:space:]]*[({[]/) fail(); \
+			if (index($$0, "UsrRollbackResumeRouteAdvanceOutcome::SuccessorBindingFailed(")) failures += 1; \
+		} \
+		END { if (bad || seen != 1 || closed != 1 || active || failures < 1) exit 1 } \
+	' "$$executor"; \
+	timeout 10s awk ' \
+		function fail() { bad = 1; exit } \
+		function finish_branch() { \
+			if (branch == 0) return; \
+			if (errors != 1 || error_open || !error_closed || !branch_closed) fail(); \
+			if (branch == 1 && (record_binding != 1 || durable_source != 1 || durable_successor != 0 || combined != 0)) fail(); \
+			if (branch == 2 && (record_binding != 1 || durable_source != 0 || durable_successor != 1 || combined != 0)) fail(); \
+			if ((branch == 3 || branch == 4) && (record_binding != 0 || durable_source != 0 || durable_successor != 0 || combined != 1)) fail(); \
+		} \
+		function reset_branch() { \
+			errors = record_binding = durable_source = durable_successor = combined = 0; \
+			error_open = error_closed = branch_closed = 0; \
+		} \
+		$$0 == "        UsrRollbackResumeRouteAdvanceOutcome::SuccessorBindingFailed(binding) => match reopened {" { \
+			if (active || seen != 0) fail(); active = 1; seen = 1; next; \
+		} \
+		active && $$0 == "        }," { finish_branch(); active = 0; closed = 1; next; } \
+		active && $$0 ~ /^            .* => / { \
+			finish_branch(); branch += 1; reset_branch(); \
+			if (branch == 1 && $$0 != "            Ok((reopened, Some(actual))) if actual == source_record => {") fail(); \
+			if (branch == 2 && $$0 != "            Ok((reopened, Some(actual))) if actual == successor => {") fail(); \
+			if (branch == 3 && $$0 != "            Ok((reopened, actual)) => {") fail(); \
+			if (branch == 4) { \
+				if ($$0 != "            Err(reopen) => Err(UsrRollbackResumeRoutePersistenceError::SuccessorRecordBindingAndReopen {") fail(); \
+				errors = 1; combined = 1; error_open = 1; \
+			} \
+			if (branch > 4) fail(); next; \
+		} \
+		active { \
+			if ($$0 ~ /(^|[^[:alnum:]_])return([^[:alnum:]_]|$$)/ || index($$0, "?") != 0 || $$0 ~ /[[:alpha:]_][[:alnum:]_]*![[:space:]]*[({[]/) fail(); \
+			if ($$0 ~ /^[[:space:]]*Ok\(/) fail(); \
+			if (branch_closed && $$0 !~ /^[[:space:]]*(\/\/.*)?$$/) fail(); \
+			if ($$0 == "                Err(UsrRollbackResumeRoutePersistenceError::SuccessorRecordBinding {") { \
+				if (branch > 2 || error_open || error_closed) fail(); errors += 1; record_binding += 1; error_open = 1; next; \
+			} \
+			if ($$0 == "                Err(UsrRollbackResumeRoutePersistenceError::SuccessorRecordBindingAndReopen {") { \
+				if (branch != 3 || error_open || error_closed) fail(); errors += 1; combined += 1; error_open = 1; next; \
+			} \
+			if ($$0 == "                    durable: DurableUsrRollbackResumeRouteRecord::Source,") durable_source += 1; \
+			if ($$0 == "                    durable: DurableUsrRollbackResumeRouteRecord::Successor,") durable_successor += 1; \
+			if (branch <= 3 && error_open && $$0 == "                })") { error_open = 0; error_closed = 1; next; } \
+			if (branch <= 3 && $$0 == "            }") { if (!error_closed || error_open || branch_closed) fail(); branch_closed = 1; next; } \
+			if (branch == 4 && error_open && $$0 == "            }),") { error_open = 0; error_closed = 1; branch_closed = 1; next; } \
+			if (error_closed && !branch_closed && $$0 !~ /^[[:space:]]*(\/\/.*)?$$/) fail(); \
+		} \
+		END { if (bad || seen != 1 || closed != 1 || active || branch != 4) exit 1 } \
+	' "$$executor"; \
+	if timeout 10s rg -n 'open_in_retained_cast|journal\.load\(' "$$executor"; then exit 1; fi; \
 	timeout 10s rg -U -q 'installation\.revalidate_mutable_namespace\(\)\?;\n    let cast = installation\.retained_mutable_cast_directory\(\)\?;\n    let journal = TransitionJournalStore::open_in_retained_cast\(cast, &installation\.root\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;\n    let record = journal\.load_revalidated_retained_cast\(cast\)\?;\n    installation\.revalidate_mutable_namespace\(\)\?;' "$$reopen"; \
 	timeout 10s test "$$( timeout 10s grep -Fc '    installation.revalidate_mutable_namespace()?;' "$$reopen" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'installation.retained_mutable_cast_directory()?' "$$reopen" )" = 1; \
@@ -82,12 +150,28 @@ forge-startup-usr-rollback-resume-route-test:
 	capture_call_count="$$( timeout 10s rg -n 'UsrRollbackResumeRouteAuthority::capture\(' crates/forge/src/client --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' | timeout 10s wc -l )"; \
 	timeout 10s test "$$capture_call_count" = 1; \
 	timeout 10s grep -Fqx '        _startup_gate_seal: &UsrRollbackResumeRouteSeal,' "$$authority"; \
-	timeout 10s grep -Fqx '    journal_binding: TransitionJournalBinding,' "$$authority"; \
-	timeout 10s test "$$( timeout 10s rg -n 'let journal_binding = journal\.binding\(\);' "$$authority" | timeout 10s wc -l )" = 1; \
-	timeout 10s test "$$( timeout 10s rg -n 'journal\.has_binding\(&self\.journal_binding\)' "$$authority" | timeout 10s wc -l )" = 1; \
-	timeout 10s awk '$$0 ~ /^    pub\(in crate::client\) fn revalidate\(/ { active = 1; next } active && $$0 == "        if !journal.has_binding(&self.journal_binding) {" { found = 1; exit } active && ($$0 ~ /self\.installation/ || $$0 ~ /journal\.load/) { exit 1 } END { exit !found }' "$$authority"; \
+	if timeout 10s rg -n 'TransitionJournalBinding|journal\.binding\(\)|journal\.has_binding\(' "$$executor" "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fqx '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' "$$authority" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'require_journal_record_binding(' "$$authority" )" = 4; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'journal.has_record_binding(cast, binding, record)?' "$$authority" )" = 1; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.has_record_binding(cast, &successor_binding, &successor)' "$$executor" )" = 1; \
+	binding_helper="$$( timeout 10s sed -n '/^fn require_journal_record_binding(/,/^}/p' "$$authority" )"; \
+	timeout 10s grep -Fq '    if !journal.has_record_store_binding(binding) {' <<<"$$binding_helper"; \
+	store_binding_line="$$( timeout 10s grep -nF '    if !journal.has_record_store_binding(binding) {' <<<"$$binding_helper" | timeout 10s cut -d: -f1 )"; \
+	cast_binding_line="$$( timeout 10s grep -nF '    let cast = installation.retained_mutable_cast_directory()?;' <<<"$$binding_helper" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$store_binding_line" -lt "$$cast_binding_line"; \
+	capture_line="$$( timeout 10s grep -nF 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' "$$authority" | timeout 10s cut -d: -f1 )"; \
+	namespace_line="$$( timeout 10s grep -nF 'let namespace_inspection = match UsrRollbackResumeRouteNamespaceInspection::begin' "$$authority" | timeout 10s cut -d: -f1 )"; \
+	timeout 10s test "$$capture_line" -lt "$$namespace_line"; \
 	timeout 10s grep -Fqx 'pub(crate) struct TransitionJournalBinding(Arc<()>);' "$$journal_store"; \
+	timeout 10s grep -Fqx 'pub(crate) struct TransitionJournalRecordBinding {' "$$record_binding"; \
+	timeout 10s grep -Fq 'pub(crate) fn has_record_store_binding(' "$$record_binding"; \
+	timeout 10s grep -Fq 'pub(crate) fn advance_record_binding(' "$$record_binding"; \
 	timeout 10s grep -Fq 'if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored)' "$$authority"; \
+	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$authority"; \
+	timeout 10s grep -Fq 'record.phase == Phase::RollbackDecided && rollback.source == ForwardPhase::RootLinksComplete' "$$authority"; \
+	if timeout 10s rg -n 'ForwardPhase::RootLinksComplete' "$$reverse_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq '(RollbackAction::Pending, UsrExchangeLayout::Post)' "$$authority"; \
 	timeout 10s grep -Fq '(RollbackAction::AlreadySatisfied, UsrExchangeLayout::Pre)' "$$authority"; \
 	timeout 10s grep -Fq 'RollbackAction::Applied | RollbackAction::AlreadySatisfied' "$$authority"; \

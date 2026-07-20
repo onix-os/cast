@@ -3,8 +3,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
-        TransitionJournalStore, TransitionRecord,
+        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
+        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -32,7 +32,7 @@ pub(in crate::client) struct UsrRollbackResumeRouteAuthority<'reservation> {
     record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: UsrRollbackResumeRouteNamespaceProof,
-    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -52,7 +52,9 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
             return Ok(UsrRollbackResumeRouteAdmission::NotApplicable);
         }
 
-        let journal_binding = journal.binding();
+        installation.revalidate_mutable_namespace()?;
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let namespace_inspection = match UsrRollbackResumeRouteNamespaceInspection::begin(installation, journal, record)
         {
@@ -81,13 +83,15 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
         installation.revalidate_mutable_namespace()?;
+        require_journal_record_binding(installation, journal, &journal_record_binding, record)?;
+        installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackResumeRouteAdmission::Ready(Self {
             installation: installation.clone(),
             state_db: retained_state_db,
             record: record.clone(),
             database,
             namespace,
-            journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         }))
     }
@@ -98,9 +102,12 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackResumeRouteAuthorityError> {
-        if !journal.has_binding(&self.journal_binding) {
-            return Err(UsrRollbackResumeRouteAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
@@ -110,6 +117,12 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         if !route_evidence_is_exact(&self.record, self.namespace.layout()) {
             return Err(UsrRollbackResumeRouteAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
+        require_journal_record_binding(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -121,6 +134,22 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
     pub(in crate::client) fn record(&self) -> &TransitionRecord {
         &self.record
     }
+
+    /// Revalidate, then consume this complete authority through the exact
+    /// predecessor-to-successor journal boundary. The retained database,
+    /// namespace, reservation, and record evidence stay owned until the
+    /// one-shot store call consumes the predecessor binding.
+    pub(in crate::client) fn advance_record_binding(
+        self,
+        journal: &TransitionJournalStore,
+        next: &TransitionRecord,
+    ) -> Result<TransitionJournalRecordBinding, UsrRollbackResumeRouteRecordAdvanceError> {
+        self.revalidate(journal)?;
+        let cast = self.installation.retained_mutable_cast_directory()?;
+        journal
+            .advance_record_binding(cast, self.journal_record_binding, next)
+            .map_err(UsrRollbackResumeRouteRecordAdvanceError::Storage)
+    }
 }
 
 fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
@@ -128,8 +157,26 @@ fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
         matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
-        ) || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
+        ) || (record.phase == Phase::RollbackDecided && rollback.source == ForwardPhase::RootLinksComplete)
+            || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
     })
+}
+
+fn require_journal_record_binding(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackResumeRouteAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackResumeRouteAuthorityErrorKind::JournalRecordBindingMismatch.into());
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, binding, record)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackResumeRouteAuthorityErrorKind::JournalRecordBindingMismatch.into())
+    }
 }
 
 fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout) -> bool {
@@ -228,6 +275,16 @@ fn require_exact_database(
 #[error(transparent)]
 pub(in crate::client) struct UsrRollbackResumeRouteAuthorityError(#[from] UsrRollbackResumeRouteAuthorityErrorKind);
 
+#[derive(Debug, thiserror::Error)]
+pub(in crate::client) enum UsrRollbackResumeRouteRecordAdvanceError {
+    #[error("revalidate exact rollback-resume route authority before the bound journal advance")]
+    Authority(#[from] UsrRollbackResumeRouteAuthorityError),
+    #[error("revalidate retained installation before the bound rollback-resume route journal advance")]
+    Installation(#[from] crate::installation::Error),
+    #[error("advance the exact bound rollback-resume route journal record")]
+    Storage(#[source] StorageError),
+}
+
 impl From<InspectionError> for UsrRollbackResumeRouteAuthorityError {
     fn from(source: InspectionError) -> Self {
         UsrRollbackResumeRouteAuthorityErrorKind::Inspection(source).into()
@@ -246,10 +303,16 @@ impl From<crate::installation::Error> for UsrRollbackResumeRouteAuthorityError {
     }
 }
 
+impl From<StorageError> for UsrRollbackResumeRouteAuthorityError {
+    fn from(source: StorageError) -> Self {
+        UsrRollbackResumeRouteAuthorityErrorKind::Journal(source).into()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackResumeRouteAuthorityErrorKind {
-    #[error("startup rollback-resume authority was paired with a different open journal store")]
-    JournalBindingMismatch,
+    #[error("startup rollback-resume authority lost its exact canonical journal record binding")]
+    JournalRecordBindingMismatch,
     #[error("exact startup rollback-resume evidence no longer selects the persisted first intent")]
     RouteEvidenceMismatch,
     #[error("inspect exact rollback-resume database evidence")]
@@ -258,6 +321,8 @@ enum UsrRollbackResumeRouteAuthorityErrorKind {
     Namespace(#[source] UsrRollbackResumeRouteNamespaceError),
     #[error("revalidate retained mutable installation namespace around rollback-resume authority")]
     Installation(#[source] crate::installation::Error),
+    #[error("capture or revalidate the exact rollback-resume journal record binding")]
+    Journal(#[source] StorageError),
     #[error("rollback-resume database evidence is incompatible: {evidence:?}")]
     DatabaseIncompatible { evidence: Box<DatabaseEvidence> },
     #[error("rollback-resume database evidence changed from {expected:?} to {actual:?}")]

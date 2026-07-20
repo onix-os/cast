@@ -27,17 +27,16 @@ impl RouteFixture {
     }
 
     fn from_fixture(fixture: Fixture, kind: OperationKind, source: SourceCase) -> Self {
-        assert_ne!(
-            source,
-            SourceCase::ExchangedPre,
-            "incompatible source cannot form a route fixture"
+        assert!(
+            !matches!(source, SourceCase::ExchangedPre | SourceCase::RootLinksCompletePre),
+            "a pre-exchange source requiring a pending reverse exchange cannot form a route fixture"
         );
         let usr_exchange = match source {
             SourceCase::IntentPre => InitialRollbackAction::AlreadySatisfied,
-            SourceCase::IntentPost | SourceCase::ExchangedPost => InitialRollbackAction::Pending,
-            SourceCase::ExchangedPre | SourceCase::RootLinksCompletePost | SourceCase::RootLinksCompletePre => {
-                unreachable!()
+            SourceCase::IntentPost | SourceCase::ExchangedPost | SourceCase::RootLinksCompletePost => {
+                InitialRollbackAction::Pending
             }
+            SourceCase::ExchangedPre | SourceCase::RootLinksCompletePre => unreachable!(),
         };
         let decision = fixture
             .source
