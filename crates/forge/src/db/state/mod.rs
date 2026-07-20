@@ -35,9 +35,10 @@ pub(crate) use exact_fresh_transition_removal::{
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by the focused exact-removal test module
 pub(crate) use exact_fresh_transition_removal::{
-    ExactFreshTransitionRemovalFault, arm_after_exact_fresh_transition_removal_attempt_before_reconciliation,
-    arm_exact_fresh_transition_removal_fault, assert_exact_fresh_transition_removal_fault_consumed,
-    exact_fresh_transition_removal_transaction_attempts,
+    ExactFreshTransitionRemovalBoundary, ExactFreshTransitionRemovalFault,
+    arm_after_exact_fresh_transition_removal_attempt_before_reconciliation,
+    arm_exact_fresh_transition_removal_callback, arm_exact_fresh_transition_removal_fault,
+    assert_exact_fresh_transition_removal_fault_consumed, exact_fresh_transition_removal_transaction_attempts,
 };
 #[allow(unused_imports)] // consumed by the ActiveReblit frozen-boot wiring slice
 pub(crate) use frozen_boot_input::{FrozenBootInput, FrozenBootInputError};

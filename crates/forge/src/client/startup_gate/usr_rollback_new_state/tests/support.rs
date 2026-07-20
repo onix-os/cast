@@ -20,6 +20,8 @@ use crate::{
     },
     db,
     installation::DatabaseKind,
+    package,
+    state::Selection,
     test_support::private_installation_tempdir,
     transition_journal::{Phase, RollbackActionOutcome, TransitionRecord, decode},
 };
@@ -368,6 +370,37 @@ pub(super) fn install_persistent_joint_absence_database(fixture: &mut FreshDbInv
     };
     database.remove_exact_fresh_transition(preimage).unwrap();
     fixture.assert_exact_joint_absence();
+}
+
+pub(super) fn install_persistent_selected_fresh_database(fixture: &mut FreshDbInvalidationFixture) {
+    let database = open_state_database(&fixture.fixture.fixture.installation);
+    let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
+    let selections = [Selection::explicit(package::Id::from(
+        "root-links-invalidation-process-kill-candidate",
+    ))];
+    let candidate = database
+        .add_with_transition(
+            &fixture.record.transition_id,
+            &selections,
+            Some("rollback selected fresh candidate"),
+            None,
+        )
+        .unwrap()
+        .id;
+    assert_eq!(previous, fixture.fixture.fixture.previous_state);
+    assert_eq!(candidate, fixture.fixture.fixture.candidate_state);
+    assert_eq!(database.get(candidate).unwrap().selections, selections);
+    let provenance = db::state::MetadataProvenance::from_outputs(OS_RELEASE, SYSTEM_MODEL);
+    database
+        .insert_fresh_metadata_provenance_if_transition_matches(
+            candidate,
+            &fixture.record.transition_id,
+            &provenance,
+        )
+        .unwrap();
+    let old = std::mem::replace(&mut fixture.fixture.fixture.database, database);
+    drop(old);
+    fixture.assert_exact_present();
 }
 
 pub(super) fn reopen_persistent_state_database(installation: &Installation) -> db::state::Database {

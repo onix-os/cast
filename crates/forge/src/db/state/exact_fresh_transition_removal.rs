@@ -140,6 +140,13 @@ impl Database {
             self.remove_exact_fresh_transition_once(&preimage)
         };
 
+        #[cfg(test)]
+        if attempt.is_ok() {
+            exact_fresh_transition_removal_boundary(
+                ExactFreshTransitionRemovalBoundary::CommitReturnedBeforeReconciliation,
+            );
+        }
+
         let attempt = match attempt {
             Ok(()) if exact_fresh_transition_removal_fault(ExactFreshTransitionRemovalFault::AfterCommit) => {
                 Err(ExactFreshTransitionAttemptError::FaultInjected {
@@ -275,6 +282,9 @@ impl Database {
                 });
             }
 
+            #[cfg(test)]
+            exact_fresh_transition_removal_boundary(ExactFreshTransitionRemovalBoundary::PreimageValidated);
+
             let provenance_changed = metadata_provenance::delete_exact_metadata_provenance(
                 tx,
                 preimage.state.id,
@@ -288,6 +298,9 @@ impl Database {
                     actual: provenance_changed,
                 });
             }
+
+            #[cfg(test)]
+            exact_fresh_transition_removal_boundary(ExactFreshTransitionRemovalBoundary::ProvenanceDeleted);
 
             if exact_fresh_transition_removal_fault(ExactFreshTransitionRemovalFault::BetweenProvenanceAndStateDelete) {
                 return Err(ExactFreshTransitionAttemptError::FaultInjected {
@@ -310,6 +323,9 @@ impl Database {
                 });
             }
 
+            #[cfg(test)]
+            exact_fresh_transition_removal_boundary(ExactFreshTransitionRemovalBoundary::SelectionsDeleted);
+
             let state_changed = diesel::delete(
                 model::state::table
                     .filter(model::state::id.eq(i32::from(preimage.state.id)))
@@ -325,6 +341,11 @@ impl Database {
                     actual: state_changed,
                 });
             }
+
+            #[cfg(test)]
+            exact_fresh_transition_removal_boundary(
+                ExactFreshTransitionRemovalBoundary::StateRowDeletedBeforeCommit,
+            );
 
             if exact_fresh_transition_removal_fault(ExactFreshTransitionRemovalFault::BeforeCommit) {
                 return Err(ExactFreshTransitionAttemptError::FaultInjected {
@@ -763,6 +784,21 @@ pub(crate) enum ExactFreshTransitionRemovalFault {
     AfterCommitWithExactRestoration,
 }
 
+/// Transaction milestones exposed only to same-process test oracles.
+///
+/// These callbacks add no production branch or callback storage. They let a
+/// re-executed test process die at real SQLite application boundaries so the
+/// next process can prove rollback-versus-commit recovery.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ExactFreshTransitionRemovalBoundary {
+    PreimageValidated,
+    ProvenanceDeleted,
+    SelectionsDeleted,
+    StateRowDeletedBeforeCommit,
+    CommitReturnedBeforeReconciliation,
+}
+
 #[cfg(test)]
 std::thread_local! {
     static EXACT_FRESH_TRANSITION_REMOVAL_FAULT:
@@ -771,6 +807,38 @@ std::thread_local! {
         std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static AFTER_EXACT_FRESH_TRANSITION_REMOVAL_ATTEMPT_BEFORE_RECONCILIATION:
         std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    static EXACT_FRESH_TRANSITION_REMOVAL_CALLBACK: std::cell::RefCell<Option<(
+        ExactFreshTransitionRemovalBoundary,
+        Box<dyn FnOnce()>,
+    )>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Arm one callback at one exact successful SQLite removal milestone.
+#[cfg(test)]
+pub(crate) fn arm_exact_fresh_transition_removal_callback(
+    boundary: ExactFreshTransitionRemovalBoundary,
+    callback: impl FnOnce() + 'static,
+) {
+    EXACT_FRESH_TRANSITION_REMOVAL_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow_mut().replace((boundary, Box::new(callback))).is_none(),
+            "an exact fresh-transition removal callback is already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn exact_fresh_transition_removal_boundary(boundary: ExactFreshTransitionRemovalBoundary) {
+    EXACT_FRESH_TRANSITION_REMOVAL_CALLBACK.with(|armed| {
+        let matches = armed
+            .borrow()
+            .as_ref()
+            .is_some_and(|(expected, _)| *expected == boundary);
+        if matches {
+            let (_, callback) = armed.borrow_mut().take().unwrap();
+            callback();
+        }
+    });
 }
 
 #[cfg(test)]

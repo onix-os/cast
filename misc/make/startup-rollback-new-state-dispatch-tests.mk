@@ -10,7 +10,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_new_state::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 35; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 36; \
 	for name in \
 		candidate_move_process_kill::startup_new_state_candidate_move_process_kill_recovers_without_second_move \
 		exclusions::startup_new_state_suffix_leaves_archived_candidate_preservation_zero_effect \
@@ -26,6 +26,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 		finalization::startup_new_state_suffix_finalization_converges_into_the_shared_prune_residue_audit \
 		finalization::startup_new_state_suffix_rejects_terminal_record_recreated_during_clean_handoff \
 		finalization::startup_new_state_suffix_rejects_mutable_namespace_substitution_after_terminal_finalization \
+		fresh_db_invalidation_process_kill::startup_root_links_new_state_fresh_db_invalidation_process_kills_recover_exactly \
 		matrix::startup_new_state_suffix_routes_every_exact_candidate_preserved_matrix_without_later_effects \
 		matrix::startup_new_state_suffix_invalidates_present_or_accepts_joint_absence_for_every_exact_matrix \
 		matrix::startup_new_state_suffix_completes_every_exact_invalidated_outcome_without_repeating_effects \
@@ -62,6 +63,11 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	candidate_process_kill="$$tests/candidate_move_process_kill.rs"; \
 	candidate_process_harness="$$tests/candidate_move_process_harness.rs"; \
 	candidate_boundaries="$$tests/candidate_process_kill_boundaries.rs"; \
+	invalidation_process_kill="$$tests/fresh_db_invalidation_process_kill.rs"; \
+	invalidation_process_harness="$$tests/fresh_db_invalidation_process_harness.rs"; \
+	invalidation_process_evidence="$$tests/fresh_db_invalidation_process_evidence.rs"; \
+	invalidation_process_boundaries="$$tests/fresh_db_invalidation_process_boundaries.rs"; \
+	exact_fresh_removal=crates/forge/src/db/state/exact_fresh_transition_removal.rs; \
 	timeout 10s test "$$( timeout 10s rg -l '^pub\(in crate::client\) struct UsrRollbackCandidatePreserveSeal \{' crates/forge/src/client --glob '*.rs' )" = "$$gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {' "$$gate"; \
 	timeout 10s awk '$$0 == "pub(in crate::client) struct UsrRollbackCandidatePreserveSeal {" { open = 1; next } open && $$0 == "    _private: ()," { field = 1; next } open && $$0 == "}" { closed = 1; open = 0 } END { exit !(field && closed) }' "$$gate"; \
@@ -301,7 +307,47 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fq 'RollbackActionOutcome::AlreadySatisfied' "$$candidate_process_harness"; \
 	timeout 10s grep -Fq 'not a reboot or' "$$candidate_process_harness"; \
 	if timeout 10s rg -n 'arm_next_|finalize_usr_rollback|FaultPoint|StorageFault' "$$candidate_process_kill" "$$candidate_process_harness" "$$candidate_boundaries"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	for file in "$$gate" "$$orchestrator" "$$active_orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$finalization_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/finalization.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" "$$process_kill" "$$candidate_process_kill" "$$candidate_process_harness" "$$candidate_boundaries" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
+	timeout 10s grep -Fq 'pub(super) const DATABASE: [Self; 5] = [' "$$invalidation_process_boundaries"; \
+	timeout 10s grep -Fq 'pub(super) const JOURNAL: [Self; 5] = [' "$$invalidation_process_boundaries"; \
+	timeout 10s grep -Fq 'pub(super) const ALL: [Self; 10] = [' "$$invalidation_process_boundaries"; \
+	for boundary in PreimageValidated ProvenanceDeleted SelectionsDeleted StateRowDeletedBeforeCommit CommitReturnedBeforeReconciliation TemporaryFullySynced CanonicalExchanged UpdateFirstDirectorySynced DisplacedUnlinked UpdateFinalDirectorySynced; do timeout 10s grep -Fq "Self::$$boundary" "$$invalidation_process_boundaries"; done; \
+	for boundary in PreimageValidated ProvenanceDeleted SelectionsDeleted StateRowDeletedBeforeCommit CommitReturnedBeforeReconciliation; do timeout 10s grep -Fq "ExactFreshTransitionRemovalBoundary::$$boundary" "$$invalidation_process_boundaries" "$$exact_fresh_removal"; done; \
+	for boundary in TemporaryFullySynced CanonicalExchanged UpdateFirstDirectorySynced DisplacedUnlinked UpdateFinalDirectorySynced; do timeout 10s grep -Fq "JournalUpdateDurabilityBoundary::$$boundary" "$$invalidation_process_boundaries"; done; \
+	timeout 10s grep -Fq 'for epoch in Epoch::ALL {' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'for boundary in FreshDbInvalidationProcessBoundary::ALL {' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq '        cases, 20,' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'CandidateSource::RootLinksComplete' "$$invalidation_process_kill"; \
+	if timeout 10s rg -n 'CandidateSource::(ALL|Intent|Exchanged)' "$$invalidation_process_kill" "$$invalidation_process_harness" "$$invalidation_process_evidence" "$$invalidation_process_boundaries"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'assert_eq!(rollback.source, ForwardPhase::RootLinksComplete);' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'assert_eq!(record.generation, 16);' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'assert_eq!(successor.generation, 17);' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'Command::new(env::current_exe().unwrap())' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq '.arg(TEST_NAME)' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq '.arg("--exact")' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq '.arg("--test-threads=1")' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'Some(nix::libc::SIGKILL)' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'nix::libc::kill(nix::libc::getpid(), nix::libc::SIGKILL)' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'struct DeadlineChild {' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'impl Drop for DeadlineChild {' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'Duration::from_secs(15)' "$$invalidation_process_harness"; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$invalidation_process_kill" )" = 2; \
+	timeout 10s grep -Fq 'release_invalidation_fixture_handles(fixture)' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'install_persistent_selected_fresh_database(&mut fixture)' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq '!candidate.selections.is_empty()' "$$invalidation_process_evidence"; \
+	timeout 10s grep -Fq 'external v1 RootLinks invalidation control' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'recovery-child-is-next-database-opener' "$$invalidation_process_harness"; \
+	timeout 10s grep -Fq 'Raw inspection deliberately precedes any journal store or SQLite open.' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'TemporaryRecordContents::Successor' "$$invalidation_process_boundaries"; \
+	timeout 10s grep -Fq 'TemporaryRecordContents::Source' "$$invalidation_process_boundaries"; \
+	timeout 10s grep -Fq 'RootAbiSnapshot::capture' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'StableNamespaceSnapshot::capture' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'expected_removals' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'retained_exchange_syscall_count(), 0' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'boot_synchronize_attempt_count(), 0' "$$invalidation_process_kill"; \
+	timeout 10s grep -Fq 'arm_before_usr_rollback_finalization_final_revalidation' "$$invalidation_process_kill"; \
+	for disclaimer in 'genuine same-boot process death' 'not a reboot simulation' 'power-loss durability oracle'; do timeout 10s grep -Fq "$$disclaimer" "$$invalidation_process_harness"; done; \
+	if timeout 10s rg -n 'diesel::|remove_exact_fresh_transition|\.advance[[:space:]]*\(|persist_usr_|finalize_usr_rollback|arm_next_|FaultPoint|StorageFault' "$$invalidation_process_kill" "$$invalidation_process_harness" "$$invalidation_process_evidence" "$$invalidation_process_boundaries"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	for file in "$$gate" "$$orchestrator" "$$active_orchestrator" "$$recovery_root" "$$candidate_leaf" "$$fresh_leaf" "$$finalization_leaf" "$$tests/mod.rs" "$$tests/support.rs" "$$tests/sequence.rs" "$$tests/matrix.rs" "$$tests/failures.rs" "$$tests/finalization.rs" "$$tests/preparation_failures.rs" "$$tests/storage_faults.rs" "$$tests/exclusions.rs" "$$process_kill" "$$candidate_process_kill" "$$candidate_process_harness" "$$candidate_boundaries" "$$invalidation_process_kill" "$$invalidation_process_harness" "$$invalidation_process_evidence" "$$invalidation_process_boundaries" "$$exact_fresh_removal" misc/make/startup-rollback-new-state-dispatch-tests.mk Makefile; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1
