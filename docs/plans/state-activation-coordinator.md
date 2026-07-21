@@ -582,9 +582,15 @@ closure remain authoritative in `PLAN.md`.
   wrapper, or cleanup effect. An exact `BootSyncStarted` rollback
   instead routes `CandidatePreserved` to `BootRepairRequired`; a later startup
   observing `BootRepairStarted` records terminal `BootRepairUnverified` without
-  invoking boot. The v2 journal model has typed Applied/AlreadySatisfied
-  completion edges, but the actual repair attempt and successful production
-  dispatch remain unwired. ActivateArchived
+  invoking boot. Journal payload v3 adds a typed immutable receipt pair, a
+  strict state-database singleton and API can durably stage the same pair, but
+  production forward staging remains unwired. V3 startup admits this route only
+  when both sources correlate. Existing v1/v2 records already
+  at `BootSyncStarted` retain a conservative journal-only route. The typed
+  Applied/AlreadySatisfied completion edges remain, but there is still no
+  publisher, actual repair attempt, boot mutation or deletion authority, full
+  receipt inventory, successful production dispatch, or VM evidence.
+  ActivateArchived
   preservation, completion, and terminal finalization now run as three separate
   bounded production entries with no same-entry successor redispatch.
   Commits

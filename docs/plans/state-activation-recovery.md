@@ -111,14 +111,18 @@ and instant rollback mechanism; it hardens their failure semantics.
   invalidation; accepted commit `39456719` separately proves terminal deletion
   and residue recovery for all three exact RootLinks finalizers. The complete pre-existing
   NewState suffix and the ActiveReblit no-boot-repair suffix reach the same
-  clean-startup handoff. An ActiveReblit
-  rollback sourced from `BootSyncStarted` instead routes a preserved candidate
-  to `BootRepairRequired`; a separately observed `BootRepairStarted` record is
-  retained as terminal `BootRepairUnverified` without invoking boot again.
-  The v2 journal domain can represent explicit `Applied` and
-  `AlreadySatisfied` repair completion, and commit `ffc32ce1` production-routes
-  an already durable `BootRepairComplete` record to `RollbackComplete`. No
-  production path performs the repair or emits that successful record.
+  clean-startup handoff. An ActiveReblit v3 rollback sourced from
+  `BootSyncStarted` routes a preserved candidate to `BootRepairRequired` only
+  when its typed immutable receipt pair exactly matches durable singleton
+  evidence. The strict state-database singleton and API can durably stage that pair, but production forward staging remains unwired. Existing v1/v2 records at
+  `BootSyncStarted` retain a conservative journal-only route. A separately
+  observed `BootRepairStarted` record is retained as terminal
+  `BootRepairUnverified` without invoking boot again. The journal domain can
+  represent explicit `Applied` and `AlreadySatisfied` repair completion, and
+  commit `ffc32ce1` production-routes an already durable `BootRepairComplete`
+  record to `RollbackComplete`. No production path performs the repair or
+  emits that successful record; no publisher, boot mutation or deletion
+  authority, full receipt inventory, or VM evidence is claimed.
   The pre-existing ActivateArchived rollback source set still reaches that same
   handoff. Exact private-detach residue can now be restored on writer reopen.
   The RootLinks campaign remains separate from the unchanged legacy 12-case
@@ -459,13 +463,20 @@ admits an exact `BootRepairStarted` record on a later startup entry and advances
 it to terminal `BootRepairUnverified` while invoking boot zero times. There is
 still no production `BootRepairRequired` -> `BootRepairStarted` attempt,
 durable publisher, successful completion dispatch, or terminal deletion for
-that branch. Commit `406cabe5` nevertheless closes the journal vocabulary: new
-records use payload v2, byte-canonical v1 remains readable and advances only
-through its old domain, and typed constructors distinguish Required -> Started,
-Started -> `BootRepairComplete { Applied | AlreadySatisfied }`, Started ->
-Unverified, and Complete -> `RollbackComplete`. The generic rollback successor
-cannot traverse those boot-specific edges, and `BootRepairComplete` remains
-nondeletable until its explicit terminal advance.
+that branch. Journal payload v3 now introduces its receipt pair only through a
+typed `BootSyncStarted` edge and retains that pair immutably. A strict
+state-database singleton and API can durably stage the exact pair, but
+production forward staging remains unwired. Startup admits v3 recovery only
+when both sources correlate. Byte-canonical v1/v2 remains readable;
+records already at `BootSyncStarted` retain a conservative journal-only route,
+while older records cannot acquire v3 receipt authority. Commit `406cabe5`'s
+typed Required -> Started, Started ->
+`BootRepairComplete { Applied | AlreadySatisfied }`, Started -> Unverified, and
+Complete -> `RollbackComplete` vocabulary remains intact. The generic rollback
+successor cannot traverse those boot-specific edges, and `BootRepairComplete`
+remains nondeletable until its explicit terminal advance. This foundation
+supplies no publisher, boot mutation or deletion authority, full receipt
+inventory, or disposable-VM evidence.
 
 The implemented preparation stack now carries one caller-owned absolute
 deadline, without resetting it, through the exact state/layout database and
@@ -539,9 +550,15 @@ retained destination and returns scalar states only. Commit `8620986a` retains
 the exact observed-root device, inode, and mount ID. Commit `3f8309b1` then
 sandwiches assessment through that same private destination `File` between
 opening and closing boot-filesystem authentication and requires the root triple
-to match. The next client blocker is a bounded expected-source bridge for
-generated slices and sealed asset descriptors; it must stream positionally
-rather than materialize the roughly 10-GiB publication ceiling.
+to match. Commit `97fb33b3` closes the bounded expected-source bridge by
+streaming generated slices and sealed asset descriptors without materializing
+the roughly 10-GiB publication ceiling. Later foundations bind those sources,
+retain exact-byte identities, and derive a canonical desired-publication
+inventory without granting mutation authority. The journal-v3/database
+receipt correlation described above authorizes only startup routing; its
+production forward staging remains unwired. Full receipt inventory, ownership
+provenance, publication, deletion authority, durability, and disposable-VM
+evidence remain open.
 
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`

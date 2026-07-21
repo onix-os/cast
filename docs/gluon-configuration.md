@@ -109,11 +109,17 @@ Commit `365e0ae5` completes the bounded retained destination observer, commit
 `8620986a` retains its exact observed-root device, inode, and mount ID, and
 commit `3f8309b1` sandwiches assessment through the same private destination
 `File` between opening and closing boot-filesystem authentication before
-requiring that root triple to match. The next client blocker is a bounded
-expected-source bridge for generated slices and sealed asset descriptors; it
-must use positional streaming rather than materialize the roughly 10-GiB
-publication ceiling. None of this authorizes writes, publication, durability,
-device flushes, restart reconciliation, or VM-backed operation. Because
+requiring that root triple to match. Commit `97fb33b3` closes the bounded
+expected-source bridge with positional streaming for generated slices and
+sealed asset descriptors rather than materializing the roughly 10-GiB
+publication ceiling. Separately, journal payload v3 carries a typed immutable
+boot-publication receipt pair. A strict state-database singleton and API can
+durably stage the same pair, but production forward staging remains unwired.
+V3 startup requires exact correlation; existing v1/v2 records
+already at `BootSyncStarted` retain only a conservative journal-only route.
+This supplies no publisher, boot mutation or deletion authority, full receipt
+inventory, durability, device flush, restart-reconciliation, or VM evidence.
+Because
 `nosymfollow` was added in
 Linux 5.10, the future boot publisher has an effective Linux 5.10-or-newer
 admission boundary. Generic `linux_fs` facilities remain compatible with the

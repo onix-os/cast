@@ -372,10 +372,18 @@ sandwiches, and scalar-only results. Commit `8620986a` adds the exact observed
 root device, inode, and mount ID. Commit `3f8309b1` then authenticates the boot
 filesystem, assesses through the same private destination `File`, authenticates
 the filesystem again, and requires that root triple to match before returning
-closed attachment evidence. The remaining client-side blocker is a bounded
-expected-source bridge over generated slices and sealed asset descriptors; it
-must stream positionally and must not materialize the roughly 10-GiB
-publication ceiling.
+closed attachment evidence. Commit `97fb33b3` closes the bounded
+expected-source bridge by streaming generated slices and sealed asset
+descriptors without materializing the roughly 10-GiB publication ceiling;
+later bindings retain exact source identities and a canonical desired
+publication inventory without granting mutation authority. The recovery-side
+foundation now introduces a typed immutable receipt pair in journal payload
+v3. A strict state-database singleton and API can durably stage that exact pair,
+but production forward staging remains unwired. V3 startup recovery is admitted
+only when the journal and database correlate. Existing v1/v2
+records already at `BootSyncStarted` retain a conservative journal-only route.
+This is not a publisher and grants no boot mutation or deletion authority;
+full receipt inventory and disposable-VM evidence remain open.
 
 A separate durable publisher combines:
 

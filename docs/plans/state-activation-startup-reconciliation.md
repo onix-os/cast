@@ -928,9 +928,15 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   Commit `92fa7aa0` adds the disjoint production route for exact ActiveReblit `CandidatePreserved` evidence sourced from
   `BootSyncStarted`: it advances once to `BootRepairRequired`, reopens only the exact source or successor, invokes boot zero
-  times, and returns. Commit `b5928340` separately admits exact `BootRepairStarted` on a fresh startup; operational capture
-  faults remain errors, structural incompatibility defers, and exact evidence advances once to terminal `BootRepairUnverified` with zero boot calls. Commit `406cabe5` adds immutable v1/v2 decoding and explicit Required -> Started,
-  Started -> Complete/Unverified, and Complete -> `RollbackComplete` edges; the generic successor refuses them. No production entry creates `BootRepairStarted`, performs the repair, or emits successful completion.
+  times, and returns. Journal payload v3 now adds a typed immutable receipt pair. A strict state-database singleton and API can
+  durably stage the same pair, but production forward staging remains unwired. Startup admits the v3 route only when both
+  sources correlate. Existing v1/v2 records already at
+  `BootSyncStarted` retain a conservative journal-only route. Commit `b5928340` separately admits exact `BootRepairStarted`
+  on a fresh startup; operational capture faults remain errors, structural incompatibility defers, and exact evidence advances
+  once to terminal `BootRepairUnverified` with zero boot calls. Commit `406cabe5`'s explicit Required -> Started,
+  Started -> Complete/Unverified, and Complete -> `RollbackComplete` edges remain; the generic successor refuses them. No
+  production entry creates `BootRepairStarted`, performs the repair, or emits successful completion. There is still no
+  publisher, boot mutation or deletion authority, full receipt inventory, or disposable-VM evidence.
 
   Commit `cbe3679a` production-wires exactly one ActivateArchived
   `CandidatePreserveIntent` checkpoint per startup entry. Exact staged evidence
