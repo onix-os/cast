@@ -47,6 +47,21 @@ and instant rollback mechanism; it hardens their failure semantics.
   their descriptor-safe baseline; full frozen execution separately requires
   Linux x86_64 5.14 or newer. Restrictive-umask repair may use only an
   authenticated procfs alias to the retained descriptor.
+- [x] Add the exact record-bound terminal-delete store foundation. Accepted
+  commit `8f391985` consumes one same-store non-`Clone` record-inode binding
+  under the retained operation and journal locks, authenticates the retained
+  Cast/journal/lock/inventory/record, and uses `RENAME_NOREPLACE` to detach the
+  public winner to one fresh collision-detecting private name. Only the exact
+  retained inode and framed record may reach the sole private unlink; the
+  successful path performs one journal-directory sync. Detach, unlink-report,
+  and sync ambiguity reconcile only authenticated exact source or absence,
+  without retrying detach or unlink, while same-byte foreign winners remain
+  untouched. The name is not secret: after final private validation there is no
+  optional hook or work before unlink, but an uncooperative same-credential
+  writer in that syscall window is outside this cooperative boundary. A
+  `.state-transition.delete-*` residue, including one process loss could leave,
+  is preserved and rejected fail-closed on reopen rather than adopted or
+  cleaned. The residue test is not a process-death claim.
 - [ ] Open mutable system clients in recovery order: installation lock,
   databases, journal lock, journal reconciliation, orphan-token audit, strict
   live-state discovery, then repositories and the active registry. Frozen
@@ -759,10 +774,17 @@ all RootLinks terminal-finalization gates remain closed. Commit `68759ba3` still
 proves only the 20-case NewState generation-16 -> generation-17 invalidation
 boundary. When its crash already made the generation-17 successor canonical,
 the recovery entry may naturally take the ordinary generation-17 -> 18 route;
-that does not create a completion-boundary `SIGKILL` claim. Other RootLinks
-process-death boundaries, reboot, and power-loss durability remain unclaimed.
-The next blocker is an exact record-bound terminal-deletion primitive before
-any operation's RootLinks finalization is widened.
+that does not create a completion-boundary `SIGKILL` claim.
+
+Accepted commit `8f391985` closes only the store-foundation blocker described
+above. Its independently accepted gate passes 11/11 focused contracts, the
+complete direct journal lane passes 98/98, and the existing NewState,
+ActivateArchived, and ActiveReblit finalizer regression lanes remain green.
+No RootLinks operation finalizer calls the primitive: all three exact terminal
+records remain byte-stable. This commit adds no cleanup or boot action and no
+process-death, reboot, or power-loss evidence. The next blocker is separately
+wiring and proving each operation-specific RootLinks finalizer, including its
+interruption and residue policy, without widening the others.
 
 ### Startup reconciliation and interruption campaign
 

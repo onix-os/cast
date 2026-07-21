@@ -417,8 +417,26 @@ closure remain authoritative in `PLAN.md`.
   closed. The existing 20-case `SIGKILL` proof remains exclusively generation
   16 -> 17. A recovery entry may naturally take generation 17 -> 18 when the
   invalidation successor was already canonical, but that creates no completion-
-  boundary process-death claim. The next blocker is an exact record-bound
-  terminal-deletion primitive before any operation's RootLinks finalization.
+  boundary process-death claim.
+
+  Accepted commit `8f391985` supplies only the independently reviewed store
+  foundation needed by a future finalizer. It consumes an exact non-`Clone`
+  record-inode binding, atomically detaches the public winner to a fresh private
+  name with `RENAME_NOREPLACE`, authenticates that exact inode and frame, then
+  performs one private unlink and one directory sync. Applied-report ambiguity
+  reconciles only exact source or absence without a second detach or unlink;
+  preexisting or same-byte foreign winners are preserved. The private name is
+  collision-detecting, not secret. The final validation-to-unlink window has no
+  optional work and is explicitly cooperative; an uncooperative same-credential
+  writer racing that syscall window is outside the contract. A private delete
+  residue is preserved and makes reopen fail closed rather than being cleaned.
+
+  The focused gate passes 11/11, the complete direct journal lane passes 98/98,
+  and all three existing operation-finalizer regressions pass. No RootLinks
+  operation finalizer is wired, so all three records above remain stable. This
+  foundation performs no cleanup or boot action and proves no process death,
+  reboot, or power-loss behavior. Next is separate operation-specific wiring
+  and interruption evidence without granting another source deletion authority.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -551,8 +569,9 @@ closure remain authoritative in `PLAN.md`.
   reboot or power-loss proof. Accepted commit `f2b305d4` now supplies the
   separate journal-only generation-17 -> generation-18 completion boundary
   with exact predecessor/successor record-inode binding and no new process-
-  death claim. Exact bound terminal deletion, later rollback actions,
-  roll-forward, triggers, and cleanup remain open. ActiveReblit's terminal
+  death claim. RootLinks wiring of the exact bound terminal-delete foundation,
+  later rollback actions, roll-forward, triggers, and cleanup remain open.
+  ActiveReblit's terminal
   finalizer now has an exact
   12-case real-process matrix across current/historical record epochs, both
   rollback sources, and final-PRE source retention, kernel-observed post-unlink
