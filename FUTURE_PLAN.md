@@ -37,3 +37,17 @@ separate decision after the current plan is finished.
 - Evaluate Nix-to-Gluon or evaluated-derivation interoperability separately.
   Compatibility remains undecided: it is neither a current objective nor
   prohibited, and must not reshape the Stone-native package model in advance.
+
+## Maintenance
+
+- Resolve the existing Forge compiler warnings reported by the current Make
+  gates, including unused Linux boot imports and variables plus dormant
+  coordinator and test-support paths. Warning cleanup is not a blocker for the
+  current system-management plan.
+
+## Test operations
+
+- Consider an operator-facing VM hygiene audit for fixture campaigns. It could
+  report remaining fixture units and processes, VM test-disk mounts, linger,
+  and the Ubuntu AppArmor user-namespace setting without changing the existing
+  authenticated fixture receipt or treating host policy as package evidence.
