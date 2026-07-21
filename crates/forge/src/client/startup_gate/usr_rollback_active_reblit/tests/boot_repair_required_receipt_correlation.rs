@@ -1,7 +1,7 @@
 //! Synthetic receipt-correlation contracts at the boot-repair boundary.
 //!
-//! These tests use private temporary roots only. They perform no ESP, `/boot`,
-//! block-device, mount, reboot, or boot-publication operation.
+//! These tests use private temporary roots only. They perform no ESP, boot
+//! filesystem, block-device, mount, reboot, or boot-publication operation.
 
 use crate::{
     boot_publication::BootPublicationReceiptFingerprint,

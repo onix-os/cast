@@ -6,13 +6,13 @@
 
 use std::{collections::TryReserveError, path::PathBuf, time::Instant};
 
-#[cfg(test)]
-use super::active_reblit_mounted_boot_topology::BoundActiveReblitMountedBootTopology;
 use super::{
     active_reblit_boot_inputs::BoundActiveReblitBootAsset,
     active_reblit_boot_render_inputs::RevalidatedActiveReblitBootRenderInputs,
     active_reblit_boot_schema_inputs::ValidatedActiveReblitBootSchema,
-    active_reblit_mounted_boot_topology::RevalidatedActiveReblitMountedBootTopology,
+    active_reblit_mounted_boot_topology::{
+        BoundActiveReblitMountedBootTopology, RevalidatedActiveReblitMountedBootTopology,
+    },
     active_reblit_publication_plan::{
         ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase,
         ActiveReblitBootPublicationRequest, ActiveReblitBootPublicationRole, ActiveReblitBootPublicationSource,
@@ -233,6 +233,14 @@ impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 
     pub(in crate::client) fn destination_layout(&self) -> ActiveReblitBootDestinationLayout {
         self.plan.destination_layout()
+    }
+
+    /// Borrow only the closed scalar topology facts retained by this plan.
+    ///
+    /// The descriptor-retained revalidation owner remains private, so this
+    /// view cannot perform I/O or extend destination authority.
+    pub(in crate::client) fn mounted_topology(&self) -> BoundActiveReblitMountedBootTopology<'_> {
+        self.topology.topology()
     }
 }
 

@@ -49,6 +49,14 @@ impl MountedBootDestinationIdentity {
     pub(in crate::client) const fn from_stat_device_and_inode(raw_device: u64, inode: u64) -> Self {
         Self { raw_device, inode }
     }
+
+    pub(in crate::client) const fn raw_device(self) -> u64 {
+        self.raw_device
+    }
+
+    pub(in crate::client) const fn inode(self) -> u64 {
+        self.inode
+    }
 }
 
 #[cfg(test)]

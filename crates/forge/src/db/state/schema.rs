@@ -10,6 +10,14 @@ diesel::table! {
 }
 
 diesel::table! {
+    boot_publication_receipts (receipt_sha256) {
+        receipt_sha256 -> Binary,
+        transition_id -> Text,
+        canonical_body -> Binary,
+    }
+}
+
+diesel::table! {
     state (id) {
         id -> Integer,
         #[sql_name = "type"]
@@ -43,6 +51,7 @@ diesel::joinable!(state_selections -> state (state_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     boot_publication_receipt_head,
+    boot_publication_receipts,
     state,
     state_metadata_provenance,
     state_selections,

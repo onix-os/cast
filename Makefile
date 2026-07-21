@@ -27,6 +27,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 include misc/make/hardening-tests.mk
 include misc/make/boot-publication-receipt-head-tests.mk
+include misc/make/boot-publication-receipt-state-tests.mk
 include misc/make/transition-journal-bound-delete-tests.mk
 include misc/make/transition-journal-delete-residue-recovery-tests.mk
 include misc/make/private-device-tests.mk
@@ -65,6 +66,7 @@ include misc/make/active-reblit-root-filesystem-intent-tests.mk
 include misc/make/active-reblit-boot-render-input-tests.mk
 include misc/make/active-reblit-bls-renderer-tests.mk
 include misc/make/active-reblit-desired-publication-tests.mk
+include misc/make/active-reblit-boot-publication-receipt-tests.mk
 include misc/make/active-reblit-boot-namespace-input-tests.mk
 include misc/make/startup-recovery-tests.mk
 include misc/make/startup-root-abi-normalization-tests.mk

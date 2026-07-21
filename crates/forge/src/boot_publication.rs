@@ -10,6 +10,24 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use thiserror::Error;
 
+#[path = "boot_publication/receipt_body.rs"]
+mod receipt_body;
+#[path = "boot_publication/receipt_codec.rs"]
+mod receipt_codec;
+
+#[allow(unused_imports)] // consumed by the client receipt mapper in the next integration slice
+pub(crate) use receipt_body::{
+    BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
+    BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
+    BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationReceiptBodyError,
+    BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
+};
+#[allow(unused_imports)] // consumed by durable receipt storage in the next integration slice
+pub(crate) use receipt_codec::{
+    BootPublicationReceiptCodecError, CanonicalBootPublicationReceipt, decode_boot_publication_receipt,
+    prepare_boot_publication_receipt, MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES,
+};
+
 const FINGERPRINT_BYTES: usize = 32;
 const FINGERPRINT_TEXT_BYTES: usize = FINGERPRINT_BYTES * 2;
 

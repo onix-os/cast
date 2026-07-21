@@ -103,6 +103,7 @@ impl Database {
     /// transition/fingerprint retry is reported without mutation. Every other
     /// existing pending value is a conflict, including reuse of the same
     /// transition ID with different receipt bytes.
+    #[cfg(test)]
     pub(crate) fn stage_boot_publication_receipt_pair(
         &self,
         transition_id: &TransitionId,
@@ -218,7 +219,7 @@ impl Database {
     }
 }
 
-fn load_receipt_head(
+pub(super) fn load_receipt_head(
     connection: &mut SqliteConnection,
 ) -> Result<BootPublicationReceiptHead, BootPublicationReceiptHeadError> {
     let mut shapes = boot_publication_receipt_head::table
@@ -351,7 +352,7 @@ fn decode_fingerprint(
         .map_err(|source| BootPublicationReceiptHeadError::InvalidStoredFingerprint { field, source })
 }
 
-fn stage_pending_row(
+pub(super) fn stage_pending_row(
     connection: &mut SqliteConnection,
     transition_id: &TransitionId,
     pair: &BootPublicationReceiptPair,

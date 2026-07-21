@@ -9,6 +9,7 @@ fn prior_state_schema_upgrades_without_losing_state_or_provenance() {
     let database = Database::new(":memory:").unwrap();
     database.conn.exec(|conn| {
         conn.revert_last_migration(MIGRATIONS).unwrap();
+        conn.revert_last_migration(MIGRATIONS).unwrap();
     });
     let transition_id = transition('e');
     let state = database
