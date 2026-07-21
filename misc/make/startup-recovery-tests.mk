@@ -146,7 +146,8 @@ forge-startup-usr-rollback-decision-test:
 	if timeout 10s rg -n 'fn new_for_test\(' "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx '    journal_record_binding: TransitionJournalRecordBinding,' "$$authority"; \
 	if timeout 10s rg -n 'Option<TransitionJournalRecordBinding>' "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'derive\([^)]*Clone|impl Clone for TransitionJournalRecordBinding' "$$record_binding"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if rg -U -n '#\[derive\([^]]*Clone[^]]*\)\]\n(?:#\[[^\n]*\]\n)*pub\(crate\) struct TransitionJournalRecordBinding' "$$record_binding"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'impl[[:space:]]+Clone[[:space:]]+for[[:space:]]+TransitionJournalRecordBinding' "$$record_binding"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' "$$authority" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'require_journal_record_binding(' "$$authority" )" = 4; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'journal.has_record_binding(cast, binding, record)?' "$$authority" )" = 1; \

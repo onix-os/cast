@@ -65,7 +65,8 @@ forge-startup-usr-rollback-active-reblit-candidate-preserve-persistence-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'advance_candidate_preserved_record_binding' "$$executor" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'advance_candidate_preserved_record_binding' "$$authority_persistence" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'journal.advance_record_binding(cast, self._effect.journal_record_binding, &successor)' "$$authority_persistence" )" = 1; \
-	if timeout 10s rg -n 'derive\([^)]*Clone|impl Clone for TransitionJournalRecordBinding' "$$journal_record_binding"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if rg -U -n '#\[derive\([^]]*Clone[^]]*\)\]\n(?:#\[[^\n]*\]\n)*pub\(crate\) struct TransitionJournalRecordBinding' "$$journal_record_binding"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'impl[[:space:]]+Clone[[:space:]]+for[[:space:]]+TransitionJournalRecordBinding' "$$journal_record_binding"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	timeout 10s grep -Fqx '            let (successor, successor_binding) = published.into_parts();' "$$executor"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'published.into_parts()' "$$executor" )" = 1; \
 	first_revalidate="$$( timeout 10s grep -nF 'authority.revalidate(&journal)' "$$executor" | timeout 10s head -n 1 | timeout 10s cut -d: -f1 )"; \
