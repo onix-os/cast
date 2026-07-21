@@ -32,11 +32,10 @@ use url::Url;
 
 use super::{Planned, Request, plan, plan_for_build};
 use crate::{
-    Env, Timing,
+    Env,
     build::{self, Builder, BuilderRequest},
     build_lock::WriteOutcome,
-    executor::Executor,
-    package::{self, FrozenPackager, Packager, Publication},
+    package::{Packager, Publication},
     profile,
     source_lock::{
         ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, decode_source_lock,
@@ -212,6 +211,11 @@ fn execution_fixture_package_directory(name: &str) -> PathBuf {
 mod bootstrap;
 #[cfg(feature = "delegated-fixture-test-support")]
 pub(crate) use bootstrap::DelegatedExecutionOutcome;
+#[path = "tests/execution_session.rs"]
+mod execution_session;
+use execution_session::execute_and_publish;
+#[path = "tests/execution_cleanup_witness_tests.rs"]
+mod execution_cleanup_witness_tests;
 #[path = "tests/documented_semantics/code_generation.rs"]
 mod documented_code_generation;
 #[path = "tests/documented_semantics/composition.rs"]
@@ -734,47 +738,6 @@ fn write_repository_index(path: &Path, requested: &[String]) {
     writer.finalize().unwrap();
 }
 
-#[derive(Debug, thiserror::Error)]
-enum FrozenExamplePayloadError {
-    #[error("execute frozen example")]
-    Execute(#[from] crate::executor::Error),
-    #[error("package frozen example")]
-    Package(#[from] package::Error),
-}
-
-fn execute_and_publish(planned: &Planned) -> Result<Publication, Box<dyn StdError + Send + Sync>> {
-    let executor = Executor::new(&planned.plan)?;
-    let packager = FrozenPackager::from_plan(&planned.runtime.paths, &planned.plan)?;
-    let execution_lock = planned.runtime.acquire_execution_lock(&planned.plan)?;
-    let mut timing = Timing::default();
-    let initialize_timer = timing.begin(crate::timing::Kind::Initialize);
-    let prepared = planned
-        .runtime
-        .setup(&planned.plan, &execution_lock, &mut timing, initialize_timer)?;
-
-    prepared.require_for(&planned.runtime.paths, &planned.plan)?;
-    crate::container::exec_frozen::<FrozenExamplePayloadError>(
-        &planned.runtime.paths,
-        &planned.plan,
-        &execution_lock,
-        prepared.sandbox(),
-        prepared.root_guard(),
-        |permit| {
-            executor.run(&mut timing)?;
-            packager.package(permit, &mut timing)?;
-            Ok(())
-        },
-    )?;
-
-    Ok(package::publish_artefacts(
-        &planned.runtime.paths,
-        &planned.plan,
-        &execution_lock,
-        prepared.artefacts()?,
-        package::ManifestVerification::None,
-    )?)
-}
-
 fn assert_runtime_reopens_planner_repository_snapshot(
     forge_dir: &Path,
     output_dir: &Path,
@@ -848,6 +811,13 @@ fn assert_runtime_reopens_planner_repository_snapshot(
 }
 
 fn container_capability_unavailable(error: &(dyn StdError + 'static)) -> bool {
+    // Cleanup is part of the fixture's lifecycle proof. Even when its primary
+    // operation is a skippable namespace denial, losing the exact prepared
+    // workspace is a hard failure and must not be hidden by source recursion.
+    if execution_session::cleanup_failed(error) {
+        return false;
+    }
+
     // The Mason wrapper is transparent, so `source()` skips directly to the
     // wrapped container error's own source (often a bare `Errno`). Inspect the
     // typed wrapper before walking the chain or the operation identity needed

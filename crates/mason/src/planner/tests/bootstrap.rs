@@ -48,6 +48,7 @@ include!("bootstrap/relation_policy.rs");
 include!("bootstrap/python_module.rs");
 include!("bootstrap/system_integration_assets.rs");
 include!("bootstrap/temp_root.rs");
+include!("bootstrap/execution_cleanup.rs");
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct BootstrapClosure {

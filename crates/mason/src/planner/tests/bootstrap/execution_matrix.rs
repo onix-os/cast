@@ -141,8 +141,8 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
         );
         let input_snapshot = ExecutionInputSnapshot::capture(recipe, &first.lock_path);
 
-        let first_publication = match execute_and_publish(&first) {
-            Ok(publication) => publication,
+        let first_execution = match execute_and_publish(&first) {
+            Ok(execution) => execution,
             Err(error)
                 if container_capability_unavailable(error.as_ref())
                     && !execution_capability_required()
@@ -159,6 +159,7 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
                 error_chain(error.as_ref())
             ),
         };
+        let first_publication = first_execution.publication();
         assert_eq!(first_publication, Publication::Published, "{name}: first publication");
         executed += 1;
 
@@ -170,6 +171,17 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
             recipe,
             &first.lock_path,
         );
+        // Capture content-derived observations first, then retire the exact
+        // workspace before replanning so two fixture roots never coexist.
+        let first_cleanup = ExecutionCleanupWitness::capture(name, &first, &published_root, &matrix.forge_dir);
+        first_execution.cleanup().unwrap_or_else(|error| {
+            panic!(
+                "{name}: exact first execution cleanup failed: {}",
+                error_chain(error.as_ref())
+            )
+        });
+        first_cleanup.assert_cleaned(name, &first, &published);
+        input_snapshot.assert_unchanged(name, "after exact first execution cleanup", recipe, &first.lock_path);
 
         let locked = plan_for_build(matrix.env(), matrix.request(recipe, false), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: reuse contentful build lock: {error:#}"));
@@ -198,12 +210,13 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
         assert_eq!(repeated_lock, first_lock, "{name}: repeated build.lock.glu bytes drifted");
         input_snapshot.assert_unchanged(name, "after locked replanning", recipe, &locked.lock_path);
 
-        let second_publication = execute_and_publish(&locked).unwrap_or_else(|error| {
+        let second_execution = execute_and_publish(&locked).unwrap_or_else(|error| {
             panic!(
                 "{name}: repeated contentful execution failed: {}",
                 error_chain(error.as_ref())
             )
         });
+        let second_publication = second_execution.publication();
         assert_eq!(second_publication, Publication::Reused, "{name}: repeated publication");
         let repeated = bundle::assert_fixture_bundle(
             name,
@@ -221,6 +234,7 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
             recipe,
             &locked.lock_path,
         );
+        let second_cleanup = ExecutionCleanupWitness::capture(name, &locked, &published_root, &matrix.forge_dir);
         evidence.push(execution_evidence::FixtureEvidenceInputs {
             name,
             first_plan: &canonical_plan,
@@ -237,6 +251,16 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
             staged_after_repeat: &repeated,
             published_after_repeat: &preserved,
         });
+        // Evidence owns bytes and hashes, never workspace paths. Cleanup must
+        // still succeed before `finish` can seal or publish the matrix proof.
+        second_execution.cleanup().unwrap_or_else(|error| {
+            panic!(
+                "{name}: exact repeated execution cleanup failed: {}",
+                error_chain(error.as_ref())
+            )
+        });
+        second_cleanup.assert_cleaned(name, &locked, &published);
+        input_snapshot.assert_unchanged(name, "after exact repeated execution cleanup", recipe, &locked.lock_path);
     }
 
     assert_eq!(executed, selection.expected_count());

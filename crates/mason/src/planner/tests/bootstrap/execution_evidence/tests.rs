@@ -135,6 +135,40 @@ fn proof_v2_serializes_the_exact_complete_matrix_and_totals_within_its_bound() {
 }
 
 #[test]
+fn sealed_execution_evidence_contains_no_host_or_workspace_paths() {
+    fn reject_absolute_strings(value: &serde_json::Value) {
+        match value {
+            serde_json::Value::Array(values) => values.iter().for_each(reject_absolute_strings),
+            serde_json::Value::Object(values) => {
+                for (key, value) in values {
+                    assert!(
+                        !["path", "root", "workspace", "cache_dir", "forge_dir", "output_dir"]
+                            .contains(&key.as_str()),
+                        "fixture evidence exposed a host-location field {key:?}"
+                    );
+                    reject_absolute_strings(value);
+                }
+            }
+            serde_json::Value::String(value) => {
+                assert!(
+                    !value.starts_with('/'),
+                    "fixture evidence exposed an absolute host path {value:?}"
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let evidence = complete_evidence();
+    let MatrixScope::Complete(totals) = &evidence.scope else {
+        panic!("complete evidence has single scope");
+    };
+    let bytes = proof::serialize_for_test(&evidence.fixtures, totals, TEST_COMMIT);
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    reject_absolute_strings(&value);
+}
+
+#[test]
 fn a_single_selection_seals_only_single_scope_and_never_claims_matrix_totals() {
     let mut builder = ExecutionEvidenceBuilder::new(ExecutionFixtureSelection::One("cmake"));
     push_synthetic(&mut builder, "cmake");
