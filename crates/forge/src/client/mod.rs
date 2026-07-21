@@ -127,6 +127,9 @@ mod active_reblit_publication_plan;
 mod active_reblit_root_filesystem_intent;
 #[cfg(test)]
 mod active_reblit_tests;
+#[cfg(test)]
+#[path = "boot/disposable_vm_gpt_topology_tests.rs"]
+mod disposable_vm_gpt_topology_tests;
 mod active_state_authority;
 #[cfg(test)]
 mod active_state_authority_tests;
