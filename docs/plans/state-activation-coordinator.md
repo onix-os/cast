@@ -352,8 +352,8 @@ closure remain authoritative in `PLAN.md`.
   link mutation seams reject 240 capture, 240 pre-effect, 120 Applied post-
   attempt, 240 initial-persistence, and 240 final-revalidation races. The
   endpoint still performs exactly one reverse `/usr` exchange and preserves
-  the targets and identities of all five canonical root links. A later
-  At that checkpoint, a later NewState entry left generation 17 byte-stable
+  the targets and identities of all five canonical root links. At that
+  checkpoint, a later NewState entry left generation 17 byte-stable
   because RootLinks completion and terminal finalization remained closed.
 
   Accepted commit `a3fb25d3` independently admits exact RootLinks-sourced
@@ -366,8 +366,8 @@ closure remain authoritative in `PLAN.md`.
   and final-revalidation seams. Database state, archived-wrapper and state-slot
   identities, and all five canonical root-link identities remain unchanged.
   The entry performs no database or non-journal effect, cleanup, finalization,
-  or boot action. A later entry leaves generation 12 byte-stable because the
-  RootLinks finalization source axis remains closed.
+  or boot action. At that checkpoint a later entry left generation 12 byte-
+  stable because the RootLinks finalization source axis remained closed.
 
   Accepted commit `a05997d8`, with acceptance-gate follow-up `cfb5a70d`,
   independently admits exact RootLinks-sourced ActiveReblit
@@ -411,13 +411,12 @@ closure remain authoritative in `PLAN.md`.
 
   This completion boundary is journal-only: it invokes no database,
   non-journal namespace, reverse-exchange, candidate, boot, cleanup,
-  terminal-deletion, or finalization effect. NewState now remains byte-stable at
-  generation 18, ActivateArchived at generation 12, and ActiveReblit at
-  generation 14 because every RootLinks terminal-finalization gate remains
-  closed. The existing 20-case `SIGKILL` proof remains exclusively generation
-  16 -> 17. A recovery entry may naturally take generation 17 -> 18 when the
-  invalidation successor was already canonical, but that creates no completion-
-  boundary process-death claim.
+  terminal-deletion, or finalization effect. NewState remains byte-stable at
+  generation 18 and ActiveReblit at generation 14 because their RootLinks
+  terminal-finalization gates remain closed. The existing 20-case `SIGKILL`
+  proof remains exclusively NewState generation 16 -> 17. A recovery entry may
+  naturally take generation 17 -> 18 when the invalidation successor was already
+  canonical, but that creates no completion-boundary process-death claim.
 
   Accepted commit `8f391985` supplies only the independently reviewed store
   foundation needed by a future finalizer. It consumes an exact non-`Clone`
@@ -432,11 +431,20 @@ closure remain authoritative in `PLAN.md`.
   residue is preserved and makes reopen fail closed rather than being cleaned.
 
   The focused gate passes 11/11, the complete direct journal lane passes 98/98,
-  and all three existing operation-finalizer regressions pass. No RootLinks
-  operation finalizer is wired, so all three records above remain stable. This
-  foundation performs no cleanup or boot action and proves no process death,
-  reboot, or power-loss behavior. Next is separate operation-specific wiring
-  and interruption evidence without granting another source deletion authority.
+  and all three existing operation-finalizer regressions pass. Accepted commit
+  `a0966008` then widens only ActivateArchived finalization to exact
+  `RootLinksComplete` generation-12 `RollbackComplete`; legacy
+  `UsrExchangeIntent` and `UsrExchanged` admission remains intact. Binding-first
+  authority captures the exact non-`Clone` record binding before database and
+  namespace evidence, revalidates it, and consumes it once through the bound
+  delete while the same lock-bearing store is retained. Success requires
+  post-delete database -> namespace -> database proof, including exact archived
+  topology, all five root links, repeated public absence, and direct same-store
+  clean handoff.
+  No NewState or ActiveReblit source is widened, and no cleanup or boot effect is
+  added. RootLinks coverage proves only fresh-handle source/absence recovery;
+  private-detach residue still fails closed, so the legacy Intent/Exchanged
+  `SIGKILL` matrix is not RootLinks, and reboot and power-loss remain unproved.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -569,8 +577,10 @@ closure remain authoritative in `PLAN.md`.
   reboot or power-loss proof. Accepted commit `f2b305d4` now supplies the
   separate journal-only generation-17 -> generation-18 completion boundary
   with exact predecessor/successor record-inode binding and no new process-
-  death claim. RootLinks wiring of the exact bound terminal-delete foundation,
-  later rollback actions, roll-forward, triggers, and cleanup remain open.
+  death claim. Commits `8f391985` and `a0966008` then provide exact bound delete
+  and consume it only for RootLinks ActivateArchived generation 12. RootLinks
+  NewState and ActiveReblit finalization, later rollback actions, roll-forward,
+  triggers, cleanup, and all RootLinks terminal process-death proof remain open.
   ActiveReblit's terminal
   finalizer now has an exact
   12-case real-process matrix across current/historical record epochs, both
@@ -581,12 +591,14 @@ closure remain authoritative in `PLAN.md`.
   runtime witness, not a reboot simulation, and no power-loss claim is made.
   Phase 11 and its broad interruption campaign therefore remain open.
   Commit `c8c5ea41` production-wires ActivateArchived's bounded completion
-  suffix. Commit `a3fb25d3` widens only that exact completion entry to the
-  RootLinks source and deliberately leaves its terminal finalizer closed.
-  Commit `32bf8589` adds its separate deterministic terminal deletion
-  and same-lock clean handoff. Commit `c6362aae` adds its exact 12-case
-  real-process terminal `SIGKILL` matrix across both epochs, both rollback
-  sources, and the three deletion boundaries. The newer bounded boot
+  suffix. Commit `a3fb25d3` widens only that completion entry to RootLinks and
+  reaches generation 12. Commit `32bf8589` adds separate deterministic terminal
+  deletion and same-lock clean handoff for the legacy Intent/Exchanged sources;
+  commit `c6362aae` adds their exact 12-case real-process terminal `SIGKILL`
+  matrix. Accepted commit `a0966008` adds exact RootLinks generation-12
+  finalization through record-bound deletion and the same clean handoff, but its
+  coverage is fresh-handle only until private-detach residue recovery exists.
+  The newer bounded boot
   projection, sealed Stone inputs, state roots and schemas, local and package
   command-line semantics, Gluon topology intent, and retained mounted-topology
   evidence and the pure BLS renderer remain outside this coordinator. They

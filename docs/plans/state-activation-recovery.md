@@ -90,11 +90,14 @@ and instant rollback mechanism; it hardens their failure semantics.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix and exact RootLinks
-  `RollbackComplete` for NewState, ActivateArchived, and ActiveReblit. The
-  genuine same-boot NewState death matrix remains confined to fresh-row
-  invalidation rather than completion. The complete pre-existing NewState suffix reaches
-  authenticated terminal journal absence, and the ActiveReblit no-boot-repair
-  suffix through the same clean-startup handoff. An ActiveReblit
+  `RollbackComplete` for NewState, ActivateArchived, and ActiveReblit. Exact
+  RootLinks ActivateArchived generation 12 now also reaches authenticated
+  terminal journal absence through one record-bound deletion and the retained
+  same-store clean handoff; NewState and ActiveReblit RootLinks finalization
+  remain closed. The genuine same-boot NewState death matrix remains confined
+  to fresh-row invalidation rather than completion. The complete pre-existing
+  NewState suffix and the ActiveReblit no-boot-repair suffix reach the same
+  clean-startup handoff. An ActiveReblit
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
   to `BootRepairRequired`; a separately observed `BootRepairStarted` record is
   retained as terminal `BootRepairUnverified` without invoking boot again.
@@ -102,9 +105,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   `AlreadySatisfied` repair completion, and commit `ffc32ce1` production-routes
   an already durable `BootRepairComplete` record to `RollbackComplete`. No
   production path performs the repair or emits that successful record.
-  The pre-existing ActivateArchived rollback source set reaches that same
-  authenticated clean-startup handoff; its RootLinks source stops at exact
-  `RollbackComplete`. Roll-forward execution, the actual boot
+  The pre-existing ActivateArchived rollback source set still reaches that same
+  handoff. RootLinks has only fresh-handle source/absence recovery, not the
+  legacy terminal `SIGKILL` claim; private-detach residue recovery, reboot, and
+  power-loss evidence remain open. Roll-forward execution, the actual boot
   repair effect and its durable publisher, and cleanup are not implemented.
   The public `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
@@ -738,9 +742,14 @@ faults, 96 binding substitutions, 48 fresh-handle reopens, and 360 all-five-
 root-ABI mutation cases across capture, fresh-namespace, and final-revalidation
 seams. Database state, archived-wrapper and state-slot identities, and all five
 canonical root-link identities remain unchanged. The journal-only entry invokes
-no database or non-journal effect, cleanup, finalization, or boot action. A
-later entry leaves generation 12 byte-identical because the RootLinks terminal-
-finalization source axis remains closed.
+no database or non-journal effect, cleanup, finalization, or boot action.
+Accepted commit `a0966008` admits only this exact `RootLinksComplete`
+generation-12 terminal source in addition to the retained legacy Intent and
+Exchanged sources. It captures the exact non-`Clone` record binding before the
+database/namespace sandwich, consumes it once through bound deletion in the
+same continuously locked store, and requires post-delete database -> namespace
+-> database proof, including exact archived topology, all five root links, and
+repeated public absence, before the same-store clean handoff.
 
 Accepted commit `a05997d8`, with acceptance-gate follow-up `cfb5a70d`, admits
 only exact RootLinks-sourced ActiveReblit `CandidatePreserved` generation 13.
@@ -768,23 +777,23 @@ revalidation races.
 
 That completion entry is journal-only: database, non-journal namespace,
 reverse-exchange, candidate, boot, cleanup, terminal-deletion, and finalization
-effects all remain zero. NewState now stays byte-stable at generation 18,
-ActivateArchived at generation 12, and ActiveReblit at generation 14 because
-all RootLinks terminal-finalization gates remain closed. Commit `68759ba3` still
-proves only the 20-case NewState generation-16 -> generation-17 invalidation
-boundary. When its crash already made the generation-17 successor canonical,
-the recovery entry may naturally take the ordinary generation-17 -> 18 route;
-that does not create a completion-boundary `SIGKILL` claim.
+effects all remain zero. NewState stays byte-stable at generation 18 and
+ActiveReblit at generation 14 because their RootLinks terminal-finalization
+gates remain closed. Commit `68759ba3` still proves only the 20-case NewState
+generation-16 -> generation-17 invalidation boundary. When its crash already
+made the generation-17 successor canonical, recovery may naturally take the
+ordinary generation-17 -> 18 route; that does not create a completion-boundary
+`SIGKILL` claim.
 
-Accepted commit `8f391985` closes only the store-foundation blocker described
+Accepted commit `8f391985` closes the shared store-foundation blocker described
 above. Its independently accepted gate passes 11/11 focused contracts, the
-complete direct journal lane passes 98/98, and the existing NewState,
-ActivateArchived, and ActiveReblit finalizer regression lanes remain green.
-No RootLinks operation finalizer calls the primitive: all three exact terminal
-records remain byte-stable. This commit adds no cleanup or boot action and no
-process-death, reboot, or power-loss evidence. The next blocker is separately
-wiring and proving each operation-specific RootLinks finalizer, including its
-interruption and residue policy, without widening the others.
+complete direct journal lane passes 98/98, and all finalizer regressions remain
+green. Accepted commit `a0966008` consumes that primitive only for exact
+RootLinks ActivateArchived generation 12, while preserving legacy Intent and
+Exchanged admission and leaving NewState and ActiveReblit unwidened. Fresh-
+handle source/absence recovery is covered, but not RootLinks `SIGKILL`: a
+private-detach residue still makes reopen fail closed and has no recovery path.
+No cleanup, boot, reboot, or power-loss claim is added.
 
 ### Startup reconciliation and interruption campaign
 
@@ -890,17 +899,17 @@ The historical epoch dimension is an out-of-current-epoch journal witness in
 the same boot, not a reboot simulation. Neither the terminal post-sync kills
 nor any candidate-preservation kill is a power-loss oracle, so reboot and
 power-loss durability remain unproved. Phase 11 and the broad interruption
-campaign stay open. ActivateArchived completion
-dispatch is production-wired by `c8c5ea41` as its own bounded entry. Accepted
-commit `a3fb25d3` widens only that exact completion entry to RootLinks, reaches
-generation-12 `RollbackComplete`, and deliberately leaves the RootLinks
-terminal finalizer closed.
-Commit `32bf8589` adds a separately authorized terminal checkpoint with one
-same-store conditional journal delete, repeated exact-source-or-absence
-classification, and same-lock clean handoff. Commit `c6362aae` adds the exact
-12-case real-process terminal matrix across current and historical epochs,
-both rollback sources, and final-PRE, post-unlink, and post-directory-sync
-same-boot `SIGKILL` boundaries. It does not simulate reboot or power loss;
+campaign stay open. ActivateArchived completion is production-wired by
+`c8c5ea41`; accepted commit `a3fb25d3` extends only that entry to RootLinks and
+reaches generation-12 `RollbackComplete`. Commit `32bf8589` adds the separately
+authorized terminal checkpoint and same-lock clean handoff for legacy Intent
+and Exchanged sources. Commit `c6362aae` adds their exact 12-case same-boot
+`SIGKILL` matrix. Accepted commit `a0966008` adds exact RootLinks generation-12
+finalization through the non-`Clone` record binding, one bound deletion, and
+post-delete database/topology/five-link/public-absence proof in the same locked
+store. Its coverage is fresh-handle only until private-detach residue recovery
+exists; it does not extend the legacy `SIGKILL` matrix or simulate reboot or
+power loss.
 later rollback, roll-forward, durable boot publication, production boot-repair
 wiring, cleanup, other earlier interruption boundaries, reboot, and
 power-loss-equivalent durability work remain.
