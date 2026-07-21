@@ -48,7 +48,7 @@ use crate::{
 use super::super::{
     Error as ActiveReblitDispatchError,
     candidate_test_support::{CandidateLayout, CandidatePreserveFixture, CandidateSource, active_reblit_wrapper_path},
-    test_fixture::{BootSyncStartedLayout, Fixture, OperationKind},
+    test_fixture::{BootSyncStartedLayout, Fixture, OperationKind, stage_test_boot_publication_receipts},
 };
 
 const OS_RELEASE: &[u8] = b"NAME=Rollback Decision Test\nID=rollback-decision-test\n";
@@ -740,6 +740,18 @@ pub(super) fn assert_boot_required_persistence_authority_error(error: &startup_g
     );
 }
 
+pub(super) fn assert_boot_required_capture_authority_error(error: &startup_gate::Error) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActiveReblitDispatch(
+                ActiveReblitDispatchError::BootRepairRequiredAuthority(_)
+            )
+        ),
+        "expected exact ActiveReblit boot-required capture authority error, got {error:?}"
+    );
+}
+
 pub(super) fn assert_boot_complete_persistence_advance(
     error: &startup_gate::Error,
     expected: DurableUsrRollbackActiveReblitBootRepairCompleteRecord,
@@ -828,14 +840,8 @@ pub(super) fn install_persistent_boot_database(fixture: &mut BootRepairFixture) 
         .boot_publication_receipt_correlation()
         .unwrap()
         .expect("v3 BootSyncStarted fixture carries receipt correlation");
-    if receipts.committed.is_some() {
-        database
-            .replace_boot_publication_receipt_head_for_test(receipts.committed, None)
-            .unwrap();
-    }
-    database
-        .stage_boot_publication_receipt_pair(transition, &receipts)
-        .unwrap();
+    let staged = stage_test_boot_publication_receipts(&database, transition, receipts.committed.is_some());
+    assert_eq!(staged, receipts);
     let old = std::mem::replace(&mut fixture.fixture.database, database);
     drop(old);
 }

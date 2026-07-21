@@ -9,7 +9,13 @@ use std::{
 
 use crate::{
     Installation, State, db,
-    boot_publication::{BootPublicationReceiptFingerprint, BootPublicationReceiptPair},
+    boot_publication::{
+        BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
+        BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
+        BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationReceiptFingerprint,
+        BootPublicationReceiptPair, BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
+        CanonicalBootPublicationReceipt, prepare_boot_publication_receipt,
+    },
     state::{self, TransitionId},
     test_support::private_installation_tempdir,
     transition_journal::{
@@ -575,15 +581,11 @@ fn persist_source_record(
         let next = match record.forward_successor(allocated) {
             Ok(next) => next,
             Err(CodecError::ExplicitBootSyncStartedSuccessorRequired) => {
-                let receipts = boot_publication_receipts(historical);
-                if receipts.committed.is_some() {
-                    database
-                        .replace_boot_publication_receipt_head_for_test(receipts.committed, None)
-                        .unwrap();
-                }
-                database
-                    .stage_boot_publication_receipt_pair(&record.transition_id, &receipts)
-                    .unwrap();
+                let receipts = stage_test_boot_publication_receipts(
+                    database,
+                    &record.transition_id,
+                    historical,
+                );
                 record.boot_sync_started_successor(receipts).unwrap()
             }
             Err(error) => panic!("fixture forward successor failed: {error}"),
@@ -595,11 +597,69 @@ fn persist_source_record(
     record
 }
 
-fn boot_publication_receipts(historical: bool) -> BootPublicationReceiptPair {
-    BootPublicationReceiptPair {
-        committed: historical.then_some(BootPublicationReceiptFingerprint::from_bytes([0x22; 32])),
-        pending: BootPublicationReceiptFingerprint::from_bytes([0x11; 32]),
+pub(super) fn stage_test_boot_publication_receipts(
+    database: &db::state::Database,
+    transition_id: &TransitionId,
+    historical: bool,
+) -> BootPublicationReceiptPair {
+    let committed = historical.then(|| {
+        test_boot_publication_receipt(
+            TransitionId::parse("ffffffffffffffffffffffffffffffff").unwrap(),
+            None,
+            0x22,
+        )
+    });
+    if let Some(committed) = committed.as_ref() {
+        database.stage_boot_publication_receipt(committed).unwrap();
+        database
+            .replace_boot_publication_receipt_head_for_test(Some(committed.fingerprint()), None)
+            .unwrap();
     }
+    let committed_fingerprint = committed.as_ref().map(CanonicalBootPublicationReceipt::fingerprint);
+    let pending = test_boot_publication_receipt(transition_id.clone(), committed_fingerprint, 0x11);
+    database.stage_boot_publication_receipt(&pending).unwrap();
+    BootPublicationReceiptPair {
+        committed: committed_fingerprint,
+        pending: pending.fingerprint(),
+    }
+}
+
+fn test_boot_publication_receipt(
+    transition_id: TransitionId,
+    committed_predecessor: Option<BootPublicationReceiptFingerprint>,
+    salt: u8,
+) -> CanonicalBootPublicationReceipt {
+    let body = BootPublicationReceiptBody::new(
+        transition_id,
+        committed_predecessor,
+        BootPublicationSha256::from_bytes([salt; 32]),
+        BootPublicationSha256::from_bytes([salt.wrapping_add(1); 32]),
+        BootPublicationDestinations::boot_aliases_esp(BootPublicationDestination::new(
+            "11111111-2222-3333-4444-555555555555",
+            1,
+            BootPublicationHistoricalRuntimeWitness::new(
+                2_049,
+                100 + u64::from(salt),
+                10 + u64::from(salt),
+                8,
+                1,
+                Some(77 + u64::from(salt)),
+            ),
+        )),
+        vec![BootPublicationOutput::new(
+            BootPublicationRoot::Boot,
+            BootPublicationPublicationPhase::Payload,
+            BootPublicationOutputRole::Payload,
+            format!("EFI/cast/startup-fixture-{salt:02x}"),
+            0o644,
+            BootPublicationXxh3::from_u128(u128::from(salt) + 1),
+            u64::from(salt) + 1,
+            BootPublicationSha256::from_bytes([salt.wrapping_add(2); 32]),
+            BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
+        )],
+    )
+    .unwrap();
+    prepare_boot_publication_receipt(body).unwrap()
 }
 
 fn snapshot_directory(root: &Path, directory: &Path, output: &mut Vec<NamespaceEntry>) {

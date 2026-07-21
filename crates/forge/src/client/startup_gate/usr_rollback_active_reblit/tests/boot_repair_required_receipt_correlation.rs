@@ -24,8 +24,8 @@ use super::{
     super::test_fixture::BootSyncStartedLayout,
     support::{
         BootRepairFixture, CandidateOrigin, Epoch, UsrRestoreOrigin,
-        assert_boot_required_persistence_authority_error, assert_no_boot_synchronize_attempts,
-        assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started,
+        assert_boot_required_capture_authority_error, assert_boot_required_persistence_authority_error,
+        assert_no_boot_synchronize_attempts, assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started,
         build_legacy_boot_sync_started, drive_boot_sync_started_to_candidate_preserved, enter_boot,
         expected_boot_repair_required, reset_boot_synchronize_observer, reset_candidate_effect_observers,
     },
@@ -64,7 +64,11 @@ fn startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preser
         reset_candidate_effect_observers();
         reset_boot_synchronize_observer();
 
-        assert_deferred(&fixture, &record);
+        if matches!(mismatch, ReceiptMismatch::MissingPending) {
+            assert_deferred(&fixture, &record);
+        } else {
+            assert_capture_fails_closed(&fixture, &record);
+        }
 
         assert_eq!(fixture.fixture.canonical_record(), record);
         assert_eq!(fixture.fixture.database_snapshot(), database_before);
@@ -83,13 +87,14 @@ fn startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preser
             );
             assert_eq!(preserved.version, version);
             assert_eq!(preserved.boot_publication_receipt_correlation().unwrap(), None);
-            let receipt_head = fixture.fixture.database.boot_publication_receipt_head().unwrap();
-            assert_eq!(
-                receipt_head.committed(),
-                (epoch == Epoch::Historical)
-                    .then_some(BootPublicationReceiptFingerprint::from_bytes([0x22; 32]))
-            );
-            assert!(receipt_head.pending().is_none());
+            let receipt_state = fixture
+                .fixture
+                .database
+                .boot_publication_receipt_state()
+                .unwrap();
+            assert_eq!(receipt_state.committed().is_some(), epoch == Epoch::Historical);
+            assert!(receipt_state.pending().is_none());
+            assert!(receipt_state.head().pending().is_none());
             assert_legacy_ready(&fixture, &preserved);
             let expected = expected_boot_repair_required(&preserved);
             let database_before = fixture.fixture.database_snapshot();
@@ -133,7 +138,7 @@ fn startup_active_reblit_boot_repair_required_rejects_receipt_races_and_corrupti
 
     let error = enter_boot(&fixture);
 
-    assert_pending_phase(&error, Phase::CandidatePreserved);
+    assert_boot_required_capture_authority_error(&error);
     assert_eq!(fixture.fixture.canonical_record(), record);
     assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
     assert_no_candidate_effects();
@@ -191,6 +196,23 @@ fn startup_active_reblit_boot_repair_required_rejects_receipt_races_and_corrupti
         CandidateOrigin::AlreadySatisfied,
     );
     fixture.fixture.database.delete_boot_publication_receipt_head_for_test().unwrap();
+    assert_capture_fails_closed(&fixture, &record);
+
+    let fixture = build_boot_sync_started(Epoch::Current, BootSyncStartedLayout::Post);
+    let record = drive_boot_sync_started_to_candidate_preserved(
+        &fixture,
+        UsrRestoreOrigin::Applied,
+        CandidateOrigin::Applied,
+    );
+    let pending = record
+        .boot_publication_receipt_correlation()
+        .unwrap()
+        .expect("v3 fixture carries receipt correlation")
+        .pending;
+    fixture
+        .fixture
+        .database
+        .delete_boot_publication_receipt_body_for_test(pending);
     assert_capture_fails_closed(&fixture, &record);
 }
 

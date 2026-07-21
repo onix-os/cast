@@ -75,6 +75,28 @@ fn receipt_row_count(database: &Database) -> i64 {
     })
 }
 
+impl Database {
+    /// Remove one exact fixture body while leaving its head reference intact.
+    /// This exists only to prove cross-module startup consumers fail closed on
+    /// a dangling receipt; production receipt storage exposes no deletion.
+    pub(crate) fn delete_boot_publication_receipt_body_for_test(
+        &self,
+        fingerprint: BootPublicationReceiptFingerprint,
+    ) {
+        let deleted = self.conn.exec(|connection| {
+            diesel::delete(
+                boot_publication_receipts::table.filter(
+                    boot_publication_receipts::receipt_sha256
+                        .eq(fingerprint.as_bytes().as_slice()),
+                ),
+            )
+            .execute(connection)
+            .unwrap()
+        });
+        assert_eq!(deleted, 1);
+    }
+}
+
 #[path = "tests/api.rs"]
 mod api;
 #[path = "tests/corruption.rs"]

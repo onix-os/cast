@@ -1,6 +1,7 @@
 .PHONY: forge-startup-active-reblit-boot-repair-required-test
 
 forge-startup-active-reblit-boot-repair-required-test: \
+	forge-boot-publication-receipt-state-test \
 	forge-startup-usr-rollback-decision-test \
 	forge-startup-usr-rollback-resume-route-test \
 	forge-startup-usr-rollback-reverse-admission-test \
@@ -70,7 +71,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	ordinary_capture_line="$$( timeout 10s grep -nF 'UsrRollbackActiveReblitCompleteRouteAuthority::capture(' <<<"$$candidate_arm" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$boot_persist_line" -lt "$$boot_return_line"; \
 	timeout 10s test "$$boot_return_line" -lt "$$ordinary_capture_line"; \
-	if timeout 10s rg -n 'boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt_pair' <<<"$$candidate_arm"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt(_pair)?' <<<"$$candidate_arm"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'record.operation != Operation::ActiveReblit || record.phase != Phase::CandidatePreserved' "$$authority"; \
 	timeout 10s grep -Fq 'rollback.source == ForwardPhase::BootSyncStarted' "$$authority"; \
 	timeout 10s grep -Fq 'rollback.previous_archive == RollbackAction::NotRequired' "$$authority"; \
@@ -91,10 +92,11 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 10s grep -Fq 'if !journal.has_binding(&journal_binding)' "$$authority"; \
 	timeout 10s grep -Fq 'let database_before = match inspect_current_database(record, state_db)? {' "$$authority"; \
 	timeout 10s grep -Fq 'let database_after = match inspect_current_database(record, state_db)? {' "$$authority"; \
-	grep -Fq 'let receipt_head = state_db.boot_publication_receipt_head()?;' "$$authority"; \
+	grep -Fq 'let receipt_state = state_db.boot_publication_receipt_state()?;' "$$authority"; \
 	grep -Fq 'record.boot_publication_receipt_correlation()?' "$$authority"; \
-	grep -Fq 'receipt_head.receipt_pair_for(&record.transition_id) == Some(pair)' "$$authority"; \
-	grep -Fq 'None if receipt_head.pending().is_none()' "$$authority"; \
+	grep -Fq 'receipt_state.receipt_pair_for(&record.transition_id) == Some(pair)' "$$authority"; \
+	grep -Fq 'None if receipt_state.head().pending().is_none()' "$$authority"; \
+	if rg -n 'boot_publication_receipt_head\(\)' "$$authority"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	grep -Fq 'ReadyAuthenticated' "$$authority"; \
 	grep -Fq 'ReadyLegacyUnverified' "$$authority"; \
 	timeout 10s grep -Fq 'UsrRollbackActiveReblitBootRepairRequiredNamespaceInspection::begin(installation, journal, record)' "$$authority"; \
@@ -117,7 +119,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	reopen_line="$$( timeout 10s grep -nF 'reopen_canonical_journal(&installation)' <<<"$$handoff" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$drop_authority_line" -lt "$$drop_journal_line"; \
 	timeout 10s test "$$drop_journal_line" -lt "$$reopen_line"; \
-	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt_pair|remove_exact_fresh_transition|renameat|unlink|mkdir|create_dir|set_permissions|chmod|Phase::BootRepair(Started|Unverified)' "$$authority" "$$proof" "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt(_pair)?|remove_exact_fresh_transition|renameat|unlink|mkdir|create_dir|set_permissions|chmod|Phase::BootRepair(Started|Unverified)' "$$authority" "$$proof" "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n '#\[derive\([^]]*Clone' "$$authority" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$complete_authority"; \
 	timeout 10s grep -Fq 'rollback.boot == BootRollback::NotRequired' "$$complete_authority"; \
@@ -131,7 +133,8 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 10s grep -Fq 'build_boot_sync_started(epoch, BootSyncStartedLayout::Post)' "$$tests/boot_repair_required_matrix.rs"; \
 	timeout 10s grep -Fq 'assert_eq!(fixture.source.generation, 11);' "$$tests/support.rs"; \
 	timeout 10s grep -Fq 'Phase::BootSyncStarted' "$$fixture"; \
-	grep -Fq 'stage_boot_publication_receipt_pair(&record.transition_id, &receipts)' "$$fixture"; \
+	grep -Fq 'let receipts = stage_test_boot_publication_receipts(' "$$fixture"; \
+	grep -Fq 'database.stage_boot_publication_receipt(&pending).unwrap();' "$$fixture"; \
 	grep -Fq 'record.boot_sync_started_successor(receipts)' "$$fixture"; \
 	receipt_tests="$$tests/boot_repair_required_receipt_correlation.rs"; \
 	for mismatch in MissingPending WrongTransition WrongPending WrongCommitted; do grep -Fq "ReceiptMismatch::$$mismatch" "$$receipt_tests"; done; \
@@ -140,6 +143,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	grep -Fq 'arm_before_usr_rollback_active_reblit_boot_repair_required_final_revalidation' "$$receipt_tests"; \
 	grep -Fq 'replace_boot_publication_receipt_head_raw_for_test' "$$receipt_tests"; \
 	grep -Fq 'delete_boot_publication_receipt_head_for_test' "$$receipt_tests"; \
+	grep -Fq 'delete_boot_publication_receipt_body_for_test' "$$receipt_tests"; \
 	prefix_boundaries="$$tests/boot_repair_required_prefix_boundaries.rs"; \
 	timeout 10s grep -Fq 'build_boot_sync_started(Epoch::Current, BootSyncStartedLayout::Post)' "$$prefix_boundaries"; \
 	timeout 10s grep -Fq 'build_boot_sync_started(Epoch::Historical, BootSyncStartedLayout::Pre)' "$$prefix_boundaries"; \
