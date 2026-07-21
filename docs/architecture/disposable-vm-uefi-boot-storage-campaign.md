@@ -5,14 +5,17 @@ The repository does not contact a hypervisor, open an SSH connection, select a
 machine, select a disk, or reboot anything. An operator must enter an already
 snapshotted disposable VM and invoke the dedicated Make targets there.
 
-The current campaign is a filesystem-substrate proof. It formats one admitted
+The current campaign extends the filesystem-substrate proof through one real
+retained leaf publication. It formats one admitted
 whole disposable disk as FAT32, mounts it only below
 `/run/cast-vm-boot-storage`, creates one declared publication-parent directory,
-syncs and unmounts it, then remounts it to prove that directory persisted. It
-explicitly disables `mkfs.fat`'s fake whole-device MBR, then repeats the
+invokes Forge's production single-leaf publisher, syncs and unmounts it, then
+remounts and invokes the same publisher again to prove the exact leaf persisted.
+The campaign explicitly disables `mkfs.fat`'s fake whole-device MBR, then repeats the
 partition-free target admission before mounting. The result remains a
-whole-device filesystem rather than a partition table. It does **not** publish
-a boot payload, mutate the guest's live ESP, change boot
+whole-device filesystem rather than a partition table. The fixed test leaf and
+payload are test evidence, not a selected kernel, initrd, entry, loader, or
+bootloader. The campaign does **not** mutate the guest's live ESP, change boot
 entries, reboot, simulate power loss, or prove a GPT ESP/XBOOTLDR topology.
 It is deliberately a cooperative disposable-guest harness, not production
 descriptor authority: guest root must remain exclusive, the admitted device
@@ -64,7 +67,29 @@ Git is invoked with an invocation-local `safe.directory` for the exact checkout,
 so a checkout owned by the remote user does not require global Git policy.
 The harness replaces inherited `PATH` with the fixed guest-system path
 `/usr/sbin:/usr/bin:/sbin:/bin`, uses the C locale, and rejects effect commands
-that are not root-owned or are group/other-writable.
+that are not root-owned or are group/other-writable. The publisher lane requires
+root-owned `env`, `nix`, `make`, and `rm` from that fixed path. Nix and Make run
+below `env -i` with only fixed identity, locale, home, temporary-directory,
+publisher-test, Cargo-home, and Cargo-target values. The fresh Cargo home and
+target are root-owned mode-0700 directories below a fresh `/var/tmp` root whose
+fixed-safe name binds the validated boot ID and 64-hex authorization challenge.
+That root must be absent before the campaign creates it and remains outside both
+the checkout and admitted VFAT mount. Inherited Cargo, Rust wrapper, Make, or
+user configuration variables cannot reach the build.
+
+Before Cargo may read, reuse, or execute anything from that target, the
+dedicated Make target performs its own guest-side preflight with fixed absolute,
+root-owned system tools. It requires guest UID 0, UEFI, exact current hostname,
+machine ID and boot ID, a non-`none` VM classification matching admission, the
+root-owned mode-0600 consumed marker, and exactly one mountinfo record binding
+the fixed campaign mountpoint to the freshly admitted device number and `vfat`.
+It derives the only accepted build root from the current boot ID and the
+marker's single 64-hex challenge, then requires Cargo's target and home to be
+the exact root-owned mode-0700 children prepared by the campaign. The recipe
+changes to the root directory before invoking Cargo with an absolute manifest
+path, so Cargo can search only root-controlled `/` and the fresh Cargo home for
+configuration; checkout, user-home, and world-writable `/var/tmp` ancestors are
+excluded.
 
 ## Three-step protocol
 
@@ -104,8 +129,9 @@ that are not root-owned or are group/other-writable.
    consumes the challenge before a second complete admission pass. Filesystem
    creation, mount, sync, and unmount children run under non-foreground GNU
    `timeout` process-group deadlines. Mount and unmount use util-linux
-   internal-only mode so filesystem helpers are not launched. Make, Git, and
-   the surrounding SSH session are not externally timeout-wrapped.
+   internal-only mode so filesystem helpers are not launched. Nix, Make, Cargo,
+   Git, and the surrounding SSH session are not externally timeout-wrapped. The
+   production publisher retains its own absolute operation deadline.
 
 ## Fail-closed disk admission
 
@@ -142,8 +168,29 @@ The VFAT attachment is admitted only with `rw`, `nosuid`, `nodev`, `noexec`,
 `0022`. Linux may omit default `uid=0,gid=0` strings from mountinfo, so the
 harness proves their effective result from the mounted filesystem root instead
 of requiring those optional textual spellings.
-After creating the declared parent, the campaign synchronizes, unmounts,
-remounts, checks persistence, synchronizes again, and unmounts.
+After creating the declared parent, the campaign runs the exact ignored
+`forge-linux-descriptor-boot-file-publication-vfat-test` Make target with phase
+`publish`. The test accepts only a parent strictly below the fixed campaign
+mount, a fixed disposable confirmation, and phase `publish` or `revalidate`.
+It publishes one fixed sealed payload through the real retained-descriptor
+publisher, then requires an immediate idempotent `AlreadyExact` result with the
+same inode. The campaign synchronizes, unmounts, remounts, checks parent
+persistence, and runs the same exact target with phase `revalidate`; that pass
+requires `AlreadyExact`. Both passes verify bytes, length, XXH3, SHA-256,
+effective mode `0644`, and absence of private `.cast-payload-*` residue.
+
+The harness checks the admitted VFAT identity and complete mount policy
+immediately before and after each fixed publisher invocation. It then performs
+the additional filesystem sync and final unmount. This is deliberately not a
+generic command or callback hook. The ignored test independently authenticates
+the current hostname, machine ID, boot ID, UEFI state, actual virtualization,
+SSH-connection hash, and root-owned consumed marker. The marker binds the target
+path, stable path, disk sequence, and byte size; after fresh disk admission, the
+harness separately passes the resulting device number through the sanitized
+publisher environment. Immediately before every production publisher call, the
+test requires exactly one mountinfo record for the fixed campaign mountpoint
+with that device number, `vfat`, and the complete required mount and superblock
+policy.
 
 ## Interrupted runs
 
@@ -154,6 +201,10 @@ tries to unmount only when the private mountpoint still has the exact admitted
 device and policy. It does not force, retry, discover a replacement, or touch
 another mount. Ambiguous cleanup leaves the consumed marker and campaign lock
 in `/run/cast-vm-boot-storage` so a later invocation fails closed.
+The private Cargo home and target are likewise preserved at their challenge-bound
+`/var/tmp` path after any failed campaign. Only after a successful final unmount
+does cleanup remove their fixed root-owned parent with root-validated
+`rm --one-file-system`, prove its absence, and then remove the campaign lock.
 
 `SIGKILL` cannot run shell cleanup, so the same-boot runtime sentinels and any
 remaining attachment must be reviewed inside the disposable VM. Power loss or
@@ -199,6 +250,9 @@ authorization root was empty afterward with neither marker nor lock, and
 read-only `fsck.fat -n` reported 3 files using 3 of 2,096,126 data clusters.
 Neither `/dev/vda2` nor the live ESP was modified.
 
-This proves only the guarded whole-disk VFAT substrate and directory
-persistence in the disposable VM. It does not prove payload publication, a GPT
-ESP role, live-ESP mutation, reboot recovery, or power-loss durability.
+This recorded evidence proves only the guarded whole-disk VFAT substrate and
+directory persistence in the disposable VM; it predates the production
+publisher extension described above. A new guarded campaign must record the
+leaf publication result before it is claimed as VM evidence. Neither result
+proves a GPT ESP role, aggregate publication ordering, receipt promotion,
+live-ESP mutation, reboot recovery, or power-loss durability.

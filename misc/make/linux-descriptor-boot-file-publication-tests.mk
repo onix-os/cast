@@ -1,7 +1,8 @@
 DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
 CARGO ?= cargo
 
-.PHONY: forge-linux-descriptor-boot-file-publication-test
+.PHONY: forge-linux-descriptor-boot-file-publication-test \
+	forge-linux-descriptor-boot-file-publication-vfat-test
 
 forge-linux-descriptor-boot-file-publication-test: host-storage-safety-test forge-linux-descriptor-boot-namespace-production-test forge-active-reblit-boot-publication-plan-test
 	@set -euo pipefail; \
@@ -11,7 +12,7 @@ forge-linux-descriptor-boot-file-publication-test: host-storage-safety-test forg
 	$(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	grep -q . "$$listed"; \
 	prefix='linux_fs::tests::descriptor_boot_file_publication::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 15; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 16; \
 	for name in \
 		canonical_request_cannot_alias_private_stage_namespace_case_insensitively \
 		stop_after_exclusive_creation_preserves_empty_mode_0644_residue_and_retry_refuses \
@@ -27,7 +28,8 @@ forge-linux-descriptor-boot-file-publication-test: host-storage-safety-test forg
 		error_reported_after_single_move_is_reconciled_as_published \
 		durability_suffix_failures_leave_an_exact_idempotent_canonical_leaf \
 		retained_attachment_replacement_fails_before_mutating_either_directory \
-		same_credential_private_name_substitution_fails_without_validated_evidence; do \
+		same_credential_private_name_substitution_fails_without_validated_evidence \
+		disposable_vm_vfat_publishes_and_revalidates_one_real_leaf; do \
 		grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	module="$(DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace/attachment/boot_file_publication.rs"; \
@@ -78,3 +80,76 @@ forge-linux-descriptor-boot-file-publication-test: host-storage-safety-test forg
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1
+
+forge-linux-descriptor-boot-file-publication-vfat-test:
+	@set -euo pipefail; \
+	test "$${CAST_VM_BOOT_PUBLICATION_CONFIRMATION-}" = disposable-vm-vfat-publisher-only; \
+	case "$${CAST_VM_BOOT_PUBLICATION_PHASE-}" in publish|revalidate) ;; *) exit 2 ;; esac; \
+	case "$${CAST_VM_BOOT_PUBLICATION_PARENT-}" in /run/cast-vm-boot-storage/mount/?*) ;; *) exit 2 ;; esac; \
+	case "$${CARGO_TARGET_DIR-}" in /run/cast-vm-boot-storage/mount|/run/cast-vm-boot-storage/mount/*) exit 2 ;; esac; \
+	test "$${CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER-}" = /run/cast-vm-boot-storage/authorization-v1.consumed; \
+	test -n "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_HOSTNAME-}"; \
+	test -n "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID-}"; \
+	test -n "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID-}"; \
+	test -n "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_VIRTUALIZATION-}"; \
+	test -n "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM-}"; \
+	test -n "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_SSH_SHA256-}"; \
+	test -n "$${SSH_CONNECTION-}"; \
+	trusted_tools='/usr/bin/id /usr/bin/stat /usr/bin/cat /usr/bin/systemd-detect-virt'; \
+	for tool in $$trusted_tools; do \
+		test -f "$$tool" && test -x "$$tool" && test ! -L "$$tool"; \
+	done; \
+	for tool in $$trusted_tools; do \
+		tool_owner="$$(/usr/bin/stat -Lc '%u' -- "$$tool")"; \
+		tool_mode="$$(/usr/bin/stat -Lc '%a' -- "$$tool")"; \
+		test "$$tool_owner" = 0; \
+		(( (8#$$tool_mode & 0022) == 0 )); \
+	done; \
+	test "$$(/usr/bin/id -u)" = 0; \
+	test -d /sys/firmware/efi && test ! -L /sys/firmware/efi; \
+	test "$$(/usr/bin/cat /proc/sys/kernel/hostname)" = "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_HOSTNAME}"; \
+	test "$$(/usr/bin/cat /etc/machine-id)" = "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID}"; \
+	test "$$(/usr/bin/cat /proc/sys/kernel/random/boot_id)" = "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID}"; \
+	detected_virtualization="$$(/usr/bin/systemd-detect-virt --vm)"; \
+	test -n "$$detected_virtualization" && test "$$detected_virtualization" != none; \
+	test "$$detected_virtualization" = "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_VIRTUALIZATION}"; \
+	marker="$${CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER}"; \
+	test -f "$$marker" && test ! -L "$$marker"; \
+	test "$$(/usr/bin/stat -Lc '%u:%g:%a:%F:%h' -- "$$marker")" = '0:0:600:regular file:1'; \
+	marker_challenge=; marker_challenge_count=0; \
+	while IFS= read -r marker_line; do \
+		case "$$marker_line" in challenge=*) \
+			marker_challenge="$${marker_line#challenge=}"; \
+			marker_challenge_count=$$((marker_challenge_count + 1));; \
+		esac; \
+	done <"$$marker"; \
+	test "$$marker_challenge_count" = 1; \
+	[[ "$$marker_challenge" =~ ^[0-9a-f]{64}$$ ]]; \
+	expected_build_root="/var/tmp/cast-vm-boot-storage-$${CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID}-$$marker_challenge"; \
+	test "$${CAST_VM_BOOT_PUBLICATION_BUILD_ROOT-}" = "$$expected_build_root"; \
+	test "$${CARGO_TARGET_DIR-}" = "$$expected_build_root/target"; \
+	test "$${CARGO_HOME-}" = "$$expected_build_root/cargo-home"; \
+	for directory in "$$expected_build_root" "$${CARGO_TARGET_DIR}" "$${CARGO_HOME}"; do \
+		test -d "$$directory" && test ! -L "$$directory"; \
+		test "$$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "$$directory")" = '0:0:700:directory'; \
+	done; \
+	[[ "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM}" =~ ^[0-9]+:[0-9]+$$ ]]; \
+	mount_matches=0; \
+	while IFS=' ' read -r -a mount_fields; do \
+		if [[ "$${mount_fields[4]-}" = /run/cast-vm-boot-storage/mount ]]; then \
+			mount_matches=$$((mount_matches + 1)); \
+			test "$${mount_fields[2]-}" = "$${CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM}"; \
+			test "$${mount_fields[3]-}" = /; \
+			mount_separator=-1; \
+			for ((field = 6; field < $${#mount_fields[@]}; field += 1)); do \
+				if [[ "$${mount_fields[$$field]}" = - ]]; then mount_separator=$$field; break; fi; \
+			done; \
+			test "$$mount_separator" -ge 0; \
+			test "$${mount_fields[$$((mount_separator + 1))]-}" = vfat; \
+		fi; \
+	done </proc/self/mountinfo; \
+	test "$$mount_matches" = 1; \
+	test_name='linux_fs::tests::descriptor_boot_file_publication::disposable_vm_vfat_publishes_and_revalidates_one_real_leaf'; \
+	cd /; \
+	$(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR)/Cargo.toml" \
+		-p forge --lib "$$test_name" -- --ignored --exact --test-threads=1

@@ -4,6 +4,15 @@ mount_command=
 umount_command=
 mkdir_command=
 sync_command=
+nix_command=
+make_command=
+env_command=
+rm_command=
+publication_build_parent=/var/tmp
+publication_build_root=$publication_build_parent/cast-vm-boot-storage-$expected_boot_id-$challenge
+publication_test_target=$publication_build_root/target
+publication_cargo_home=$publication_build_root/cargo-home
+publication_build_prepared=0
 
 load_effect_commands() {
     timeout_command=$(command_path timeout)
@@ -12,6 +21,10 @@ load_effect_commands() {
     umount_command=$(command_path umount)
     mkdir_command=$(command_path mkdir)
     sync_command=$(command_path sync)
+    nix_command=$(command_path nix)
+    make_command=$(command_path make)
+    env_command=$(command_path env)
+    rm_command=$(command_path rm)
 }
 
 run_bounded() {
@@ -114,6 +127,19 @@ cleanup_campaign() {
         rmdir -- "$mount_root" || cleanup_failed=1
     fi
     if [ "$campaign_complete" -eq 1 ] && [ "$cleanup_failed" -eq 0 ]; then
+        if [ -d "$publication_build_root" ] && [ ! -L "$publication_build_root" ] \
+            && [ "$(stat -Lc '%u:%g:%a:%F' -- "$publication_build_root")" \
+                = '0:0:700:directory' ]; then
+            "$rm_command" -rf --one-file-system -- "$publication_build_root" \
+                || cleanup_failed=1
+            if [ -e "$publication_build_root" ] || [ -L "$publication_build_root" ]; then
+                cleanup_failed=1
+            fi
+        else
+            cleanup_failed=1
+        fi
+    fi
+    if [ "$campaign_complete" -eq 1 ] && [ "$cleanup_failed" -eq 0 ]; then
         rmdir -- "$campaign_lock" || cleanup_failed=1
     fi
     if [ "$campaign_complete" -eq 1 ] && [ "$cleanup_failed" -eq 0 ]; then
@@ -161,6 +187,76 @@ verify_publication_parent() {
         [ -d "$current" ] && [ ! -L "$current" ] \
             || die 'publication parent did not survive remount'
     done
+}
+
+prepare_publication_build_environment() {
+    [ -d "$publication_build_parent" ] && [ ! -L "$publication_build_parent" ] \
+        || die 'private publication build parent is not a real directory'
+    [ "$(stat -Lc '%u:%g:%a:%F' -- "$publication_build_parent")" \
+        = '0:0:1777:directory' ] \
+        || die 'private publication build parent metadata is unsafe'
+    if [ "$publication_build_prepared" -eq 0 ]; then
+        [ ! -e "$publication_build_root" ] && [ ! -L "$publication_build_root" ] \
+            || die 'fresh private publication build root already exists'
+        "$mkdir_command" -m 700 -- "$publication_build_root" \
+            || die 'cannot create the fresh private publication build root'
+        publication_build_prepared=1
+    fi
+    [ -d "$publication_build_root" ] && [ ! -L "$publication_build_root" ] \
+        || die 'private publication build root is not a real directory'
+    [ "$(stat -Lc '%u:%g:%a:%F' -- "$publication_build_root")" \
+        = '0:0:700:directory' ] \
+        || die 'private publication build root metadata is unsafe'
+    for directory in "$publication_test_target" "$publication_cargo_home"
+    do
+        if [ ! -e "$directory" ] && [ ! -L "$directory" ]; then
+            "$mkdir_command" -m 700 -- "$directory" \
+                || die 'cannot create the private publication build directory'
+        fi
+        [ -d "$directory" ] && [ ! -L "$directory" ] \
+            || die 'private publication build path is not a real directory'
+        [ "$(stat -Lc '%u:%g:%a:%F' -- "$directory")" = '0:0:700:directory' ] \
+            || die 'private publication build directory metadata is unsafe'
+    done
+}
+
+run_boot_file_publication_test() {
+    publication_phase=$1
+    publication_test_parent=$mount_root/$publication_parent
+    [ -d "$publication_test_parent" ] && [ ! -L "$publication_test_parent" ] \
+        || die 'declared publication parent is unavailable before the publisher test'
+    prepare_publication_build_environment
+    verify_init_mount_namespace
+    publication_status=0
+    mount_is_exact_target \
+        || die 'publisher test lost the exact admitted VFAT mount policy before invocation'
+    "$env_command" -i \
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+        HOME=/root USER=root LOGNAME=root \
+        LC_ALL=C LANG=C TMPDIR=/tmp \
+        "SSH_CONNECTION=$SSH_CONNECTION" \
+        CAST_VM_BOOT_PUBLICATION_CONFIRMATION=disposable-vm-vfat-publisher-only \
+        "CAST_VM_BOOT_PUBLICATION_PARENT=$publication_test_parent" \
+        "CAST_VM_BOOT_PUBLICATION_PHASE=$publication_phase" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_HOSTNAME=$expected_hostname" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID=$expected_machine_id" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID=$expected_boot_id" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_VIRTUALIZATION=$expected_virtualization" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM=$target_devnum" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_SSH_SHA256=$ssh_connection_hash" \
+        "CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER=$consumed_marker" \
+        "CAST_VM_BOOT_PUBLICATION_BUILD_ROOT=$publication_build_root" \
+        "CARGO_TARGET_DIR=$publication_test_target" \
+        "CARGO_HOME=$publication_cargo_home" \
+        "$nix_command" --extra-experimental-features 'nix-command flakes' \
+        develop "path:$root" --command \
+        "$make_command" -C "$root" \
+        forge-linux-descriptor-boot-file-publication-vfat-test \
+        || publication_status=$?
+    mount_is_exact_target \
+        || die 'publisher test lost the exact admitted VFAT mount policy after invocation'
+    [ "$publication_status" -eq 0 ] \
+        || die "production boot-file publisher test failed during $publication_phase"
 }
 
 mount_target() {
@@ -253,11 +349,13 @@ run_campaign() {
 
     mount_target
     create_publication_parent
+    run_boot_file_publication_test publish
     run_bounded 30s "$sync_command" -f "$mount_root" \
         || die 'bounded first VFAT durability barrier failed'
     unmount_target
     mount_target
     verify_publication_parent
+    run_boot_file_publication_test revalidate
     run_bounded 30s "$sync_command" -f "$mount_root" \
         || die 'bounded remount durability barrier failed'
     unmount_target

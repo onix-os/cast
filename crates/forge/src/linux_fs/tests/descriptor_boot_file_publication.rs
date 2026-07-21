@@ -1,11 +1,16 @@
 use std::{
+    env,
     fs::{self, File},
     io::Write as _,
     os::{
         fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd},
-        unix::fs::{MetadataExt as _, PermissionsExt as _},
+        unix::{
+            ffi::OsStrExt as _,
+            fs::{MetadataExt as _, PermissionsExt as _},
+        },
     },
     path::{Path, PathBuf},
+    process::Command,
     time::{Duration, Instant},
 };
 
@@ -25,6 +30,12 @@ use crate::linux_fs::{
 const FULL_SEALS: i32 =
     nix::libc::F_SEAL_WRITE | nix::libc::F_SEAL_GROW | nix::libc::F_SEAL_SHRINK | nix::libc::F_SEAL_SEAL;
 const LEAF: &str = "vmlinuz";
+const DISPOSABLE_VM_PARENT_PREFIX: &str = "/run/cast-vm-boot-storage/mount/";
+const DISPOSABLE_VM_CONFIRMATION: &str = "disposable-vm-vfat-publisher-only";
+const DISPOSABLE_VM_LEAF: &str = "cast-vm-publisher-test.efi";
+const DISPOSABLE_VM_PAYLOAD: &[u8] = b"cast disposable VM retained VFAT publication\n";
+const DISPOSABLE_VM_MOUNT_ROOT: &str = "/run/cast-vm-boot-storage/mount";
+const DISPOSABLE_VM_CONSUMED_MARKER: &str = "/run/cast-vm-boot-storage/authorization-v1.consumed";
 
 struct PublicationFixture {
     temporary: tempfile::TempDir,
@@ -138,6 +149,258 @@ fn sealed_memfd(bytes: &[u8]) -> File {
     // SAFETY: F_ADD_SEALS consumes only the live descriptor and fixed mask.
     assert_eq!(unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_ADD_SEALS, FULL_SEALS) }, 0);
     file
+}
+
+fn required_disposable_vm_environment(name: &str) -> String {
+    let value = env::var(name).unwrap_or_else(|_| panic!("missing disposable VM environment: {name}"));
+    assert!(!value.is_empty() && !value.contains(['\n', '\r']));
+    value
+}
+
+fn read_disposable_vm_line(path: &Path) -> String {
+    let bytes = fs::read(path).unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let value = text.strip_suffix('\n').unwrap_or(text);
+    assert!(!value.is_empty() && !value.contains(['\n', '\r']));
+    value.to_owned()
+}
+
+fn marker_value<'line>(lines: &[&'line str], key: &str) -> &'line str {
+    let prefix = format!("{key}=");
+    let mut found = lines.iter().filter_map(|line| line.strip_prefix(&prefix));
+    let value = found.next().unwrap_or_else(|| panic!("consumed marker omits {key}"));
+    assert!(found.next().is_none(), "consumed marker duplicates {key}");
+    value
+}
+
+fn assert_disposable_vm_identity_and_marker(publication_parent: &str) -> String {
+    let expected_hostname = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_HOSTNAME");
+    let expected_machine_id =
+        required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID");
+    let expected_boot_id = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID");
+    let expected_virtualization =
+        required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_VIRTUALIZATION");
+    let expected_target_devnum =
+        required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM");
+    let expected_ssh_sha256 =
+        required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_SSH_SHA256");
+    assert_eq!(
+        read_disposable_vm_line(Path::new("/proc/sys/kernel/hostname")),
+        expected_hostname
+    );
+    assert_eq!(read_disposable_vm_line(Path::new("/etc/machine-id")), expected_machine_id);
+    assert_eq!(
+        read_disposable_vm_line(Path::new("/proc/sys/kernel/random/boot_id")),
+        expected_boot_id
+    );
+    let detector = Path::new("/usr/bin/systemd-detect-virt");
+    let detector_metadata = fs::metadata(detector).unwrap();
+    assert!(detector_metadata.file_type().is_file());
+    assert_eq!(detector_metadata.uid(), 0);
+    assert_eq!(detector_metadata.permissions().mode() & 0o022, 0);
+    let detected = Command::new(detector)
+        .arg("--vm")
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("LC_ALL", "C")
+        .output()
+        .unwrap();
+    assert!(detected.status.success());
+    assert_eq!(std::str::from_utf8(&detected.stdout).unwrap(), format!("{expected_virtualization}\n"));
+    assert!(detected.stderr.is_empty());
+
+    let ssh_connection = required_disposable_vm_environment("SSH_CONNECTION");
+    assert_eq!(hex::encode(Sha256::digest(ssh_connection.as_bytes())), expected_ssh_sha256);
+    let marker = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER");
+    assert_eq!(marker, DISPOSABLE_VM_CONSUMED_MARKER);
+    let marker_path = Path::new(&marker);
+    let marker_metadata = fs::symlink_metadata(marker_path).unwrap();
+    assert!(marker_metadata.file_type().is_file());
+    assert_eq!(marker_metadata.uid(), 0);
+    assert_eq!(marker_metadata.gid(), 0);
+    assert_eq!(marker_metadata.permissions().mode() & 0o7777, 0o600);
+    assert_eq!(marker_metadata.nlink(), 1);
+    assert!(marker_metadata.len() > 0 && marker_metadata.len() <= 4096);
+    let marker_bytes = fs::read(marker_path).unwrap();
+    assert!(marker_bytes.ends_with(b"\n") && !marker_bytes.contains(&b'\r'));
+    let marker_text = std::str::from_utf8(&marker_bytes).unwrap();
+    let lines = marker_text.lines().collect::<Vec<_>>();
+    let expected_keys = [
+        "protocol",
+        "hostname",
+        "machine_id",
+        "boot_id",
+        "virtualization",
+        "ssh_connection_sha256",
+        "commit",
+        "target_disk",
+        "target_stable_path",
+        "target_diskseq",
+        "target_bytes",
+        "root_device",
+        "live_esp_device",
+        "live_esp_mountpoint",
+        "filesystem_label",
+        "publication_parent",
+        "snapshot_confirmation",
+        "remote_confirmation",
+        "cooperative_root_confirmation",
+        "issued_uptime_seconds",
+        "challenge",
+    ];
+    assert_eq!(lines.len(), expected_keys.len());
+    for (line, key) in lines.iter().zip(expected_keys) {
+        assert!(line.starts_with(&format!("{key}=")), "consumed marker key order changed");
+    }
+    assert_eq!(marker_value(&lines, "protocol"), "1");
+    assert_eq!(marker_value(&lines, "hostname"), expected_hostname);
+    assert_eq!(marker_value(&lines, "machine_id"), expected_machine_id);
+    assert_eq!(marker_value(&lines, "boot_id"), expected_boot_id);
+    assert_eq!(marker_value(&lines, "virtualization"), expected_virtualization);
+    assert_eq!(marker_value(&lines, "ssh_connection_sha256"), expected_ssh_sha256);
+    assert_eq!(marker_value(&lines, "publication_parent"), publication_parent);
+    assert_eq!(marker_value(&lines, "remote_confirmation"), "disposable-vm-remote-only");
+    assert_eq!(
+        marker_value(&lines, "cooperative_root_confirmation"),
+        "cooperative-guest-root-no-hotplug"
+    );
+    expected_target_devnum
+}
+
+fn has_mount_option(options: &str, expected: &str) -> bool {
+    options.split(',').any(|option| option == expected)
+}
+
+fn assert_disposable_vm_mount_policy(expected_devnum: &str) {
+    let mountinfo = fs::read_to_string("/proc/self/mountinfo").unwrap();
+    let mut matches = mountinfo.lines().filter_map(|line| {
+        let fields = line.split_ascii_whitespace().collect::<Vec<_>>();
+        (fields.get(4) == Some(&DISPOSABLE_VM_MOUNT_ROOT)).then_some(fields)
+    });
+    let fields = matches.next().expect("fixed disposable VM mountpoint is absent");
+    assert!(matches.next().is_none(), "fixed disposable VM mountpoint is ambiguous");
+    assert_eq!(fields[2], expected_devnum);
+    assert_eq!(fields[3], "/");
+    for required in ["rw", "nosuid", "nodev", "noexec", "nosymfollow"] {
+        assert!(has_mount_option(fields[5], required));
+    }
+    let separator = fields.iter().position(|field| *field == "-").unwrap();
+    assert_eq!(fields[separator + 1], "vfat");
+    let super_options = fields[separator + 3];
+    for required in ["rw", "fmask=0133", "dmask=0022"] {
+        assert!(has_mount_option(super_options, required));
+    }
+    assert!(super_options
+        .split(',')
+        .all(|option| !option.starts_with("uid=") || option == "uid=0"));
+    assert!(super_options
+        .split(',')
+        .all(|option| !option.starts_with("gid=") || option == "gid=0"));
+    let mount_metadata = fs::metadata(DISPOSABLE_VM_MOUNT_ROOT).unwrap();
+    assert_eq!(mount_metadata.uid(), 0);
+    assert_eq!(mount_metadata.gid(), 0);
+}
+
+fn disposable_vm_parent() -> PathBuf {
+    assert_eq!(
+        env::var("CAST_VM_BOOT_PUBLICATION_CONFIRMATION").unwrap(),
+        DISPOSABLE_VM_CONFIRMATION
+    );
+    assert!(nix::unistd::geteuid().is_root(), "disposable VM publication requires guest root");
+    assert!(Path::new("/sys/firmware/efi").is_dir(), "disposable VM publication requires UEFI");
+
+    let authored = env::var("CAST_VM_BOOT_PUBLICATION_PARENT").unwrap();
+    let relative = authored
+        .strip_prefix(DISPOSABLE_VM_PARENT_PREFIX)
+        .expect("publication parent escaped the fixed disposable VM mount root");
+    assert!(!relative.is_empty() && !relative.ends_with('/'));
+    assert!(relative.split('/').all(|component| !component.is_empty() && component != "." && component != ".."));
+    let parent = PathBuf::from(authored);
+    assert!(parent.is_dir());
+    assert!(!fs::symlink_metadata(&parent).unwrap().file_type().is_symlink());
+    assert_eq!(fs::canonicalize(&parent).unwrap(), parent);
+    parent
+}
+
+fn assert_disposable_vm_publication(
+    parent: &Path,
+    publication: crate::linux_fs::mount_namespace::ValidatedRetainedBootFilePublication,
+    expected_outcome: RetainedBootFilePublicationOutcome,
+    expected_sha256: [u8; 32],
+) {
+    assert_eq!(publication.outcome(), expected_outcome);
+    assert_eq!(publication.length(), DISPOSABLE_VM_PAYLOAD.len() as u64);
+    assert_eq!(publication.xxh3(), xxh3_128(DISPOSABLE_VM_PAYLOAD));
+    assert_eq!(publication.sha256(), expected_sha256);
+    let canonical = parent.join(DISPOSABLE_VM_LEAF);
+    assert_eq!(fs::read(&canonical).unwrap(), DISPOSABLE_VM_PAYLOAD);
+    let metadata = fs::metadata(&canonical).unwrap();
+    assert!(metadata.file_type().is_file());
+    assert_eq!(metadata.len(), DISPOSABLE_VM_PAYLOAD.len() as u64);
+    assert_eq!(metadata.nlink(), 1);
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o644);
+    assert_eq!(metadata.dev(), publication.file_device());
+    assert_eq!(metadata.ino(), publication.file_inode());
+    assert!(fs::read_dir(parent).unwrap().all(|entry| {
+        let name = entry.unwrap().file_name();
+        let bytes = name.as_bytes();
+        !bytes
+            .get(..b".cast-payload-".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b".cast-payload-"))
+    }));
+}
+
+#[test]
+#[ignore = "requires the guarded disposable-VM VFAT campaign"]
+fn disposable_vm_vfat_publishes_and_revalidates_one_real_leaf() {
+    let parent = disposable_vm_parent();
+    let publication_parent = parent
+        .to_str()
+        .unwrap()
+        .strip_prefix(DISPOSABLE_VM_PARENT_PREFIX)
+        .unwrap();
+    let expected_target_devnum = assert_disposable_vm_identity_and_marker(publication_parent);
+    let phase = env::var("CAST_VM_BOOT_PUBLICATION_PHASE").unwrap();
+    assert!(matches!(phase.as_str(), "publish" | "revalidate"));
+    let expected_sha256: [u8; 32] = Sha256::digest(DISPOSABLE_VM_PAYLOAD).into();
+    let source = sealed_memfd(DISPOSABLE_VM_PAYLOAD);
+    let request = request_for_leaf(DISPOSABLE_VM_LEAF, DISPOSABLE_VM_PAYLOAD, expected_sha256);
+    let anchor = PreparedMountNamespaceAnchor::prepare().unwrap();
+    let attachment = anchor
+        .revalidate()
+        .unwrap()
+        .prepare_task_rooted_attachment(parent.to_str().unwrap())
+        .unwrap();
+    let publish = || {
+        let view = attachment.revalidate_against(&anchor).unwrap();
+        view.authenticate_boot_filesystem_until(deadline()).unwrap();
+        assert_disposable_vm_mount_policy(&expected_target_devnum);
+        view.publish_immutable_boot_file_until(
+            request,
+            RetainedBootNamespaceExpectedSource::sealed_descriptor(source.as_fd()),
+            RetainedBootFilePublicationLimits::default(),
+            deadline(),
+        )
+        .unwrap()
+    };
+
+    let first = publish();
+    let expected_first = if phase == "publish" {
+        RetainedBootFilePublicationOutcome::Published
+    } else {
+        RetainedBootFilePublicationOutcome::AlreadyExact
+    };
+    assert_disposable_vm_publication(&parent, first, expected_first, expected_sha256);
+    if phase == "publish" {
+        let second = publish();
+        assert_eq!(second.file_inode(), first.file_inode());
+        assert_disposable_vm_publication(
+            &parent,
+            second,
+            RetainedBootFilePublicationOutcome::AlreadyExact,
+            expected_sha256,
+        );
+    }
 }
 
 fn assert_nonexact_mode_0644_residue(

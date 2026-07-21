@@ -51,10 +51,14 @@ disposable-vm-uefi-boot-storage-harness-test:
 	@set -eu; \
 	script="$(DISPOSABLE_VM_BOOT_STORAGE_SCRIPT)"; \
 	effects="$(DISPOSABLE_VM_BOOT_STORAGE_EFFECTS)"; \
+	publisher_tests="$(DISPOSABLE_VM_BOOT_STORAGE_TOP_DIR)/crates/forge/src/linux_fs/tests/descriptor_boot_file_publication.rs"; \
+	publisher_make="$(DISPOSABLE_VM_BOOT_STORAGE_TOP_DIR)/misc/make/linux-descriptor-boot-file-publication-tests.mk"; \
 	test -f "$$script"; \
 	test ! -L "$$script"; \
 	test -f "$$effects"; \
 	test ! -L "$$effects"; \
+	test -f "$$publisher_tests"; \
+	test -f "$$publisher_make"; \
 	sh -n "$$script"; \
 	sh -n "$$effects"; \
 	test "$$(wc -l <"$$script")" -le 1000; \
@@ -87,10 +91,44 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq 'destructive_started=1' "$$effects"; \
 	grep -Fq 'campaign_complete=1' "$$effects"; \
 	grep -Fq 'mount_is_exact_identity' "$$effects"; \
+	grep -Fq 'nix_command=$$(command_path nix)' "$$effects"; \
+	grep -Fq 'make_command=$$(command_path make)' "$$effects"; \
+	grep -Fq 'env_command=$$(command_path env)' "$$effects"; \
+	grep -Fq 'rm_command=$$(command_path rm)' "$$effects"; \
+	grep -Fq 'publication_build_parent=/var/tmp' "$$effects"; \
+	grep -Fq 'publication_build_root=$$publication_build_parent/cast-vm-boot-storage-$$expected_boot_id-$$challenge' "$$effects"; \
+	grep -Fq 'fresh private publication build root already exists' "$$effects"; \
+	grep -Fq '"$$env_command" -i' "$$effects"; \
+	grep -Fq '"CARGO_TARGET_DIR=$$publication_test_target"' "$$effects"; \
+	grep -Fq '"CARGO_HOME=$$publication_cargo_home"' "$$effects"; \
+	grep -Fq '"CAST_VM_BOOT_PUBLICATION_BUILD_ROOT=$$publication_build_root"' "$$effects"; \
+	grep -Fq 'develop "path:$$root" --command' "$$effects"; \
+	test "$$(grep -Fc 'run_boot_file_publication_test publish' "$$effects")" = 1; \
+	test "$$(grep -Fc 'run_boot_file_publication_test revalidate' "$$effects")" = 1; \
+	grep -Fq 'publisher test lost the exact admitted VFAT mount policy before invocation' "$$effects"; \
+	grep -Fq 'publisher test lost the exact admitted VFAT mount policy after invocation' "$$effects"; \
+	grep -Fq 'forge-linux-descriptor-boot-file-publication-vfat-test' "$$effects"; \
+	grep -Fq '#[ignore = "requires the guarded disposable-VM VFAT campaign"]' "$$publisher_tests"; \
+	grep -Fq 'DISPOSABLE_VM_PARENT_PREFIX: &str = "/run/cast-vm-boot-storage/mount/"' "$$publisher_tests"; \
+	grep -Fq 'assert_disposable_vm_identity_and_marker(publication_parent)' "$$publisher_tests"; \
+	grep -Fq 'assert_disposable_vm_mount_policy(&expected_target_devnum)' "$$publisher_tests"; \
+	grep -Fq 'forge-linux-descriptor-boot-file-publication-vfat-test:' "$$publisher_make"; \
+	grep -Fq "trusted_tools='/usr/bin/id /usr/bin/stat /usr/bin/cat /usr/bin/systemd-detect-virt'" "$$publisher_make"; \
+	grep -Fq '/usr/bin/systemd-detect-virt --vm' "$$publisher_make"; \
+	grep -Fq "'0:0:600:regular file:1'" "$$publisher_make"; \
+	grep -Fq 'expected_build_root="/var/tmp/cast-vm-boot-storage-' "$$publisher_make"; \
+	grep -Fq 'done </proc/self/mountinfo' "$$publisher_make"; \
+	grep -Eq '^[[:space:]]*cd /; \\$$' "$$publisher_make"; \
+	awk '/^forge-linux-descriptor-boot-file-publication-vfat-test:/ { target = NR } /\/usr\/bin\/systemd-detect-virt --vm/ && target > 0 { virt = NR } /^[[:space:]]*cd \/; \\$$/ && target > 0 { chdir = NR } /\$\(CARGO\) test --manifest-path/ && target > 0 { cargo = NR } END { exit !(target > 0 && virt > target && chdir > virt && cargo > chdir) }' "$$publisher_make"; \
+	if grep -Fq 'target_devnum=$$target_devnum' "$$script"; then exit 1; fi; \
+	if grep -Fq '$$root/target' "$$effects"; then exit 1; fi; \
+	if rg -n 'run_bounded.*(nix_command|make_command)' "$$effects"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$(grep -Fc 'verify_init_mount_namespace' "$$effects")" -ge 4; \
 	awk '/verify_marker "\$$consumed_marker"/ { marker = NR } /destructive_started=1/ { started = NR } /run_bounded 120s "\$$mkfs_command"/ { effect = NR } END { exit !(marker > 0 && started == marker + 1 && effect == started + 1) }' "$$effects"; \
 	lock_cleanup_line="$$(grep -nF 'rmdir -- "$$campaign_lock"' "$$effects" | cut -d: -f1)"; \
+	build_cleanup_line="$$(grep -nF '"$$rm_command" -rf --one-file-system -- "$$publication_build_root"' "$$effects" | cut -d: -f1)"; \
 	marker_cleanup_line="$$(grep -nF 'rm -f -- "$$consumed_marker"' "$$effects" | cut -d: -f1)"; \
+	test "$$build_cleanup_line" -lt "$$lock_cleanup_line"; \
 	test "$$lock_cleanup_line" -lt "$$marker_cleanup_line"; \
 	grep -Fq 'No reboot was requested or performed.' "$$effects"; \
 	if grep -Fq -- '--foreground' "$$effects"; then \
