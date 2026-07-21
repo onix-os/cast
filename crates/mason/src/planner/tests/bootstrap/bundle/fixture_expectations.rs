@@ -377,9 +377,9 @@ fn assert_plugin_output_fixture(planned: &super::super::Planned, packages: &BTre
         );
     }
     assert_eq!(plugin_elf.soname.as_deref(), Some(PLUGIN_SONAME));
-    let plugin_relation = format!("soname({PLUGIN_SONAME}(x86_64))");
+    let plugin_needed_relation = format!("soname({PLUGIN_SONAME}(x86_64))");
     assert!(
-        !host_elf.dependencies.contains(&plugin_relation),
+        !host_elf.dependencies.contains(&plugin_needed_relation),
         "{FIXTURE}: explicitly loaded plugin leaked into host DT_NEEDED"
     );
 
@@ -400,7 +400,10 @@ fn assert_plugin_output_fixture(planned: &super::super::Planned, packages: &BTre
         FIXTURE,
         plugin,
         plugin_dependencies,
-        BTreeSet::from([plugin_plan.package_name.clone(), plugin_relation]),
+        BTreeSet::from([
+            plugin_plan.package_name.clone(),
+            format!("soname(cast/plugins/{PLUGIN_SONAME}(x86_64))"),
+        ]),
     );
     assert_debug_output(FIXTURE, debug, &[host_elf, plugin_elf]);
     assert_exact_relations(
