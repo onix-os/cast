@@ -390,7 +390,7 @@ full receipt state, admitting v3 only when its compact journal pair correlates
 exactly; production forward staging remains unwired. Existing v1/v2 records already at `BootSyncStarted` retain a
 conservative journal-only route. This is not a publisher and grants no boot
 mutation or deletion authority. Authenticated claim derivation, exact durable
-predecessor-record binding, pending promotion, and disposable-VM evidence
+predecessor-record binding, pending promotion, and real-publication VM evidence
 remain open.
 
 A separate durable publisher combines:
@@ -436,9 +436,19 @@ temporary directories, injected sysfs trees, and effect recorders. They do not
 inspect the host's ESP, `/boot`, `/efi`, `/esp`, raw devices, live mount
 topology, or storage tools, and they never perform a storage mutation.
 
-No real ESP/BOOT discovery, publication, or durability VM evidence exists yet.
-Any future test must run only in a disposable virtual machine explicitly
-supplied by the user. A dedicated VM target must be
+At exact commit `58c87a5db50bec7a5ac00978455841c7d2402689`, disposable
+UEFI guest `test` was observed with `/` on `/dev/vda2`, its live ESP on
+`/dev/vda1`, and a separate untouched `/dev/vdb` of exactly 34359738368 bytes.
+The operation-specific atomic suffix passed ActivateArchived complete 17/17
+and finalization 24/24; ActiveReblit dispatch 62/62, complete 11/11, and
+finalization 24/24; shared RootLinks terminal-process 3/3 and delete-residue
+recovery 13/13; synthetic boot namespace 40/40; and all receipt/startup
+boot-repair Make lanes exited zero. No disk, ESP, mount, reboot, or live-`/usr`
+mutation occurred. This is same-boot synthetic/component evidence only, not
+publisher, ESP-publication, reboot, or power-loss proof.
+
+Real ESP/BOOT publication and durability testing must run only in a disposable
+virtual machine explicitly supplied by the user. A dedicated VM target must be
 absent from every default or local validation dependency, require the reviewed
 guest marker and per-run challenge, and fail closed if its exact disposable
 disk is missing or ambiguous. It must never fall back to the host, choose a

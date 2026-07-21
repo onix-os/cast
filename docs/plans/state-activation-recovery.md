@@ -122,7 +122,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   route. A separately observed `BootRepairStarted` becomes terminal
   `BootRepairUnverified` without invoking boot; durable `BootRepairComplete`
   still routes to `RollbackComplete`. No production path repairs boot or emits success;
-  authenticated claim derivation, exact durable predecessor binding, promotion, publisher, mutation/deletion, and VM evidence remain open.
+  authenticated claim derivation, exact durable predecessor binding, promotion, publisher, mutation/deletion, and real-publication VM evidence remain open.
   The pre-existing ActivateArchived rollback source set still reaches that same
   handoff. Exact private-detach residue can now be restored on writer reopen.
   The RootLinks campaign remains separate from the unchanged legacy 12-case
@@ -476,7 +476,7 @@ journal-only route, while older records cannot acquire v3 receipt authority.
 Commit `406cabe5`'s typed Required -> Started, Started -> Complete/Unverified,
 and Complete -> `RollbackComplete` vocabulary remains intact. No authenticated
 claim derivation, exact durable predecessor binding, promotion, publisher, boot
-mutation/deletion authority, or disposable-VM evidence exists yet.
+mutation/deletion authority, or real-publication VM evidence exists yet.
 
 The implemented preparation stack now carries one caller-owned absolute
 deadline, without resetting it, through the exact state/layout database and
@@ -558,7 +558,7 @@ desired inventory, destination identities, and keyed inert claims. One exclusive
 database transaction persists the immutable body and pending singleton head.
 Startup now retains that strict full receipt state; production staging, authenticated
 claim derivation and durable record binding, promotion, publication, deletion,
-durability, and disposable-VM evidence remain open.
+durability, and real-publication VM evidence remain open.
 
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`
@@ -594,12 +594,12 @@ inter-pass observation, GPT-pass-two, closing-observation, and reconciliation
 schedule. The closed result does not prove whole-root non-bind provenance or
 ongoing currentness; same-thread `setns` still requires outer aggregate
 revalidation. Linux MSDOS magic likewise remains distinct from exact `vfat`.
-Disk admissibility beyond the admitted evidence, write authority, durable
-descriptor-rooted publication, device-flush ordering, restart reconciliation,
-and disposable-VM evidence remain open.
-Default and focused tests do not inspect or mutate host ESP/BOOT storage; real
-publication, reboot, and power-loss evidence requires the user-supplied
-disposable VM.
+Disk admissibility beyond the admitted evidence, write authority, durable descriptor-rooted publication, device-flush ordering, and restart reconciliation remain open.
+At exact commit `58c87a5db50bec7a5ac00978455841c7d2402689`, disposable UEFI guest `test` was observed with `/` on `/dev/vda2`, its live ESP on `/dev/vda1`, and a separate untouched `/dev/vdb` of exactly 34359738368 bytes.
+Its operation-specific atomic suffix passed ActivateArchived complete 17/17 and finalization 24/24, plus ActiveReblit dispatch 62/62, complete 11/11, and finalization 24/24.
+Shared RootLinks terminal-process 3/3 and delete-residue recovery 13/13 passed; synthetic boot namespace passed 40/40; the receipt and startup boot-repair Make lanes all exited zero.
+No disk, ESP, mount, reboot, or live-`/usr` mutation occurred. This is same-boot synthetic/component evidence only, not publisher, ESP-publication, reboot, or power-loss proof.
+Default and focused tests still do not inspect or mutate host ESP/BOOT storage; real publication and destructive durability tests remain confined to the user-supplied disposable VM.
 
 ### Durable transition coordination
 
