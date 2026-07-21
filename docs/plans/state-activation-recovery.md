@@ -47,7 +47,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   their descriptor-safe baseline; full frozen execution separately requires
   Linux x86_64 5.14 or newer. Restrictive-umask repair may use only an
   authenticated procfs alias to the retained descriptor.
-- [x] Add the exact record-bound terminal-delete store foundation. Accepted
+- [x] Add the exact record-bound terminal-delete and writer-reopen foundations. Accepted
   commit `8f391985` consumes one same-store non-`Clone` record-inode binding
   under the retained operation and journal locks, authenticates the retained
   Cast/journal/lock/inventory/record, and uses `RENAME_NOREPLACE` to detach the
@@ -58,10 +58,22 @@ and instant rollback mechanism; it hardens their failure semantics.
   without retrying detach or unlink, while same-byte foreign winners remain
   untouched. The name is not secret: after final private validation there is no
   optional hook or work before unlink, but an uncooperative same-credential
-  writer in that syscall window is outside this cooperative boundary. A
-  `.state-transition.delete-*` residue, including one process loss could leave,
-  is preserved and rejected fail-closed on reopen rather than adopted or
-  cleaned. The residue test is not a process-death claim.
+  writer in that syscall window is outside this cooperative boundary. Accepted
+  commit `0a91c2ed` handles the exact interrupted-detach state on writer reopen.
+  After exact public journal-directory and lock authentication, it recognizes
+  only one canonical-form `.state-transition.delete-*` regular file that is
+  owner-private, single-link, mode `0600`, bounded, decodable, and terminal. It
+  retains the complete frame and inode, double-observes the exact lock-plus-
+  record inventory, restores that inode once to the canonical name with
+  `RENAME_NOREPLACE`, and performs one directory sync. Restore-report and sync
+  ambiguity reconcile the exact residue or canonical state without retry.
+  Foreign, malformed, unsafe, corrupt, nonterminal, multiple, or canonical-
+  coexisting evidence fails closed and remains untouched; read-only inspection
+  still rejects residue. The final compare/rename window retains the cooperative
+  same-credential limitation. The gates pass 13/13 focused recovery, 10/10
+  bound-delete, and 110/110 direct-journal tests. This is fresh-writer-reopen and
+  fault-race store evidence, not an operation-finalizer widening or a `SIGKILL`,
+  reboot, or power-loss proof.
 - [ ] Open mutable system clients in recovery order: installation lock,
   databases, journal lock, journal reconciliation, orphan-token audit, strict
   live-state discovery, then repositories and the active registry. Frozen
@@ -106,9 +118,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   an already durable `BootRepairComplete` record to `RollbackComplete`. No
   production path performs the repair or emits that successful record.
   The pre-existing ActivateArchived rollback source set still reaches that same
-  handoff. RootLinks has only fresh-handle source/absence recovery, not the
-  legacy terminal `SIGKILL` claim; private-detach residue recovery, reboot, and
-  power-loss evidence remain open. Roll-forward execution, the actual boot
+  handoff. Exact private-detach residue can now be restored on writer reopen,
+  but this store foundation does not extend the legacy terminal `SIGKILL` claim
+  to RootLinks or prove reboot or power loss. Roll-forward execution, the actual boot
   repair effect and its durable publisher, and cleanup are not implemented.
   The public `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
@@ -785,15 +797,23 @@ made the generation-17 successor canonical, recovery may naturally take the
 ordinary generation-17 -> 18 route; that does not create a completion-boundary
 `SIGKILL` claim.
 
-Accepted commit `8f391985` closes the shared store-foundation blocker described
-above. Its independently accepted gate passes 11/11 focused contracts, the
-complete direct journal lane passes 98/98, and all finalizer regressions remain
-green. Accepted commit `a0966008` consumes that primitive only for exact
+Accepted commit `8f391985` closes the shared bound-delete store blocker.
+Accepted commit `0a91c2ed` adds exact interrupted-detach writer reopen: it
+authenticates the public journal and lock, retains one valid owner-private
+single-link mode-`0600` terminal residue's bounded frame and inode, double-
+observes the exact inventory, restores it once with `RENAME_NOREPLACE`, and
+syncs the directory once. Ambiguous restore or sync reports reconcile without
+retry; unsafe, foreign, malformed, corrupt, nonterminal, multiple, and
+canonical-coexisting states fail closed, while read-only inspection rejects
+residue. Its accepted lanes pass 13/13 focused recovery, 10/10 bound deletion,
+and 110/110 direct journal tests. Accepted commit `a0966008` consumes the bound-
+delete primitive only for exact
 RootLinks ActivateArchived generation 12, while preserving legacy Intent and
 Exchanged admission and leaving NewState and ActiveReblit unwidened. Fresh-
-handle source/absence recovery is covered, but not RootLinks `SIGKILL`: a
-private-detach residue still makes reopen fail closed and has no recovery path.
-No cleanup, boot, reboot, or power-loss claim is added.
+writer-reopen/fault-race residue recovery is now covered at store level, but it
+does not widen an operation finalizer or prove RootLinks `SIGKILL`, reboot, or
+power loss. The cooperative same-credential limitation remains explicit. No
+cleanup or boot claim is added.
 
 ### Startup reconciliation and interruption campaign
 
@@ -907,9 +927,10 @@ and Exchanged sources. Commit `c6362aae` adds their exact 12-case same-boot
 `SIGKILL` matrix. Accepted commit `a0966008` adds exact RootLinks generation-12
 finalization through the non-`Clone` record binding, one bound deletion, and
 post-delete database/topology/five-link/public-absence proof in the same locked
-store. Its coverage is fresh-handle only until private-detach residue recovery
-exists; it does not extend the legacy `SIGKILL` matrix or simulate reboot or
-power loss.
+store. Its finalizer coverage remains fresh-handle. Commit `0a91c2ed` now restores the
+single exact recoverable terminal residue during writer reopen, but it neither
+widens this finalizer nor extends the legacy `SIGKILL` matrix or simulates reboot
+or power loss.
 later rollback, roll-forward, durable boot publication, production boot-repair
 wiring, cleanup, other earlier interruption boundaries, reboot, and
 power-loss-equivalent durability work remain.

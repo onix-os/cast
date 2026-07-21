@@ -192,7 +192,8 @@ impl TransitionJournalStore {
     /// classified as the exact bound source or authenticated absence without
     /// retrying the detach or unlink and with at most one reconciliation sync.
     /// Process loss after detach may leave a `.state-transition.delete-*`
-    /// residue which store reopen deliberately preserves and rejects.
+    /// residue. A writer reopen restores only the exact recoverable terminal
+    /// residue to the canonical name; read-only inspection still rejects it.
     pub(crate) fn delete_record_binding(
         &self,
         cast_directory: &std::fs::File,

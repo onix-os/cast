@@ -418,8 +418,8 @@ closure remain authoritative in `PLAN.md`.
   naturally take generation 17 -> 18 when the invalidation successor was already
   canonical, but that creates no completion-boundary process-death claim.
 
-  Accepted commit `8f391985` supplies only the independently reviewed store
-  foundation needed by a future finalizer. It consumes an exact non-`Clone`
+  Accepted commit `8f391985` supplies the independently reviewed store
+  foundation used by terminal finalizers. It consumes an exact non-`Clone`
   record-inode binding, atomically detaches the public winner to a fresh private
   name with `RENAME_NOREPLACE`, authenticates that exact inode and frame, then
   performs one private unlink and one directory sync. Applied-report ambiguity
@@ -427,12 +427,23 @@ closure remain authoritative in `PLAN.md`.
   preexisting or same-byte foreign winners are preserved. The private name is
   collision-detecting, not secret. The final validation-to-unlink window has no
   optional work and is explicitly cooperative; an uncooperative same-credential
-  writer racing that syscall window is outside the contract. A private delete
-  residue is preserved and makes reopen fail closed rather than being cleaned.
+  writer racing that syscall window is outside the contract. Accepted commit
+  `0a91c2ed` adds the writer-reopen recovery foundation for an interrupted
+  detach. After exact public journal-directory and lock authentication, it
+  recognizes only one canonical-form `.state-transition.delete-*` regular file
+  that is owner-private, single-link, mode `0600`, bounded, decodable, and
+  terminal. It retains the complete frame and inode, double-observes the exact
+  lock-plus-record inventory, restores that inode once to the canonical name
+  with `RENAME_NOREPLACE`, and performs one directory sync. Restore-report and
+  sync ambiguity reconcile exact residue or canonical state without retry.
+  Foreign, malformed, unsafe, corrupt, nonterminal, multiple, or canonical-
+  coexisting evidence fails closed; read-only inspection still rejects any
+  residue. Its final compare/rename window keeps the same cooperative same-
+  credential limitation.
 
-  The focused gate passes 11/11, the complete direct journal lane passes 98/98,
-  and all three existing operation-finalizer regressions pass. Accepted commit
-  `a0966008` then widens only ActivateArchived finalization to exact
+  The recovery gate passes 13/13, the retained bound-delete gate passes 10/10,
+  and the complete direct journal lane passes 110/110. Accepted commit
+  `a0966008` widens only ActivateArchived finalization to exact
   `RootLinksComplete` generation-12 `RollbackComplete`; legacy
   `UsrExchangeIntent` and `UsrExchanged` admission remains intact. Binding-first
   authority captures the exact non-`Clone` record binding before database and
@@ -442,9 +453,9 @@ closure remain authoritative in `PLAN.md`.
   topology, all five root links, repeated public absence, and direct same-store
   clean handoff.
   No NewState or ActiveReblit source is widened, and no cleanup or boot effect is
-  added. RootLinks coverage proves only fresh-handle source/absence recovery;
-  private-detach residue still fails closed, so the legacy Intent/Exchanged
-  `SIGKILL` matrix is not RootLinks, and reboot and power-loss remain unproved.
+  added. Commit `0a91c2ed` is fresh-writer-reopen and fault-race store evidence,
+  not an operation-finalizer widening. The legacy Intent/Exchanged `SIGKILL`
+  matrix is still not RootLinks, and reboot and power-loss remain unproved.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -596,8 +607,10 @@ closure remain authoritative in `PLAN.md`.
   deletion and same-lock clean handoff for the legacy Intent/Exchanged sources;
   commit `c6362aae` adds their exact 12-case real-process terminal `SIGKILL`
   matrix. Accepted commit `a0966008` adds exact RootLinks generation-12
-  finalization through record-bound deletion and the same clean handoff, but its
-  coverage is fresh-handle only until private-detach residue recovery exists.
+  finalization through record-bound deletion and the same clean handoff.
+  Accepted commit `0a91c2ed` now restores only the exact recoverable terminal
+  private-detach residue on writer reopen; this store-level fresh-reopen proof
+  does not widen a finalizer or establish `SIGKILL`, reboot, or power loss.
   The newer bounded boot
   projection, sealed Stone inputs, state roots and schemas, local and package
   command-line semantics, Gluon topology intent, and retained mounted-topology
