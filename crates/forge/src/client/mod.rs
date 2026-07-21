@@ -89,6 +89,9 @@ mod active_reblit_boot_inputs;
 #[allow(dead_code)] // closed plan inputs consumed by the later retained attachment coordinator
 #[path = "boot/active_reblit_boot_namespace_inputs.rs"]
 mod active_reblit_boot_namespace_inputs;
+#[allow(dead_code)] // read-only plan/target preflight consumed by the later one-shot publisher
+#[path = "boot/active_reblit_boot_publication_preflight.rs"]
+mod active_reblit_boot_publication_preflight;
 #[allow(dead_code)] // authority-free complete receipt mapping; durable staging remains unwired
 #[path = "boot/active_reblit_boot_publication_receipt.rs"]
 mod active_reblit_boot_publication_receipt;

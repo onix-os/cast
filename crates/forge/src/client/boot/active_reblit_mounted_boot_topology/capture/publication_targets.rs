@@ -15,7 +15,18 @@ use std::{io, time::Instant};
 
 use thiserror::Error;
 
-use crate::linux_fs::mount_namespace::RevalidatedTaskRootedAttachment;
+use crate::linux_fs::{
+    descriptor_boot_namespace::{
+        BootNamespaceAssessmentLimits, BootNamespaceRequest,
+        RetainedBootNamespaceAssessmentLimits,
+        RetainedBootNamespaceExpectedSource,
+    },
+    mount_namespace::{
+        RevalidatedTaskRootedAttachment,
+        TaskRootBootNamespaceAssessmentError,
+        ValidatedTaskRootBootNamespaceAssessment,
+    },
+};
 
 use super::{
     model::{
@@ -114,6 +125,29 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
 
     pub(in crate::client) const fn deadline(&self) -> Instant {
         self.deadline
+    }
+
+    /// Assess one already-bound collision domain through this exact retained
+    /// target without exposing its attachment or accepting a fresh deadline.
+    ///
+    /// The returned value contains scalar evidence only. In particular, this
+    /// operation grants no publication, replacement, removal, or descriptor
+    /// authority to its caller.
+    pub(in crate::client) fn assess_boot_namespace(
+        &self,
+        requests: &[BootNamespaceRequest<'_>],
+        expected: &[RetainedBootNamespaceExpectedSource<'_>],
+    ) -> Result<
+        ValidatedTaskRootBootNamespaceAssessment,
+        TaskRootBootNamespaceAssessmentError,
+    > {
+        self.attachment.assess_retained_boot_namespace_until(
+            requests,
+            expected,
+            BootNamespaceAssessmentLimits::default(),
+            RetainedBootNamespaceAssessmentLimits::default(),
+            self.deadline,
+        )
     }
 }
 

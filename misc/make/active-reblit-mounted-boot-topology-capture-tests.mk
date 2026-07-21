@@ -67,10 +67,15 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	timeout 10s test "$$( timeout 10s grep -Fc '.revalidate_until(self._installation, deadline)' "$$publication_targets" )" = 2; \
 	timeout 10s grep -Fq '.revalidate_against_until(anchor, deadline)' "$$publication_targets"; \
 	for scalar in destination_device destination_inode destination_mount_id; do timeout 10s grep -Fq "attachment.$$scalar()" "$$publication_targets"; done; \
+	grep -Fq 'pub(in crate::client) fn assess_boot_namespace(' "$$publication_targets"; \
+	grep -Fq 'self.attachment.assess_retained_boot_namespace_until(' "$$publication_targets"; \
+	grep -Fq 'BootNamespaceAssessmentLimits::default()' "$$publication_targets"; \
+	grep -Fq 'RetainedBootNamespaceAssessmentLimits::default()' "$$publication_targets"; \
+	grep -Fq 'self.deadline,' "$$publication_targets"; \
 	timeout 10s grep -Fq 'self.topology.revalidate_publication_targets()' "$$renderer"; \
 	if timeout 10s rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) (?:struct RevalidatedActiveReblitBootPublicationTarget|enum RevalidatedActiveReblitBootPublicationTargets)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:RevalidatedActiveReblitBootPublicationTarget|RevalidatedActiveReblitBootPublicationTargets)' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg --pcre2 -U -n 'pub\(in crate::client\)\s+fn\s+[[:alnum:]_]+[^\{;]{0,300}(?:RevalidatedTaskRootedAttachment|PreparedTaskRootedAttachment|std::fs::File|OwnedFd|BorrowedFd|RawFd|PathBuf|&Path)|pub\(in crate::client\).*attachment\s*:' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -n 'retain_boot_publication_parent|publish_immutable_boot_file|assess_retained_boot_namespace|create_dir|mkdir|rename|unlink|remove_file|syncfs|sync_all' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'retain_boot_publication_parent|publish_immutable_boot_file|create_dir|mkdir|rename|unlink|remove_file|syncfs|sync_all' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for phase in Pass1 Pass2 Terminal; do timeout 10s grep -Fq "ObservationPhase::$$phase" "$$core/preparation.rs"; done; \
 	timeout 10s grep -Fq 'same_revalidated_block_parent_snapshot(&xbootldr_sysfs)' "$$core/observation.rs"; \
 	timeout 10s grep -Fq 'intent_selector == attachment_selector' "$$core/observation.rs"; \

@@ -197,7 +197,7 @@ impl AliasFixture {
         write_alias_source(&self.source, CHANGED_PARTUUID)
     }
 
-    pub(super) fn replace_attachment_identity(&self) -> io::Result<()> {
+    pub(in crate::client) fn replace_attachment_identity(&self) -> io::Result<()> {
         let displaced = self.context.join("root/displaced-firmware");
         fs::rename(&self.attachment, displaced)?;
         fs::create_dir(&self.attachment)
