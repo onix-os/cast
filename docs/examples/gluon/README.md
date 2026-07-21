@@ -50,15 +50,14 @@ Commit `3f8309b1` now runs that assessment through the same private destination
 the observed root triple to match. Commit `97fb33b3` closes the bounded
 expected-source bridge with positional streaming for generated slices and
 sealed asset descriptors rather than materializing the roughly 10-GiB
-publication ceiling. Journal payload v3 now carries a typed immutable
-boot-publication receipt pair. A strict state-database singleton and API can
-durably stage the same pair, but production forward staging remains unwired.
-V3 startup requires exact correlation; existing v1/v2 records
-already at `BootSyncStarted` keep only a conservative journal-only route. This
-foundation is not a publisher and grants no boot mutation or deletion
-authority. Full receipt inventory, real ESP/BOOT publication, durability,
-device flushes, restart reconciliation, and disposable-VM evidence remain
-open. The `nosymfollow` requirement gives
+publication ceiling. Journal payload v3 carries the compact immutable receipt
+pair. A complete bounded canonical authority-free body separately binds the
+transition/predecessor hashes, desired inventory, exact destinations, and every
+ordered output with a keyed inert claim. One exclusive SQLite transaction
+persists that body and its pending singleton head, but startup still consumes
+only the compact pair. Production staging, authenticated claim derivation,
+publisher authority, real ESP/BOOT publication, durability, restart
+reconciliation, and disposable-VM evidence remain open. The `nosymfollow` requirement gives
 the future boot publisher an effective Linux 5.10-or-newer admission boundary
 without changing the generic `linux_fs` Linux 5.6 compatibility baseline.
 `cast.boot_topology.v1` cannot be

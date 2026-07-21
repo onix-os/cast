@@ -926,17 +926,17 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   candidate durability effect and changes neither the database nor the
   non-journal namespace.
 
-  Commit `92fa7aa0` adds the disjoint production route for exact ActiveReblit `CandidatePreserved` evidence sourced from
-  `BootSyncStarted`: it advances once to `BootRepairRequired`, reopens only the exact source or successor, invokes boot zero
-  times, and returns. Journal payload v3 now adds a typed immutable receipt pair. A strict state-database singleton and API can
-  durably stage the same pair, but production forward staging remains unwired. Startup admits the v3 route only when both
-  sources correlate. Existing v1/v2 records already at
-  `BootSyncStarted` retain a conservative journal-only route. Commit `b5928340` separately admits exact `BootRepairStarted`
-  on a fresh startup; operational capture faults remain errors, structural incompatibility defers, and exact evidence advances
-  once to terminal `BootRepairUnverified` with zero boot calls. Commit `406cabe5`'s explicit Required -> Started,
-  Started -> Complete/Unverified, and Complete -> `RollbackComplete` edges remain; the generic successor refuses them. No
-  production entry creates `BootRepairStarted`, performs the repair, or emits successful completion. There is still no
-  publisher, boot mutation or deletion authority, full receipt inventory, or disposable-VM evidence.
+  Commit `92fa7aa0` routes exact ActiveReblit `CandidatePreserved` evidence sourced from `BootSyncStarted` once to
+  `BootRepairRequired`, reopens only the exact source or successor, invokes boot zero times, and returns. Journal v3 carries
+  the compact immutable receipt pair. A complete bounded canonical body separately binds transition/predecessor hashes,
+  desired inventory, exact destinations, and every ordered output with a keyed inert claim. One exclusive SQLite transaction
+  inserts that immutable body and stages its pending singleton head with strict body/head validation. Startup still correlates
+  only the compact journal/head pair; production forward staging and full-body startup consumption remain unwired. Existing
+  v1/v2 records at `BootSyncStarted` retain their conservative journal-only route. Commit `b5928340` separately advances exact
+  `BootRepairStarted` evidence to terminal `BootRepairUnverified` with zero boot calls. Commit `406cabe5`'s explicit Required ->
+  Started, Started -> Complete/Unverified, and Complete -> `RollbackComplete` edges remain. No production entry performs the
+  repair or emits success; authenticated claim derivation, exact durable predecessor binding, promotion, publisher, boot
+  mutation/deletion authority, and disposable-VM evidence remain open.
 
   Commit `cbe3679a` production-wires exactly one ActivateArchived
   `CandidatePreserveIntent` checkpoint per startup entry. Exact staged evidence

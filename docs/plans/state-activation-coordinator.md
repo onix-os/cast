@@ -579,17 +579,18 @@ closure remain authoritative in `PLAN.md`.
   binding before database or namespace evidence, consumes it through one bound
   deletion, and retains the same locked store through post-delete proof and
   shared clean admission without a database, non-journal namespace, trigger,
-  wrapper, or cleanup effect. An exact `BootSyncStarted` rollback
-  instead routes `CandidatePreserved` to `BootRepairRequired`; a later startup
-  observing `BootRepairStarted` records terminal `BootRepairUnverified` without
-  invoking boot. Journal payload v3 adds a typed immutable receipt pair, a
-  strict state-database singleton and API can durably stage the same pair, but
-  production forward staging remains unwired. V3 startup admits this route only
-  when both sources correlate. Existing v1/v2 records already
-  at `BootSyncStarted` retain a conservative journal-only route. The typed
-  Applied/AlreadySatisfied completion edges remain, but there is still no
-  publisher, actual repair attempt, boot mutation or deletion authority, full
-  receipt inventory, successful production dispatch, or VM evidence.
+  wrapper, or cleanup effect. An exact `BootSyncStarted` rollback instead routes
+  `CandidatePreserved` to `BootRepairRequired`; later `BootRepairStarted` becomes
+  terminal `BootRepairUnverified` without invoking boot. Journal v3 carries the
+  compact immutable pair. A complete bounded canonical authority-free body
+  separately binds transition/predecessor hashes, desired inventory, exact
+  destinations, and every ordered output with a keyed inert claim. One exclusive
+  SQLite transaction inserts that immutable body and stages its pending head.
+  Startup still correlates only the compact journal/head pair; production
+  staging and full-body startup consumption remain unwired. Existing v1/v2
+  records retain their conservative route. There is still no authenticated
+  claim derivation, exact durable predecessor binding, promotion, publisher,
+  actual repair, mutation/deletion authority, successful dispatch, or VM proof.
   ActivateArchived
   preservation, completion, and terminal finalization now run as three separate
   bounded production entries with no same-entry successor redispatch.

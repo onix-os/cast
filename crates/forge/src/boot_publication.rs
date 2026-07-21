@@ -15,14 +15,14 @@ mod receipt_body;
 #[path = "boot_publication/receipt_codec.rs"]
 mod receipt_codec;
 
-#[allow(unused_imports)] // consumed by the client receipt mapper in the next integration slice
+#[allow(unused_imports)] // shared with the client receipt mapper
 pub(crate) use receipt_body::{
     BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
     BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
     BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationReceiptBodyError,
     BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
 };
-#[allow(unused_imports)] // consumed by durable receipt storage in the next integration slice
+#[allow(unused_imports)] // shared with durable receipt storage
 pub(crate) use receipt_codec::{
     BootPublicationReceiptCodecError, CanonicalBootPublicationReceipt, decode_boot_publication_receipt,
     prepare_boot_publication_receipt, MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES,
