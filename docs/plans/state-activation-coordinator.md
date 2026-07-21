@@ -604,6 +604,24 @@ closure remain authoritative in `PLAN.md`.
   UEFI guest passed the focused receipt/staging Make lane with its declared
   dependencies, all 12 receipt-database tests, and all 9 production staging
   tests. That run performed no disk, ESP, mount, reboot, or live-`/usr` mutation.
+  At exact commit `07b917a73189563f02104455c937613ffe6b2e72`, the same UEFI
+  guest and boot passed the separate guarded whole-disk VFAT challenge,
+  admission, and campaign after fresh snapshot
+  `os-tools-vdb-retry-20260721-07b917a7`. Guest `test`, machine ID
+  `556a65c27e9b4150a9fb2b68f8693cdb`, boot ID
+  `e875fab7-b970-4881-89d1-e87aa70acffb`, retained root `/dev/vda2` and live
+  ESP `/dev/vda1` at `/boot/efi`; neither was modified. The exact disposable
+  target `/dev/disk/by-path/virtio-pci-0000:07:00.0` -> `/dev/vdb`, diskseq
+  `10`, `34359738368` bytes, held FAT32 `CASTTEST`; `EFI/Linux` persisted
+  across sync/unmount/remount, the target ended unmounted, the runtime root
+  ended empty without marker or lock, and read-only `fsck.fat -n` reported 3
+  files using 3/2096126 clusters. The prior `a6a834df` attempt failed closed
+  immediately after `mkfs.fat` introduced fake-MBR child `/dev/vdb1`; it
+  preserved the sentinel for inspection, mounted nothing, and did not reboot.
+  Signatures were explicitly recovered before the fresh retry. Commit
+  `07b917a7` adds `--mbr=n` and effective root-ownership validation. This proves
+  only the disposable VFAT substrate: payload publication, GPT ESP role,
+  live-ESP mutation, reboot recovery, and power-loss durability remain open.
   ActivateArchived
   preservation, completion, and terminal finalization now run as three separate
   bounded production entries with no same-entry successor redispatch.

@@ -171,3 +171,34 @@ make disposable-vm-uefi-boot-storage-harness-test
 It parses and inspects the harness without reading a block device or running a
 storage command. It is not a dependency of `make test`, `make check`, or any
 default target.
+
+## Recorded disposable-VM evidence
+
+At exact commit `07b917a73189563f02104455c937613ffe6b2e72`, the guarded
+campaign ran inside UEFI guest `test`, machine ID
+`556a65c27e9b4150a9fb2b68f8693cdb`, during boot
+`e875fab7-b970-4881-89d1-e87aa70acffb`. The live root remained
+`/dev/vda2`, and the live ESP remained `/dev/vda1` mounted at `/boot/efi`.
+The admitted disposable target was
+`/dev/disk/by-path/virtio-pci-0000:07:00.0` resolving to `/dev/vdb`, with
+disk sequence `10` and exactly `34359738368` bytes.
+
+The first attempt from commit `a6a834df` failed closed immediately after
+formatting: `mkfs.fat` had automatically written a fake whole-device MBR, so
+the repeated admission observed `/dev/vdb1` and refused to mount. The consumed
+sentinel state was preserved, the exact state was inspected, and the target's
+signatures were recovered explicitly. That attempt mounted nothing and did not
+reboot the guest. Commit `07b917a7` then disabled that behavior with `--mbr=n`
+and added validation of effective root ownership on the mounted filesystem.
+
+After confirming fresh snapshot `os-tools-vdb-retry-20260721-07b917a7`, the
+corrected challenge, dry admission, and destructive campaign all passed. The
+target contained FAT32 filesystem `CASTTEST`; `EFI/Linux` survived the ordered
+sync, unmount, remount, validation, sync, and final unmount. The runtime
+authorization root was empty afterward with neither marker nor lock, and
+read-only `fsck.fat -n` reported 3 files using 3 of 2,096,126 data clusters.
+Neither `/dev/vda2` nor the live ESP was modified.
+
+This proves only the guarded whole-disk VFAT substrate and directory
+persistence in the disposable VM. It does not prove payload publication, a GPT
+ESP role, live-ESP mutation, reboot recovery, or power-loss durability.
