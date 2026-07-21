@@ -77,8 +77,13 @@ disposable-vm-uefi-boot-storage-harness-test:
 	test "$$(grep -Fc '[ "$$BLOCK_DEVNUM" != "$$target_devnum" ]' "$$script")" = 1; \
 	test "$$(grep -Fc '[ "$$BLOCK_DISK_DEVNUM" != "$$target_disk_devnum" ]' "$$script")" = 1; \
 	grep -Fq 'run_bounded 120s "$$mkfs_command"' "$$effects"; \
+	test "$$(grep -Fc -- '--mbr=n' "$$effects")" = 1; \
 	grep -Fq '"$$mount_command" -i -t vfat' "$$effects"; \
 	grep -Fq '"$$umount_command" -i --' "$$effects"; \
+	grep -Fq 'uid=0 | gid=0) ;;' "$$effects"; \
+	grep -Fq 'uid=* | gid=*) return 1 ;;' "$$effects"; \
+	grep -Fq "mount_root_metadata=\$$(stat -Lc '%u:%g:%F' -- \"\$$mount_root\")" "$$effects"; \
+	grep -Fq "[ \"\$$mount_root_metadata\" = '0:0:directory' ]" "$$effects"; \
 	grep -Fq 'destructive_started=1' "$$effects"; \
 	grep -Fq 'campaign_complete=1' "$$effects"; \
 	grep -Fq 'mount_is_exact_identity' "$$effects"; \

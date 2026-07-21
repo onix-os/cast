@@ -9,7 +9,10 @@ The current campaign is a filesystem-substrate proof. It formats one admitted
 whole disposable disk as FAT32, mounts it only below
 `/run/cast-vm-boot-storage`, creates one declared publication-parent directory,
 syncs and unmounts it, then remounts it to prove that directory persisted. It
-does **not** publish a boot payload, mutate the guest's live ESP, change boot
+explicitly disables `mkfs.fat`'s fake whole-device MBR, then repeats the
+partition-free target admission before mounting. The result remains a
+whole-device filesystem rather than a partition table. It does **not** publish
+a boot payload, mutate the guest's live ESP, change boot
 entries, reboot, simulate power loss, or prove a GPT ESP/XBOOTLDR topology.
 It is deliberately a cooperative disposable-guest harness, not production
 descriptor authority: guest root must remain exclusive, the admitted device
@@ -135,7 +138,10 @@ selection in the fixed disposable VM; they do not create retained block-device
 authority across hostile hotplug or guest-root races.
 
 The VFAT attachment is admitted only with `rw`, `nosuid`, `nodev`, `noexec`,
-`nosymfollow`, root ownership, file mask `0133`, and directory mask `0022`.
+`nosymfollow`, effective root ownership, file mask `0133`, and directory mask
+`0022`. Linux may omit default `uid=0,gid=0` strings from mountinfo, so the
+harness proves their effective result from the mounted filesystem root instead
+of requiring those optional textual spellings.
 After creating the declared parent, the campaign synchronizes, unmounts,
 remounts, checks persistence, synchronizes again, and unmounts.
 

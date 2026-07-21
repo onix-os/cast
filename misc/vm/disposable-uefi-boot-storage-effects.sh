@@ -60,9 +60,22 @@ mount_is_exact_target() {
         case ",$2," in *,$required,*) ;; *) return 1 ;; esac
     done
     [ "$3" = vfat ] || return 1
-    for required in rw uid=0 gid=0 fmask=0133 dmask=0022; do
+    for required in rw fmask=0133 dmask=0022; do
         case ",$4," in *,$required,*) ;; *) return 1 ;; esac
     done
+    super_options=$4
+    old_ifs=$IFS
+    IFS=,
+    set -- $super_options
+    IFS=$old_ifs
+    for option do
+        case "$option" in
+            uid=0 | gid=0) ;;
+            uid=* | gid=*) return 1 ;;
+        esac
+    done
+    mount_root_metadata=$(stat -Lc '%u:%g:%F' -- "$mount_root") || return 1
+    [ "$mount_root_metadata" = '0:0:directory' ] || return 1
     [ "$(target_mount_count)" = 1 ] || return 1
 }
 
@@ -233,7 +246,7 @@ run_campaign() {
     # Literal last pre-effect authority check: it also rechecks freshness.
     verify_marker "$consumed_marker"
     destructive_started=1
-    run_bounded 120s "$mkfs_command" -I -F 32 -n "$filesystem_label" \
+    run_bounded 120s "$mkfs_command" -I --mbr=n -F 32 -n "$filesystem_label" \
         -- "$target_disk" \
         || die 'bounded VFAT creation failed on the exact admitted target'
     verify_target_disk
