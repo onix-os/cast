@@ -22,9 +22,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
   As of 2026-07-21, startup's diagnostic checkpoint remains read-only and fail closed.
   Immediately before it, the mutable gate has one sealed, bounded ladder: ActiveReblit replacement-mode repair, forward exchange-parent durability, exact `UsrExchanged` root-ABI normalization, rollback-decision persistence and routing, and `/usr` reversal.
-  Exact RootLinks-sourced `UsrRestored` routes through candidate preservation. NewState advances generation 15 through 16 `FreshDbInvalidationIntent` and 17 `FreshDbInvalidated` to 18 `RollbackComplete`, then finalizes cleanly; ActiveReblit advances generation 13 to 14 `RollbackComplete` and remains byte-stable.
-  ActivateArchived likewise advances generation 11 to generation-12 `RollbackComplete`; exact RootLinks generation 12 and NewState generation 18 each finalize through one record-bound deletion and the same locked-store clean handoff, while legacy `UsrExchangeIntent` and `UsrExchanged` admission remains intact.
-  Both RootLinks terminal lanes remain fresh-handle evidence only, not the unchanged legacy Intent/Exchanged `SIGKILL` matrix, reboot, or power loss; exact private-detach residue can now be restored by the store's authenticated writer-reopen foundation.
+  Exact RootLinks-sourced `UsrRestored` routes through candidate preservation. NewState advances generation 15 through 16 `FreshDbInvalidationIntent` and 17 `FreshDbInvalidated` to 18 `RollbackComplete`; ActiveReblit advances generation 13 to 14 `RollbackComplete`; both then finalize cleanly.
+  ActivateArchived likewise advances generation 11 to generation-12 `RollbackComplete`; exact RootLinks NewState generation 18, ActivateArchived generation 12, and ActiveReblit generation 14 each finalize through one record-bound deletion and the same locked-store clean handoff, while legacy `UsrExchangeIntent` and `UsrExchanged` admission remains intact.
+  All three RootLinks terminal lanes remain fresh-handle evidence only, not the unchanged legacy Intent/Exchanged `SIGKILL` matrices, reboot, or power loss; exact private-detach residue can now be restored by the store's authenticated writer-reopen foundation.
   For the pre-existing later source set, NewState preserves its candidate, invalidates the exact fresh row, completes, and authenticates journal absence. ActivateArchived completes and finalizes in separate entries.
   ActiveReblit preserves its whole replacement wrapper; exact cleared ownership and provenance can route the no-boot case through `RollbackComplete` and later same-lock finalization.
   `BootSyncStarted` instead routes only to `BootRepairRequired`; observed
@@ -80,7 +80,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   Commit `7b3770b1` captures the exact non-Clone `TransitionJournalRecordBinding` before namespace/database evidence and moves it through NewState create/normalize/move, ActivateArchived, ActiveReblit, common effect/durability/persistence-facing authority, and dispatch; all six coarse semantic loads are eliminated, and `RestartRequired` now carries an opaque one-use unchanged-source authority. Its original identical-bytes/different-inode matrix was 44 pre-effect + 44 post-effect + 16 restart cases across current/historical epochs and both `/usr` outcomes, with `BootSyncStarted` only for ActiveReblit.
   Commits `fec890ad`, `c9140a88`, and `043a3c24` complete exact candidate persistence for NewState, ActivateArchived, and ActiveReblit respectively. Each consuming writer derives its sole `CandidatePreserved` successor from private operation evidence, validates the exact successor binding in the same store, destroys the old lock-bearing store, and requires an independent canonical reopen inside a final installation-revalidation sandwich. Covered publication faults, same-byte/different-inode replacement seams, and fresh restarts fail closed without extra database, non-journal namespace, or redispatch effects.
   Commit `67ad3de0` widens only the exact RootLinks source passage: current/historical epochs, all three operations, and both `/usr` outcomes now follow `UsrRestored` -> `CandidatePreserveIntent` -> `CandidatePreserved`, with one reverse exchange and all five root-link identities unchanged. Route mutation coverage is 360 cases across two seams; admission rejects another 360 races spanning all five links. Common binding totals become 64 pre-effect, 64 post-effect, and 24 restart cases; NewState and ActivateArchived writer totals are 24/120/96/48 for success/storage fault/binding substitution/restart, and ActiveReblit totals are 32/160/128/64. Accepted commit `e35a2183` then carries exact RootLinks NewState generation-15 `CandidatePreserved` through the bound non-Clone record-inode advance to generation-16 `FreshDbInvalidationIntent`, same-store validation, old-store destruction, and canonical reopen. Accepted commit `7457b259` continues only that exact source through capture, Apply-or-Finish effect reconciliation, the bound generation-17 `FreshDbInvalidated` advance, same-store validation, and independent reopen. Present evidence permits at most one exact removal; proved joint absence performs zero. Its success/storage/binding/fresh-handle matrices are 48/240/192/96, and its all-five-link races are 240 capture, 240 pre-effect, 120 Applied post-attempt, 240 initial-persistence, and 240 final-revalidation executions. Accepted commit `68759ba3` proves genuine same-boot `SIGKILL` recovery only for this RootLinks NewState generation-16 -> generation-17 boundary: exactly 20 cases = two epochs x (five SQLite application-transaction seams + five journal-update durability seams). The parent releases all installation, journal, and database handles; crash and recovery children re-execute production `CleanSystemStartup` under 15-second kill-and-reap deadlines, and recovery is the first SQLite opener. A nonempty selected row proves real cascade deletion. The first four database seams roll back, then recovery performs one exact `Applied` removal; post-commit and journal paths perform zero removals and converge through exact `AlreadySatisfied` or source-versus-successor evidence. Post-crash raw temporary inventory precedes any recovery store open, all five root-link identities remain exact, and unrelated effects stay zero. Accepted commit `f2b305d4` separately admits exact RootLinks NewState generation-17 `FreshDbInvalidated`, captures its non-Clone record-inode binding, consumes it through one bound advance to generation-18 `RollbackComplete`, validates the successor in the same store, drops the old lock-bearing store, and independently reopens the canonical journal to match that same successor inode and record. Its base-success/storage-fault/binding-substitution/fresh-handle matrices cover 48/240/192/96 executions; fresh-handle reopen is not process death. Its 480 all-five-root-ABI races split into 240 capture and 240 final-revalidation cases. This route is journal-only and invokes no database, non-journal namespace, reverse-exchange, candidate, boot, cleanup, terminal-delete, or finalization effect. Accepted commit `a3fb25d3` independently admits exact RootLinks ActivateArchived generation-11 `CandidatePreserved` and carries its exact record-inode binding from capture through one bound advance to generation-12 `RollbackComplete`, same-store validation, and independent reopen. Accepted commit `a05997d8`, with acceptance-gate follow-up `cfb5a70d`, does the same for RootLinks ActiveReblit generation 13 to generation-14 `RollbackComplete`. The full endpoint performs exactly one reverse `/usr` exchange and preserves all five root-link identities; ActiveReblit also performs its one wrapper exchange. `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`. At that completion-route checkpoint, NewState was byte-stable at generation 18, ActivateArchived at generation 12, and ActiveReblit at generation 14 because RootLinks terminal finalization remained closed. The 20-case `SIGKILL` claim remains only generation 16 -> 17; if its invalidation successor was already canonical, the recovery entry may naturally take generation 17 -> 18 without proving a completion-route death boundary. It is not reboot or power-loss proof. The next blocker was an exact record-bound terminal-deletion primitive before operation finalization.
-  Accepted commit `8f391985` closes the bound-delete store blocker: its exact same-store non-`Clone` binding primitive detaches with `RENAME_NOREPLACE`, authenticates the retained inode/frame, unlinks once, syncs once, and preserves foreign winners. Accepted commit `0a91c2ed` adds writer-reopen recovery after exact public journal-directory and lock authentication: exactly one canonical-form owner-private, single-link, mode-`0600`, valid-terminal `.state-transition.delete-*` is retained by complete bounded frame and inode, the exact inventory is double-observed, and it is restored once to canonical with `RENAME_NOREPLACE` plus one directory sync. Ambiguous restore/sync reports reconcile without retry; foreign, malformed, unsafe, corrupt, nonterminal, multiple, or canonical-coexisting evidence fails closed; read-only still rejects residue; and the cooperative same-credential limitation remains. Its gates pass 13/13 focused recovery, 10/10 bound-delete, and 110/110 direct-journal tests. Accepted commit `a0966008` consumes bound deletion only for ActivateArchived `RootLinksComplete` generation-12 `RollbackComplete`, preserving legacy Intent/Exchanged admission and the same locked-store database/topology/all-five-link/public-absence/clean-handoff proof. Accepted commit `b0af65d6` then widens only exact RootLinks NewState generation-18 finalization while preserving legacy Intent/Exchanged admission. Its binding-first authority captures the exact non-`Clone` record binding before database or namespace evidence, revalidates it, and consumes it once through `delete_record_binding`; the same locked store carries exact jointly-absent database proof, preserved-candidate namespace and all five root links, repeated public absence, and clean handoff. Every delete error, including storage-classified absence, fails that entry. Coverage is 7 authority, 14 executor, 5 handoff, 2 fresh-handle, and 2 endpoint tests, with 48 success, 15 link-race, and 6 storage cases. The unchanged legacy 12-case terminal `SIGKILL` matrix excludes RootLinks; RootLinks itself still has no `SIGKILL`, reboot, or power-loss proof. ActiveReblit remains unwidened. Commit `0a91c2ed` remains store-level fresh-reopen/fault-race evidence, not process-death proof.
+  Accepted commit `8f391985` closes the bound-delete store blocker: its exact same-store non-`Clone` binding primitive detaches with `RENAME_NOREPLACE`, authenticates the retained inode/frame, unlinks once, syncs once, and preserves foreign winners. Accepted commit `0a91c2ed` adds writer-reopen recovery after exact public journal-directory and lock authentication: exactly one canonical-form owner-private, single-link, mode-`0600`, valid-terminal `.state-transition.delete-*` is retained by complete bounded frame and inode, the exact inventory is double-observed, and it is restored once to canonical with `RENAME_NOREPLACE` plus one directory sync. Ambiguous restore/sync reports reconcile without retry; foreign, malformed, unsafe, corrupt, nonterminal, multiple, or canonical-coexisting evidence fails closed; read-only still rejects residue; and the cooperative same-credential limitation remains. Its gates pass 13/13 focused recovery, 10/10 bound-delete, and 110/110 direct-journal tests. Accepted commits `a0966008`, `b0af65d6`, and `806003ac` consume bound deletion only for exact RootLinks ActivateArchived generation 12, NewState generation 18, and ActiveReblit generation 14 while preserving legacy Intent/Exchanged admission. The ActiveReblit path captures mandatory non-`Clone` binding before database/namespace evidence, performs exactly one bound delete, and keeps the same locked store through exact `ExistingCandidate`/`Cleared` provenance, whole-wrapper/index, all-five-link, two-public-absence, and clean-handoff proof. Every delete error, including authenticated `Absent`, fails. Its proof covers 24 focused tests, a 24-case success matrix, 15 link races, fresh handles, and clean-then-clean endpoint. The unchanged legacy 12-case terminal `SIGKILL` matrix excludes RootLinks; no RootLinks finalizer has `SIGKILL`, reboot, or power-loss proof. Commit `0a91c2ed` remains store-level fresh-reopen/fault-race evidence, not process-death proof.
   Commit `911dcbc` separated rollback routing from decision persistence.
   Startup deliberately permits only one recovery journal mutation per entry.
   An entry which persists `RollbackDecided` returns `RecoveryPending`; it does
@@ -457,7 +457,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   exact RootLinks-only genuine same-boot process-death proof: 20 cases = two epochs x (five SQLite transaction seams + five journal-update seams).
   After all parent handles are released, crash and recovery children re-execute production `CleanSystemStartup` under 15-second deadlines; recovery is the first database opener. A nonempty selection proves real deletion. The first four SQLite deaths roll back and require one `Applied` recovery removal;
   post-commit and journal deaths remove zero, preserve exact `AlreadySatisfied` or source-versus-successor handling, inspect raw temporaries before any recovery store open, retain all five root-link identities, and perform no unrelated effects. Accepted commit `f2b305d4` separately captures exact generation-17 `FreshDbInvalidated` with its non-Clone record-inode binding, consumes one bound advance, validates generation-18 `RollbackComplete` in the same store, drops the old store, and independently reopens the same successor inode and record. Its base-success/storage/binding/fresh-handle totals are 48/240/192/96, and 480 root-ABI races split across capture/final revalidation; the journal-only route leaves database, non-journal namespace, reverse, candidate, boot, cleanup, deletion, and finalization effects at zero. At that completion-only checkpoint, generation 18 remained stable because RootLinks finalization stayed closed.
-  Accepted commit `8f391985` supplies exact record-bound store deletion; `a0966008` consumes it only for exact RootLinks ActivateArchived generation 12, preserving Intent/Exchanged and retaining the same locked store through post-delete database/topology/all-five-link/public-absence proof and clean handoff. Accepted commit `0a91c2ed` restores only one exactly authenticated terminal private-detach residue on writer reopen. Accepted commit `b0af65d6` now consumes exact bound deletion for RootLinks NewState generation 18 through the same locked-store proof and clean handoff described above; ActiveReblit remains unwidened. The RootLinks NewState finalizer has fresh-handle evidence only and adds no `SIGKILL`, reboot, or power-loss proof.
+  Accepted commit `8f391985` supplies exact record-bound store deletion; `a0966008`, `b0af65d6`, and `806003ac` consume it only for exact RootLinks ActivateArchived generation 12, NewState generation 18, and ActiveReblit generation 14 while preserving Intent/Exchanged. ActiveReblit retains mandatory binding-first authority, one bound delete, and the same locked store through exact post-delete database/topology/index/all-five-link/two-public-absence proof and clean handoff. All three RootLinks finalizers have fresh-handle evidence only and add no `SIGKILL`, reboot, or power-loss proof. Accepted commit `0a91c2ed` restores only one exactly authenticated terminal private-detach residue on writer reopen.
   Commit `9adc2760` preserves the inventory-gate coverage while avoiding the host argument-size limit.
 
   Commit `20b36768` completes Phase 11A's exact fresh-transition removal
@@ -619,40 +619,37 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   ActiveReblit, and terminal process-death, reboot, and power-loss proof
   remained open.
 
-  ActiveReblit terminal finalization is now a separate deterministic
-  production checkpoint rather than an extension of the NewState finalizer.
-  Admission requires an exact ActiveReblit `RollbackComplete` plan with
-  `candidate == previous`, an `ExistingCandidate` database observation for
-  that state under `Cleared` transition ownership, present matching immutable
-  provenance, `previous: None`, and no global in-flight transition.
-  Binding-first database -> namespace -> database capture and revalidation
-  retain the source database, active-state reservation, journal binding, and
-  exact preserved whole-wrapper topology. The replacement-wrapper index is
-  part of that topology and must remain identical across the retained before
-  and after snapshots and every fresh capture.
+  Accepted commit `806003ac` makes ActiveReblit terminal finalization a separate
+  deterministic production checkpoint rather than an extension of another
+  operation's finalizer. RootLinks admission is restricted to exact
+  `RollbackComplete` generation 14 while the legacy `UsrExchangeIntent` and
+  `UsrExchanged` sources remain intact. Mandatory binding-first authority
+  captures the exact non-`Clone` source record before database or namespace
+  evidence. Admission requires `candidate == previous`, exact
+  `ExistingCandidate` database evidence under `Cleared` transition ownership,
+  matching immutable provenance, `previous: None`, no global in-flight
+  transition, the preserved whole-wrapper topology and replacement-wrapper
+  index, and unchanged identities for all five root links.
 
-  The consuming finalizer keeps the original public journal directory and
-  lock-bearing store continuously retained. It authenticates the exact public
-  source, repeats final authority and public-name validation, and makes exactly
-  one conditional terminal delete. It neither reopens nor retries. Deletion is
-  reconciled only as the exact source record or authenticated public absence;
-  success requires the latter to remain stable across the consuming
-  post-delete database -> namespace -> database proof and a second public
-  observation. The same still-locked store then enters the operation-neutral
-  clean-startup handoff, where mutable namespace and database audits precede
-  the shared orphan-transition, prune-residue, and final public-absence gate.
-  No database row, provenance, wrapper, non-journal namespace, trigger,
-  cleanup, or other finalization effect is reachable from this checkpoint.
+  The consuming finalizer retains the original public journal directory and
+  lock-bearing store continuously. It revalidates and consumes that exact
+  binding through exactly one `delete_record_binding`; every delete error,
+  including authenticated `Absent`, fails rather than becoming success. The
+  same locked store crosses post-delete database -> namespace -> database
+  proof, two exact public-absence observations, and the shared clean-startup
+  handoff. Mutable namespace and database audits precede the shared orphan-row,
+  prune-residue, and final absence gate. No database row, provenance, wrapper,
+  non-journal namespace, trigger, cleanup, or other effect is changed.
 
-  Deterministic terminal-delete faults and fresh-handle restart cover both
-  observed source-or-absence sides without treating absence as deletion
-  causality. A separate real-process checkpoint now covers an exact 2 x 2 x 3
-  matrix: current and historical record epochs, both rollback sources, and
-  final-PRE, post-unlink, and post-directory-sync kill boundaries. Those 12
-  cases use genuine same-boot `SIGKILL` followed by fresh-process production
-  startup. Historical epoch means only that the journal witness differs from
-  the running epoch; it is not a reboot simulation, and no reboot or power-loss
-  durability is claimed.
+  Coverage includes 24 focused contracts and the full 24-case success matrix,
+  15 all-five-link races, deterministic delete and storage failures,
+  same-bytes/different-inode and public-binding rejection, fresh-handle reopen,
+  and an endpoint that reaches clean then remains clean on the next entry. The
+  unchanged 12-case process matrix spans current and historical epochs, both
+  legacy sources, and final-PRE, post-unlink, and post-directory-sync deaths;
+  RootLinks is excluded. Those cases are genuine same-boot `SIGKILL`, not
+  reboot or power-loss durability. `BootSyncStarted` remains disjoint and
+  routes unchanged to `BootRepairRequired`.
 
 ## Diagnostic reconciliation and namespace inventory
 
@@ -799,11 +796,12 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   terminal deletion. Test-only one-shot seams fire immediately after successful
   canonical unlink and journal-directory fsync; the established final-PRE hook
   supplies the exact source-survives boundary. Current and historical epochs,
-  both rollback sources, and all three boundaries form 12 genuine `SIGKILL`
+  both legacy rollback sources, and all three boundaries form 12 genuine `SIGKILL`
   crash/recovery cases through `CleanSystemStartup`. The parent seeds an
   anchored persistent database with exact joint fresh-state absence, records
   public journal identities and bytes, and releases every fixture handle before
   either child opens fresh installation and database capabilities.
+  RootLinks is excluded from this unchanged matrix.
 
   Final-PRE death preserves the exact terminal inode and bytes. Post-unlink and
   post-fsync death expose lock-only public inventory, while `.cast`, journal,
@@ -913,9 +911,9 @@ completion, and repository closure remain authoritative in `PLAN.md`.
 
 ## Remaining recovery campaign
 
-  The production ladder covers the authenticated `/usr` rollback prefix and exact RootLinks rollback for all three operations through candidate preservation and their admitted later boundaries. NewState reaches generation-18 `RollbackComplete` and finalizes in a later bounded entry; ActivateArchived does the same from generation 12. ActiveReblit reaches generation-14 `RollbackComplete` and remains byte-stable.
+  The production ladder covers the authenticated `/usr` rollback prefix and exact RootLinks rollback for all three operations through candidate preservation and their admitted later boundaries. NewState reaches generation-18 `RollbackComplete`, ActivateArchived reaches generation 12, and ActiveReblit reaches generation 14; each finalizes in its own later bounded entry.
   Accepted commits `7457b259`, `68759ba3`, and `f2b305d4` carry RootLinks NewState from generation 16 through exact invalidation to generation 18; only the generation-16 -> 17 boundary has its 20-case same-boot `SIGKILL` proof. Commits `a3fb25d3`, `a05997d8`, and `cfb5a70d` carry ActivateArchived to generation 12 and ActiveReblit to generation 14. The endpoint performs one reverse `/usr` exchange and preserves every root-link identity; ActiveReblit also exchanges its wrapper once.
-  Accepted commit `8f391985` supplies exact record-bound deletion. Accepted commits `a0966008` and `b0af65d6` consume it only for exact RootLinks ActivateArchived generation 12 and NewState generation 18 respectively, preserving legacy Intent/Exchanged admission and the same locked-store post-delete database/topology/five-link/public-absence proof and clean handoff. Accepted commit `0a91c2ed` adds exact terminal private-detach restoration on writer reopen. ActiveReblit finalization remains closed, and neither RootLinks finalizer has `SIGKILL`, reboot, or power-loss proof. The earlier source set retains the exact NewState suffix through authenticated terminal absence and the ActiveReblit no-boot-repair suffix through shared clean admission.
+  Accepted commit `8f391985` supplies exact record-bound deletion. Accepted commits `a0966008`, `b0af65d6`, and `806003ac` consume it only for exact RootLinks ActivateArchived generation 12, NewState generation 18, and ActiveReblit generation 14 respectively, preserving legacy Intent/Exchanged admission and the same locked-store post-delete database/topology/five-link/two-public-absence proof and clean handoff. Accepted commit `0a91c2ed` adds exact terminal private-detach restoration on writer reopen. No RootLinks finalizer has `SIGKILL`, reboot, or power-loss proof. The earlier source set retains the exact operation-specific suffixes through authenticated terminal absence.
   Separate NewState entries preserve the candidate, invalidate the exact fresh transition or accept proved joint absence, route to completion, and delete the terminal record.
   Separate no-boot ActiveReblit entries preserve the whole replacement wrapper and route `CandidatePreserved` to `RollbackComplete`;
   only a further entry may authenticate and delete that terminal record. Every entry handles only its observed checkpoint,
@@ -954,8 +952,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   faults, six evidence races, and both fresh-handle restart sides. Updated
   sibling-dispatch and reverse-`SIGKILL` contracts prove one operation owns the
   checkpoint and no restart performs a second move or same-entry completion.
-  ActiveReblit retains deterministic terminal finalization, authenticated clean
-  handoff, and its exact 12-case same-boot terminal `SIGKILL` matrix.
+  ActiveReblit retains deterministic RootLinks terminal finalization and clean
+  handoff; its exact 12-case same-boot terminal `SIGKILL` matrix remains legacy-only.
   Commit `c8c5ea41` production-wires ActivateArchived completion as a separate
   bounded entry. Accepted commit `a3fb25d3` extends only that entry to exact RootLinks generation-11 `CandidatePreserved`, carrying its bound record to generation-12 `RollbackComplete`. Commit `32bf8589` adds its operation-specific finalizer for legacy Intent and Exchanged sources: exact cleared candidate and previous rows with candidate provenance survive binding-first database -> namespace -> database proof, one same-store deletion, repeated absence, and same-lock clean admission.
   Commit `c6362aae` adds the matching 12-case same-boot terminal `SIGKILL` matrix
@@ -964,7 +962,7 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   database/namespace evidence, consumes it once through record-bound deletion,
   and retains the same locked store through post-delete database -> namespace -> database proof, including archived topology, all five links, repeated public
   absence, and clean handoff.
-  Accepted commit `b0af65d6` applies that exact architecture to RootLinks NewState generation 18, with the deterministic coverage and delete-error policy recorded above. ActiveReblit is not widened. Commit `0a91c2ed` adds only exact writer-reopen residue restoration; it does not prove RootLinks `SIGKILL`, reboot, or power-
+  Accepted commit `b0af65d6` applies that exact architecture to RootLinks NewState generation 18. Accepted commit `806003ac` applies it only to RootLinks ActiveReblit generation 14 with the deterministic coverage and delete-error policy recorded above. Commit `0a91c2ed` adds only exact writer-reopen residue restoration; it does not prove RootLinks `SIGKILL`, reboot, or power-
   loss behavior. The ladder still has no roll-forward executor, boot publisher, actual
   boot-repair attempt, cleanup, or power-loss-equivalent proof.
   The exact reverse prefix has deterministic contracts and genuine
@@ -972,8 +970,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   real-startup matrices, all five journal durability faults across each of four
   persistence boundaries, deterministic terminal-delete faults, 12 real
   terminal process-death cases, and the 28 candidate-move cases above, but not
-  process death at every earlier database and routing effect. ActiveReblit adds terminal-delete fault injection, fresh-handle
-  restart, and 12 genuine same-boot process-death cases. ActivateArchived adds
+  process death at every earlier database and routing effect. ActiveReblit adds RootLinks terminal-delete fault injection and fresh-handle
+  restart, while its 12 genuine same-boot process-death cases remain legacy-only. ActivateArchived adds
   its 12 terminal cases plus the 28 candidate-preservation cases above, but
   its other earlier interruption boundaries remain open. None of these lanes
   has reboot or power-loss proof: `SIGKILL` preserves the
@@ -990,10 +988,10 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   must converge to exactly one authenticated live tree and one terminal
   outcome without deleting or overwriting a foreign entry.
   The reverse `/usr` prefix now covers 12 execution-boundary and 30
-  journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState and
-  ActiveReblit terminal deletion each retain an exact 12-case matrix; NewState's
-  and ActivateArchived's matching matrices cover only legacy Intent/Exchanged,
-  not their fresh-handle-only RootLinks finalizers. NewState and ActivateArchived candidate
+  journal-update-boundary `SIGKILL` cases with fresh-process reopen. NewState,
+  ActiveReblit, and ActivateArchived terminal deletion each retain an exact
+  legacy Intent/Exchanged-only 12-case matrix, not their fresh-handle-only
+  RootLinks finalizers. NewState and ActivateArchived candidate
   preservation each cover 2 x 2 x 7 process-death cases; RootLinks NewState
   invalidation adds 2 x (5 SQLite + 5 journal) = 20 same-boot cases. This stays
   unchecked because the other phases and true reboot or power-loss durability

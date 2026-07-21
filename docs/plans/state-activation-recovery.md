@@ -103,10 +103,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
   now covers the shared `/usr` reversal prefix and exact RootLinks
   `RollbackComplete` for NewState, ActivateArchived, and ActiveReblit. Exact
-  RootLinks NewState generation 18 and ActivateArchived generation 12 now reach
-  authenticated terminal journal absence through one record-bound deletion and
-  retained same-store clean handoff; ActiveReblit RootLinks finalization remains
-  closed. The genuine same-boot NewState death matrix remains confined to
+  RootLinks NewState generation 18, ActivateArchived generation 12, and
+  ActiveReblit generation 14 now reach authenticated terminal journal absence
+  through one record-bound deletion and retained same-store clean handoff. The
+  genuine same-boot NewState death matrix remains confined to
   fresh-row invalidation rather than terminal deletion. The complete pre-existing
   NewState suffix and the ActiveReblit no-boot-repair suffix reach the same
   clean-startup handoff. An ActiveReblit
@@ -119,7 +119,7 @@ and instant rollback mechanism; it hardens their failure semantics.
   production path performs the repair or emits that successful record.
   The pre-existing ActivateArchived rollback source set still reaches that same
   handoff. Exact private-detach residue can now be restored on writer reopen.
-  Neither RootLinks finalizer extends the legacy terminal `SIGKILL` claim to
+  No RootLinks finalizer extends a legacy terminal `SIGKILL` source axis to
   RootLinks or proves reboot or power loss. Roll-forward execution, the actual boot
   repair effect and its durable publisher, and cleanup are not implemented.
   The public `ReadOnlyClient` path is now real: construction requires the explicit
@@ -816,10 +816,19 @@ absence, the preserved-candidate namespace and all five root links, repeated
 public absence, and clean handoff. Every delete error, including storage-
 classified absence, fails the current entry. Coverage is 7 authority, 14
 executor, 5 handoff, 2 fresh-handle, and 2 endpoint tests, including 48 success,
-15 link-race, and 6 storage cases. The unchanged legacy 12-case terminal
-`SIGKILL` matrix excludes RootLinks; RootLinks itself still has no `SIGKILL`,
-reboot, or power-loss proof. ActiveReblit remains unwidened. The cooperative
-same-credential limitation remains explicit. No cleanup or boot claim is added.
+  15 link-race, and 6 storage cases. Accepted commit `806003ac` applies the same
+  one-shot architecture only to exact RootLinks ActiveReblit generation 14 while
+  retaining legacy Intent/Exchanged admission. It captures mandatory non-`Clone`
+  record binding before database or namespace evidence, consumes it in exactly
+  one bound delete, and retains the same locked store through exact
+  `ExistingCandidate`/`Cleared` ownership and provenance, whole-wrapper topology
+  and index, all five links, two public-absence observations, and clean handoff.
+  Every delete error, including authenticated `Absent`, fails. Its 24 focused
+  tests and full 24-case success matrix, 15 all-five-link races, fresh-handle
+  coverage, and clean-then-clean endpoint pass. The unchanged legacy 12-case
+  terminal `SIGKILL` matrix excludes RootLinks; no RootLinks finalizer has
+  `SIGKILL`, reboot, or power-loss proof. The cooperative same-credential
+  limitation remains explicit. No cleanup or boot claim is added.
 
 ### Startup reconciliation and interruption campaign
 
@@ -834,12 +843,15 @@ deletion each stop after their own boundary. ActiveReblit preserves its whole
 replacement wrapper. When boot repair is not required, a later entry advances
 only the journal from `CandidatePreserved` to `RollbackComplete`; that
 successor is never finalized in the same entry. A further entry admits the
-terminal record only with the exact `ExistingCandidate` row under `Cleared`
+RootLinks terminal record only at generation 14, while retaining the legacy
+Intent/Exchanged sources, and only with the exact `ExistingCandidate` row under `Cleared`
 ownership, present immutable provenance, `previous: None`, `candidate ==
 previous`, and the unchanged preserved-wrapper topology and wrapper index. Its
-operation-specific finalizer retains the same continuously locked journal
-store, performs one conditional deletion, authenticates public absence, and
-transfers that store directly into the shared clean-startup audit. It performs
+operation-specific finalizer captures the exact non-`Clone` binding before
+database or namespace evidence, retains the same continuously locked journal
+store, consumes exactly one bound deletion, and requires post-delete database
+-> namespace -> database, all-five-link, and two-public-absence proof before
+transferring that store directly into the shared clean-startup audit. It performs
 no database, non-journal namespace, trigger, cleanup, or wrapper effect. An
 exact `BootSyncStarted` source instead routes the preserved candidate to
 `BootRepairRequired`; independently observed `BootRepairStarted` evidence
@@ -849,15 +861,16 @@ and operation-specific real-gate contracts cover the complete deterministic
 matrices, journal-update and terminal-delete faults, evidence races, and
 fresh-handle restart.
 
-The separate ActiveReblit terminal process lane now runs an exact 2 x 2 x 3
-matrix: current and historical record epochs, both rollback sources, and three
+The separate legacy ActiveReblit terminal process lane runs an exact 2 x 2 x 3
+matrix: current and historical record epochs, both legacy rollback sources, and three
 genuine same-boot `SIGKILL` boundaries. Final-PRE death retains the exact
 canonical source; death immediately after unlink exposes kernel-observed
 absence before the journal-directory barrier; and death after that directory
 sync exposes post-barrier absence. Fresh recovery processes enter production
 startup and preserve the exact cleared existing-candidate row, provenance,
 wrapper topology, and wrapper index while converging through the appropriate
-source-or-absence path to clean admission.
+source-or-absence path to clean admission. RootLinks is excluded from this
+unchanged 12-case matrix.
 
 Commit `8c22ec67` establishes two independently sealed ActivateArchived
 foundations without making either production-reachable. Candidate preservation
@@ -935,8 +948,10 @@ finalization through the non-`Clone` record binding, one bound deletion, and
 post-delete database/topology/five-link/public-absence proof in the same locked
 store. Accepted commit `b0af65d6` adds the matching exact RootLinks NewState
 generation-18 bound deletion and clean handoff; its full deterministic coverage
-is recorded above. Commit `0a91c2ed` restores the single exact recoverable
-terminal residue during writer reopen. Neither RootLinks finalizer extends the
+is recorded above. Accepted commit `806003ac` adds matching exact RootLinks
+ActiveReblit generation-14 bound deletion and clean handoff while preserving
+its legacy terminal source axis. Commit `0a91c2ed` restores the single exact recoverable
+terminal residue during writer reopen. No RootLinks finalizer extends the
 unchanged legacy 12-case `SIGKILL` source axis or simulates reboot or power loss.
 Later rollback, roll-forward, durable boot publication, production boot-repair
 wiring, cleanup, other earlier interruption boundaries, reboot, and
