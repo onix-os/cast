@@ -25,7 +25,7 @@ closure remain authoritative in `PLAN.md`.
 
 ## Operation-specific prefix and state machine
 
-  As of 2026-07-20, one intentionally unwired coordinator contract owns the
+  As of 2026-07-21, one intentionally unwired coordinator contract owns the
   durable prefix through `RootLinksComplete` for all three operations. While
   that phase remains canonical, ActiveReblit must consume a sealed,
   non-trigger-ready typestate to reserve the exact replacement wrapper and
@@ -353,8 +353,8 @@ closure remain authoritative in `PLAN.md`.
   attempt, 240 initial-persistence, and 240 final-revalidation races. The
   endpoint still performs exactly one reverse `/usr` exchange and preserves
   the targets and identities of all five canonical root links. A later
-  NewState entry leaves generation 17 byte-stable because RootLinks completion
-  and terminal finalization remain closed.
+  At that checkpoint, a later NewState entry left generation 17 byte-stable
+  because RootLinks completion and terminal finalization remained closed.
 
   Accepted commit `a3fb25d3` independently admits exact RootLinks-sourced
   ActivateArchived `CandidatePreserved` generation 11 and carries its exact
@@ -382,9 +382,7 @@ closure remain authoritative in `PLAN.md`.
   one reverse `/usr` exchange and one ActiveReblit wrapper exchange. It invokes
   no boot, database, non-journal namespace, finalization, or cleanup effect.
   `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
-  NewState stays byte-stable at generation 17, ActivateArchived at generation
-  12, and ActiveReblit at generation 14 because every RootLinks finalization
-  gate remains closed. Accepted commit `68759ba3` adds genuine same-boot
+  Accepted commit `68759ba3` adds genuine same-boot
   `SIGKILL` proof only for the RootLinks NewState generation-16 -> generation-17
   boundary: exactly 20 cases = two epochs x (five SQLite application-transaction
   seams + five journal-update durability seams). The parent releases every
@@ -397,10 +395,30 @@ closure remain authoritative in `PLAN.md`.
   `AlreadySatisfied` or source-versus-successor evidence. Post-crash raw
   temporary-file inventory precedes every recovery journal-store or SQLite
   open, all five root-link identities stay exact, and namespace, exchange, and
-  boot effects remain zero. This remains
-  same-boot evidence, not reboot or power-loss proof; RootLinks terminal
-  finalization is also open. NewState next requires the separately admitted
-  generation-17 `FreshDbInvalidated` -> generation-18 `RollbackComplete` edge.
+  boot effects remain zero. This remains same-boot evidence, not reboot or
+  power-loss proof.
+
+  Accepted commit `f2b305d4` separately admits only exact RootLinks NewState
+  generation-17 `FreshDbInvalidated`. It captures the non-Clone predecessor
+  record-inode binding, consumes it through one bound advance to generation-18
+  `RollbackComplete`, validates the successor in the same store, drops the old
+  lock-bearing store, and independently reopens the canonical journal to match
+  that same successor inode and record. Its base-success, storage-fault,
+  binding-substitution, and fresh-handle matrices cover 48, 240, 192, and 96
+  executions; fresh-handle reopen is not process-death evidence. Another 480
+  cases preserve all five root-ABI identities across 240 capture and 240
+  final-revalidation races.
+
+  This completion boundary is journal-only: it invokes no database,
+  non-journal namespace, reverse-exchange, candidate, boot, cleanup,
+  terminal-deletion, or finalization effect. NewState now remains byte-stable at
+  generation 18, ActivateArchived at generation 12, and ActiveReblit at
+  generation 14 because every RootLinks terminal-finalization gate remains
+  closed. The existing 20-case `SIGKILL` proof remains exclusively generation
+  16 -> 17. A recovery entry may naturally take generation 17 -> 18 when the
+  invalidation successor was already canonical, but that creates no completion-
+  boundary process-death claim. The next blocker is an exact record-bound
+  terminal-deletion primitive before any operation's RootLinks finalization.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -518,7 +536,8 @@ closure remain authoritative in `PLAN.md`.
   canonical reopen. Source-side restart uses zero-removal Finish; successor-
   side restart skips invalidation. Accepted commit `7457b259` makes this exact
   effect and persistence boundary production-reachable for the RootLinks
-  source, while leaving generation-17 completion and finalization closed.
+  source, while at that checkpoint leaving generation-17 completion and
+  finalization closed.
   Accepted commit `68759ba3` proves this RootLinks-only boundary across genuine
   same-boot process death: two epochs cross five real SQLite transaction seams
   and five journal-update seams for exactly 20 re-executed production-startup
@@ -529,7 +548,10 @@ closure remain authoritative in `PLAN.md`.
   post-commit and journal deaths require zero removal and preserve exact
   `AlreadySatisfied` or source/successor classification. All five root-link
   identities remain exact and every unrelated effect stays zero. This is not
-  reboot or power-loss proof. Generation-17 completion, later rollback actions,
+  reboot or power-loss proof. Accepted commit `f2b305d4` now supplies the
+  separate journal-only generation-17 -> generation-18 completion boundary
+  with exact predecessor/successor record-inode binding and no new process-
+  death claim. Exact bound terminal deletion, later rollback actions,
   roll-forward, triggers, and cleanup remain open. ActiveReblit's terminal
   finalizer now has an exact
   12-case real-process matrix across current/historical record epochs, both

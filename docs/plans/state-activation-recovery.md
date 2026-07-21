@@ -74,10 +74,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   incompatible database, active-selection, record, or installation authority.
   Beyond this chmod, the bounded rollback ladder documented in the
   [startup-reconciliation plan](state-activation-startup-reconciliation.md)
-  now covers the shared `/usr` reversal prefix, RootLinks NewState through exact
-  `FreshDbInvalidated` plus its genuine same-boot invalidation-death matrix, and
-  RootLinks ActivateArchived and ActiveReblit
-  through exact `RollbackComplete`; the complete pre-existing NewState suffix reaches
+  now covers the shared `/usr` reversal prefix and exact RootLinks
+  `RollbackComplete` for NewState, ActivateArchived, and ActiveReblit. The
+  genuine same-boot NewState death matrix remains confined to fresh-row
+  invalidation rather than completion. The complete pre-existing NewState suffix reaches
   authenticated terminal journal absence, and the ActiveReblit no-boot-repair
   suffix through the same clean-startup handoff. An ActiveReblit
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
@@ -709,9 +709,10 @@ zero.
 Five all-link mutation seams fail closed: 240 capture, 240 pre-effect, 120
 Applied post-attempt, 240 initial-persistence, and 240 final-revalidation
 executions. The endpoint performs exactly one reverse `/usr` exchange and
-leaves all five canonical root-link targets and identities unchanged. A later
-NewState entry leaves generation 17 byte-identical because its RootLinks
-completion and terminal-finalization gates remain closed.
+  leaves all five canonical root-link targets and identities unchanged. At
+  that checkpoint, a later NewState entry left generation 17 byte-identical
+  because its RootLinks completion and terminal-finalization gates remained
+  closed.
 
 Accepted commit `a3fb25d3` independently admits exact RootLinks-sourced
 ActivateArchived `CandidatePreserved` generation 11 and carries the exact
@@ -739,14 +740,29 @@ focused contract. The full RootLinks endpoint performs exactly one reverse
 `/usr` exchange and one ActiveReblit wrapper exchange. This entry performs no
 boot, database, non-journal namespace, finalization, or cleanup effect. Exact
 `BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
-NewState remains byte-stable at generation 17, ActivateArchived at generation
-12, and ActiveReblit at generation 14 because all RootLinks finalization gates
-remain closed. Commit `68759ba3` proves only the NewState invalidation boundary;
-it does not widen another rollback source or operation suffix. Other RootLinks
-process-death boundaries, terminal finalization, reboot, and power-loss durability
-remain unclaimed. The next NewState widening is the exact generation-17
-`FreshDbInvalidated` -> generation-18 `RollbackComplete` boundary; it must not
-silently admit terminal deletion.
+Accepted commit `f2b305d4` now admits only exact RootLinks NewState generation-17
+`FreshDbInvalidated`. It captures the non-Clone predecessor record-inode
+binding, consumes it through one bound advance to generation-18
+`RollbackComplete`, validates the successor in the same store, drops the old
+lock-bearing store, and independently reopens the canonical journal to match
+the same successor inode and record. Its base-success, storage-fault,
+binding-substitution, and fresh-handle matrices cover 48, 240, 192, and 96
+executions. The fresh-handle lane is not process-death evidence. Another 480
+cases retain all five root-ABI identities across 240 capture and 240 final-
+revalidation races.
+
+That completion entry is journal-only: database, non-journal namespace,
+reverse-exchange, candidate, boot, cleanup, terminal-deletion, and finalization
+effects all remain zero. NewState now stays byte-stable at generation 18,
+ActivateArchived at generation 12, and ActiveReblit at generation 14 because
+all RootLinks terminal-finalization gates remain closed. Commit `68759ba3` still
+proves only the 20-case NewState generation-16 -> generation-17 invalidation
+boundary. When its crash already made the generation-17 successor canonical,
+the recovery entry may naturally take the ordinary generation-17 -> 18 route;
+that does not create a completion-boundary `SIGKILL` claim. Other RootLinks
+process-death boundaries, reboot, and power-loss durability remain unclaimed.
+The next blocker is an exact record-bound terminal-deletion primitive before
+any operation's RootLinks finalization is widened.
 
 ### Startup reconciliation and interruption campaign
 
