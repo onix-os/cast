@@ -10,7 +10,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_new_state::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 36; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 37; \
 	for name in \
 		candidate_move_process_kill::startup_new_state_candidate_move_process_kill_recovers_without_second_move \
 		exclusions::startup_new_state_suffix_leaves_archived_candidate_preservation_zero_effect \
@@ -41,6 +41,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 		preparation_failures::startup_new_state_suffix_pre_move_evidence_failure_makes_zero_move_until_repaired \
 		preparation_failures::startup_new_state_suffix_post_move_durability_failure_finishes_without_second_move \
 		preparation_failures::startup_new_state_suffix_post_move_evidence_failure_reopens_preserved_layout_without_second_move \
+		root_links_terminal_process_kill::startup_new_state_root_links_terminal_delete_process_kills_restart_cleanly \
 		sequence::startup_new_state_suffix_consumes_exactly_one_checkpoint_per_entry_for_every_target_prefix \
 		sequence::startup_new_state_suffix_runs_the_exact_multi_entry_sequence_without_same_entry_fallthrough \
 		sequence::startup_new_state_suffix_reacquires_fresh_installation_database_journal_and_reservation_handles \

@@ -58,6 +58,7 @@ help:
 	@timeout 10s echo "  forge-startup-usr-rollback-activate-archived-complete-route-test  Run production one-entry ActivateArchived rollback-completion contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-activate-archived-finalization-test  Run terminal ActivateArchived rollback-finalization contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-active-reblit-finalization-test  Run terminal ActiveReblit rollback-finalization contracts"
+	@echo "  forge-startup-root-links-terminal-process-test  Run RootLinks terminal process-death contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-new-state-dispatch-test  Run the real-startup NewState rollback-suffix contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-admission-test  Run sealed read-only reverse-admission contracts"
 	@timeout 10s echo "  forge-startup-usr-rollback-reverse-projection-test  Run normalized reverse-exchange projection contracts"

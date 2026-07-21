@@ -9,6 +9,8 @@ use super::{
 };
 
 mod default_system_intent;
+#[cfg(test)]
+mod root_links_terminal_process_harness;
 mod usr_rollback_activate_archived;
 mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;

@@ -21,6 +21,7 @@ mod finalization_root_link_races;
 mod finalization_storage_faults;
 mod matrix;
 mod record_binding;
+mod root_links_terminal_process_kill;
 mod restart;
 mod storage_faults;
 mod support;

@@ -13,6 +13,7 @@ mod fresh_db_invalidation_process_harness;
 mod fresh_db_invalidation_process_kill;
 mod matrix;
 mod preparation_failures;
+mod root_links_terminal_process_kill;
 mod sequence;
 mod storage_faults;
 mod support;

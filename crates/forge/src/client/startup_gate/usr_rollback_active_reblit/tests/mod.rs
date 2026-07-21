@@ -41,5 +41,6 @@ mod finalization_storage_faults;
 mod matrix;
 mod new_state_regression;
 mod restart;
+mod root_links_terminal_process_kill;
 mod storage_faults;
 mod support;

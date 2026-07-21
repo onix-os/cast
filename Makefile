@@ -92,6 +92,7 @@ include misc/make/startup-active-reblit-boot-repair-complete-tests.mk
 include misc/make/startup-rollback-activate-archived-complete-route-tests.mk
 include misc/make/startup-rollback-activate-archived-finalization-tests.mk
 include misc/make/startup-rollback-active-reblit-finalization-tests.mk
+include misc/make/startup-root-links-terminal-process-tests.mk
 include misc/make/startup-rollback-new-state-dispatch-tests.mk
 include misc/make/startup-rollback-reverse-admission-tests.mk
 include misc/make/startup-rollback-reverse-projection-tests.mk
