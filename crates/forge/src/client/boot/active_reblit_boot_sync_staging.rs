@@ -19,7 +19,8 @@ use thiserror::Error;
 use crate::{
     Installation,
     boot_publication::{
-        BootPublicationReceiptPair, CanonicalBootPublicationReceipt,
+        BootPublicationReceiptFingerprint, BootPublicationReceiptPair,
+        CanonicalBootPublicationReceipt,
     },
     db::state::{
         BootPublicationReceiptStageOutcome, BootPublicationReceiptStateError, Database,
@@ -54,10 +55,24 @@ pub(in crate::client) enum DurableActiveReblitBootSyncRecord {
 /// this non-cloneable typestate until a later coordinator consumes them.
 #[derive(Debug)]
 pub(in crate::client) struct StagedActiveReblitBootSync {
-    journal: TransitionJournalStore,
     record: TransitionRecord,
     record_binding: TransitionJournalRecordBinding,
     database_outcome: BootPublicationReceiptStageOutcome,
+    receipt: CanonicalBootPublicationReceipt,
+    journal: TransitionJournalStore,
+    database: Database,
+    // Deliberately last so its global lock outlives the journal and database.
+    installation: Installation,
+}
+
+/// Fresh read-only correlation of one staged receipt with its exact client.
+///
+/// Private fields prevent sibling components from manufacturing this view.
+/// It carries no destination descriptor and grants no publication, promotion,
+/// replacement, removal, or deletion authority.
+pub(in crate::client) struct FreshStagedActiveReblitBootSync<'staged, 'client> {
+    staged: &'staged StagedActiveReblitBootSync,
+    _client: &'client Client,
 }
 
 impl StagedActiveReblitBootSync {
@@ -69,6 +84,47 @@ impl StagedActiveReblitBootSync {
         self.database_outcome
     }
 
+    pub(in crate::client) const fn receipt(&self) -> &CanonicalBootPublicationReceipt {
+        &self.receipt
+    }
+
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
+        self.receipt.fingerprint()
+    }
+
+    /// Revalidate this exact staged result against the client which owns its
+    /// retained installation and state-database capabilities.
+    pub(in crate::client) fn revalidate_against<'staged, 'client>(
+        &'staged self,
+        client: &'client Client,
+    ) -> Result<
+        FreshStagedActiveReblitBootSync<'staged, 'client>,
+        ActiveReblitBootSyncFreshValidationError,
+    > {
+        if !self.database.same_instance(&client.state_db)
+            || !std::ptr::eq(
+                self.installation.root_directory(),
+                client.installation.root_directory(),
+            )
+        {
+            return Err(ActiveReblitBootSyncFreshValidationError::ClientCapabilityMismatch);
+        }
+        validate_staged_successor(
+            &self.installation,
+            &self.database,
+            &self.journal,
+            &self.record,
+            &self.record_binding,
+            &self.receipt,
+            receipt_pair(&self.receipt),
+        )?;
+        Ok(FreshStagedActiveReblitBootSync {
+            staged: self,
+            _client: client,
+        })
+    }
+
+    #[cfg(test)]
     pub(in crate::client) fn into_parts(
         self,
     ) -> (
@@ -77,6 +133,20 @@ impl StagedActiveReblitBootSync {
         TransitionJournalRecordBinding,
     ) {
         (self.journal, self.record, self.record_binding)
+    }
+}
+
+impl FreshStagedActiveReblitBootSync<'_, '_> {
+    pub(in crate::client) const fn record(&self) -> &TransitionRecord {
+        self.staged.record()
+    }
+
+    pub(in crate::client) const fn receipt(&self) -> &CanonicalBootPublicationReceipt {
+        self.staged.receipt()
+    }
+
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
+        self.staged.receipt_fingerprint()
     }
 }
 
@@ -230,7 +300,7 @@ fn stage_with_retained_stores<
     match journal.advance_record_binding(cast, predecessor_binding, &successor) {
         Ok(successor_binding) => {
             after_successful_advance_before_validation();
-            match validate_published_successor(
+            match validate_staged_successor(
                 installation,
                 database,
                 &journal,
@@ -240,10 +310,13 @@ fn stage_with_retained_stores<
                 pair,
             ) {
                 Ok(()) => Ok(StagedActiveReblitBootSync {
+                    installation: installation.clone(),
+                    database: database.clone(),
                     journal,
                     record: successor,
                     record_binding: successor_binding,
                     database_outcome,
+                    receipt: rederived,
                 }),
                 Err(validation) => {
                     drop(successor_binding);
@@ -313,7 +386,7 @@ fn require_active_reblit_predecessor(
     predecessor
         .boot_sync_started_successor(BootPublicationReceiptPair {
             committed: None,
-            pending: crate::boot_publication::BootPublicationReceiptFingerprint::from_bytes([0_u8; 32]),
+            pending: BootPublicationReceiptFingerprint::from_bytes([0_u8; 32]),
         })
         .map(|_| ())
         .map_err(ActiveReblitBootSyncStagingError::Successor)
@@ -339,7 +412,7 @@ fn exact_successor(
     Ok(successor)
 }
 
-fn validate_published_successor(
+fn validate_staged_successor(
     installation: &Installation,
     database: &Database,
     journal: &TransitionJournalStore,
@@ -360,6 +433,7 @@ fn validate_published_successor(
     {
         return Err(ActiveReblitBootSyncPostAdvanceValidationError::SuccessorBindingChanged);
     }
+    require_exact_record_receipt_pair(successor, receipt, pair)?;
     require_exact_receipt_state(database, receipt, pair)
         .map_err(ActiveReblitBootSyncPostAdvanceValidationError::ReceiptState)?;
     installation
@@ -370,6 +444,24 @@ fn validate_published_successor(
         .map_err(ActiveReblitBootSyncPostAdvanceValidationError::Journal)?
     {
         return Err(ActiveReblitBootSyncPostAdvanceValidationError::SuccessorBindingChanged);
+    }
+    Ok(())
+}
+
+fn require_exact_record_receipt_pair(
+    record: &TransitionRecord,
+    receipt: &CanonicalBootPublicationReceipt,
+    expected: BootPublicationReceiptPair,
+) -> Result<(), ActiveReblitBootSyncPostAdvanceValidationError> {
+    let actual = record
+        .boot_publication_receipt_correlation()
+        .map_err(ActiveReblitBootSyncPostAdvanceValidationError::RecordReceipt)?;
+    if record.operation != Operation::ActiveReblit
+        || record.phase != Phase::BootSyncStarted
+        || &record.transition_id != receipt.body().transition_id()
+        || actual != Some(expected)
+    {
+        return Err(ActiveReblitBootSyncPostAdvanceValidationError::RecordReceiptMismatch);
     }
     Ok(())
 }
@@ -529,8 +621,20 @@ pub(in crate::client) enum ActiveReblitBootSyncPostAdvanceValidationError {
     Journal(#[source] StorageError),
     #[error("the returned BootSyncStarted journal binding changed")]
     SuccessorBindingChanged,
+    #[error("decode the retained BootSyncStarted receipt pair")]
+    RecordReceipt(#[source] CodecError),
+    #[error("the retained BootSyncStarted record does not carry the exact staged receipt pair")]
+    RecordReceiptMismatch,
     #[error("revalidate the exact internally derived staged receipt")]
     ReceiptState(#[source] ActiveReblitBootSyncReceiptStateError),
+}
+
+#[derive(Debug, Error)]
+pub(in crate::client) enum ActiveReblitBootSyncFreshValidationError {
+    #[error("the staged boot-sync result belongs to a different client capability set")]
+    ClientCapabilityMismatch,
+    #[error("revalidate the exact staged boot-sync evidence")]
+    Evidence(#[from] ActiveReblitBootSyncPostAdvanceValidationError),
 }
 
 #[derive(Debug, Error)]

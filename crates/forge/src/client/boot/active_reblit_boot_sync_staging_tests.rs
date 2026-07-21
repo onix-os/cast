@@ -16,7 +16,7 @@ use crate::{
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
         active_reblit_mounted_boot_topology::AliasFixture,
     },
-    db,
+    db, repository,
     state::{self, TransitionId},
     transition_journal::{
         BootId, MountNamespaceIdentity, Previous, PreviousOrigin,
@@ -184,6 +184,28 @@ fn assert_exact_journal_record(
     );
 }
 
+fn staging_client(
+    fixture: &support::RenderFixture,
+    state_db: Database,
+) -> Client {
+    let repositories = repository::Manager::with_explicit(
+        "boot-sync-staging-test",
+        repository::Map::default(),
+        fixture.installation.clone(),
+    )
+    .unwrap();
+    Client {
+        registry: super::super::build_repository_registry(&repositories),
+        install_db: db::meta::Database::new(":memory:").unwrap(),
+        state_db,
+        layout_db: fixture.layout_db.clone(),
+        config: None,
+        repositories,
+        scope: super::super::Scope::Stateful,
+        installation: fixture.installation.clone(),
+    }
+}
+
 macro_rules! with_bound_staging_plan {
     (|$fixture:ident, $plan:ident, $inventory:ident, $claims:ident| $body:block) => {{
         let deadline = support::future_deadline();
@@ -267,6 +289,7 @@ macro_rules! with_cross_installation_staging_plan {
 fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+        let client = staging_client(&fixture, fixture.state_db.clone());
         let (journal, predecessor, binding) =
             exact_boot_sync_journal(&fixture.installation);
         let expected = plan
@@ -296,11 +319,22 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
         .unwrap();
 
         assert_eq!(staged.record().phase, Phase::BootSyncStarted);
+        assert_eq!(staged.receipt(), &expected);
+        assert_eq!(staged.receipt_fingerprint(), expected.fingerprint());
+        assert_eq!(
+            staged.record().boot_publication_receipt_correlation().unwrap(),
+            Some(receipt_pair(staged.receipt())),
+        );
         assert_eq!(
             staged.database_outcome(),
             BootPublicationReceiptStageOutcome::Staged,
         );
         assert_exact_database_receipt(&fixture.state_db, &expected);
+        let fresh = staged.revalidate_against(&client).unwrap();
+        assert_eq!(fresh.record(), staged.record());
+        assert_eq!(fresh.receipt(), staged.receipt());
+        assert_eq!(fresh.receipt_fingerprint(), staged.receipt_fingerprint());
+        drop(fresh);
         let (journal, record, binding) = staged.into_parts();
         let cast = fixture
             .installation
@@ -308,6 +342,140 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
             .unwrap();
         assert!(journal.has_record_binding(cast, &binding, &record).unwrap());
         assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
+    });
+}
+
+#[test]
+fn fresh_revalidation_rejects_a_mixed_client_before_reading_effect_evidence() {
+    crate::client::boot::reset_boot_synchronize_attempt_count();
+    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+        let mismatched_client = staging_client(
+            &fixture,
+            Database::new(":memory:").unwrap(),
+        );
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal(&fixture.installation);
+        let expected = plan
+            .prepare_complete_boot_publication_receipt(
+                &inventory,
+                &predecessor,
+                None,
+                &claims,
+            )
+            .unwrap();
+
+        let staged = stage_with_retained_stores(
+            &fixture.installation,
+            &fixture.state_db,
+            &plan,
+            &inventory,
+            &claims,
+            journal,
+            predecessor,
+            binding,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            staged.revalidate_against(&mismatched_client),
+            Err(ActiveReblitBootSyncFreshValidationError::ClientCapabilityMismatch),
+        ));
+        assert_exact_database_receipt(&fixture.state_db, &expected);
+        assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
+    });
+}
+
+#[test]
+fn fresh_revalidation_rejects_successor_inode_drift_without_boot_effects() {
+    crate::client::boot::reset_boot_synchronize_attempt_count();
+    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+        let client = staging_client(&fixture, fixture.state_db.clone());
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal(&fixture.installation);
+        let expected = plan
+            .prepare_complete_boot_publication_receipt(
+                &inventory,
+                &predecessor,
+                None,
+                &claims,
+            )
+            .unwrap();
+        let staged = stage_with_retained_stores(
+            &fixture.installation,
+            &fixture.state_db,
+            &plan,
+            &inventory,
+            &claims,
+            journal,
+            predecessor,
+            binding,
+        )
+        .unwrap();
+        let successor = staged.record().clone();
+        let canonical = fixture
+            .installation
+            .root
+            .join(".cast/journal/state-transition");
+        let displaced = fixture
+            .installation
+            .root
+            .join("fresh-validation-displaced-successor");
+        let bytes = fs::read(&canonical).unwrap();
+        fs::rename(&canonical, &displaced).unwrap();
+        fs::write(&canonical, &bytes).unwrap();
+        fs::set_permissions(&canonical, fs::Permissions::from_mode(0o600)).unwrap();
+
+        assert!(matches!(
+            staged.revalidate_against(&client),
+            Err(ActiveReblitBootSyncFreshValidationError::Evidence(
+                ActiveReblitBootSyncPostAdvanceValidationError::SuccessorBindingChanged,
+            )),
+        ));
+        assert_exact_database_receipt(&fixture.state_db, &expected);
+        assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
+        drop(staged);
+        assert_exact_journal_record(&fixture.installation, &successor);
+    });
+}
+
+#[test]
+fn fresh_revalidation_rejects_pending_body_drift_without_boot_effects() {
+    crate::client::boot::reset_boot_synchronize_attempt_count();
+    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+        let client = staging_client(&fixture, fixture.state_db.clone());
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal(&fixture.installation);
+        let staged = stage_with_retained_stores(
+            &fixture.installation,
+            &fixture.state_db,
+            &plan,
+            &inventory,
+            &claims,
+            journal,
+            predecessor,
+            binding,
+        )
+        .unwrap();
+        let successor = staged.record().clone();
+        fixture
+            .state_db
+            .delete_boot_publication_receipt_body_for_test(
+                staged.receipt_fingerprint(),
+            );
+
+        assert!(matches!(
+            staged.revalidate_against(&client),
+            Err(ActiveReblitBootSyncFreshValidationError::Evidence(
+                ActiveReblitBootSyncPostAdvanceValidationError::ReceiptState(
+                    ActiveReblitBootSyncReceiptStateError::Load(
+                        BootPublicationReceiptStateError::DanglingReference { .. },
+                    ),
+                ),
+            )),
+        ));
+        assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
+        drop(staged);
+        assert_exact_journal_record(&fixture.installation, &successor);
     });
 }
 

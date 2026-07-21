@@ -23,9 +23,12 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 		grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
 	staging_prefix='client::active_reblit_boot_sync_staging::tests::'; \
-	test "$$( grep -Ec "^$$staging_prefix.*: test$$" <<<"$$listed" )" = 9; \
+	test "$$( grep -Ec "^$$staging_prefix.*: test$$" <<<"$$listed" )" = 12; \
 	for name in \
 		success_derives_and_stages_exact_receipt_then_retains_successor_binding \
+		fresh_revalidation_rejects_a_mixed_client_before_reading_effect_evidence \
+		fresh_revalidation_rejects_successor_inode_drift_without_boot_effects \
+		fresh_revalidation_rejects_pending_body_drift_without_boot_effects \
 		exact_internally_derived_pre_staged_retry_is_read_only_and_advances \
 		unbound_provenance_inputs_fail_before_database_or_journal_change \
 		cross_installation_bound_plan_is_rejected_before_database_staging \
@@ -72,6 +75,15 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 	grep -Fq 'rederived.canonical_body() != receipt.canonical_body()' "$$staging"; \
 	grep -Fq 'if !plan.is_bound_to_installation(installation)' "$$staging"; \
 	grep -Fq 'after_successful_advance_before_validation();' "$$staging"; \
+	test "$$( grep -Fc 'receipt: CanonicalBootPublicationReceipt,' "$$staging" )" = 1; \
+	test "$$( grep -Fc 'receipt: rederived,' "$$staging" )" = 1; \
+	grep -Fq 'pub(in crate::client) const fn receipt(&self) -> &CanonicalBootPublicationReceipt' "$$staging"; \
+	grep -Fq 'pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint' "$$staging"; \
+	grep -Fq 'pub(in crate::client) fn revalidate_against' "$$staging"; \
+	grep -Fq "client: &'client Client," "$$staging"; \
+	grep -Fq 'self.database.same_instance(&client.state_db)' "$$staging"; \
+	grep -Fq 'require_exact_record_receipt_pair(successor, receipt, pair)?;' "$$staging"; \
+	awk 'previous == "    #[cfg(test)]" && $$0 == "    pub(in crate::client) fn into_parts(" { found = 1 } { previous = $$0 } END { exit(found ? 0 : 1) }' "$$staging"; \
 	public_api="$$( sed -n '/pub(in crate::client) fn stage_active_reblit_boot_sync</,/^    ) -> Result/p' "$$staging" )"; \
 	private_api="$$( sed -n '/^fn stage_with_retained_stores</,/^) -> Result/p' "$$staging" )"; \
 	grep -Fq 'BoundActiveReblitBlsPublicationPlan' <<<"$$public_api"; \
@@ -81,7 +93,7 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 	test "$$( grep -Fc 'journal.advance_record_binding(cast, predecessor_binding, &successor)' "$$staging" )" = 1; \
 	grep -Fq 'drop(journal);' "$$staging"; \
 	grep -Fq 'TransitionJournalStore::open_in_retained_cast(cast, &installation.root)' "$$staging"; \
-	if rg -n 'boot::synchronize|synchronize_boot|publish_(?:boot|output)|remove_(?:boot|output)|delete_(?:boot|output)' "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'boot::synchronize|synchronize_boot|publish_(?:boot|output)|promote_(?:boot|receipt)|replace_(?:boot|output|receipt)|remove_(?:boot|output)|delete_(?:boot|output)' "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$( grep -Fc 'fn stage_boot_publication_receipt_pair(' "$$head" )" = 1; \
 	awk 'previous == "    #[cfg(test)]" && $$0 == "    pub(crate) fn stage_boot_publication_receipt_pair(" { found = 1 } { previous = $$0 } END { exit(found ? 0 : 1) }' "$$head"; \
 	surface="$$( sed -nE 's/^[[:space:]]*pub\(crate\)[[:space:]]+(const[[:space:]]+)?fn[[:space:]]+([A-Za-z0-9_]+).*/\2/p' "$$state" )"; \
