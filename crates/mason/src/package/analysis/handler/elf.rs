@@ -45,10 +45,10 @@ pub fn elf(bucket: &mut BucketMut<'_>, info: &mut PathInfo) -> Result<Response, 
     // A package-private dynamic loader satisfies the exact PT_INTERP path used
     // by executables in the same stone. musl's loader advertises a libc SONAME,
     // so it cannot be identified reliably from its file name or SONAME alone.
-    // Restrict this provider to executable ET_DYN objects without an interpreter
-    // of their own: dynamic loaders have that shape, while PIE executables and
-    // ordinary shared libraries do not.
-    if is_interpreter_candidate(elf.ehdr.e_type, info.layout.mode, has_interp) {
+    // Restrict this provider to executable ET_DYN objects with a transfer entry
+    // and without an interpreter of their own: dynamic loaders have that shape,
+    // while PIE executables and ordinary shared libraries do not.
+    if is_interpreter_candidate(elf.ehdr.e_type, elf.ehdr.e_entry, info.layout.mode, has_interp) {
         bucket.providers.insert(Provider {
             kind: Kind::Interpreter,
             name: format!("{}({machine_isa})", info.target_path.display()),
@@ -114,8 +114,8 @@ pub(in crate::package::analysis) fn is_elf_candidate(info: &PathInfo) -> bool {
     info.is_file() && !(info.file_name().ends_with(".debug") && info.has_component("debug"))
 }
 
-fn is_interpreter_candidate(elf_type: u16, mode: u32, has_interp: bool) -> bool {
-    elf_type == ET_DYN && mode & 0o111 != 0 && !has_interp
+fn is_interpreter_candidate(elf_type: u16, entry: u64, mode: u32, has_interp: bool) -> bool {
+    elf_type == ET_DYN && entry != 0 && mode & 0o111 != 0 && !has_interp
 }
 
 fn package_private_rpath_dependency(rpath: &str, name: &str) -> Option<PathBuf> {
@@ -428,22 +428,23 @@ mod tests {
 
     #[test]
     fn executable_dynamic_object_without_interp_is_interpreter_candidate() {
-        assert!(is_interpreter_candidate(ET_DYN, 0o100755, false));
+        assert!(is_interpreter_candidate(ET_DYN, 1, 0o100755, false));
     }
 
     #[test]
     fn ordinary_shared_library_is_not_interpreter_candidate() {
-        assert!(!is_interpreter_candidate(ET_DYN, 0o100644, false));
+        assert!(!is_interpreter_candidate(ET_DYN, 1, 0o100644, false));
+        assert!(!is_interpreter_candidate(ET_DYN, 0, 0o100755, false));
     }
 
     #[test]
     fn pie_with_own_interp_is_not_interpreter_candidate() {
-        assert!(!is_interpreter_candidate(ET_DYN, 0o100755, true));
+        assert!(!is_interpreter_candidate(ET_DYN, 1, 0o100755, true));
     }
 
     #[test]
     fn fixed_address_executable_is_not_interpreter_candidate() {
-        assert!(!is_interpreter_candidate(ET_EXEC, 0o100755, false));
+        assert!(!is_interpreter_candidate(ET_EXEC, 1, 0o100755, false));
     }
 
     #[test]
