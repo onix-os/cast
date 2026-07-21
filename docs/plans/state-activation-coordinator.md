@@ -472,8 +472,29 @@ closure remain authoritative in `PLAN.md`.
   including authenticated `Absent`, fails. Coverage includes 24 focused tests,
   the full 24-case success matrix, 15 all-five-link races, fresh handles, and a
   clean-then-clean endpoint. The unchanged legacy 12-case terminal `SIGKILL`
-  matrix remains Intent/Exchanged-only; no RootLinks finalizer has `SIGKILL`,
-  reboot, or power-loss proof, and no cleanup or boot effect is added.
+  matrices remain Intent/Exchanged-only and continue to exclude RootLinks.
+
+  Accepted commit `39456719` adds a separate RootLinks-only terminal restart
+  campaign for exact NewState generation 18, ActivateArchived generation 12,
+  and ActiveReblit generation 14. Its 3 operations x 2 current/historical
+  epochs x 6 scenarios produce 36 cases and exactly 84 child executions: 48
+  genuine same-boot `SIGKILL` deaths and 36 successful final recoveries. The
+  six seams retain final PRE, kill after exact private detach but before the
+  private unlink, kill after private unlink, kill after delete-directory sync,
+  kill residue recovery after canonical restore, and kill recovery after the
+  restore directory sync.
+
+  Before any child opens a writer, journal store, or database, raw inventory
+  authenticates the exact public Cast directory, journal directory, and lock
+  anchors plus exact absence or, when present, the canonical/private record
+  name, inode, complete frame, mode, and link count. Every death callback asserts zero operation-
+  specific effect attempts before killing itself. Crash, recovery-crash, and
+  final-recovery children enter only through production `CleanSystemStartup`;
+  internal 15-second deadlines supervise only those spawned children. Final
+  recovery preserves all five root links, exact operation-specific database
+  and topology evidence, and public journal absence, then proves clean and a
+  second clean entry. This is same-boot process-death evidence only: it proves
+  neither reboot nor power-loss durability and adds no cleanup or boot effect.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -612,8 +633,9 @@ closure remain authoritative in `PLAN.md`.
   `b0af65d6` consumes the same one-shot binding architecture for exact RootLinks
   NewState generation 18. Accepted commit `806003ac` consumes it for exact
   RootLinks ActiveReblit generation 14. Later rollback actions, roll-forward,
-  triggers, cleanup, and every RootLinks terminal process-death, reboot, or
-  power-loss proof remain open.
+  triggers, cleanup, reboot, and power-loss proof remain open; accepted commit
+  `39456719` closes the separate same-boot RootLinks terminal process-death
+  matrix without widening those claims.
   ActiveReblit's terminal
   finalizer now has an exact
   12-case real-process matrix across current/historical record epochs, both
@@ -622,7 +644,10 @@ closure remain authoritative in `PLAN.md`.
   `SIGKILL`, followed by fresh-process production startup; it is not evidence
   that a pre-sync state survives reboot. Historical epoch is only a mismatched
   runtime witness, not a reboot simulation, and no power-loss claim is made.
-  RootLinks is excluded from this unchanged process matrix.
+  RootLinks is excluded from this unchanged legacy process matrix. Accepted
+  commit `39456719` supplies the separate RootLinks-only 36-case matrix: 84
+  child executions yield 48 genuine same-boot `SIGKILL` deaths and 36 final
+  recoveries across the six terminal delete and residue-restoration seams.
   Phase 11 and its broad interruption campaign therefore remain open.
   Commit `c8c5ea41` production-wires ActivateArchived's bounded completion
   suffix. Commit `a3fb25d3` widens only that completion entry to RootLinks and
@@ -634,8 +659,10 @@ closure remain authoritative in `PLAN.md`.
   Accepted commits `b0af65d6` and `806003ac` apply the same exact architecture
   to RootLinks NewState generation 18 and ActiveReblit generation 14.
   Accepted commit `0a91c2ed` now restores only the exact recoverable terminal
-  private-detach residue on writer reopen; this store-level fresh-reopen proof
-  does not widen a finalizer or establish `SIGKILL`, reboot, or power loss.
+  private-detach residue on writer reopen; that store-level fresh-reopen proof
+  did not itself widen a finalizer. Accepted commit `39456719` now exercises it
+  through production startup under genuine same-boot `SIGKILL`, but still does
+  not establish reboot or power-loss durability.
   The newer bounded boot
   projection, sealed Stone inputs, state roots and schemas, local and package
   command-line semantics, Gluon topology intent, and retained mounted-topology

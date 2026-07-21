@@ -71,9 +71,10 @@ and instant rollback mechanism; it hardens their failure semantics.
   coexisting evidence fails closed and remains untouched; read-only inspection
   still rejects residue. The final compare/rename window retains the cooperative
   same-credential limitation. The gates pass 13/13 focused recovery, 10/10
-  bound-delete, and 110/110 direct-journal tests. This is fresh-writer-reopen and
-  fault-race store evidence, not an operation-finalizer widening or a `SIGKILL`,
-  reboot, or power-loss proof.
+  bound-delete, and 110/110 direct-journal tests. By itself this was fresh-
+  writer-reopen and fault-race store evidence, not an operation-finalizer or
+  process-death proof; accepted commit `39456719` later exercises the path under
+  same-boot `SIGKILL`, without claiming reboot or power-loss durability.
 - [ ] Open mutable system clients in recovery order: installation lock,
   databases, journal lock, journal reconciliation, orphan-token audit, strict
   live-state discovery, then repositories and the active registry. Frozen
@@ -106,8 +107,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   RootLinks NewState generation 18, ActivateArchived generation 12, and
   ActiveReblit generation 14 now reach authenticated terminal journal absence
   through one record-bound deletion and retained same-store clean handoff. The
-  genuine same-boot NewState death matrix remains confined to
-  fresh-row invalidation rather than terminal deletion. The complete pre-existing
+  earlier 20-case same-boot NewState death matrix remains confined to fresh-row
+  invalidation; accepted commit `39456719` separately proves terminal deletion
+  and residue recovery for all three exact RootLinks finalizers. The complete pre-existing
   NewState suffix and the ActiveReblit no-boot-repair suffix reach the same
   clean-startup handoff. An ActiveReblit
   rollback sourced from `BootSyncStarted` instead routes a preserved candidate
@@ -119,8 +121,9 @@ and instant rollback mechanism; it hardens their failure semantics.
   production path performs the repair or emits that successful record.
   The pre-existing ActivateArchived rollback source set still reaches that same
   handoff. Exact private-detach residue can now be restored on writer reopen.
-  No RootLinks finalizer extends a legacy terminal `SIGKILL` source axis to
-  RootLinks or proves reboot or power loss. Roll-forward execution, the actual boot
+  The RootLinks campaign remains separate from the unchanged legacy 12-case
+  terminal matrices and proves same-boot `SIGKILL`, not reboot or power loss.
+  Roll-forward execution, the actual boot
   repair effect and its durable publisher, and cleanup are not implemented.
   The public `ReadOnlyClient` path is now real: construction requires the explicit
   snapshot authority, proves a clean journal before imaging the state database,
@@ -826,9 +829,26 @@ executor, 5 handoff, 2 fresh-handle, and 2 endpoint tests, including 48 success,
   Every delete error, including authenticated `Absent`, fails. Its 24 focused
   tests and full 24-case success matrix, 15 all-five-link races, fresh-handle
   coverage, and clean-then-clean endpoint pass. The unchanged legacy 12-case
-  terminal `SIGKILL` matrix excludes RootLinks; no RootLinks finalizer has
-  `SIGKILL`, reboot, or power-loss proof. The cooperative same-credential
-  limitation remains explicit. No cleanup or boot claim is added.
+  terminal `SIGKILL` matrices remain Intent/Exchanged-only and exclude
+  RootLinks.
+
+  Accepted commit `39456719` adds a separate exact RootLinks terminal campaign:
+  3 operations x 2 current/historical epochs x 6 scenarios = 36 cases, 84 child
+  executions, 48 genuine same-boot `SIGKILL` deaths, and 36 successful final
+  recoveries. The seams are final PRE retention, exact private detach before
+  private unlink, post-private-unlink absence, post-delete-directory-sync
+  absence, recovery death after canonical restore, and recovery death after
+  the restore directory sync. Before any child opens a writer, journal store,
+  or database, raw inventory authenticates the exact public Cast/journal/lock
+  anchors and exact absence or, when present, the canonical/private record
+  name, inode, complete frame, mode, and link count. Every death callback first asserts zero operation-specific
+  effect attempts. Every child enters only through production
+  `CleanSystemStartup`, with internal 15-second deadlines restricted to those
+  spawned children. Final recovery proves all five root links, the exact
+  operation-specific database and topology, public journal absence, clean
+  admission, and a second clean entry. The cooperative same-credential
+  limitation remains explicit. This proves neither reboot nor power-loss
+  durability and adds no cleanup or boot claim.
 
 ### Startup reconciliation and interruption campaign
 
@@ -951,8 +971,10 @@ generation-18 bound deletion and clean handoff; its full deterministic coverage
 is recorded above. Accepted commit `806003ac` adds matching exact RootLinks
 ActiveReblit generation-14 bound deletion and clean handoff while preserving
 its legacy terminal source axis. Commit `0a91c2ed` restores the single exact recoverable
-terminal residue during writer reopen. No RootLinks finalizer extends the
-unchanged legacy 12-case `SIGKILL` source axis or simulates reboot or power loss.
+terminal residue during writer reopen. Accepted commit `39456719` exercises
+all three RootLinks finalizers and that residue recovery through a separate
+genuine same-boot `SIGKILL` campaign, leaving the unchanged legacy 12-case
+source matrices intact and making no reboot or power-loss claim.
 Later rollback, roll-forward, durable boot publication, production boot-repair
 wiring, cleanup, other earlier interruption boundaries, reboot, and
 power-loss-equivalent durability work remain.
