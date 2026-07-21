@@ -1,0 +1,23 @@
+let b = import! cast.package.v3
+
+// One prebuilt ELF release is a closed value: target, archive identity,
+// extraction layout, executable path, and runtime ABI requirements travel
+// together. The package factory never consults uname, PATH, or the host ELF.
+{
+    architecture = "x86_64",
+    executable = "bin/quartz-inspector",
+    installed_path = "/usr/bin/quartz-inspector",
+    install_script = r#"/usr/bin/install -Dm755 bin/quartz-inspector "${CAST_INSTALL_ROOT}${CAST_BINDIR}/quartz-inspector""#,
+    runtime_inputs = [
+        b.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)",
+        b.dep.soname "libc.so.6(x86_64)",
+    ],
+    source = b.source.archive_with {
+        url = "https://example.invalid/quartz-inspector/releases/3.4.1/quartz-inspector-3.4.1-x86_64.tar.xz",
+        hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        rename = b.optional.set "quartz-inspector-3.4.1-x86_64.tar.xz",
+        strip_dirs = b.optional.set 1,
+        unpack = b.boolean.true,
+        unpack_dir = b.optional.set "quartz-inspector",
+    },
+}

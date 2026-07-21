@@ -51,7 +51,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 63] = [
+const PACKAGE_EXAMPLES: [&str; 64] = [
     "autotools",
     "backend-choice-factory",
     "binary-release",
@@ -98,6 +98,7 @@ const PACKAGE_EXAMPLES: [&str; 63] = [
     "platform-binary-factory",
     "platform-factory",
     "post-install-smoke-test",
+    "prebuilt-elf-runtime-contract",
     "profiles-emul32",
     "python-module",
     "raw-script-package",
@@ -238,6 +239,8 @@ mod documented_interpreter_suite;
 mod documented_outputs;
 #[path = "tests/documented_semantics/overrides.rs"]
 mod documented_overrides;
+#[path = "tests/documented_semantics/prebuilt_elf.rs"]
+mod documented_prebuilt_elf;
 #[path = "tests/documented_semantics/profiles.rs"]
 mod documented_profiles;
 #[path = "tests/documented_semantics/runtime_wrappers.rs"]

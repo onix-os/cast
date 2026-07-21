@@ -24,6 +24,7 @@ fn assert_documented_factory_semantics(
         "optional-component-source-graph" => documented_sources::assert_semantics(declaration, plan),
         "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),
         "platform-factory" => assert_platform_factory_semantics(declaration, plan),
+        "prebuilt-elf-runtime-contract" => documented_prebuilt_elf::assert_semantics(declaration, plan),
         "release-override" => documented_overrides::assert_semantics(declaration, plan),
         "runtime-environment-wrapper" => documented_runtime_wrappers::assert_semantics(declaration, plan),
         "service-family-factory" => documented_composition::assert_service_family(declaration, plan),

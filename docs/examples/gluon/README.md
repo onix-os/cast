@@ -87,6 +87,7 @@ needed by a declarative userspace.
 | [`source-less-generated-config`](packages/source-less-generated-config/stone.glu) | A deterministic configuration artifact generated from authored data without an upstream source. |
 | [`binary-release`](packages/binary-release/stone.glu) | An architecture-specific prebuilt archive with an explicit install contract. |
 | [`platform-binary-factory`](packages/platform-binary-factory/stone.glu) | An explicit platform record selecting a prebuilt archive, target, and runtime loader without host discovery. |
+| [`prebuilt-elf-runtime-contract`](packages/prebuilt-elf-runtime-contract/stone.glu) | A locked prebuilt ELF whose self-test, install, runtime ABI, stripping, and debug routing are explicit without compilation steps. |
 | [`raw-script-package`](packages/raw-script-package/stone.glu) | A single locked, renamed, non-archive source installed with an explicit interpreter relation. |
 | [`explicit-interpreter-suite`](packages/explicit-interpreter-suite/stone.glu) | Source-less Bash and Python commands whose inert shebang tokens are explicitly replaced, checked, and retained as exact runtime relations. |
 | [`cmake`](packages/cmake/stone.glu) | CMake flags, checks, and typed build dependencies. |
