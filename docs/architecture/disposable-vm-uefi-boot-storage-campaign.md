@@ -250,9 +250,31 @@ authorization root was empty afterward with neither marker nor lock, and
 read-only `fsck.fat -n` reported 3 files using 3 of 2,096,126 data clusters.
 Neither `/dev/vda2` nor the live ESP was modified.
 
-This recorded evidence proves only the guarded whole-disk VFAT substrate and
-directory persistence in the disposable VM; it predates the production
-publisher extension described above. A new guarded campaign must record the
-leaf publication result before it is claimed as VM evidence. Neither result
-proves a GPT ESP role, aggregate publication ordering, receipt promotion,
-live-ESP mutation, reboot recovery, or power-loss durability.
+At exact commit `bc8d8b2682e865117ae6a59fb14eb186ad7e4e8b`, after atomic
+external snapshot `os-tools-vdb-publisher-manifest-20260721-bc8d8b26`, the
+same guest completed the production leaf-publisher extension against only the
+same admitted `/dev/vdb`. The harness staged the exact clean commit privately,
+resolved one immutable Nix source, and built, SHA-256-manifested, and
+revalidated one fixed Forge libtest runner before `destructive_started`; no Nix
+or Cargo command ran after disk effects began.
+
+The campaign formatted FAT32 `CASTTEST`, mounted it under the root-private
+runtime directory, and invoked the production retained-descriptor primitive.
+It published the exact 45-byte mode-`0644`
+`EFI/Linux/cast-vm-publisher-test.efi` with SHA-256
+`f204c2a6e2404aad56f08410b6f0751516ffee0c7e502d3cafbfac4233c9a004`.
+The first result was `Published`; immediate re-entry returned `AlreadyExact`
+for the same inode. After sync, unmount, and remount, the fixed runner again
+returned `AlreadyExact`, then the campaign synced and unmounted cleanly.
+
+Independent post-run inspection found VFAT UUID `7DC7-7B1E`, no partition
+children, mount, swap, authorization marker, lock, or campaign build root.
+Bounded read-only `fsck.fat -n` reported 4 files using 4 of 2,096,126 data
+clusters. Root `/dev/vda2` and live ESP `/dev/vda1` at `/boot/efi` remained
+unchanged, and no reboot was requested or performed.
+
+This proves one real production BOOT leaf, immediate idempotence, and
+sync/unmount/remount persistence on disposable whole-device VFAT. It does not
+yet prove aggregate publication ordering and deletion, receipt promotion and
+production coordinator wiring, GPT ESP/XBOOTLDR roles, live-ESP mutation,
+reboot recovery, interruption recovery, or power-loss durability.
