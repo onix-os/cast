@@ -72,17 +72,19 @@ exchange of the real `/usr`.
 |---|---|---|
 | Activation | Single atomic `RENAME_EXCHANGE` under a crash journal | Symlink flip + activation scripts |
 | File dedup | Content-addressed store, dedup by construction | Opt-in `nix store optimise` |
-| Build network access | Rejected outright; hash-pinned source locks only | Allowed in fixed-output derivations |
+| Build network access | Unsupported in the current model; hash-pinned source locks only | Allowed in fixed-output derivations |
 | Config language | Typed, resource-bounded, fingerprinted; not in the install path | Untyped, lazy, evaluated on every rebuild |
 | Filesystem | Real FHS `/usr`; foreign binaries work unmodified | `/nix/store` paths; patchelf/FHS shims needed |
 | Declarative scope | Package set + repositories | Entire system (services, users, kernel) |
 | Multi-version / dev shells | One live tree; no shell story (yet) | Native store-path coexistence, `nix develop` |
 | Ecosystem | One implementation, young repository | ~140k packages, multiple implementations |
 
-The trade is deliberate. Cast does not offer per-machine composed closures,
-side-by-side package versions, or a whole-system module language — that is
-the price of a compatible filesystem, solver-free installs, and an activation
-step strong enough to carry a crash journal. In exchange, Cast keeps most of
+The current boundary is deliberate. Cast does not yet offer per-machine
+composed closures, side-by-side package versions, or a whole-system module
+language; those directions remain in the [future backlog](FUTURE_PLAN.md)
+rather than being rejected permanently. The present work first secures a
+compatible filesystem, solver-free installs, and an activation step strong
+enough to carry a crash journal. In exchange, Cast keeps most of
 the operational value people run NixOS for — atomic updates, bootable
 rollback, reproducible locked builds — while looking and behaving like a
 normal package manager on a normal Linux tree.

@@ -10,6 +10,13 @@ rather than discarded. Each entry should retain the useful idea, state why it
 does not close the current blocker, and define what would make it worth
 reconsidering.
 
+This is a backlog, not an implicit extension of the active plan. Safety
+violations and dishonest evidence shortcuts are not future features: host-disk
+mutation, ambient host or `/nix/store` fixture mounts, mutable untracked recipe
+mounts, fake tool shims, and claiming same-boot tests as reboot or power-loss
+proof remain forbidden. Everything else listed below is preserved for a later,
+explicit scope decision.
+
 ## Package model
 
 - Evaluate a typed toolchain-free package mode for prebuilt artifacts. The
@@ -18,6 +25,11 @@ reconsidering.
 - Design a content-addressed local directory/file source ABI. It must bind file
   type, mode, content, symlink target, and destination before frozen execution;
   mutable recipe-directory mounts remain forbidden.
+- Design a fixed-output network ABI only after locked-source execution is
+  complete. Reconsider the retained typed network request when an exact output
+  digest, bounded transfer policy, isolation contract, and reproducible cache
+  semantics can make network access no less explicit than an ordinary source;
+  `options.networking = true` remains rejected until then.
 - Revisit reusable package-specific wrapper helpers only if repeated recipes
   demonstrate a real abstraction. Do not copy Nix helper APIs by name or make
   future Nix interoperability impossible.
@@ -42,8 +54,102 @@ reconsidering.
 - Evaluate Nix-to-Gluon or evaluated-derivation interoperability separately.
   Compatibility remains undecided: it is neither a current objective nor
   prohibited, and must not reshape the Stone-native package model in advance.
+- Keep a full Nix-language/store or lazy recursive package-set architecture as
+  comparative research rather than a presumed destination. Reconsider it only
+  through a separate architecture decision if Stone-native packages expose a
+  concrete limitation that smaller interoperability layers cannot solve.
+
+## Declarative system and user workflows
+
+- Extend declarative scope beyond package sets and repositories to typed
+  services, users, kernel selection, and per-machine composition after the
+  package and crash-recoverable activation contracts are complete. A future
+  module system must preserve the `/usr` versus `/etc` boundary and atomic
+  rollback instead of bypassing them with imperative activation scripts.
+- Evaluate multi-version package coexistence, profile generations, and
+  reproducible development shells as a separate store/profile design. Revisit
+  these when concrete workflows require concurrent closures; do not weaken the
+  one-live-tree transaction model accidentally while adding them.
+
+## Language and evaluation model
+
+- Reconsider recursive policy-overlay fixed points only if the completed
+  one-way `add`, `replace`, and `modify` model cannot express a concrete package
+  family without duplication. Any later design must remain finite, explainable,
+  and Stone-native rather than importing Nix semantics by default.
+- Evaluate automatic package-argument reflection, similar in convenience to
+  `callPackage`, only after the explicit `PackageInputs -> PackageSpec` ABI is
+  stable. Reconsider it when reflection can preserve typed missing/extra-input
+  errors and deterministic provenance instead of hiding dependency selection.
+- Research evaluation-time fetching or import-from-derivation only as a
+  separately versioned capability with a complete hermeticity, locking,
+  recursion, and failure model. It remains outside the pure initial evaluator
+  because the current derivation must be frozen before execution.
+- Consider explicitly declared global or user policy discovery only if every
+  selected layer can be sealed into evaluation identity and reproduced without
+  ambient home-directory state. Unrestricted discovery remains inadmissible.
+- Add direct Gluon provenance to future structured build steps when those steps
+  have a stable evaluated source identity. Until then, diagnostics should keep
+  reporting stable positions inside the evaluated script and must not guess a
+  source location by scanning the root recipe text.
+
+## Package and archive architecture
+
+- Reconsider replacing Forge provider resolution with another dependency
+  solver only as a coherent future architecture migration. A second concurrent
+  solver would create two sources of package identity and therefore does not
+  belong in the current plan.
+- Explore fully structured, shell-free builders if real recipes demonstrate
+  that they improve auditability without reducing expressiveness. Explicit
+  shell steps remain valid typed data; removing all shell execution is not a
+  prerequisite for declarative packages.
+- Treat `.stone` archive-format evolution and workspace release/version changes
+  as independent, versioned migrations after the current semantic and recovery
+  contracts close. They must include readers, upgrade policy, reproducibility
+  evidence, and rollback compatibility rather than being folded into Gluon
+  adoption.
+
+## Installation and metadata extensions
+
+- Design an authenticated adoption flow for a nonempty unmanaged prior `/usr`.
+  The `Unmanaged` transition origin remains representable, but current
+  preparation correctly refuses to bless arbitrary unowned content. Reconsider
+  it only with a bounded inventory, explicit operator intent, durable ownership
+  provenance, and a recovery path that never converts ambiguity into authority.
+- Add typed SELinux, IMA, EVM, and security-xattr policy before supporting
+  labeled candidate filesystems or labeled local boot-policy inputs. The future
+  model must declare labels as package/system data and authenticate them through
+  descriptor-rooted inventories; pathname fallbacks and silent label stripping
+  remain forbidden.
+- Add a read-only repository-manager backend when SQLite can be opened strictly
+  in `mode=ro` and installation/cache ownership has an explicit trusted-owner
+  model. It must not weaken the writable manager's current lock, mode, or owner
+  checks merely to admit unprivileged readers.
+- Investigate privilege separation or a stronger kernel isolation boundary for
+  mutations currently protected against cooperative same-credential writers by
+  authenticated descriptors and locks. Reconsider it with an explicit hostile
+  same-UID threat model; do not claim the existing cooperative contract already
+  provides a kernel freeze.
+
+## Migration and operator UX
+
+- Consider an explicit offline `cast.boot_topology.v1` to v2 migration helper
+  after the v2 contract is stable. It must produce reviewed canonical Gluon and
+  never become an automatic runtime fallback or a second accepted ABI.
+- Support separately mounted `/etc` or `/etc/cast` only through an explicitly
+  supplied, descriptor-authenticated configuration root with a defined
+  cross-mount trust model. Current rooted loading correctly rejects crossing an
+  undeclared mount boundary.
+- Complete canonical Gluon repository-list output when the CLI can preserve
+  generated-file ownership and round-trip every typed repository field without
+  creating a legacy configuration path.
 
 ## Deferred design alternatives
+
+The authenticated receipt/provenance chain, descriptor-safe boot publisher,
+restart reconciliation, and VM durability evidence remain required by the
+current Phase 11 plan. Only alternative foundations that cannot establish that
+authority are deferred here.
 
 - Reconsider a standalone, authority-free
   `active_reblit_publication_ownership` policy module after authenticated boot
@@ -62,6 +168,18 @@ reconsidering.
   when those types remove duplication from the real authenticated publication
   path rather than adding another unconsumed foundation.
 
+## Archived research
+
+- Retain the [`cast-core` and platform-backend study](plans/bsd.md) for a
+  possible post-plan portability effort. Reconsider it only after the Linux
+  activation and recovery contracts are complete and another platform can
+  provide equivalent atomicity, confinement, sandboxing, boot, and durability
+  guarantees rather than weaker syscall-shaped substitutes.
+- Retain the [embedded-Lua feasibility report](plans/lua.md) as research, not
+  current direction. Cast remains Gluon-only; reconsidering the evaluator
+  requires a separate user decision after the Gluon ABI and system-manager plan
+  are complete, with no dual-format compatibility layer during this work.
+
 ## Maintenance
 
 - Resolve the existing Forge compiler warnings reported by the current Make
@@ -75,6 +193,11 @@ reconsidering.
   report remaining fixture units and processes, VM test-disk mounts, linger,
   and the Ubuntu AppArmor user-namespace setting without changing the existing
   authenticated fixture receipt or treating host policy as package evidence.
+- Add a fail-before-launch VM capacity preflight if delegated campaigns are run
+  regularly. It should authenticate persistent build-space and inode headroom,
+  keep bounded receipts separate from disposable artifacts, and refuse the
+  outer unit before compilation rather than relocate a populated target tree
+  between memory filesystems under pressure.
 - Standardize long host-side validation on a repository-private temporary root
   and provide a non-destructive stale-artifact report. A saturated per-user
   `/tmp` allocation can prevent the sandbox or LOC gate from starting even when
