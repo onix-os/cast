@@ -10,7 +10,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_new_state::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 37; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix.*: test$$" "$$listed" )" = 39; \
 	for name in \
 		candidate_move_process_kill::startup_new_state_candidate_move_process_kill_recovers_without_second_move \
 		exclusions::startup_new_state_suffix_leaves_archived_candidate_preservation_zero_effect \
@@ -26,6 +26,8 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 		finalization::startup_new_state_suffix_finalization_converges_into_the_shared_prune_residue_audit \
 		finalization::startup_new_state_suffix_rejects_terminal_record_recreated_during_clean_handoff \
 		finalization::startup_new_state_suffix_rejects_mutable_namespace_substitution_after_terminal_finalization \
+		finalization_restart::startup_new_state_root_links_finalization_restarts_from_observed_absence_with_fresh_handles \
+		finalization_restart::startup_new_state_root_links_finalization_restarts_from_retained_terminal_source_with_fresh_handles \
 		fresh_db_invalidation_process_kill::startup_root_links_new_state_fresh_db_invalidation_process_kills_recover_exactly \
 		matrix::startup_new_state_suffix_routes_every_exact_candidate_preserved_matrix_without_later_effects \
 		matrix::startup_new_state_suffix_invalidates_present_or_accepts_joint_absence_for_every_exact_matrix \
@@ -107,6 +109,7 @@ forge-startup-usr-rollback-new-state-dispatch-test:
 	timeout 10s grep -Fqx 'mod exclusions;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod failures;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod finalization;' "$$tests/mod.rs"; \
+	timeout 10s grep -Fqx 'mod finalization_restart;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod matrix;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod preparation_failures;' "$$tests/mod.rs"; \
 	timeout 10s grep -Fqx 'mod sequence;' "$$tests/mod.rs"; \
