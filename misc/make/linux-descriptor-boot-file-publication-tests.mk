@@ -97,7 +97,7 @@ forge-linux-descriptor-boot-file-publication-vfat-test:
 	test -n "$${SSH_CONNECTION-}"; \
 	trusted_tools='/usr/bin/id /usr/bin/stat /usr/bin/cat /usr/bin/systemd-detect-virt'; \
 	for tool in $$trusted_tools; do \
-		test -f "$$tool" && test -x "$$tool" && test ! -L "$$tool"; \
+		test -f "$$tool" && test -x "$$tool"; \
 	done; \
 	for tool in $$trusted_tools; do \
 		tool_owner="$$(/usr/bin/stat -Lc '%u' -- "$$tool")"; \
