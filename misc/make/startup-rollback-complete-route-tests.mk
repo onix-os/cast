@@ -154,7 +154,7 @@ forge-startup-usr-rollback-complete-route-test:
 	grep -Fq 'for source in CandidateSource::THROUGH_ROLLBACK_COMPLETE {' "$$dispatch_tests/matrix.rs"; \
 	grep -Fq 'assert_eq!(cases, 48);' "$$dispatch_tests/matrix.rs"; \
 	grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$finalization_authority"; \
-	if rg -n 'RootLinksComplete' "$$finalization_authority"; then exit 1; else test "$$?" = 1; fi; \
+	grep -Fq 'ForwardPhase::RootLinksComplete, 18' "$$finalization_authority"; \
 	grep -Fq 'for source in CandidateSource::ALL {' "$$dispatch_tests/matrix.rs"; \
 	grep -Fq 'for source in CandidateSource::ALL {' "$$dispatch_tests/terminal_delete_process_kill.rs"; \
 	grep -Fq 'for source in CandidateSource::ALL {' "$$dispatch_tests/candidate_move_process_kill.rs"; \
@@ -163,8 +163,8 @@ forge-startup-usr-rollback-complete-route-test:
 	grep -Fq 'assert_eq!(rollback_complete.generation, 12, "{case}");' "$$root_links_endpoint"; \
 	grep -Fq 'assert_eq!(rollback_complete.generation, 14, "{case}");' "$$root_links_endpoint"; \
 	grep -Fq 'assert_eq!(complete.generation, 18, "{case}");' "$$new_state_endpoint"; \
-	grep -Fq 'assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");' "$$new_state_endpoint"; \
-	grep -Fq 'assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");' "$$new_state_endpoint"; \
+	grep -Fq '.expect("exact generation-18 RootLinks NewState terminal must finalize cleanly");' "$$new_state_endpoint"; \
+	grep -Fq '.expect("finalized RootLinks NewState endpoint must remain clean");' "$$new_state_endpoint"; \
 	grep -Fq 'assert_eq!(rollback_complete.generation, 18, "{case}");' "$$resume_make"; \
 	for file in "$$executor" "$$authority" "$$proof" "$$candidate_proof" "$$exact" "$$reopen" "$$startup_gate" "$$recovery_root" "$$reconciliation_root" "$$namespace_root" "$$tests.rs" "$$tests"/*.rs "$$candidate_support" "$$dispatch_tests/matrix.rs" "$$dispatch_tests/finalization.rs" "$$dispatch_tests/terminal_delete_process_kill.rs" "$$dispatch_tests/candidate_move_process_kill.rs" "$$finalization_authority" "$$root_links_endpoint" "$$new_state_endpoint" misc/make/startup-rollback-complete-route-tests.mk "$$resume_make"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \

@@ -117,7 +117,8 @@ pub(in crate::client) use usr_rollback_decision_authority::{
     UsrRollbackDecisionAuthorityError, UsrRollbackDecisionRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_finalization_authority::{
-    UsrRollbackFinalizationAdmission, UsrRollbackFinalizationAuthority, UsrRollbackFinalizationAuthorityError,
+    UsrRollbackFinalizationAdmission, UsrRollbackFinalizationAfterDeleteAuthority,
+    UsrRollbackFinalizationAuthority, UsrRollbackFinalizationAuthorityError,
 };
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_authority::{
     UsrRollbackFreshDbInvalidationAdmission, UsrRollbackFreshDbInvalidationApplyAuthority,

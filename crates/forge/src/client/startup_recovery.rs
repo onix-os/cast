@@ -225,11 +225,6 @@ pub(in crate::client) use usr_rollback_complete_route::{
 };
 
 #[cfg(test)]
-pub(in crate::client) use usr_rollback_finalization::{
-    DurableUsrRollbackFinalizationRecord, UsrRollbackFinalizationVerificationError,
-};
-
-#[cfg(test)]
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_persistence::{
     DurableUsrRollbackFreshDbInvalidationRecord, UsrRollbackFreshDbInvalidationSuccessorBindingError,
     arm_after_usr_rollback_fresh_db_invalidation_successor_binding_check_before_reopen,
@@ -274,8 +269,7 @@ pub(crate) use usr_rollback_activate_archived_finalization::{
 
 #[cfg(test)]
 pub(crate) use usr_rollback_finalization::{
-    arm_after_usr_rollback_finalization_delete, arm_before_usr_rollback_finalization_final_durable_inspection,
-    arm_before_usr_rollback_finalization_final_revalidation,
+    arm_after_usr_rollback_finalization_delete, arm_before_usr_rollback_finalization_final_revalidation,
 };
 
 #[cfg(test)]

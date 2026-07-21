@@ -210,14 +210,22 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
 
-                    let complete_bytes = fixture.canonical_bytes();
+                    let terminal_database = fixture.database_snapshot();
                     drop(complete_entry);
-                    let stable_entry = fixture.enter();
-                    assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");
-                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
-                    assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");
+                    let reservation = ActiveStateReservation::acquire().unwrap();
+                    let clean = CleanSystemStartup::enter(&fixture.system, &reservation)
+                        .expect("exact generation-18 RootLinks NewState terminal must finalize cleanly");
+                    assert!(
+                        !fixture
+                            .installation
+                            .root
+                            .join(".cast/journal/state-transition")
+                            .exists(),
+                        "{case}"
+                    );
                     assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
                     assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
+                    assert_eq!(fixture.database_snapshot(), terminal_database, "{case}");
                     assert!(matches!(
                         fixture.database.inspect_exact_fresh_transition(
                             fixture.candidate_state,
@@ -227,6 +235,24 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
                     ));
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+                    assert_eq!(archived_candidate_preserve_move_attempt_count(), 0, "{case}");
+                    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0, "{case}");
+                    assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
+                    drop(clean);
+                    drop(reservation);
+
+                    let stable_reservation = ActiveStateReservation::acquire().unwrap();
+                    let stable = CleanSystemStartup::enter(&fixture.system, &stable_reservation)
+                        .expect("finalized RootLinks NewState endpoint must remain clean");
+                    assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
+                    assert_eq!(fixture.database_snapshot(), terminal_database, "{case}");
+                    assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
+                    assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+                    assert_eq!(archived_candidate_preserve_move_attempt_count(), 0, "{case}");
+                    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0, "{case}");
+                    assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
+                    drop(stable);
                 }
                 OperationKind::Archived => {
                     assert_eq!(candidate_preserved.generation, 11, "{case}");

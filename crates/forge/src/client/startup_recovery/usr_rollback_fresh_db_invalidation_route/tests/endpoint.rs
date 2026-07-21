@@ -2,7 +2,9 @@ use std::{fs, os::unix::fs::MetadataExt as _, path::PathBuf};
 
 use crate::{
     client::{
+        active_state_snapshot::ActiveStateReservation,
         boot::{boot_synchronize_attempt_count, reset_boot_synchronize_attempt_count},
+        startup_gate::CleanSystemStartup,
         startup_reconciliation::{
             fresh_db_invalidation_removal_call_count, new_state_candidate_preserve_move_attempt_count,
             reset_new_state_candidate_preserve_move_attempt_count,
@@ -18,7 +20,7 @@ use super::{
 };
 
 #[test]
-fn startup_root_links_complete_new_state_reaches_generation_18_then_terminal_finalization_stays_closed() {
+fn startup_root_links_complete_new_state_reaches_generation_18_then_finalizes_cleanly() {
     for historical in [false, true] {
         for candidate_outcome in CandidateOutcome::ALL {
             for fresh_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
@@ -202,13 +204,20 @@ fn startup_root_links_complete_new_state_reaches_generation_18_then_terminal_fin
             ));
             assert_eq!(fixture.namespace_snapshot(), route_namespace_before, "{case}");
             assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
-            let complete_bytes = fixture.canonical_bytes();
+            let terminal_database = fixture.database_snapshot();
             drop(completion_entry);
 
-            let stable_entry = fixture.enter();
-            assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");
-            assert_eq!(fixture.canonical_record(), complete, "{case}");
-            assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");
+            let reservation = ActiveStateReservation::acquire().unwrap();
+            let clean = CleanSystemStartup::enter(&fixture.system, &reservation)
+                .expect("exact generation-18 RootLinks NewState terminal must finalize cleanly");
+            assert!(
+                !fixture
+                    .installation
+                    .root
+                    .join(".cast/journal/state-transition")
+                    .exists(),
+                "{case}"
+            );
             assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
             assert_eq!(
                 fresh_db_invalidation_removal_call_count(),
@@ -216,6 +225,7 @@ fn startup_root_links_complete_new_state_reaches_generation_18_then_terminal_fin
                 "{case}"
             );
             assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
+            assert_eq!(fixture.database_snapshot(), terminal_database, "{case}");
             assert!(matches!(
                 fixture.database.inspect_exact_fresh_transition(
                     fixture.candidate_state,
@@ -225,6 +235,23 @@ fn startup_root_links_complete_new_state_reaches_generation_18_then_terminal_fin
             ));
             assert_eq!(fixture.namespace_snapshot(), route_namespace_before, "{case}");
             assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+            drop(clean);
+            drop(reservation);
+
+            let stable_reservation = ActiveStateReservation::acquire().unwrap();
+            let stable = CleanSystemStartup::enter(&fixture.system, &stable_reservation)
+                .expect("finalized RootLinks NewState endpoint must remain clean");
+            assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+            assert_eq!(
+                fresh_db_invalidation_removal_call_count(),
+                usize::from(fresh_outcome == RollbackActionOutcome::Applied),
+                "{case}"
+            );
+            assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
+            assert_eq!(fixture.database_snapshot(), terminal_database, "{case}");
+            assert_eq!(fixture.namespace_snapshot(), route_namespace_before, "{case}");
+            assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+            drop(stable);
             }
         }
     }

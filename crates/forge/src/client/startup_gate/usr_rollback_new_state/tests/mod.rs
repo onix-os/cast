@@ -6,6 +6,7 @@ mod candidate_process_kill_boundaries;
 mod exclusions;
 mod failures;
 mod finalization;
+mod finalization_restart;
 mod fresh_db_invalidation_process_boundaries;
 mod fresh_db_invalidation_process_evidence;
 mod fresh_db_invalidation_process_harness;

@@ -7,7 +7,9 @@
 
 use crate::{
     Installation,
-    transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::{
@@ -32,9 +34,10 @@ impl UsrRollbackFinalizationNamespaceInspection {
     pub(in crate::client::startup_reconciliation) fn begin(
         installation: &Installation,
         journal: &TransitionJournalStore,
+        binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<Self, UsrRollbackFinalizationNamespaceError> {
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
         let before = capture_snapshot(installation, expected)?;
         require_exact_new_state_rollback_complete_topology(expected, &before)?;
         Ok(Self { before })
@@ -44,6 +47,7 @@ impl UsrRollbackFinalizationNamespaceInspection {
         self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<UsrRollbackFinalizationNamespaceProof, UsrRollbackFinalizationNamespaceError> {
         let after = capture_snapshot(installation, expected)?;
@@ -52,7 +56,7 @@ impl UsrRollbackFinalizationNamespaceInspection {
         require_matching_fingerprints(&self.before, &after)?;
         require_exact_new_state_rollback_complete_topology(expected, &self.before)?;
         require_exact_new_state_rollback_complete_topology(expected, &after)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackFinalizationNamespaceProof {
             before: self.before,
@@ -66,6 +70,7 @@ impl UsrRollbackFinalizationNamespaceProof {
         &self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<(), UsrRollbackFinalizationNamespaceError> {
         installation.revalidate_mutable_namespace()?;
@@ -74,7 +79,7 @@ impl UsrRollbackFinalizationNamespaceProof {
         require_matching_fingerprints(&self.before, &self.after)?;
         require_exact_new_state_rollback_complete_topology(expected, &self.before)?;
         require_exact_new_state_rollback_complete_topology(expected, &self.after)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
 
         run_before_fresh_namespace_capture();
         let fresh = capture_snapshot(installation, expected)?;
@@ -82,7 +87,7 @@ impl UsrRollbackFinalizationNamespaceProof {
         require_matching_fingerprints(&self.before, &fresh)?;
         require_exact_new_state_rollback_complete_topology(expected, &fresh)?;
 
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
@@ -148,12 +153,19 @@ fn require_matching_fingerprints(
 }
 
 fn require_exact_journal(
+    installation: &Installation,
     journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
     expected: &TransitionRecord,
 ) -> Result<(), UsrRollbackFinalizationNamespaceError> {
-    match journal.load()? {
-        Some(actual) if actual == *expected => Ok(()),
-        Some(_) | None => Err(UsrRollbackFinalizationNamespaceError::JournalChanged),
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackFinalizationNamespaceError::JournalChanged);
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, binding, expected)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackFinalizationNamespaceError::JournalChanged)
     }
 }
 

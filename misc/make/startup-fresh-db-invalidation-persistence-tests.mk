@@ -131,7 +131,8 @@ forge-startup-usr-rollback-fresh-db-invalidation-persistence-test:
 	if timeout 10s rg -n '^[[:space:]]*(loop|while|for)[[:space:]]|=[[:space:]]*(loop|while|for)[[:space:]]' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'remove_exact_fresh_transition|clear_transition_if_matches|remove_transition_if_matches|run_transaction_triggers|run_system_triggers|root_links|archive_previous|preserve_failed|cleanup|finalize|diesel::|SqliteConnection|sql_query|\.execute[[:space:]]*\(|\.transaction[[:space:]]*\(' "$$production_code"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$complete_authority"; \
-	if timeout 10s rg -n 'RootLinksComplete' "$$complete_authority" "$$finalization_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$complete_authority"; \
+	timeout 10s grep -Fq 'ForwardPhase::RootLinksComplete, 18' "$$finalization_authority"; \
 	for file in "$$executor" "$$persistence_authority" "$$journal_record_binding" "$$effect" "$$authority" "$$proof" "$$recovery_root" "$$reconciliation_root" "$$tests" "$$support" "$$matrix" "$$races" "$$storage" "$$record_binding" "$$fresh_reopen" "$$root_abi" misc/make/startup-fresh-db-invalidation-persistence-tests.mk Makefile misc/make/help.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \

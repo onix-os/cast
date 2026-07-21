@@ -9,7 +9,7 @@ forge-startup-usr-rollback-fresh-db-invalidation-route-test:
 	for name in \
 		admission::startup_usr_rollback_fresh_db_invalidation_route_admits_exact_current_and_historical_evidence \
 		admission::startup_usr_rollback_fresh_db_invalidation_route_defers_inexact_phase_plan_database_and_provenance \
-		endpoint::startup_root_links_complete_new_state_reaches_generation_18_then_terminal_finalization_stays_closed \
+		endpoint::startup_root_links_complete_new_state_reaches_generation_18_then_finalizes_cleanly \
 		evidence_races::startup_usr_rollback_fresh_db_invalidation_route_rejects_mixed_and_cross_root_journals \
 		evidence_races::startup_usr_rollback_fresh_db_invalidation_route_capture_and_final_evidence_races_never_advance \
 		evidence_races::startup_usr_rollback_fresh_db_invalidation_route_refuses_namespace_lookalikes \
@@ -108,10 +108,8 @@ forge-startup-usr-rollback-fresh-db-invalidation-route-test:
 	timeout 10s grep -Fq 'record.phase == Phase::FreshDbInvalidated' <<<"$$complete_route_plan"; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' <<<"$$complete_route_plan"; \
 	timeout 10s grep -Fq 'record.phase == Phase::RollbackComplete' <<<"$$finalization_plan"; \
-	for closed_plan in "$$finalization_plan"; do \
-		timeout 10s test "$$( timeout 10s grep -Fc 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' <<<"$$closed_plan" )" = 1; \
-		if timeout 10s grep -Fq 'RootLinksComplete' <<<"$$closed_plan"; then exit 1; fi; \
-	done; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' <<<"$$finalization_plan" )" = 1; \
+	timeout 10s grep -Fq 'ForwardPhase::RootLinksComplete, 18' <<<"$$finalization_plan"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)?' "$$production_dispatch" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackFreshDbInvalidationRouteAuthority::capture(' "$$production_dispatch" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_fresh_db_invalidation_route_and_reopen(' "$$executor" )" = 1; \
@@ -217,10 +215,10 @@ forge-startup-usr-rollback-fresh-db-invalidation-route-test:
 	timeout 10s grep -Fq 'assert_eq!(complete.generation, 18' "$$endpoint"; \
 	timeout 10s grep -Fq '["bin", "sbin", "lib", "lib32", "lib64"]' "$$endpoint"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'retained_exchange_syscall_count(), 1' "$$endpoint" )" -ge 3; \
-	timeout 10s test "$$( timeout 10s grep -Fc 'usize::from(fresh_outcome == RollbackActionOutcome::Applied)' "$$endpoint" )" = 3; \
+	timeout 10s test "$$( timeout 10s grep -Fc 'usize::from(fresh_outcome == RollbackActionOutcome::Applied)' "$$endpoint" )" = 4; \
 	timeout 10s grep -Fq 'boot_synchronize_attempt_count(), 0' "$$endpoint"; \
-	timeout 10s grep -Fq 'assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete' "$$endpoint"; \
-	timeout 10s grep -Fq 'assert_eq!(fixture.canonical_bytes(), complete_bytes' "$$endpoint"; \
+	timeout 10s grep -Fq '.expect("exact generation-18 RootLinks NewState terminal must finalize cleanly");' "$$endpoint"; \
+	timeout 10s grep -Fq '.expect("finalized RootLinks NewState endpoint must remain clean");' "$$endpoint"; \
 	for race in Database Provenance Journal Installation Namespace; do timeout 10s grep -Fq "FinalRace::$$race" "$$races"; done; \
 	timeout 10s grep -Fq 'arm_between_usr_rollback_fresh_db_invalidation_route_database_captures' "$$races"; \
 	timeout 10s grep -Fq 'arm_before_usr_rollback_fresh_db_invalidation_route_fresh_namespace_capture' "$$races"; \

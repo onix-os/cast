@@ -9,7 +9,7 @@ use super::support::{CandidateResult, FinalizationFixture, FreshDbOutcome, Sourc
 fn startup_usr_rollback_finalization_admits_exact_current_and_historical_terminal_evidence() {
     for historical in [false, true] {
         for origin in FreshDbOutcome::ALL {
-            for source in Source::ALL {
+            for source in Source::THROUGH_ROLLBACK_COMPLETE {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     for candidate_outcome in CandidateResult::ALL {
                         let case = (historical, origin, source, usr_outcome, candidate_outcome);
@@ -26,6 +26,9 @@ fn startup_usr_rollback_finalization_admits_exact_current_and_historical_termina
 
                         authority.revalidate(&journal).unwrap();
                         assert_eq!(authority.record(), &fixture.record, "{case:?}");
+                        if source == Source::RootLinksComplete {
+                            assert_eq!(fixture.record.generation, 18, "{case:?}");
+                        }
                         assert_eq!(
                             authority.installation().root,
                             fixture.fixture.fixture.fixture.installation.root
@@ -36,6 +39,26 @@ fn startup_usr_rollback_finalization_admits_exact_current_and_historical_termina
             }
         }
     }
+}
+
+#[test]
+fn startup_usr_rollback_finalization_admits_root_links_only_at_generation_eighteen() {
+    let fixture = FinalizationFixture::historical(
+        FreshDbOutcome::AlreadySatisfied,
+        Source::RootLinksComplete,
+        RollbackActionOutcome::AlreadySatisfied,
+        CandidateResult::Applied,
+    );
+    assert_eq!(fixture.record.generation, 18);
+    let mut wrong_generation = fixture.record.clone();
+    wrong_generation.generation += 1;
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+
+    let admission = capture_record(&fixture.fixture, &journal, &reservation, &wrong_generation).unwrap();
+
+    assert!(matches!(admission, UsrRollbackFinalizationAdmission::Deferred));
+    assert_eq!(fixture.canonical_record(), fixture.record);
 }
 
 #[test]
