@@ -76,9 +76,10 @@ text, or container test names.
 The gate deliberately excludes documentation, generated artifacts, and its own
 matcher definition. Documentation has to name the prohibited operations, and
 the matcher has to contain its own rejection fixtures. Production boot assets
-under `misc/boot` are not a local test harness. A future real integration
-harness belongs in a separately reviewed disposable-VM-only directory and must
-not become a dependency of any local/default target.
+under `misc/boot` are not a local test harness. The separately reviewed guarded
+foundation under `misc/vm` is disposable-VM-only and is not a dependency of any
+local/default target. Its exact protocol is documented in
+[`disposable-vm-uefi-boot-storage-campaign.md`](disposable-vm-uefi-boot-storage-campaign.md).
 
 This is a static admission check, not a shell parser or a sandbox. Code review
 must reject indirection intended to hide a prohibited command, and runtime
