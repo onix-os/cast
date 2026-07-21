@@ -5,7 +5,7 @@ The repository does not contact a hypervisor, open an SSH connection, select a
 machine, select a disk, or reboot anything. An operator must enter an already
 snapshotted disposable VM and invoke the dedicated Make targets there.
 
-The harness exposes two separately named, marker-bound profiles. The base
+The harness exposes three separately named, marker-bound profiles. The base
 profile extends the filesystem-substrate proof through one real retained leaf
 publication. It formats one admitted whole disposable disk as FAT32, mounts it
 only below `/run/cast-vm-boot-storage`, creates one declared publication-parent
@@ -18,18 +18,24 @@ The dedicated `gpt-boot-topologies` profile instead repartitions the admitted
 disk twice. It first exercises one GPT ESP as both ESP and BOOT, then exercises
 a distinct GPT ESP plus XBOOTLDR. Each layout runs production mounted-topology
 capture and the production retained-descriptor leaf publisher before and after
-sync, unmount, read-only filesystem checking, and remount. The fixed leaves and
-payloads are test evidence, not a selected kernel, initrd, entry, loader, or
-bootloader. Neither profile mutates the guest's live ESP, changes firmware boot
-entries, reboots, simulates power loss, or proves that the resulting payloads
-are bootable.
+sync, unmount, read-only filesystem checking, and remount.
 
-Both profiles are deliberately cooperative disposable-guest harnesses, not
+The `gpt-receipt-bound-aggregate-v1` profile uses those same two GPT layouts,
+but drives the production receipt-staging boundary and the high-level immutable
+aggregate publication attempt. It publishes a deterministic five-output plan,
+then constructs a fresh deterministic journal and receipt to revalidate all
+five outputs after sync, unmount, read-only filesystem checking, and remount.
+The fixed leaves and payloads in all three profiles are test evidence, not a
+selected kernel, initrd, entry, loader, or bootloader. No profile mutates the
+guest's live ESP, changes firmware boot entries, reboots, simulates power loss,
+or proves that the resulting payloads are bootable.
+
+All three profiles are deliberately cooperative disposable-guest harnesses, not
 production descriptor authority: guest root must remain exclusive, the
 admitted device must not be hot-unplugged or rebound, and no competing storage
 actor may race the pathname-based partitioner, formatter, or mount calls.
 Production publication must retain its own descriptor-backed authority and
-cannot cite either harness as a substitute.
+cannot cite any harness as a substitute.
 
 ## Required operator facts
 
@@ -65,12 +71,13 @@ The snapshot confirmation is an operator assertion. The guest cannot
 authenticate hypervisor snapshot state, and the repository intentionally does
 not run `virsh` or another host command to do so.
 
-All three runtime targets require root, a UEFI boot, a persistent clean checkout
-outside volatile directories, an active SSH session, and the exact same SSH
-connection for challenge and consumption. If privilege escalation discards
-`SSH_CONNECTION`, admission fails rather than weakening that binding. Enter a
-root SSH session directly or explicitly preserve that single variable through
-the guest's configured privilege boundary; do not fabricate another value.
+Every runtime target in all three profiles requires root, a UEFI boot, a
+persistent clean checkout outside volatile directories, an active SSH session,
+and the exact same SSH connection for challenge and consumption. If privilege
+escalation discards `SSH_CONNECTION`, admission fails rather than weakening
+that binding. Enter a root SSH session directly or explicitly preserve that
+single variable through the guest's configured privilege boundary; do not
+fabricate another value.
 Git is invoked with an invocation-local `safe.directory` for the exact checkout,
 so a checkout owned by the remote user does not require global Git policy.
 The harness replaces inherited `PATH` with the fixed guest-system path
@@ -161,6 +168,29 @@ by this profile, and the GPT confirmation is rejected by the base profile. Only
 the final target repartitions the exact admitted disk; challenge and admission
 do not mutate that target disk.
 
+### Receipt-bound aggregate GPT profile
+
+The aggregate profile also uses the common mandatory operator facts, snapshot
+assertion, SSH-connection binding, and single-use challenge, but has its own
+three targets and commit-bound destructive confirmation:
+
+```sh
+make disposable-vm-uefi-boot-gpt-aggregate-challenge
+export VM_BOOT_STORAGE_CHALLENGE=the-printed-64-character-value
+make disposable-vm-uefi-boot-gpt-aggregate-admission
+export VM_GPT_AGGREGATE_DESTRUCTIVE_CONFIRMATION="publish-aggregate-gpt:$VM_TARGET_STABLE_PATH:$VM_TARGET_DISK_BYTES:$VM_TARGET_DISKSEQ:$VM_EXPECTED_BOOT_ID:$VM_EXPECTED_COMMIT:gpt-receipt-bound-aggregate-v1"
+make disposable-vm-uefi-boot-gpt-aggregate-campaign
+```
+
+Its wrapper owns the exact `gpt-receipt-bound-aggregate-v1` profile and records
+it in a version-3 authorization marker. The base, GPT-topology, and aggregate
+confirmations are mutually rejected. Challenge and admission remain
+non-mutating; only the final aggregate target repartitions and formats the exact
+admitted disk. The campaign builds and manifests its fixed runner before disk
+effects, then invokes only the high-level receipt-bound aggregate publication
+attempt for each publish and revalidation pass. It does not invoke a leaf
+publisher directly and does not promote or clear the pending receipt.
+
 ## Fail-closed disk admission
 
 The selected target must be a root-owned canonical whole-disk node whose exact
@@ -246,6 +276,7 @@ The safe local static checks are:
 ```sh
 make disposable-vm-uefi-boot-storage-harness-test
 make disposable-vm-uefi-boot-gpt-topology-harness-test
+make disposable-vm-uefi-boot-gpt-aggregate-harness-test
 ```
 
 They parse and inspect the harnesses without reading a block device or running
@@ -366,3 +397,63 @@ yet prove aggregate publication ordering, replacement, or deletion; receipt
 promotion; journal-coupled forward coordination or startup BOOT repair; selected
 kernel/initrd/entry bootability; device-flush survival; interruption or reboot
 recovery; or power-loss-equivalent durability.
+
+### Receipt-bound aggregate GPT publication evidence
+
+At exact commit `12f888e11e95b640da75c745841d0aa118f471a4`, after atomic
+external snapshot `os-tools-gpt-aggregate-20260721-12f888e1`, UEFI KVM guest
+`test`, machine ID `556a65c27e9b4150a9fb2b68f8693cdb`, during boot
+`e875fab7-b970-4881-89d1-e87aa70acffb`, completed the version-3 aggregate
+challenge, dry admission, and destructive campaign. Root remained `/dev/vda2`,
+and the live ESP remained `/dev/vda1` mounted at `/boot/efi`. The only admitted
+target was `/dev/disk/by-path/virtio-pci-0000:07:00.0` resolving to `/dev/vdb`,
+with disk sequence `10` and exactly `34359738368` bytes.
+
+The alias layout used one 256-MiB GPT ESP as both ESP and BOOT. Its first
+receipt-bound aggregate attempt returned `Published` for all five outputs. The
+campaign synced, unmounted, ran read-only `fsck.fat -n`, remounted, and used a
+fresh journal and receipt to obtain `AlreadyExact` for all five outputs before
+a clean final unmount. It then repartitioned the same admitted disk as a
+256-MiB ESP plus a distinct 512-MiB XBOOTLDR. The distinct publish pass again
+returned five `Published` results, routed the three BOOT-root outputs only to
+XBOOTLDR and the two ESP-root outputs only to ESP, and its post-sync,
+unmount/fsck/remount fresh-receipt pass returned five `AlreadyExact` results
+before clean final unmounts.
+
+The separately captured root-privileged read-only audit authenticated the
+final distinct split. Every file was mode `0644`, owned by `root:root`, and had
+link count one:
+
+- ESP `EFI/Boot/BOOTX64.EFI`: 33 bytes, SHA-256
+  `5e930626c132ff8da28803a0ef27c484ae37a74e57074c1b62a718f1df69be3c`.
+- ESP `EFI/systemd/systemd-bootx64.efi`: 33 bytes, SHA-256
+  `5e930626c132ff8da28803a0ef27c484ae37a74e57074c1b62a718f1df69be3c`.
+- XBOOTLDR
+  `EFI/head/xxh3-5113812e9eaf0b5bfbef5646393e9758-l0000000000000012/vmlinuz`:
+  18 bytes, SHA-256
+  `2abff9f003da97346beaa8cd7e2329f9292c41708ca1f1895d9def1e46ba1b86`.
+- XBOOTLDR `loader/entries/head-6.12-1.conf`: 177 bytes, SHA-256
+  `447d9c4bca99eb0e69db004fe2aaf676b95d1b6f5a7809a2ffc6188e7dd0b6b4`.
+- XBOOTLDR `loader/loader.conf`: 16 bytes, SHA-256
+  `119499abcfd637aaa7c2cddcacb37f1d296ecf377b464adb46edd82124215fec`.
+
+The guest campaign transcript
+`/home/bresilla/os-tools-gpt-aggregate-12f888e1.log` has SHA-256
+`a35862ee20c3b4c5907980c90b3a2e8e1d9c3287a5502c7b78b5f172420a504f`.
+The independent audit transcript
+`/home/bresilla/os-tools-gpt-aggregate-audit-12f888e1.log` has SHA-256
+`097a4144f2552b07941ec8458f99407a099e2917a43be531564dc9741586fc69`.
+Read-only `fsck.fat -n` reported `/dev/vdb1: 6 files, 6/516188 clusters`
+and `/dev/vdb2: 9 files, 9/130811 clusters`. The audit ended with
+`GPT_AGGREGATE_READ_ONLY_AUDIT_OK`. Both target partitions were unmounted with
+no swap, holders, slaves, private mount, authorization marker, consumed marker,
+campaign lock, challenge-bound build root, or audit directory left behind.
+Guest root, live ESP, target path, disk sequence, and byte size remained exact.
+
+This proves one ordered five-output receipt-bound immutable aggregate attempt
+on each supported GPT role layout, plus exact persistence and routing across
+sync, unmount, read-only filesystem checking, and remount. Each revalidation
+invocation intentionally created a fresh receipt; it does not prove receipt
+continuity across processes. The campaign performed no receipt promotion, no
+`BootSyncComplete` transition, no replacement or deletion, no reboot or
+power-loss experiment, and no selected-payload bootability test.
