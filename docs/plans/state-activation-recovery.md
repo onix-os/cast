@@ -116,13 +116,12 @@ and instant rollback mechanism; it hardens their failure semantics.
   pair matches the durable singleton head. A complete bounded canonical body
   separately binds transition/predecessor hashes, desired inventory, exact
   destinations, and every ordered output with a keyed inert claim. One exclusive
-  SQLite transaction inserts that immutable body and stages its pending head,
-  but production forward staging remains unwired. Commit `5acba0ba` makes startup
-  retain the strict full receipt state and require exact v3 compact-pair correlation. Existing v1/v2 records retain their conservative journal-only
-  route. A separately observed `BootRepairStarted` becomes terminal
-  `BootRepairUnverified` without invoking boot; durable `BootRepairComplete`
-  still routes to `RollbackComplete`. No production path repairs boot or emits success;
-  authenticated claim derivation, exact durable predecessor binding, promotion, publisher, mutation/deletion, and real-publication VM evidence remain open.
+  SQLite transaction inserts that immutable body and stages its pending head.
+  Commit `5acba0ba` makes startup retain the strict full receipt state and require exact v3 compact-pair correlation. Accepted commit `9f57157a` adds the independently reviewed, effect-free production staging boundary.
+  It derives the receipt internally from a plan bound to the Client's exact same `Installation`, its exact retained predecessor, and the database-owned committed head; atomically stages the immutable body and pending head; then rederives the exact bytes immediately before one bound journal advance to `BootSyncStarted`.
+  All injected fault seams either classify the durable exact predecessor or successor where possible, or fail stop. The boundary remains intentionally unwired. Existing v1/v2 records retain their conservative journal-only route.
+  A separately observed `BootRepairStarted` becomes terminal `BootRepairUnverified` without invoking boot; durable `BootRepairComplete` still routes to `RollbackComplete`. No production path repairs boot or emits success.
+  Caller-supplied provenance claims are not authenticated effect authority; promotion, publisher, aggregate/live wiring, mutation/deletion, real-publication VM evidence, reboot, and power-loss proof remain open.
   The pre-existing ActivateArchived rollback source set still reaches that same
   handoff. Exact private-detach residue can now be restored on writer reopen.
   The RootLinks campaign remains separate from the unchanged legacy 12-case
@@ -469,14 +468,12 @@ binds its transition, optional committed predecessor, canonical predecessor
 record and desired-inventory hashes, exact destinations, and every ordered
 output with a keyed inert provenance claim. One exclusive SQLite transaction
 inserts that immutable body and stages its pending singleton head with strict
-body/head validation. Production forward staging remains unwired. Commit
-`5acba0ba` makes startup retain the strict full receipt state and require exact v3 compact-pair correlation. Byte-canonical v1/v2
-remains readable; records already at `BootSyncStarted` retain a conservative
-journal-only route, while older records cannot acquire v3 receipt authority.
-Commit `406cabe5`'s typed Required -> Started, Started -> Complete/Unverified,
-and Complete -> `RollbackComplete` vocabulary remains intact. No authenticated
-claim derivation, exact durable predecessor binding, promotion, publisher, boot
-mutation/deletion authority, or real-publication VM evidence exists yet.
+body/head validation. Commit `5acba0ba` makes startup retain the strict full receipt state and require exact v3 compact-pair correlation; at that checkpoint, the production forward-staging boundary was still absent. Byte-canonical v1/v2 remains readable; records already at `BootSyncStarted` retain a conservative journal-only route, while older records cannot acquire v3 receipt authority.
+Commit `406cabe5`'s typed Required -> Started, Started -> Complete/Unverified, and Complete -> `RollbackComplete` vocabulary remains intact. Accepted commit `9f57157a` adds an independently reviewed effect-free production staging boundary, but deliberately does not wire it into the coordinator.
+It rejects a bound render/topology plan unless it belongs to the Client's exact same `Installation`, derives the receipt internally from the exact retained predecessor and database-owned committed head, atomically stages the immutable body and pending singleton head, then strictly reloads and rederives the exact receipt immediately before one bound journal advance to `BootSyncStarted`.
+The proof covers exact and pre-staged success, rejected unbound and cross-installation inputs, all five journal-update fault seams, late plan drift, and post-advance successor substitution.
+Durable classification is limited to the exact predecessor or `BootSyncStarted`; unresolved uncertainty fails stop. Caller-supplied keyed provenance claims remain inert rather than authenticated effect authority.
+Pending promotion, publisher, aggregate/live wiring, boot mutation/deletion authority, real publication, reboot, and power-loss proof remain open.
 
 The implemented preparation stack now carries one caller-owned absolute
 deadline, without resetting it, through the exact state/layout database and
@@ -556,9 +553,9 @@ the roughly 10-GiB publication ceiling. The complete authority-free receipt
 body and mapper now bind those exact outputs, transition/predecessor hashes,
 desired inventory, destination identities, and keyed inert claims. One exclusive
 database transaction persists the immutable body and pending singleton head.
-Startup now retains that strict full receipt state; production staging, authenticated
-claim derivation and durable record binding, promotion, publication, deletion,
-durability, and real-publication VM evidence remain open.
+Startup now retains that strict full receipt state. Accepted commit `9f57157a` adds the independently reviewed, effect-free production boundary that internally derives this receipt from the same-`Installation` bound plan and exact retained predecessor, atomically stages the database body and pending head, and advances the bound journal exactly to `BootSyncStarted` after strict rederivation.
+Its fault seams classify the exact predecessor or successor when durable evidence permits and otherwise fail stop. It remains intentionally unwired, and caller provenance claims remain inert rather than authenticated authority.
+Promotion, publication, deletion, aggregate/live wiring, publication durability, and real-publication VM evidence remain open.
 
 Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
 stable directory identity and the Linux MSDOS magic family; commit `029f0590`
@@ -598,7 +595,7 @@ Disk admissibility beyond the admitted evidence, write authority, durable descri
 At exact commit `58c87a5db50bec7a5ac00978455841c7d2402689`, disposable UEFI guest `test` was observed with `/` on `/dev/vda2`, its live ESP on `/dev/vda1`, and a separate untouched `/dev/vdb` of exactly 34359738368 bytes.
 Its operation-specific atomic suffix passed ActivateArchived complete 17/17 and finalization 24/24, plus ActiveReblit dispatch 62/62, complete 11/11, and finalization 24/24.
 Shared RootLinks terminal-process 3/3 and delete-residue recovery 13/13 passed; synthetic boot namespace passed 40/40; the receipt and startup boot-repair Make lanes all exited zero.
-No disk, ESP, mount, reboot, or live-`/usr` mutation occurred. This is same-boot synthetic/component evidence only, not publisher, ESP-publication, reboot, or power-loss proof.
+At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the same guest also passed the focused receipt/staging Make lane, including its declared dependencies, all 12 receipt-database tests, and all 9 production staging tests. Neither campaign mutated a disk, ESP, mount, live `/usr`, or rebooted the guest. This is same-boot synthetic/component evidence only, not publisher, ESP-publication, reboot, or power-loss proof.
 Default and focused tests still do not inspect or mutate host ESP/BOOT storage; real publication and destructive durability tests remain confined to the user-supplied disposable VM.
 
 ### Durable transition coordination

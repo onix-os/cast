@@ -587,10 +587,23 @@ closure remain authoritative in `PLAN.md`.
   destinations, and every ordered output with a keyed inert claim. One exclusive
   SQLite transaction inserts that immutable body and stages its pending head.
   Commit `5acba0ba` makes startup retain the strict full receipt state and require exact
-  v3 compact-pair correlation; production forward staging remains unwired. Existing v1/v2
-  records retain their conservative route. There is still no authenticated
-  claim derivation, exact durable predecessor binding, promotion, publisher,
-  actual repair, mutation/deletion authority, successful dispatch, or VM proof.
+  v3 compact-pair correlation. Accepted commit `9f57157a` adds the independently
+  reviewed, effect-free production staging boundary. It requires the bound plan
+  to belong to the Client's exact same `Installation`, derives the receipt
+  internally from that plan, the exact retained predecessor, and the
+  database-owned committed head, atomically stages the body and pending head,
+  then strictly rederives it immediately before the bound journal advance to
+  exact `BootSyncStarted`. All injected fault seams classify the exact durable
+  predecessor or successor where possible and otherwise fail stop. The boundary
+  remains intentionally unwired; existing v1/v2 records retain their
+  conservative route. Caller provenance claims are not authenticated effect
+  authority. Promotion, publisher, actual repair, aggregate/live wiring,
+  mutation/deletion authority, successful dispatch, real-publication VM
+  evidence, reboot, and power-loss proof remain open.
+  At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable
+  UEFI guest passed the focused receipt/staging Make lane with its declared
+  dependencies, all 12 receipt-database tests, and all 9 production staging
+  tests. That run performed no disk, ESP, mount, reboot, or live-`/usr` mutation.
   ActivateArchived
   preservation, completion, and terminal finalization now run as three separate
   bounded production entries with no same-entry successor redispatch.

@@ -931,12 +931,14 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   the compact immutable receipt pair. A complete bounded canonical body separately binds transition/predecessor hashes,
   desired inventory, exact destinations, and every ordered output with a keyed inert claim. One exclusive SQLite transaction
   inserts that immutable body and stages its pending singleton head with strict body/head validation. Commit `5acba0ba` makes
-  startup retain the strict full receipt state and require exact v3 compact-pair correlation; production forward staging remains unwired. Existing
-  v1/v2 records at `BootSyncStarted` retain their conservative journal-only route. Commit `b5928340` separately advances exact
+  startup retain the strict full receipt state and require exact v3 compact-pair correlation. Accepted commit `9f57157a` adds an independently reviewed, effect-free production staging boundary.
+  The bound plan must belong to the Client's exact same `Installation`; the receipt is derived internally from that plan, the exact retained predecessor, and the database-owned committed head; its immutable body and pending head are staged atomically.
+  The exact receipt is strictly rederived immediately before one bound journal advance to `BootSyncStarted`. Every injected fault seam either classifies the durable exact predecessor or successor where possible, or fails stop.
+  The boundary remains intentionally unwired. Existing v1/v2 records at `BootSyncStarted` retain their conservative journal-only route. Commit `b5928340` separately advances exact
   `BootRepairStarted` evidence to terminal `BootRepairUnverified` with zero boot calls. Commit `406cabe5`'s explicit Required ->
   Started, Started -> Complete/Unverified, and Complete -> `RollbackComplete` edges remain. No production entry performs the
-  repair or emits success; authenticated claim derivation, exact durable predecessor binding, promotion, publisher, boot
-  mutation/deletion authority, and disposable-VM evidence remain open.
+  repair or emits success. Caller-supplied keyed provenance claims remain inert rather than authenticated effect authority; promotion, publisher, aggregate/live wiring, boot mutation/deletion authority, real-publication VM evidence, reboot, and power-loss proof remain open.
+  At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable UEFI guest passed the focused receipt/staging Make lane, including its declared dependencies, all 12 receipt-database tests, and all 9 production staging tests. It performed no disk, ESP, mount, reboot, or live-`/usr` mutation.
 
   Commit `cbe3679a` production-wires exactly one ActivateArchived
   `CandidatePreserveIntent` checkpoint per startup entry. Exact staged evidence
