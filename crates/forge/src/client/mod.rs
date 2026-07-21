@@ -133,6 +133,9 @@ mod active_reblit_tests;
 #[cfg(test)]
 #[path = "boot/disposable_vm_gpt_topology_tests.rs"]
 mod disposable_vm_gpt_topology_tests;
+#[cfg(test)]
+#[path = "boot/disposable_vm_gpt_aggregate_publication_tests.rs"]
+mod disposable_vm_gpt_aggregate_publication_tests;
 mod active_state_authority;
 #[cfg(test)]
 mod active_state_authority_tests;

@@ -4,6 +4,7 @@ esp_mount=$mount_root/esp
 xbootldr_mount=$mount_root/xbootldr
 topology_installation=$publication_build_root/topology-installation
 topology_source=$topology_installation/etc/cast/boot-topology.glu
+aggregate_fixture_root=$publication_build_root/gpt-aggregate-fixtures
 partition_layout=$publication_build_root/gpt-layout.sfdisk
 esp_type=c12a7328-f81f-11d2-ba4b-00a0c93ec93b
 xbootldr_type=bc13c2ff-59e6-4262-a352-b275fd6f7172
@@ -24,6 +25,39 @@ expected_partition_layout=empty
 esp_formatted=0
 xbootldr_formatted=0
 live_system_disk=/dev/"vda"
+topology_test_confirmation=
+topology_test_make_target=
+
+configure_gpt_publication_profile() {
+    case "$campaign_profile" in
+        gpt-boot-topologies)
+            topology_test_confirmation=disposable-vm-gpt-topology-only
+            topology_test_make_target=forge-disposable-vm-gpt-boot-topology-test
+            ;;
+        gpt-receipt-bound-aggregate-v1)
+            topology_test_confirmation=disposable-vm-gpt-receipt-bound-aggregate-only
+            topology_test_make_target=forge-disposable-vm-gpt-aggregate-publication-test
+            ;;
+        *) die 'GPT effects require an exact supported marker-bound campaign profile' ;;
+    esac
+}
+
+prepare_aggregate_fixture_parents() {
+    [ "$campaign_profile" = gpt-receipt-bound-aggregate-v1 ] || return 0
+    for fixture_directory in \
+        "$aggregate_fixture_root" \
+        "$aggregate_fixture_root/alias" \
+        "$aggregate_fixture_root/distinct"
+    do
+        [ ! -e "$fixture_directory" ] && [ ! -L "$fixture_directory" ] \
+            || die 'aggregate fixture directory is not fresh'
+        "$mkdir_command" -m 700 -- "$fixture_directory" \
+            || die 'cannot create private aggregate fixture directory'
+        [ "$(stat -Lc '%u:%g:%a:%F' -- "$fixture_directory")" \
+            = '0:0:700:directory' ] \
+            || die 'aggregate fixture directory metadata is unsafe'
+    done
+}
 
 load_gpt_effect_commands() {
     load_effect_commands
@@ -639,6 +673,8 @@ run_gpt_topology_test() (
     topology_test_phase=$2
     [ "$publication_runner_prepared" -eq 1 ] \
         || die 'production publisher runner is not prepared'
+    [ -n "$topology_test_confirmation" ] && [ -n "$topology_test_make_target" ] \
+        || die 'production GPT publication profile is not configured'
     verify_immutable_publication_source
     verify_publication_develop_profile
     verify_publication_binary_manifest
@@ -661,10 +697,11 @@ run_gpt_topology_test() (
         PATH=/usr/sbin:/usr/bin:/sbin:/bin \
         HOME=/root USER=root LOGNAME=root LC_ALL=C LANG=C TMPDIR=/tmp \
         "SSH_CONNECTION=$SSH_CONNECTION" \
-        CAST_VM_GPT_TOPOLOGY_CONFIRMATION=disposable-vm-gpt-topology-only \
+        "CAST_VM_GPT_TOPOLOGY_CONFIRMATION=$topology_test_confirmation" \
         "CAST_VM_GPT_TOPOLOGY_KIND=$topology_test_kind" \
         "CAST_VM_GPT_TOPOLOGY_PHASE=$topology_test_phase" \
         "CAST_VM_GPT_TOPOLOGY_INSTALLATION=$topology_installation" \
+        "CAST_VM_GPT_AGGREGATE_FIXTURE_PARENT=$aggregate_fixture_root/$topology_test_kind" \
         "CAST_VM_GPT_TOPOLOGY_ESP_MOUNT=$esp_mount" \
         "CAST_VM_GPT_TOPOLOGY_ESP_DEVNUM=$esp_devnum" \
         "CAST_VM_GPT_TOPOLOGY_ESP_PARTUUID=$esp_partuuid" \
@@ -680,6 +717,7 @@ run_gpt_topology_test() (
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_STABLE_PATH=$target_stable_path" \
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DISKSEQ=$target_diskseq" \
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_BYTES=$target_bytes" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_COMMIT=$expected_commit" \
         "CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER=$consumed_marker" \
         "CAST_VM_BOOT_PUBLICATION_BUILD_ROOT=$publication_build_root" \
         "CAST_VM_BOOT_PUBLICATION_SOURCE_ROOT=$publication_source_root" \
@@ -688,7 +726,7 @@ run_gpt_topology_test() (
         "CARGO_TARGET_DIR=$publication_test_target" \
         "CARGO_HOME=$publication_cargo_home" \
         "$make_command" -C "$publication_source_root" \
-        forge-disposable-vm-gpt-boot-topology-test || topology_test_status=$?
+        "$topology_test_make_target" || topology_test_status=$?
     verify_gpt_whole_disk_identity
     reauthenticate_generated_partition \
         "$esp_device" 1 "$esp_type" 2048 524288 "$esp_devnum" "$esp_partuuid" 1
@@ -811,8 +849,7 @@ run_distinct_topology() {
 }
 
 run_campaign() {
-    [ "$campaign_profile" = gpt-boot-topologies ] \
-        || die 'GPT effects require the exact marker-bound campaign profile'
+    configure_gpt_publication_profile
     [ "$target_bytes" -ge 2147483648 ] \
         || die 'GPT topology target is too small for the fixed bounded layouts'
     ensure_runtime_root
@@ -842,6 +879,7 @@ run_campaign() {
     verify_init_mount_namespace
     verify_target_disk
     prepare_boot_file_publication_runner
+    prepare_aggregate_fixture_parents
     verify_guest_identity
     verify_init_mount_namespace
     verify_target_disk
@@ -862,8 +900,15 @@ run_campaign() {
     verify_marker "$consumed_marker"
     verify_gpt_whole_disk_identity
     campaign_complete=1
-    printf '%s\n' \
-        'Disposable VM GPT ESP/XBOOTLDR topology campaign passed.' \
-        'ESP-as-BOOT and distinct ESP+XBOOTLDR survived unmount/remount.' \
-        'No reboot was requested or performed.'
+    if [ "$campaign_profile" = gpt-receipt-bound-aggregate-v1 ]; then
+        printf '%s\n' \
+            'Disposable VM receipt-bound aggregate GPT campaign passed.' \
+            'Immutable aggregate publication was revalidated after unmount/remount.' \
+            'No promotion or reboot was requested or performed.'
+    else
+        printf '%s\n' \
+            'Disposable VM GPT ESP/XBOOTLDR topology campaign passed.' \
+            'ESP-as-BOOT and distinct ESP+XBOOTLDR survived unmount/remount.' \
+            'No reboot was requested or performed.'
+    fi
 }

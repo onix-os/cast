@@ -84,6 +84,22 @@ impl StateSpec {
 impl RenderFixture {
     pub(super) fn new(head_spec: StateSpec, history_specs: Vec<StateSpec>) -> Self {
         let temporary = private_installation_tempdir();
+        Self::with_temporary(temporary, head_spec, history_specs)
+    }
+
+    pub(super) fn new_in(parent: &Path, head_spec: StateSpec, history_specs: Vec<StateSpec>) -> Self {
+        let temporary = tempfile::Builder::new()
+            .prefix("cast-render-fixture-")
+            .tempdir_in(parent)
+            .unwrap();
+        Self::with_temporary(temporary, head_spec, history_specs)
+    }
+
+    fn with_temporary(
+        temporary: tempfile::TempDir,
+        head_spec: StateSpec,
+        history_specs: Vec<StateSpec>,
+    ) -> Self {
         let state_db = db::state::Database::new(":memory:").unwrap();
         let layout_db = db::layout::Database::new(":memory:").unwrap();
         let head_package = package::Id::from("render-head".to_owned());

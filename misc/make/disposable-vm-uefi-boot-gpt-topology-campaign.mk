@@ -72,7 +72,7 @@ disposable-vm-uefi-boot-gpt-topology-harness-test: \
 	trap 'rm -f -- "$$output" "$$old_marker" "$$gpt_marker" "$$normalized_marker" "$$format_capture"' EXIT; \
 	status=0; sh "$$base" challenge "$${common[@]}" --campaign-profile unknown \
 		>"$$output" 2>&1 || status=$$?; \
-	test "$$status" = 2; grep -Fq -- '--campaign-profile must be gpt-boot-topologies' "$$output"; \
+	test "$$status" = 2; grep -Fq -- '--campaign-profile must be gpt-boot-topologies or gpt-receipt-bound-aggregate-v1' "$$output"; \
 	status=0; sh "$$base" campaign "$${common[@]}" --challenge "$$challenge" \
 		--destructive-confirmation "$$gpt_confirmation" >"$$output" 2>&1 || status=$$?; \
 	test "$$status" = 2; grep -Fq -- '--destructive-confirmation does not bind' "$$output"; \

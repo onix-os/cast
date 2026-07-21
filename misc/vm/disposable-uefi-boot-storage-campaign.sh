@@ -32,7 +32,7 @@ usage: disposable-uefi-boot-storage-campaign.sh <challenge|admit|campaign> \
   --snapshot-confirmation snapshot-ready:BOOT-ID:GIT-OID \
   --remote-confirmation disposable-vm-remote-only \
   --cooperative-root-confirmation cooperative-guest-root-no-hotplug \
-  [--campaign-profile gpt-boot-topologies] \
+  [--campaign-profile gpt-boot-topologies|gpt-receipt-bound-aggregate-v1] \
   [--challenge 64-LOWER-HEX] \
   [--destructive-confirmation PROFILE-BOUND-CONFIRMATION]
 
@@ -45,6 +45,11 @@ The optional gpt-boot-topologies profile is a distinct protocol selected only
 by its dedicated wrapper. It repartitions the exact admitted disposable disk;
 its confirmation is
 repartition-gpt:STABLE-PATH:BYTES:DISKSEQ:BOOT-ID:gpt-boot-topologies.
+
+The optional gpt-receipt-bound-aggregate-v1 profile is a separate protocol for
+the receipt-bound aggregate publisher. Its confirmation additionally binds the
+exact immutable source commit:
+publish-aggregate-gpt:STABLE-PATH:BYTES:DISKSEQ:BOOT-ID:COMMIT:gpt-receipt-bound-aggregate-v1.
 EOF
 }
 die() {
@@ -375,18 +380,28 @@ validate_publication_parent
 [ "$cooperative_root_confirmation" = cooperative-guest-root-no-hotplug ] \
     || bad_usage '--cooperative-root-confirmation must be cooperative-guest-root-no-hotplug'
 if [ "$seen_campaign_profile" -eq 1 ]; then
-    [ "$campaign_profile" = gpt-boot-topologies ] \
-        || bad_usage '--campaign-profile must be gpt-boot-topologies'
+    case "$campaign_profile" in
+        gpt-boot-topologies | gpt-receipt-bound-aggregate-v1) ;;
+        *)
+            bad_usage '--campaign-profile must be gpt-boot-topologies or gpt-receipt-bound-aggregate-v1'
+            ;;
+    esac
 fi
 if [ "$seen_challenge" -eq 1 ]; then
     require_pattern '--challenge' "$challenge" '^[0-9a-f]{64}$'
 fi
 if [ "$mode" = campaign ]; then
-    if [ "$campaign_profile" = gpt-boot-topologies ]; then
-        expected_destructive_confirmation="repartition-gpt:$target_stable_path:$target_bytes:$target_diskseq:$expected_boot_id:gpt-boot-topologies"
-    else
-        expected_destructive_confirmation="erase:$target_stable_path:$target_bytes:$target_diskseq:$expected_boot_id"
-    fi
+    case "$campaign_profile" in
+        gpt-boot-topologies)
+            expected_destructive_confirmation="repartition-gpt:$target_stable_path:$target_bytes:$target_diskseq:$expected_boot_id:gpt-boot-topologies"
+            ;;
+        gpt-receipt-bound-aggregate-v1)
+            expected_destructive_confirmation="publish-aggregate-gpt:$target_stable_path:$target_bytes:$target_diskseq:$expected_boot_id:$expected_commit:gpt-receipt-bound-aggregate-v1"
+            ;;
+        *)
+            expected_destructive_confirmation="erase:$target_stable_path:$target_bytes:$target_diskseq:$expected_boot_id"
+            ;;
+    esac
     [ "$destructive_confirmation" = "$expected_destructive_confirmation" ] \
         || bad_usage '--destructive-confirmation does not bind the exact target, size, and boot'
 fi
@@ -723,11 +738,11 @@ verify_runtime_inventory() {
 write_marker_body() {
     issued=$1
     marker_challenge=$2
-    if [ "$campaign_profile" = gpt-boot-topologies ]; then
-        marker_protocol=2
-    else
-        marker_protocol=1
-    fi
+    case "$campaign_profile" in
+        gpt-boot-topologies) marker_protocol=2 ;;
+        gpt-receipt-bound-aggregate-v1) marker_protocol=3 ;;
+        *) marker_protocol=1 ;;
+    esac
     cat <<EOF
 protocol=$marker_protocol
 hostname=$expected_hostname
@@ -749,7 +764,7 @@ snapshot_confirmation=$snapshot_confirmation
 remote_confirmation=$remote_confirmation
 cooperative_root_confirmation=$cooperative_root_confirmation
 EOF
-    if [ "$campaign_profile" = gpt-boot-topologies ]; then
+    if [ -n "$campaign_profile" ]; then
         printf 'campaign_profile=%s\n' "$campaign_profile"
     fi
     cat <<EOF
@@ -767,11 +782,11 @@ verify_marker() {
         || die 'authorization marker metadata is unsafe'
 
     exec 3<"$marker_path"
-    if [ "$campaign_profile" = gpt-boot-topologies ]; then
-        expected_marker_protocol=2
-    else
-        expected_marker_protocol=1
-    fi
+    case "$campaign_profile" in
+        gpt-boot-topologies) expected_marker_protocol=2 ;;
+        gpt-receipt-bound-aggregate-v1) expected_marker_protocol=3 ;;
+        *) expected_marker_protocol=1 ;;
+    esac
     IFS= read -r line <&3 && [ "$line" = "protocol=$expected_marker_protocol" ] \
         || die 'authorization marker protocol is invalid'
     for expected_line in \
@@ -797,7 +812,7 @@ verify_marker() {
         IFS= read -r line <&3 && [ "$line" = "$expected_line" ] \
             || die 'authorization marker is not bound to this exact invocation'
     done
-    if [ "$campaign_profile" = gpt-boot-topologies ]; then
+    if [ -n "$campaign_profile" ]; then
         IFS= read -r line <&3 && [ "$line" = "campaign_profile=$campaign_profile" ] \
             || die 'authorization marker campaign profile is invalid'
     fi
@@ -870,11 +885,12 @@ case "$mode" in
     challenge) verify_target_disk; create_challenge ;;
     admit) admit_challenge ;;
     campaign)
-        if [ "$campaign_profile" = gpt-boot-topologies ]; then
-            effects_script=$root/misc/vm/disposable-uefi-boot-gpt-topology-effects.sh
-        else
-            effects_script=$root/misc/vm/disposable-uefi-boot-storage-effects.sh
-        fi
+        case "$campaign_profile" in
+            gpt-boot-topologies | gpt-receipt-bound-aggregate-v1)
+                effects_script=$root/misc/vm/disposable-uefi-boot-gpt-topology-effects.sh
+                ;;
+            *) effects_script=$root/misc/vm/disposable-uefi-boot-storage-effects.sh ;;
+        esac
         [ -f "$effects_script" ] && [ ! -L "$effects_script" ] \
             || die 'campaign effect implementation is unavailable or unsafe'
         . "$effects_script"
