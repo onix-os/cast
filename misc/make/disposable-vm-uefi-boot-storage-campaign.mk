@@ -95,14 +95,24 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq 'make_command=$$(command_path make)' "$$effects"; \
 	grep -Fq 'env_command=$$(command_path env)' "$$effects"; \
 	grep -Fq 'rm_command=$$(command_path rm)' "$$effects"; \
+	grep -Fq 'jq_command=$$(command_path jq)' "$$effects"; \
+	grep -Fq 'readlink_command=$$(command_path readlink)' "$$effects"; \
+	grep -Fq 'stat_command=$$(command_path stat)' "$$effects"; \
 	grep -Fq 'publication_build_parent=/var/tmp' "$$effects"; \
 	grep -Fq 'publication_build_root=$$publication_build_parent/cast-vm-boot-storage-$$expected_boot_id-$$challenge' "$$effects"; \
+	grep -Fq 'publication_develop_profile=$$publication_build_root/nix-develop-profile' "$$effects"; \
+	grep -Fq 'publication_binary_manifest=$$publication_build_root/forge-libtest-manifest-v1' "$$effects"; \
 	grep -Fq 'fresh private publication build root already exists' "$$effects"; \
 	grep -Fq '"$$env_command" -i' "$$effects"; \
 	grep -Fq '"CARGO_TARGET_DIR=$$publication_test_target"' "$$effects"; \
 	grep -Fq '"CARGO_HOME=$$publication_cargo_home"' "$$effects"; \
 	grep -Fq '"CAST_VM_BOOT_PUBLICATION_BUILD_ROOT=$$publication_build_root"' "$$effects"; \
-	grep -Fq 'develop "path:$$root" --command' "$$effects"; \
+	grep -Fq 'flake metadata --json --no-write-lock-file --no-update-lock-file' "$$effects"; \
+	grep -Fq '.revision == $$expected_commit' "$$effects"; \
+	grep -Fq '.locked.rev == $$expected_commit' "$$effects"; \
+	grep -Fq 'develop --profile "$$publication_develop_profile"' "$$effects"; \
+	grep -Fq '"$$make_command" -C "$$publication_source_root"' "$$effects"; \
+	test "$$(grep -Fc 'forge-linux-descriptor-boot-file-publication-vfat-build' "$$effects")" = 1; \
 	test "$$(grep -Fc 'run_boot_file_publication_test publish' "$$effects")" = 1; \
 	test "$$(grep -Fc 'run_boot_file_publication_test revalidate' "$$effects")" = 1; \
 	grep -Fq 'publisher test lost the exact admitted VFAT mount policy before invocation' "$$effects"; \
@@ -112,19 +122,49 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq 'DISPOSABLE_VM_PARENT_PREFIX: &str = "/run/cast-vm-boot-storage/mount/"' "$$publisher_tests"; \
 	grep -Fq 'assert_disposable_vm_identity_and_marker(publication_parent)' "$$publisher_tests"; \
 	grep -Fq 'assert_disposable_vm_mount_policy(&expected_target_devnum)' "$$publisher_tests"; \
+	grep -Fq 'forge-linux-descriptor-boot-file-publication-vfat-build:' "$$publisher_make"; \
 	grep -Fq 'forge-linux-descriptor-boot-file-publication-vfat-test:' "$$publisher_make"; \
-	grep -Fq "trusted_tools='/usr/bin/id /usr/bin/stat /usr/bin/cat /usr/bin/systemd-detect-virt'" "$$publisher_make"; \
+	test "$$(grep -Fc "trusted_tools='/usr/bin/id /usr/bin/stat /usr/bin/cat /usr/bin/systemd-detect-virt" "$$publisher_make")" = 2; \
 	grep -Fq '/usr/bin/systemd-detect-virt --vm' "$$publisher_make"; \
 	grep -Fq "'0:0:600:regular file:1'" "$$publisher_make"; \
 	grep -Fq 'expected_build_root="/var/tmp/cast-vm-boot-storage-' "$$publisher_make"; \
+	grep -Fq 'forge-libtest-manifest-v1' "$$publisher_make"; \
+	grep -Fq -- '--lib --no-run --message-format=json' "$$publisher_make"; \
+	grep -Fq '"$$$$executable" "$$$$test_name" --ignored --exact --test-threads=1' "$$publisher_make"; \
 	grep -Fq 'done </proc/self/mountinfo' "$$publisher_make"; \
 	grep -Eq '^[[:space:]]*cd /; \\$$' "$$publisher_make"; \
-	awk '/^forge-linux-descriptor-boot-file-publication-vfat-test:/ { target = NR } /\/usr\/bin\/systemd-detect-virt --vm/ && target > 0 { virt = NR } /^[[:space:]]*cd \/; \\$$/ && target > 0 { chdir = NR } /\$\(CARGO\) test --manifest-path/ && target > 0 { cargo = NR } END { exit !(target > 0 && virt > target && chdir > virt && cargo > chdir) }' "$$publisher_make"; \
+	build_recipe="$$(sed -n '/^forge-linux-descriptor-boot-file-publication-vfat-build:/,/^forge-linux-descriptor-boot-file-publication-vfat-test:/p' "$$publisher_make" | sed '$$d')"; \
+	run_recipe="$$(sed -n '/^forge-linux-descriptor-boot-file-publication-vfat-test:/,$$p' "$$publisher_make")"; \
+	test "$$(grep -Fc '$$(CARGO) test --locked' <<<"$$build_recipe")" = 1; \
+	test "$$(grep -Fc -- '--no-run --message-format=json' <<<"$$build_recipe")" = 1; \
+	test "$$(grep -Fc '"$$$$executable" "$$$$test_name" --ignored --exact --test-threads=1' <<<"$$run_recipe")" = 1; \
+	if rg -n '\$\(CARGO\)|cargo test|nix develop|nix_command' <<<"$$run_recipe"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if grep -Fq 'target_devnum=$$target_devnum' "$$script"; then exit 1; fi; \
 	if grep -Fq '$$root/target' "$$effects"; then exit 1; fi; \
+	if grep -Fq 'path:$$root' "$$effects"; then exit 1; fi; \
+	test "$$(grep -Fc 'flake metadata --json --no-write-lock-file --no-update-lock-file' "$$effects")" = 1; \
+	test "$$(grep -Fc 'develop --profile "$$publication_develop_profile"' "$$effects")" = 1; \
 	if rg -n 'run_bounded.*(nix_command|make_command)' "$$effects"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$(grep -Fc 'verify_init_mount_namespace' "$$effects")" -ge 4; \
-	awk '/verify_marker "\$$consumed_marker"/ { marker = NR } /destructive_started=1/ { started = NR } /run_bounded 120s "\$$mkfs_command"/ { effect = NR } END { exit !(marker > 0 && started == marker + 1 && effect == started + 1) }' "$$effects"; \
+	run_campaign="$$(sed -n '/^run_campaign() {/,/^}/p' "$$effects")"; \
+	prepare_line="$$(grep -nF '    prepare_boot_file_publication_runner' <<<"$$run_campaign" | cut -d: -f1)"; \
+	last_guest_line="$$(grep -nF '    verify_guest_identity' <<<"$$run_campaign" | tail -n 1 | cut -d: -f1)"; \
+	last_disk_line="$$(grep -nF '    verify_target_disk' <<<"$$run_campaign" | sed -n '2p' | cut -d: -f1)"; \
+	marker_line="$$(grep -nF '    verify_marker "$$consumed_marker"' <<<"$$run_campaign" | tail -n 1 | cut -d: -f1)"; \
+	started_line="$$(grep -nF '    destructive_started=1' <<<"$$run_campaign" | cut -d: -f1)"; \
+	mkfs_line="$$(grep -nF '    run_bounded 120s "$$mkfs_command"' <<<"$$run_campaign" | cut -d: -f1)"; \
+	publish_line="$$(grep -nF '    run_boot_file_publication_test publish' <<<"$$run_campaign" | cut -d: -f1)"; \
+	revalidate_line="$$(grep -nF '    run_boot_file_publication_test revalidate' <<<"$$run_campaign" | cut -d: -f1)"; \
+	complete_line="$$(grep -nF '    campaign_complete=1' <<<"$$run_campaign" | cut -d: -f1)"; \
+	test "$$(grep -Fc '    prepare_boot_file_publication_runner' <<<"$$run_campaign")" = 1; \
+	test "$$prepare_line" -lt "$$last_guest_line"; \
+	test "$$last_guest_line" -lt "$$last_disk_line"; \
+	test "$$last_disk_line" -lt "$$marker_line"; \
+	test "$$marker_line" -lt "$$started_line"; \
+	test "$$started_line" -lt "$$mkfs_line"; \
+	test "$$mkfs_line" -lt "$$publish_line"; \
+	test "$$publish_line" -lt "$$revalidate_line"; \
+	test "$$revalidate_line" -lt "$$complete_line"; \
 	lock_cleanup_line="$$(grep -nF 'rmdir -- "$$campaign_lock"' "$$effects" | cut -d: -f1)"; \
 	build_cleanup_line="$$(grep -nF '"$$rm_command" -rf --one-file-system -- "$$publication_build_root"' "$$effects" | cut -d: -f1)"; \
 	marker_cleanup_line="$$(grep -nF 'rm -f -- "$$consumed_marker"' "$$effects" | cut -d: -f1)"; \

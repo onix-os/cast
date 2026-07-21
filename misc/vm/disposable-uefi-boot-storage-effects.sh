@@ -8,11 +8,19 @@ nix_command=
 make_command=
 env_command=
 rm_command=
+jq_command=
+readlink_command=
+stat_command=
 publication_build_parent=/var/tmp
 publication_build_root=$publication_build_parent/cast-vm-boot-storage-$expected_boot_id-$challenge
 publication_test_target=$publication_build_root/target
 publication_cargo_home=$publication_build_root/cargo-home
+publication_develop_profile=$publication_build_root/nix-develop-profile
+publication_binary_manifest=$publication_build_root/forge-libtest-manifest-v1
+publication_flake_metadata=$publication_build_root/flake-metadata-v1.json
+publication_source_root=
 publication_build_prepared=0
+publication_runner_prepared=0
 
 load_effect_commands() {
     timeout_command=$(command_path timeout)
@@ -25,6 +33,9 @@ load_effect_commands() {
     make_command=$(command_path make)
     env_command=$(command_path env)
     rm_command=$(command_path rm)
+    jq_command=$(command_path jq)
+    readlink_command=$(command_path readlink)
+    stat_command=$(command_path stat)
 }
 
 run_bounded() {
@@ -220,12 +231,164 @@ prepare_publication_build_environment() {
     done
 }
 
+verify_immutable_publication_directory() {
+    immutable_directory=$1
+    immutable_label=$2
+    [ -d "$immutable_directory" ] && [ ! -L "$immutable_directory" ] \
+        || die "$immutable_label is not a real directory"
+    immutable_metadata=$("$stat_command" -Lc '%u:%a:%F' -- "$immutable_directory") \
+        || die "cannot inspect $immutable_label metadata"
+    immutable_owner=${immutable_metadata%%:*}
+    immutable_remainder=${immutable_metadata#*:}
+    immutable_mode=${immutable_remainder%%:*}
+    immutable_type=${immutable_remainder#*:}
+    require_pattern "$immutable_label mode" "$immutable_mode" '^[0-7]{3,4}$'
+    [ "$immutable_owner" = 0 ] && [ "$immutable_type" = directory ] \
+        && [ $((0$immutable_mode & 0222)) -eq 0 ] \
+        || die "$immutable_label is not immutable root-owned storage"
+}
+
+verify_immutable_publication_source() {
+    require_pattern 'immutable publication source path' "$publication_source_root" \
+        '^/nix/store/[0123456789abcdfghijklmnpqrsvwxyz]{32}-source$'
+    [ "$("$readlink_command" -e -- "$publication_source_root")" \
+        = "$publication_source_root" ] \
+        || die 'immutable publication source does not resolve exactly to itself'
+    verify_immutable_publication_directory "$publication_source_root" \
+        'immutable publication source'
+    for source_file in flake.nix flake.lock Cargo.toml Cargo.lock Makefile
+    do
+        [ -f "$publication_source_root/$source_file" ] \
+            && [ ! -L "$publication_source_root/$source_file" ] \
+            || die "immutable publication source lacks a real $source_file"
+    done
+}
+
+verify_publication_develop_profile() {
+    [ -L "$publication_develop_profile" ] \
+        || die 'publication develop profile is not a symlink'
+    [ "$("$stat_command" -c '%u:%g:%F:%h' -- "$publication_develop_profile")" \
+        = '0:0:symbolic link:1' ] \
+        || die 'publication develop profile symlink metadata is unsafe'
+    publication_profile_store=$("$readlink_command" -e -- "$publication_develop_profile") \
+        || die 'cannot resolve publication develop profile'
+    require_pattern 'publication develop profile store path' \
+        "$publication_profile_store" \
+        '^/nix/store/[0123456789abcdfghijklmnpqrsvwxyz]{32}-[^/]+$'
+    verify_immutable_publication_directory "$publication_profile_store" \
+        'publication develop profile store'
+}
+
+verify_publication_binary_manifest() {
+    [ -f "$publication_binary_manifest" ] && [ ! -L "$publication_binary_manifest" ] \
+        || die 'publication binary manifest is not a real file'
+    [ "$("$stat_command" -Lc '%u:%g:%a:%F:%h' -- "$publication_binary_manifest")" \
+        = '0:0:600:regular file:1' ] \
+        || die 'publication binary manifest metadata is unsafe'
+}
+
+resolve_immutable_publication_source() {
+    [ -z "$publication_source_root" ] \
+        || die 'immutable publication source was resolved more than once'
+    [ ! -e "$publication_flake_metadata" ] && [ ! -L "$publication_flake_metadata" ] \
+        || die 'publication flake metadata path already exists'
+    metadata_status=0
+    (
+        umask 077
+        "$env_command" -i \
+            PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+            HOME=/root USER=root LOGNAME=root \
+            LC_ALL=C LANG=C TMPDIR=/tmp \
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0=safe.directory \
+            "GIT_CONFIG_VALUE_0=$root" \
+            "$nix_command" --extra-experimental-features 'nix-command flakes' \
+            flake metadata --json --no-write-lock-file --no-update-lock-file \
+            "$root" >"$publication_flake_metadata"
+    ) || metadata_status=$?
+    [ "$metadata_status" -eq 0 ] \
+        || die 'cannot resolve the Git-aware immutable publication source'
+    [ -f "$publication_flake_metadata" ] && [ ! -L "$publication_flake_metadata" ] \
+        || die 'publication flake metadata is not a real file'
+    [ "$("$stat_command" -Lc '%u:%g:%a:%F:%h' -- "$publication_flake_metadata")" \
+        = '0:0:600:regular file:1' ] \
+        || die 'publication flake metadata file is unsafe'
+    "$jq_command" -e --arg expected_commit "$expected_commit" '
+        .revision == $expected_commit
+        and .locked.rev == $expected_commit
+        and .resolved.type == "git"
+        and .locked.type == "git"
+        and ((.dirtyRevision? // null) == null)
+        and ((.dirtyRev? // null) == null)
+    ' "$publication_flake_metadata" >/dev/null \
+        || die 'Git-aware flake metadata is not bound to the expected clean commit'
+    publication_source_root=$("$jq_command" -er \
+        '.path | select(type == "string")' "$publication_flake_metadata") \
+        || die 'Git-aware flake metadata has no immutable source path'
+    verify_immutable_publication_source
+}
+
+prepare_boot_file_publication_runner() {
+    [ "$publication_runner_prepared" -eq 0 ] \
+        || die 'publication runner was prepared more than once'
+    prepare_publication_build_environment
+    resolve_immutable_publication_source
+    [ ! -e "$publication_develop_profile" ] \
+        && [ ! -L "$publication_develop_profile" ] \
+        || die 'fresh publication develop profile already exists'
+    [ ! -e "$publication_binary_manifest" ] \
+        && [ ! -L "$publication_binary_manifest" ] \
+        || die 'fresh publication binary manifest already exists'
+    publication_build_status=0
+    "$env_command" -i \
+        PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+        HOME=/root USER=root LOGNAME=root \
+        LC_ALL=C LANG=C TMPDIR=/tmp \
+        "SSH_CONNECTION=$SSH_CONNECTION" \
+        CAST_VM_BOOT_PUBLICATION_CONFIRMATION=disposable-vm-vfat-publisher-only \
+        CAST_VM_BOOT_PUBLICATION_PHASE=build \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_HOSTNAME=$expected_hostname" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID=$expected_machine_id" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID=$expected_boot_id" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_VIRTUALIZATION=$expected_virtualization" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_COMMIT=$expected_commit" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM=$target_devnum" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_SSH_SHA256=$ssh_connection_hash" \
+        "CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER=$consumed_marker" \
+        "CAST_VM_BOOT_PUBLICATION_BUILD_ROOT=$publication_build_root" \
+        "CAST_VM_BOOT_PUBLICATION_SOURCE_ROOT=$publication_source_root" \
+        "CAST_VM_BOOT_PUBLICATION_DEVELOP_PROFILE=$publication_develop_profile" \
+        "CAST_VM_BOOT_PUBLICATION_BINARY_MANIFEST=$publication_binary_manifest" \
+        "CARGO_TARGET_DIR=$publication_test_target" \
+        "CARGO_HOME=$publication_cargo_home" \
+        "$nix_command" --extra-experimental-features 'nix-command flakes' \
+        develop --profile "$publication_develop_profile" \
+        "$publication_source_root" --command \
+        "$make_command" -C "$publication_source_root" \
+        forge-linux-descriptor-boot-file-publication-vfat-build \
+        || publication_build_status=$?
+    [ "$publication_build_status" -eq 0 ] \
+        || die 'cannot build the fixed production boot-file publisher runner'
+    verify_immutable_publication_source
+    verify_publication_develop_profile
+    verify_publication_binary_manifest
+    publication_runner_prepared=1
+}
+
 run_boot_file_publication_test() {
     publication_phase=$1
+    case "$publication_phase" in
+        publish | revalidate) ;;
+        *) die 'invalid production boot-file publisher phase' ;;
+    esac
     publication_test_parent=$mount_root/$publication_parent
     [ -d "$publication_test_parent" ] && [ ! -L "$publication_test_parent" ] \
         || die 'declared publication parent is unavailable before the publisher test'
-    prepare_publication_build_environment
+    [ "$publication_runner_prepared" -eq 1 ] \
+        || die 'production boot-file publisher runner was not prepared'
+    verify_immutable_publication_source
+    verify_publication_develop_profile
+    verify_publication_binary_manifest
     verify_init_mount_namespace
     publication_status=0
     mount_is_exact_target \
@@ -242,17 +405,22 @@ run_boot_file_publication_test() {
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID=$expected_machine_id" \
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID=$expected_boot_id" \
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_VIRTUALIZATION=$expected_virtualization" \
+        "CAST_VM_BOOT_PUBLICATION_EXPECTED_COMMIT=$expected_commit" \
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM=$target_devnum" \
         "CAST_VM_BOOT_PUBLICATION_EXPECTED_SSH_SHA256=$ssh_connection_hash" \
         "CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER=$consumed_marker" \
         "CAST_VM_BOOT_PUBLICATION_BUILD_ROOT=$publication_build_root" \
+        "CAST_VM_BOOT_PUBLICATION_SOURCE_ROOT=$publication_source_root" \
+        "CAST_VM_BOOT_PUBLICATION_DEVELOP_PROFILE=$publication_develop_profile" \
+        "CAST_VM_BOOT_PUBLICATION_BINARY_MANIFEST=$publication_binary_manifest" \
         "CARGO_TARGET_DIR=$publication_test_target" \
         "CARGO_HOME=$publication_cargo_home" \
-        "$nix_command" --extra-experimental-features 'nix-command flakes' \
-        develop "path:$root" --command \
-        "$make_command" -C "$root" \
+        "$make_command" -C "$publication_source_root" \
         forge-linux-descriptor-boot-file-publication-vfat-test \
         || publication_status=$?
+    verify_immutable_publication_source
+    verify_publication_develop_profile
+    verify_publication_binary_manifest
     mount_is_exact_target \
         || die 'publisher test lost the exact admitted VFAT mount policy after invocation'
     [ "$publication_status" -eq 0 ] \
@@ -328,6 +496,10 @@ run_campaign() {
     mkdir -m 700 -- "$mount_root" \
         || die 'cannot create the private campaign mountpoint'
 
+    verify_guest_identity
+    verify_init_mount_namespace
+    verify_target_disk
+    prepare_boot_file_publication_runner
     verify_guest_identity
     verify_init_mount_namespace
     verify_target_disk
