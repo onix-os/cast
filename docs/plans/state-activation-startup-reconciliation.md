@@ -930,8 +930,8 @@ completion, and repository closure remain authoritative in `PLAN.md`.
   `BootRepairRequired`, reopens only the exact source or successor, invokes boot zero times, and returns. Journal v3 carries
   the compact immutable receipt pair. A complete bounded canonical body separately binds transition/predecessor hashes,
   desired inventory, exact destinations, and every ordered output with a keyed inert claim. One exclusive SQLite transaction
-  inserts that immutable body and stages its pending singleton head with strict body/head validation. Startup still correlates
-  only the compact journal/head pair; production forward staging and full-body startup consumption remain unwired. Existing
+  inserts that immutable body and stages its pending singleton head with strict body/head validation. Commit `5acba0ba` makes
+  startup retain the strict full receipt state and require exact v3 compact-pair correlation; production forward staging remains unwired. Existing
   v1/v2 records at `BootSyncStarted` retain their conservative journal-only route. Commit `b5928340` separately advances exact
   `BootRepairStarted` evidence to terminal `BootRepairUnverified` with zero boot calls. Commit `406cabe5`'s explicit Required ->
   Started, Started -> Complete/Unverified, and Complete -> `RollbackComplete` edges remain. No production entry performs the

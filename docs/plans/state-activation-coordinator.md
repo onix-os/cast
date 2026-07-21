@@ -586,8 +586,8 @@ closure remain authoritative in `PLAN.md`.
   separately binds transition/predecessor hashes, desired inventory, exact
   destinations, and every ordered output with a keyed inert claim. One exclusive
   SQLite transaction inserts that immutable body and stages its pending head.
-  Startup still correlates only the compact journal/head pair; production
-  staging and full-body startup consumption remain unwired. Existing v1/v2
+  Commit `5acba0ba` makes startup retain the strict full receipt state and require exact
+  v3 compact-pair correlation; production forward staging remains unwired. Existing v1/v2
   records retain their conservative route. There is still no authenticated
   claim derivation, exact durable predecessor binding, promotion, publisher,
   actual repair, mutation/deletion authority, successful dispatch, or VM proof.

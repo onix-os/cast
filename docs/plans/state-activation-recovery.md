@@ -117,8 +117,8 @@ and instant rollback mechanism; it hardens their failure semantics.
   separately binds transition/predecessor hashes, desired inventory, exact
   destinations, and every ordered output with a keyed inert claim. One exclusive
   SQLite transaction inserts that immutable body and stages its pending head,
-  but production forward staging is unwired and startup still consumes only the
-  compact pair. Existing v1/v2 records retain their conservative journal-only
+  but production forward staging remains unwired. Commit `5acba0ba` makes startup
+  retain the strict full receipt state and require exact v3 compact-pair correlation. Existing v1/v2 records retain their conservative journal-only
   route. A separately observed `BootRepairStarted` becomes terminal
   `BootRepairUnverified` without invoking boot; durable `BootRepairComplete`
   still routes to `RollbackComplete`. No production path repairs boot or emits success;
@@ -469,8 +469,8 @@ binds its transition, optional committed predecessor, canonical predecessor
 record and desired-inventory hashes, exact destinations, and every ordered
 output with a keyed inert provenance claim. One exclusive SQLite transaction
 inserts that immutable body and stages its pending singleton head with strict
-body/head validation. Production forward staging remains unwired, and startup
-still correlates only the compact journal/head pair. Byte-canonical v1/v2
+body/head validation. Production forward staging remains unwired. Commit
+`5acba0ba` makes startup retain the strict full receipt state and require exact v3 compact-pair correlation. Byte-canonical v1/v2
 remains readable; records already at `BootSyncStarted` retain a conservative
 journal-only route, while older records cannot acquire v3 receipt authority.
 Commit `406cabe5`'s typed Required -> Started, Started -> Complete/Unverified,
@@ -556,7 +556,7 @@ the roughly 10-GiB publication ceiling. The complete authority-free receipt
 body and mapper now bind those exact outputs, transition/predecessor hashes,
 desired inventory, destination identities, and keyed inert claims. One exclusive
 database transaction persists the immutable body and pending singleton head.
-Startup still consumes only the compact pair; production staging, authenticated
+Startup now retains that strict full receipt state; production staging, authenticated
 claim derivation and durable record binding, promotion, publication, deletion,
 durability, and disposable-VM evidence remain open.
 

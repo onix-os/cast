@@ -116,8 +116,8 @@ publication ceiling. Journal payload v3 carries the compact immutable receipt
 pair. A complete bounded canonical authority-free body separately binds the
 transition/predecessor hashes, desired inventory, exact destinations, and every
 ordered output with a keyed inert claim. One exclusive SQLite transaction
-persists that body and its pending singleton head, but startup still consumes
-only the compact pair. Production staging, authenticated claim derivation,
+persists that body and its pending singleton head. Startup now retains that
+strict full receipt state and requires exact v3 compact-pair correlation. Production staging, authenticated claim derivation,
 publisher authority, durability, restart reconciliation, and VM proof are open.
 Because
 `nosymfollow` was added in

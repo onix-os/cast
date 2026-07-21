@@ -385,9 +385,9 @@ exact alias/distinct destination identities with historical witnesses, and
 every ordered output with a keyed inert provenance claim. Journal payload v3
 carries only the compact immutable pair. One exclusive SQLite transaction
 inserts the immutable body and stages its pending singleton head, with strict
-body/head validation. Startup still correlates only the compact journal/head
-pair; production forward staging and full-body startup consumption remain
-unwired. Existing v1/v2 records already at `BootSyncStarted` retain a
+body/head validation. Commit `5acba0ba` makes startup load and retain the strict
+full receipt state, admitting v3 only when its compact journal pair correlates
+exactly; production forward staging remains unwired. Existing v1/v2 records already at `BootSyncStarted` retain a
 conservative journal-only route. This is not a publisher and grants no boot
 mutation or deletion authority. Authenticated claim derivation, exact durable
 predecessor-record binding, pending promotion, and disposable-VM evidence
