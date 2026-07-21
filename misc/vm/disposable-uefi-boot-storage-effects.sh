@@ -281,8 +281,24 @@ verify_publication_develop_profile() {
     require_pattern 'publication develop profile store path' \
         "$publication_profile_store" \
         '^/nix/store/[0123456789abcdfghijklmnpqrsvwxyz]{32}-[^/]+$'
-    verify_immutable_publication_directory "$publication_profile_store" \
-        'publication develop profile store'
+    [ -f "$publication_profile_store" ] && [ ! -L "$publication_profile_store" ] \
+        || die 'publication develop profile store is not a real file'
+    profile_metadata=$("$stat_command" -Lc '%u:%g:%a:%F' \
+        -- "$publication_profile_store") \
+        || die 'cannot inspect publication develop profile store metadata'
+    profile_owner=${profile_metadata%%:*}
+    profile_remainder=${profile_metadata#*:}
+    profile_group=${profile_remainder%%:*}
+    profile_remainder=${profile_remainder#*:}
+    profile_mode=${profile_remainder%%:*}
+    profile_remainder=${profile_remainder#*:}
+    profile_type=$profile_remainder
+    require_pattern 'publication develop profile store mode' \
+        "$profile_mode" '^[0-7]{3,4}$'
+    [ "$profile_owner" = 0 ] && [ "$profile_group" = 0 ] \
+        && [ "$profile_type" = 'regular file' ] \
+        && [ $((0$profile_mode & 0222)) -eq 0 ] \
+        || die 'publication develop profile store is not immutable root-owned storage'
 }
 
 verify_publication_binary_manifest() {

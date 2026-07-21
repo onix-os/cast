@@ -150,11 +150,11 @@ forge-linux-descriptor-boot-file-publication-vfat-build:
 	test "$$(/usr/bin/stat -c '%u:%g:%F:%h' -- "$$develop_profile")" = '0:0:symbolic link:1'; \
 	develop_profile_store="$$(/usr/bin/readlink -e -- "$$develop_profile")"; \
 	case "$$develop_profile_store" in /nix/store/?*) ;; *) exit 2 ;; esac; \
-	test -d "$$develop_profile_store" && test ! -L "$$develop_profile_store"; \
+	test -f "$$develop_profile_store" && test ! -L "$$develop_profile_store"; \
 	IFS=: read -r profile_owner profile_group profile_mode profile_type \
 		<<<"$$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "$$develop_profile_store")"; \
 	test "$$profile_owner" = 0 && test "$$profile_group" = 0; \
-	test "$$profile_type" = directory; \
+	test "$$profile_type" = 'regular file'; \
 	(( (8#$$profile_mode & 0022) == 0 )); \
 	manifest="$${CAST_VM_BOOT_PUBLICATION_BINARY_MANIFEST-}"; \
 	test "$$manifest" = "$$expected_build_root/forge-libtest-manifest-v1"; \
@@ -294,11 +294,11 @@ forge-linux-descriptor-boot-file-publication-vfat-test:
 	test "$$(/usr/bin/stat -c '%u:%g:%F:%h' -- "$$develop_profile")" = '0:0:symbolic link:1'; \
 	develop_profile_store="$$(/usr/bin/readlink -e -- "$$develop_profile")"; \
 	case "$$develop_profile_store" in /nix/store/?*) ;; *) exit 2 ;; esac; \
-	test -d "$$develop_profile_store" && test ! -L "$$develop_profile_store"; \
+	test -f "$$develop_profile_store" && test ! -L "$$develop_profile_store"; \
 	IFS=: read -r profile_owner profile_group profile_mode profile_type \
 		<<<"$$(/usr/bin/stat -Lc '%u:%g:%a:%F' -- "$$develop_profile_store")"; \
 	test "$$profile_owner" = 0 && test "$$profile_group" = 0; \
-	test "$$profile_type" = directory; \
+	test "$$profile_type" = 'regular file'; \
 	(( (8#$$profile_mode & 0022) == 0 )); \
 	manifest="$${CAST_VM_BOOT_PUBLICATION_BINARY_MANIFEST-}"; \
 	test "$$manifest" = "$$expected_build_root/forge-libtest-manifest-v1"; \

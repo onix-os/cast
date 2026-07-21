@@ -129,6 +129,8 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq '((.revision? // null) == null)' "$$effects"; \
 	grep -Fq 'develop --profile "$$publication_develop_profile"' "$$effects"; \
 	grep -Fq '"path:$$publication_source_root" --command' "$$effects"; \
+	grep -Fq 'profile_type=$$profile_remainder' "$$effects"; \
+	grep -Fq "profile_type\" = 'regular file' ]" "$$effects"; \
 	grep -Fq '"$$make_command" -C "$$publication_source_root"' "$$effects"; \
 	test "$$(grep -Fc 'forge-linux-descriptor-boot-file-publication-vfat-build' "$$effects")" = 1; \
 	test "$$(grep -Fc 'run_boot_file_publication_test publish' "$$effects")" = 1; \
@@ -147,6 +149,7 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq "'0:0:600:regular file:1'" "$$publisher_make"; \
 	grep -Fq 'expected_build_root="/var/tmp/cast-vm-boot-storage-' "$$publisher_make"; \
 	grep -Fq 'forge-libtest-manifest-v1' "$$publisher_make"; \
+	test "$$(grep -Fc "profile_type\" = 'regular file'" "$$publisher_make")" = 2; \
 	grep -Fq -- '--lib --no-run --message-format=json' "$$publisher_make"; \
 	grep -Fq '"$$$$executable" "$$$$test_name" --ignored --exact --test-threads=1' "$$publisher_make"; \
 	grep -Fq 'done </proc/self/mountinfo' "$$publisher_make"; \
