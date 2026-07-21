@@ -104,6 +104,7 @@ help:
 	@echo "  forge-database-adapter-test  Run extracted layout and metadata database adapter tests"
 	@echo "  forge-boot-publication-receipt-head-test  Run strict receipt identity and database-head contracts"
 	@echo "  forge-boot-publication-receipt-state-test  Run strict receipt-body database state contracts"
+	@echo "  forge-boot-publication-receipt-promotion-test  Run exact atomic pending-to-committed receipt contracts"
 	@echo "  forge-read-only-substrate-test  Run immutable database-image and clean-journal substrate tests"
 	@timeout 10s echo "  forge-exact-fresh-transition-removal-test  Run exact fresh-state database removal contracts"
 	@echo "  forge-read-only-client-test  Run public retained read-only query-client tests"

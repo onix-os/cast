@@ -34,7 +34,11 @@ pub(crate) use boot_publication_receipt_head::{
 };
 #[allow(unused_imports)] // consumed by authenticated boot-publication coordination
 pub(crate) use boot_publication_receipts::{
-    BootPublicationReceiptState, BootPublicationReceiptStateError,
+    BootPublicationReceiptPromotionDurableState,
+    BootPublicationReceiptPromotionError,
+    BootPublicationReceiptPromotionOutcome,
+    BootPublicationReceiptState,
+    BootPublicationReceiptStateError,
 };
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by cross-module receipt-race tests

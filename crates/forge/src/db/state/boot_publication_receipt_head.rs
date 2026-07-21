@@ -2,8 +2,10 @@
 //!
 //! This singleton records which complete receipt is currently committed and,
 //! while publication is in flight, the exact transition and receipt expected
-//! to replace it. It deliberately grants no promotion, repair, or deletion
-//! authority.
+//! to replace it. Its mutation surface is limited to conditional staging and
+//! pending-to-committed head updates; canonical-body admission and promotion
+//! policy remain in the receipt-state layer. It grants no repair, deletion,
+//! journal, filesystem, or publication authority.
 
 use diesel::{
     SqliteConnection,
@@ -378,6 +380,55 @@ pub(super) fn stage_pending_row(
             .set(values)
             .execute(connection)
             .map_err(Error::from),
+    }
+}
+
+/// Conditionally promote one exact pending pair and clear its transition slot.
+///
+/// Canonical body admission belongs to the receipt-state layer. This narrow
+/// helper changes only the singleton head and succeeds only while every scalar
+/// in the caller's already-admitted preimage is still exact.
+#[allow(dead_code)] // DB-only substrate; consumed by the aggregate coordination slice
+pub(super) fn promote_pending_row(
+    connection: &mut SqliteConnection,
+    transition_id: &TransitionId,
+    pair: &BootPublicationReceiptPair,
+) -> Result<usize, Error> {
+    let base = boot_publication_receipt_head::table
+        .filter(boot_publication_receipt_head::singleton.eq(RECEIPT_HEAD_SINGLETON))
+        .filter(
+            boot_publication_receipt_head::pending_transition_id
+                .eq(Some(transition_id.as_str())),
+        )
+        .filter(
+            boot_publication_receipt_head::pending_receipt_sha256
+                .eq(Some(pair.pending.as_bytes().as_slice())),
+        );
+    let promoted = (
+        boot_publication_receipt_head::committed_receipt_sha256
+            .eq(Some(pair.pending.as_bytes().as_slice())),
+        boot_publication_receipt_head::pending_transition_id.eq(None::<&str>),
+        boot_publication_receipt_head::pending_receipt_sha256
+            .eq(None::<&[u8]>),
+    );
+    match pair.committed {
+        Some(committed) => diesel::update(
+            base.filter(
+                boot_publication_receipt_head::committed_receipt_sha256
+                    .eq(committed.as_bytes().as_slice()),
+            ),
+        )
+        .set(promoted)
+        .execute(connection)
+        .map_err(Error::from),
+        None => diesel::update(
+            base.filter(
+                boot_publication_receipt_head::committed_receipt_sha256.is_null(),
+            ),
+        )
+        .set(promoted)
+        .execute(connection)
+        .map_err(Error::from),
     }
 }
 

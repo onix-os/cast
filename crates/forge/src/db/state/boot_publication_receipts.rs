@@ -3,9 +3,10 @@
 //! The state database stores inert receipt bodies and correlates exactly one
 //! pending body through the receipt-head singleton. Loading validates every
 //! body referenced by that head. Staging inserts the immutable body and moves
-//! the empty pending slot in one exclusive SQLite transaction. This module
-//! exposes no promotion, update, deletion, garbage-collection, or filesystem
-//! authority.
+//! the empty pending slot in one exclusive SQLite transaction. Promotion may
+//! move only one exact pending head to committed while retaining every body.
+//! This module exposes no journal, filesystem, publication, replacement,
+//! deletion, cleanup, or garbage-collection authority.
 
 use diesel::{
     SqliteConnection,
@@ -34,6 +35,15 @@ use crate::{
 
 const RECEIPT_LOOKUP_LIMIT: i64 = 2;
 
+#[allow(dead_code)] // DB-only substrate; consumed by the aggregate coordination slice
+#[path = "boot_publication_receipts/promotion.rs"]
+mod promotion;
+pub(crate) use promotion::{
+    BootPublicationReceiptPromotionDurableState,
+    BootPublicationReceiptPromotionError,
+    BootPublicationReceiptPromotionOutcome,
+};
+
 /// One strictly decoded state of the compact head and its referenced bodies.
 ///
 /// These values are authenticated only as self-consistent database data. They
@@ -50,6 +60,7 @@ impl BootPublicationReceiptState {
         &self.head
     }
 
+    #[allow(dead_code)] // consumed by receipt promotion before coordinator wiring
     pub(crate) const fn committed(&self) -> Option<&CanonicalBootPublicationReceipt> {
         self.committed.as_ref()
     }
@@ -423,6 +434,8 @@ struct StoredBootPublicationReceipt {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ReceiptReference {
     Committed,
+    #[allow(dead_code)] // consumed by receipt promotion before coordinator wiring
+    CommittedPredecessor,
     Pending,
 }
 

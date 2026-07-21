@@ -27,7 +27,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 
 include misc/make/hardening-tests.mk
 include misc/make/boot-publication-receipt-head-tests.mk
-include misc/make/boot-publication-receipt-state-tests.mk
+include misc/make/boot-publication-receipt-state-tests.mk misc/make/boot-publication-receipt-promotion-tests.mk
 include misc/make/transition-journal-bound-delete-tests.mk
 include misc/make/transition-journal-delete-residue-recovery-tests.mk
 include misc/make/private-device-tests.mk
