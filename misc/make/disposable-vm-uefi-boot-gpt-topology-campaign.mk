@@ -169,6 +169,8 @@ disposable-vm-uefi-boot-gpt-topology-harness-test: \
 	grep -Fq 'parent.root_device(), target.destination.raw_device()' "$$rust"; \
 	grep -Fq 'parent.root_inode(), target.destination.inode()' "$$rust"; \
 	grep -Fq 'parent.root_mount_id(), target.mount_id' "$$rust"; \
+	grep -Fq 'Path::new("/var/tmp").join(format!("cast-vm-boot-storage-{expected_boot_id}-{challenge}"))' "$$rust"; \
+	grep -Fq 'assert_eq!(installation_root, build_root.join("topology-installation"));' "$$rust"; \
 	publish_function="$$(sed -n '/^fn publish(/,/^#\[test\]/p' "$$rust")"; \
 	grep -Fq 'let publication = parent' <<<"$$publish_function"; \
 	if grep -Fq 'view.publish_immutable_boot_file_until' <<<"$$publish_function"; then exit 1; else status=$$?; test "$$status" = 1; fi; \

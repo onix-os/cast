@@ -73,7 +73,7 @@ fn marker_value<'a>(lines: &'a [&str], key: &str) -> &'a str {
     value
 }
 
-fn assert_remote_identity_and_marker() {
+fn assert_remote_identity_and_marker() -> String {
     assert!(nix::unistd::geteuid().is_root());
     assert!(Path::new("/sys/firmware/efi").is_dir());
     assert_eq!(
@@ -113,6 +113,14 @@ fn assert_remote_identity_and_marker() {
         marker_value(&lines, "cooperative_root_confirmation"),
         "cooperative-guest-root-no-hotplug"
     );
+    let challenge = marker_value(&lines, "challenge");
+    assert_eq!(challenge.len(), 64);
+    assert!(
+        challenge
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    );
+    challenge.to_owned()
 }
 
 fn assert_fixed_path(name: &str, expected: &str) -> PathBuf {
@@ -196,7 +204,7 @@ fn publish(
 #[ignore = "requires the guarded disposable-VM GPT ESP/XBOOTLDR campaign"]
 fn disposable_vm_authenticates_gpt_boot_topology_and_publishes_real_leaves() {
     assert_eq!(required("CAST_VM_GPT_TOPOLOGY_CONFIRMATION"), CONFIRMATION);
-    assert_remote_identity_and_marker();
+    let challenge = assert_remote_identity_and_marker();
     let kind = required("CAST_VM_GPT_TOPOLOGY_KIND");
     assert!(matches!(kind.as_str(), "alias" | "distinct"));
     let phase = required("CAST_VM_GPT_TOPOLOGY_PHASE");
@@ -210,8 +218,14 @@ fn disposable_vm_authenticates_gpt_boot_topology_and_publishes_real_leaves() {
     let esp_devnum = parse_devnum(&required("CAST_VM_GPT_TOPOLOGY_ESP_DEVNUM"));
     let esp_partuuid = required("CAST_VM_GPT_TOPOLOGY_ESP_PARTUUID");
     assert_partuuid(&esp_partuuid);
+    let expected_boot_id = required("CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID");
+    let build_root = PathBuf::from(required("CAST_VM_BOOT_PUBLICATION_BUILD_ROOT"));
+    assert_eq!(
+        build_root,
+        Path::new("/var/tmp").join(format!("cast-vm-boot-storage-{expected_boot_id}-{challenge}"))
+    );
     let installation_root = PathBuf::from(required("CAST_VM_GPT_TOPOLOGY_INSTALLATION"));
-    assert!(installation_root.starts_with("/var/tmp/cast-vm-boot-storage-"));
+    assert_eq!(installation_root, build_root.join("topology-installation"));
     assert!(!installation_root.starts_with(MOUNT_ROOT));
     assert_eq!(fs::canonicalize(&installation_root).unwrap(), installation_root);
     let installation = Installation::open(&installation_root, None).unwrap();
