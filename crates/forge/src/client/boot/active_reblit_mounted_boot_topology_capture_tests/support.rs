@@ -142,6 +142,33 @@ impl AliasFixture {
         )
     }
 
+    pub(in crate::client) fn prepare_for_installation_until(
+        &self,
+        installation: &Installation,
+        deadline: Instant,
+    ) -> io::Result<PreparedActiveReblitMountedBootTopology> {
+        let source_directory = installation.root.join("etc/cast");
+        fs::create_dir_all(&source_directory)?;
+        for directory in [installation.root.join("etc"), source_directory] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755))?;
+        }
+        let source = installation.root.join("etc/cast/boot-topology.glu");
+        write_alias_source(&source, PARTUUID)?;
+        PreparedActiveReblitMountedBootTopology::prepare_fixture_until(
+            installation,
+            self.prepared_anchor()?,
+            &self.sysfs_tree,
+            self.feed.clone(),
+            FixtureBootFilesystemEvidenceFeeds::aliases_esp(
+                self.boot_filesystem_feed.clone(),
+            ),
+            deadline,
+        )
+        .map_err(|source| io::Error::other(format!(
+            "fixture topology preparation failed: {source}",
+        )))
+    }
+
     pub(in crate::client) fn installation(&self) -> &Installation {
         &self.installation
     }

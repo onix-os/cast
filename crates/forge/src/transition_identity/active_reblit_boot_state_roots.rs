@@ -480,6 +480,10 @@ impl PreparedActiveReblitBootStateRoots {
 }
 
 impl RevalidatedActiveReblitBootStateRoots<'_> {
+    pub(crate) fn is_bound_to_installation(&self, installation: &Installation) -> bool {
+        std::ptr::eq(self._installation, installation)
+    }
+
     pub(crate) fn head(&self) -> BoundActiveReblitBootStateRoot<'_> {
         bound_root(
             self.authority.head.state,

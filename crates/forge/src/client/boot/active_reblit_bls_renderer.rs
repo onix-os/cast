@@ -35,6 +35,18 @@ pub(in crate::client) use error::{
 };
 use payload_catalog::{PayloadCandidate, RetainedSealedSource, SealedSourceCatalog};
 
+#[cfg(test)]
+std::thread_local! {
+    static FORCE_BOUND_PLAN_COLLISION_DRIFT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(in crate::client) fn arm_bound_plan_collision_drift() {
+    FORCE_BOUND_PLAN_COLLISION_DRIFT.with(|armed| {
+        assert!(!armed.replace(true), "bound-plan collision drift already armed");
+    });
+}
+
 const MAX_BLS_REQUESTS: usize = 8_322;
 const MAX_BLS_PATH_BYTES: usize = 8 * 1024 * 1024;
 const MAX_BLS_GENERATED_FILE_BYTES: usize = 1024 * 1024;
@@ -196,7 +208,19 @@ impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     }
 
     pub(in crate::client) fn collision_domains_still_match(&self) -> bool {
+        #[cfg(test)]
+        if FORCE_BOUND_PLAN_COLLISION_DRIFT.with(|armed| armed.replace(false)) {
+            return false;
+        }
         self.plan.collision_domains_match(self.topology.topology())
+    }
+
+    pub(in crate::client) fn is_bound_to_installation(
+        &self,
+        installation: &crate::Installation,
+    ) -> bool {
+        self.inputs.is_bound_to_installation(installation)
+            && self.topology.is_bound_to_installation(installation)
     }
 
     pub(in crate::client) fn input_deadline(&self) -> Instant {

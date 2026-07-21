@@ -22,6 +22,20 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 		migration::transition_constraint_counts_bytes_after_embedded_nul; do \
 		grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
+	staging_prefix='client::active_reblit_boot_sync_staging::tests::'; \
+	test "$$( grep -Ec "^$$staging_prefix.*: test$$" <<<"$$listed" )" = 9; \
+	for name in \
+		success_derives_and_stages_exact_receipt_then_retains_successor_binding \
+		exact_internally_derived_pre_staged_retry_is_read_only_and_advances \
+		unbound_provenance_inputs_fail_before_database_or_journal_change \
+		cross_installation_bound_plan_is_rejected_before_database_staging \
+		conflicting_internally_derived_pending_receipt_does_not_advance \
+		dangling_pending_body_fails_database_admission_before_advancing \
+		every_journal_update_fault_is_classified_as_exact_predecessor_or_successor \
+		post_advance_successor_inode_substitution_is_fail_stop_boot_sync_started \
+		bound_plan_drift_after_staging_never_reaches_boot_sync_started; do \
+		grep -Fqx "$$staging_prefix$$name: test" <<<"$$listed"; \
+	done; \
 	state="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipts.rs"; \
 	head="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipt_head.rs"; \
 	state_mod="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/db/state/mod.rs"; \
@@ -48,6 +62,26 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 	test "$$( grep -Fc 'self.conn.exclusive_tx' "$$state" )" = 1; \
 	test "$$( grep -Fc 'diesel::insert_into(boot_publication_receipts::table)' "$$state" )" = 1; \
 	test "$$( grep -Fc 'stage_pending_row(connection, transition_id, &pair)?' "$$state" )" = 1; \
+	staging="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging.rs"; \
+	test "$$( grep -Fc '.stage_boot_publication_receipt(&receipt)' "$$staging" )" = 1; \
+	test "$$( grep -Fc '.prepare_complete_boot_publication_receipt(' "$$staging" )" = 2; \
+	grep -Fq 'let admitted_state = database' "$$staging"; \
+	grep -Fq 'let committed_predecessor = admitted_state.head().committed();' "$$staging"; \
+	grep -Fq 'let rederivation_state = database' "$$staging"; \
+	grep -Fq 'let rederived_committed_predecessor = rederivation_state.head().committed();' "$$staging"; \
+	grep -Fq 'rederived.canonical_body() != receipt.canonical_body()' "$$staging"; \
+	grep -Fq 'if !plan.is_bound_to_installation(installation)' "$$staging"; \
+	grep -Fq 'after_successful_advance_before_validation();' "$$staging"; \
+	public_api="$$( sed -n '/pub(in crate::client) fn stage_active_reblit_boot_sync</,/^    ) -> Result/p' "$$staging" )"; \
+	private_api="$$( sed -n '/^fn stage_with_retained_stores</,/^) -> Result/p' "$$staging" )"; \
+	grep -Fq 'BoundActiveReblitBlsPublicationPlan' <<<"$$public_api"; \
+	grep -Fq 'PreparedActiveReblitDesiredPublicationInventory' <<<"$$public_api"; \
+	grep -Fq 'BorrowedActiveReblitBootPublicationProvenanceClaim' <<<"$$public_api"; \
+	if grep -Fq 'CanonicalBootPublicationReceipt' <<<"$$public_api$$private_api"; then exit 1; fi; \
+	test "$$( grep -Fc 'journal.advance_record_binding(cast, predecessor_binding, &successor)' "$$staging" )" = 1; \
+	grep -Fq 'drop(journal);' "$$staging"; \
+	grep -Fq 'TransitionJournalStore::open_in_retained_cast(cast, &installation.root)' "$$staging"; \
+	if rg -n 'boot::synchronize|synchronize_boot|publish_(?:boot|output)|remove_(?:boot|output)|delete_(?:boot|output)' "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$( grep -Fc 'fn stage_boot_publication_receipt_pair(' "$$head" )" = 1; \
 	awk 'previous == "    #[cfg(test)]" && $$0 == "    pub(crate) fn stage_boot_publication_receipt_pair(" { found = 1 } { previous = $$0 } END { exit(found ? 0 : 1) }' "$$head"; \
 	surface="$$( sed -nE 's/^[[:space:]]*pub\(crate\)[[:space:]]+(const[[:space:]]+)?fn[[:space:]]+([A-Za-z0-9_]+).*/\2/p' "$$state" )"; \
@@ -59,9 +93,12 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipts/tests.rs" \
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)"/crates/forge/src/db/state/boot_publication_receipts/tests/*.rs \
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)"/crates/forge/src/db/state/migrations/2026-07-21-010000_boot_publication_receipts/*.sql \
+		"$$staging" \
+		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging_tests.rs" \
 		"$$schema" \
 		"$$state_mod" \
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/misc/make/boot-publication-receipt-state-tests.mk"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
-	$(CARGO) test --manifest-path "$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1
+	$(CARGO) test --manifest-path "$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1; \
+	$(CARGO) test --manifest-path "$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/Cargo.toml" -p forge --lib "$$staging_prefix" -- --test-threads=1

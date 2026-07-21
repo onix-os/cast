@@ -92,6 +92,9 @@ mod active_reblit_boot_namespace_inputs;
 #[allow(dead_code)] // authority-free complete receipt mapping; durable staging remains unwired
 #[path = "boot/active_reblit_boot_publication_receipt.rs"]
 mod active_reblit_boot_publication_receipt;
+#[allow(dead_code)] // effect-free cross-store staging component; live forward typestate remains unwired
+#[path = "boot/active_reblit_boot_sync_staging.rs"]
+mod active_reblit_boot_sync_staging;
 #[allow(dead_code)] // pure owned desired-publication inventory for later desired-state comparison
 #[path = "boot/active_reblit_desired_publication.rs"]
 mod active_reblit_desired_publication;
