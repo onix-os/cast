@@ -8,7 +8,7 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_active_reblit::tests::'; \
-	timeout 10s test "$$( timeout 10s grep "^$$prefix.*: test$$" "$$listed" | timeout 10s grep -Evc "^$$prefix"'(finalization_|boot_repair_required_|boot_repair_complete_|boot_repair_unverified_)' )" = 22; \
+	timeout 10s test "$$( timeout 10s grep "^$$prefix.*: test$$" "$$listed" | timeout 10s grep -Evc "^$$prefix"'(finalization_|boot_repair_required_|boot_repair_complete_|boot_repair_unverified_)' )" = 23; \
 	for name in \
 		candidate_wrapper_exchange_process_kill::startup_active_reblit_candidate_wrapper_exchange_process_kill_recovers_without_second_exchange \
 		complete_authority_binding::startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_root_journal_bindings \
@@ -31,6 +31,7 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 		new_state_regression::startup_active_reblit_candidate_dispatch_precedes_new_state_without_stealing_its_checkpoint \
 		restart::startup_active_reblit_candidate_dispatch_source_durable_failure_fresh_entry_finishes_without_second_exchange \
 		restart::startup_active_reblit_candidate_dispatch_successor_durable_failure_fresh_entry_never_redispatches_exchange \
+		root_links_terminal_process_kill::startup_active_reblit_root_links_terminal_delete_process_kills_restart_cleanly \
 		storage_faults::startup_active_reblit_candidate_dispatch_all_five_journal_faults_reopen_exact_source_or_successor; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
@@ -47,10 +48,10 @@ forge-startup-usr-rollback-active-reblit-candidate-dispatch-test:
 	if timeout 10s awk 'previous == "#[cfg(test)]" && $$0 == "mod usr_rollback_active_reblit;" { found = 1 } { previous = $$0 } END { exit !found }' "$$gate"; then exit 1; fi; \
 	timeout 10s grep -Fqx '#[cfg(test)]' "$$orchestrator"; \
 	timeout 10s grep -Fqx 'mod tests;' "$$orchestrator"; \
-	for module in candidate_wrapper_exchange_kill_boundaries candidate_wrapper_exchange_process_harness candidate_wrapper_exchange_process_kill complete_authority_binding complete_evidence_races complete_exclusions complete_matrix complete_record_binding complete_restart complete_storage_faults durability_failures effect_failures evidence_races exclusions matrix new_state_regression restart storage_faults support; do \
+	for module in candidate_wrapper_exchange_kill_boundaries candidate_wrapper_exchange_process_harness candidate_wrapper_exchange_process_kill complete_authority_binding complete_evidence_races complete_exclusions complete_matrix complete_record_binding complete_restart complete_storage_faults durability_failures effect_failures evidence_races exclusions matrix new_state_regression restart root_links_terminal_process_kill storage_faults support; do \
 		timeout 10s grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
-	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests" --glob '!finalization_*.rs' --glob '!boot_repair_required_*.rs' --glob '!boot_repair_complete_*.rs' --glob '!boot_repair_unverified_*.rs' | timeout 10s wc -l )" = 22; \
+	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests" --glob '!finalization_*.rs' --glob '!boot_repair_required_*.rs' --glob '!boot_repair_complete_*.rs' --glob '!boot_repair_unverified_*.rs' | timeout 10s wc -l )" = 23; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'CleanSystemStartup::enter(' "$$tests/support.rs" )" = 3; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'ActiveStateReservation::acquire().unwrap();' "$$tests/support.rs" )" = 3; \
 	if timeout 10s rg -n --glob '!complete_*.rs' --glob '!support.rs' --glob '!finalization_*.rs' --glob '!boot_repair_required_*.rs' 'UsrRollbackCandidatePreserve(?:Seal::new_for_test|Authority::capture)|UsrRollbackActiveReblitCompleteRoute(?:Seal::new_for_test|Authority::capture)|usr_rollback_active_reblit::dispatch|super::super::dispatch|dispatch_usr_rollback_candidate_preserve_and_reopen|persist_usr_rollback_active_reblit_(candidate_preserve|complete_route)_and_reopen' "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
