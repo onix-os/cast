@@ -1,11 +1,31 @@
 DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+DESCRIPTOR_BOOT_FILE_PUBLICATION_CARGO_ARTIFACT_FILTER = select(.reason == "compiler-artifact" and .manifest_path == $$manifest and .target.name == "forge" and .target.kind == ["lib"] and .profile.test == true and (.executable | type == "string")) | .executable
 CARGO ?= cargo
 
 .PHONY: forge-linux-descriptor-boot-file-publication-test \
+	forge-linux-descriptor-boot-file-publication-cargo-filter-test \
 	forge-linux-descriptor-boot-file-publication-vfat-build \
 	forge-linux-descriptor-boot-file-publication-vfat-test
 
-forge-linux-descriptor-boot-file-publication-test: host-storage-safety-test forge-linux-descriptor-boot-namespace-production-test forge-active-reblit-boot-publication-plan-test
+forge-linux-descriptor-boot-file-publication-cargo-filter-test:
+	@set -eu; \
+	jq_path="$$(command -v jq)"; \
+	test -n "$$jq_path"; \
+	selected="$$( \
+		printf '%s\n' \
+			'{"reason":"compiler-artifact","manifest_path":"/fixture/crates/forge/Cargo.toml","target":{"name":"forge","kind":["lib"]},"profile":{"test":true},"executable":"/fixture/target/forge-test"}' \
+			'{"reason":"compiler-artifact","manifest_path":"/fixture/crates/forge/Cargo.toml","target":{"name":"other","kind":["lib"]},"profile":{"test":true},"executable":"/fixture/target/other-test"}' \
+			'{"reason":"compiler-artifact","manifest_path":"/fixture/crates/other/Cargo.toml","target":{"name":"forge","kind":["lib"]},"profile":{"test":true},"executable":"/fixture/target/wrong-manifest"}' \
+			'{"reason":"compiler-artifact","manifest_path":"/fixture/crates/forge/Cargo.toml","target":{"name":"forge","kind":["bin"]},"profile":{"test":true},"executable":"/fixture/target/wrong-kind"}' \
+			'{"reason":"compiler-artifact","manifest_path":"/fixture/crates/forge/Cargo.toml","target":{"name":"forge","kind":["lib"]},"profile":{"test":false},"executable":"/fixture/target/non-test"}' \
+			'{"reason":"compiler-artifact","manifest_path":"/fixture/crates/forge/Cargo.toml","target":{"name":"forge","kind":["lib"]},"profile":{"test":true},"executable":null}' \
+			'{"reason":"build-script-executed","manifest_path":"/fixture/crates/forge/Cargo.toml","target":{"name":"forge","kind":["lib"]},"profile":{"test":true},"executable":"/fixture/target/build-script"}' \
+		| "$$jq_path" -r --arg manifest /fixture/crates/forge/Cargo.toml \
+			'$(DESCRIPTOR_BOOT_FILE_PUBLICATION_CARGO_ARTIFACT_FILTER)' \
+	)"; \
+	test "$$selected" = /fixture/target/forge-test
+
+forge-linux-descriptor-boot-file-publication-test: host-storage-safety-test forge-linux-descriptor-boot-namespace-production-test forge-active-reblit-boot-publication-plan-test forge-linux-descriptor-boot-file-publication-cargo-filter-test
 	@set -euo pipefail; \
 	mkdir -p "$(DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR)/target"; \
 	listed="$$( mktemp "$(DESCRIPTOR_BOOT_FILE_PUBLICATION_TOP_DIR)/target/linux-descriptor-boot-file-publication-test-list.XXXXXXXXXXXX" )"; \
@@ -180,12 +200,7 @@ forge-linux-descriptor-boot-file-publication-vfat-build:
 		--manifest-path "$$source_root/Cargo.toml" \
 		-p forge --lib --no-run --message-format=json >"$$cargo_messages"; \
 	"$$jq_path" -r --arg manifest "$$source_root/crates/forge/Cargo.toml" \
-		'select(.reason == "compiler-artifact" \
-			and .manifest_path == $$manifest \
-			and .target.name == "forge" \
-			and .target.kind == ["lib"] \
-			and .profile.test == true \
-			and (.executable | type == "string")) | .executable' \
+		'$(DESCRIPTOR_BOOT_FILE_PUBLICATION_CARGO_ARTIFACT_FILTER)' \
 		"$$cargo_messages" >"$$cargo_candidates"; \
 	mapfile -t candidate_lines <"$$cargo_candidates"; \
 	test "$${#candidate_lines[@]}" = 1; \

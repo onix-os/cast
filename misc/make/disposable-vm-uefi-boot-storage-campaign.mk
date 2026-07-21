@@ -47,7 +47,7 @@ define disposable_vm_boot_storage_common_arguments
 	--cooperative-root-confirmation "$${VM_COOPERATIVE_ROOT_CONFIRMATION-}"
 endef
 
-disposable-vm-uefi-boot-storage-harness-test:
+disposable-vm-uefi-boot-storage-harness-test: forge-linux-descriptor-boot-file-publication-cargo-filter-test
 	@set -eu; \
 	script="$(DISPOSABLE_VM_BOOT_STORAGE_SCRIPT)"; \
 	effects="$(DISPOSABLE_VM_BOOT_STORAGE_EFFECTS)"; \
@@ -144,6 +144,9 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq 'assert_disposable_vm_mount_policy(&expected_target_devnum)' "$$publisher_tests"; \
 	grep -Fq 'forge-linux-descriptor-boot-file-publication-vfat-build:' "$$publisher_make"; \
 	grep -Fq 'forge-linux-descriptor-boot-file-publication-vfat-test:' "$$publisher_make"; \
+	grep -Fq 'forge-linux-descriptor-boot-file-publication-cargo-filter-test:' "$$publisher_make"; \
+	grep -Fq "'\$$(DESCRIPTOR_BOOT_FILE_PUBLICATION_CARGO_ARTIFACT_FILTER)'" "$$publisher_make"; \
+	test "$$(grep -Fc "'\$$(DESCRIPTOR_BOOT_FILE_PUBLICATION_CARGO_ARTIFACT_FILTER)'" "$$publisher_make")" = 2; \
 	test "$$(grep -Fc "trusted_tools='/usr/bin/id /usr/bin/stat /usr/bin/cat /usr/bin/systemd-detect-virt" "$$publisher_make")" = 2; \
 	grep -Fq '/usr/bin/systemd-detect-virt --vm' "$$publisher_make"; \
 	grep -Fq "'0:0:600:regular file:1'" "$$publisher_make"; \
