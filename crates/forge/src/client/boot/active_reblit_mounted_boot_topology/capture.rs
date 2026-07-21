@@ -25,10 +25,16 @@ mod model;
 mod observation;
 #[path = "capture/preparation.rs"]
 mod preparation;
+#[path = "capture/publication_targets.rs"]
+mod publication_targets;
 
 pub(in crate::client) use error::ActiveReblitMountedBootTopologyCaptureError;
 pub(in crate::client) use model::{
     PreparedActiveReblitMountedBootTopology, RevalidatedActiveReblitMountedBootTopology,
+};
+pub(in crate::client) use publication_targets::{
+    ActiveReblitBootPublicationTargetsError, RevalidatedActiveReblitBootPublicationTarget,
+    RevalidatedActiveReblitBootPublicationTargets,
 };
 
 #[cfg(test)]
@@ -37,3 +43,5 @@ pub(super) use error::ObservationBoundary;
 pub(super) use model::{FixtureBootFilesystemEvidenceFeed, FixtureBootFilesystemEvidenceFeeds, FixtureMountInfoFeed};
 #[cfg(test)]
 pub(super) use observation::validate_fixture_attachment_selector;
+#[cfg(test)]
+pub(super) use publication_targets::validate_fixture_publication_target_binding;

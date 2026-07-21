@@ -11,7 +11,8 @@ use super::{
     active_reblit_boot_render_inputs::RevalidatedActiveReblitBootRenderInputs,
     active_reblit_boot_schema_inputs::ValidatedActiveReblitBootSchema,
     active_reblit_mounted_boot_topology::{
-        BoundActiveReblitMountedBootTopology, RevalidatedActiveReblitMountedBootTopology,
+        ActiveReblitBootPublicationTargetsError, BoundActiveReblitMountedBootTopology,
+        RevalidatedActiveReblitBootPublicationTargets, RevalidatedActiveReblitMountedBootTopology,
     },
     active_reblit_publication_plan::{
         ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase,
@@ -265,6 +266,18 @@ impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     /// view cannot perform I/O or extend destination authority.
     pub(in crate::client) fn mounted_topology(&self) -> BoundActiveReblitMountedBootTopology<'_> {
         self.topology.topology()
+    }
+
+    /// Revalidate opaque ESP/XBOOTLDR publication targets through the exact
+    /// mounted-topology authority retained by this plan.
+    ///
+    /// This delegate intentionally exposes neither the topology authority nor
+    /// its prepared attachments. The original render/topology deadline is
+    /// inherited unchanged by the returned non-cloneable target bridge.
+    pub(in crate::client) fn revalidate_publication_targets<'plan>(
+        &'plan self,
+    ) -> Result<RevalidatedActiveReblitBootPublicationTargets<'plan>, ActiveReblitBootPublicationTargetsError> {
+        self.topology.revalidate_publication_targets()
     }
 }
 

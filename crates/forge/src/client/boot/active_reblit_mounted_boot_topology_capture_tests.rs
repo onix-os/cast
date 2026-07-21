@@ -2,6 +2,8 @@
 mod deadlines;
 #[path = "active_reblit_mounted_boot_topology_capture_tests/filesystem.rs"]
 mod filesystem;
+#[path = "active_reblit_mounted_boot_topology_capture_tests/publication_targets.rs"]
+mod publication_targets;
 #[path = "active_reblit_mounted_boot_topology_capture_tests/races.rs"]
 mod races;
 #[path = "active_reblit_mounted_boot_topology_capture_tests/stable.rs"]

@@ -11,7 +11,7 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_mounted_boot_topology::capture_tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 23; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 28; \
 	for name in \
 		stable::alias_fixture_retains_exact_descriptor_backed_scalar_facts \
 		stable::repeated_revalidation_keeps_the_bootstrap_topology_exact \
@@ -21,6 +21,11 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 		filesystem::distinct_bootstrap_consumes_both_feeds_and_types_xbootldr_wrong_magic \
 		filesystem::distinct_bootstrap_types_xbootldr_identity_mismatch_after_both_feeds \
 		filesystem::evidence_drift_is_rejected_in_pass2_and_terminal_observations \
+		publication_targets::alias_bridge_brackets_exact_attachment_and_retains_original_deadline \
+		publication_targets::bridge_rejects_intent_drift_in_its_opening_complete_topology_pass \
+		publication_targets::bridge_rejects_attachment_drift_in_its_closing_complete_topology_pass \
+		publication_targets::bridge_terminal_checkpoint_cannot_outlive_original_deadline \
+		publication_targets::scalar_binding_rejects_each_role_typed_identity_component_drift \
 		races::bootstrap_rejects_an_unsupported_boot_filesystem_policy \
 		races::changed_declarative_intent_fails_at_the_opening_boundary \
 		races::changed_mount_namespace_identity_fails_before_attachment_use \
@@ -41,6 +46,8 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	root="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology.rs"; \
 	capture="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology/capture.rs"; \
 	core="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology/capture"; \
+	publication_targets="$$core/publication_targets.rs"; \
+	renderer="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer.rs"; \
 	tests="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology_capture_tests.rs"; \
 	test_core="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology_capture_tests"; \
 	timeout 10s grep -Fq 'pub(in crate::client) struct PreparedActiveReblitMountedBootTopology' "$$core/model.rs"; \
@@ -55,6 +62,15 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	timeout 10s grep -Fq 'pub(in crate::client) fn deadline(&self) -> Instant' "$$core/model.rs"; \
 	timeout 10s grep -Fq 'deadline,' "$$core/preparation.rs"; \
 	timeout 10s grep -Fq 'assert_eq!(view.deadline(), operation_deadline);' "$$test_core/deadlines.rs"; \
+	timeout 10s grep -Fq 'pub(in crate::client) enum RevalidatedActiveReblitBootPublicationTargets' "$$publication_targets"; \
+	timeout 10s grep -Fq 'attachment: RevalidatedTaskRootedAttachment' "$$publication_targets"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.revalidate_until(self._installation, deadline)' "$$publication_targets" )" = 2; \
+	timeout 10s grep -Fq '.revalidate_against_until(anchor, deadline)' "$$publication_targets"; \
+	for scalar in destination_device destination_inode destination_mount_id; do timeout 10s grep -Fq "attachment.$$scalar()" "$$publication_targets"; done; \
+	timeout 10s grep -Fq 'self.topology.revalidate_publication_targets()' "$$renderer"; \
+	if timeout 10s rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) (?:struct RevalidatedActiveReblitBootPublicationTarget|enum RevalidatedActiveReblitBootPublicationTargets)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:RevalidatedActiveReblitBootPublicationTarget|RevalidatedActiveReblitBootPublicationTargets)' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg --pcre2 -U -n 'pub\(in crate::client\)\s+fn\s+[[:alnum:]_]+[^\{;]{0,300}(?:RevalidatedTaskRootedAttachment|PreparedTaskRootedAttachment|std::fs::File|OwnedFd|BorrowedFd|RawFd|PathBuf|&Path)|pub\(in crate::client\).*attachment\s*:' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'retain_boot_publication_parent|publish_immutable_boot_file|assess_retained_boot_namespace|create_dir|mkdir|rename|unlink|remove_file|syncfs|sync_all' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for phase in Pass1 Pass2 Terminal; do timeout 10s grep -Fq "ObservationPhase::$$phase" "$$core/preparation.rs"; done; \
 	timeout 10s grep -Fq 'same_revalidated_block_parent_snapshot(&xbootldr_sysfs)' "$$core/observation.rs"; \
 	timeout 10s grep -Fq 'intent_selector == attachment_selector' "$$core/observation.rs"; \

@@ -41,8 +41,9 @@ pub(in crate::client) use model::{
 
 #[allow(unused_imports)] // consumed by the pure renderer and later durable publisher
 pub(in crate::client) use capture::{
-    ActiveReblitMountedBootTopologyCaptureError, PreparedActiveReblitMountedBootTopology,
-    RevalidatedActiveReblitMountedBootTopology,
+    ActiveReblitBootPublicationTargetsError, ActiveReblitMountedBootTopologyCaptureError,
+    PreparedActiveReblitMountedBootTopology, RevalidatedActiveReblitBootPublicationTarget,
+    RevalidatedActiveReblitBootPublicationTargets, RevalidatedActiveReblitMountedBootTopology,
 };
 
 #[cfg(test)]
