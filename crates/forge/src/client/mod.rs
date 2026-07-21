@@ -211,6 +211,7 @@ include!("core/root_abi.rs");
 include!("frozen/private_stage.rs");
 include!("frozen/publication.rs");
 include!("frozen/discard.rs");
+include!("frozen/discard_tree.rs");
 include!("frozen/normalization_execution.rs");
 include!("frozen/normalization_verification.rs");
 include!("materialization/layout_planning.rs");
