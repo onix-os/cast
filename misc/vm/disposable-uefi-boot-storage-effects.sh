@@ -11,6 +11,8 @@ rm_command=
 jq_command=
 readlink_command=
 stat_command=
+git_command=
+tar_command=
 publication_build_parent=/var/tmp
 publication_build_root=$publication_build_parent/cast-vm-boot-storage-$expected_boot_id-$challenge
 publication_test_target=$publication_build_root/target
@@ -18,6 +20,8 @@ publication_cargo_home=$publication_build_root/cargo-home
 publication_develop_profile=$publication_build_root/nix-develop-profile
 publication_binary_manifest=$publication_build_root/forge-libtest-manifest-v1
 publication_flake_metadata=$publication_build_root/flake-metadata-v1.json
+publication_source_archive=$publication_build_root/source-$expected_commit.tar
+publication_staged_source=$publication_build_root/source
 publication_source_root=
 publication_build_prepared=0
 publication_runner_prepared=0
@@ -36,6 +40,8 @@ load_effect_commands() {
     jq_command=$(command_path jq)
     readlink_command=$(command_path readlink)
     stat_command=$(command_path stat)
+    git_command=$(command_path git)
+    tar_command=$(command_path tar)
 }
 
 run_bounded() {
@@ -287,11 +293,60 @@ verify_publication_binary_manifest() {
         || die 'publication binary manifest metadata is unsafe'
 }
 
+verify_clean_expected_checkout() {
+    checkout_commit=$(GIT_NO_REPLACE_OBJECTS=1 "$git_command" \
+        -c safe.directory="$root" -C "$root" rev-parse --verify HEAD) \
+        || die 'cannot resolve the guest checkout commit for source staging'
+    [ "$checkout_commit" = "$expected_commit" ] \
+        || die 'guest checkout changed before immutable source staging'
+    [ -z "$(GIT_NO_REPLACE_OBJECTS=1 "$git_command" \
+        -c safe.directory="$root" -C "$root" \
+        status --porcelain=v1 --untracked-files=all)" ] \
+        || die 'guest checkout became dirty during immutable source staging'
+}
+
 resolve_immutable_publication_source() {
     [ -z "$publication_source_root" ] \
         || die 'immutable publication source was resolved more than once'
+    [ ! -e "$publication_source_archive" ] && [ ! -L "$publication_source_archive" ] \
+        || die 'fresh private publication source archive already exists'
+    [ ! -e "$publication_staged_source" ] && [ ! -L "$publication_staged_source" ] \
+        || die 'fresh private publication source staging directory already exists'
     [ ! -e "$publication_flake_metadata" ] && [ ! -L "$publication_flake_metadata" ] \
         || die 'publication flake metadata path already exists'
+    "$mkdir_command" -m 700 -- "$publication_staged_source" \
+        || die 'cannot create the private publication source staging directory'
+    [ "$($stat_command -Lc '%u:%g:%a:%F' -- "$publication_staged_source")" \
+        = '0:0:700:directory' ] \
+        || die 'private publication source staging directory is unsafe'
+    verify_clean_expected_checkout
+    (
+        umask 077
+        GIT_NO_REPLACE_OBJECTS=1 "$git_command" -c safe.directory="$root" \
+            -C "$root" archive --format=tar \
+            --output="$publication_source_archive" "$expected_commit"
+    ) || die 'cannot archive the exact expected publication source commit'
+    verify_clean_expected_checkout
+    [ -f "$publication_source_archive" ] && [ ! -L "$publication_source_archive" ] \
+        || die 'private publication source archive is not a real file'
+    [ "$($stat_command -Lc '%u:%g:%a:%F:%h' -- "$publication_source_archive")" \
+        = '0:0:600:regular file:1' ] \
+        || die 'private publication source archive metadata is unsafe'
+    (
+        umask 077
+        "$tar_command" --extract --file "$publication_source_archive" \
+            --directory "$publication_staged_source" --no-same-owner \
+            --no-same-permissions --no-overwrite-dir
+    ) || die 'cannot extract the private publication source archive'
+    [ "$($stat_command -Lc '%u:%g:%a:%F' -- "$publication_staged_source")" \
+        = '0:0:700:directory' ] \
+        || die 'private publication source staging directory changed metadata'
+    [ ! -e "$publication_staged_source/.git" ] \
+        && [ ! -L "$publication_staged_source/.git" ] \
+        || die 'staged publication source unexpectedly contains .git'
+    [ ! -e "$publication_staged_source/target" ] \
+        && [ ! -L "$publication_staged_source/target" ] \
+        || die 'staged publication source unexpectedly contains top-level target'
     metadata_status=0
     (
         umask 077
@@ -299,32 +354,32 @@ resolve_immutable_publication_source() {
             PATH=/usr/sbin:/usr/bin:/sbin:/bin \
             HOME=/root USER=root LOGNAME=root \
             LC_ALL=C LANG=C TMPDIR=/tmp \
-            GIT_CONFIG_COUNT=1 \
-            GIT_CONFIG_KEY_0=safe.directory \
-            "GIT_CONFIG_VALUE_0=$root" \
             "$nix_command" --extra-experimental-features 'nix-command flakes' \
             flake metadata --json --no-write-lock-file --no-update-lock-file \
-            "$root" >"$publication_flake_metadata"
+            "path:$publication_staged_source" >"$publication_flake_metadata"
     ) || metadata_status=$?
     [ "$metadata_status" -eq 0 ] \
-        || die 'cannot resolve the Git-aware immutable publication source'
+        || die 'cannot resolve the private staged immutable publication source'
     [ -f "$publication_flake_metadata" ] && [ ! -L "$publication_flake_metadata" ] \
         || die 'publication flake metadata is not a real file'
     [ "$("$stat_command" -Lc '%u:%g:%a:%F:%h' -- "$publication_flake_metadata")" \
         = '0:0:600:regular file:1' ] \
         || die 'publication flake metadata file is unsafe'
-    "$jq_command" -e --arg expected_commit "$expected_commit" '
-        .revision == $expected_commit
-        and .locked.rev == $expected_commit
-        and .resolved.type == "git"
-        and .locked.type == "git"
+    "$jq_command" -e --arg staged_source "$publication_staged_source" '
+        .resolved.type == "path"
+        and .locked.type == "path"
+        and .resolved.path == $staged_source
+        and .locked.path == $staged_source
+        and (.locked.narHash | type == "string"
+            and test("^sha256-[A-Za-z0-9+/]{43}=$"))
+        and ((.revision? // null) == null)
         and ((.dirtyRevision? // null) == null)
         and ((.dirtyRev? // null) == null)
     ' "$publication_flake_metadata" >/dev/null \
-        || die 'Git-aware flake metadata is not bound to the expected clean commit'
+        || die 'path flake metadata does not bind the private staged source'
     publication_source_root=$("$jq_command" -er \
         '.path | select(type == "string")' "$publication_flake_metadata") \
-        || die 'Git-aware flake metadata has no immutable source path'
+        || die 'path flake metadata has no immutable source path'
     verify_immutable_publication_source
 }
 

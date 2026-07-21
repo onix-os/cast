@@ -98,18 +98,35 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq 'jq_command=$$(command_path jq)' "$$effects"; \
 	grep -Fq 'readlink_command=$$(command_path readlink)' "$$effects"; \
 	grep -Fq 'stat_command=$$(command_path stat)' "$$effects"; \
+	grep -Fq 'git_command=$$(command_path git)' "$$effects"; \
+	grep -Fq 'tar_command=$$(command_path tar)' "$$effects"; \
 	grep -Fq 'publication_build_parent=/var/tmp' "$$effects"; \
 	grep -Fq 'publication_build_root=$$publication_build_parent/cast-vm-boot-storage-$$expected_boot_id-$$challenge' "$$effects"; \
 	grep -Fq 'publication_develop_profile=$$publication_build_root/nix-develop-profile' "$$effects"; \
 	grep -Fq 'publication_binary_manifest=$$publication_build_root/forge-libtest-manifest-v1' "$$effects"; \
+	grep -Fq 'publication_source_archive=$$publication_build_root/source-$$expected_commit.tar' "$$effects"; \
+	grep -Fq 'publication_staged_source=$$publication_build_root/source' "$$effects"; \
 	grep -Fq 'fresh private publication build root already exists' "$$effects"; \
+	grep -Fq '"$$mkdir_command" -m 700 -- "$$publication_staged_source"' "$$effects"; \
+	test "$$(grep -Fc 'GIT_NO_REPLACE_OBJECTS=1 "$$git_command"' "$$effects")" = 3; \
+	test "$$(grep -Fc 'archive --format=tar' "$$effects")" = 1; \
+	grep -Fq -- '--output="$$publication_source_archive" "$$expected_commit"' "$$effects"; \
+	grep -Fq '"$$tar_command" --extract --file "$$publication_source_archive"' "$$effects"; \
+	grep -Fq -- '--directory "$$publication_staged_source" --no-same-owner' "$$effects"; \
+	grep -Fq 'staged publication source unexpectedly contains .git' "$$effects"; \
+	grep -Fq 'staged publication source unexpectedly contains top-level target' "$$effects"; \
 	grep -Fq '"$$env_command" -i' "$$effects"; \
 	grep -Fq '"CARGO_TARGET_DIR=$$publication_test_target"' "$$effects"; \
 	grep -Fq '"CARGO_HOME=$$publication_cargo_home"' "$$effects"; \
 	grep -Fq '"CAST_VM_BOOT_PUBLICATION_BUILD_ROOT=$$publication_build_root"' "$$effects"; \
 	grep -Fq 'flake metadata --json --no-write-lock-file --no-update-lock-file' "$$effects"; \
-	grep -Fq '.revision == $$expected_commit' "$$effects"; \
-	grep -Fq '.locked.rev == $$expected_commit' "$$effects"; \
+	grep -Fq '"path:$$publication_staged_source" >"$$publication_flake_metadata"' "$$effects"; \
+	grep -Fq '.resolved.type == "path"' "$$effects"; \
+	grep -Fq '.locked.type == "path"' "$$effects"; \
+	grep -Fq '.resolved.path == $$staged_source' "$$effects"; \
+	grep -Fq '.locked.path == $$staged_source' "$$effects"; \
+	grep -Fq '.locked.narHash | type == "string"' "$$effects"; \
+	grep -Fq '((.revision? // null) == null)' "$$effects"; \
 	grep -Fq 'develop --profile "$$publication_develop_profile"' "$$effects"; \
 	grep -Fq '"$$make_command" -C "$$publication_source_root"' "$$effects"; \
 	test "$$(grep -Fc 'forge-linux-descriptor-boot-file-publication-vfat-build' "$$effects")" = 1; \
@@ -142,8 +159,17 @@ disposable-vm-uefi-boot-storage-harness-test:
 	if grep -Fq 'target_devnum=$$target_devnum' "$$script"; then exit 1; fi; \
 	if grep -Fq '$$root/target' "$$effects"; then exit 1; fi; \
 	if grep -Fq 'path:$$root' "$$effects"; then exit 1; fi; \
+	if rg -n '\.revision ==|\.locked\.rev ==' "$$effects"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$(grep -Fc 'flake metadata --json --no-write-lock-file --no-update-lock-file' "$$effects")" = 1; \
+	test "$$(grep -Fc '"path:$$publication_staged_source"' "$$effects")" = 1; \
 	test "$$(grep -Fc 'develop --profile "$$publication_develop_profile"' "$$effects")" = 1; \
+	prepare_runner="$$(sed -n '/^prepare_boot_file_publication_runner() {/,/^}/p' "$$effects")"; \
+	resolve_line="$$(grep -nF '    resolve_immutable_publication_source' <<<"$$prepare_runner" | cut -d: -f1)"; \
+	develop_line="$$(grep -nF '        develop --profile "$$publication_develop_profile"' <<<"$$prepare_runner" | cut -d: -f1)"; \
+	build_line="$$(grep -nF '        forge-linux-descriptor-boot-file-publication-vfat-build' <<<"$$prepare_runner" | cut -d: -f1)"; \
+	test "$$(grep -Fc '    resolve_immutable_publication_source' <<<"$$prepare_runner")" = 1; \
+	test "$$resolve_line" -lt "$$develop_line"; \
+	test "$$develop_line" -lt "$$build_line"; \
 	if rg -n 'run_bounded.*(nix_command|make_command)' "$$effects"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$(grep -Fc 'verify_init_mount_namespace' "$$effects")" -ge 4; \
 	run_campaign="$$(sed -n '/^run_campaign() {/,/^}/p' "$$effects")"; \
