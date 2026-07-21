@@ -5,6 +5,11 @@ This file records useful work deliberately excluded from the current
 evidence, or repository closure. Moving an item into active work requires a
 separate decision after the current plan is finished.
 
+Proposals rejected from the current implementation sequence are deferred here
+rather than discarded. Each entry should retain the useful idea, state why it
+does not close the current blocker, and define what would make it worth
+reconsidering.
+
 ## Package model
 
 - Evaluate a typed toolchain-free package mode for prebuilt artifacts. The
@@ -37,6 +42,25 @@ separate decision after the current plan is finished.
 - Evaluate Nix-to-Gluon or evaluated-derivation interoperability separately.
   Compatibility remains undecided: it is neither a current objective nor
   prohibited, and must not reshape the Stone-native package model in advance.
+
+## Deferred design alternatives
+
+- Reconsider a standalone, authority-free
+  `active_reblit_publication_ownership` policy module after authenticated boot
+  publication provenance exists. The proposed module would distinguish
+  `BorrowedFirstAdoption` from claimed `PublishedByCast` records, preserve
+  bounded ordering and deadline checks, and keep decoded, self-consistent,
+  borrowed, and first-adoption values non-deleting. It is deferred because an
+  authority-free value alone cannot close the current requirement for durable
+  provenance bound to the exact journal record and ESP/XBOOTLDR identity. It
+  may become useful later as a read-only codec or policy surface, but it must
+  never mint deletion authority by itself.
+- If that module is revisited, keep its error and function-named test splits
+  separate (`authority_separation`, `first_adoption`, and
+  `bounds_and_deadlines`) and retain the proposed structural guard against
+  filesystem, descriptor, write, rename, unlink, and delete APIs. Reuse it only
+  when those types remove duplication from the real authenticated publication
+  path rather than adding another unconsumed foundation.
 
 ## Maintenance
 
