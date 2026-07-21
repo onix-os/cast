@@ -409,14 +409,14 @@ closure remain authoritative in `PLAN.md`.
   cases preserve all five root-ABI identities across 240 capture and 240
   final-revalidation races.
 
-  This completion boundary is journal-only: it invokes no database,
-  non-journal namespace, reverse-exchange, candidate, boot, cleanup,
-  terminal-deletion, or finalization effect. NewState remains byte-stable at
-  generation 18 and ActiveReblit at generation 14 because their RootLinks
-  terminal-finalization gates remain closed. The existing 20-case `SIGKILL`
-  proof remains exclusively NewState generation 16 -> 17. A recovery entry may
-  naturally take generation 17 -> 18 when the invalidation successor was already
-  canonical, but that creates no completion-boundary process-death claim.
+  At this completion-only checkpoint the boundary was journal-only: it invoked
+  no database, non-journal namespace, reverse-exchange, candidate, boot,
+  cleanup, terminal deletion, or finalization effect. NewState therefore
+  remained byte-stable at generation 18 and ActiveReblit at generation 14.
+  The existing 20-case `SIGKILL` proof remains exclusively NewState generation
+  16 -> 17. A recovery entry may naturally take generation 17 -> 18 when the
+  invalidation successor was already canonical, but that creates no completion-
+  boundary process-death claim.
 
   Accepted commit `8f391985` supplies the independently reviewed store
   foundation used by terminal finalizers. It consumes an exact non-`Clone`
@@ -452,10 +452,19 @@ closure remain authoritative in `PLAN.md`.
   post-delete database -> namespace -> database proof, including exact archived
   topology, all five root links, repeated public absence, and direct same-store
   clean handoff.
-  No NewState or ActiveReblit source is widened, and no cleanup or boot effect is
-  added. Commit `0a91c2ed` is fresh-writer-reopen and fault-race store evidence,
-  not an operation-finalizer widening. The legacy Intent/Exchanged `SIGKILL`
-  matrix is still not RootLinks, and reboot and power-loss remain unproved.
+  Accepted commit `b0af65d6` then widens only exact RootLinks NewState
+  generation-18 finalization, preserving legacy Intent/Exchanged admission.
+  Binding-first authority captures the exact non-`Clone` record binding before
+  database or namespace evidence, revalidates it, and consumes it once through
+  `delete_record_binding`. The same locked store crosses post-delete exact
+  jointly-absent database proof, preserved-candidate namespace and all five root
+  links, repeated public absence, and clean handoff. Every delete error,
+  including storage-classified absence, fails that entry. Coverage is 7
+  authority, 14 executor, 5 handoff, 2 fresh-handle, and 2 endpoint tests, with
+  48 success, 15 link-race, and 6 storage cases. The unchanged legacy 12-case
+  terminal `SIGKILL` matrix remains Intent/Exchanged-only: RootLinks itself has
+  no `SIGKILL`, reboot, or power-loss proof. ActiveReblit remains unwidened, and
+  no cleanup or boot effect is added.
 
   ActiveReblit no longer enters the legacy unjournaled wrapper-rotation path.
   While `CandidatePrepared` is canonical, a sealed coordinator-only effect
@@ -589,9 +598,11 @@ closure remain authoritative in `PLAN.md`.
   separate journal-only generation-17 -> generation-18 completion boundary
   with exact predecessor/successor record-inode binding and no new process-
   death claim. Commits `8f391985` and `a0966008` then provide exact bound delete
-  and consume it only for RootLinks ActivateArchived generation 12. RootLinks
-  NewState and ActiveReblit finalization, later rollback actions, roll-forward,
-  triggers, cleanup, and all RootLinks terminal process-death proof remain open.
+  and consume it for RootLinks ActivateArchived generation 12. Accepted commit
+  `b0af65d6` consumes the same one-shot binding architecture for exact RootLinks
+  NewState generation 18. ActiveReblit finalization, later rollback actions,
+  roll-forward, triggers, cleanup, and every RootLinks terminal process-death,
+  reboot, or power-loss proof remain open.
   ActiveReblit's terminal
   finalizer now has an exact
   12-case real-process matrix across current/historical record epochs, both
