@@ -1,6 +1,15 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    boot_publication_receipt_head (singleton) {
+        singleton -> Integer,
+        committed_receipt_sha256 -> Nullable<Binary>,
+        pending_transition_id -> Nullable<Text>,
+        pending_receipt_sha256 -> Nullable<Binary>,
+    }
+}
+
+diesel::table! {
     state (id) {
         id -> Integer,
         #[sql_name = "type"]
@@ -32,4 +41,9 @@ diesel::table! {
 diesel::joinable!(state_metadata_provenance -> state (state_id));
 diesel::joinable!(state_selections -> state (state_id));
 
-diesel::allow_tables_to_appear_in_same_query!(state, state_metadata_provenance, state_selections,);
+diesel::allow_tables_to_appear_in_same_query!(
+    boot_publication_receipt_head,
+    state,
+    state_metadata_provenance,
+    state_selections,
+);

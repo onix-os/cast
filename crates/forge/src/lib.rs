@@ -12,6 +12,7 @@ pub use self::state::State;
 pub use self::system_model::SystemModel;
 
 pub mod cli;
+pub(crate) mod boot_publication;
 pub mod client;
 pub mod db;
 pub mod dependency;

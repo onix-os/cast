@@ -15,6 +15,7 @@ const MAX_SELECTION_TEXT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STATE_DATABASE_TEXT_FIELD_BYTES: usize = 64 * 1024;
 
 mod exact_archived_removal;
+mod boot_publication_receipt_head;
 #[allow(dead_code)] // exact fresh removal remains sealed from startup dispatch
 mod exact_fresh_transition_removal;
 #[allow(dead_code)] // consumed by the ActiveReblit frozen-boot wiring slice
@@ -25,6 +26,14 @@ mod read_only;
 mod schema;
 
 pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
+#[allow(unused_imports)] // consumed by authenticated boot-publication coordination
+pub(crate) use boot_publication_receipt_head::{
+    BootPublicationReceiptHead, BootPublicationReceiptHeadError, BootPublicationReceiptStageOutcome,
+    PendingBootPublicationReceipt,
+};
+#[cfg(test)]
+#[allow(unused_imports)] // consumed by cross-module receipt-race tests
+pub(crate) use boot_publication_receipt_head::BootPublicationReceiptHeadRawForTest;
 #[cfg(test)]
 use exact_archived_removal::{ExactArchivedRemovalFault, arm_exact_archived_removal_fault};
 #[allow(unused_imports)] // exact fresh removal remains sealed from startup dispatch

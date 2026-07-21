@@ -2,6 +2,7 @@ use std::io;
 
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
+use crate::boot_publication::BootPublicationReceiptPair;
 use crate::state::TransitionId;
 
 use super::codec::{CodecError, MAX_QUARANTINE_NAME_BYTES, PAYLOAD_FORMAT, PAYLOAD_VERSION};
@@ -391,6 +392,8 @@ pub(crate) struct TransitionRecord {
     pub(crate) operation: Operation,
     pub(crate) phase: Phase,
     pub(crate) rollback: Option<RollbackPlan>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) boot_publication_receipts: Option<BootPublicationReceiptPair>,
     pub(crate) candidate: Candidate,
     pub(crate) previous: Previous,
     pub(crate) options: TransitionOptions,
@@ -426,6 +429,7 @@ impl TransitionRecord {
             operation,
             phase: Phase::Preparing,
             rollback: None,
+            boot_publication_receipts: None,
             candidate: Candidate {
                 id: candidate_id,
                 origin: candidate_origin,

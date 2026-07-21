@@ -15,6 +15,7 @@ fn disabled_forward_phases_and_rollback_plan_placement_fail_closed() {
 
     let mut invalid = record(Phase::BootSyncStarted);
     invalid.options.run_boot_sync = false;
+    invalid.boot_publication_receipts = None;
     assert!(matches!(encode(&invalid), Err(CodecError::DisabledPhase(_))));
 
     let mut invalid = record(Phase::Preparing);

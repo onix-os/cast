@@ -191,6 +191,7 @@ fn production_rollback_successor_requires_one_exact_action_outcome_and_persists_
 
     let mut v1_required = required.clone();
     v1_required.version = PAYLOAD_VERSION_V1;
+    v1_required.boot_publication_receipts = None;
     encode(&v1_required).unwrap();
     let v1_started = v1_required.boot_repair_started_successor().unwrap();
     assert_eq!(v1_started.version, PAYLOAD_VERSION_V1);

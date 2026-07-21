@@ -319,6 +319,11 @@ forge-transition-journal-contract-test:
 	for test in \
 		transition_journal::tests::canonical_round_trip_covers_every_phase \
 		transition_journal::tests::canonical_v1_full_frame_and_json_order_are_locked_by_golden_bytes \
+		transition_journal::tests::canonical_v2_full_frame_and_json_order_remain_legacy_stable \
+		transition_journal::tests::payload_v3_boot_publication_receipts_are_canonical_and_version_gated \
+		transition_journal::tests::payload_v3_receipt_presence_tracks_exact_boot_sync_reachability \
+		transition_journal::tests::legacy_payloads_freeze_before_boot_entry_and_retain_conservative_recovery \
+		transition_journal::tests::receipt_pair_replacement_is_rejected_across_every_successor_family \
 		transition_journal::tests::exact_record_limit_and_n_plus_one_are_distinguished \
 		transition_journal::tests::checksum_covers_header_fields_and_payload \
 		transition_journal::tests::unknown_frame_and_payload_versions_are_rejected \
@@ -363,9 +368,11 @@ forge-transition-journal-successor-test:
 	timeout 10s grep -q . <<<"$$listed"; \
 	for test in \
 		transition_journal::tests::production_forward_successor_inserts_a_state_id_only_at_allocation_completion \
+		transition_journal::tests::production_boot_sync_entry_requires_the_typed_receipt_successor \
 		transition_journal::tests::production_rollback_decision_derives_requirements_from_exact_observations \
 		transition_journal::tests::production_rollback_successor_requires_one_exact_action_outcome_and_persists_unverified_boot \
-		transition_journal::tests::production_rollback_successor_executes_every_pending_effect_in_fixed_order; do \
+		transition_journal::tests::production_rollback_successor_executes_every_pending_effect_in_fixed_order \
+		transition_journal::tests::receipt_pair_is_preserved_by_every_forward_rollback_and_boot_repair_successor; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
 	done
@@ -374,7 +381,7 @@ forge-transition-journal-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 110; \
+	test "$$count" = 117; \
 	for test in \
 		transition_journal::tests::reopened_record_binding_accepts_the_retained_exact_successor_after_old_store_drop \
 		transition_journal::tests::reopened_record_binding_rejects_same_bytes_successor_replacement_before_reopen; do \

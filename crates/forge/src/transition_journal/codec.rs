@@ -14,10 +14,13 @@ pub(super) const MAGIC: &[u8; 8] = b"CASTSTJ\0";
 pub(super) const FRAME_VERSION: u16 = 1;
 pub(super) const PAYLOAD_FORMAT: &str = "cast-state-transition";
 /// Legacy payloads remain byte-canonically readable and may advance only
-/// through transitions representable by their original domain.
+/// where the successor does not require new authenticated receipt evidence.
 pub(super) const PAYLOAD_VERSION_V1: u16 = 1;
+/// The second payload domain adds verified boot-repair completion but carries
+/// no authenticated boot-publication receipt correlation.
+pub(super) const PAYLOAD_VERSION_V2: u16 = 2;
 /// Current write version used for every newly prepared transition.
-pub(super) const PAYLOAD_VERSION: u16 = 2;
+pub(super) const PAYLOAD_VERSION: u16 = 3;
 pub(super) const MAGIC_END: usize = MAGIC.len();
 pub(super) const VERSION_END: usize = MAGIC_END + size_of::<u16>();
 const LENGTH_END: usize = VERSION_END + size_of::<u32>();
@@ -53,6 +56,10 @@ pub(crate) enum CodecError {
     PayloadVersionPhaseMismatch { version: u16, phase: Phase },
     #[error("journal payload version {version} cannot encode boot rollback status {status:?}")]
     PayloadVersionBootRollbackMismatch { version: u16, status: BootRollback },
+    #[error("journal payload version {0} cannot carry boot-publication receipt correlation")]
+    PayloadVersionBootPublicationReceiptsMismatch(u16),
+    #[error("boot-publication receipt correlation presence is invalid at phase {phase:?}; required={required}")]
+    BootPublicationReceiptPresenceMismatch { phase: Phase, required: bool },
     #[error("journal generation must be nonzero")]
     ZeroGeneration,
     #[error("journal generation counter is exhausted")]
@@ -158,6 +165,10 @@ pub(crate) enum CodecError {
     RollbackActionOutcomeMismatch,
     #[error("boot-repair phase {0:?} requires an explicit typed successor")]
     ExplicitBootRepairSuccessorRequired(Phase),
+    #[error("entering boot-sync-started requires the typed receipt-bearing successor")]
+    ExplicitBootSyncStartedSuccessorRequired,
+    #[error("boot-publication receipt correlation changed outside entry to boot-sync-started")]
+    BootPublicationReceiptsChangedIllegally,
     #[error("candidate state ID changed outside fresh allocation")]
     CandidateStateChangedIllegally,
 }

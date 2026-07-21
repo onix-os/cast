@@ -12,6 +12,7 @@ use std::{
 };
 
 use super::*;
+use crate::boot_publication::{BootPublicationReceiptFingerprint, BootPublicationReceiptPair};
 
 fn id() -> TransitionId {
     TransitionId::parse("0123456789abcdef0123456789abcdef").unwrap()
@@ -44,6 +45,17 @@ fn identity(inode: u64) -> RuntimeTreeIdentity {
     }
 }
 
+fn receipt_fingerprint(byte: u8) -> BootPublicationReceiptFingerprint {
+    BootPublicationReceiptFingerprint::from_bytes([byte; 32])
+}
+
+fn boot_publication_receipts() -> BootPublicationReceiptPair {
+    BootPublicationReceiptPair {
+        committed: Some(receipt_fingerprint(0x22)),
+        pending: receipt_fingerprint(0x11),
+    }
+}
+
 fn new_state_record(phase: Phase) -> TransitionRecord {
     let forward = phase.forward().expect("new_state_record requires a forward phase");
     TransitionRecord {
@@ -55,6 +67,8 @@ fn new_state_record(phase: Phase) -> TransitionRecord {
         operation: Operation::NewState,
         phase,
         rollback: None,
+        boot_publication_receipts: (forward.ordinal() >= ForwardPhase::BootSyncStarted.ordinal())
+            .then_some(boot_publication_receipts()),
         candidate: Candidate {
             id: (!matches!(forward, ForwardPhase::Preparing | ForwardPhase::FreshStateAllocating)).then_some(42),
             origin: CandidateOrigin::Fresh,
@@ -196,6 +210,9 @@ fn advance_record(current: &TransitionRecord, phase: Phase) -> TransitionRecord 
     let mut next = current.clone();
     next.generation += 1;
     next.phase = phase;
+    if phase == Phase::BootSyncStarted && next.boot_publication_receipts.is_none() {
+        next.boot_publication_receipts = Some(boot_publication_receipts());
+    }
     if (current.phase, phase) == (Phase::FreshStateAllocating, Phase::FreshStateAllocated) {
         next.candidate.id = Some(42);
     }
@@ -348,6 +365,7 @@ fn assert_no_journal_temporaries(root: &Path) {
 }
 
 
+include!("boot_publication_receipts.rs");
 include!("record_contract.rs");
 include!("record_binding.rs");
 include!("record_binding_delete.rs");

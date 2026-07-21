@@ -1,5 +1,5 @@
 use super::{
-    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION, PAYLOAD_VERSION_V1},
+    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION, PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2},
     model::{
         AbortDisposition, BootRollback, ForwardPhase, MountNamespaceIdentity, Operation, Phase, PreviousOrigin,
         RollbackAction, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity, TransitionRecord,
@@ -120,11 +120,21 @@ impl RollbackAction {
 }
 
 impl TransitionRecord {
+    /// Validate the complete journal contract before exposing receipt
+    /// correlation. `Ok(None)` therefore means a valid pre-publication or
+    /// legacy record, never a malformed v3 record missing required evidence.
+    pub(crate) fn boot_publication_receipt_correlation(
+        &self,
+    ) -> Result<Option<crate::boot_publication::BootPublicationReceiptPair>, CodecError> {
+        self.validate()?;
+        Ok(self.boot_publication_receipts)
+    }
+
     pub(super) fn validate(&self) -> Result<(), CodecError> {
         if self.format != PAYLOAD_FORMAT {
             return Err(CodecError::UnsupportedPayloadFormat(self.format.clone()));
         }
-        if !matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION) {
+        if !matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION_V2 | PAYLOAD_VERSION) {
             return Err(CodecError::UnsupportedPayloadVersion(self.version));
         }
         if self.version == PAYLOAD_VERSION_V1 {
@@ -178,6 +188,7 @@ impl TransitionRecord {
             }
             (None, None) => return Err(CodecError::MissingRollbackPlan),
         };
+        self.validate_boot_publication_receipts(layout_phase)?;
         self.validate_option_reachability(layout_phase)?;
         self.validate_candidate_layout(layout_phase)?;
         self.validate_relationships()?;
@@ -186,6 +197,29 @@ impl TransitionRecord {
             validate_rollback_phase(self.phase, rollback)?;
         }
         Ok(())
+    }
+
+    fn validate_boot_publication_receipts(&self, layout_phase: ForwardPhase) -> Result<(), CodecError> {
+        if matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION_V2) {
+            return if self.boot_publication_receipts.is_none() {
+                Ok(())
+            } else {
+                Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(
+                    self.version,
+                ))
+            };
+        }
+
+        let required = self.options.run_boot_sync
+            && layout_phase.ordinal() >= ForwardPhase::BootSyncStarted.ordinal();
+        if self.boot_publication_receipts.is_some() == required {
+            Ok(())
+        } else {
+            Err(CodecError::BootPublicationReceiptPresenceMismatch {
+                phase: self.phase,
+                required,
+            })
+        }
     }
 
     fn validate_option_reachability(&self, phase: ForwardPhase) -> Result<(), CodecError> {
@@ -707,6 +741,13 @@ pub(super) fn validate_advance(expected: &TransitionRecord, next: &TransitionRec
     }
     if expected.transition_id != next.transition_id {
         return Err(CodecError::TransitionChanged);
+    }
+    let receipt_entry = expected.version == PAYLOAD_VERSION
+        && expected.boot_publication_receipts.is_none()
+        && next.boot_publication_receipts.is_some()
+        && next.phase == Phase::BootSyncStarted;
+    if expected.boot_publication_receipts != next.boot_publication_receipts && !receipt_entry {
+        return Err(CodecError::BootPublicationReceiptsChangedIllegally);
     }
     if expected.format != next.format
         || expected.version != next.version

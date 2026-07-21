@@ -64,6 +64,7 @@ fn canonical_v1_full_frame_and_json_order_are_locked_by_golden_bytes() {
 
     let mut source = new_state_record(Phase::BootSyncStarted);
     source.version = PAYLOAD_VERSION_V1;
+    source.boot_publication_receipts = None;
     let value = rollback_decided(&source);
     assert_eq!(encode(&value).unwrap(), golden_frame);
     assert_eq!(&golden_frame[HEADER_SIZE..], golden_json);
@@ -141,6 +142,7 @@ fn payload_v1_remains_decodable_but_cannot_enter_v2_boot_success_domain() {
 
     let mut v1_complete = record(Phase::BootRepairComplete);
     v1_complete.version = PAYLOAD_VERSION_V1;
+    v1_complete.boot_publication_receipts = None;
     assert!(matches!(
         encode(&v1_complete),
         Err(CodecError::PayloadVersionPhaseMismatch {
@@ -161,6 +163,7 @@ fn payload_v1_remains_decodable_but_cannot_enter_v2_boot_success_domain() {
         let mut v1_resolved = v2_complete.boot_repair_rollback_complete_successor().unwrap();
         assert_eq!(v1_resolved.phase, Phase::RollbackComplete);
         v1_resolved.version = PAYLOAD_VERSION_V1;
+        v1_resolved.boot_publication_receipts = None;
         assert!(matches!(
             encode(&v1_resolved),
             Err(CodecError::PayloadVersionBootRollbackMismatch {

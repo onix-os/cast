@@ -1,5 +1,6 @@
 use super::{
     BootRollback, CodecError, ForwardPhase, Operation, Phase, RollbackAction, RollbackPlan, TransitionRecord,
+    codec::PAYLOAD_VERSION,
     model::CandidateRollback,
     validation::{next_forward_phase, next_rollback_phase, rollback_action_phase, rollback_allowed, validate_advance},
 };
@@ -84,9 +85,10 @@ impl From<BootRepairOutcome> for BootRollback {
 }
 
 impl TransitionRecord {
-    /// Construct the only legal forward successor without exposing mutable
+    /// Construct an ordinary legal forward successor without exposing mutable
     /// record fields to the coordinator. A candidate ID is accepted only for
-    /// the durable `FreshStateAllocating -> FreshStateAllocated` boundary.
+    /// the durable `FreshStateAllocating -> FreshStateAllocated` boundary;
+    /// boot-publication entry uses its receipt-bearing constructor instead.
     pub(crate) fn forward_successor(&self, allocated_candidate_id: Option<i32>) -> Result<Self, CodecError> {
         self.validate()?;
         let current = self.phase.forward().ok_or(CodecError::IllegalPhaseAdvance {
@@ -94,6 +96,9 @@ impl TransitionRecord {
             next: self.phase,
         })?;
         let next_phase = next_forward_phase(self, current).ok_or(CodecError::TerminalPhaseAdvance)?;
+        if next_phase == ForwardPhase::BootSyncStarted {
+            return Err(CodecError::ExplicitBootSyncStartedSuccessorRequired);
+        }
         let allocation_completed =
             (current, next_phase) == (ForwardPhase::FreshStateAllocating, ForwardPhase::FreshStateAllocated);
         if !allocation_completed && allocated_candidate_id.is_some() {
@@ -106,6 +111,38 @@ impl TransitionRecord {
         if allocation_completed {
             next.candidate.id = allocated_candidate_id;
         }
+        validate_advance(self, &next)?;
+        Ok(next)
+    }
+
+    /// Enter boot publication while durably binding the exact committed and
+    /// pending receipt fingerprints. This is the sole v3 `None -> Some`
+    /// receipt-correlation edge; generic forward advancement cannot enter it.
+    pub(crate) fn boot_sync_started_successor(
+        &self,
+        receipts: crate::boot_publication::BootPublicationReceiptPair,
+    ) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.version != PAYLOAD_VERSION {
+            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(
+                self.version,
+            ));
+        }
+        let current = self.phase.forward().ok_or(CodecError::IllegalPhaseAdvance {
+            current: self.phase,
+            next: Phase::BootSyncStarted,
+        })?;
+        if next_forward_phase(self, current) != Some(ForwardPhase::BootSyncStarted) {
+            return Err(CodecError::IllegalPhaseAdvance {
+                current: self.phase,
+                next: Phase::BootSyncStarted,
+            });
+        }
+
+        let mut next = self.clone();
+        next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
+        next.phase = Phase::BootSyncStarted;
+        next.boot_publication_receipts = Some(receipts);
         validate_advance(self, &next)?;
         Ok(next)
     }
