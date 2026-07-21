@@ -7,13 +7,13 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            DurableUsrRollbackActiveReblitFinalizationRecord, UsrRollbackActiveReblitFinalizationError,
-            finalize_usr_rollback_active_reblit,
+            UsrRollbackActiveReblitFinalizationError, finalize_usr_rollback_active_reblit,
         },
     },
     transition_journal::{
         RollbackActionOutcome, arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
         assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
+        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
     },
 };
 
@@ -31,11 +31,12 @@ use super::{
 fn startup_active_reblit_finalization_restarts_from_retained_terminal_source_with_fresh_handles() {
     let mut fixture = build_active(
         Epoch::Current,
-        CandidateSource::Exchanged,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOrigin::AlreadySatisfied,
     );
     let terminal = persist_rollback_complete(&fixture, CandidateOrigin::Applied);
+    assert_eq!(terminal.generation, 14);
     install_persistent_database(&mut fixture);
     let journal = fixture.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
@@ -55,10 +56,12 @@ fn startup_active_reblit_finalization_restarts_from_retained_terminal_source_wit
     assert_delete_canonical_unlink_fault_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActiveReblitFinalizationError::Delete {
-            durable: DurableUsrRollbackActiveReblitFinalizationRecord::RollbackComplete,
-            ..
-        }
+        UsrRollbackActiveReblitFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::ExactSource,
+                ..
+            }
+        )
     ));
     assert_eq!(fixture.fixture.canonical_record(), terminal);
     assert_no_candidate_effects();
@@ -80,11 +83,12 @@ fn startup_active_reblit_finalization_restarts_from_retained_terminal_source_wit
 fn startup_active_reblit_finalization_restarts_from_observed_absence_with_fresh_handles() {
     let mut fixture = build_active(
         Epoch::Historical,
-        CandidateSource::Intent,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );
     let terminal = persist_rollback_complete(&fixture, CandidateOrigin::AlreadySatisfied);
+    assert_eq!(terminal.generation, 14);
     install_persistent_database(&mut fixture);
     let journal = fixture.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
@@ -104,10 +108,12 @@ fn startup_active_reblit_finalization_restarts_from_observed_absence_with_fresh_
     assert_delete_directory_sync_fault_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActiveReblitFinalizationError::Delete {
-            durable: DurableUsrRollbackActiveReblitFinalizationRecord::Absent,
-            ..
-        }
+        UsrRollbackActiveReblitFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::Absent,
+                ..
+            }
+        )
     ));
     assert_canonical_absent(&fixture.fixture.installation.root);
     assert_no_candidate_effects();

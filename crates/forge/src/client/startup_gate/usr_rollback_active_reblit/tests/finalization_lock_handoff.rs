@@ -14,7 +14,7 @@ use super::{
 fn startup_active_reblit_finalization_hands_the_same_lock_into_clean_startup_until_proof_drop() {
     let fixture = build_active(
         Epoch::Historical,
-        CandidateSource::Intent,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );

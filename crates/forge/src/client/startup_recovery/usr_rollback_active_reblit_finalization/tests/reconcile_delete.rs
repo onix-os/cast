@@ -1,4 +1,4 @@
-//! Defensive branches for delete reports that the real syscall path cannot deterministically produce.
+//! Production error mapping for classified bound-delete outcomes.
 
 use std::fs;
 
@@ -6,108 +6,97 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            DurableUsrRollbackActiveReblitFinalizationRecord, UsrRollbackActiveReblitFinalizationError,
-            UsrRollbackActiveReblitFinalizationVerificationError,
-            arm_after_usr_rollback_active_reblit_finalization_delete, finalize_usr_rollback_active_reblit,
+            UsrRollbackActiveReblitFinalizationError,
+            arm_after_usr_rollback_active_reblit_finalization_delete,
+            finalize_usr_rollback_active_reblit,
         },
     },
     transition_journal::{
-        arm_next_delete_canonical_unlink_fault, assert_delete_canonical_unlink_fault_consumed, encode,
+        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
+        arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
+        assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
     },
 };
 
-use super::{super::reconcile_delete, support::FinalizationFixture, test_fixture::canonical_journal};
+use super::support::FinalizationFixture;
 
 #[test]
-fn active_reblit_finalization_false_delete_report_classifies_exact_source() {
+fn active_reblit_finalization_preserves_exact_source_bound_delete_error() {
     let fixture = FinalizationFixture::new();
     let journal = fixture.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
     let authority = fixture.capture_ready(&journal, &reservation);
-    let installation = fixture.fixture.fixture.installation.clone();
-
-    let error = reconcile_delete(Ok(false), journal, authority, &installation, fixture.terminal.clone()).unwrap_err();
-
-    assert!(matches!(
-        error,
-        UsrRollbackActiveReblitFinalizationError::DeleteReportedFalse {
-            durable: DurableUsrRollbackActiveReblitFinalizationRecord::RollbackComplete,
-        }
-    ));
-    assert_eq!(fixture.fixture.fixture.canonical_record(), fixture.terminal);
-}
-
-#[test]
-fn active_reblit_finalization_false_delete_report_classifies_authenticated_absence() {
-    let fixture = FinalizationFixture::new();
-    let journal = fixture.open_journal();
-    let reservation = ActiveStateReservation::acquire().unwrap();
-    let authority = fixture.capture_ready(&journal, &reservation);
-    let installation = fixture.fixture.fixture.installation.clone();
-    let canonical = canonical_journal(&installation.root);
-    let journal_directory = fs::File::open(canonical.parent().unwrap()).unwrap();
-    fs::remove_file(&canonical).unwrap();
-    journal_directory.sync_all().unwrap();
-
-    let error = reconcile_delete(Ok(false), journal, authority, &installation, fixture.terminal.clone()).unwrap_err();
-
-    assert!(matches!(
-        error,
-        UsrRollbackActiveReblitFinalizationError::DeleteReportedFalse {
-            durable: DurableUsrRollbackActiveReblitFinalizationRecord::Absent,
-        }
-    ));
-    assert!(!canonical_journal(&installation.root).exists());
-}
-
-#[test]
-fn active_reblit_finalization_false_delete_report_rejects_an_unexpected_record() {
-    let fixture = FinalizationFixture::new();
-    let journal = fixture.open_journal();
-    let reservation = ActiveStateReservation::acquire().unwrap();
-    let authority = fixture.capture_ready(&journal, &reservation);
-    let installation = fixture.fixture.fixture.installation.clone();
-    fs::write(
-        canonical_journal(&installation.root),
-        encode(&fixture.preterminal).unwrap(),
-    )
-    .unwrap();
-
-    let error = reconcile_delete(Ok(false), journal, authority, &installation, fixture.terminal.clone()).unwrap_err();
-
-    assert!(matches!(
-        error,
-        UsrRollbackActiveReblitFinalizationError::DeleteReportedFalseAndVerification {
-            source: UsrRollbackActiveReblitFinalizationVerificationError::UnexpectedRecord { actual: Some(_), .. },
-        }
-    ));
-    assert_eq!(fixture.fixture.fixture.canonical_record(), fixture.preterminal);
-}
-
-#[test]
-fn active_reblit_finalization_delete_error_preserves_ambiguous_verification() {
-    let fixture = FinalizationFixture::new();
-    let journal = fixture.open_journal();
-    let reservation = ActiveStateReservation::acquire().unwrap();
-    let authority = fixture.capture_ready(&journal, &reservation);
-    let canonical = canonical_journal(&fixture.fixture.fixture.installation.root);
-    let unexpected = fixture.preterminal.clone();
-    let encoded = encode(&unexpected).unwrap();
     arm_next_delete_canonical_unlink_fault();
-    arm_after_usr_rollback_active_reblit_finalization_delete(move || fs::write(canonical, encoded).unwrap());
 
     let error = finalize_usr_rollback_active_reblit(journal, authority).unwrap_err();
 
     assert_delete_canonical_unlink_fault_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActiveReblitFinalizationError::DeleteAndVerification {
-            verification: UsrRollbackActiveReblitFinalizationVerificationError::UnexpectedRecord {
-                actual: Some(_),
+        UsrRollbackActiveReblitFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::ExactSource,
+                ..
+            }
+        )
+    ));
+    assert_eq!(fixture.fixture.fixture.canonical_record(), fixture.terminal);
+}
+
+#[test]
+fn active_reblit_finalization_preserves_absent_bound_delete_error() {
+    let fixture = FinalizationFixture::new();
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let authority = fixture.capture_ready(&journal, &reservation);
+    arm_next_delete_directory_sync_fault();
+
+    let error = finalize_usr_rollback_active_reblit(journal, authority).unwrap_err();
+
+    assert_delete_directory_sync_fault_consumed();
+    assert!(matches!(
+        error,
+        UsrRollbackActiveReblitFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::Absent,
+                ..
+            }
+        )
+    ));
+    assert!(
+        !fixture
+            .fixture
+            .fixture
+            .installation
+            .root
+            .join(".cast/journal/state-transition")
+            .exists()
+    );
+}
+
+#[test]
+fn active_reblit_finalization_preserves_absent_error_when_post_delete_evidence_also_changes() {
+    let fixture = FinalizationFixture::new();
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let authority = fixture.capture_ready(&journal, &reservation);
+    let root_link = fixture.fixture.fixture.installation.root.join("bin");
+    arm_next_delete_directory_sync_fault();
+    arm_after_usr_rollback_active_reblit_finalization_delete(move || {
+        fs::remove_file(root_link).unwrap();
+    });
+
+    let error = finalize_usr_rollback_active_reblit(journal, authority).unwrap_err();
+
+    assert_delete_directory_sync_fault_consumed();
+    assert!(matches!(
+        error,
+        UsrRollbackActiveReblitFinalizationError::DeleteAndPostDeleteAuthority {
+            delete: TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::Absent,
                 ..
             },
             ..
         }
     ));
-    assert_eq!(fixture.fixture.fixture.canonical_record(), unexpected);
 }

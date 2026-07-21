@@ -182,11 +182,6 @@ pub(in crate::client) use usr_rollback_active_reblit_boot_repair_required::{
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_unverified::DurableUsrRollbackActiveReblitBootRepairUnverifiedRecord;
 
 #[cfg(test)]
-pub(in crate::client) use usr_rollback_active_reblit_finalization::{
-    DurableUsrRollbackActiveReblitFinalizationRecord, UsrRollbackActiveReblitFinalizationVerificationError,
-};
-
-#[cfg(test)]
 pub(in crate::client) use usr_rollback_activate_archived_complete_route::{
     DurableUsrRollbackActivateArchivedCompleteRouteRecord,
     UsrRollbackActivateArchivedCompleteRouteSuccessorBindingError,
@@ -257,7 +252,6 @@ pub(crate) use usr_rollback_complete_route::arm_before_usr_rollback_complete_rou
 #[cfg(test)]
 pub(crate) use usr_rollback_active_reblit_finalization::{
     arm_after_usr_rollback_active_reblit_finalization_delete,
-    arm_before_usr_rollback_active_reblit_finalization_final_durable_inspection,
     arm_before_usr_rollback_active_reblit_finalization_final_revalidation,
 };
 

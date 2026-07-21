@@ -15,15 +15,15 @@ const USR_OUTCOMES: [RollbackActionOutcome; 2] =
     [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied];
 
 #[test]
-fn startup_active_reblit_finalization_covers_all_sixteen_exact_terminal_cases_and_both_wrapper_indices() {
+fn startup_active_reblit_finalization_covers_all_twenty_four_exact_terminal_cases_and_both_wrapper_indices() {
     assert_eq!(Epoch::ALL.len(), 2);
-    assert_eq!(CandidateSource::ALL.len(), 2);
+    assert_eq!(CandidateSource::THROUGH_ROLLBACK_COMPLETE.len(), 3);
     assert_eq!(USR_OUTCOMES.len(), 2);
     assert_eq!(CandidateOrigin::ALL.len(), 2);
     assert_eq!(WRAPPER_INDICES, [0, WRAPPER_INDEX]);
     let mut cases = 0;
     for epoch in Epoch::ALL {
-        for source in CandidateSource::ALL {
+        for source in CandidateSource::THROUGH_ROLLBACK_COMPLETE {
             for usr_outcome in USR_OUTCOMES {
                 for candidate_outcome in CandidateOrigin::ALL {
                     let wrapper_index = match epoch {
@@ -56,5 +56,5 @@ fn startup_active_reblit_finalization_covers_all_sixteen_exact_terminal_cases_an
             }
         }
     }
-    assert_eq!(cases, 16);
+    assert_eq!(cases, 24);
 }

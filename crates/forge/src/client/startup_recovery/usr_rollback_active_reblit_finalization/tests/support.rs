@@ -16,7 +16,6 @@ use super::{
 
 pub(super) struct FinalizationFixture {
     pub(super) fixture: CandidatePreserveFixture,
-    pub(super) preterminal: TransitionRecord,
     pub(super) terminal: TransitionRecord,
 }
 
@@ -24,27 +23,24 @@ impl FinalizationFixture {
     pub(super) fn new() -> Self {
         let fixture = CandidatePreserveFixture::new(
             OperationKind::ActiveReblit,
-            CandidateSource::Intent,
+            CandidateSource::RootLinksComplete,
             RollbackActionOutcome::Applied,
             CandidateLayout::Preserved,
         )
         .with_active_reblit_wrapper_index(13);
-        let preterminal = fixture
+        let preserved = fixture
             .candidate_intent
             .rollback_successor(Some(RollbackActionOutcome::Applied))
             .unwrap();
-        assert_eq!(preterminal.phase, Phase::CandidatePreserved);
-        let terminal = preterminal.rollback_successor(None).unwrap();
+        assert_eq!(preserved.phase, Phase::CandidatePreserved);
+        let terminal = preserved.rollback_successor(None).unwrap();
         assert_eq!(terminal.phase, Phase::RollbackComplete);
+        assert_eq!(terminal.generation, 14);
         let journal = fixture.open_journal();
-        journal.advance(&fixture.candidate_intent, &preterminal).unwrap();
-        journal.advance(&preterminal, &terminal).unwrap();
+        journal.advance(&fixture.candidate_intent, &preserved).unwrap();
+        journal.advance(&preserved, &terminal).unwrap();
         drop(journal);
-        Self {
-            fixture,
-            preterminal,
-            terminal,
-        }
+        Self { fixture, terminal }
     }
 
     pub(super) fn open_journal(&self) -> TransitionJournalStore {
@@ -67,7 +63,7 @@ impl FinalizationFixture {
         )
         .unwrap();
         let UsrRollbackActiveReblitFinalizationAdmission::Ready(authority) = admission else {
-            panic!("exact terminal ActiveReblit evidence did not admit finalization");
+            panic!("exact generation-14 RootLinks ActiveReblit terminal did not admit finalization");
         };
         authority
     }

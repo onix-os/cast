@@ -30,7 +30,7 @@ use super::{
 fn startup_active_reblit_finalization_refuses_wrong_database_and_provenance_evidence() {
     let missing = build_active(
         Epoch::Current,
-        CandidateSource::Exchanged,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOrigin::AlreadySatisfied,
     );
@@ -54,7 +54,7 @@ fn startup_active_reblit_finalization_refuses_wrong_database_and_provenance_evid
 
     let no_provenance = build_active(
         Epoch::Historical,
-        CandidateSource::Intent,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );
@@ -81,7 +81,7 @@ fn startup_active_reblit_finalization_refuses_wrong_database_and_provenance_evid
 fn startup_active_reblit_finalization_rejects_capture_and_final_pre_evidence_races() {
     let capture_database = build_active(
         Epoch::Current,
-        CandidateSource::Intent,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOrigin::AlreadySatisfied,
     );
@@ -103,7 +103,7 @@ fn startup_active_reblit_finalization_rejects_capture_and_final_pre_evidence_rac
 
     let capture_namespace = build_active(
         Epoch::Historical,
-        CandidateSource::Exchanged,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );
@@ -131,7 +131,7 @@ fn startup_active_reblit_finalization_rejects_capture_and_final_pre_evidence_rac
 
     let final_journal = build_active(
         Epoch::Current,
-        CandidateSource::Exchanged,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOrigin::AlreadySatisfied,
     );
@@ -163,7 +163,7 @@ fn startup_active_reblit_finalization_rejects_capture_and_final_pre_evidence_rac
 
     let final_namespace = build_active(
         Epoch::Historical,
-        CandidateSource::Intent,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );
@@ -193,7 +193,7 @@ fn startup_active_reblit_finalization_rejects_database_and_provenance_changes_at
     for provenance in [false, true] {
         let fixture = build_active(
             Epoch::Current,
-            CandidateSource::Intent,
+            CandidateSource::RootLinksComplete,
             RollbackActionOutcome::Applied,
             CandidateOrigin::AlreadySatisfied,
         );
@@ -221,7 +221,7 @@ fn startup_active_reblit_finalization_rejects_database_and_provenance_changes_at
     for provenance in [false, true] {
         let fixture = build_active(
             Epoch::Historical,
-            CandidateSource::Intent,
+            CandidateSource::RootLinksComplete,
             RollbackActionOutcome::AlreadySatisfied,
             CandidateOrigin::AlreadySatisfied,
         );
@@ -248,7 +248,7 @@ fn startup_active_reblit_finalization_rejects_database_and_provenance_changes_at
 
     let fixture = build_active(
         Epoch::Current,
-        CandidateSource::Exchanged,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOrigin::AlreadySatisfied,
     );

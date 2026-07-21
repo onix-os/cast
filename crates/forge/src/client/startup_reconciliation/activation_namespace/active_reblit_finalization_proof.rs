@@ -10,7 +10,9 @@
 
 use crate::{
     Installation,
-    transition_journal::{StorageError, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::{
@@ -37,9 +39,10 @@ impl UsrRollbackActiveReblitFinalizationNamespaceInspection {
     pub(in crate::client::startup_reconciliation) fn begin(
         installation: &Installation,
         journal: &TransitionJournalStore,
+        binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<Self, UsrRollbackActiveReblitFinalizationNamespaceError> {
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
         let before = capture_snapshot(installation, expected)?;
         let wrapper_index = require_exact_active_reblit_rollback_complete_topology(expected, &before)?;
         Ok(Self { before, wrapper_index })
@@ -49,6 +52,7 @@ impl UsrRollbackActiveReblitFinalizationNamespaceInspection {
         self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<UsrRollbackActiveReblitFinalizationNamespaceProof, UsrRollbackActiveReblitFinalizationNamespaceError>
     {
@@ -58,7 +62,7 @@ impl UsrRollbackActiveReblitFinalizationNamespaceInspection {
         require_matching_fingerprints(&self.before, &after)?;
         require_exact_wrapper_index(expected, &self.before, self.wrapper_index)?;
         require_exact_wrapper_index(expected, &after, self.wrapper_index)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
         installation.revalidate_mutable_namespace()?;
         Ok(UsrRollbackActiveReblitFinalizationNamespaceProof {
             before: self.before,
@@ -73,6 +77,7 @@ impl UsrRollbackActiveReblitFinalizationNamespaceProof {
         &self,
         installation: &Installation,
         journal: &TransitionJournalStore,
+        binding: &TransitionJournalRecordBinding,
         expected: &TransitionRecord,
     ) -> Result<(), UsrRollbackActiveReblitFinalizationNamespaceError> {
         installation.revalidate_mutable_namespace()?;
@@ -81,7 +86,7 @@ impl UsrRollbackActiveReblitFinalizationNamespaceProof {
         require_matching_fingerprints(&self.before, &self.after)?;
         require_exact_wrapper_index(expected, &self.before, self.wrapper_index)?;
         require_exact_wrapper_index(expected, &self.after, self.wrapper_index)?;
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
 
         run_before_fresh_namespace_capture();
         let fresh = capture_snapshot(installation, expected)?;
@@ -89,7 +94,7 @@ impl UsrRollbackActiveReblitFinalizationNamespaceProof {
         require_matching_fingerprints(&self.before, &fresh)?;
         require_exact_wrapper_index(expected, &fresh, self.wrapper_index)?;
 
-        require_exact_journal(journal, expected)?;
+        require_exact_journal(installation, journal, binding, expected)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
@@ -175,12 +180,19 @@ fn require_matching_fingerprints(
 }
 
 fn require_exact_journal(
+    installation: &Installation,
     journal: &TransitionJournalStore,
+    binding: &TransitionJournalRecordBinding,
     expected: &TransitionRecord,
 ) -> Result<(), UsrRollbackActiveReblitFinalizationNamespaceError> {
-    match journal.load()? {
-        Some(actual) if actual == *expected => Ok(()),
-        Some(_) | None => Err(UsrRollbackActiveReblitFinalizationNamespaceError::JournalChanged),
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackActiveReblitFinalizationNamespaceError::JournalChanged);
+    }
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.has_record_binding(cast, binding, expected)? {
+        Ok(())
+    } else {
+        Err(UsrRollbackActiveReblitFinalizationNamespaceError::JournalChanged)
     }
 }
 

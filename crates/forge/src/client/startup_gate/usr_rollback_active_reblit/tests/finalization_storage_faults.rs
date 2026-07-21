@@ -4,13 +4,13 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            DurableUsrRollbackActiveReblitFinalizationRecord, UsrRollbackActiveReblitFinalizationError,
-            finalize_usr_rollback_active_reblit,
+            UsrRollbackActiveReblitFinalizationError, finalize_usr_rollback_active_reblit,
         },
     },
     transition_journal::{
         RollbackActionOutcome, arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
         assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
+        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
     },
 };
 
@@ -26,24 +26,24 @@ use super::{
 struct DeleteFault {
     arm: fn(),
     assert_consumed: fn(),
-    durable: DurableUsrRollbackActiveReblitFinalizationRecord,
+    state: TransitionJournalRecordDeleteState,
 }
 
 const DELETE_FAULTS: [DeleteFault; 2] = [
     DeleteFault {
         arm: arm_next_delete_canonical_unlink_fault,
         assert_consumed: assert_delete_canonical_unlink_fault_consumed,
-        durable: DurableUsrRollbackActiveReblitFinalizationRecord::RollbackComplete,
+        state: TransitionJournalRecordDeleteState::ExactSource,
     },
     DeleteFault {
         arm: arm_next_delete_directory_sync_fault,
         assert_consumed: assert_delete_directory_sync_fault_consumed,
-        durable: DurableUsrRollbackActiveReblitFinalizationRecord::Absent,
+        state: TransitionJournalRecordDeleteState::Absent,
     },
 ];
 
 #[test]
-fn startup_active_reblit_finalization_classifies_both_terminal_delete_faults_and_converges() {
+fn startup_active_reblit_finalization_preserves_both_bound_delete_faults_and_converges_on_restart() {
     for fault in DELETE_FAULTS {
         let fixture = build_active(
             Epoch::Current,
@@ -66,17 +66,18 @@ fn startup_active_reblit_finalization_classifies_both_terminal_delete_faults_and
         assert!(
             matches!(
                 error,
-                UsrRollbackActiveReblitFinalizationError::Delete { durable, .. }
-                    if durable == fault.durable
+                UsrRollbackActiveReblitFinalizationError::Delete(
+                    TransitionJournalRecordDeleteError::Storage { state, .. }
+                ) if state == fault.state
             ),
-            "expected durable {:?}, got {error:?}",
-            fault.durable
+            "expected bound-delete state {:?}, got {error:?}",
+            fault.state
         );
-        match fault.durable {
-            DurableUsrRollbackActiveReblitFinalizationRecord::RollbackComplete => {
+        match fault.state {
+            TransitionJournalRecordDeleteState::ExactSource => {
                 assert_eq!(fixture.fixture.canonical_record(), terminal);
             }
-            DurableUsrRollbackActiveReblitFinalizationRecord::Absent => {
+            TransitionJournalRecordDeleteState::Absent => {
                 assert_canonical_absent(&fixture.fixture.installation.root);
             }
         }

@@ -10,18 +10,22 @@ use std::{
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
+        startup_reconciliation::arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture,
         startup_recovery::{
-            UsrRollbackActiveReblitFinalizationError, UsrRollbackActiveReblitFinalizationVerificationError,
+            UsrRollbackActiveReblitFinalizationError,
             arm_after_usr_rollback_active_reblit_finalization_delete,
-            arm_before_usr_rollback_active_reblit_finalization_final_durable_inspection,
             arm_before_usr_rollback_active_reblit_finalization_final_revalidation, finalize_usr_rollback_active_reblit,
         },
     },
-    transition_journal::{RollbackActionOutcome, StorageError, encode},
+    transition_journal::{
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError,
+        TransitionJournalRecordDeleteError, arm_public_binding_revalidation_callback,
+        assert_public_binding_revalidation_callback_consumed, encode,
+    },
 };
 
 use super::{
-    super::candidate_test_support::CandidateSource,
+    super::candidate_test_support::{CandidatePreserveFixture, CandidateSource},
     support::{
         CandidateOrigin, Epoch, assert_no_candidate_effects, build_active, capture_finalization_ready,
         persist_rollback_complete, reset_candidate_effect_observers,
@@ -38,12 +42,7 @@ enum Timing {
 fn startup_active_reblit_finalization_rejects_public_directory_and_lock_substitution() {
     for timing in [Timing::BeforeDelete, Timing::AfterDelete] {
         for directory in [true, false] {
-            let fixture = build_active(
-                Epoch::Current,
-                CandidateSource::Intent,
-                RollbackActionOutcome::Applied,
-                CandidateOrigin::AlreadySatisfied,
-            );
+            let fixture = exact_route();
             let terminal = persist_rollback_complete(&fixture, CandidateOrigin::Applied);
             let journal = fixture.open_journal();
             let reservation = ActiveStateReservation::acquire().unwrap();
@@ -77,12 +76,7 @@ fn startup_active_reblit_finalization_rejects_public_directory_and_lock_substitu
 #[test]
 fn startup_active_reblit_finalization_rejects_hidden_entry_set_substitution() {
     for timing in [Timing::BeforeDelete, Timing::AfterDelete] {
-        let fixture = build_active(
-            Epoch::Historical,
-            CandidateSource::Intent,
-            RollbackActionOutcome::AlreadySatisfied,
-            CandidateOrigin::AlreadySatisfied,
-        );
+        let fixture = exact_route();
         let terminal = persist_rollback_complete(&fixture, CandidateOrigin::AlreadySatisfied);
         let journal = fixture.open_journal();
         let reservation = ActiveStateReservation::acquire().unwrap();
@@ -115,13 +109,61 @@ fn startup_active_reblit_finalization_rejects_hidden_entry_set_substitution() {
 }
 
 #[test]
-fn startup_active_reblit_finalization_rejects_source_recreation_after_delete_and_after_absence_proof() {
-    let fixture = build_active(
-        Epoch::Current,
-        CandidateSource::Exchanged,
-        RollbackActionOutcome::Applied,
-        CandidateOrigin::AlreadySatisfied,
+fn startup_active_reblit_finalization_bound_delete_never_unlinks_a_last_seam_replacement() {
+    let fixture = exact_route();
+    let terminal = persist_rollback_complete(&fixture, CandidateOrigin::Applied);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let authority = capture_finalization_ready(&fixture, &journal, &reservation, &terminal);
+    let root = &fixture.fixture.installation.root;
+    let canonical = root.join(".cast/journal/state-transition");
+    let displaced = fixture
+        .fixture
+        .installation
+        .state_quarantine_dir()
+        .join("active-reblit-finalization-retained-original");
+    let exact_bytes = fs::read(&canonical).unwrap();
+    let hook_canonical = canonical.clone();
+    let hook_displaced = displaced.clone();
+    let hook_bytes = exact_bytes.clone();
+    arm_public_binding_revalidation_callback(
+        PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach,
+        move || {
+            fs::rename(&hook_canonical, &hook_displaced).unwrap();
+            write_new_private_file(&hook_canonical, &hook_bytes);
+        },
     );
+    reset_candidate_effect_observers();
+
+    let error = finalize_usr_rollback_active_reblit(journal, authority).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(
+        error,
+        UsrRollbackActiveReblitFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Detached(StorageError::CanonicalChanged)
+        )
+    ));
+    assert_eq!(fs::read(displaced).unwrap(), exact_bytes);
+    assert!(!canonical.exists());
+    let retained_replacements = fs::read_dir(root.join(".cast/journal"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".state-transition.delete-")
+        })
+        .map(|entry| fs::read(entry.path()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(retained_replacements, vec![exact_bytes]);
+    assert_no_candidate_effects();
+}
+
+#[test]
+fn startup_active_reblit_finalization_rejects_source_recreation_after_delete_and_absence_proof() {
+    let fixture = exact_route();
     let terminal = persist_rollback_complete(&fixture, CandidateOrigin::Applied);
     let journal = fixture.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
@@ -135,38 +177,42 @@ fn startup_active_reblit_finalization_rejects_source_recreation_after_delete_and
 
     assert!(matches!(
         recreated,
-        UsrRollbackActiveReblitFinalizationError::DeleteSucceededButRecordPresent
+        UsrRollbackActiveReblitFinalizationError::PostDeleteAuthority(_)
     ));
     assert_eq!(fixture.fixture.canonical_record(), terminal);
     drop(reservation);
 
-    let fixture = build_active(
-        Epoch::Historical,
-        CandidateSource::Intent,
-        RollbackActionOutcome::AlreadySatisfied,
-        CandidateOrigin::AlreadySatisfied,
-    );
-    let terminal = persist_rollback_complete(&fixture, CandidateOrigin::AlreadySatisfied);
+    let fixture = exact_route();
+    let terminal = persist_rollback_complete(&fixture, CandidateOrigin::Applied);
     let journal = fixture.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
     let authority = capture_finalization_ready(&fixture, &journal, &reservation, &terminal);
     let canonical = fixture.fixture.installation.root.join(".cast/journal/state-transition");
     let bytes = encode(&terminal).unwrap();
     reset_candidate_effect_observers();
-    arm_before_usr_rollback_active_reblit_finalization_final_durable_inspection(move || {
-        write_new_private_file(&canonical, &bytes)
+    arm_after_usr_rollback_active_reblit_finalization_delete(move || {
+        arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture(move || {
+            write_new_private_file(&canonical, &bytes)
+        });
     });
 
     let changed = finalize_usr_rollback_active_reblit(journal, authority).unwrap_err();
 
     assert!(matches!(
         changed,
-        UsrRollbackActiveReblitFinalizationError::PostDeleteVerification(
-            UsrRollbackActiveReblitFinalizationVerificationError::JournalChangedDuringVerification { .. }
-        )
+        UsrRollbackActiveReblitFinalizationError::PostDeleteAuthority(_)
     ));
     assert_eq!(fixture.fixture.canonical_record(), terminal);
     assert_no_candidate_effects();
+}
+
+fn exact_route() -> CandidatePreserveFixture {
+    build_active(
+        Epoch::Current,
+        CandidateSource::RootLinksComplete,
+        RollbackActionOutcome::Applied,
+        CandidateOrigin::AlreadySatisfied,
+    )
 }
 
 fn arm_at(timing: Timing, hook: impl FnOnce() + 'static) {
@@ -177,25 +223,9 @@ fn arm_at(timing: Timing, hook: impl FnOnce() + 'static) {
 }
 
 fn assert_binding_error(timing: Timing, error: &UsrRollbackActiveReblitFinalizationError, directory: bool) {
-    let expected = |source: &UsrRollbackActiveReblitFinalizationVerificationError| {
-        matches!(
-            source,
-            UsrRollbackActiveReblitFinalizationVerificationError::Journal(
-                StorageError::JournalDirectoryBindingChanged
-            ) if directory
-        ) || matches!(
-            source,
-            UsrRollbackActiveReblitFinalizationVerificationError::Journal(StorageError::JournalLockBindingChanged)
-                if !directory
-        )
-    };
     let matched = match (timing, error) {
-        (Timing::BeforeDelete, UsrRollbackActiveReblitFinalizationError::PreDeleteVerification(source)) => {
-            expected(source)
-        }
-        (Timing::AfterDelete, UsrRollbackActiveReblitFinalizationError::PostDeleteVerification(source)) => {
-            expected(source)
-        }
+        (Timing::BeforeDelete, UsrRollbackActiveReblitFinalizationError::Authority(_)) => true,
+        (Timing::AfterDelete, UsrRollbackActiveReblitFinalizationError::PostDeleteAuthority(_)) => true,
         _ => false,
     };
     assert!(matched, "timing={timing:?}, directory={directory}: {error:?}");
@@ -206,18 +236,10 @@ fn assert_entry_set_error(timing: Timing, error: &UsrRollbackActiveReblitFinaliz
         (timing, error),
         (
             Timing::BeforeDelete,
-            UsrRollbackActiveReblitFinalizationError::PreDeleteVerification(
-                UsrRollbackActiveReblitFinalizationVerificationError::Journal(
-                    StorageError::JournalEntrySetMismatch { .. }
-                )
-            )
+            UsrRollbackActiveReblitFinalizationError::Authority(_)
         ) | (
             Timing::AfterDelete,
-            UsrRollbackActiveReblitFinalizationError::PostDeleteVerification(
-                UsrRollbackActiveReblitFinalizationVerificationError::Journal(
-                    StorageError::JournalEntrySetMismatch { .. }
-                )
-            )
+            UsrRollbackActiveReblitFinalizationError::PostDeleteAuthority(_)
         )
     );
     assert!(matched, "timing={timing:?}: {error:?}");

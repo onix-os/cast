@@ -3,14 +3,16 @@
 //! This authority is deliberately disjoint from both the NewState terminal
 //! authority and the earlier ActiveReblit completion route. Admission retains
 //! the exact cleared existing-state row, immutable provenance, preserved
-//! whole-wrapper namespace and wrapper index, journal binding, installation,
-//! and active-state reservation through a binding-first DB -> namespace -> DB
-//! sandwich. It exposes no deletion or other mutable effect.
+//! whole-wrapper namespace and wrapper index, exact journal inode,
+//! installation, and active-state reservation through a binding-first
+//! DB -> namespace -> DB sandwich. Its only effect surface consumes that exact
+//! binding into one operation-specific terminal deletion attempt.
 
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
+        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
+        TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalRecordDeleteError,
         TransitionJournalStore, TransitionRecord,
     },
 };
@@ -37,6 +39,19 @@ pub(in crate::client) enum UsrRollbackActiveReblitFinalizationAdmission<'reserva
 /// finalizer may consume it, and successful absence consumes its terminal
 /// namespace proof.
 pub(in crate::client) struct UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: UsrRollbackActiveReblitFinalizationDatabaseEvidence,
+    namespace: UsrRollbackActiveReblitFinalizationNamespaceProof,
+    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+/// One-shot evidence retained after the exact record binding has been
+/// consumed by a deletion attempt. This type is intentionally not `Clone`.
+pub(in crate::client) struct UsrRollbackActiveReblitFinalizationAfterDeleteAuthority<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
@@ -80,10 +95,10 @@ impl<'reservation> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
             return Ok(UsrRollbackActiveReblitFinalizationAdmission::Deferred);
         }
 
+        installation.revalidate_mutable_namespace()?;
         let journal_binding = journal.binding();
-        if !journal.has_binding(&journal_binding) {
-            return Err(UsrRollbackActiveReblitFinalizationAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database(record, state_db)? {
@@ -93,12 +108,17 @@ impl<'reservation> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
             }
         };
         let namespace_inspection =
-            match UsrRollbackActiveReblitFinalizationNamespaceInspection::begin(installation, journal, record) {
+            match UsrRollbackActiveReblitFinalizationNamespaceInspection::begin(
+                installation,
+                journal,
+                &journal_record_binding,
+                record,
+            ) {
                 Ok(inspection) => inspection,
                 Err(_) => return Ok(UsrRollbackActiveReblitFinalizationAdmission::Deferred),
             };
         run_between_database_captures();
-        let namespace = match namespace_inspection.finish(installation, journal, record) {
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackActiveReblitFinalizationAdmission::Deferred),
         };
@@ -111,6 +131,7 @@ impl<'reservation> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
         if database_before != database_after || !active_reblit_finalization_plan_is_exact(record) {
             return Ok(UsrRollbackActiveReblitFinalizationAdmission::Deferred);
         }
+        require_journal_record_binding(journal, installation, &journal_record_binding, record)?;
 
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
@@ -122,6 +143,7 @@ impl<'reservation> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
             database: database_after,
             namespace,
             journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         }))
     }
@@ -131,22 +153,87 @@ impl<'reservation> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackActiveReblitFinalizationAuthorityError> {
-        if !journal.has_binding(&self.journal_binding) {
-            return Err(UsrRollbackActiveReblitFinalizationAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        require_journal_record_binding(
+            journal,
+            &self.installation,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
-        self.namespace.revalidate(&self.installation, journal, &self.record)?;
+        self.namespace.revalidate(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         let database_after =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if database_before != database_after || !active_reblit_finalization_plan_is_exact(&self.record) {
             return Err(UsrRollbackActiveReblitFinalizationAuthorityErrorKind::FinalizationEvidenceMismatch.into());
         }
+        require_journal_record_binding(
+            journal,
+            &self.installation,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
 
+    pub(in crate::client) fn attempt_record_bound_delete(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<
+        (
+            Result<(), TransitionJournalRecordDeleteError>,
+            UsrRollbackActiveReblitFinalizationAfterDeleteAuthority<'reservation>,
+        ),
+        UsrRollbackActiveReblitFinalizationAuthorityError,
+    > {
+        self.revalidate(journal)?;
+        let Self {
+            installation,
+            state_db,
+            record,
+            database,
+            namespace,
+            journal_binding,
+            journal_record_binding,
+            _active_state_reservation,
+        } = self;
+        let delete = journal.delete_record_binding(
+            installation.retained_mutable_cast_directory()?,
+            journal_record_binding,
+            &record,
+        );
+        Ok((
+            delete,
+            UsrRollbackActiveReblitFinalizationAfterDeleteAuthority {
+                installation,
+                state_db,
+                record,
+                database,
+                namespace,
+                journal_binding,
+                _active_state_reservation,
+            },
+        ))
+    }
+
+    pub(in crate::client) fn record(&self) -> &TransitionRecord {
+        &self.record
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn wrapper_index(&self) -> usize {
+        self.namespace.wrapper_index()
+    }
+}
+
+impl UsrRollbackActiveReblitFinalizationAfterDeleteAuthority<'_> {
     /// Consume this one-shot authority after terminal deletion and prove that
     /// its independent database and namespace evidence still describes the
     /// exact same ActiveReblit rollback result.
@@ -171,19 +258,6 @@ impl<'reservation> UsrRollbackActiveReblitFinalizationAuthority<'reservation> {
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
-
-    pub(in crate::client) fn installation(&self) -> &Installation {
-        &self.installation
-    }
-
-    pub(in crate::client) fn record(&self) -> &TransitionRecord {
-        &self.record
-    }
-
-    #[cfg(test)]
-    pub(in crate::client) fn wrapper_index(&self) -> usize {
-        self.namespace.wrapper_index()
-    }
 }
 
 /// Exact narrow plan accepted by ActiveReblit terminal finalization.
@@ -196,8 +270,9 @@ fn active_reblit_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
         && record.candidate.id.is_some()
         && record.candidate.id == record.previous.id
         && matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            (rollback.source, record.generation),
+            (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
+                | (ForwardPhase::RootLinksComplete, 14)
         )
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
@@ -212,6 +287,24 @@ fn active_reblit_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
         && rollback.fresh_db == RollbackAction::NotRequired
         && rollback.boot == BootRollback::NotRequired
         && rollback.external_effects_may_remain
+}
+
+fn require_journal_record_binding(
+    journal: &TransitionJournalStore,
+    installation: &Installation,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackActiveReblitFinalizationAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackActiveReblitFinalizationAuthorityErrorKind::JournalBindingMismatch.into());
+    }
+    installation.revalidate_mutable_namespace()?;
+    let cast = installation.retained_mutable_cast_directory()?;
+    if !journal.has_record_binding(cast, binding, record)? {
+        return Err(UsrRollbackActiveReblitFinalizationAuthorityErrorKind::JournalRecordBindingMismatch.into());
+    }
+    installation.revalidate_mutable_namespace()?;
+    Ok(())
 }
 
 /// Inspect the exact existing-state evidence around the general startup
@@ -300,10 +393,20 @@ impl From<crate::installation::Error> for UsrRollbackActiveReblitFinalizationAut
     }
 }
 
+impl From<StorageError> for UsrRollbackActiveReblitFinalizationAuthorityError {
+    fn from(source: StorageError) -> Self {
+        UsrRollbackActiveReblitFinalizationAuthorityErrorKind::Journal(source).into()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackActiveReblitFinalizationAuthorityErrorKind {
     #[error("ActiveReblit rollback-finalization authority was paired with a different open journal store")]
     JournalBindingMismatch,
+    #[error("the exact retained ActiveReblit terminal journal inode no longer matches its captured binding")]
+    JournalRecordBindingMismatch,
+    #[error("authenticate the exact retained ActiveReblit terminal journal inode")]
+    Journal(#[source] StorageError),
     #[error("exact ActiveReblit RollbackComplete evidence no longer authorizes finalization")]
     FinalizationEvidenceMismatch,
     #[error("inspect ActiveReblit rollback-finalization startup database context")]

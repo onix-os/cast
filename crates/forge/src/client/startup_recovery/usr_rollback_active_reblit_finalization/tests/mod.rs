@@ -1,4 +1,4 @@
-//! Defensive executor-local contracts for ActiveReblit terminal finalization.
+//! Direct same-store ActiveReblit bound-delete error contracts.
 
 #[allow(dead_code)]
 #[path = "../../../startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs"]

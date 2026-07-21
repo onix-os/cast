@@ -78,7 +78,8 @@ pub(in crate::client) use usr_rollback_active_reblit_complete_route_authority::{
     UsrRollbackActiveReblitCompleteRouteAuthorityError, UsrRollbackActiveReblitCompleteRouteRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_finalization_authority::{
-    UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
+    UsrRollbackActiveReblitFinalizationAdmission,
+    UsrRollbackActiveReblitFinalizationAfterDeleteAuthority, UsrRollbackActiveReblitFinalizationAuthority,
     UsrRollbackActiveReblitFinalizationAuthorityError,
 };
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
