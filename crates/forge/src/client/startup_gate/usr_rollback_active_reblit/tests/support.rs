@@ -41,7 +41,7 @@ use crate::{
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
     transition_journal::{
         AbortDisposition, BootRepairOutcome, BootRollback, ForwardPhase, Operation, Phase, RollbackAction,
-        RollbackActionOutcome, TransitionJournalStore, TransitionRecord, decode,
+        RollbackActionOutcome, TransitionJournalStore, TransitionRecord, decode, encode,
     },
 };
 
@@ -173,6 +173,40 @@ pub(super) fn build_boot_sync_started(epoch: Epoch, layout: BootSyncStartedLayou
     assert_eq!(fixture.source.phase, Phase::BootSyncStarted);
     assert_eq!(fixture.source.generation, 11);
     BootRepairFixture { fixture }
+}
+
+/// Recreate an already-existing v1/v2 BootSyncStarted checkpoint. This is test
+/// evidence for the conservative legacy route, not a production downgrade or
+/// a way for a pre-boot legacy record to enter boot synchronization.
+pub(super) fn build_legacy_boot_sync_started(
+    epoch: Epoch,
+    layout: BootSyncStartedLayout,
+    version: u16,
+) -> BootRepairFixture {
+    let mut fixture = build_boot_sync_started(epoch, layout);
+    assert!(matches!(version, 1 | 2));
+    let committed = fixture
+        .fixture
+        .source
+        .boot_publication_receipt_correlation()
+        .unwrap()
+        .unwrap()
+        .committed;
+    fixture.fixture.source.version = version;
+    fixture.fixture.source.boot_publication_receipts = None;
+    let legacy_source = fixture.fixture.source.clone();
+    fs::write(
+        fixture.fixture.installation.root.join(".cast/journal/state-transition"),
+        encode(&legacy_source).unwrap(),
+    )
+    .unwrap();
+    fixture
+        .fixture
+        .database
+        .replace_boot_publication_receipt_head_for_test(committed, None)
+        .unwrap();
+    assert_eq!(fixture.fixture.canonical_record(), legacy_source);
+    fixture
 }
 
 pub(super) fn expected_candidate_preserved(
@@ -788,6 +822,20 @@ pub(super) fn install_persistent_boot_database(fixture: &mut BootRepairFixture) 
         .insert_fresh_metadata_provenance_if_transition_matches(candidate, transition, &provenance)
         .unwrap();
     database.clear_transition_if_matches(candidate, transition).unwrap();
+    let receipts = fixture
+        .fixture
+        .source
+        .boot_publication_receipt_correlation()
+        .unwrap()
+        .expect("v3 BootSyncStarted fixture carries receipt correlation");
+    if receipts.committed.is_some() {
+        database
+            .replace_boot_publication_receipt_head_for_test(receipts.committed, None)
+            .unwrap();
+    }
+    database
+        .stage_boot_publication_receipt_pair(transition, &receipts)
+        .unwrap();
     let old = std::mem::replace(&mut fixture.fixture.database, database);
     drop(old);
 }

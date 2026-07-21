@@ -13,7 +13,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_active_reblit::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'boot_repair_required_.*: test$$' "$$listed" )" = 7; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'boot_repair_required_.*: test$$' "$$listed" )" = 9; \
 	for name in \
 		boot_repair_required_authority_binding::startup_active_reblit_boot_repair_required_authority_rejects_reopened_and_cross_root_journal_bindings \
 		boot_repair_required_evidence_races::startup_active_reblit_boot_repair_required_rejects_database_provenance_journal_and_namespace_races \
@@ -21,6 +21,8 @@ forge-startup-active-reblit-boot-repair-required-test: \
 		boot_repair_required_exclusions::startup_active_reblit_boot_repair_required_physical_pre_layout_defers_without_mutation \
 		boot_repair_required_matrix::startup_active_reblit_boot_repair_required_covers_current_historical_applied_and_already_satisfied \
 		boot_repair_required_prefix_boundaries::startup_active_reblit_boot_repair_required_prefix_boundaries_are_exact_and_effect_free \
+		boot_repair_required_receipt_correlation::startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preserves_legacy_route \
+		boot_repair_required_receipt_correlation::startup_active_reblit_boot_repair_required_rejects_receipt_races_and_corruption_without_effects \
 		boot_repair_required_storage_faults::startup_active_reblit_boot_repair_required_all_five_journal_faults_converge_fresh_without_boot; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
@@ -41,7 +43,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	fixture=crates/forge/src/client/startup_recovery/test_support.rs; \
 	boot_worker=crates/forge/src/client/boot.rs; \
 	tests=crates/forge/src/client/startup_gate/usr_rollback_active_reblit/tests; \
-	for module in boot_repair_required_authority_binding boot_repair_required_evidence_races boot_repair_required_exclusions boot_repair_required_matrix boot_repair_required_prefix_boundaries boot_repair_required_storage_faults; do \
+	for module in boot_repair_required_authority_binding boot_repair_required_evidence_races boot_repair_required_exclusions boot_repair_required_matrix boot_repair_required_prefix_boundaries boot_repair_required_receipt_correlation boot_repair_required_storage_faults; do \
 		timeout 10s grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
 	timeout 10s grep -Fqx 'mod usr_rollback_active_reblit_boot_repair_required_authority;' "$$reconciliation_root"; \
@@ -53,7 +55,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	for predicate in usr_rollback_decision_source_is_supported_for_test usr_rollback_resume_route_plan_is_exact_for_test usr_rollback_reverse_plan_is_exact_for_test usr_rollback_candidate_preserve_plan_is_exact_for_test; do \
 		timeout 10s grep -Fq "$$predicate" "$$focused_exports"; \
 	done; \
-	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests"/boot_repair_required_*.rs | timeout 10s wc -l )" = 7; \
+	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests"/boot_repair_required_*.rs | timeout 10s wc -l )" = 9; \
 	timeout 10s grep -Fq 'UsrRollbackActiveReblitBootRepairRequiredSeal,' "$$gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackActiveReblitBootRepairRequiredSeal {' "$$orchestrator"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackActiveReblitBootRepairRequiredAuthority::capture(' "$$orchestrator" )" = 1; \
@@ -68,7 +70,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	ordinary_capture_line="$$( timeout 10s grep -nF 'UsrRollbackActiveReblitCompleteRouteAuthority::capture(' <<<"$$candidate_arm" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$boot_persist_line" -lt "$$boot_return_line"; \
 	timeout 10s test "$$boot_return_line" -lt "$$ordinary_capture_line"; \
-	if timeout 10s rg -n 'boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete' <<<"$$candidate_arm"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n 'boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt_pair' <<<"$$candidate_arm"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'record.operation != Operation::ActiveReblit || record.phase != Phase::CandidatePreserved' "$$authority"; \
 	timeout 10s grep -Fq 'rollback.source == ForwardPhase::BootSyncStarted' "$$authority"; \
 	timeout 10s grep -Fq 'rollback.previous_archive == RollbackAction::NotRequired' "$$authority"; \
@@ -89,6 +91,12 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 10s grep -Fq 'if !journal.has_binding(&journal_binding)' "$$authority"; \
 	timeout 10s grep -Fq 'let database_before = match inspect_current_database(record, state_db)? {' "$$authority"; \
 	timeout 10s grep -Fq 'let database_after = match inspect_current_database(record, state_db)? {' "$$authority"; \
+	grep -Fq 'let receipt_head = state_db.boot_publication_receipt_head()?;' "$$authority"; \
+	grep -Fq 'record.boot_publication_receipt_correlation()?' "$$authority"; \
+	grep -Fq 'receipt_head.receipt_pair_for(&record.transition_id) == Some(pair)' "$$authority"; \
+	grep -Fq 'None if receipt_head.pending().is_none()' "$$authority"; \
+	grep -Fq 'ReadyAuthenticated' "$$authority"; \
+	grep -Fq 'ReadyLegacyUnverified' "$$authority"; \
 	timeout 10s grep -Fq 'UsrRollbackActiveReblitBootRepairRequiredNamespaceInspection::begin(installation, journal, record)' "$$authority"; \
 	timeout 10s grep -Fq 'database_before != database_after' "$$authority"; \
 	timeout 10s grep -Fq 'database_ownership_evidence_compatible(record, evidence)' "$$authority"; \
@@ -109,7 +117,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	reopen_line="$$( timeout 10s grep -nF 'reopen_canonical_journal(&installation)' <<<"$$handoff" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$drop_authority_line" -lt "$$drop_journal_line"; \
 	timeout 10s test "$$drop_journal_line" -lt "$$reopen_line"; \
-	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|remove_exact_fresh_transition|renameat|unlink|mkdir|create_dir|set_permissions|chmod|Phase::BootRepair(Started|Unverified)' "$$authority" "$$proof" "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -n '^[[:space:]]*(loop|while)[[:space:]]|^[[:space:]]*for[[:space:]].*[[:space:]]in[[:space:]]|boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt_pair|remove_exact_fresh_transition|renameat|unlink|mkdir|create_dir|set_permissions|chmod|Phase::BootRepair(Started|Unverified)' "$$authority" "$$proof" "$$executor"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n '#\[derive\([^]]*Clone' "$$authority" "$$proof"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete' "$$complete_authority"; \
 	timeout 10s grep -Fq 'rollback.boot == BootRollback::NotRequired' "$$complete_authority"; \
@@ -123,6 +131,15 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 10s grep -Fq 'build_boot_sync_started(epoch, BootSyncStartedLayout::Post)' "$$tests/boot_repair_required_matrix.rs"; \
 	timeout 10s grep -Fq 'assert_eq!(fixture.source.generation, 11);' "$$tests/support.rs"; \
 	timeout 10s grep -Fq 'Phase::BootSyncStarted' "$$fixture"; \
+	grep -Fq 'stage_boot_publication_receipt_pair(&record.transition_id, &receipts)' "$$fixture"; \
+	grep -Fq 'record.boot_sync_started_successor(receipts)' "$$fixture"; \
+	receipt_tests="$$tests/boot_repair_required_receipt_correlation.rs"; \
+	for mismatch in MissingPending WrongTransition WrongPending WrongCommitted; do grep -Fq "ReceiptMismatch::$$mismatch" "$$receipt_tests"; done; \
+	grep -Fq 'ReadyLegacyUnverified' "$$receipt_tests"; \
+	grep -Fq 'arm_between_usr_rollback_active_reblit_boot_repair_required_database_captures' "$$receipt_tests"; \
+	grep -Fq 'arm_before_usr_rollback_active_reblit_boot_repair_required_final_revalidation' "$$receipt_tests"; \
+	grep -Fq 'replace_boot_publication_receipt_head_raw_for_test' "$$receipt_tests"; \
+	grep -Fq 'delete_boot_publication_receipt_head_for_test' "$$receipt_tests"; \
 	prefix_boundaries="$$tests/boot_repair_required_prefix_boundaries.rs"; \
 	timeout 10s grep -Fq 'build_boot_sync_started(Epoch::Current, BootSyncStartedLayout::Post)' "$$prefix_boundaries"; \
 	timeout 10s grep -Fq 'build_boot_sync_started(Epoch::Historical, BootSyncStartedLayout::Pre)' "$$prefix_boundaries"; \

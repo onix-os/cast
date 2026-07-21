@@ -3,6 +3,15 @@
 forge-boot-publication-receipt-head-test:
 	@set -euo pipefail; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	shared_prefix='boot_publication::tests::'; \
+	test "$$( grep -c "^$$shared_prefix.*: test$$" <<<"$$listed" )" = 4; \
+	for name in \
+		receipt_fingerprint_uses_one_canonical_lowercase_hex_encoding \
+		receipt_fingerprint_accepts_zero_and_rejects_every_noncanonical_shape \
+		receipt_pair_is_strict_and_round_trips_both_committed_states \
+		binary_receipt_fingerprint_requires_exactly_thirty_two_bytes; do \
+		grep -Fqx "$$shared_prefix$$name: test" <<<"$$listed"; \
+	done; \
 	prefix='db::state::boot_publication_receipt_head::tests::'; \
 	test "$$( grep -c "^$$prefix.*: test$$" <<<"$$listed" )" = 15; \
 	for name in \
@@ -24,10 +33,13 @@ forge-boot-publication-receipt-head-test:
 		grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
 	for file in \
+		crates/forge/src/boot_publication.rs \
+		crates/forge/src/boot_publication/tests.rs \
 		crates/forge/src/db/state/boot_publication_receipt_head.rs \
 		crates/forge/src/db/state/boot_publication_receipt_head/tests.rs \
 		crates/forge/src/db/state/boot_publication_receipt_head/tests/*.rs \
 		misc/make/boot-publication-receipt-head-tests.mk; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
+	$(CARGO) test -p forge --lib "$$shared_prefix" -- --test-threads=1; \
 	$(CARGO) test -p forge --lib "$$prefix" -- --test-threads=1

@@ -50,7 +50,7 @@ fn startup_active_reblit_boot_repair_required_authority_rejects_reopened_and_cro
         &record,
     )
     .unwrap();
-    let UsrRollbackActiveReblitBootRepairRequiredAdmission::Ready(authority) = admission else {
+    let UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyAuthenticated(authority) = admission else {
         panic!("exact source-root CandidatePreserved boot evidence did not admit required routing");
     };
     assert_eq!(authority.wrapper_index(), WRAPPER_INDEX);

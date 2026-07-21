@@ -1,6 +1,7 @@
 use std::fs;
 
 use crate::{
+    boot_publication::{BootPublicationReceiptFingerprint, BootPublicationReceiptPair},
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{UsrRollbackCompleteRouteAdmission, fresh_db_invalidation_removal_call_count},
@@ -93,6 +94,10 @@ fn startup_usr_rollback_complete_route_defers_inexact_phase_plan_and_non_absent_
     rollback.previous_archive = RollbackAction::AlreadySatisfied;
     rollback.boot = BootRollback::PendingUnverifiable;
     rollback.external_effects_may_remain = true;
+    boot_repair.boot_publication_receipts = Some(BootPublicationReceiptPair {
+        committed: None,
+        pending: BootPublicationReceiptFingerprint::from_bytes([0x52; 32]),
+    });
     assert_eq!(
         boot_repair.rollback_successor(None).unwrap().phase,
         Phase::BootRepairRequired

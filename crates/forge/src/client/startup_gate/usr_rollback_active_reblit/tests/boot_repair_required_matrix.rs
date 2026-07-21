@@ -21,6 +21,11 @@ fn startup_active_reblit_boot_repair_required_covers_current_historical_applied_
                 reset_boot_synchronize_observer();
                 let preserved =
                     drive_boot_sync_started_to_candidate_preserved(&fixture, usr_outcome, candidate_outcome);
+                let receipts = preserved
+                    .boot_publication_receipt_correlation()
+                    .unwrap()
+                    .expect("v3 boot source retains receipt correlation");
+                assert_eq!(receipts.committed.is_some(), epoch == Epoch::Historical);
                 let expected = expected_boot_repair_required(&preserved);
                 let database_before = fixture.fixture.database_snapshot();
                 let namespace_before = fixture.fixture.namespace_snapshot();

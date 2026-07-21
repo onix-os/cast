@@ -12,8 +12,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalBinding,
-        TransitionJournalStore, TransitionRecord,
+        AbortDisposition, BootRollback, CodecError, ForwardPhase, Operation, Phase, RollbackAction,
+        TransitionJournalBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -31,7 +31,11 @@ use super::{
 pub(in crate::client) enum UsrRollbackActiveReblitBootRepairRequiredAdmission<'reservation> {
     NotApplicable,
     Deferred,
-    Ready(UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservation>),
+    /// A v3 record is correlated to the exact pending state-database receipt.
+    ReadyAuthenticated(UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservation>),
+    /// A v1/v2 record carries no receipt and may take only the existing
+    /// journal-only route toward conservative unverified recovery.
+    ReadyLegacyUnverified(UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservation>),
 }
 
 /// Retained evidence authorizing only the next journal-only boot-repair route.
@@ -50,11 +54,22 @@ pub(in crate::client) struct UsrRollbackActiveReblitBootRepairRequiredAuthority<
 #[derive(Debug, Eq, PartialEq)]
 struct UsrRollbackActiveReblitBootRepairRequiredDatabaseEvidence {
     context: DatabaseEvidence,
+    receipt_head: db::state::BootPublicationReceiptHead,
+    receipt_correlation: BootPublicationReceiptCorrelation,
 }
 
 enum DatabaseInspection {
     Exact(UsrRollbackActiveReblitBootRepairRequiredDatabaseEvidence),
-    Incompatible(DatabaseEvidence),
+    Incompatible {
+        context: DatabaseEvidence,
+        receipt_head: db::state::BootPublicationReceiptHead,
+    },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum BootPublicationReceiptCorrelation {
+    Authenticated,
+    LegacyUnverified,
 }
 
 impl<'reservation> UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservation> {
@@ -87,7 +102,7 @@ impl<'reservation> UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservati
 
         let database_before = match inspect_current_database(record, state_db)? {
             DatabaseInspection::Exact(database) => database,
-            DatabaseInspection::Incompatible(_) => {
+            DatabaseInspection::Incompatible { .. } => {
                 return Ok(UsrRollbackActiveReblitBootRepairRequiredAdmission::Deferred);
             }
         };
@@ -103,7 +118,7 @@ impl<'reservation> UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservati
         };
         let database_after = match inspect_current_database(record, state_db)? {
             DatabaseInspection::Exact(database) => database,
-            DatabaseInspection::Incompatible(_) => {
+            DatabaseInspection::Incompatible { .. } => {
                 return Ok(UsrRollbackActiveReblitBootRepairRequiredAdmission::Deferred);
             }
         };
@@ -114,7 +129,7 @@ impl<'reservation> UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservati
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
         installation.revalidate_mutable_namespace()?;
-        Ok(UsrRollbackActiveReblitBootRepairRequiredAdmission::Ready(Self {
+        let admission = Self {
             installation: installation.clone(),
             state_db: retained_state_db,
             record: record.clone(),
@@ -122,7 +137,15 @@ impl<'reservation> UsrRollbackActiveReblitBootRepairRequiredAuthority<'reservati
             namespace,
             journal_binding,
             _active_state_reservation: active_state_reservation,
-        }))
+        };
+        Ok(match &admission.database.receipt_correlation {
+            BootPublicationReceiptCorrelation::Authenticated => {
+                UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyAuthenticated(admission)
+            }
+            BootPublicationReceiptCorrelation::LegacyUnverified => {
+                UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyLegacyUnverified(admission)
+            }
+        })
     }
 
     /// Revalidate the exact binding-first DB -> namespace -> DB sandwich.
@@ -194,12 +217,27 @@ fn inspect_current_database(
 ) -> Result<DatabaseInspection, UsrRollbackActiveReblitBootRepairRequiredAuthorityError> {
     let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
     let context = inspect_database(record, state_db, in_flight)?;
-    if active_reblit_database_pair_is_exact(record, &context) {
+    let receipt_head = state_db.boot_publication_receipt_head()?;
+    let receipt_correlation = match record.boot_publication_receipt_correlation()? {
+        Some(pair) if receipt_head.receipt_pair_for(&record.transition_id) == Some(pair) => {
+            Some(BootPublicationReceiptCorrelation::Authenticated)
+        }
+        None if receipt_head.pending().is_none() => Some(BootPublicationReceiptCorrelation::LegacyUnverified),
+        Some(_) | None => None,
+    };
+    if active_reblit_database_pair_is_exact(record, &context) && receipt_correlation.is_some() {
         Ok(DatabaseInspection::Exact(
-            UsrRollbackActiveReblitBootRepairRequiredDatabaseEvidence { context },
+            UsrRollbackActiveReblitBootRepairRequiredDatabaseEvidence {
+                context,
+                receipt_head,
+                receipt_correlation: receipt_correlation.expect("checked exact receipt correlation"),
+            },
         ))
     } else {
-        Ok(DatabaseInspection::Incompatible(context))
+        Ok(DatabaseInspection::Incompatible {
+            context,
+            receipt_head,
+        })
     }
 }
 
@@ -241,9 +279,13 @@ fn require_exact_database(
         DatabaseInspection::Exact(_) => {
             Err(UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::DatabaseChanged.into())
         }
-        DatabaseInspection::Incompatible(evidence) => Err(
+        DatabaseInspection::Incompatible {
+            context,
+            receipt_head,
+        } => Err(
             UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::DatabaseIncompatible {
-                evidence: Box::new(evidence),
+                evidence: Box::new(context),
+                receipt_head: Box::new(receipt_head),
             }
             .into(),
         ),
@@ -259,6 +301,20 @@ pub(in crate::client) struct UsrRollbackActiveReblitBootRepairRequiredAuthorityE
 impl From<InspectionError> for UsrRollbackActiveReblitBootRepairRequiredAuthorityError {
     fn from(source: InspectionError) -> Self {
         UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::Inspection(source).into()
+    }
+}
+
+impl From<db::state::BootPublicationReceiptHeadError>
+    for UsrRollbackActiveReblitBootRepairRequiredAuthorityError
+{
+    fn from(source: db::state::BootPublicationReceiptHeadError) -> Self {
+        UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::ReceiptHead(source).into()
+    }
+}
+
+impl From<CodecError> for UsrRollbackActiveReblitBootRepairRequiredAuthorityError {
+    fn from(source: CodecError) -> Self {
+        UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::Record(source).into()
     }
 }
 
@@ -284,12 +340,21 @@ enum UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind {
     RouteEvidenceMismatch,
     #[error("inspect ActiveReblit boot-repair-required startup database context")]
     Inspection(#[source] InspectionError),
+    #[error("inspect exact ActiveReblit boot-publication receipt head")]
+    ReceiptHead(#[source] db::state::BootPublicationReceiptHeadError),
+    #[error("validate ActiveReblit boot-publication receipt correlation in the journal")]
+    Record(#[source] CodecError),
     #[error("revalidate the independent ActiveReblit boot-repair-required namespace proof")]
     Namespace(#[source] UsrRollbackActiveReblitBootRepairRequiredNamespaceError),
     #[error("revalidate retained mutable installation namespace around ActiveReblit boot-repair-required routing")]
     Installation(#[source] crate::installation::Error),
-    #[error("ActiveReblit boot-repair-required database context is incompatible: {evidence:?}")]
-    DatabaseIncompatible { evidence: Box<DatabaseEvidence> },
+    #[error(
+        "ActiveReblit boot-repair-required database context or receipt correlation is incompatible: context={evidence:?}, receipt_head={receipt_head:?}"
+    )]
+    DatabaseIncompatible {
+        evidence: Box<DatabaseEvidence>,
+        receipt_head: Box<db::state::BootPublicationReceiptHead>,
+    },
     #[error("ActiveReblit boot-repair-required database evidence changed across its DB -> namespace -> DB sandwich")]
     DatabaseChanged,
 }

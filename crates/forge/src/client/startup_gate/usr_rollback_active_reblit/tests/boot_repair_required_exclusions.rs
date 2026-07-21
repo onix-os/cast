@@ -169,7 +169,8 @@ fn assert_boot_ready(
     .unwrap();
     assert!(matches!(
         admission,
-        UsrRollbackActiveReblitBootRepairRequiredAdmission::Ready(_)
+        UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyAuthenticated(_)
+            | UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyLegacyUnverified(_)
     ));
 }
 
@@ -191,7 +192,8 @@ fn assert_boot_refused(
     .unwrap();
     assert!(!matches!(
         admission,
-        UsrRollbackActiveReblitBootRepairRequiredAdmission::Ready(_)
+        UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyAuthenticated(_)
+            | UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyLegacyUnverified(_)
     ));
 }
 

@@ -179,7 +179,13 @@ pub(super) fn dispatch<'reservation>(
                 active_state_reservation,
                 &record,
             )?;
-            if let UsrRollbackActiveReblitBootRepairRequiredAdmission::Ready(authority) = boot_repair {
+            // Both variants authorize only the existing journal edge to
+            // BootRepairRequired. A future publisher or boot mutator must use
+            // a separate authenticated authority that cannot carry legacy
+            // evidence.
+            if let UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyAuthenticated(authority)
+            | UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyLegacyUnverified(authority) = boot_repair
+            {
                 let (journal, record) =
                     persist_usr_rollback_active_reblit_boot_repair_required_and_reopen(journal, authority)?;
                 return Ok(Dispatch::Handled { journal, record });

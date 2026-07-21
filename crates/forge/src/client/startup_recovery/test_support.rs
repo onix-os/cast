@@ -9,11 +9,12 @@ use std::{
 
 use crate::{
     Installation, State, db,
+    boot_publication::{BootPublicationReceiptFingerprint, BootPublicationReceiptPair},
     state::{self, TransitionId},
     test_support::private_installation_tempdir,
     transition_journal::{
-        AbortDisposition, BootId, BootRollback, CandidateRollback, ForwardPhase, MountNamespaceIdentity, Operation,
-        Phase, Previous, PreviousOrigin, QuarantineName, RollbackAction, RollbackPlan, RuntimeEpoch,
+        AbortDisposition, BootId, BootRollback, CandidateRollback, CodecError, ForwardPhase, MountNamespaceIdentity,
+        Operation, Phase, Previous, PreviousOrigin, QuarantineName, RollbackAction, RollbackPlan, RuntimeEpoch,
         RuntimeTreeIdentity, TransitionJournalStore, TransitionRecord, TreeToken, decode,
     },
     tree_marker::TreeMarkerStore,
@@ -235,7 +236,14 @@ impl Fixture {
             QuarantineName::parse("failed-startup-rollback-decision").unwrap(),
         )
         .unwrap();
-        let source_record = persist_source_record(&installation, preparing, source_phase, candidate_state);
+        let source_record = persist_source_record(
+            &installation,
+            &database,
+            preparing,
+            source_phase,
+            candidate_state,
+            historical,
+        );
 
         let system = MutableSystemCapabilities::from_test_parts(
             &MutableSystemCapabilitiesTestSeal::new(),
@@ -390,6 +398,7 @@ impl Fixture {
                 .transition_ownership(self.previous_state, &self.source.transition_id)
                 .unwrap(),
             previous_provenance: self.database.metadata_provenance(self.previous_state).unwrap(),
+            boot_publication_receipt_head: self.database.boot_publication_receipt_head().unwrap(),
         }
     }
 
@@ -419,6 +428,7 @@ pub(super) struct DatabaseSnapshot {
     candidate_provenance: Option<db::state::MetadataProvenance>,
     previous_ownership: db::state::TransitionOwnership,
     previous_provenance: Option<db::state::MetadataProvenance>,
+    boot_publication_receipt_head: db::state::BootPublicationReceiptHead,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -552,20 +562,44 @@ pub(super) fn exchange_usr_layout(root: &Path) {
 
 fn persist_source_record(
     installation: &Installation,
+    database: &db::state::Database,
     mut record: TransitionRecord,
     target: Phase,
     candidate: state::Id,
+    historical: bool,
 ) -> TransitionRecord {
     let store = TransitionJournalStore::open_retained(installation.root_directory(), &installation.root).unwrap();
     store.create(&record).unwrap();
     while record.phase != target {
         let allocated = (record.phase == Phase::FreshStateAllocating).then_some(candidate.into());
-        let next = record.forward_successor(allocated).unwrap();
+        let next = match record.forward_successor(allocated) {
+            Ok(next) => next,
+            Err(CodecError::ExplicitBootSyncStartedSuccessorRequired) => {
+                let receipts = boot_publication_receipts(historical);
+                if receipts.committed.is_some() {
+                    database
+                        .replace_boot_publication_receipt_head_for_test(receipts.committed, None)
+                        .unwrap();
+                }
+                database
+                    .stage_boot_publication_receipt_pair(&record.transition_id, &receipts)
+                    .unwrap();
+                record.boot_sync_started_successor(receipts).unwrap()
+            }
+            Err(error) => panic!("fixture forward successor failed: {error}"),
+        };
         store.advance(&record, &next).unwrap();
         record = next;
     }
     drop(store);
     record
+}
+
+fn boot_publication_receipts(historical: bool) -> BootPublicationReceiptPair {
+    BootPublicationReceiptPair {
+        committed: historical.then_some(BootPublicationReceiptFingerprint::from_bytes([0x22; 32])),
+        pending: BootPublicationReceiptFingerprint::from_bytes([0x11; 32]),
+    }
 }
 
 fn snapshot_directory(root: &Path, directory: &Path, output: &mut Vec<NamespaceEntry>) {

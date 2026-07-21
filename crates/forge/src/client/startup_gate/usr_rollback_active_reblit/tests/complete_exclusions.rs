@@ -3,6 +3,7 @@
 use std::fs;
 
 use crate::{
+    boot_publication::{BootPublicationReceiptFingerprint, BootPublicationReceiptPair},
     client::{startup_gate, startup_reconciliation::RecoveryBlocker},
     transition_journal::{BootRollback, ForwardPhase, Phase, RollbackAction, RollbackActionOutcome, encode},
 };
@@ -95,6 +96,10 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
     assert_eq!(rollback.previous_archive, RollbackAction::NotRequired);
     rollback.boot = BootRollback::PendingUnverifiable;
     rollback.external_effects_may_remain = true;
+    inexact.boot_publication_receipts = Some(BootPublicationReceiptPair {
+        committed: None,
+        pending: BootPublicationReceiptFingerprint::from_bytes([0x51; 32]),
+    });
     assert_eq!(
         inexact.rollback_successor(None).unwrap().phase,
         Phase::BootRepairRequired
