@@ -97,6 +97,35 @@ persistent build-space and inode headroom before compilation, keep bounded
 evidence separate from disposable build artifacts, and fail before launching
 the outer unit rather than attempting a cross-tmpfs relocation after pressure.
 
+At exact commit `99c66ada1ae33fa9918066dec2f445032cfe2a97`, the approved
+persistent UEFI Ubuntu VM completed the required `all` selection without a
+capability skip. The repository's canonical validator accepted the regular,
+caller-owned, mode-`0644`, single-link v2 receipt from a clean checkout. It
+records 28 fixtures, 56 executions, 84 bundle validations, 134 Stones, 56
+manifests, and 190 artifacts totaling 1,396,417 bytes. Every fixture retained
+identical first/repeat plans and derivation IDs, a written-then-unchanged exact
+build lock, published-then-reused outcomes, and three identical bundle-ledger
+observations.
+
+The userspace-profile fixture emitted one 470-byte empty-root Stone. Its two
+plans have the same derivation ID
+`7ad3cc4c32d148d946ebc739fe0e5ee86889ea3fe92bb5cc4628c0c549654d6b`;
+its decoded expectations prove exactly `bash`, `uutils-coreutils`, `findutils`,
+`ca-certificates`, and `xz` as runtime relations. The receipt is 103,612 bytes
+with SHA-256
+`e50e1f6f156a2bcd9747d5686b8994d7ad1e636747099e28afdd2148e5f1b532`.
+The mode-`0600` execution log is 485,372 bytes with SHA-256
+`f6ba0046a1cc17762b6aae5eb85047b025a6c702c61b525c88cdc57d3712629f`.
+
+The enclosing system service exited successfully. Its cleanup restored linger
+to `no` and `kernel.apparmor_restrict_unprivileged_userns` to `1`; no
+`/dev/vdb` mount, fixture unit, or fixture process remained, and the checkout
+was clean at the exact tested commit. Copies of the receipt and log are kept in
+the host checkout's ignored `target/fixture-evidence/vm-99c66ada/` directory.
+This proves delegated package execution and deterministic reproduction. It is
+not ESP/BOOT publication, activation, rollback, reboot, power-loss, or signed
+remote-attestation evidence.
+
 ## Runtime containment contract
 
 Accepted runtime commit `249b5c8b` replaces the equal nested deadlines exposed
@@ -126,16 +155,16 @@ status caps are respectively 18,665 and 22,215 seconds.
 
 An explicitly shorter outer deadline remains valid for bounded fault-injection
 and cleanup tests. It deliberately may expire before the requested inner
-runtime and therefore cannot produce accepted complete-campaign evidence.
-The full twenty-eight-fixture campaign and its v2 receipt still require a clean,
-non-skipped rerun from an accepted commit on a capacity-proven persistent
-guest; that rerun has not yet occurred.
+runtime and therefore cannot produce accepted complete-campaign evidence. The
+successful twenty-eight-fixture campaign above stayed within the accepted
+hierarchy on a capacity-proven persistent guest.
 
 ## Acceptance rule
 
-Only one complete, non-skipped `make fixtures-ci` run from the accepted commit
-may publish the bounded v2 receipt described in the canonical checklist. The
-receipt must cover both executions of every selected fixture, every decoded
-bundle and manifest, and the exact cross-run artifact ledgers. Focused tests,
-host-side builds, a production preflight, or an incomplete matrix remain
-diagnostics rather than substitutes for that evidence.
+Only one complete, non-skipped `make fixtures-ci` run from its exact accepted
+commit may publish the bounded v2 receipt described in the canonical
+checklist. The accepted receipt above covers both executions of every selected
+fixture, every decoded bundle and manifest, and the exact cross-run artifact
+ledgers. Focused tests, host-side builds, a production preflight, or an
+incomplete matrix remain diagnostics rather than substitutes for that
+evidence.

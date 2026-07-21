@@ -574,7 +574,8 @@ The matrix inventory, frozen closure, live-run history, evidence rules, and
 current blocker are indexed by the
 [delegated fixture execution subplan](docs/plans/delegated-fixture-execution.md).
 Offline source, lock, and planning proofs are not contentful execution proof;
-the live items below remain open until a non-skipped required run proves them.
+the live items below were closed only by the non-skipped required run recorded
+with its bounded receipt below.
 
 - [x] Maintain a checked corpus covering CMake, Meson, Cargo, Autotools,
   custom steps, hooks, feature functions, argument and attribute overrides,
@@ -614,7 +615,7 @@ the live items below remain open until a non-skipped required run proves them.
   index, freezes an empty-phase execution topology, and installs strict bundle,
   manifest, relation, and reproduction expectations without adding a source
   lock or host tool.
-- [ ] On a supported delegated host, emit and decode its empty-root `out`
+- [x] On a supported delegated host, emit and decode its empty-root `out`
   Stone, prove its exact five-package runtime relation set, and attach the
   byte-identical locked replan/rebuild evidence. A capability skip is not
   execution proof.
@@ -630,14 +631,14 @@ the live items below remain open until a non-skipped required run proves them.
   executable through uniquely owned symlink hops inside the exact frozen
   closure. Missing or ambiguous handoffs and provider metadata without its
   promised entry point fail closed.
-- [ ] Actually configure, compile, check, install, analyze, package, and publish
+- [x] Actually configure, compile, check, install, analyze, package, and publish
   at least one hermetic fixture for each standard builder: CMake, Meson, Cargo,
   and Autotools. Also execute one honest custom-step fixture and one native
   split-output fixture containing an executable, shared library, development
   files, pkg-config metadata, documentation, and a man page. Also execute both
   source-less generated payloads and the explicit plugin-output relation; install
   their exact bytes without a hidden source or link-time dependency.
-- [ ] Decode each emitted fixture bundle and prove the expected metadata,
+- [x] Decode each emitted fixture bundle and prove the expected metadata,
   layout, index, content, output relations, modes, and manifest membership.
   Rebuild from the unchanged source and build locks and require byte-identical
   plans, derivation IDs, Stone files, and manifests before accepting reuse.
@@ -652,15 +653,15 @@ the live items below remain open until a non-skipped required run proves them.
   v2 receipt: 56 executions, 84 bundle validations, 134 Stones, 56 manifests, and 190
   artifacts, with repeated plans, locks, publication outcomes, digests, and ledgers.
   Exact validation rejects drift; focused tests do not substitute for live execution.
-  Accepted runtime commit `249b5c8b` sets preflight, named-fixture, `all`, and outer
-  service limits to 30, 7,200, 14,400, and 21,600 seconds; `all` is capped at 18,000.
-  Status is runtime plus twice kill-after, a five/sixty/ten-second client margin, and
-  five seconds: defaults are 50, 7,325, 14,525, and 21,675 seconds; inner/outer caps
-  are 18,665/22,215. Shorter outer limits are only fault/cleanup tests, not run proof.
-  At exact commit `10d51fb9`, the disposable NixOS VM completed both runs for 19/26
-  fixtures; `hooks-patch` passed twice, while `multiple-sources` passed once with nine
-  Stones before its second run hit the former two-hour limit. A clean `7b3770b1` rerun
-  proved the new budgets but filled the live-root tmpfs during pre-fixture compilation: zero fixtures ran, no receipt was published, and a cross-tmpfs recovery caused OOM service loss without disk modification or reboot. The three live items remain open pending a capacity-proven persistent guest.
+  Runtime budgets and earlier campaign history remain in the linked subplan. At
+  exact commit `99c66ada`, a persistent UEFI Ubuntu VM completed the required
+  all-fixture campaign without a skip. The canonical validator accepted every
+  exact total, identical plans, lock bytes, ledgers, Stones, and manifests, plus
+  required published-then-reused outcomes. Live decoded-bundle assertions proved
+  the userspace profile's empty-root Stone and five relations. Cleanup left no
+  fixture unit, process, or test-disk mount;
+  hashes and the complete record are in the subplan. This proves package
+  execution, not ESP/BOOT, activation, rollback, reboot, or power-loss behavior.
   CI covers `develop`, matching the required untouched-`main` integration workflow.
 
 **Exit gate:** every example is checked and frozen through public production
