@@ -2,6 +2,7 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
     match name {
         "backend-choice-factory" => documented_variants::assert_semantics(declaration, plan),
         "explicit-git-subprojects" => documented_git_subprojects::assert_semantics(declaration, plan),
+        "explicit-interpreter-suite" => documented_interpreter_suite::assert_semantics(declaration, plan),
         "explicit-package-scope" => documented_scopes::assert_semantics(declaration, plan),
         "explicit-package-set-extension" => documented_composition::assert_package_set_extension(declaration, plan),
         "factory-override" => assert_factory_override_semantics(declaration, plan),
@@ -822,4 +823,5 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
     }
 
     assert_factory_override_changes_frozen_identity(&matrix);
+    documented_interpreter_suite::assert_source_and_import_invalidation(&matrix);
 }

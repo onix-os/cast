@@ -88,6 +88,7 @@ needed by a declarative userspace.
 | [`binary-release`](packages/binary-release/stone.glu) | An architecture-specific prebuilt archive with an explicit install contract. |
 | [`platform-binary-factory`](packages/platform-binary-factory/stone.glu) | An explicit platform record selecting a prebuilt archive, target, and runtime loader without host discovery. |
 | [`raw-script-package`](packages/raw-script-package/stone.glu) | A single locked, renamed, non-archive source installed with an explicit interpreter relation. |
+| [`explicit-interpreter-suite`](packages/explicit-interpreter-suite/stone.glu) | Source-less Bash and Python commands whose inert shebang tokens are explicitly replaced, checked, and retained as exact runtime relations. |
 | [`cmake`](packages/cmake/stone.glu) | CMake flags, checks, and typed build dependencies. |
 | [`meson`](packages/meson/stone.glu) | Meson configuration and pkg-config dependencies. |
 | [`cargo`](packages/cargo/stone.glu) | An offline Cargo build with features and explicit binaries. |

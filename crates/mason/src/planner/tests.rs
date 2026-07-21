@@ -51,7 +51,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 59] = [
+const PACKAGE_EXAMPLES: [&str; 60] = [
     "autotools",
     "backend-choice-factory",
     "binary-release",
@@ -63,6 +63,7 @@ const PACKAGE_EXAMPLES: [&str; 59] = [
     "dependency-roles",
     "desktop-application",
     "explicit-git-subprojects",
+    "explicit-interpreter-suite",
     "explicit-package-scope",
     "explicit-package-set-extension",
     "external-patch-source",
@@ -226,6 +227,8 @@ mod documented_dependencies;
 mod documented_generated;
 #[path = "tests/documented_semantics/git_subprojects.rs"]
 mod documented_git_subprojects;
+#[path = "tests/documented_semantics/interpreter_suite.rs"]
+mod documented_interpreter_suite;
 #[path = "tests/documented_semantics/outputs.rs"]
 mod documented_outputs;
 #[path = "tests/documented_semantics/overrides.rs"]
