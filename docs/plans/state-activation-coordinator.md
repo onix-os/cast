@@ -597,9 +597,30 @@ closure remain authoritative in `PLAN.md`.
   predecessor or successor where possible and otherwise fail stop. The boundary
   remains intentionally unwired; existing v1/v2 records retain their
   conservative route. Caller provenance claims are not authenticated effect
-  authority. Promotion, publisher, actual repair, aggregate/live wiring,
-  mutation/deletion authority, successful dispatch, real-publication VM
-  evidence, reboot, and power-loss proof remain open.
+  authority. Accepted commit `4d1f8ceb` adds the high-level receipt-bound
+  aggregate publication attempt, and exact commit `12f888e11e95b640da75c745841d0aa118f471a4`
+  proves that path on disposable GPT ESP/XBOOTLDR storage in the UEFI VM for
+  both alias and distinct layouts. Every canonical output was initially
+  `Published` and, after sync, unmount, read-only filesystem checks, and
+  remount, a fresh deterministic invocation classified every output
+  `AlreadyExact`. That campaign proves ordered immutable aggregate publication
+  and remount persistence, not same-receipt continuity or boot completion.
+  Accepted commit `323f776e1121a0173338a312d67d371e2cd33439` adds the separate
+  database-only pending-to-committed receipt boundary. An ordinary strict read
+  returns exact already-promoted retries without taking an exclusive lock;
+  pending state is revalidated inside one exclusive transaction before one
+  conditional singleton-head update. Both canonical bodies and the immediate
+  predecessor remain mandatory through terminal and post-commit
+  reconciliation. A genuine deferred-foreign-key COMMIT failure is rolled back
+  through Diesel's transaction manager, classified as exact durable pending,
+  and followed successfully by another promotion on the same database handle.
+  The focused Make gate passes 14/14 tests. This primitive remains unwired and
+  grants no aggregate-result, journal, filesystem, publication, deletion,
+  cleanup, or `BootSyncComplete` authority. The next boundary must consume
+  authenticated terminal aggregate evidence before it may invoke promotion;
+  journal persistence to `BootSyncComplete`, same-receipt startup recovery,
+  actual repair, replacement/deletion authority, selected-payload bootability,
+  reboot, and power-loss proof remain open.
   At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable
   UEFI guest passed the focused receipt/staging Make lane with its declared
   dependencies, all 12 receipt-database tests, and all 9 production staging
