@@ -23,9 +23,10 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 		grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
 	staging_prefix='client::active_reblit_boot_sync_staging::tests::'; \
-	test "$$( grep -Ec "^$$staging_prefix.*: test$$" <<<"$$listed" )" = 12; \
+	test "$$( grep -Ec "^$$staging_prefix.*: test$$" <<<"$$listed" )" = 13; \
 	for name in \
 		success_derives_and_stages_exact_receipt_then_retains_successor_binding \
+		fresh_view_retains_the_exact_original_bound_plan_and_inventory \
 		fresh_revalidation_rejects_a_mixed_client_before_reading_effect_evidence \
 		fresh_revalidation_rejects_successor_inode_drift_without_boot_effects \
 		fresh_revalidation_rejects_pending_body_drift_without_boot_effects \
@@ -82,6 +83,12 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 	grep -Fq 'pub(in crate::client) fn revalidate_against' "$$staging"; \
 	grep -Fq "client: &'client Client," "$$staging"; \
 	grep -Fq 'self.database.same_instance(&client.state_db)' "$$staging"; \
+	grep -Fq "plan: &'plan Plan," "$$staging"; \
+	grep -Fq "inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory," "$$staging"; \
+	grep -Fq 'pub(in crate::client) const fn plan(&self) -> &Plan' "$$staging"; \
+	grep -Fq 'pub(in crate::client) const fn inventory(&self) -> &PreparedActiveReblitDesiredPublicationInventory' "$$staging"; \
+	test "$$( grep -Fc '                    plan,' "$$staging" )" = 1; \
+	test "$$( grep -Fc '                    inventory,' "$$staging" )" = 1; \
 	grep -Fq 'require_exact_record_receipt_pair(successor, receipt, pair)?;' "$$staging"; \
 	awk 'previous == "    #[cfg(test)]" && $$0 == "    pub(in crate::client) fn into_parts(" { found = 1 } { previous = $$0 } END { exit(found ? 0 : 1) }' "$$staging"; \
 	public_api="$$( sed -n '/pub(in crate::client) fn stage_active_reblit_boot_sync</,/^    ) -> Result/p' "$$staging" )"; \

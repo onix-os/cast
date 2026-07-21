@@ -53,12 +53,13 @@ pub(in crate::client) enum DurableActiveReblitBootSyncRecord {
 ///
 /// The journal store must outlive its record binding, so both remain owned by
 /// this non-cloneable typestate until a later coordinator consumes them.
-#[derive(Debug)]
-pub(in crate::client) struct StagedActiveReblitBootSync {
+pub(in crate::client) struct StagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     record: TransitionRecord,
     record_binding: TransitionJournalRecordBinding,
     database_outcome: BootPublicationReceiptStageOutcome,
     receipt: CanonicalBootPublicationReceipt,
+    plan: &'plan Plan,
+    inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
     journal: TransitionJournalStore,
     database: Database,
     // Deliberately last so its global lock outlives the journal and database.
@@ -70,12 +71,29 @@ pub(in crate::client) struct StagedActiveReblitBootSync {
 /// Private fields prevent sibling components from manufacturing this view.
 /// It carries no destination descriptor and grants no publication, promotion,
 /// replacement, removal, or deletion authority.
-pub(in crate::client) struct FreshStagedActiveReblitBootSync<'staged, 'client> {
-    staged: &'staged StagedActiveReblitBootSync,
+pub(in crate::client) struct FreshStagedActiveReblitBootSync<
+    'staged,
+    'client,
+    'plan,
+    'inventory,
+    Plan,
+> {
+    staged: &'staged StagedActiveReblitBootSync<'plan, 'inventory, Plan>,
     _client: &'client Client,
 }
 
-impl StagedActiveReblitBootSync {
+impl<Plan> std::fmt::Debug for StagedActiveReblitBootSync<'_, '_, Plan> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StagedActiveReblitBootSync")
+            .field("record", &self.record)
+            .field("database_outcome", &self.database_outcome)
+            .field("receipt", &self.receipt)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     pub(in crate::client) const fn record(&self) -> &TransitionRecord {
         &self.record
     }
@@ -98,7 +116,13 @@ impl StagedActiveReblitBootSync {
         &'staged self,
         client: &'client Client,
     ) -> Result<
-        FreshStagedActiveReblitBootSync<'staged, 'client>,
+        FreshStagedActiveReblitBootSync<
+            'staged,
+            'client,
+            'plan,
+            'inventory,
+            Plan,
+        >,
         ActiveReblitBootSyncFreshValidationError,
     > {
         if !self.database.same_instance(&client.state_db)
@@ -136,7 +160,7 @@ impl StagedActiveReblitBootSync {
     }
 }
 
-impl FreshStagedActiveReblitBootSync<'_, '_> {
+impl<Plan> FreshStagedActiveReblitBootSync<'_, '_, '_, '_, Plan> {
     pub(in crate::client) const fn record(&self) -> &TransitionRecord {
         self.staged.record()
     }
@@ -148,6 +172,14 @@ impl FreshStagedActiveReblitBootSync<'_, '_> {
     pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.staged.receipt_fingerprint()
     }
+
+    pub(in crate::client) const fn plan(&self) -> &Plan {
+        self.staged.plan
+    }
+
+    pub(in crate::client) const fn inventory(&self) -> &PreparedActiveReblitDesiredPublicationInventory {
+        self.staged.inventory
+    }
 }
 
 impl Client {
@@ -155,6 +187,8 @@ impl Client {
     /// `BootSyncStarted` without performing a boot-publication effect.
     #[allow(clippy::too_many_arguments)]
     pub(in crate::client) fn stage_active_reblit_boot_sync<
+        'plan,
+        'inventory,
         'input,
         'topology_view,
         'topology_authority,
@@ -163,7 +197,7 @@ impl Client {
         'roots,
     >(
         &self,
-        plan: &BoundActiveReblitBlsPublicationPlan<
+        plan: &'plan BoundActiveReblitBlsPublicationPlan<
             'input,
             'topology_view,
             'topology_authority,
@@ -171,12 +205,26 @@ impl Client {
             'stone,
             'roots,
         >,
-        inventory: &PreparedActiveReblitDesiredPublicationInventory,
+        inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
         provenance_claims: &[BorrowedActiveReblitBootPublicationProvenanceClaim<'_>],
         journal: TransitionJournalStore,
         predecessor: TransitionRecord,
         predecessor_binding: TransitionJournalRecordBinding,
-    ) -> Result<StagedActiveReblitBootSync, ActiveReblitBootSyncStagingError> {
+    ) -> Result<
+        StagedActiveReblitBootSync<
+            'plan,
+            'inventory,
+            BoundActiveReblitBlsPublicationPlan<
+                'input,
+                'topology_view,
+                'topology_authority,
+                'attempt,
+                'stone,
+                'roots,
+            >,
+        >,
+        ActiveReblitBootSyncStagingError,
+    > {
         stage_with_retained_stores(
             &self.installation,
             &self.state_db,
@@ -192,6 +240,8 @@ impl Client {
 
 #[allow(clippy::too_many_arguments)]
 fn stage_with_retained_stores<
+    'plan,
+    'inventory,
     'input,
     'topology_view,
     'topology_authority,
@@ -201,7 +251,7 @@ fn stage_with_retained_stores<
 >(
     installation: &Installation,
     database: &Database,
-    plan: &BoundActiveReblitBlsPublicationPlan<
+    plan: &'plan BoundActiveReblitBlsPublicationPlan<
         'input,
         'topology_view,
         'topology_authority,
@@ -209,12 +259,26 @@ fn stage_with_retained_stores<
         'stone,
         'roots,
     >,
-    inventory: &PreparedActiveReblitDesiredPublicationInventory,
+    inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
     provenance_claims: &[BorrowedActiveReblitBootPublicationProvenanceClaim<'_>],
     journal: TransitionJournalStore,
     predecessor: TransitionRecord,
     predecessor_binding: TransitionJournalRecordBinding,
-) -> Result<StagedActiveReblitBootSync, ActiveReblitBootSyncStagingError> {
+) -> Result<
+    StagedActiveReblitBootSync<
+        'plan,
+        'inventory,
+        BoundActiveReblitBlsPublicationPlan<
+            'input,
+            'topology_view,
+            'topology_authority,
+            'attempt,
+            'stone,
+            'roots,
+        >,
+    >,
+    ActiveReblitBootSyncStagingError,
+> {
     if !plan.is_bound_to_installation(installation) {
         return Err(ActiveReblitBootSyncStagingError::PlanInstallationMismatch);
     }
@@ -317,6 +381,8 @@ fn stage_with_retained_stores<
                     record_binding: successor_binding,
                     database_outcome,
                     receipt: rederived,
+                    plan,
+                    inventory,
                 }),
                 Err(validation) => {
                     drop(successor_binding);

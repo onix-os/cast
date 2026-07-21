@@ -346,6 +346,36 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
 }
 
 #[test]
+fn fresh_view_retains_the_exact_original_bound_plan_and_inventory() {
+    crate::client::boot::reset_boot_synchronize_attempt_count();
+    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+        let client = staging_client(&fixture, fixture.state_db.clone());
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal(&fixture.installation);
+        let staged = stage_with_retained_stores(
+            &fixture.installation,
+            &fixture.state_db,
+            &plan,
+            &inventory,
+            &claims,
+            journal,
+            predecessor,
+            binding,
+        )
+        .unwrap();
+
+        let fresh = staged.revalidate_against(&client).unwrap();
+        assert!(std::ptr::eq(fresh.plan(), &plan));
+        assert!(std::ptr::eq(fresh.inventory(), &inventory));
+        assert_eq!(
+            fresh.receipt().body().desired_inventory_sha256().as_bytes(),
+            fresh.inventory().fingerprint().as_bytes(),
+        );
+        assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
+    });
+}
+
+#[test]
 fn fresh_revalidation_rejects_a_mixed_client_before_reading_effect_evidence() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
