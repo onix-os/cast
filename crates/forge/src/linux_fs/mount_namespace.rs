@@ -27,7 +27,9 @@ mod mountinfo_snapshot;
 
 #[allow(unused_imports)] // named by the future owned mounted-topology aggregate
 pub(crate) use attachment::{
-    PreparedTaskRootedAttachment, RevalidatedTaskRootedAttachment, TaskRootBootNamespaceAssessmentError,
+    PreparedTaskRootedAttachment, RetainedBootFilePublicationError, RetainedBootFilePublicationLimits,
+    RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest, RevalidatedTaskRootedAttachment,
+    TaskRootBootNamespaceAssessmentError, ValidatedRetainedBootFilePublication,
     ValidatedTaskRootBootNamespaceAssessment,
 };
 #[allow(unused_imports)] // consumed by the authenticated mounted-topology aggregate
@@ -36,6 +38,12 @@ pub(crate) use mountinfo_snapshot::AuthenticatedMountInfoSnapshot;
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by the synthetic attachment test slice
 pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
+
+#[cfg(test)]
+pub(crate) use attachment::{
+    FixtureRetainedBootFilePublicationFault, arm_retained_boot_file_private_name_substitution,
+    arm_retained_boot_file_publication_fault,
+};
 
 #[cfg(test)]
 pub(crate) use attachment::validate_fixture_attachment_st_dev;

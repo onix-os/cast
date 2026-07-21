@@ -25,6 +25,7 @@ use std::{
 };
 
 mod boot_namespace;
+mod boot_file_publication;
 mod capture;
 mod device;
 mod filesystem;
@@ -32,6 +33,15 @@ mod gpt_device;
 mod selector;
 
 pub(crate) use boot_namespace::{TaskRootBootNamespaceAssessmentError, ValidatedTaskRootBootNamespaceAssessment};
+pub(crate) use boot_file_publication::{
+    RetainedBootFilePublicationError, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
+    RetainedBootFilePublicationRequest, ValidatedRetainedBootFilePublication,
+};
+#[cfg(test)]
+pub(crate) use boot_file_publication::{
+    FixtureRetainedBootFilePublicationFault, arm_retained_boot_file_private_name_substitution,
+    arm_retained_boot_file_publication_fault,
+};
 use capture::{AttachmentCapture, capture_twice, require_capture_matches};
 pub(crate) use device::{TaskRootDevtmpfsAttachmentAuthenticationError, ValidatedTaskRootDevtmpfsAttachmentEvidence};
 use filesystem::{AttachmentLimits, directory_witness, duplicate_directory, require_same_directory};

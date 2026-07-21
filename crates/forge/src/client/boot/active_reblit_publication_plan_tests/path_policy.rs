@@ -34,6 +34,40 @@ fn unsafe_relative_paths_are_rejected_instead_of_normalized() {
 }
 
 #[test]
+fn canonical_plan_rejects_cross_request_private_stage_aliases_case_insensitively() {
+    const DIGEST: u128 = 0x1234;
+    const LENGTH: u64 = 0x5678;
+    let canonical_path = checksum_payload_path("Aeryn", "vmlinuz", DIGEST, LENGTH);
+    let parent = canonical_path.parent().unwrap();
+
+    for private_leaf in [
+        ".cast-payload-request-one.stage",
+        ".CaSt-PaYlOaD-request-one.STAGE",
+    ] {
+        let private_alias = ActiveReblitBootPublicationRequest::raw(
+            ActiveReblitBootPublicationRole::Payload,
+            ActiveReblitBootDestinationRoot::Boot,
+            ActiveReblitBootPublicationPhase::Payload,
+            parent.join(private_leaf),
+            sealed_source(1, DIGEST + 1, LENGTH),
+        );
+        let error = prepare_alias([
+            addressed_payload("Aeryn", "vmlinuz", 0, DIGEST, LENGTH),
+            private_alias,
+        ])
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ActiveReblitBootPublicationPlanError::ReservedPrivatePublicationComponent {
+                component,
+                ..
+            } if component == private_leaf
+        ));
+    }
+}
+
+#[test]
 fn non_utf8_and_non_ascii_paths_fail_closed() {
     let non_utf8 = PathBuf::from(OsString::from_vec(b"EFI/Aeryn/\xff/vmlinuz".to_vec()));
     assert!(matches!(

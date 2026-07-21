@@ -151,6 +151,11 @@ include!("linux_fs/directory_security.rs");
 
 include!("linux_fs/descriptor_access.rs");
 
+mod boot_file_publication_name;
+pub(crate) use boot_file_publication_name::{
+    RETAINED_BOOT_FILE_PRIVATE_PREFIX, is_retained_boot_file_private_component,
+};
+
 #[allow(dead_code)] // pure injected foundation for destination namespace assessment
 pub(crate) mod descriptor_boot_namespace;
 

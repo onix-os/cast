@@ -13,6 +13,7 @@ mod authenticated_mountinfo_snapshot;
 mod boot_mount_policy;
 mod chmod_once;
 mod descriptor_boot_filesystem;
+mod descriptor_boot_file_publication;
 mod descriptor_boot_namespace;
 mod descriptor_boot_namespace_production;
 mod descriptor_devtmpfs_filesystem;

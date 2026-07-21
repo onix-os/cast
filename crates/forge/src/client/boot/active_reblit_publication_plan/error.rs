@@ -34,6 +34,8 @@ pub(in crate::client) enum ActiveReblitBootPublicationPlanError {
     ControlPathComponent { path: PathBuf },
     #[error("boot publication path {path:?} contains a non-ASCII component")]
     NonAsciiPathComponent { path: PathBuf },
+    #[error("boot publication path {path:?} contains reserved private-stage component {component:?}")]
+    ReservedPrivatePublicationComponent { path: PathBuf, component: String },
     #[error("boot publication path {path:?} contains a FAT component with {actual} bytes, exceeding limit {limit}")]
     FatComponentByteLimit { path: PathBuf, limit: usize, actual: usize },
     #[error("boot publication path {path:?} contains FAT-forbidden character {character:?}")]

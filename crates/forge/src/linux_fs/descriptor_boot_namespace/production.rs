@@ -48,3 +48,4 @@ pub(crate) use retained::{
     RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits, RetainedBootNamespaceExpectedSource,
     ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
 };
+pub(in crate::linux_fs) use retained::BoundRetainedBootFileSource;

@@ -38,12 +38,15 @@ mod limits;
 mod node;
 #[path = "retained/observer.rs"]
 mod observer;
+#[path = "retained/publication_source.rs"]
+mod publication_source;
 #[path = "retained/syscall.rs"]
 mod syscall;
 
 pub(crate) use error::RetainedBootNamespaceAssessmentError;
 pub(crate) use expected::RetainedBootNamespaceExpectedSource;
 pub(crate) use limits::RetainedBootNamespaceAssessmentLimits;
+pub(in crate::linux_fs) use publication_source::BoundRetainedBootFileSource;
 
 #[cfg(test)]
 pub(crate) use hook::FixtureRetainedBootNamespaceProtocolEvent;

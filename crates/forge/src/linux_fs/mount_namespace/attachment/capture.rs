@@ -51,6 +51,18 @@ impl AttachmentCapture {
         self.destination_witness
     }
 
+    /// Borrow the exact final directory retained by this capture.
+    ///
+    /// This stays private to the attachment implementation so scalar identity
+    /// values can never be promoted into mutation authority by a caller.
+    pub(super) fn destination_file(&self) -> &std::fs::File {
+        &self
+            .components
+            .last()
+            .unwrap_or_else(|| unreachable!("validated attachment capture always retains one destination component"))
+            .file
+    }
+
     pub(super) fn authenticate_boot_filesystem_until(
         &self,
         deadline: std::time::Instant,

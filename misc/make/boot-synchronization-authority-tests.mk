@@ -11,7 +11,7 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -Ec '^client::active_reblit_publication_plan::tests::[^:]+: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 26; \
+	timeout 10s test "$$count" = 27; \
 	for test in \
 		client::active_reblit_publication_plan::tests::canonical_order_is_typed_phase_then_root_then_precomputed_folded_path \
 		client::active_reblit_publication_plan::tests::both_bootloader_roles_bind_exact_esp_paths_and_carry_one_binding_coordinate \
@@ -24,6 +24,7 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 		client::active_reblit_publication_plan::tests::alias_and_distinct_layouts_route_roots_to_expected_collision_domains \
 		client::active_reblit_publication_plan::tests::plan_retains_the_topology_collision_layout_for_later_revalidation \
 		client::active_reblit_publication_plan::tests::unsafe_relative_paths_are_rejected_instead_of_normalized \
+		client::active_reblit_publication_plan::tests::canonical_plan_rejects_cross_request_private_stage_aliases_case_insensitively \
 		client::active_reblit_publication_plan::tests::non_utf8_and_non_ascii_paths_fail_closed \
 		client::active_reblit_publication_plan::tests::fat_forbidden_trailing_reserved_and_short_name_components_are_rejected \
 		client::active_reblit_publication_plan::tests::fat_component_byte_bound_admits_n_and_rejects_n_plus_one \
@@ -42,6 +43,7 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	plan="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan.rs"; \
+	path_policy="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan/path_policy.rs"; \
 	role_binding="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan/role_binding.rs"; \
 	content_identity="$(TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
 	timeout 10s grep -Fq 'role_binding::require_role_binding(&request, &relative_path)?;' "$$plan"; \
@@ -57,7 +59,10 @@ forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
 	timeout 10s grep -Fq 'content_identity: BootContentIdentity,' "$$plan"; \
 	timeout 10s grep -Fq 'let content_identity = BootContentIdentity::hash(&bytes);' "$$plan"; \
 	timeout 10s grep -Fq '&& &existing.source == source' "$$plan"; \
+	grep -Fq 'is_retained_boot_file_private_component(component)' "$$path_policy"; \
+	grep -Fq 'ReservedPrivatePublicationComponent' "$$path_policy"; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$plan" )" -le 1000; \
+	test "$$( wc -l < "$$path_policy" )" -le 1000; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$role_binding" )" -le 1000; \
 	timeout 10s test "$$( timeout 10s wc -l < "$$content_identity" )" -le 1000; \
 	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_publication_plan::tests::" -- --test-threads=1
