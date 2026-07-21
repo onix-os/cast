@@ -152,6 +152,9 @@ disposable-vm-uefi-boot-storage-harness-test: forge-linux-descriptor-boot-file-p
 	grep -Fq "'0:0:600:regular file:1'" "$$publisher_make"; \
 	grep -Fq 'expected_build_root="/var/tmp/cast-vm-boot-storage-' "$$publisher_make"; \
 	grep -Fq 'forge-libtest-manifest-v1' "$$publisher_make"; \
+	grep -Fq 'manifest_temporary" && test ! -L "' "$$publisher_make"; \
+	test "$$(grep -Fc "'%u:%g:%a:%h'" "$$publisher_make")" = 1; \
+	grep -Fq 'manifest_temporary")" = 0;' "$$publisher_make"; \
 	test "$$(grep -Fc "profile_type\" = 'regular file'" "$$publisher_make")" = 2; \
 	grep -Fq -- '--lib --no-run --message-format=json' "$$publisher_make"; \
 	grep -Fq '"$$$$executable" "$$$$test_name" --ignored --exact --test-threads=1' "$$publisher_make"; \

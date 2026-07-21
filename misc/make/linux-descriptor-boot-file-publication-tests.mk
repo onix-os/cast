@@ -219,7 +219,9 @@ forge-linux-descriptor-boot-file-publication-vfat-build:
 	executable_sha256="$${executable_sha256%% *}"; \
 	[[ "$$executable_sha256" =~ ^[0-9a-f]{64}$$ ]]; \
 	manifest_temporary="$$(/usr/bin/mktemp "$$expected_build_root/.forge-libtest-manifest-v1.XXXXXXXXXXXX")"; \
-	test "$$(/usr/bin/stat -Lc '%u:%g:%a:%F:%h' -- "$$manifest_temporary")" = '0:0:600:regular file:1'; \
+	test -f "$$manifest_temporary" && test ! -L "$$manifest_temporary"; \
+	test "$$(/usr/bin/stat -Lc '%u:%g:%a:%h' -- "$$manifest_temporary")" = '0:0:600:1'; \
+	test "$$(/usr/bin/stat -Lc '%s' -- "$$manifest_temporary")" = 0; \
 	printf 'protocol=1\tsource_root=%s\tdevelop_profile=%s\tdevelop_profile_store=%s\ttarget_root=%s\texecutable=%s\tsha256=%s\n' \
 		"$$source_root" "$$develop_profile" "$$develop_profile_store" \
 		"$${CARGO_TARGET_DIR}" "$$executable" "$$executable_sha256" \
