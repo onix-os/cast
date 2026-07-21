@@ -7,17 +7,26 @@ use std::{
 };
 
 use super::{
-    CANONICAL_NAME, DirectoryPolicy, InodeIdentity, JOURNAL_DIRECTORY, JOURNAL_FILE_MODE, LOCK_NAME,
-    MAX_STALE_TEMPORARIES, Phase, StorageError, TransitionRecord, controlled_resolution, decode, directory_entries,
-    encode, ensure_journal_directory, inode_identity, open_and_lock, open_directory_path, open_existing_directory,
-    openat2_file, read_bounded, renameat2, require_safe_regular_file, require_safe_stale_temporary, require_same_inode,
-    temporary_name, try_open_and_lock, unlinkat, valid_temporary_name, validation::validate_advance,
+    CANONICAL_NAME, DirectoryPolicy, InodeIdentity, JOURNAL_DIRECTORY, JOURNAL_FILE_MODE, LOCK_NAME, Phase,
+    StorageError, TransitionRecord, controlled_resolution, decode, directory_entries, encode, ensure_journal_directory,
+    inode_identity, open_and_lock, open_directory_path, open_existing_directory, openat2_file, read_bounded, renameat2,
+    require_safe_regular_file, require_same_inode, temporary_name, try_open_and_lock, unlinkat,
+    validation::validate_advance,
 };
 
 mod record_binding;
+mod delete_residue_recovery;
+mod stale_temporary_cleanup;
 #[cfg(test)]
 pub(crate) use record_binding::{
     arm_bound_delete_private_name_callback, assert_bound_delete_private_name_callback_consumed,
+};
+#[cfg(test)]
+pub(crate) use delete_residue_recovery::{
+    DeleteResidueRecoveryDurabilityBoundary, DeleteResidueRecoveryRevalidationBoundary,
+    arm_delete_residue_recovery_durability_callback, arm_delete_residue_recovery_revalidation_callback,
+    assert_delete_residue_recovery_durability_callback_consumed,
+    assert_delete_residue_recovery_revalidation_callback_consumed,
 };
 pub(crate) use record_binding::{
     TransitionJournalRecordBinding, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
@@ -48,6 +57,10 @@ pub(super) enum StorageFaultPoint {
     CanonicalUnlink,
     BoundDeleteUnlinkReport,
     DeleteDirectorySync,
+    DeleteResidueRestore,
+    DeleteResidueRestoreReport,
+    DeleteResidueDirectorySync,
+    DeleteResidueDirectorySyncReport,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -370,6 +383,7 @@ impl TransitionJournalStore {
             path,
             binding: Arc::new(()),
         };
+        store.recover_interrupted_bound_delete(cast)?;
         store.cleanup_stale_temporaries()?;
         Ok(store)
     }
@@ -908,83 +922,4 @@ impl TransitionJournalStore {
         Ok(())
     }
 
-    pub(super) fn cleanup_temporary(&self, temporary: &TemporaryRecord) -> Result<(), StorageError> {
-        self.cleanup_temporary_identity(&temporary.name, temporary.identity)
-    }
-
-    fn cleanup_temporary_identity(&self, name: &CStr, expected: InodeIdentity) -> Result<(), StorageError> {
-        let display = name.to_string_lossy().into_owned();
-        let named = openat2_file(
-            self.directory.as_raw_fd(),
-            name,
-            nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-            0,
-            controlled_resolution(),
-        )
-        .map_err(|source| StorageError::CleanupTemporary {
-            name: display.clone(),
-            source,
-        })?;
-        let actual = inode_identity(&named).map_err(|source| StorageError::CleanupTemporary {
-            name: display.clone(),
-            source,
-        })?;
-        if actual != expected {
-            return Err(StorageError::CanonicalChanged);
-        }
-        unlinkat(self.directory.as_raw_fd(), name)
-            .map_err(|source| StorageError::CleanupTemporary { name: display, source })?;
-        self.directory
-            .sync_all()
-            .map_err(|source| StorageError::SyncJournalDirectory { source })
-    }
-
-    fn cleanup_stale_temporaries(&self) -> Result<(), StorageError> {
-        let entries = directory_entries(&self.directory).map_err(|source| StorageError::EnumerateJournal { source })?;
-        let mut stale = Vec::new();
-        for name in entries {
-            match name.to_bytes() {
-                b"state-transition" | b"state-transition.lock" => {}
-                bytes if valid_temporary_name(bytes) => {
-                    stale.push(name);
-                    if stale.len() > MAX_STALE_TEMPORARIES {
-                        return Err(StorageError::TooManyStaleTemporaries);
-                    }
-                }
-                _ => {
-                    return Err(StorageError::UnexpectedJournalEntry(
-                        name.to_string_lossy().into_owned(),
-                    ));
-                }
-            }
-        }
-        let mut authenticated = Vec::with_capacity(stale.len());
-        for name in stale {
-            let display = name.to_string_lossy().into_owned();
-            let file = openat2_file(
-                self.directory.as_raw_fd(),
-                &name,
-                nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-                0,
-                controlled_resolution(),
-            )
-            .map_err(|source| StorageError::ValidateStaleTemporary {
-                name: display.clone(),
-                source,
-            })?;
-            require_safe_stale_temporary(&file, &self.path.join(&display)).map_err(|source| {
-                StorageError::ValidateStaleTemporary {
-                    name: display.clone(),
-                    source,
-                }
-            })?;
-            let identity = inode_identity(&file)
-                .map_err(|source| StorageError::ValidateStaleTemporary { name: display, source })?;
-            authenticated.push((name, identity));
-        }
-        for (name, identity) in authenticated {
-            self.cleanup_temporary_identity(&name, identity)?;
-        }
-        Ok(())
-    }
 }

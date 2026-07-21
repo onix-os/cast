@@ -47,9 +47,13 @@ pub(crate) use recovery::RecoveryDisposition;
 pub(crate) use runtime_evidence::RuntimeEvidenceError;
 #[cfg(test)]
 pub(crate) use store::{
+    DeleteResidueRecoveryDurabilityBoundary, DeleteResidueRecoveryRevalidationBoundary,
     JournalDeleteDurabilityBoundary, JournalUpdateDurabilityBoundary, PublicBindingRevalidationBoundary,
+    arm_delete_residue_recovery_durability_callback, arm_delete_residue_recovery_revalidation_callback,
     arm_bound_delete_private_name_callback, arm_journal_delete_durability_callback,
     arm_journal_update_durability_callback, arm_public_binding_revalidation_callback,
+    assert_delete_residue_recovery_durability_callback_consumed,
+    assert_delete_residue_recovery_revalidation_callback_consumed,
     assert_bound_delete_private_name_callback_consumed, assert_public_binding_revalidation_callback_consumed,
 };
 #[allow(unused_imports)] // consumed by the bound terminal-finalizer wiring slice
@@ -334,6 +338,51 @@ pub(crate) enum StorageError {
         #[source]
         source: io::Error,
     },
+    #[error("interrupted bound-delete residue inventory is not uniquely recoverable: {entries:?}")]
+    DeleteResidueEntrySetMismatch { entries: Vec<String> },
+    #[error("validate interrupted bound-delete residue `{name}`")]
+    ValidateDeleteResidue {
+        name: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("read complete interrupted bound-delete residue `{name}`")]
+    ReadDeleteResidue {
+        name: String,
+        #[source]
+        source: io::Error,
+    },
+    #[error("decode interrupted bound-delete residue `{name}`")]
+    DecodeDeleteResidue {
+        name: String,
+        #[source]
+        source: CodecError,
+    },
+    #[error("interrupted bound-delete residue `{name}` is not a deletable terminal record")]
+    NonterminalDeleteResidue { name: String },
+    #[error("interrupted bound-delete residue `{name}` changed during recovery")]
+    DeleteResidueChanged { name: String },
+    #[error("atomically restore interrupted bound-delete residue `{name}` (restored={restored})")]
+    RestoreDeleteResidue {
+        name: String,
+        restored: bool,
+        #[source]
+        source: io::Error,
+    },
+    #[error("restore interrupted bound-delete residue `{name}` failed ({restore}) and exact state reconciliation also failed")]
+    RestoreDeleteResidueAndReconciliation {
+        name: String,
+        restore: io::Error,
+        #[source]
+        reconciliation: Box<StorageError>,
+    },
+    #[error("sync restored bound-delete residue `{name}` failed ({sync}) and exact state reconciliation also failed")]
+    SyncDeleteResidueAndReconciliation {
+        name: String,
+        sync: io::Error,
+        #[source]
+        reconciliation: Box<StorageError>,
+    },
     #[error("bound-delete journal inventory is not canonical (private={private_name}, entries={entries:?})")]
     BoundDeleteEntrySetMismatch {
         private_name: String,
@@ -506,6 +555,18 @@ fn flock_exclusive(file: &std::fs::File, wait: bool) -> io::Result<()> {
             return Err(source);
         }
     }
+}
+
+fn valid_delete_name(name: &[u8]) -> bool {
+    let Some(tail) = name.strip_prefix(DELETE_PREFIX) else {
+        return false;
+    };
+    tail.len() == 8 + 1 + 16
+        && tail[8] == b'-'
+        && tail[..8]
+            .iter()
+            .chain(&tail[9..])
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
 }
 
 fn valid_temporary_name(name: &[u8]) -> bool {

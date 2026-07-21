@@ -722,38 +722,3 @@ fn bound_record_delete_durability_callbacks_follow_sole_private_unlink_then_sync
     }
     assert_eq!(cases, 2, "bound-delete durability callback matrix drifted");
 }
-
-#[test]
-fn bound_record_delete_private_residue_is_preserved_and_rejected_on_reopen() {
-    let (temporary, store, cast, terminal, binding) = bound_delete_fixture();
-    let blocker = temporary.path().join(".cast/journal/bound-delete-test-blocker");
-    let callback_blocker = blocker.clone();
-    arm_public_binding_revalidation_callback(
-        PublicBindingRevalidationBoundary::BeforeBoundDeletePrivateUnlink,
-        move || write_bound_delete_replacement(&callback_blocker, b"block private unlink"),
-    );
-    take_durability_checkpoints();
-
-    let error = store.delete_record_binding(&cast, binding, &terminal).unwrap_err();
-
-    assert_public_binding_revalidation_callback_consumed();
-    assert!(matches!(
-        error,
-        TransitionJournalRecordDeleteError::Detached(StorageError::BoundDeleteEntrySetMismatch { .. })
-    ));
-    assert_eq!(take_durability_checkpoints(), [DurabilityCheckpoint::CanonicalDetached]);
-    let private = bound_delete_private_path(temporary.path());
-    let expected_name = private.file_name().unwrap().to_string_lossy().into_owned();
-    let bytes = fs::read(&private).unwrap();
-    fs::remove_file(blocker).unwrap();
-    drop(store);
-    drop(cast);
-
-    let reopen = TransitionJournalStore::open(temporary.path()).unwrap_err();
-
-    assert!(matches!(
-        reopen,
-        StorageError::UnexpectedJournalEntry(name) if name == expected_name
-    ));
-    assert_eq!(fs::read(private).unwrap(), bytes);
-}

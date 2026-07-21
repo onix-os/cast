@@ -1,9 +1,9 @@
 use std::{
     fs,
-    io::{self, Write as _},
+    io::{self, Read as _, Write as _},
     os::unix::{
         ffi::OsStrExt as _,
-        fs::{MetadataExt as _, PermissionsExt as _, symlink},
+        fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _, symlink},
     },
     process::Command,
     sync::{Arc, mpsc},
@@ -351,6 +351,7 @@ fn assert_no_journal_temporaries(root: &Path) {
 include!("record_contract.rs");
 include!("record_binding.rs");
 include!("record_binding_delete.rs");
+include!("delete_residue_recovery.rs");
 include!("record_successors.rs");
 include!("runtime_evidence.rs");
 include!("transition_semantics.rs");

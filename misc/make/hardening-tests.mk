@@ -7,7 +7,7 @@
 	forge-database-adapter-test forge-read-only-substrate-test \
 	forge-read-only-client-test forge-transition-journal-contract-test \
 	forge-transition-runtime-evidence-test forge-transition-journal-successor-test \
-	forge-transition-journal-test \
+	forge-transition-journal-test forge-transition-journal-delete-residue-recovery-test \
 	stone-recipe-derivation-provenance-test \
 	stone-recipe-derivation-validation-test stone-recipe-build-lock-test \
 	stone-recipe-package-validation-test \
@@ -374,7 +374,7 @@ forge-transition-journal-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 98; \
+	test "$$count" = 110; \
 	for test in \
 		transition_journal::tests::reopened_record_binding_accepts_the_retained_exact_successor_after_old_store_drop \
 		transition_journal::tests::reopened_record_binding_rejects_same_bytes_successor_replacement_before_reopen; do \

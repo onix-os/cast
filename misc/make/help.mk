@@ -92,6 +92,7 @@ help:
 	@echo "  forge-transition-runtime-evidence-test  Run authenticated boot, namespace, and tree witness tests"
 	@echo "  forge-transition-journal-successor-test  Run production journal successor-construction tests"
 	@echo "  forge-transition-journal-bound-delete-test  Run exact consuming journal-inode deletion tests"
+	@echo "  forge-transition-journal-delete-residue-recovery-test  Run exact interrupted bound-delete recovery tests"
 	@echo "  forge-transition-journal-test  Run every direct transition-journal contract and storage test"
 	@echo "  stone-read-test  Run the exact bounded Stone reader and content-stream tests"
 	@echo "  stone-recipe-derivation-provenance-test  Run exact derivation provenance identity and validation tests"

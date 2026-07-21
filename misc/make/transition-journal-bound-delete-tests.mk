@@ -14,11 +14,10 @@ forge-transition-journal-bound-delete-test:
 		bound_record_delete_storage_faults_reconcile_exact_source_or_absence_without_retry \
 		bound_record_delete_storage_reconciliation_never_deletes_same_byte_replacement \
 		bound_record_delete_rejects_same_inode_record_change_at_both_preunlink_checks \
-		bound_record_delete_durability_callbacks_follow_sole_private_unlink_then_sync \
-		bound_record_delete_private_residue_is_preserved_and_rejected_on_reopen; do \
+		bound_record_delete_durability_callbacks_follow_sole_private_unlink_then_sync; do \
 		grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
-	test "$$( grep -c '^transition_journal::tests::bound_record_delete_.*: test$$' <<<"$$listed" )" = 11; \
+	test "$$( grep -c '^transition_journal::tests::bound_record_delete_.*: test$$' <<<"$$listed" )" = 10; \
 	record_binding=crates/forge/src/transition_journal/store/record_binding.rs; \
 	store=crates/forge/src/transition_journal/store.rs; \
 	journal=crates/forge/src/transition_journal.rs; \
