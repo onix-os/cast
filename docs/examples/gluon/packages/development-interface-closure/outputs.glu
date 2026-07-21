@@ -1,0 +1,35 @@
+let b = import! cast.package.v3
+
+// Output closure is declared per output. In particular, headers and link-time
+// metadata need both this package's libraries and the external development
+// interface; neither dependency is implicitly propagated to sibling outputs.
+\inputs ->
+    let package = b.package_ref inputs.pname
+
+    let root = b.output_with {
+        summary = b.optional.set "Interface closure metadata",
+        paths = [b.path.any "/usr/share/interface-closure"],
+        .. b.output "out"
+    }
+
+    let libraries = b.output_with {
+        summary = b.optional.set "Interface closure runtime library",
+        paths = [b.path.any "/usr/lib/libinterface-closure.so.*"],
+        .. b.output "libs"
+    }
+
+    let development = b.output_with {
+        summary = b.optional.set "Interface closure development files",
+        runtime_inputs = [
+            b.dep.output package "libs",
+            inputs.dependencies.external_development,
+        ],
+        paths = [
+            b.path.any "/usr/include/interface-closure",
+            b.path.symlink "/usr/lib/libinterface-closure.so",
+            b.path.any "/usr/lib/pkgconfig/interface-closure.pc",
+        ],
+        .. b.output "devel"
+    }
+
+    [root, libraries, development]

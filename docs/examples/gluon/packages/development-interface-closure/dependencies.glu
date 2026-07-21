@@ -1,0 +1,10 @@
+let b = import! cast.package.v3
+
+let annotations = b.package_ref "interface-annotations"
+
+// Keep the exact named output as a typed value. Consumers of this factory can
+// replace the development interface without turning it into a package-wide
+// build or runtime dependency.
+{
+    external_development = b.dep.output annotations "devel",
+}

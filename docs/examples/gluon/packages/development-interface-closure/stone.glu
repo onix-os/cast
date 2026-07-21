@@ -1,0 +1,10 @@
+let dependencies = import! "./dependencies.glu"
+let make_outputs = import! "./outputs.glu"
+let make_package = import! "./package.glu"
+
+// A package-level dependency would reach every output. Passing this exact
+// named development output into the output factory keeps it on `devel` only.
+make_package {
+    dependencies,
+    output_factory = make_outputs,
+}

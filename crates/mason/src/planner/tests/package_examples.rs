@@ -1,6 +1,12 @@
-fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, plan: &DerivationPlan) {
+fn assert_documented_factory_semantics(
+    name: &str,
+    declaration: &PackageSpec,
+    plan: &DerivationPlan,
+    matrix: &PackageExampleMatrix,
+) {
     match name {
         "backend-choice-factory" => documented_variants::assert_semantics(declaration, plan),
+        "development-interface-closure" => documented_development_outputs::assert_semantics(declaration, plan),
         "explicit-git-subprojects" => documented_git_subprojects::assert_semantics(declaration, plan),
         "explicit-interpreter-suite" => documented_interpreter_suite::assert_semantics(declaration, plan),
         "explicit-package-scope" => documented_scopes::assert_semantics(declaration, plan),
@@ -8,6 +14,7 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "factory-override" => assert_factory_override_semantics(declaration, plan),
         "gettext-catalogs" => assert_gettext_catalog_semantics(declaration, plan),
         "go-module" => assert_go_module_semantics(declaration, plan),
+        "independent-vendor-source" => documented_vendor_sources::assert_semantics(declaration, plan, matrix),
         "kernel-module-factory" => assert_kernel_module_factory_semantics(declaration, plan),
         "layered-overrides" => assert_layered_override_semantics(declaration, plan),
         "locked-template-substitution" => assert_locked_template_substitution_semantics(declaration, plan),
@@ -18,6 +25,7 @@ fn assert_documented_factory_semantics(name: &str, declaration: &PackageSpec, pl
         "output-policy-factory" => assert_output_policy_factory_semantics(declaration, plan),
         "platform-factory" => assert_platform_factory_semantics(declaration, plan),
         "release-override" => documented_overrides::assert_semantics(declaration, plan),
+        "runtime-environment-wrapper" => documented_runtime_wrappers::assert_semantics(declaration, plan),
         "service-family-factory" => documented_composition::assert_service_family(declaration, plan),
         "shared-capability-origins" => documented_dependencies::assert_semantics(declaration, plan),
         "source-less-generated-config" => documented_generated::assert_semantics(declaration, plan),
@@ -736,7 +744,7 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
             "{}: the frozen plan must retain the exact public recipe evaluation fingerprint",
             example.name
         );
-        assert_documented_factory_semantics(&example.name, &evaluated.recipe.declaration, &first.plan);
+        assert_documented_factory_semantics(&example.name, &evaluated.recipe.declaration, &first.plan, &matrix);
         assert_eq!(
             first.lock_outcome,
             Some(WriteOutcome::Written),

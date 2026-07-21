@@ -51,7 +51,7 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-const PACKAGE_EXAMPLES: [&str; 60] = [
+const PACKAGE_EXAMPLES: [&str; 63] = [
     "autotools",
     "backend-choice-factory",
     "binary-release",
@@ -62,6 +62,7 @@ const PACKAGE_EXAMPLES: [&str; 60] = [
     "custom-steps",
     "dependency-roles",
     "desktop-application",
+    "development-interface-closure",
     "explicit-git-subprojects",
     "explicit-interpreter-suite",
     "explicit-package-scope",
@@ -76,6 +77,7 @@ const PACKAGE_EXAMPLES: [&str; 60] = [
     "go-module",
     "header-only-library",
     "hooks",
+    "independent-vendor-source",
     "kernel-module-factory",
     "layered-overrides",
     "locked-template-substitution",
@@ -102,6 +104,7 @@ const PACKAGE_EXAMPLES: [&str; 60] = [
     "realistic-daemon",
     "release-override",
     "release-source-factory",
+    "runtime-environment-wrapper",
     "service-family-factory",
     "shared-capability-origins",
     "source-less-generated-config",
@@ -223,6 +226,8 @@ mod documented_code_generation;
 mod documented_composition;
 #[path = "tests/documented_semantics/dependencies.rs"]
 mod documented_dependencies;
+#[path = "tests/documented_semantics/development_outputs.rs"]
+mod documented_development_outputs;
 #[path = "tests/documented_semantics/generated.rs"]
 mod documented_generated;
 #[path = "tests/documented_semantics/git_subprojects.rs"]
@@ -235,6 +240,8 @@ mod documented_outputs;
 mod documented_overrides;
 #[path = "tests/documented_semantics/profiles.rs"]
 mod documented_profiles;
+#[path = "tests/documented_semantics/runtime_wrappers.rs"]
+mod documented_runtime_wrappers;
 #[path = "tests/documented_semantics/scopes.rs"]
 mod documented_scopes;
 #[path = "tests/documented_semantics.rs"]
@@ -243,6 +250,8 @@ mod documented_semantics;
 mod documented_sources;
 #[path = "tests/documented_semantics/variants.rs"]
 mod documented_variants;
+#[path = "tests/documented_semantics/vendor_sources.rs"]
+mod documented_vendor_sources;
 include!("tests/execution_archives.rs");
 include!("tests/execution_autotools_regeneration.rs");
 include!("tests/execution_capability.rs");
