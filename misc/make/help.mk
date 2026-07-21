@@ -77,6 +77,7 @@ help:
 	@echo "  disposable-vm-uefi-boot-storage-admission  Recheck an armed challenge without disk mutation"
 	@echo "  disposable-vm-uefi-boot-storage-campaign  DESTROY only the exact admitted disposable-VM disk"
 	@timeout 10s echo "  forge-linux-descriptor-boot-filesystem-test  Run pure descriptor-bound boot-filesystem authentication contracts"
+	@echo "  forge-linux-descriptor-boot-publication-parent-test  Run retained nested boot publication-parent contracts"
 	@timeout 10s echo "  forge-linux-descriptor-boot-namespace-test  Run pure bounded boot-destination namespace assessment contracts"
 	@timeout 10s echo "  forge-linux-gpt-partition-role-test  Run pure bounded GPT partition-role parser contracts"
 	@timeout 10s echo "  forge-linux-mount-attachment-test  Run exact synthetic mountinfo attachment-selection contracts"

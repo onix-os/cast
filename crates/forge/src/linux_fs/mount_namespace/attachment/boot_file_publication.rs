@@ -1,10 +1,11 @@
 //! Descriptor-retained immutable publication of one boot payload leaf.
 //!
-//! The only callable production surface is an inherent operation on a freshly
-//! revalidated task-root attachment. Callers cannot mint mutation authority
-//! from device, inode, or mount-ID scalars: the destination descriptor remains
-//! private inside the attachment capture for validation, classification,
-//! publication, reconciliation, and durability.
+//! The callable production surfaces are inherent operations on either a
+//! freshly revalidated task-root attachment or its non-cloneable retained
+//! descendant-parent chain. Callers cannot mint mutation authority from
+//! device, inode, or mount-ID scalars: the destination descriptor remains
+//! private for validation, classification, publication, reconciliation, and
+//! durability.
 //!
 //! This is deliberately one leaf below one already-existing parent. It does
 //! not create directory trees, replace or delete entries, publish entries or
@@ -80,74 +81,106 @@ pub(crate) use effect::{
     arm_retained_boot_file_private_name_substitution, arm_retained_boot_file_publication_fault,
 };
 #[derive(Clone, Copy)]
-struct AttachmentIdentity {
-    device: u64,
-    inode: u64,
-    mount_id: u64,
+pub(super) struct AttachmentIdentity {
+    pub(super) device: u64,
+    pub(super) inode: u64,
+    pub(super) mount_id: u64,
+}
+
+/// Private capability boundary shared by the authenticated attachment root
+/// and a descriptor-retained descendant parent. Implementors never expose the
+/// retained directory to callers; the leaf engine alone borrows it after a
+/// fresh full-chain revalidation.
+pub(super) trait RetainedBootFilePublicationTarget {
+    fn publication_parent(&self) -> &File;
+    fn publication_parent_identity(&self) -> AttachmentIdentity;
+    fn require_publication_parent_until(
+        &self,
+        action: &'static str,
+        deadline: Instant,
+    ) -> Result<(), RetainedBootFilePublicationError>;
 }
 
 impl RevalidatedTaskRootedAttachment<'_> {
     /// Publish or durably revalidate one immutable payload below this exact
     /// already-existing attachment directory.
     ///
-    /// The source is consumed into a one-element closed slice so its sealed
-    /// descriptor, when present, can be repeatedly authenticated without ever
-    /// being copied or exposed. `renameat2(RENAME_NOREPLACE)` is attempted at
-    /// most once, and every result is reconciled before interpretation.
+    /// The source is borrowed through a one-element closed slice so its sealed
+    /// descriptor, when present, can be reused by aggregate preflight and final
+    /// assessment without ever being copied or exposed.
+    /// `renameat2(RENAME_NOREPLACE)` is attempted at most once, and every result
+    /// is reconciled before interpretation.
     pub(crate) fn publish_immutable_boot_file_until<'source>(
         &self,
         request: RetainedBootFilePublicationRequest<'_>,
-        expected_source: RetainedBootNamespaceExpectedSource<'source>,
+        expected_source: &RetainedBootNamespaceExpectedSource<'source>,
         limits: RetainedBootFilePublicationLimits,
         deadline: Instant,
     ) -> Result<ValidatedRetainedBootFilePublication, RetainedBootFilePublicationError> {
-        let canonical_name = validate_request(request, limits, deadline)?;
-        let private_leaf = deterministic_private_leaf(request);
-        let private_name = component(&private_leaf)?;
-        let expected_sources = [expected_source];
-        let attachment = self.attachment_identity();
-
-        self.require_publication_attachment_until("opening boot-file publication", deadline)?;
-        let retained_parent = self.current.destination_file();
-        let parent = destination::open_parent_io(retained_parent, attachment, deadline)?;
-        let initial = self.classify_leaf(
-            request.canonical_leaf(),
-            request,
-            &expected_sources,
-            limits,
-            "classifying the canonical boot-file leaf",
-            deadline,
-        )?;
-
-        match initial {
-            BootNamespaceDestinationState::Exact => self.finish_existing(
-                &parent,
-                &canonical_name,
-                &private_leaf,
-                &private_name,
-                request,
-                &expected_sources,
-                limits,
-                attachment,
-                deadline,
-            ),
-            BootNamespaceDestinationState::Different => {
-                Err(RetainedBootFilePublicationError::DifferentCanonicalDestination)
-            }
-            BootNamespaceDestinationState::Absent => self.publish_absent(
-                &parent,
-                &canonical_name,
-                &private_leaf,
-                &private_name,
-                request,
-                &expected_sources,
-                limits,
-                attachment,
-                deadline,
-            ),
-        }
+        publish_immutable_boot_file_from_target_until(self, request, expected_source, limits, deadline)
     }
+}
 
+pub(super) fn publish_immutable_boot_file_from_target_until<'source>(
+    target: &impl RetainedBootFilePublicationTarget,
+    request: RetainedBootFilePublicationRequest<'_>,
+    expected_source: &RetainedBootNamespaceExpectedSource<'source>,
+    limits: RetainedBootFilePublicationLimits,
+    deadline: Instant,
+) -> Result<ValidatedRetainedBootFilePublication, RetainedBootFilePublicationError> {
+    let canonical_name = validate_request(request, limits, deadline)?;
+    let private_leaf = deterministic_private_leaf(request);
+    let private_name = component(&private_leaf)?;
+    let expected_sources = std::slice::from_ref(expected_source);
+    let attachment = target.publication_parent_identity();
+
+    target.require_publication_parent_until("opening boot-file publication", deadline)?;
+    let retained_parent = target.publication_parent();
+    let parent = destination::open_parent_io(retained_parent, attachment, deadline)?;
+    let publisher = RetainedBootFilePublisher { target };
+    let initial = publisher.classify_leaf(
+        request.canonical_leaf(),
+        request,
+        expected_sources,
+        limits,
+        "classifying the canonical boot-file leaf",
+        deadline,
+    )?;
+
+    match initial {
+        BootNamespaceDestinationState::Exact => publisher.finish_existing(
+            &parent,
+            &canonical_name,
+            &private_leaf,
+            &private_name,
+            request,
+            expected_sources,
+            limits,
+            attachment,
+            deadline,
+        ),
+        BootNamespaceDestinationState::Different => {
+            Err(RetainedBootFilePublicationError::DifferentCanonicalDestination)
+        }
+        BootNamespaceDestinationState::Absent => publisher.publish_absent(
+            &parent,
+            &canonical_name,
+            &private_leaf,
+            &private_name,
+            request,
+            expected_sources,
+            limits,
+            attachment,
+            deadline,
+        ),
+    }
+}
+
+struct RetainedBootFilePublisher<'target, Target: ?Sized> {
+    target: &'target Target,
+}
+
+impl<Target: RetainedBootFilePublicationTarget + ?Sized> RetainedBootFilePublisher<'_, Target> {
     #[allow(clippy::too_many_arguments)]
     fn finish_existing(
         &self,
@@ -467,7 +500,7 @@ impl RevalidatedTaskRootedAttachment<'_> {
             content.expected_xxh3(),
         )];
         let assessment = assess_retained_boot_namespace_until(
-            self.current.destination_file(),
+            self.target.publication_parent(),
             &request,
             expected_sources,
             limits.namespace,
@@ -478,7 +511,7 @@ impl RevalidatedTaskRootedAttachment<'_> {
         let observed = assessment.observed_root_identity().ok_or(
             RetainedBootFilePublicationError::DestinationIdentityChanged { action },
         )?;
-        let expected = self.attachment_identity();
+        let expected = self.target.publication_parent_identity();
         if observed.device != expected.device
             || observed.inode != expected.inode
             || observed.mount_id != expected.mount_id
@@ -493,6 +526,28 @@ impl RevalidatedTaskRootedAttachment<'_> {
     }
 
     fn require_publication_attachment_until(
+        &self,
+        action: &'static str,
+        deadline: Instant,
+    ) -> Result<(), RetainedBootFilePublicationError> {
+        self.target.require_publication_parent_until(action, deadline)
+    }
+}
+
+impl RetainedBootFilePublicationTarget for RevalidatedTaskRootedAttachment<'_> {
+    fn publication_parent(&self) -> &File {
+        self.current.destination_file()
+    }
+
+    fn publication_parent_identity(&self) -> AttachmentIdentity {
+        AttachmentIdentity {
+            device: self.destination_device(),
+            inode: self.destination_inode(),
+            mount_id: self.destination_mount_id(),
+        }
+    }
+
+    fn require_publication_parent_until(
         &self,
         action: &'static str,
         deadline: Instant,
@@ -514,14 +569,6 @@ impl RevalidatedTaskRootedAttachment<'_> {
         operation
             .checkpoint()
             .map_err(|source| RetainedBootFilePublicationError::Attachment { action, source })
-    }
-
-    const fn attachment_identity(&self) -> AttachmentIdentity {
-        AttachmentIdentity {
-            device: self.destination_device(),
-            inode: self.destination_inode(),
-            mount_id: self.destination_mount_id(),
-        }
     }
 }
 

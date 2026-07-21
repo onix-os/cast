@@ -29,7 +29,8 @@ mod mountinfo_snapshot;
 pub(crate) use attachment::{
     PreparedTaskRootedAttachment, RetainedBootFilePublicationError, RetainedBootFilePublicationLimits,
     RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest, RevalidatedTaskRootedAttachment,
-    TaskRootBootNamespaceAssessmentError, ValidatedRetainedBootFilePublication,
+    RetainedBootPublicationParent, RetainedBootPublicationParentError, TaskRootBootNamespaceAssessmentError,
+    ValidatedRetainedBootFilePublication,
     ValidatedTaskRootBootNamespaceAssessment,
 };
 #[allow(unused_imports)] // consumed by the authenticated mounted-topology aggregate
@@ -41,8 +42,11 @@ pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
 
 #[cfg(test)]
 pub(crate) use attachment::{
-    FixtureRetainedBootFilePublicationFault, arm_retained_boot_file_private_name_substitution,
-    arm_retained_boot_file_publication_fault,
+    FixtureRetainedBootFilePublicationFault, FixtureRetainedBootPublicationParentCheckpoint,
+    FixtureRetainedBootPublicationParentFault,
+    arm_retained_boot_file_private_name_substitution, arm_retained_boot_file_publication_fault,
+    arm_retained_boot_publication_parent_checkpoint_hook, arm_retained_boot_publication_parent_fault,
+    validate_fixture_boot_publication_parent_identity, validate_fixture_boot_publication_parent_policy,
 };
 
 #[cfg(test)]

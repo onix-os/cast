@@ -87,7 +87,7 @@ impl PublicationFixture {
         let view = self.attachment.revalidate_against(&self.anchor).unwrap();
         view.publish_immutable_boot_file_until(
             request(bytes, sha256),
-            RetainedBootNamespaceExpectedSource::generated(bytes),
+            &RetainedBootNamespaceExpectedSource::generated(bytes),
             RetainedBootFilePublicationLimits::default(),
             deadline(),
         )
@@ -377,7 +377,7 @@ fn disposable_vm_vfat_publishes_and_revalidates_one_real_leaf() {
         assert_disposable_vm_mount_policy(&expected_target_devnum);
         view.publish_immutable_boot_file_until(
             request,
-            RetainedBootNamespaceExpectedSource::sealed_descriptor(source.as_fd()),
+            &RetainedBootNamespaceExpectedSource::sealed_descriptor(source.as_fd()),
             RetainedBootFilePublicationLimits::default(),
             deadline(),
         )
@@ -446,7 +446,7 @@ fn canonical_request_cannot_alias_private_stage_namespace_case_insensitively() {
         let error = view
             .publish_immutable_boot_file_until(
                 request_for_leaf(leaf, bytes, Sha256::digest(bytes).into()),
-                RetainedBootNamespaceExpectedSource::generated(bytes),
+                &RetainedBootNamespaceExpectedSource::generated(bytes),
                 RetainedBootFilePublicationLimits::default(),
                 deadline(),
             )
@@ -545,7 +545,7 @@ fn sealed_source_streams_multiple_chunks_without_exposing_its_descriptor() {
     let published = view
         .publish_immutable_boot_file_until(
             request(&bytes, Sha256::digest(&bytes).into()),
-            RetainedBootNamespaceExpectedSource::sealed_descriptor(source.as_fd()),
+            &RetainedBootNamespaceExpectedSource::sealed_descriptor(source.as_fd()),
             RetainedBootFilePublicationLimits::default(),
             deadline(),
         )
@@ -691,7 +691,7 @@ fn retained_attachment_replacement_fails_before_mutating_either_directory() {
     let error = view
         .publish_immutable_boot_file_until(
             request(bytes, Sha256::digest(bytes).into()),
-            RetainedBootNamespaceExpectedSource::generated(bytes),
+            &RetainedBootNamespaceExpectedSource::generated(bytes),
             RetainedBootFilePublicationLimits::default(),
             deadline(),
         )

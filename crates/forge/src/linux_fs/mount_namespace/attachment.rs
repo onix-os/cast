@@ -26,6 +26,7 @@ use std::{
 
 mod boot_namespace;
 mod boot_file_publication;
+mod boot_publication_parent;
 mod capture;
 mod device;
 mod filesystem;
@@ -37,10 +38,20 @@ pub(crate) use boot_file_publication::{
     RetainedBootFilePublicationError, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
     RetainedBootFilePublicationRequest, ValidatedRetainedBootFilePublication,
 };
+pub(crate) use boot_publication_parent::{
+    RetainedBootPublicationParent, RetainedBootPublicationParentError,
+};
 #[cfg(test)]
 pub(crate) use boot_file_publication::{
     FixtureRetainedBootFilePublicationFault, arm_retained_boot_file_private_name_substitution,
     arm_retained_boot_file_publication_fault,
+};
+#[cfg(test)]
+pub(crate) use boot_publication_parent::{
+    FixtureRetainedBootPublicationParentCheckpoint, FixtureRetainedBootPublicationParentFault,
+    arm_retained_boot_publication_parent_checkpoint_hook,
+    arm_retained_boot_publication_parent_fault, validate_fixture_boot_publication_parent_identity,
+    validate_fixture_boot_publication_parent_policy,
 };
 use capture::{AttachmentCapture, capture_twice, require_capture_matches};
 pub(crate) use device::{TaskRootDevtmpfsAttachmentAuthenticationError, ValidatedTaskRootDevtmpfsAttachmentEvidence};
