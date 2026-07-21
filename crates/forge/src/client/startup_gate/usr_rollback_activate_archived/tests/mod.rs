@@ -17,6 +17,7 @@ mod finalization_matrix;
 mod finalization_process_kill;
 mod finalization_public_binding_races;
 mod finalization_restart;
+mod finalization_root_link_races;
 mod finalization_storage_faults;
 mod matrix;
 mod record_binding;

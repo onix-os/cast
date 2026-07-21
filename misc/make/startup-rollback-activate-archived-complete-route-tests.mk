@@ -9,7 +9,7 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_activate_archived::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'.*: test$$' "$$listed" )" = 43; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'.*: test$$' "$$listed" )" = 47; \
 	for name in \
 		authority_binding::startup_activate_archived_complete_route_rejects_reopened_and_cross_root_journal_bindings \
 		evidence_races::startup_activate_archived_complete_route_capture_sandwich_rejects_database_provenance_and_namespace_races \
@@ -181,9 +181,9 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	finalization_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_activate_archived_finalization_authority.rs; \
 	finalization_tests="$$tests/finalization_matrix.rs"; \
 	timeout 10s grep -Fq 'ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged' "$$finalization_authority"; \
-	if timeout 10s rg -n 'RootLinksComplete' "$$finalization_authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	timeout 10s grep -Fq 'for source in CandidateSource::ALL {' "$$finalization_tests"; \
-	if timeout 10s rg -n 'THROUGH_CANDIDATE_PRESERVED' "$$finalization_tests" "$$tests/finalization_process_kill.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	timeout 10s grep -Fq 'ForwardPhase::RootLinksComplete, 12' "$$finalization_authority"; \
+	timeout 10s grep -Fq 'for source in CandidateSource::THROUGH_ROLLBACK_COMPLETE {' "$$finalization_tests"; \
+	if timeout 10s rg -n 'THROUGH_(?:CANDIDATE_PRESERVED|ROLLBACK_COMPLETE)' "$$tests/finalization_process_kill.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'unreachable!("RootLinksComplete is outside the later process-kill source axis")' "$$tests/finalization_process_kill.rs"; \
 	timeout 10s grep -Fq 'assert_route_pending_audit(&error, &fixture, &expected);' "$$tests/exclusions.rs"; \
 	if timeout 10s rg -n 'finalize_usr_rollback|journal\.delete' "$$tests/exclusions.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \

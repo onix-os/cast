@@ -1,4 +1,4 @@
-//! Direct same-store ActivateArchived terminal-delete reconciliation contracts.
+//! Direct same-store ActivateArchived bound-delete error contracts.
 
 #[allow(dead_code)]
 #[path = "../../../startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs"]

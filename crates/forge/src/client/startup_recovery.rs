@@ -195,11 +195,6 @@ pub(in crate::client) use usr_rollback_activate_archived_complete_route::{
     arm_before_usr_rollback_activate_archived_complete_route_successor_binding_revalidation,
 };
 
-#[cfg(test)]
-pub(in crate::client) use usr_rollback_activate_archived_finalization::{
-    DurableUsrRollbackActivateArchivedFinalizationRecord, UsrRollbackActivateArchivedFinalizationVerificationError,
-};
-
 pub(super) use usr_rollback_complete_route::{
     UsrRollbackCompleteRoutePersistenceError, persist_usr_rollback_complete_route_and_reopen,
 };
@@ -274,7 +269,6 @@ pub(crate) use usr_rollback_active_reblit_finalization::{
 #[cfg(test)]
 pub(crate) use usr_rollback_activate_archived_finalization::{
     arm_after_usr_rollback_activate_archived_finalization_delete,
-    arm_before_usr_rollback_activate_archived_finalization_final_durable_inspection,
     arm_before_usr_rollback_activate_archived_finalization_final_revalidation,
 };
 

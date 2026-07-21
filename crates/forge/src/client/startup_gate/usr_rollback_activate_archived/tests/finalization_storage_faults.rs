@@ -4,13 +4,13 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            DurableUsrRollbackActivateArchivedFinalizationRecord, UsrRollbackActivateArchivedFinalizationError,
-            finalize_usr_rollback_activate_archived,
+            UsrRollbackActivateArchivedFinalizationError, finalize_usr_rollback_activate_archived,
         },
     },
     transition_journal::{
         RollbackActionOutcome, arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
         assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
+        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
     },
 };
 
@@ -26,19 +26,19 @@ use super::{
 struct DeleteFault {
     arm: fn(),
     assert_consumed: fn(),
-    durable: DurableUsrRollbackActivateArchivedFinalizationRecord,
+    state: TransitionJournalRecordDeleteState,
 }
 
 const DELETE_FAULTS: [DeleteFault; 2] = [
     DeleteFault {
         arm: arm_next_delete_canonical_unlink_fault,
         assert_consumed: assert_delete_canonical_unlink_fault_consumed,
-        durable: DurableUsrRollbackActivateArchivedFinalizationRecord::RollbackComplete,
+        state: TransitionJournalRecordDeleteState::ExactSource,
     },
     DeleteFault {
         arm: arm_next_delete_directory_sync_fault,
         assert_consumed: assert_delete_directory_sync_fault_consumed,
-        durable: DurableUsrRollbackActivateArchivedFinalizationRecord::Absent,
+        state: TransitionJournalRecordDeleteState::Absent,
     },
 ];
 
@@ -47,7 +47,7 @@ fn startup_activate_archived_finalization_classifies_both_delete_faults_and_conv
     for fault in DELETE_FAULTS {
         let fixture = RouteFixture::new(
             Epoch::Current,
-            CandidateSource::Exchanged,
+            CandidateSource::RootLinksComplete,
             RollbackActionOutcome::Applied,
             CandidateOutcome::Applied,
         );
@@ -66,17 +66,18 @@ fn startup_activate_archived_finalization_classifies_both_delete_faults_and_conv
         assert!(
             matches!(
                 error,
-                UsrRollbackActivateArchivedFinalizationError::Delete { durable, .. }
-                    if durable == fault.durable
+                UsrRollbackActivateArchivedFinalizationError::Delete(
+                    TransitionJournalRecordDeleteError::Storage { state, .. }
+                ) if state == fault.state
             ),
-            "expected durable {:?}, got {error:?}",
-            fault.durable
+            "expected bound-delete state {:?}, got {error:?}",
+            fault.state
         );
-        match fault.durable {
-            DurableUsrRollbackActivateArchivedFinalizationRecord::RollbackComplete => {
+        match fault.state {
+            TransitionJournalRecordDeleteState::ExactSource => {
                 assert_eq!(fixture.canonical_record(), terminal);
             }
-            DurableUsrRollbackActivateArchivedFinalizationRecord::Absent => {
+            TransitionJournalRecordDeleteState::Absent => {
                 assert_canonical_absent(&fixture.fixture.fixture.installation.root);
             }
         }

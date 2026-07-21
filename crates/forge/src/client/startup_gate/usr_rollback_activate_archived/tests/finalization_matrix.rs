@@ -1,6 +1,16 @@
 //! Exact terminal ActivateArchived matrix through the production startup gate.
 
-use crate::transition_journal::{Operation, RollbackActionOutcome};
+use crate::{
+    client::{
+        boot::{boot_synchronize_attempt_count, reset_boot_synchronize_attempt_count},
+        startup_reconciliation::{
+            active_reblit_candidate_preserve_exchange_attempt_count,
+            fresh_db_invalidation_removal_call_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
+        },
+    },
+    transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
+    transition_journal::{Operation, RollbackActionOutcome},
+};
 
 use super::{
     super::candidate_test_support::CandidateSource,
@@ -14,14 +24,14 @@ const USR_OUTCOMES: [RollbackActionOutcome; 2] =
     [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied];
 
 #[test]
-fn startup_activate_archived_finalization_covers_all_sixteen_exact_terminal_cases() {
+fn startup_activate_archived_finalization_covers_all_twenty_four_exact_terminal_cases() {
     assert_eq!(Epoch::ALL.len(), 2);
-    assert_eq!(CandidateSource::ALL.len(), 2);
+    assert_eq!(CandidateSource::THROUGH_ROLLBACK_COMPLETE.len(), 3);
     assert_eq!(USR_OUTCOMES.len(), 2);
     assert_eq!(CandidateOutcome::ALL.len(), 2);
     let mut cases = 0;
     for epoch in Epoch::ALL {
-        for source in CandidateSource::ALL {
+        for source in CandidateSource::THROUGH_ROLLBACK_COMPLETE {
             for usr_outcome in USR_OUTCOMES {
                 for candidate_outcome in CandidateOutcome::ALL {
                     let fixture = RouteFixture::new(epoch, source, usr_outcome, candidate_outcome);
@@ -29,6 +39,9 @@ fn startup_activate_archived_finalization_covers_all_sixteen_exact_terminal_case
                     let database_before = fixture.database_snapshot();
                     let namespace_before = fixture.namespace_snapshot();
                     reset_candidate_observers();
+                    reset_retained_exchange_syscall_count();
+                    reset_boot_synchronize_attempt_count();
+                    reset_active_reblit_candidate_preserve_exchange_attempt_count();
 
                     let clean = enter_clean_route(&fixture);
 
@@ -38,11 +51,15 @@ fn startup_activate_archived_finalization_covers_all_sixteen_exact_terminal_case
                     assert_eq!(fixture.namespace_snapshot(), namespace_before);
                     fixture.assert_exact_archived_topology();
                     assert_eq!(candidate_move_count(), 0);
+                    assert_eq!(retained_exchange_syscall_count(), 0);
+                    assert_eq!(boot_synchronize_attempt_count(), 0);
+                    assert_eq!(fresh_db_invalidation_removal_call_count(), 0);
+                    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0);
                     drop(clean);
                     cases += 1;
                 }
             }
         }
     }
-    assert_eq!(cases, 16);
+    assert_eq!(cases, 24);
 }

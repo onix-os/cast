@@ -10,15 +10,19 @@ use std::{
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
+        startup_reconciliation::arm_before_usr_rollback_activate_archived_finalization_fresh_namespace_capture,
         startup_recovery::{
-            UsrRollbackActivateArchivedFinalizationError, UsrRollbackActivateArchivedFinalizationVerificationError,
+            UsrRollbackActivateArchivedFinalizationError,
             arm_after_usr_rollback_activate_archived_finalization_delete,
-            arm_before_usr_rollback_activate_archived_finalization_final_durable_inspection,
             arm_before_usr_rollback_activate_archived_finalization_final_revalidation,
             finalize_usr_rollback_activate_archived,
         },
     },
-    transition_journal::{RollbackActionOutcome, StorageError, encode},
+    transition_journal::{
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError,
+        TransitionJournalRecordDeleteError, arm_public_binding_revalidation_callback,
+        assert_public_binding_revalidation_callback_consumed, encode,
+    },
 };
 
 use super::{
@@ -112,6 +116,60 @@ fn startup_activate_archived_finalization_rejects_hidden_entry_set_substitution(
 }
 
 #[test]
+fn startup_activate_archived_finalization_bound_delete_never_unlinks_a_last_seam_replacement() {
+    let fixture = exact_route();
+    let terminal = persist_rollback_complete(&fixture);
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let authority = capture_finalization_ready(&fixture, &journal, &reservation, &terminal);
+    let root = &fixture.fixture.fixture.installation.root;
+    let canonical = root.join(".cast/journal/state-transition");
+    let displaced = fixture
+        .fixture
+        .fixture
+        .installation
+        .state_quarantine_dir()
+        .join("activate-archived-finalization-retained-original");
+    let exact_bytes = fs::read(&canonical).unwrap();
+    let hook_canonical = canonical.clone();
+    let hook_displaced = displaced.clone();
+    let hook_bytes = exact_bytes.clone();
+    arm_public_binding_revalidation_callback(
+        PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach,
+        move || {
+            fs::rename(&hook_canonical, &hook_displaced).unwrap();
+            write_new_private_file(&hook_canonical, &hook_bytes);
+        },
+    );
+    reset_candidate_observers();
+
+    let error = finalize_usr_rollback_activate_archived(journal, authority).unwrap_err();
+
+    assert_public_binding_revalidation_callback_consumed();
+    assert!(matches!(
+        error,
+        UsrRollbackActivateArchivedFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Detached(StorageError::CanonicalChanged)
+        )
+    ));
+    assert_eq!(fs::read(displaced).unwrap(), exact_bytes);
+    assert!(!canonical.exists());
+    let retained_replacements = fs::read_dir(root.join(".cast/journal"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".state-transition.delete-")
+        })
+        .map(|entry| fs::read(entry.path()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(retained_replacements, vec![exact_bytes]);
+    assert_eq!(candidate_move_count(), 0);
+}
+
+#[test]
 fn startup_activate_archived_finalization_rejects_source_recreation_after_delete_and_absence_proof() {
     let fixture = exact_route();
     let terminal = persist_rollback_complete(&fixture);
@@ -132,7 +190,7 @@ fn startup_activate_archived_finalization_rejects_source_recreation_after_delete
 
     assert!(matches!(
         recreated,
-        UsrRollbackActivateArchivedFinalizationError::DeleteSucceededButRecordPresent
+        UsrRollbackActivateArchivedFinalizationError::PostDeleteAuthority(_)
     ));
     assert_eq!(fixture.canonical_record(), terminal);
     assert_eq!(candidate_move_count(), 0);
@@ -150,17 +208,17 @@ fn startup_activate_archived_finalization_rejects_source_recreation_after_delete
         .root
         .join(".cast/journal/state-transition");
     let bytes = encode(&terminal).unwrap();
-    arm_before_usr_rollback_activate_archived_finalization_final_durable_inspection(move || {
-        write_new_private_file(&canonical, &bytes)
+    arm_after_usr_rollback_activate_archived_finalization_delete(move || {
+        arm_before_usr_rollback_activate_archived_finalization_fresh_namespace_capture(move || {
+            write_new_private_file(&canonical, &bytes)
+        });
     });
 
     let changed = finalize_usr_rollback_activate_archived(journal, authority).unwrap_err();
 
     assert!(matches!(
         changed,
-        UsrRollbackActivateArchivedFinalizationError::PostDeleteVerification(
-            UsrRollbackActivateArchivedFinalizationVerificationError::JournalChangedDuringVerification { .. }
-        )
+        UsrRollbackActivateArchivedFinalizationError::PostDeleteAuthority(_)
     ));
     assert_eq!(fixture.canonical_record(), terminal);
     assert_eq!(candidate_move_count(), 0);
@@ -169,7 +227,7 @@ fn startup_activate_archived_finalization_rejects_source_recreation_after_delete
 fn exact_route() -> RouteFixture {
     RouteFixture::new(
         Epoch::Current,
-        CandidateSource::Intent,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOutcome::AlreadySatisfied,
     )
@@ -183,28 +241,16 @@ fn arm_at(timing: Timing, hook: impl FnOnce() + 'static) {
 }
 
 fn assert_binding_error(timing: Timing, error: &UsrRollbackActivateArchivedFinalizationError, directory: bool) {
-    let expected = |source: &UsrRollbackActivateArchivedFinalizationVerificationError| {
-        matches!(
-            source,
-            UsrRollbackActivateArchivedFinalizationVerificationError::Journal(
-                StorageError::JournalDirectoryBindingChanged
-            ) if directory
-        ) || matches!(
-            source,
-            UsrRollbackActivateArchivedFinalizationVerificationError::Journal(
-                StorageError::JournalLockBindingChanged
-            ) if !directory
+    let matched = matches!(
+        (timing, error),
+        (
+            Timing::BeforeDelete,
+            UsrRollbackActivateArchivedFinalizationError::Authority(_)
+        ) | (
+            Timing::AfterDelete,
+            UsrRollbackActivateArchivedFinalizationError::PostDeleteAuthority(_)
         )
-    };
-    let matched = match (timing, error) {
-        (Timing::BeforeDelete, UsrRollbackActivateArchivedFinalizationError::PreDeleteVerification(source)) => {
-            expected(source)
-        }
-        (Timing::AfterDelete, UsrRollbackActivateArchivedFinalizationError::PostDeleteVerification(source)) => {
-            expected(source)
-        }
-        _ => false,
-    };
+    );
     assert!(matched, "timing={timing:?}, directory={directory}: {error:?}");
 }
 
@@ -213,18 +259,10 @@ fn assert_entry_set_error(timing: Timing, error: &UsrRollbackActivateArchivedFin
         (timing, error),
         (
             Timing::BeforeDelete,
-            UsrRollbackActivateArchivedFinalizationError::PreDeleteVerification(
-                UsrRollbackActivateArchivedFinalizationVerificationError::Journal(
-                    StorageError::JournalEntrySetMismatch { .. }
-                )
-            )
+            UsrRollbackActivateArchivedFinalizationError::Authority(_)
         ) | (
             Timing::AfterDelete,
-            UsrRollbackActivateArchivedFinalizationError::PostDeleteVerification(
-                UsrRollbackActivateArchivedFinalizationVerificationError::Journal(
-                    StorageError::JournalEntrySetMismatch { .. }
-                )
-            )
+            UsrRollbackActivateArchivedFinalizationError::PostDeleteAuthority(_)
         )
     );
     assert!(matched, "timing={timing:?}: {error:?}");

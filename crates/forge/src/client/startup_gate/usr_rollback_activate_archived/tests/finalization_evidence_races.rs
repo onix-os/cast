@@ -225,7 +225,7 @@ fn startup_activate_archived_finalization_rejects_final_pre_and_post_delete_evid
 fn exact_route(epoch: Epoch) -> RouteFixture {
     RouteFixture::new(
         epoch,
-        CandidateSource::Intent,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOutcome::AlreadySatisfied,
     )

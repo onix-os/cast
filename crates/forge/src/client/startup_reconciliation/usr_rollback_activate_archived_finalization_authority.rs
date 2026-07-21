@@ -1,15 +1,17 @@
 //! Sealed authority for exact ActivateArchived rollback finalization.
 //!
 //! Admission retains the exact two distinct cleared rows, immutable candidate
-//! provenance, terminal archived canonical-slot topology, journal binding,
+//! provenance, terminal archived canonical-slot topology, exact journal inode,
 //! installation, and active-state reservation through a binding-first
-//! DB -> namespace -> DB sandwich. It exposes no deletion or other effect.
+//! DB -> namespace -> DB sandwich. Its only effect surface consumes that exact
+//! binding into one operation-specific terminal deletion attempt.
 
 use crate::{
     Installation, db,
     transition_journal::{
         AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin,
-        RollbackAction, TransitionJournalBinding, TransitionJournalStore, TransitionRecord,
+        RollbackAction, StorageError, TransitionJournalBinding, TransitionJournalRecordBinding,
+        TransitionJournalRecordDeleteError, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -30,6 +32,19 @@ pub(in crate::client) enum UsrRollbackActivateArchivedFinalizationAdmission<'res
 
 /// One-shot terminal authority. This type is intentionally not `Clone`.
 pub(in crate::client) struct UsrRollbackActivateArchivedFinalizationAuthority<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: UsrRollbackActivateArchivedFinalizationDatabaseEvidence,
+    namespace: UsrRollbackActivateArchivedFinalizationNamespaceProof,
+    journal_binding: TransitionJournalBinding,
+    journal_record_binding: TransitionJournalRecordBinding,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+/// One-shot evidence retained after the exact record binding has been
+/// consumed by a deletion attempt. This type is intentionally not `Clone`.
+pub(in crate::client) struct UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
@@ -68,10 +83,10 @@ impl<'reservation> UsrRollbackActivateArchivedFinalizationAuthority<'reservation
             return Ok(UsrRollbackActivateArchivedFinalizationAdmission::Deferred);
         }
 
+        installation.revalidate_mutable_namespace()?;
         let journal_binding = journal.binding();
-        if !journal.has_binding(&journal_binding) {
-            return Err(UsrRollbackActivateArchivedFinalizationAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        let journal_record_binding =
+            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database(record, state_db)? {
@@ -81,12 +96,17 @@ impl<'reservation> UsrRollbackActivateArchivedFinalizationAuthority<'reservation
             }
         };
         let namespace_inspection =
-            match UsrRollbackActivateArchivedFinalizationNamespaceInspection::begin(installation, journal, record) {
+            match UsrRollbackActivateArchivedFinalizationNamespaceInspection::begin(
+                installation,
+                journal,
+                &journal_record_binding,
+                record,
+            ) {
                 Ok(inspection) => inspection,
                 Err(_) => return Ok(UsrRollbackActivateArchivedFinalizationAdmission::Deferred),
             };
         run_between_database_captures();
-        let namespace = match namespace_inspection.finish(installation, journal, record) {
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackActivateArchivedFinalizationAdmission::Deferred),
         };
@@ -99,6 +119,7 @@ impl<'reservation> UsrRollbackActivateArchivedFinalizationAuthority<'reservation
         if database_before != database_after || !activate_archived_finalization_plan_is_exact(record) {
             return Ok(UsrRollbackActivateArchivedFinalizationAdmission::Deferred);
         }
+        require_journal_record_binding(journal, installation, &journal_record_binding, record)?;
 
         let retained_state_db = state_db.clone();
         debug_assert!(retained_state_db.same_instance(state_db));
@@ -110,6 +131,7 @@ impl<'reservation> UsrRollbackActivateArchivedFinalizationAuthority<'reservation
             database: database_after,
             namespace,
             journal_binding,
+            journal_record_binding,
             _active_state_reservation: active_state_reservation,
         }))
     }
@@ -118,22 +140,82 @@ impl<'reservation> UsrRollbackActivateArchivedFinalizationAuthority<'reservation
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackActivateArchivedFinalizationAuthorityError> {
-        if !journal.has_binding(&self.journal_binding) {
-            return Err(UsrRollbackActivateArchivedFinalizationAuthorityErrorKind::JournalBindingMismatch.into());
-        }
+        require_journal_record_binding(
+            journal,
+            &self.installation,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
-        self.namespace.revalidate(&self.installation, journal, &self.record)?;
+        self.namespace.revalidate(
+            &self.installation,
+            journal,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         let database_after =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if database_before != database_after || !activate_archived_finalization_plan_is_exact(&self.record) {
             return Err(UsrRollbackActivateArchivedFinalizationAuthorityErrorKind::FinalizationEvidenceMismatch.into());
         }
+        require_journal_record_binding(
+            journal,
+            &self.installation,
+            &self.journal_record_binding,
+            &self.record,
+        )?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
 
+    pub(in crate::client) fn attempt_record_bound_delete(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<
+        (
+            Result<(), TransitionJournalRecordDeleteError>,
+            UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority<'reservation>,
+        ),
+        UsrRollbackActivateArchivedFinalizationAuthorityError,
+    > {
+        self.revalidate(journal)?;
+        let Self {
+            installation,
+            state_db,
+            record,
+            database,
+            namespace,
+            journal_binding,
+            journal_record_binding,
+            _active_state_reservation,
+        } = self;
+        let delete = journal.delete_record_binding(
+            installation.retained_mutable_cast_directory()?,
+            journal_record_binding,
+            &record,
+        );
+        Ok((
+            delete,
+            UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority {
+                installation,
+                state_db,
+                record,
+                database,
+                namespace,
+                journal_binding,
+                _active_state_reservation,
+            },
+        ))
+    }
+
+    pub(in crate::client) fn record(&self) -> &TransitionRecord {
+        &self.record
+    }
+}
+
+impl UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority<'_> {
     pub(in crate::client) fn revalidate_after_journal_delete(
         self,
         journal: &TransitionJournalStore,
@@ -155,14 +237,6 @@ impl<'reservation> UsrRollbackActivateArchivedFinalizationAuthority<'reservation
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
-
-    pub(in crate::client) fn installation(&self) -> &Installation {
-        &self.installation
-    }
-
-    pub(in crate::client) fn record(&self) -> &TransitionRecord {
-        &self.record
-    }
 }
 
 fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
@@ -177,8 +251,9 @@ fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bo
         && record.previous.id.is_some()
         && record.candidate.id != record.previous.id
         && matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged
+            (rollback.source, record.generation),
+            (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
+                | (ForwardPhase::RootLinksComplete, 12)
         )
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
@@ -193,6 +268,24 @@ fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bo
         && rollback.fresh_db == RollbackAction::NotRequired
         && rollback.boot == BootRollback::NotRequired
         && !rollback.external_effects_may_remain
+}
+
+fn require_journal_record_binding(
+    journal: &TransitionJournalStore,
+    installation: &Installation,
+    binding: &TransitionJournalRecordBinding,
+    record: &TransitionRecord,
+) -> Result<(), UsrRollbackActivateArchivedFinalizationAuthorityError> {
+    if !journal.has_record_store_binding(binding) {
+        return Err(UsrRollbackActivateArchivedFinalizationAuthorityErrorKind::JournalBindingMismatch.into());
+    }
+    installation.revalidate_mutable_namespace()?;
+    let cast = installation.retained_mutable_cast_directory()?;
+    if !journal.has_record_binding(cast, binding, record)? {
+        return Err(UsrRollbackActivateArchivedFinalizationAuthorityErrorKind::JournalRecordBindingMismatch.into());
+    }
+    installation.revalidate_mutable_namespace()?;
+    Ok(())
 }
 
 fn inspect_current_database(
@@ -285,10 +378,20 @@ impl From<crate::installation::Error> for UsrRollbackActivateArchivedFinalizatio
     }
 }
 
+impl From<StorageError> for UsrRollbackActivateArchivedFinalizationAuthorityError {
+    fn from(source: StorageError) -> Self {
+        UsrRollbackActivateArchivedFinalizationAuthorityErrorKind::Journal(source).into()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 enum UsrRollbackActivateArchivedFinalizationAuthorityErrorKind {
     #[error("ActivateArchived rollback-finalization authority was paired with a different open journal store")]
     JournalBindingMismatch,
+    #[error("the exact retained ActivateArchived terminal journal inode no longer matches its captured binding")]
+    JournalRecordBindingMismatch,
+    #[error("authenticate the exact retained ActivateArchived terminal journal inode")]
+    Journal(#[source] StorageError),
     #[error("exact ActivateArchived RollbackComplete evidence no longer authorizes finalization")]
     FinalizationEvidenceMismatch,
     #[error("inspect ActivateArchived rollback-finalization startup database context")]

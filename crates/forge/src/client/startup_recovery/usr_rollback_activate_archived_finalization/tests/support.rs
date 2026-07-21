@@ -1,5 +1,3 @@
-use std::os::unix::fs::symlink;
-
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
@@ -16,17 +14,8 @@ use super::{
     test_fixture::OperationKind,
 };
 
-const ROOT_ABI: [(&str, &str); 5] = [
-    ("bin", "usr/bin"),
-    ("sbin", "usr/sbin"),
-    ("lib", "usr/lib"),
-    ("lib32", "usr/lib32"),
-    ("lib64", "usr/lib"),
-];
-
 pub(super) struct FinalizationFixture {
     pub(super) fixture: CandidatePreserveFixture,
-    pub(super) preterminal: TransitionRecord,
     pub(super) terminal: TransitionRecord,
 }
 
@@ -34,29 +23,23 @@ impl FinalizationFixture {
     pub(super) fn new() -> Self {
         let fixture = CandidatePreserveFixture::new(
             OperationKind::Archived,
-            CandidateSource::Intent,
+            CandidateSource::RootLinksComplete,
             RollbackActionOutcome::Applied,
             CandidateLayout::Preserved,
         );
-        for (name, target) in ROOT_ABI {
-            symlink(target, fixture.fixture.installation.root.join(name)).unwrap();
-        }
-        let preterminal = fixture
+        let preserved = fixture
             .candidate_intent
             .rollback_successor(Some(RollbackActionOutcome::Applied))
             .unwrap();
-        assert_eq!(preterminal.phase, Phase::CandidatePreserved);
-        let terminal = preterminal.rollback_successor(None).unwrap();
+        assert_eq!(preserved.phase, Phase::CandidatePreserved);
+        let terminal = preserved.rollback_successor(None).unwrap();
         assert_eq!(terminal.phase, Phase::RollbackComplete);
+        assert_eq!(terminal.generation, 12);
         let journal = fixture.open_journal();
-        journal.advance(&fixture.candidate_intent, &preterminal).unwrap();
-        journal.advance(&preterminal, &terminal).unwrap();
+        journal.advance(&fixture.candidate_intent, &preserved).unwrap();
+        journal.advance(&preserved, &terminal).unwrap();
         drop(journal);
-        Self {
-            fixture,
-            preterminal,
-            terminal,
-        }
+        Self { fixture, terminal }
     }
 
     pub(super) fn open_journal(&self) -> TransitionJournalStore {
@@ -79,7 +62,7 @@ impl FinalizationFixture {
         )
         .unwrap();
         let UsrRollbackActivateArchivedFinalizationAdmission::Ready(authority) = admission else {
-            panic!("exact terminal ActivateArchived evidence did not admit finalization");
+            panic!("exact generation-12 RootLinks ActivateArchived terminal did not admit finalization");
         };
         authority
     }

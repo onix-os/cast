@@ -1,9 +1,16 @@
 use std::{fs, os::unix::fs::MetadataExt as _, path::PathBuf};
 
 use crate::{
-    client::startup_reconciliation::{
-        active_reblit_candidate_preserve_exchange_attempt_count,
-        fresh_db_invalidation_removal_call_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
+    client::{
+        active_state_snapshot::ActiveStateReservation,
+        boot::{boot_synchronize_attempt_count, reset_boot_synchronize_attempt_count},
+        startup_gate::CleanSystemStartup,
+        startup_reconciliation::{
+            active_reblit_candidate_preserve_exchange_attempt_count,
+            archived_candidate_preserve_move_attempt_count, fresh_db_invalidation_removal_call_count,
+            reset_active_reblit_candidate_preserve_exchange_attempt_count,
+            reset_archived_candidate_preserve_move_attempt_count,
+        },
     },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},
     transition_journal::{Phase, RecoveryDisposition, RollbackActionOutcome, TransitionRecord},
@@ -12,7 +19,8 @@ use crate::{
 use super::fixture::{Fixture, OperationKind, SourceCase, create_private_directory, pending};
 
 #[test]
-fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suffix_without_second_reverse_exchange() {
+fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_endpoints_without_second_reverse_exchange()
+{
     for historical in [false, true] {
         for kind in OperationKind::ALL {
             let fixture = if historical {
@@ -29,6 +37,8 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
             let usr_before = usr_layout(&fixture);
             reset_retained_exchange_syscall_count();
             reset_active_reblit_candidate_preserve_exchange_attempt_count();
+            reset_archived_candidate_preserve_move_attempt_count();
+            reset_boot_synchronize_attempt_count();
 
             let decision_entry = fixture.enter();
             assert_eq!(pending(&decision_entry).phase(), Phase::RollbackDecided, "{case}");
@@ -123,6 +133,12 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
                 usize::from(kind == OperationKind::ActiveReblit),
                 "{case}"
             );
+            assert_eq!(
+                archived_candidate_preserve_move_attempt_count(),
+                usize::from(kind == OperationKind::Archived),
+                "{case}"
+            );
+            let fresh_db_invalidations_before_terminal = fresh_db_invalidation_removal_call_count();
 
             let preserved_bytes = fixture.canonical_bytes();
             let preserved_namespace = fixture.namespace_snapshot();
@@ -227,16 +243,49 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_closed_suf
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
 
-                    let complete_bytes = fixture.canonical_bytes();
                     drop(complete_entry);
-                    let stable_entry = fixture.enter();
-                    assert_eq!(pending(&stable_entry).phase(), Phase::RollbackComplete, "{case}");
-                    assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
-                    assert_eq!(fixture.canonical_bytes(), complete_bytes, "{case}");
+                    let reservation = ActiveStateReservation::acquire().unwrap();
+                    let clean = CleanSystemStartup::enter(&fixture.system, &reservation)
+                        .expect("exact generation-12 RootLinks ActivateArchived terminal must finalize cleanly");
+                    assert!(
+                        !fixture
+                            .installation
+                            .root
+                            .join(".cast/journal/state-transition")
+                            .exists(),
+                        "{case}"
+                    );
                     assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
                     assert_eq!(fixture.database_snapshot(), database_before, "{case}");
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
                     assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+                    assert_eq!(archived_candidate_preserve_move_attempt_count(), 1, "{case}");
+                    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0, "{case}");
+                    assert_eq!(
+                        fresh_db_invalidation_removal_call_count(),
+                        fresh_db_invalidations_before_terminal,
+                        "{case}"
+                    );
+                    assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
+                    drop(clean);
+                    drop(reservation);
+
+                    let stable_reservation = ActiveStateReservation::acquire().unwrap();
+                    let stable = CleanSystemStartup::enter(&fixture.system, &stable_reservation)
+                        .expect("finalized RootLinks ActivateArchived endpoint must remain clean");
+                    assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
+                    assert_eq!(fixture.database_snapshot(), database_before, "{case}");
+                    assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
+                    assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");
+                    assert_eq!(archived_candidate_preserve_move_attempt_count(), 1, "{case}");
+                    assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), 0, "{case}");
+                    assert_eq!(
+                        fresh_db_invalidation_removal_call_count(),
+                        fresh_db_invalidations_before_terminal,
+                        "{case}"
+                    );
+                    assert_eq!(boot_synchronize_attempt_count(), 0, "{case}");
+                    drop(stable);
                 }
                 OperationKind::ActiveReblit => {
                     assert_eq!(candidate_preserved.generation, 13, "{case}");

@@ -57,8 +57,9 @@ pub(in crate::client) use usr_rollback_activate_archived_complete_route_authorit
     UsrRollbackActivateArchivedCompleteRouteRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_activate_archived_finalization_authority::{
-    UsrRollbackActivateArchivedFinalizationAdmission, UsrRollbackActivateArchivedFinalizationAuthority,
-    UsrRollbackActivateArchivedFinalizationAuthorityError,
+    UsrRollbackActivateArchivedFinalizationAdmission,
+    UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority,
+    UsrRollbackActivateArchivedFinalizationAuthority, UsrRollbackActivateArchivedFinalizationAuthorityError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_complete_authority::{
     UsrRollbackActiveReblitBootRepairCompleteAdmission, UsrRollbackActiveReblitBootRepairCompleteAuthority,

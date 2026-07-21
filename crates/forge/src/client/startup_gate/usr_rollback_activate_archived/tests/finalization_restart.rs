@@ -7,13 +7,13 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            DurableUsrRollbackActivateArchivedFinalizationRecord, UsrRollbackActivateArchivedFinalizationError,
-            finalize_usr_rollback_activate_archived,
+            UsrRollbackActivateArchivedFinalizationError, finalize_usr_rollback_activate_archived,
         },
     },
     transition_journal::{
         RollbackActionOutcome, arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
         assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
+        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
     },
 };
 
@@ -50,10 +50,12 @@ fn startup_activate_archived_finalization_restarts_from_retained_terminal_source
     assert_delete_canonical_unlink_fault_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActivateArchivedFinalizationError::Delete {
-            durable: DurableUsrRollbackActivateArchivedFinalizationRecord::RollbackComplete,
-            ..
-        }
+        UsrRollbackActivateArchivedFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::ExactSource,
+                ..
+            }
+        )
     ));
     assert_eq!(fixture.canonical_record(), terminal);
     assert_eq!(candidate_move_count(), 0);
@@ -95,10 +97,12 @@ fn startup_activate_archived_finalization_restarts_from_observed_absence_with_fr
     assert_delete_directory_sync_fault_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActivateArchivedFinalizationError::Delete {
-            durable: DurableUsrRollbackActivateArchivedFinalizationRecord::Absent,
-            ..
-        }
+        UsrRollbackActivateArchivedFinalizationError::Delete(
+            TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::Absent,
+                ..
+            }
+        )
     ));
     assert_canonical_absent(&fixture.fixture.fixture.installation.root);
     assert_eq!(candidate_move_count(), 0);
@@ -118,7 +122,7 @@ fn startup_activate_archived_finalization_restarts_from_observed_absence_with_fr
 fn exact_route(epoch: Epoch) -> RouteFixture {
     RouteFixture::new(
         epoch,
-        CandidateSource::Exchanged,
+        CandidateSource::RootLinksComplete,
         RollbackActionOutcome::Applied,
         CandidateOutcome::AlreadySatisfied,
     )
