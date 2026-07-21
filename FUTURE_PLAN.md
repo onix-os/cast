@@ -51,3 +51,8 @@ separate decision after the current plan is finished.
   report remaining fixture units and processes, VM test-disk mounts, linger,
   and the Ubuntu AppArmor user-namespace setting without changing the existing
   authenticated fixture receipt or treating host policy as package evidence.
+- Standardize long host-side validation on a repository-private temporary root
+  and provide a non-destructive stale-artifact report. A saturated per-user
+  `/tmp` allocation can prevent the sandbox or LOC gate from starting even when
+  the home filesystem has ample capacity; cleanup must never remove unrelated
+  user data automatically.
