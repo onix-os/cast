@@ -11,7 +11,7 @@ forge-linux-mountinfo-parser-test:
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNTINFO_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='linux_fs::tests::mountinfo_'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 22; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 23; \
 	for name in \
 		grammar::complete_records_preserve_order_fields_and_exact_decoded_path_bytes \
 		grammar::all_four_kernel_path_escapes_decode_without_interpreting_utf8 \
@@ -34,7 +34,8 @@ forge-linux-mountinfo-parser-test:
 		bounds::expired_snapshot_deadline_reads_zero_bytes \
 		bounds::expired_parser_deadline_fails_before_parsing_complete_bytes \
 		bounds::production_limits_are_finite_and_internally_consistent \
-		compatibility::synthetic_kernel_format_snapshot_is_parser_compatible_without_host_topology; do \
+		compatibility::synthetic_kernel_format_snapshot_is_parser_compatible_without_host_topology \
+		compatibility::observed_nsfs_mount_root_is_preserved_as_an_opaque_field; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	module="$(MOUNTINFO_TOP_DIR)/crates/forge/src/linux_fs/mountinfo.rs"; \

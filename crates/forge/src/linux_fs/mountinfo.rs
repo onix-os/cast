@@ -81,6 +81,10 @@ impl MountInfoEntry {
     }
 
     /// Exact decoded bytes for field 4. No UTF-8 conversion is performed.
+    ///
+    /// Most filesystems emit an absolute pathname here, but Linux lets a
+    /// filesystem's `show_path` callback provide this field. For example,
+    /// nsfs emits an opaque namespace identity such as `mnt:[4026532758]`.
     pub(crate) fn root(&self) -> &[u8] {
         &self.root
     }
@@ -368,7 +372,10 @@ fn parse_mountinfo_line(
     let mount_id = parse_positive_u64(fields[0], "mount ID", line_number, budget)?;
     let parent_id = parse_positive_u64(fields[1], "parent mount ID", line_number, budget)?;
     let device = parse_device(fields[2], line_number, budget)?;
-    let root = decode_mountinfo_path(fields[3], "root", line_number, true, budget)?;
+    // Linux normally renders this as a path, but a filesystem-specific
+    // `show_path` callback may render an opaque nonempty identity instead.
+    // Authority-bearing consumers validate the exact root they require.
+    let root = decode_mountinfo_path(fields[3], "root", line_number, false, budget)?;
     let mount_point = decode_mountinfo_path(fields[4], "mount point", line_number, true, budget)?;
 
     let mut line_field_units = fields.len();

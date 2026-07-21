@@ -562,11 +562,18 @@ fn deadline_expiring_only_at_terminal_checkpoint_rejects_policy() {
 fn malformed_mountinfo_and_ambiguous_dev_attachments_fail_before_policy() {
     for malformed in [
         b"73 1 0:5 / /dev rw,,nosuid - devtmpfs ignored rw\n".as_slice(),
-        b"73 1 0:5 relative /dev rw - devtmpfs ignored rw\n".as_slice(),
         b"73 1 0:5 / /dev rw - devtmpfs ignored rw".as_slice(),
     ] {
         assert!(parse_mountinfo_bytes(malformed).is_err());
     }
+
+    let opaque_root = parsed(b"73 1 0:5 mnt:[4026532758] /dev rw - devtmpfs ignored rw\n");
+    assert_eq!(
+        selected_at(&opaque_root, DEV_SELECTOR, MOUNT_ID, MAJOR, MINOR)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData,
+    );
 
     let first = stable_record();
     let second = record(

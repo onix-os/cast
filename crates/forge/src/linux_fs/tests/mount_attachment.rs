@@ -110,7 +110,16 @@ fn generic_selection_identity_ignores_filesystem_policy_and_source() {
 fn unrelated_mount_table_churn_does_not_change_the_selected_view() {
     let before = parsed(&joined(&[
         record(MOUNT_ID, 1, MAJOR, MINOR, b"/", SELECTOR, b"vfat", b"source"),
-        record(60, 1, 0, 60, b"/", b"/unrelated-a", b"tmpfs", b"none"),
+        record(
+            60,
+            1,
+            0,
+            60,
+            b"mnt:[4026532758]",
+            b"/unrelated-a",
+            b"nsfs",
+            b"nsfs",
+        ),
     ]));
     let after = parsed(&joined(&[
         record(70, 1, 0, 70, b"/", b"/unrelated-b", b"futurefs", b"changed"),
@@ -201,17 +210,12 @@ fn selected_mount_id_must_equal_the_expected_unique_id() {
 
 #[test]
 fn selected_root_must_be_exact_partition_root() {
-    let mountinfo = parsed(&record(
-        MOUNT_ID,
-        1,
-        MAJOR,
-        MINOR,
-        b"/bound-subdir",
-        SELECTOR,
-        b"vfat",
-        b"ignored",
-    ));
-    assert_invalid_data(selected(&mountinfo, SELECTOR));
+    for root in [b"/bound-subdir".as_slice(), b"mnt:[4026532758]"] {
+        let mountinfo = parsed(&record(
+            MOUNT_ID, 1, MAJOR, MINOR, root, SELECTOR, b"vfat", b"ignored",
+        ));
+        assert_invalid_data(selected(&mountinfo, SELECTOR));
+    }
 }
 
 #[test]

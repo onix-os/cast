@@ -135,7 +135,6 @@ fn separator_and_space_grammar_rejects_ambiguous_or_incomplete_lines() {
         b"1 1 0:1 / / rw - rootfs rootfs rw extra\n",
         b"1 1 0:1 / / rw - rootfs rootfs\n",
         b"1\t1 0:1 / / rw - rootfs rootfs rw\n",
-        b"1 1 0:1 relative / rw - rootfs rootfs rw\n",
         b"1 1 0:1 / relative rw - rootfs rootfs rw\n",
         b"1 1 0:1 / / rw,,nodev - rootfs rootfs rw\n",
         b"1 1 0:1 / / rw, - rootfs rootfs rw\n",
