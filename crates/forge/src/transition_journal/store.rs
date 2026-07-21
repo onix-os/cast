@@ -15,13 +15,20 @@ use super::{
 };
 
 mod record_binding;
-pub(crate) use record_binding::TransitionJournalRecordBinding;
+#[cfg(test)]
+pub(crate) use record_binding::{
+    arm_bound_delete_private_name_callback, assert_bound_delete_private_name_callback_consumed,
+};
+pub(crate) use record_binding::{
+    TransitionJournalRecordBinding, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum DurabilityCheckpoint {
     TemporaryFullySynced,
     CanonicalPublished,
     CanonicalExchanged,
+    CanonicalDetached,
     CanonicalUnlinked,
     DisplacedUnlinked,
     JournalDirectorySynced,
@@ -36,7 +43,10 @@ pub(super) enum StorageFaultPoint {
     UpdateFirstDirectorySync,
     DisplacedUnlink,
     UpdateFinalDirectorySync,
+    BoundDeleteDetach,
+    BoundDeleteDetachReport,
     CanonicalUnlink,
+    BoundDeleteUnlinkReport,
     DeleteDirectorySync,
 }
 
@@ -45,6 +55,13 @@ pub(crate) enum PublicBindingRevalidationBoundary {
     BeforeLoadFinalBinding,
     BeforeBoundAdvancePublish,
     BeforeBoundAdvanceFinalBinding,
+    BeforeBoundDeleteAdmission,
+    BeforeBoundDeleteDetach,
+    BeforeBoundDeletePrivateUnlink,
+    AfterBoundDeleteUnlink,
+    BeforeBoundDeleteFailureReconciliation,
+    BeforeBoundDeletePublication,
+    BeforeBoundDeletePublicationFinalBinding,
     BeforeDeleteUnlinkBinding,
     BeforeDeleteFalseFinalBinding,
     BeforeDeleteFinalBinding,

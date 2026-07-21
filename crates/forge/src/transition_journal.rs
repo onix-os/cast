@@ -48,10 +48,15 @@ pub(crate) use runtime_evidence::RuntimeEvidenceError;
 #[cfg(test)]
 pub(crate) use store::{
     JournalDeleteDurabilityBoundary, JournalUpdateDurabilityBoundary, PublicBindingRevalidationBoundary,
-    arm_journal_delete_durability_callback, arm_journal_update_durability_callback,
-    arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed,
+    arm_bound_delete_private_name_callback, arm_journal_delete_durability_callback,
+    arm_journal_update_durability_callback, arm_public_binding_revalidation_callback,
+    assert_bound_delete_private_name_callback_consumed, assert_public_binding_revalidation_callback_consumed,
 };
-pub(crate) use store::{TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalStore};
+#[allow(unused_imports)] // consumed by the bound terminal-finalizer wiring slice
+pub(crate) use store::{
+    TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalRecordDeleteError,
+    TransitionJournalRecordDeleteState, TransitionJournalStore,
+};
 #[allow(unused_imports)] // deliberate internal surface for the next durable coordinator slice
 pub(crate) use successors::{BootRepairOutcome, InitialRollbackAction, RollbackActionOutcome, RollbackObservations};
 
@@ -165,6 +170,7 @@ const JOURNAL_DIRECTORY_MODE: u32 = 0o700;
 const JOURNAL_FILE_MODE: u32 = 0o600;
 const MAX_STALE_TEMPORARIES: usize = 256;
 const TEMPORARY_PREFIX: &[u8] = b".state-transition.tmp-";
+const DELETE_PREFIX: &[u8] = b".state-transition.delete-";
 
 static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -318,8 +324,28 @@ pub(crate) enum StorageError {
     },
     #[error("canonical state-transition inode changed during the operation")]
     CanonicalChanged,
+    #[error("atomically detach the exact canonical state-transition journal")]
+    DetachCanonical {
+        #[source]
+        source: io::Error,
+    },
+    #[error("restore an exact privately detached state-transition journal")]
+    RestoreCanonical {
+        #[source]
+        source: io::Error,
+    },
+    #[error("bound-delete journal inventory is not canonical (private={private_name}, entries={entries:?})")]
+    BoundDeleteEntrySetMismatch {
+        private_name: String,
+        entries: Vec<String>,
+    },
     #[error("delete canonical state-transition journal")]
     DeleteCanonical {
+        #[source]
+        source: io::Error,
+    },
+    #[error("delete exact privately detached state-transition journal")]
+    DeleteDetachedCanonical {
         #[source]
         source: io::Error,
     },
@@ -340,6 +366,13 @@ fn temporary_name() -> CString {
     let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     CString::new(format!(".state-transition.tmp-{process:08x}-{sequence:016x}"))
         .expect("internally generated journal temporary name contains no NUL")
+}
+
+fn delete_name() -> CString {
+    let process = std::process::id();
+    let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    CString::new(format!(".state-transition.delete-{process:08x}-{sequence:016x}"))
+        .expect("internally generated journal delete name contains no NUL")
 }
 
 fn open_and_lock(directory: &std::fs::File, path: &Path) -> Result<std::fs::File, StorageError> {

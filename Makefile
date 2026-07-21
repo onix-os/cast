@@ -26,6 +26,7 @@ BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
 .DEFAULT_GOAL := cast
 
 include misc/make/hardening-tests.mk
+include misc/make/transition-journal-bound-delete-tests.mk
 include misc/make/private-device-tests.mk
 include misc/make/private-device-service-tests.mk
 include misc/make/host-storage-safety-tests.mk

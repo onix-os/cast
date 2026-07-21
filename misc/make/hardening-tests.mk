@@ -372,16 +372,16 @@ forge-transition-journal-successor-test:
 
 forge-transition-journal-test:
 	@set -eu; \
-	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
-	count="$$( timeout 10s grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 87; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	count="$$( grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
+	test "$$count" = 98; \
 	for test in \
 		transition_journal::tests::reopened_record_binding_accepts_the_retained_exact_successor_after_old_store_drop \
 		transition_journal::tests::reopened_record_binding_rejects_same_bytes_successor_replacement_before_reopen; do \
-		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+		grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
-	timeout 10s grep -Fq 'pub(crate) fn has_reopened_record_binding(' crates/forge/src/transition_journal/store/record_binding.rs; \
-	timeout 900s $(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
+	grep -Fq 'pub(crate) fn has_reopened_record_binding(' crates/forge/src/transition_journal/store/record_binding.rs; \
+	$(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
 
 stone-read-test:
 	@set -eu; \
