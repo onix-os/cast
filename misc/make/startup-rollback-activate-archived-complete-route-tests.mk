@@ -9,7 +9,7 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_activate_archived::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'.*: test$$' "$$listed" )" = 47; \
+	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'.*: test$$' "$$listed" )" = 48; \
 	for name in \
 		authority_binding::startup_activate_archived_complete_route_rejects_reopened_and_cross_root_journal_bindings \
 		evidence_races::startup_activate_archived_complete_route_capture_sandwich_rejects_database_provenance_and_namespace_races \
@@ -27,6 +27,7 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 		record_binding::startup_activate_archived_complete_route_same_byte_successor_replacement_fails_same_store_binding \
 		restart::startup_activate_archived_complete_route_source_durable_fresh_handle_reopen_retries_only_the_route \
 		restart::startup_activate_archived_complete_route_successor_durable_fresh_handle_reopen_skips_the_route \
+		root_links_terminal_process_kill::startup_activate_archived_root_links_terminal_delete_process_kills_restart_cleanly \
 		storage_faults::startup_activate_archived_complete_route_all_five_journal_faults_reopen_exact_durable_record; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
@@ -45,7 +46,7 @@ forge-startup-usr-rollback-activate-archived-complete-route-test:
 	timeout 10s test "$$( timeout 10s grep -Fc 'mod usr_rollback_activate_archived_complete_route_authority;' "$$reconciliation" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'mod usr_rollback_activate_archived_complete_route;' "$$recovery" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'mod activate_archived_complete_route_proof;' "$$namespace" )" = 1; \
-	for module in authority_binding evidence_races exclusions matrix record_binding restart storage_faults support; do \
+	for module in authority_binding evidence_races exclusions matrix record_binding restart root_links_terminal_process_kill storage_faults support; do \
 		timeout 10s grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackActivateArchivedCompleteRouteSeal {' "$$seal"; \
