@@ -128,6 +128,7 @@ disposable-vm-uefi-boot-storage-harness-test:
 	grep -Fq '.locked.narHash | type == "string"' "$$effects"; \
 	grep -Fq '((.revision? // null) == null)' "$$effects"; \
 	grep -Fq 'develop --profile "$$publication_develop_profile"' "$$effects"; \
+	grep -Fq '"path:$$publication_source_root" --command' "$$effects"; \
 	grep -Fq '"$$make_command" -C "$$publication_source_root"' "$$effects"; \
 	test "$$(grep -Fc 'forge-linux-descriptor-boot-file-publication-vfat-build' "$$effects")" = 1; \
 	test "$$(grep -Fc 'run_boot_file_publication_test publish' "$$effects")" = 1; \
@@ -163,6 +164,7 @@ disposable-vm-uefi-boot-storage-harness-test:
 	test "$$(grep -Fc 'flake metadata --json --no-write-lock-file --no-update-lock-file' "$$effects")" = 1; \
 	test "$$(grep -Fc '"path:$$publication_staged_source"' "$$effects")" = 1; \
 	test "$$(grep -Fc 'develop --profile "$$publication_develop_profile"' "$$effects")" = 1; \
+	test "$$(grep -Fc '"path:$$publication_source_root" --command' "$$effects")" = 1; \
 	prepare_runner="$$(sed -n '/^prepare_boot_file_publication_runner() {/,/^}/p' "$$effects")"; \
 	resolve_line="$$(grep -nF '    resolve_immutable_publication_source' <<<"$$prepare_runner" | cut -d: -f1)"; \
 	develop_line="$$(grep -nF '        develop --profile "$$publication_develop_profile"' <<<"$$prepare_runner" | cut -d: -f1)"; \

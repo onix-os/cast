@@ -418,7 +418,7 @@ prepare_boot_file_publication_runner() {
         "CARGO_HOME=$publication_cargo_home" \
         "$nix_command" --extra-experimental-features 'nix-command flakes' \
         develop --profile "$publication_develop_profile" \
-        "$publication_source_root" --command \
+        "path:$publication_source_root" --command \
         "$make_command" -C "$publication_source_root" \
         forge-linux-descriptor-boot-file-publication-vfat-build \
         || publication_build_status=$?
