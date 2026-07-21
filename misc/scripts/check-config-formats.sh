@@ -237,16 +237,7 @@ is_allowed_documentation_reference() {
     case "${path}" in
         'README.md')
             case "${line}" in
-                'This is a breaking architecture decision, not a file-extension change. YAML' \
-                    | 'and KDL loaders, fallbacks, dual writes, and intermediate representations have' \
-                    | 'authored in Gluon. YAML and KDL loaders, fallbacks, dual writes, and compatibility' \
-                    | 'That break is specifically with the inherited YAML/KDL configuration paths. Nix' \
-                    | 'OS Tools does not fall back to YAML or KDL. The only YAML allowlist is' \
-                    | 'OS Tools does not fall back to YAML or KDL. The only YAML allowlist belongs to' \
-                    | '`.github/dependabot.yml`, `.github/workflows/ci.yaml`, and' \
-                    | $'`.github/workflows/release.yaml`; these belong to GitHub\'s interfaces, not OS' \
-                    | 'Tools configuration. There are no tracked KDL files. `make test` runs the' \
-                    | '`config-formats` allowlist gate so new owned YAML/KDL paths fail validation.' \
+                'Cast does not fall back to YAML or KDL. The only YAML allowlist belongs to' \
                     | '`config-formats` gate so owned YAML or KDL paths fail validation.')
                     return 0
                     ;;

@@ -248,12 +248,13 @@ pass_content_case \
 pass_content_case \
     'exact README removal statement is an audit exception' \
     'README.md' \
-    'OS Tools does not fall back to YAML or KDL. The only YAML allowlist is'
+    'Cast does not fall back to YAML or KDL. The only YAML allowlist belongs to'
 
-pass_content_case \
-    'exact README compatibility-scope clarification is an audit exception' \
+fail_content_case \
+    'obsolete README wording is not retained in the exception set' \
+    'README.md:1: OS Tools does not fall back to YAML or KDL. The only YAML allowlist is' \
     'README.md' \
-    'That break is specifically with the inherited YAML/KDL configuration paths. Nix'
+    'OS Tools does not fall back to YAML or KDL. The only YAML allowlist is'
 
 pass_content_case \
     'exact acknowledgment migration statement is an audit exception' \

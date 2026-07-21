@@ -1,4 +1,8 @@
-# Replacing Gluon with embedded Lua — Feasibility & Architecture Report
+# Archived feasibility report: replacing Gluon with embedded Lua
+
+> **ARCHIVED — NOT AN ACTIVE PLAN.** Cast remains Gluon-only under
+> [`../PLAN.md`](../PLAN.md). This dated study is retained as architecture
+> research, not as implementation direction.
 
 Based on a four-track audit (the `gluon_config` embedding layer, every downstream consumer plus the
 `.glu` corpus, a quantitative footprint/dependency analysis, and external research on the 2026
@@ -80,7 +84,7 @@ All VM construction is in one function (`evaluator.rs:260-279`), deliberately mi
 | Boot topology / root fs intent | `/etc/cast/boot-topology.glu`, `root-filesystem.glu` | machine admin | forge boot intent evaluators |
 
 Layering: vendor → admin → user, whole-fragment shadowing by logical name (no value merging),
-invalid files are hard errors, `.glu` is the only format (YAML/KDL removed without fallback).
+invalid files are hard errors, `.glu` is the only format and there is no legacy fallback.
 
 ### 2.3 Footprint numbers
 
@@ -141,7 +145,7 @@ invalid files are hard errors, `.glu` is the only format (YAML/KDL removed witho
 | rlua / hlua / hematita | archived / dead / dead | Not candidates. |
 | Teal + tealr 0.11 | active | Typed-Lua compile step over mlua; stricter than Luau annotations but adds a compiler to the pipeline. Niche fallback. |
 | Starlark (facebook/starlark-rust 0.14) | active | **Strongest determinism story of anything surveyed** (hermetic by design, Bazel/Buck2 pedigree). Not Lua, no gradual runtime typing — but if the goal is "deterministic config language with a real maintainer," it is the honest alternative to Luau. |
-| rhai / rune / nickel / KDL | active | Dynamically typed niche / async-first / closest-in-spirit typed config but small ecosystem / data-only (can't compute — would fit *triggers* alone). |
+| rhai / rune / nickel | active | Dynamically typed niche / async-first / closest-in-spirit typed config but small ecosystem. |
 
 ### 3.3 Gluon status (the do-nothing baseline)
 
@@ -202,8 +206,8 @@ markers and refuse-to-overwrite-authored logic.
    `Unset`-sentinel handling, keep the existing `TryFrom` semantic-validation layers untouched.
 4. **Corpus translation**: a one-shot `.glu → .lua` translator covers the mechanical 90%
    (records/let/imports/record-update); the 7 match-using files and the ABI modules are rewritten
-   by hand. The project's own precedent applies: hard cutover, no dual-format fallback (YAML/KDL
-   were removed the same way) — but keep a feature-gated dual-runtime window *internally* for
+   by hand. The project's own format-migration precedent applies: hard cutover, no dual-format
+   fallback — but keep a feature-gated dual-runtime window *internally* for
    differential testing: evaluate all 202 files under both runtimes, require identical DTOs.
 5. **Docs**: `gluon-configuration.md` (639 lines) and 116 examples re-authored; `cast recipe
    check` gains a `luau-analyze` pass.
