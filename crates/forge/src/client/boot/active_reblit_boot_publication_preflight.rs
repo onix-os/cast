@@ -39,6 +39,18 @@ use super::{
     },
 };
 
+#[cfg(test)]
+#[path = "active_reblit_boot_publication_preflight/fixture_assessment.rs"]
+mod fixture_assessment;
+#[path = "active_reblit_boot_publication_preflight/immutable_attempt.rs"]
+mod immutable_attempt;
+
+pub(in crate::client) use immutable_attempt::{
+    ActiveReblitBootPublicationEffectSeal,
+    ActiveReblitBootImmutablePublicationAttemptError,
+    StagedExactActiveReblitBootPublication,
+};
+
 /// Exact read-only inputs retained for one later publication attempt.
 ///
 /// All borrows originate from `plan`. Keeping that reference alongside the
@@ -304,19 +316,7 @@ impl<
     where
         'input: 'plan,
     {
-        let mut assess = |role,
-                          target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
-                          domain: &BoundActiveReblitBootNamespaceDomain<'_>| {
-            target
-                .assess_boot_namespace(domain.requests(), domain.expected_sources())
-                .map(BootPublicationNamespaceAssessment::Retained)
-                .map_err(|source| {
-                    ActiveReblitBootPublicationPreflightError::NamespaceAssessment {
-                        role,
-                        source,
-                    }
-                })
-        };
+        let mut assess = assess_one_bound_namespace;
         let mut now = Instant::now;
         self.prepare_boot_publication_preflight_with_assessor(&mut assess, &mut now)
     }
@@ -406,6 +406,24 @@ impl<
     {
         self.prepare_boot_publication_preflight_with_assessor(assess, now)
     }
+}
+
+fn assess_one_bound_namespace(
+    role: BootTargetRole,
+    target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
+    domain: &BoundActiveReblitBootNamespaceDomain<'_>,
+) -> Result<BootPublicationNamespaceAssessment, ActiveReblitBootPublicationPreflightError> {
+    #[cfg(test)]
+    if let Some(assessment) = fixture_assessment::take(role, target, domain) {
+        return Ok(assessment);
+    }
+    target
+        .assess_boot_namespace(domain.requests(), domain.expected_sources())
+        .map(BootPublicationNamespaceAssessment::Retained)
+        .map_err(|source| ActiveReblitBootPublicationPreflightError::NamespaceAssessment {
+            role,
+            source,
+        })
 }
 
 fn assess_bound_namespaces_with(

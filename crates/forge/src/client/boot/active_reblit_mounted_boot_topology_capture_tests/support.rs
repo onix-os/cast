@@ -173,6 +173,10 @@ impl AliasFixture {
         &self.installation
     }
 
+    pub(in crate::client) fn publication_root(&self) -> &std::path::Path {
+        &self.attachment
+    }
+
     pub(super) fn feed(&self) -> FixtureMountInfoFeed {
         self.feed.clone()
     }

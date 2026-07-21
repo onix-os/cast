@@ -41,9 +41,20 @@ pub(in crate::client) use model::{
 
 #[allow(unused_imports)] // consumed by the pure renderer and later durable publisher
 pub(in crate::client) use capture::{
-    ActiveReblitBootPublicationTargetsError, ActiveReblitMountedBootTopologyCaptureError,
-    PreparedActiveReblitMountedBootTopology, RevalidatedActiveReblitBootPublicationTarget,
-    RevalidatedActiveReblitBootPublicationTargets, RevalidatedActiveReblitMountedBootTopology,
+    ActiveReblitBootImmutableLeafPublicationError,
+    ActiveReblitBootPublicationTargetsError,
+    ActiveReblitMountedBootTopologyCaptureError,
+    PreparedActiveReblitMountedBootTopology,
+    RevalidatedActiveReblitBootPublicationTarget,
+    RevalidatedActiveReblitBootPublicationTargets,
+    RevalidatedActiveReblitMountedBootTopology,
+};
+#[cfg(test)]
+#[allow(unused_imports)] // guard lifetime is held through type inference by aggregate tests
+pub(in crate::client) use capture::{
+    FixtureImmutableLeafAssessmentGuard,
+    arm_fixture_immutable_leaf_assessments,
+    fixture_immutable_leaf_assessments_remaining,
 };
 
 #[cfg(test)]

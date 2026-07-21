@@ -33,8 +33,16 @@ pub(in crate::client) use model::{
     PreparedActiveReblitMountedBootTopology, RevalidatedActiveReblitMountedBootTopology,
 };
 pub(in crate::client) use publication_targets::{
-    ActiveReblitBootPublicationTargetsError, RevalidatedActiveReblitBootPublicationTarget,
+    ActiveReblitBootImmutableLeafPublicationError,
+    ActiveReblitBootPublicationTargetsError,
+    RevalidatedActiveReblitBootPublicationTarget,
     RevalidatedActiveReblitBootPublicationTargets,
+};
+#[cfg(test)]
+pub(in crate::client) use publication_targets::{
+    FixtureImmutableLeafAssessmentGuard,
+    arm_fixture_immutable_leaf_assessments,
+    fixture_immutable_leaf_assessments_remaining,
 };
 
 #[cfg(test)]

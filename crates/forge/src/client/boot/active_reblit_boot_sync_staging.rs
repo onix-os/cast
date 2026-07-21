@@ -781,6 +781,9 @@ pub(in crate::client) enum ActiveReblitBootSyncReconciliationError {
     ReceiptState(#[source] ActiveReblitBootSyncReceiptStateError),
 }
 
+#[path = "active_reblit_boot_sync_staging/immutable_publication_attempt.rs"]
+mod immutable_publication_attempt;
+
 #[cfg(test)]
 #[path = "active_reblit_boot_sync_staging_tests.rs"]
 mod tests;

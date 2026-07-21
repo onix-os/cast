@@ -40,6 +40,17 @@ use super::super::{
     BoundActiveReblitMountedBootTopology, MountedBootDestinationIdentity,
 };
 
+#[path = "publication_targets/immutable_leaf.rs"]
+mod immutable_leaf;
+
+pub(in crate::client) use immutable_leaf::ActiveReblitBootImmutableLeafPublicationError;
+#[cfg(test)]
+pub(in crate::client) use immutable_leaf::{
+    FixtureImmutableLeafAssessmentGuard,
+    arm_fixture_immutable_leaf_assessments,
+    fixture_immutable_leaf_assessments_remaining,
+};
+
 /// Failure while bracketing opaque publication targets with full topology
 /// revalidation.
 ///
