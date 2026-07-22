@@ -131,6 +131,28 @@ fn load_exact_promoted_state(
     transition_id: &TransitionId,
     pair: &BootPublicationReceiptPair,
 ) -> Result<BootPublicationReceiptState, ExactPromotedBootPublicationReceiptStateError> {
+    load_exact_promoted_state_with_predecessor(connection, transition_id, pair)
+        .map(|(state, _)| state)
+}
+
+/// Load the existing exact promoted state together with the canonical body
+/// named as its committed predecessor.
+///
+/// Keeping this helper beside the original validator ensures startup chain
+/// loading and state-only validation cannot drift into different admission
+/// rules. Both values are loaded through the caller's single read
+/// transaction; the predecessor is never rediscovered afterward.
+pub(super) fn load_exact_promoted_state_with_predecessor(
+    connection: &mut SqliteConnection,
+    transition_id: &TransitionId,
+    pair: &BootPublicationReceiptPair,
+) -> Result<
+    (
+        BootPublicationReceiptState,
+        Option<CanonicalBootPublicationReceipt>,
+    ),
+    ExactPromotedBootPublicationReceiptStateError,
+> {
     let state = load_receipt_state(connection)?;
 
     if let Some(pending) = state.head().pending() {
@@ -170,15 +192,18 @@ fn load_exact_promoted_state(
             actual: committed.body().committed_predecessor(),
         });
     }
-    if let Some(predecessor) = pair.committed {
-        load_required_receipt(
-            connection,
-            ReceiptReference::CommittedPredecessor,
-            predecessor,
-        )?;
-    }
+    let predecessor = pair
+        .committed
+        .map(|predecessor| {
+            load_required_receipt(
+                connection,
+                ReceiptReference::CommittedPredecessor,
+                predecessor,
+            )
+        })
+        .transpose()?;
 
-    Ok(state)
+    Ok((state, predecessor))
 }
 
 fn promote_receipt(

@@ -38,6 +38,10 @@ const RECEIPT_LOOKUP_LIMIT: i64 = 2;
 #[allow(dead_code)] // DB-only substrate; consumed by the aggregate coordination slice
 #[path = "boot_publication_receipts/promotion.rs"]
 mod promotion;
+#[allow(dead_code)] // crash-recovery foundation; client integration follows separately
+#[path = "boot_publication_receipts/exact_promoted_receipt_chain.rs"]
+mod exact_promoted_receipt_chain;
+pub(crate) use exact_promoted_receipt_chain::ExactPromotedBootPublicationReceiptChain;
 pub(crate) use promotion::{
     BootPublicationReceiptPromotionDurableState,
     BootPublicationReceiptPromotionError,
@@ -545,3 +549,6 @@ mod tests;
 #[cfg(test)]
 #[path = "boot_publication_receipts/installed_receipt_tests.rs"]
 mod installed_receipt_tests;
+#[cfg(test)]
+#[path = "boot_publication_receipts/exact_promoted_receipt_chain_tests.rs"]
+mod exact_promoted_receipt_chain_tests;
