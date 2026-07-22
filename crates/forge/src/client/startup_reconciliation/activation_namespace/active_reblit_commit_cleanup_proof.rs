@@ -9,10 +9,10 @@
 //! the empty replacement occupies the fixed staging name.
 //!
 //! Both proofs own complete `NamespaceSnapshot`s, including retained roots,
-//! quarantine, wrapper, tree, state-ID, and root-ABI descriptors. This module
-//! exposes no descriptor or mutation operation. A later effect-specific child
-//! may consume the appropriate proof to project the exact two-parent,
-//! two-wrapper exchange capability without reopening a pathname.
+//! quarantine, wrapper, tree, state-ID, and root-ABI descriptors. Admission
+//! exposes no descriptor or mutation operation. The specialized effect child
+//! consumes the appropriate proof to project the exact two-parent, two-wrapper
+//! exchange capability without reopening a pathname.
 
 use crate::{
     Installation,
@@ -24,9 +24,10 @@ use crate::{
 use super::{
     active_reblit_boot_repair_started_error_classification::capture_error_is_structural,
     capture::{
-        ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupLayout,
-        CaptureError, NamespaceSnapshot, RetainedActiveReblitCommitCleanupNamespace,
-        capture_snapshot,
+        ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupEffectError,
+        ActiveReblitCommitCleanupLayout, CaptureError, NamespaceSnapshot,
+        PendingActiveReblitCommitCleanupDurability, PreparedActiveReblitCommitCleanupExchange,
+        RetainedActiveReblitCommitCleanupNamespace, capture_snapshot,
     },
     policy::{
         CandidatePlace, LayoutAlternative, NamespacePolicyConflict, PreviousPlace, assess_snapshot_layout,
@@ -40,7 +41,7 @@ pub(in crate::client::startup_reconciliation) struct ActiveReblitCommitCleanupNa
     layout: ActiveReblitCommitCleanupLayout,
 }
 
-/// Exact descriptor-backed post-exchange layout which may later authorize one
+/// Exact descriptor-backed post-exchange layout which authorizes one
 /// wrapper exchange. This type intentionally implements neither `Clone` nor
 /// `Copy`.
 #[derive(Debug)]
@@ -49,7 +50,7 @@ pub(in crate::client::startup_reconciliation) struct ActiveReblitCommitCleanupAp
     after: RetainedActiveReblitCommitCleanupNamespace,
 }
 
-/// Exact descriptor-backed completed layout which may later authorize the
+/// Exact descriptor-backed completed layout which authorizes the
 /// zero-exchange Finish durability suffix. This type intentionally implements
 /// neither `Clone` nor `Copy`.
 #[derive(Debug)]
@@ -58,18 +59,18 @@ pub(in crate::client::startup_reconciliation) struct ActiveReblitCommitCleanupFi
     after: RetainedActiveReblitCommitCleanupNamespace,
 }
 
-/// Consuming descriptor projection accepted only by the following Apply
-/// effect. It intentionally exposes no operation in this checkpoint.
+/// Consuming descriptor projection accepted only by the specialized Apply
+/// effect child.
 pub(in crate::client::startup_reconciliation) struct ActiveReblitCommitCleanupApplyNamespaceEffectEvidence {
-    _before: RetainedActiveReblitCommitCleanupNamespace,
-    _after: RetainedActiveReblitCommitCleanupNamespace,
+    before: RetainedActiveReblitCommitCleanupNamespace,
+    after: RetainedActiveReblitCommitCleanupNamespace,
 }
 
-/// Consuming descriptor projection accepted only by the following zero-effect
-/// Finish durability path. It intentionally exposes no operation here.
+/// Consuming descriptor projection accepted only by the specialized
+/// zero-exchange Finish durability path.
 pub(in crate::client::startup_reconciliation) struct ActiveReblitCommitCleanupFinishNamespaceEffectEvidence {
-    _before: RetainedActiveReblitCommitCleanupNamespace,
-    _after: RetainedActiveReblitCommitCleanupNamespace,
+    before: RetainedActiveReblitCommitCleanupNamespace,
+    after: RetainedActiveReblitCommitCleanupNamespace,
 }
 
 /// Layout-specific result of the complete read-only namespace sandwich.
@@ -156,8 +157,8 @@ impl ActiveReblitCommitCleanupApplyNamespaceProof {
         self,
     ) -> ActiveReblitCommitCleanupApplyNamespaceEffectEvidence {
         ActiveReblitCommitCleanupApplyNamespaceEffectEvidence {
-            _before: self.before,
-            _after: self.after,
+            before: self.before,
+            after: self.after,
         }
     }
 }
@@ -185,9 +186,39 @@ impl ActiveReblitCommitCleanupFinishNamespaceProof {
         self,
     ) -> ActiveReblitCommitCleanupFinishNamespaceEffectEvidence {
         ActiveReblitCommitCleanupFinishNamespaceEffectEvidence {
-            _before: self.before,
-            _after: self.after,
+            before: self.before,
+            after: self.after,
         }
+    }
+}
+
+impl ActiveReblitCommitCleanupApplyNamespaceEffectEvidence {
+    pub(in crate::client::startup_reconciliation) fn prepare_exchange(
+        self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<PreparedActiveReblitCommitCleanupExchange, ActiveReblitCommitCleanupEffectError> {
+        self.before.revalidate(record)?;
+        self.after.revalidate(record)?;
+        if self.before.fingerprint() != self.after.fingerprint() {
+            return Err(ActiveReblitCommitCleanupEffectError::FinalNamespaceChanged);
+        }
+        self.after.prepare_exchange(installation, record)
+    }
+}
+
+impl ActiveReblitCommitCleanupFinishNamespaceEffectEvidence {
+    pub(in crate::client::startup_reconciliation) fn into_durability(
+        self,
+        installation: &Installation,
+        record: &TransitionRecord,
+    ) -> Result<PendingActiveReblitCommitCleanupDurability, ActiveReblitCommitCleanupEffectError> {
+        self.before.revalidate(record)?;
+        self.after.revalidate(record)?;
+        if self.before.fingerprint() != self.after.fingerprint() {
+            return Err(ActiveReblitCommitCleanupEffectError::FinalNamespaceChanged);
+        }
+        self.after.into_finish_durability(installation, record)
     }
 }
 

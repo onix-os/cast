@@ -50,6 +50,22 @@ pub(in crate::client::startup_reconciliation::activation_namespace) use active_r
     ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupLayout,
     RetainedActiveReblitCommitCleanupNamespace,
 };
+pub(in crate::client::startup_reconciliation) use active_reblit_commit_cleanup::{
+    ActiveReblitCommitCleanupDurabilityError, ActiveReblitCommitCleanupEffectError,
+    ActiveReblitCommitCleanupExchangeReconciliation, DurableActiveReblitCommitCleanupNamespace,
+    PendingActiveReblitCommitCleanupDurability, PreparedActiveReblitCommitCleanupExchange,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_commit_cleanup::{
+    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
+    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
+    arm_active_reblit_commit_cleanup_durability_fault,
+    arm_active_reblit_commit_cleanup_exchange_fault,
+    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
+    reset_active_reblit_commit_cleanup_durability_events,
+    reset_active_reblit_commit_cleanup_exchange_attempt_count,
+    take_active_reblit_commit_cleanup_durability_events,
+};
 #[cfg(test)]
 pub(in crate::client) use active_reblit_candidate_preserve::{
     ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,

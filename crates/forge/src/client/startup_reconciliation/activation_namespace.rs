@@ -194,6 +194,14 @@ pub(super) use candidate_preserve_proof::{
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
 #[cfg(test)]
 pub(in crate::client) use capture::{
+    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
+    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
+    arm_active_reblit_commit_cleanup_durability_fault,
+    arm_active_reblit_commit_cleanup_exchange_fault,
+    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
+    reset_active_reblit_commit_cleanup_durability_events,
+    reset_active_reblit_commit_cleanup_exchange_attempt_count,
+    take_active_reblit_commit_cleanup_durability_events,
     ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
     ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, NewStateCandidatePreserveMoveFault,
     NewStateTargetCreateFault, NewStateTargetNormalizeFault, active_reblit_candidate_preserve_exchange_attempt_count,
@@ -220,6 +228,9 @@ pub(in crate::client) use capture::{
 };
 use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 pub(super) use capture::{
+    ActiveReblitCommitCleanupDurabilityError, ActiveReblitCommitCleanupEffectError,
+    ActiveReblitCommitCleanupExchangeReconciliation, DurableActiveReblitCommitCleanupNamespace,
+    PendingActiveReblitCommitCleanupDurability,
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
 };
 #[cfg(test)]

@@ -4,8 +4,11 @@
 //! record with the same selected candidate and previous state. It retains the
 //! complete state and provenance, active selection and reservation, exact
 //! journal-record inode, and a descriptor-backed Apply or Finish namespace
-//! proof. This module performs no namespace, database, journal, boot, or
-//! durability effect.
+//! proof. Admission remains read-only; the specialized child owns the exact
+//! namespace effect and durability suffix. Persistence and startup dispatch
+//! remain the next slice.
+
+mod effect;
 
 use crate::{
     Installation, State, db, state,
@@ -27,6 +30,11 @@ use super::activation_namespace::{
     ActiveReblitCommitCleanupFinishNamespaceProof, ActiveReblitCommitCleanupNamespaceError,
     ActiveReblitCommitCleanupNamespaceInspection, ActiveReblitCommitCleanupNamespaceProof,
     active_reblit_commit_cleanup_namespace_error_is_mismatch,
+};
+
+pub(in crate::client) use effect::{
+    ActiveReblitCommitCleanupApplyReconciliation, ActiveReblitCommitCleanupDurableAuthority,
+    ActiveReblitCommitCleanupEffectError, ActiveReblitCommitCleanupPendingDurabilityAuthority,
 };
 
 /// Layout-specific result of exact read-only cleanup admission.
@@ -54,15 +62,15 @@ pub(in crate::client) struct ActiveReblitCommitCleanupFinishAuthority<'reservati
     namespace: ActiveReblitCommitCleanupFinishNamespaceProof,
 }
 
-/// Narrow consuming projection for the immediately following Apply effect.
-/// It exposes no effect operation in this checkpoint.
+/// Narrow consuming projection accepted only by the specialized Apply effect
+/// child.
 pub(in crate::client) struct ActiveReblitCommitCleanupApplyEffectAuthority<'reservation> {
     _evidence: ActiveReblitCommitCleanupCommonEvidence<'reservation>,
     _namespace: ActiveReblitCommitCleanupApplyNamespaceEffectEvidence,
 }
 
-/// Narrow consuming projection for the immediately following zero-exchange
-/// Finish durability suffix. It exposes no operation in this checkpoint.
+/// Narrow consuming projection accepted only by the specialized zero-exchange
+/// Finish durability child.
 pub(in crate::client) struct ActiveReblitCommitCleanupFinishEffectAuthority<'reservation> {
     _evidence: ActiveReblitCommitCleanupCommonEvidence<'reservation>,
     _namespace: ActiveReblitCommitCleanupFinishNamespaceEffectEvidence,
@@ -214,7 +222,7 @@ impl<'reservation> ActiveReblitCommitCleanupApplyAuthority<'reservation> {
     }
 
     /// Consume exact Apply admission into the only projection accepted by the
-    /// immediately following effect slice.
+    /// specialized effect child.
     pub(in crate::client) fn into_effect_authority(
         self,
         journal: &TransitionJournalStore,
