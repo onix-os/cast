@@ -47,12 +47,15 @@ mod immutable_attempt;
 
 pub(in crate::client) use immutable_attempt::{
     ActiveReblitBootPublicationEffectSeal,
+    ActiveReblitBootSyncCompletionSeal,
     ActiveReblitBootImmutablePublicationAttemptError,
     StagedExactActiveReblitBootPublication,
 };
-#[allow(unused_imports)] // consumed by the next durable BootSyncComplete wiring slice
+#[allow(unused_imports)] // completed authority is retained for commit coordination
 pub(in crate::client) use immutable_attempt::{
+    ActiveReblitBootSyncCompletionError,
     ActiveReblitBootReceiptPromotionError,
+    CompletedExactActiveReblitBootPublication,
     PromotedExactActiveReblitBootPublication,
 };
 

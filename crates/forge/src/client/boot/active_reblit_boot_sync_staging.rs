@@ -792,6 +792,18 @@ mod immutable_publication_attempt;
 mod promoted_receipt_validation;
 pub(in crate::client) use promoted_receipt_validation::ActiveReblitBootSyncPromotedValidationError;
 
+#[path = "active_reblit_boot_sync_staging/boot_sync_complete_persistence.rs"]
+mod boot_sync_complete_persistence;
+#[allow(unused_imports)] // fresh completed view is consumed by the later commit-coordination slice
+pub(in crate::client) use boot_sync_complete_persistence::{
+    ActiveReblitBootSyncCompletePersistenceError,
+    ActiveReblitBootSyncCompleteValidationError,
+    ActiveReblitBootSyncCompletionReconciliationError,
+    CompletedStagedActiveReblitBootSync,
+    DurableActiveReblitBootSyncCompletionRecord,
+    FreshCompletedStagedActiveReblitBootSync,
+};
+
 #[cfg(test)]
 #[path = "active_reblit_boot_sync_staging_tests.rs"]
 mod tests;

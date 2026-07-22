@@ -429,114 +429,146 @@ where
         >,
         checkpoint: &'static str,
     ) -> Result<(), ActiveReblitBootTerminalEvidenceValidationError> {
-        require_deadline(checkpoint, plan.input_deadline())?;
-        let expected = plan.publication_count();
-        if self.publication_count != expected {
-            return Err(
-                ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
-                    checkpoint,
-                    expected,
-                    actual: self.publication_count,
-                },
-            );
-        }
-        if self.evidence.len() != expected {
-            return Err(
-                ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
-                    checkpoint,
-                    expected,
-                    actual: self.evidence.len(),
-                },
-            );
-        }
-
-        let mut published = 0usize;
-        let mut already_exact = 0usize;
-        for (plan_index, (evidence, output)) in
-            self.evidence.iter().copied().zip(plan.outputs()).enumerate()
-        {
-            if evidence.length() != output.expected_length()
-                || evidence.xxh3() != output.expected_digest()
-                || evidence.sha256() != *output.expected_content_identity().as_bytes()
-            {
-                return Err(
-                    ActiveReblitBootTerminalEvidenceValidationError::EvidenceMismatch {
-                        checkpoint,
-                        plan_index,
-                    },
-                );
-            }
-            match evidence.outcome() {
-                RetainedBootFilePublicationOutcome::Published => {
-                    published = published.checked_add(1).ok_or(
-                        ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
-                            checkpoint,
-                        },
-                    )?;
-                }
-                RetainedBootFilePublicationOutcome::AlreadyExact => {
-                    already_exact = already_exact.checked_add(1).ok_or(
-                        ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
-                            checkpoint,
-                        },
-                    )?;
-                }
-            }
-        }
-        if published != self.published_count || already_exact != self.already_exact_count {
-            return Err(
-                ActiveReblitBootTerminalEvidenceValidationError::PublicationOutcomeMismatch {
-                    checkpoint,
-                    published,
-                    already_exact,
-                    retained_published: self.published_count,
-                    retained_already_exact: self.already_exact_count,
-                },
-            );
-        }
-        let accounted = published.checked_add(already_exact).ok_or(
-            ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
-                checkpoint,
-            },
-        )?;
-        if accounted != expected {
-            return Err(
-                ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
-                    checkpoint,
-                    expected,
-                    actual: accounted,
-                },
-            );
-        }
-
-        let preflight = plan
-            .prepare_boot_publication_preflight()
-            .map_err(|source| ActiveReblitBootTerminalEvidenceValidationError::Preflight {
-                checkpoint,
-                source,
-            })?;
-        if preflight.publication_count() != expected {
-            return Err(
-                ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
-                    checkpoint,
-                    expected,
-                    actual: preflight.publication_count(),
-                },
-            );
-        }
-        for (plan_index, state) in preflight.initial_states().iter().copied().enumerate() {
-            if state != BootNamespaceDestinationState::Exact {
-                return Err(
-                    ActiveReblitBootTerminalEvidenceValidationError::DestinationNotExact {
-                        checkpoint,
-                        plan_index,
-                        state,
-                    },
-                );
-            }
-        }
-        require_deadline(checkpoint, plan.input_deadline())
+        validate_exact_terminal_evidence_snapshot(
+            plan,
+            self.publication_count,
+            self.published_count,
+            self.already_exact_count,
+            &self.evidence,
+            checkpoint,
+        )
     }
+}
+
+fn validate_exact_terminal_evidence_snapshot<
+    'input,
+    'topology_view,
+    'topology_authority,
+    'attempt,
+    'stone,
+    'roots,
+>(
+    plan: &BoundActiveReblitBlsPublicationPlan<
+        'input,
+        'topology_view,
+        'topology_authority,
+        'attempt,
+        'stone,
+        'roots,
+    >,
+    publication_count: usize,
+    published_count: usize,
+    already_exact_count: usize,
+    evidence: &[ValidatedRetainedBootFilePublication],
+    checkpoint: &'static str,
+) -> Result<(), ActiveReblitBootTerminalEvidenceValidationError> {
+    require_deadline(checkpoint, plan.input_deadline())?;
+    let expected = plan.publication_count();
+    if publication_count != expected {
+        return Err(
+            ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
+                checkpoint,
+                expected,
+                actual: publication_count,
+            },
+        );
+    }
+    if evidence.len() != expected {
+        return Err(
+            ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
+                checkpoint,
+                expected,
+                actual: evidence.len(),
+            },
+        );
+    }
+
+    let mut published = 0usize;
+    let mut already_exact = 0usize;
+    for (plan_index, (retained, output)) in
+        evidence.iter().copied().zip(plan.outputs()).enumerate()
+    {
+        if retained.length() != output.expected_length()
+            || retained.xxh3() != output.expected_digest()
+            || retained.sha256() != *output.expected_content_identity().as_bytes()
+        {
+            return Err(
+                ActiveReblitBootTerminalEvidenceValidationError::EvidenceMismatch {
+                    checkpoint,
+                    plan_index,
+                },
+            );
+        }
+        match retained.outcome() {
+            RetainedBootFilePublicationOutcome::Published => {
+                published = published.checked_add(1).ok_or(
+                    ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
+                        checkpoint,
+                    },
+                )?;
+            }
+            RetainedBootFilePublicationOutcome::AlreadyExact => {
+                already_exact = already_exact.checked_add(1).ok_or(
+                    ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
+                        checkpoint,
+                    },
+                )?;
+            }
+        }
+    }
+    if published != published_count || already_exact != already_exact_count {
+        return Err(
+            ActiveReblitBootTerminalEvidenceValidationError::PublicationOutcomeMismatch {
+                checkpoint,
+                published,
+                already_exact,
+                retained_published: published_count,
+                retained_already_exact: already_exact_count,
+            },
+        );
+    }
+    let accounted = published.checked_add(already_exact).ok_or(
+        ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
+            checkpoint,
+        },
+    )?;
+    if accounted != expected {
+        return Err(
+            ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
+                checkpoint,
+                expected,
+                actual: accounted,
+            },
+        );
+    }
+
+    let preflight = plan
+        .prepare_boot_publication_preflight()
+        .map_err(|source| ActiveReblitBootTerminalEvidenceValidationError::Preflight {
+            checkpoint,
+            source,
+        })?;
+    if preflight.publication_count() != expected {
+        return Err(
+            ActiveReblitBootTerminalEvidenceValidationError::PublicationCountMismatch {
+                checkpoint,
+                expected,
+                actual: preflight.publication_count(),
+            },
+        );
+    }
+    for (plan_index, state) in preflight.initial_states().iter().copied().enumerate() {
+        if state != BootNamespaceDestinationState::Exact {
+            return Err(
+                ActiveReblitBootTerminalEvidenceValidationError::DestinationNotExact {
+                    checkpoint,
+                    plan_index,
+                    state,
+                },
+            );
+        }
+    }
+    require_deadline(checkpoint, plan.input_deadline())
 }
 
 fn require_deadline(
@@ -669,3 +701,22 @@ fn before_final_promoted_validation() {
 
 #[cfg(not(test))]
 fn before_final_promoted_validation() {}
+
+#[path = "receipt_promotion/boot_sync_completion.rs"]
+mod boot_sync_completion;
+pub(in crate::client) use boot_sync_completion::{
+    ActiveReblitBootSyncCompletionError,
+    CompletedExactActiveReblitBootPublication,
+};
+#[cfg(test)]
+pub(super) use boot_sync_completion::{
+    ActiveReblitBootPostCompletionValidationError,
+    arm_after_boot_sync_complete_persistence,
+    arm_after_initial_completion_handoff,
+    arm_before_completion_deadline,
+    arm_before_final_completion_validation,
+    assert_after_boot_sync_complete_persistence_hook_consumed,
+    assert_after_initial_completion_handoff_hook_consumed,
+    assert_before_completion_deadline_hook_consumed,
+    assert_before_final_completion_validation_hook_consumed,
+};

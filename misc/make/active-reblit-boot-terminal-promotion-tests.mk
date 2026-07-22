@@ -11,7 +11,7 @@ forge-active-reblit-boot-terminal-promotion-test: forge-active-reblit-boot-immut
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::receipt_promotion::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 20; \
+	test "$$( grep -Ec "^$${prefix}(admission|database_reporting|fail_stop|last_boundary|pre_promotion_integrity|success)::.*: test$$" "$$listed" )" = 20; \
 	for name in \
 		admission::wrong_client_is_rejected_before_fresh_namespace_admission \
 		admission::inherited_deadline_expiry_fails_without_receipt_promotion \
@@ -83,4 +83,4 @@ forge-active-reblit-boot-terminal-promotion-test: forge-active-reblit-boot-immut
 		"$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/misc/make/active-reblit-boot-terminal-promotion-tests.mk"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
-	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1 --include-ignored
+	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --skip "$${prefix}completion::" --test-threads=1 --include-ignored

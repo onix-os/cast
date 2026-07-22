@@ -93,3 +93,5 @@ mod last_boundary;
 mod pre_promotion_integrity;
 #[path = "tests/success.rs"]
 mod success;
+#[path = "tests/completion.rs"]
+mod completion;

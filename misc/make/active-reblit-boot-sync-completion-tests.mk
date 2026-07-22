@@ -1,0 +1,85 @@
+ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/../..)
+CARGO ?= cargo
+
+.PHONY: forge-active-reblit-boot-sync-completion-test
+
+forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal-promotion-test forge-transition-journal-successor-test forge-transition-journal-test
+	@set -euo pipefail; \
+	mkdir -p "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/target"; \
+	listed="$$( mktemp "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/target/active-reblit-boot-sync-completion-list.XXXXXXXXXXXX" )"; \
+	trap 'rm -f "$$listed"' EXIT; \
+	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
+	test -s "$$listed"; \
+	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::receipt_promotion::completion::'; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 9; \
+	for name in \
+		completion_behavioral_scenario_inventory_is_exactly_nineteen \
+		deadline::inherited_completion_deadline_expires_without_journal_advance_or_token \
+		drift::final_return_revalidation_catches_late_drift_after_durable_completion \
+		drift::post_advance_namespace_database_journal_and_plan_drift_returns_no_completion_token \
+		drift::pre_advance_wrong_client_and_four_drift_axes_never_reach_boot_sync_complete \
+		reconciliation::completion_journal_faults_reconcile_only_exact_started_or_complete_without_token \
+		reconciliation::completion_reconciliation_rejects_representative_wrong_generation_record \
+		success::chained_already_promoted_completion_preserves_pair_bodies_and_outputs \
+		success::first_adoption_completion_persists_only_exact_boot_sync_complete; do \
+		grep -Fqx "$$prefix$$name: test" "$$listed"; \
+	done; \
+	forge_root="$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/crates/forge/src"; \
+	attempt="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt.rs"; \
+	outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion.rs"; \
+	staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence.rs"; \
+	staging_parent="$$forge_root/client/boot/active_reblit_boot_sync_staging.rs"; \
+	seal_mints="$$( rg -n -F 'ActiveReblitBootSyncCompletionSeal { _private: () }' "$$forge_root" \
+		--glob '*.rs' \
+		--glob '!**/tests/**' \
+		--glob '!**/tests.rs' \
+		--glob '!**/*_tests.rs' \
+		--glob '!**/*_test.rs' )"; \
+	test "$$( grep -c . <<<"$$seal_mints" )" = 1; \
+	grep -Fq "$$outer:" <<<"$$seal_mints"; \
+	test "$$( grep -Fc 'pub(in crate::client) fn persist_boot_sync_complete(' "$$outer" )" = 1; \
+	test "$$( grep -Fc 'pub(in crate::client) fn persist_boot_sync_complete(' "$$staging" )" = 1; \
+	grep -Fq '.revalidate_promoted_against(client)' "$$outer"; \
+	if rg -n '[.]staged[.]plan|[.]terminal[.]staged[.]plan' "$$outer"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	test "$$( grep -Fc '.boot_sync_complete_successor(pair)' "$$staging" )" = 1; \
+	test "$$( grep -Fc '.advance_record_binding_until(' "$$staging" )" = 1; \
+	test "$$( grep -Fc 'Ok(fresh.plan().input_deadline())' "$$staging" )" = 1; \
+	test "$$( grep -Fc 'let deadline = require_promoted_staging_admission(&self, client)?;' "$$staging" )" = 1; \
+	test "$$( grep -Fc 'let repeated_deadline = require_promoted_staging_admission(&self, client)?;' "$$staging" )" = 1; \
+	rg --pcre2 -U -q '[.]advance_record_binding_until\(\s*cast,\s*predecessor_binding,\s*&successor,\s*deadline,\s*\)' "$$staging"; \
+	success_body="$$( sed -n '/^fn finish_successful_completion_advance(/,/^}/p' "$$staging" )"; \
+	test -n "$$success_body"; \
+	test "$$( grep -Fc 'validate_completed_successor(' <<<"$$success_body" )" = 2; \
+	test "$$( grep -Fc 'drop(journal);' <<<"$$success_body" )" = 1; \
+	test "$$( grep -Fc 'TransitionJournalStore::open_in_retained_cast(' <<<"$$success_body" )" = 1; \
+	test "$$( grep -Fc '.has_reopened_record_binding(cast, &successor_binding, successor)' <<<"$$success_body" )" = 1; \
+	test "$$( grep -Fc '.record_binding(cast, successor)' <<<"$$success_body" )" = 1; \
+	test "$$( grep -Fc 'drop(successor_binding);' <<<"$$success_body" )" = 1; \
+	initial_validation_line="$$( grep -nF 'validate_completed_successor(' <<<"$$success_body" | head -n 1 | cut -d: -f1 )"; \
+	drop_store_line="$$( grep -nF 'drop(journal);' <<<"$$success_body" | cut -d: -f1 )"; \
+	reopen_line="$$( grep -nF 'TransitionJournalStore::open_in_retained_cast(' <<<"$$success_body" | cut -d: -f1 )"; \
+	old_inode_line="$$( grep -nF '.has_reopened_record_binding(cast, &successor_binding, successor)' <<<"$$success_body" | cut -d: -f1 )"; \
+	recapture_line="$$( grep -nF '.record_binding(cast, successor)' <<<"$$success_body" | cut -d: -f1 )"; \
+	drop_old_binding_line="$$( grep -nF 'drop(successor_binding);' <<<"$$success_body" | cut -d: -f1 )"; \
+	final_validation_line="$$( grep -nF 'validate_completed_successor(' <<<"$$success_body" | tail -n 1 | cut -d: -f1 )"; \
+	test "$$initial_validation_line" -lt "$$drop_store_line"; \
+	test "$$drop_store_line" -lt "$$reopen_line"; \
+	test "$$reopen_line" -lt "$$old_inode_line"; \
+	test "$$old_inode_line" -lt "$$recapture_line"; \
+	test "$$recapture_line" -lt "$$drop_old_binding_line"; \
+	test "$$drop_old_binding_line" -lt "$$final_validation_line"; \
+	grep -Fq 'DurableActiveReblitBootSyncCompletionRecord::BootSyncStarted' "$$staging"; \
+	grep -Fq 'DurableActiveReblitBootSyncCompletionRecord::BootSyncComplete' "$$staging"; \
+	if rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct (?:ActiveReblitBootSyncCompletionSeal|CompletedStagedActiveReblitBootSync|FreshCompletedStagedActiveReblitBootSync|CompletedExactActiveReblitBootPublication)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:ActiveReblitBootSyncCompletionSeal|CompletedStagedActiveReblitBootSync|FreshCompletedStagedActiveReblitBootSync|CompletedExactActiveReblitBootPublication)' "$$attempt" "$$outer" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n '[.]advance_record_binding\(|Phase::CommitDecided|[.]promote_boot_publication_receipt\(|[.]publish_preflighted_immutable_leaf\(|[.]delete_record_binding\(|remove_(?:file|dir)|unlinkat|renameat|Command::new|nix::mount|libc::mount' "$$outer" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	for file in \
+		"$$attempt" \
+		"$$outer" \
+		"$$staging" \
+		"$$staging_parent" \
+		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion.rs \
+		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion/*.rs \
+		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/misc/make/active-reblit-boot-sync-completion-tests.mk"; do \
+		test "$$( wc -l < "$$file" )" -le 1000; \
+	done; \
+	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1 --include-ignored

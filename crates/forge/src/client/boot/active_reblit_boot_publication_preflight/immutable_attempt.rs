@@ -67,6 +67,14 @@ pub(in crate::client) struct ActiveReblitBootPublicationEffectSeal {
     _private: (),
 }
 
+/// Unforgeable safe-code proof that exact promoted terminal publication
+/// evidence passed the completion handoff. Only descendants of this module
+/// can construct the fieldless seal; the staging state owner may consume it
+/// but cannot mint it.
+pub(in crate::client) struct ActiveReblitBootSyncCompletionSeal {
+    _private: (),
+}
+
 /// Terminal exact-output evidence which still owns the original staged
 /// `BootSyncStarted` authority.
 ///
@@ -720,6 +728,8 @@ mod tests;
 #[path = "immutable_attempt/receipt_promotion.rs"]
 mod receipt_promotion;
 pub(in crate::client) use receipt_promotion::{
+    ActiveReblitBootSyncCompletionError,
     ActiveReblitBootReceiptPromotionError,
+    CompletedExactActiveReblitBootPublication,
     PromotedExactActiveReblitBootPublication,
 };

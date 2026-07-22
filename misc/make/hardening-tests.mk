@@ -368,6 +368,7 @@ forge-transition-journal-successor-test:
 	grep -q . <<<"$$listed"; \
 	forge_root="crates/forge/src"; \
 	successors="$$forge_root/transition_journal/successors.rs"; \
+	completion="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence.rs"; \
 	for test in \
 		transition_journal::tests::production_forward_successor_inserts_a_state_id_only_at_allocation_completion \
 		transition_journal::tests::production_boot_sync_entry_requires_the_typed_receipt_successor \
@@ -393,8 +394,9 @@ forge-transition-journal-successor-test:
 		--glob '!**/*_test.rs' \
 		--glob '!**/test_support.rs' \
 		--glob '!**/*_test_support.rs' )"; \
-	test "$$( grep -c . <<<"$$typed_mentions" )" = 1; \
+	test "$$( grep -c . <<<"$$typed_mentions" )" = 2; \
 	grep -Fq "$$successors:" <<<"$$typed_mentions"; \
+	grep -Fq "$$completion:" <<<"$$typed_mentions"; \
 	boot_complete_sources="$$( rg -l 'Phase[[:space:]]*::[[:space:]]*BootSyncComplete' "$$forge_root" \
 		--glob '*.rs' \
 		--glob '!**/tests/**' \

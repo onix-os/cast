@@ -28,6 +28,7 @@ help:
 	@echo "  forge-active-reblit-boot-publication-preflight-test  Run retained read-only BOOT publication preflight contracts"
 	@echo "  forge-active-reblit-boot-immutable-publication-attempt-test  Run staged immutable BOOT publication attempt contracts"
 	@echo "  forge-active-reblit-boot-terminal-promotion-test  Run terminal BOOT evidence-to-receipt promotion contracts"
+	@echo "  forge-active-reblit-boot-sync-completion-test  Run exact promoted receipt-to-BootSyncComplete contracts"
 	@timeout 10s echo "  forge-candidate-pre-journal-durability-test  Run candidate durability, marker-link, and namespace tests"
 	@timeout 10s echo "  forge-transition-journal-coordinator-test  Run the unwired durable journal coordinator through /usr exchange completion"
 	@timeout 10s echo "  forge-transition-recovery-classifier-test  Run persisted-phase startup recovery direction tests"
