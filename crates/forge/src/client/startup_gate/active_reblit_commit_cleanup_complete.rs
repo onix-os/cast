@@ -1,9 +1,8 @@
 //! One-entry production dispatch for exact completed ActiveReblit cleanup.
 //!
-//! `CommitCleanupComplete` admission may retire the one exact promoted
-//! receipt head, or resume after that retirement is already durable, and
-//! persist one exact `Complete` successor. Every handled source or successor
-//! returns immediately.
+//! `CommitCleanupComplete` admission authenticates the installed promoted
+//! receipt without mutating it, then persists one exact `Complete` successor.
+//! Every handled source or successor returns immediately.
 
 use thiserror::Error;
 
@@ -19,7 +18,6 @@ use crate::client::{
         ActiveReblitCommitCleanupCompleteAdmission,
         ActiveReblitCommitCleanupCompleteAuthority,
         ActiveReblitCommitCleanupCompleteAuthorityError,
-        ActiveReblitCommitCleanupCompleteRetiredAuthority,
     },
     startup_recovery::{
         ActiveReblitCommitCleanupCompletePersistenceError,
@@ -61,35 +59,24 @@ pub(super) fn dispatch<'reservation>(
         active_state_reservation,
         &record,
     )?;
-    let retired = match admission {
+    let ready = match admission {
         ActiveReblitCommitCleanupCompleteAdmission::NotApplicable => {
             return Err(Error::ExactCheckpointRejectedAsNotApplicable);
         }
         ActiveReblitCommitCleanupCompleteAdmission::Deferred => {
             return Ok(Dispatch::Handled { journal, record });
         }
-        ActiveReblitCommitCleanupCompleteAdmission::Apply(authority) => {
-            match authority.retire(&journal) {
-                Ok(retired) => retired,
-                Err(_) => return Ok(Dispatch::Handled { journal, record }),
-            }
-        }
-        ActiveReblitCommitCleanupCompleteAdmission::Finish(authority) => {
-            match authority.into_retired(&journal) {
-                Ok(retired) => retired,
-                Err(_) => return Ok(Dispatch::Handled { journal, record }),
-            }
-        }
+        ActiveReblitCommitCleanupCompleteAdmission::Ready(authority) => authority,
     };
-    persist_complete(journal, retired)
+    persist_complete(journal, ready)
 }
 
 fn persist_complete(
     journal: TransitionJournalStore,
-    retired: ActiveReblitCommitCleanupCompleteRetiredAuthority<'_>,
+    authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
 ) -> Result<Dispatch, Error> {
     let (journal, record) =
-        persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, retired)?;
+        persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, authority)?;
     Ok(Dispatch::Handled { journal, record })
 }
 

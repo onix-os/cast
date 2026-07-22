@@ -1,5 +1,5 @@
-//! Exact startup authority for retiring the completed ActiveReblit receipt
-//! head and advancing the bound record to `Complete`.
+//! Exact read-only startup authority for advancing a completed ActiveReblit
+//! cleanup record to `Complete` while retaining the installed receipt head.
 
 use crate::{
     Installation, State, db, state,
@@ -29,24 +29,11 @@ use super::activation_namespace::{
 pub(in crate::client) enum ActiveReblitCommitCleanupCompleteAdmission<'reservation> {
     NotApplicable,
     Deferred,
-    Apply(ActiveReblitCommitCleanupCompleteApplyAuthority<'reservation>),
-    Finish(ActiveReblitCommitCleanupCompleteFinishAuthority<'reservation>),
+    Ready(ActiveReblitCommitCleanupCompleteAuthority<'reservation>),
 }
 
-pub(in crate::client) struct ActiveReblitCommitCleanupCompleteAuthority;
-
-/// Consuming authority for the sole receipt-head retirement attempt.
-pub(in crate::client) struct ActiveReblitCommitCleanupCompleteApplyAuthority<'reservation> {
-    evidence: ActiveReblitCommitCleanupCompleteEvidence<'reservation>,
-}
-
-/// Consuming authority proving the exact receipt head is already retired.
-pub(in crate::client) struct ActiveReblitCommitCleanupCompleteFinishAuthority<'reservation> {
-    evidence: ActiveReblitCommitCleanupCompleteEvidence<'reservation>,
-}
-
-/// Exact retired evidence accepted by the sole `Complete` persistence edge.
-pub(in crate::client) struct ActiveReblitCommitCleanupCompleteRetiredAuthority<'reservation> {
+/// Non-replayable authority for one exact bound `CommitCleanupComplete` record.
+pub(in crate::client) struct ActiveReblitCommitCleanupCompleteAuthority<'reservation> {
     evidence: ActiveReblitCommitCleanupCompleteEvidence<'reservation>,
 }
 
@@ -76,7 +63,7 @@ struct ActiveReblitCommitCleanupCompleteEvidence<'reservation> {
 
 #[derive(Debug, Eq, PartialEq)]
 struct ActiveReblitCommitCleanupCompleteDatabaseEvidence {
-    receipt: db::state::BootPublicationReceiptRetirementDurableState,
+    receipt: db::state::BootPublicationReceiptState,
     context: DatabaseEvidence,
     state: State,
 }
@@ -86,7 +73,7 @@ enum ActiveReblitCommitCleanupCompleteDatabaseInspection {
     Incompatible,
 }
 
-impl ActiveReblitCommitCleanupCompleteAuthority {
+impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
     pub(in crate::client) fn capture<'reservation>(
         _seal: &ActiveReblitCommitCleanupCompleteSeal,
         installation: &Installation,
@@ -190,67 +177,9 @@ impl ActiveReblitCommitCleanupCompleteAuthority {
             journal_record_binding,
             _active_state_reservation: active_state_reservation,
         };
-        Ok(match evidence.database.receipt {
-            db::state::BootPublicationReceiptRetirementDurableState::Promoted => {
-                ActiveReblitCommitCleanupCompleteAdmission::Apply(
-                    ActiveReblitCommitCleanupCompleteApplyAuthority { evidence },
-                )
-            }
-            db::state::BootPublicationReceiptRetirementDurableState::Retired => {
-                ActiveReblitCommitCleanupCompleteAdmission::Finish(
-                    ActiveReblitCommitCleanupCompleteFinishAuthority { evidence },
-                )
-            }
-        })
-    }
-}
-
-impl<'reservation> ActiveReblitCommitCleanupCompleteApplyAuthority<'reservation> {
-    /// Consume Apply authority through at most one retirement invocation.
-    pub(in crate::client) fn retire(
-        self,
-        journal: &TransitionJournalStore,
-    ) -> Result<
-        ActiveReblitCommitCleanupCompleteRetiredAuthority<'reservation>,
-        ActiveReblitCommitCleanupCompleteApplyError,
-    > {
-        let mut evidence = self.evidence;
-        evidence.revalidate(
-            journal,
-            db::state::BootPublicationReceiptRetirementDurableState::Promoted,
-        )?;
-        evidence
-            .state_db
-            .retire_promoted_boot_publication_receipt_head(
-                &evidence.record.transition_id,
-                &evidence.receipt_pair,
-            )?;
-        evidence.database.receipt =
-            db::state::BootPublicationReceiptRetirementDurableState::Retired;
-        evidence.revalidate(
-            journal,
-            db::state::BootPublicationReceiptRetirementDurableState::Retired,
-        )?;
-        Ok(ActiveReblitCommitCleanupCompleteRetiredAuthority { evidence })
-    }
-}
-
-impl<'reservation> ActiveReblitCommitCleanupCompleteFinishAuthority<'reservation> {
-    /// Consume Finish authority without invoking receipt retirement.
-    pub(in crate::client) fn into_retired(
-        self,
-        journal: &TransitionJournalStore,
-    ) -> Result<
-        ActiveReblitCommitCleanupCompleteRetiredAuthority<'reservation>,
-        ActiveReblitCommitCleanupCompleteAuthorityError,
-    > {
-        self.evidence.revalidate(
-            journal,
-            db::state::BootPublicationReceiptRetirementDurableState::Retired,
-        )?;
-        Ok(ActiveReblitCommitCleanupCompleteRetiredAuthority {
-            evidence: self.evidence,
-        })
+        Ok(ActiveReblitCommitCleanupCompleteAdmission::Ready(
+            ActiveReblitCommitCleanupCompleteAuthority { evidence },
+        ))
     }
 }
 
@@ -258,7 +187,6 @@ impl ActiveReblitCommitCleanupCompleteEvidence<'_> {
     fn revalidate(
         &self,
         journal: &TransitionJournalStore,
-        receipt: db::state::BootPublicationReceiptRetirementDurableState,
     ) -> Result<(), ActiveReblitCommitCleanupCompleteAuthorityError> {
         require_exact_record_binding(
             &self.installation,
@@ -271,11 +199,6 @@ impl ActiveReblitCommitCleanupCompleteEvidence<'_> {
             &self.database,
             inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
         )?;
-        if before.receipt != receipt {
-            return Err(
-                ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
-            );
-        }
         require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
         self.namespace.revalidate(
             &self.installation,
@@ -304,7 +227,7 @@ impl ActiveReblitCommitCleanupCompleteEvidence<'_> {
     }
 }
 
-impl<'reservation> ActiveReblitCommitCleanupCompleteRetiredAuthority<'reservation> {
+impl<'reservation> ActiveReblitCommitCleanupCompleteAuthority<'reservation> {
     pub(in crate::client) fn installation(&self) -> &Installation {
         &self.evidence.installation
     }
@@ -325,10 +248,7 @@ impl<'reservation> ActiveReblitCommitCleanupCompleteRetiredAuthority<'reservatio
         ),
         ActiveReblitCommitCleanupCompleteRecordAdvanceError,
     > {
-        self.evidence.revalidate(
-            journal,
-            db::state::BootPublicationReceiptRetirementDurableState::Retired,
-        )?;
+        self.evidence.revalidate(journal)?;
         let successor = self.evidence.record.forward_successor(None)?;
         if !exact_complete_successor(
             &self.evidence.record,
@@ -430,10 +350,7 @@ impl ActiveReblitCommitCleanupCompletePostAdvanceAuthority<'_> {
             inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
         )?;
         require_exact_active_state(successor, &self.installation, &self.active_state)?;
-        if before != after
-            || after.receipt
-                != db::state::BootPublicationReceiptRetirementDurableState::Retired
-        {
+        if before != after {
             return Err(
                 ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
             );
@@ -458,18 +375,9 @@ fn inspect_current_database(
     ActiveReblitCommitCleanupCompleteDatabaseInspection,
     ActiveReblitCommitCleanupCompleteAuthorityError,
 > {
-    let receipt_before = match state_db
-        .inspect_exact_boot_publication_receipt_retirement_state(&record.transition_id, &pair)
-    {
-        Ok(receipt) => receipt,
-        Err(db::state::BootPublicationReceiptRetirementError::StateMismatch { .. }) => {
-            return Ok(ActiveReblitCommitCleanupCompleteDatabaseInspection::Incompatible);
-        }
-        Err(source) => {
-            return Err(
-                ActiveReblitCommitCleanupCompleteAuthorityErrorKind::Receipt(source).into(),
-            );
-        }
+    let receipt_before = match load_exact_promoted_receipt(state_db, record, pair)? {
+        Some(receipt) => receipt,
+        None => return Ok(ActiveReblitCommitCleanupCompleteDatabaseInspection::Incompatible),
     };
     let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
     let context = inspect_database(record, state_db, in_flight)?;
@@ -485,9 +393,14 @@ fn inspect_current_database(
             ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
         );
     }
-    let receipt_after = state_db
-        .inspect_exact_boot_publication_receipt_retirement_state(&record.transition_id, &pair)
-        .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::Receipt)?;
+    let receipt_after = match load_exact_promoted_receipt(state_db, record, pair)? {
+        Some(receipt) => receipt,
+        None => {
+            return Err(
+                ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
+            );
+        }
+    };
     if receipt_before != receipt_after {
         return Err(
             ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
@@ -500,6 +413,39 @@ fn inspect_current_database(
             state,
         },
     ))
+}
+
+fn load_exact_promoted_receipt(
+    state_db: &db::state::Database,
+    record: &TransitionRecord,
+    pair: crate::boot_publication::BootPublicationReceiptPair,
+) -> Result<
+    Option<db::state::BootPublicationReceiptState>,
+    ActiveReblitCommitCleanupCompleteAuthorityError,
+> {
+    match state_db
+        .load_exact_promoted_boot_publication_receipt_state(&record.transition_id, &pair)
+    {
+        Ok(receipt) => Ok(Some(receipt)),
+        Err(db::state::ExactPromotedBootPublicationReceiptStateError::State(source)) => {
+            Err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::ReceiptState(source).into())
+        }
+        Err(source @ db::state::ExactPromotedBootPublicationReceiptStateError::PendingBodyPresent)
+        | Err(source @ db::state::ExactPromotedBootPublicationReceiptStateError::MissingCommittedBody)
+        | Err(
+            source @ db::state::ExactPromotedBootPublicationReceiptStateError::CommittedBodyFingerprintMismatch {
+                ..
+            },
+        ) => Err(
+            ActiveReblitCommitCleanupCompleteAuthorityErrorKind::ReceiptCorrelation(source).into(),
+        ),
+        Err(
+            db::state::ExactPromotedBootPublicationReceiptStateError::PendingHeadPresent { .. }
+            | db::state::ExactPromotedBootPublicationReceiptStateError::CommittedHeadMismatch { .. }
+            | db::state::ExactPromotedBootPublicationReceiptStateError::TransitionMismatch { .. }
+            | db::state::ExactPromotedBootPublicationReceiptStateError::CommittedPredecessorMismatch { .. },
+        ) => Ok(None),
+    }
 }
 
 fn require_exact_database(
@@ -677,8 +623,10 @@ enum ActiveReblitCommitCleanupCompleteAuthorityErrorKind {
     JournalRecordBindingChanged,
     #[error("the exact Complete successor binding changed")]
     SuccessorRecordBindingChanged,
-    #[error("inspect exact promoted or retired boot-publication receipt chain")]
-    Receipt(#[source] db::state::BootPublicationReceiptRetirementError),
+    #[error("load exact promoted boot-publication receipt state")]
+    ReceiptState(#[source] db::state::BootPublicationReceiptStateError),
+    #[error("authenticate exact promoted boot-publication receipt correlation")]
+    ReceiptCorrelation(#[source] db::state::ExactPromotedBootPublicationReceiptStateError),
     #[error("inspect exact cleared ActiveReblit database and provenance")]
     Inspection(#[source] InspectionError),
     #[error("load complete selected ActiveReblit state")]
@@ -728,16 +676,8 @@ impl From<StorageError> for ActiveReblitCommitCleanupCompleteAuthorityError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(in crate::client) enum ActiveReblitCommitCleanupCompleteApplyError {
-    #[error("revalidate exact promoted CommitCleanupComplete authority")]
-    Authority(#[from] ActiveReblitCommitCleanupCompleteAuthorityError),
-    #[error("retire exact promoted boot-publication receipt head")]
-    Retirement(#[from] db::state::BootPublicationReceiptRetirementError),
-}
-
-#[derive(Debug, thiserror::Error)]
 pub(in crate::client) enum ActiveReblitCommitCleanupCompleteRecordAdvanceError {
-    #[error("revalidate exact retired CommitCleanupComplete authority")]
+    #[error("revalidate exact promoted CommitCleanupComplete authority")]
     Authority(#[from] ActiveReblitCommitCleanupCompleteAuthorityError),
     #[error("derive or validate sole ActiveReblit Complete successor")]
     Record(#[from] CodecError),

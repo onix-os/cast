@@ -1,7 +1,7 @@
 //! Sealed authority for exact forward ActiveReblit `Complete` finalization.
 //!
 //! This is deliberately separate from rollback finalization. Admission binds
-//! the exact v3 terminal record before retaining its retired receipt chain,
+//! the exact v3 terminal record before retaining its installed receipt chain,
 //! cleared existing-state database context, full selected state, active-state
 //! selection, and completed cleanup namespace. Its only mutation surface is
 //! one record-bound terminal deletion on the same locked journal store.
@@ -64,6 +64,7 @@ struct ActiveReblitCompleteFinalizationEvidence<'reservation> {
 
 #[derive(Debug, Eq, PartialEq)]
 struct ActiveReblitCompleteFinalizationDatabaseEvidence {
+    receipt: db::state::BootPublicationReceiptState,
     context: DatabaseEvidence,
     state: State,
 }
@@ -345,19 +346,10 @@ fn inspect_current_database(
     ActiveReblitCompleteFinalizationDatabaseInspection,
     ActiveReblitCompleteFinalizationAuthorityError,
 > {
-    match state_db.inspect_exact_boot_publication_receipt_retirement_state(
-        &record.transition_id,
-        &pair,
-    ) {
-        Ok(db::state::BootPublicationReceiptRetirementDurableState::Retired) => {}
-        Ok(db::state::BootPublicationReceiptRetirementDurableState::Promoted)
-        | Err(db::state::BootPublicationReceiptRetirementError::StateMismatch { .. }) => {
-            return Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible);
-        }
-        Err(source) => {
-            return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::Receipt(source).into());
-        }
-    }
+    let receipt_before = match load_exact_promoted_receipt(state_db, record, pair)? {
+        Some(receipt) => receipt,
+        None => return Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible),
+    };
     let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
     let context = inspect_database(record, state_db, in_flight)?;
     if !existing_state_context_is_exact(record, &context) {
@@ -370,22 +362,55 @@ fn inspect_current_database(
     if state.id != state_id {
         return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::DatabaseChanged.into());
     }
-    match state_db.inspect_exact_boot_publication_receipt_retirement_state(
-        &record.transition_id,
-        &pair,
-    ) {
-        Ok(db::state::BootPublicationReceiptRetirementDurableState::Retired) => {}
-        Ok(db::state::BootPublicationReceiptRetirementDurableState::Promoted)
-        | Err(db::state::BootPublicationReceiptRetirementError::StateMismatch { .. }) => {
+    let receipt_after = match load_exact_promoted_receipt(state_db, record, pair)? {
+        Some(receipt) => receipt,
+        None => {
             return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::DatabaseChanged.into());
         }
-        Err(source) => {
-            return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::Receipt(source).into());
-        }
+    };
+    if receipt_before != receipt_after {
+        return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::DatabaseChanged.into());
     }
     Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Exact(
-        ActiveReblitCompleteFinalizationDatabaseEvidence { context, state },
+        ActiveReblitCompleteFinalizationDatabaseEvidence {
+            receipt: receipt_after,
+            context,
+            state,
+        },
     ))
+}
+
+fn load_exact_promoted_receipt(
+    state_db: &db::state::Database,
+    record: &TransitionRecord,
+    pair: crate::boot_publication::BootPublicationReceiptPair,
+) -> Result<
+    Option<db::state::BootPublicationReceiptState>,
+    ActiveReblitCompleteFinalizationAuthorityError,
+> {
+    match state_db
+        .load_exact_promoted_boot_publication_receipt_state(&record.transition_id, &pair)
+    {
+        Ok(receipt) => Ok(Some(receipt)),
+        Err(db::state::ExactPromotedBootPublicationReceiptStateError::State(source)) => {
+            Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptState(source).into())
+        }
+        Err(source @ db::state::ExactPromotedBootPublicationReceiptStateError::PendingBodyPresent)
+        | Err(source @ db::state::ExactPromotedBootPublicationReceiptStateError::MissingCommittedBody)
+        | Err(
+            source @ db::state::ExactPromotedBootPublicationReceiptStateError::CommittedBodyFingerprintMismatch {
+                ..
+            },
+        ) => Err(
+            ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptCorrelation(source).into(),
+        ),
+        Err(
+            db::state::ExactPromotedBootPublicationReceiptStateError::PendingHeadPresent { .. }
+            | db::state::ExactPromotedBootPublicationReceiptStateError::CommittedHeadMismatch { .. }
+            | db::state::ExactPromotedBootPublicationReceiptStateError::TransitionMismatch { .. }
+            | db::state::ExactPromotedBootPublicationReceiptStateError::CommittedPredecessorMismatch { .. },
+        ) => Ok(None),
+    }
 }
 
 fn require_exact_database(
@@ -502,8 +527,10 @@ enum ActiveReblitCompleteFinalizationAuthorityErrorKind {
     JournalRecordBindingChanged,
     #[error("the lock-bearing Complete journal store changed")]
     JournalBindingChanged,
-    #[error("inspect exact retired boot-publication receipt chain")]
-    Receipt(#[source] db::state::BootPublicationReceiptRetirementError),
+    #[error("load exact installed boot-publication receipt state")]
+    ReceiptState(#[source] db::state::BootPublicationReceiptStateError),
+    #[error("authenticate exact installed boot-publication receipt correlation")]
+    ReceiptCorrelation(#[source] db::state::ExactPromotedBootPublicationReceiptStateError),
     #[error("inspect exact cleared ActiveReblit database and provenance")]
     Inspection(#[source] InspectionError),
     #[error("load complete selected ActiveReblit state")]

@@ -1,4 +1,4 @@
-//! Persist exact retired ActiveReblit `CommitCleanupComplete` authority to
+//! Persist exact promoted ActiveReblit `CommitCleanupComplete` authority to
 //! `Complete` and authenticate the successor across canonical writer reopen.
 
 use thiserror::Error;
@@ -14,9 +14,9 @@ use crate::{
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 use super::super::startup_reconciliation::{
     ActiveReblitCommitCleanupCompleteAuthorityError,
+    ActiveReblitCommitCleanupCompleteAuthority,
     ActiveReblitCommitCleanupCompletePostAdvanceAuthority,
     ActiveReblitCommitCleanupCompleteRecordAdvanceError,
-    ActiveReblitCommitCleanupCompleteRetiredAuthority,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,7 +48,7 @@ enum AdvanceOutcome<'reservation> {
 
 pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(
     journal: TransitionJournalStore,
-    authority: ActiveReblitCommitCleanupCompleteRetiredAuthority<'_>,
+    authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
 ) -> Result<
     (TransitionJournalStore, TransitionRecord),
     ActiveReblitCommitCleanupCompletePersistenceError,
@@ -328,7 +328,7 @@ pub(in crate::client) enum ActiveReblitCommitCleanupCompleteFreshBindingError {
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitCommitCleanupCompletePersistenceError {
-    #[error("revalidate exact retired CommitCleanupComplete authority")]
+    #[error("revalidate exact promoted CommitCleanupComplete authority")]
     Authority(#[source] ActiveReblitCommitCleanupCompleteAuthorityError),
     #[error("derive sole legal ActiveReblit Complete successor")]
     RouteConstruction { #[source] source: CodecError },

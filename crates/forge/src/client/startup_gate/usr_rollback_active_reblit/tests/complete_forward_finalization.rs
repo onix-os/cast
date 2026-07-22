@@ -39,7 +39,7 @@ use crate::{
 use super::{
     boot_sync_complete_support::{open_boot_sync_complete_journal, same_byte_different_inode_hook},
     commit_cleanup_complete_startup_dispatch::{
-        assert_receipt_retired, commit_cleanup_complete_fixture,
+        assert_installed_receipt_promoted, commit_cleanup_complete_fixture,
     },
     commit_cleanup_effect::{CleanupLayout, commit_decided_fixture},
     support::{
@@ -68,7 +68,7 @@ fn forward_complete_current_and_historical_finalizes_next_entry_and_clean_reentr
             in_flight_before,
         );
         assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
-        assert_receipt_retired(&fixture);
+        assert_installed_receipt_promoted(&fixture);
         assert_no_unrelated_effects();
         drop(clean);
 
@@ -77,7 +77,7 @@ fn forward_complete_current_and_historical_finalizes_next_entry_and_clean_reentr
         assert_canonical_absent(&fixture.fixture.installation.root);
         assert_eq!(fixture.fixture.database.all().unwrap(), states_before);
         assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
-        assert_receipt_retired(&fixture);
+        assert_installed_receipt_promoted(&fixture);
         assert_no_unrelated_effects();
         assert_eq!(exact_complete.phase, Phase::Complete);
         drop(clean_again);
@@ -86,20 +86,23 @@ fn forward_complete_current_and_historical_finalizes_next_entry_and_clean_reentr
 
 #[test]
 fn forward_complete_exact_incompatibilities_stay_pending_without_unrelated_effects() {
-    let promoted = complete_fixture(Epoch::Current);
-    let promoted_source = promoted.fixture.source.clone();
-    let pair = receipt_pair(&promoted);
-    promoted
+    let pending = complete_fixture(Epoch::Current);
+    let pending_source = pending.fixture.source.clone();
+    let pair = receipt_pair(&pending);
+    pending
         .fixture
         .database
-        .replace_boot_publication_receipt_head_for_test(Some(pair.pending), None)
+        .replace_boot_publication_receipt_head_for_test(
+            pair.committed,
+            Some((&pending.fixture.source.transition_id, pair.pending)),
+        )
         .unwrap();
     reset_unrelated_effect_observers();
 
-    let promoted_error = enter_boot_with_context(&promoted, "non-retired receipt");
+    let pending_error = enter_boot_with_context(&pending, "still-pending receipt");
 
-    assert_pending_phase(&promoted_error, Phase::Complete);
-    assert_eq!(promoted.fixture.canonical_record(), promoted_source);
+    assert_pending_phase(&pending_error, Phase::Complete);
+    assert_eq!(pending.fixture.canonical_record(), pending_source);
     assert_no_unrelated_effects();
 
     let no_provenance = complete_fixture(Epoch::Historical);
@@ -125,15 +128,6 @@ fn forward_complete_exact_incompatibilities_stay_pending_without_unrelated_effec
     journal.advance(&apply_layout.fixture.source, &cleanup_complete).unwrap();
     journal.advance(&cleanup_complete, &complete).unwrap();
     drop(journal);
-    let pair = complete.boot_publication_receipt_correlation().unwrap().unwrap();
-    apply_layout
-        .fixture
-        .database
-        .retire_promoted_boot_publication_receipt_head(
-            &complete.transition_id,
-            &pair,
-        )
-        .unwrap();
     apply_layout.fixture.source = complete.clone();
     reset_unrelated_effect_observers();
 
@@ -164,12 +158,12 @@ fn forward_complete_binding_substitution_fails_before_delete_and_converges() {
         )
     ));
     assert_eq!(fixture.fixture.canonical_record(), complete);
-    assert_receipt_retired(&fixture);
+    assert_installed_receipt_promoted(&fixture);
     assert_no_unrelated_effects();
 
     let clean = enter_clean_boot(&fixture);
     assert_canonical_absent(&fixture.fixture.installation.root);
-    assert_receipt_retired(&fixture);
+    assert_installed_receipt_promoted(&fixture);
     assert_no_unrelated_effects();
     drop(clean);
 }
@@ -226,7 +220,7 @@ fn forward_complete_delete_fault_states_remain_errors_and_next_entry_converges()
         }
         assert_eq!(fixture.fixture.database.all().unwrap(), states_before);
         assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
-        assert_receipt_retired(&fixture);
+        assert_installed_receipt_promoted(&fixture);
         assert_no_unrelated_effects();
         drop(reservation);
 
@@ -234,7 +228,7 @@ fn forward_complete_delete_fault_states_remain_errors_and_next_entry_converges()
         assert_canonical_absent(&fixture.fixture.installation.root);
         assert_eq!(fixture.fixture.database.all().unwrap(), states_before);
         assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
-        assert_receipt_retired(&fixture);
+        assert_installed_receipt_promoted(&fixture);
         assert_no_unrelated_effects();
         drop(clean);
     }
@@ -270,7 +264,7 @@ fn forward_complete_post_delete_database_selection_namespace_and_public_record_r
         )
     ));
     assert_eq!(capture_database.fixture.canonical_record(), capture_database_record);
-    assert_receipt_retired(&capture_database);
+    assert_installed_receipt_promoted(&capture_database);
     assert_no_unrelated_effects();
 
     let capture_namespace = complete_fixture(Epoch::Historical);
@@ -294,7 +288,7 @@ fn forward_complete_post_delete_database_selection_namespace_and_public_record_r
         )
     ));
     assert_eq!(capture_namespace.fixture.canonical_record(), capture_namespace_record);
-    assert_receipt_retired(&capture_namespace);
+    assert_installed_receipt_promoted(&capture_namespace);
     assert_no_unrelated_effects();
 
     for race in [
@@ -354,7 +348,7 @@ fn forward_complete_post_delete_database_selection_namespace_and_public_record_r
         } else {
             assert_canonical_absent(&fixture.fixture.installation.root);
         }
-        assert_receipt_retired(&fixture);
+        assert_installed_receipt_promoted(&fixture);
         assert_no_unrelated_effects();
     }
 }
@@ -369,7 +363,7 @@ fn complete_fixture(epoch: Epoch) -> BootRepairFixture {
     assert_pending_phase(&entry, Phase::Complete);
     assert_eq!(fixture.fixture.canonical_record(), complete);
     fixture.fixture.source = complete;
-    assert_receipt_retired(&fixture);
+    assert_installed_receipt_promoted(&fixture);
     fixture
 }
 

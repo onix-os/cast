@@ -25,6 +25,7 @@ forge-startup-active-reblit-complete-finalization-test:
 	grep -Fq 'active_reblit_complete_finalization::dispatch(' "$$gate"; \
 	grep -Fq 'Dispatch::Finalized { journal }' "$$gate"; \
 	grep -Fq 'finalize_active_reblit_complete(journal, authority)' "$$dispatch"; \
+	test "$$( grep -Fc '.load_exact_promoted_boot_publication_receipt_state(' "$$authority" )" = 1; \
 	test "$$( grep -Fc '.delete_record_binding(' "$$authority" )" = 1; \
 	grep -Fq 'revalidate_completed_namespace_after_journal_delete' "$$authority"; \
 	grep -Fq 'require_exact_public_journal_absence(installation, journal)?;' "$$proof"; \

@@ -37,9 +37,6 @@ pub(crate) use boot_publication_receipts::{
     BootPublicationReceiptPromotionDurableState,
     BootPublicationReceiptPromotionError,
     BootPublicationReceiptPromotionOutcome,
-    BootPublicationReceiptRetirementDurableState,
-    BootPublicationReceiptRetirementError,
-    BootPublicationReceiptRetirementOutcome,
     BootPublicationReceiptState,
     BootPublicationReceiptStateError,
     ExactPromotedBootPublicationReceiptStateError,
@@ -47,9 +44,6 @@ pub(crate) use boot_publication_receipts::{
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by cross-module receipt-promotion fault tests
 pub(crate) use boot_publication_receipts::arm_boot_publication_receipt_promotion_after_commit_error;
-#[cfg(test)]
-#[allow(unused_imports)] // consumed by focused receipt-retirement fault tests
-pub(crate) use boot_publication_receipts::arm_boot_publication_receipt_retirement_after_commit_error;
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by cross-module receipt-race tests
 pub(crate) use boot_publication_receipt_head::BootPublicationReceiptHeadRawForTest;

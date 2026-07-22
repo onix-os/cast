@@ -38,22 +38,14 @@ const RECEIPT_LOOKUP_LIMIT: i64 = 2;
 #[allow(dead_code)] // DB-only substrate; consumed by the aggregate coordination slice
 #[path = "boot_publication_receipts/promotion.rs"]
 mod promotion;
-#[path = "boot_publication_receipts/retirement.rs"]
-mod retirement;
 pub(crate) use promotion::{
     BootPublicationReceiptPromotionDurableState,
     BootPublicationReceiptPromotionError,
     BootPublicationReceiptPromotionOutcome,
     ExactPromotedBootPublicationReceiptStateError,
 };
-pub(crate) use retirement::{
-    BootPublicationReceiptRetirementDurableState, BootPublicationReceiptRetirementError,
-    BootPublicationReceiptRetirementOutcome,
-};
 #[cfg(test)]
 pub(crate) use promotion::arm_boot_publication_receipt_promotion_after_commit_error;
-#[cfg(test)]
-pub(crate) use retirement::arm_boot_publication_receipt_retirement_after_commit_error;
 
 /// One strictly decoded state of the compact head and its referenced bodies.
 ///
@@ -448,7 +440,6 @@ pub(crate) enum ReceiptReference {
     #[allow(dead_code)] // consumed by receipt promotion before coordinator wiring
     CommittedPredecessor,
     Pending,
-    Retired,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -551,3 +542,6 @@ impl From<diesel::result::Error> for BootPublicationReceiptStateError {
 #[cfg(test)]
 #[path = "boot_publication_receipts/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "boot_publication_receipts/installed_receipt_tests.rs"]
+mod installed_receipt_tests;

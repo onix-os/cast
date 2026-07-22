@@ -1,4 +1,4 @@
-//! Focused receipt retirement and `CommitCleanupComplete` dispatch contracts.
+//! Focused installed-receipt and `CommitCleanupComplete` dispatch contracts.
 
 use std::{fs, os::unix::fs::PermissionsExt as _};
 
@@ -12,7 +12,6 @@ use crate::{
         startup_reconciliation::{
             ActiveReblitCommitCleanupCompleteAdmission,
             ActiveReblitCommitCleanupCompleteAuthority,
-            ActiveReblitCommitCleanupCompleteRetiredAuthority,
             arm_between_active_reblit_commit_cleanup_complete_database_captures,
         },
         startup_recovery::{
@@ -44,74 +43,48 @@ use super::{
     boot_sync_complete_support::{open_boot_sync_complete_journal, same_byte_different_inode_hook},
     commit_cleanup_effect::{CleanupLayout, commit_decided_fixture},
     support::{
-        BootRepairFixture, Epoch, assert_canonical_absent, assert_pending_phase,
-        enter_boot, enter_clean_boot,
+        BootRepairFixture, Epoch, assert_pending_phase, enter_boot,
     },
 };
 
-#[derive(Clone, Copy)]
-enum ReceiptRoute {
-    Apply,
-    Finish,
-}
-
 #[test]
-fn completed_cleanup_current_and_historical_apply_and_finish_reaches_complete_once() {
+fn completed_cleanup_current_and_historical_reaches_complete_once() {
     for epoch in Epoch::ALL {
-        for route in [ReceiptRoute::Apply, ReceiptRoute::Finish] {
-            let mut fixture = commit_cleanup_complete_fixture(epoch);
-            let source = fixture.fixture.source.clone();
-            let successor = exact_complete(&source);
-            let state_before = NonReceiptDatabaseSnapshot::capture(&fixture);
-            if matches!(route, ReceiptRoute::Finish) {
-                retire_receipt(&fixture);
-            }
+        let fixture = commit_cleanup_complete_fixture(epoch);
+        let source = fixture.fixture.source.clone();
+        let successor = exact_complete(&source);
+        let database_before = NonReceiptDatabaseSnapshot::capture(&fixture);
+        let receipt_before = installed_receipt_state(&fixture);
 
-            let first = enter_boot(&fixture);
+        let first = enter_boot(&fixture);
 
-            assert_pending_phase(&first, Phase::Complete);
-            assert_eq!(fixture.fixture.canonical_record(), successor);
-            state_before.assert_unchanged(&fixture);
-            assert_receipt_retired(&fixture);
-            fixture.fixture.source = successor.clone();
-
-            let clean = enter_clean_boot(&fixture);
-
-            assert_canonical_absent(&fixture.fixture.installation.root);
-            state_before.assert_unchanged(&fixture);
-            assert_receipt_retired(&fixture);
-            drop(clean);
-
-            let clean_again = enter_clean_boot(&fixture);
-            assert_canonical_absent(&fixture.fixture.installation.root);
-            state_before.assert_unchanged(&fixture);
-            assert_receipt_retired(&fixture);
-            drop(clean_again);
-        }
+        assert_pending_phase(&first, Phase::Complete);
+        assert_eq!(fixture.fixture.canonical_record(), successor);
+        database_before.assert_unchanged(&fixture);
+        assert_eq!(installed_receipt_state(&fixture), receipt_before);
+        assert_installed_receipt_promoted(&fixture);
     }
 }
 
 #[test]
-fn committed_retirement_report_error_reenters_finish_and_completes() {
-    let mut fixture = commit_cleanup_complete_fixture(Epoch::Current);
+fn completed_cleanup_bound_advance_reopens_without_mutating_installed_receipt() {
+    let fixture = commit_cleanup_complete_fixture(Epoch::Current);
     let source = fixture.fixture.source.clone();
     let successor = exact_complete(&source);
-    db::state::arm_boot_publication_receipt_retirement_after_commit_error(
-        db::Error::RowNotFound,
-    );
+    let receipt_before = installed_receipt_state(&fixture);
+    let journal = open_boot_sync_complete_journal(&fixture);
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let ready = capture_ready(&fixture, &journal, &reservation);
 
-    let first = enter_boot(&fixture);
+    let (journal, actual) =
+        persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, ready)
+            .unwrap();
 
-    assert_pending_phase(&first, Phase::CommitCleanupComplete);
-    assert_eq!(fixture.fixture.canonical_record(), source);
-    assert_receipt_retired(&fixture);
-
-    let second = enter_boot(&fixture);
-
-    assert_pending_phase(&second, Phase::Complete);
+    assert_eq!(actual, successor);
     assert_eq!(fixture.fixture.canonical_record(), successor);
-    assert_receipt_retired(&fixture);
-    fixture.fixture.source = successor;
+    assert_eq!(installed_receipt_state(&fixture), receipt_before);
+    assert_installed_receipt_promoted(&fixture);
+    drop(journal);
 }
 
 #[derive(Clone, Copy)]
@@ -155,6 +128,7 @@ fn completed_cleanup_all_five_journal_faults_classify_and_converge() {
         let mut fixture = commit_cleanup_complete_fixture(Epoch::Current);
         let source = fixture.fixture.source.clone();
         let successor = exact_complete(&source);
+        let receipt_before = installed_receipt_state(&fixture);
         (fault.arm)();
 
         let first = enter_boot(&fixture);
@@ -170,25 +144,17 @@ fn completed_cleanup_all_five_journal_faults_classify_and_converge() {
                 DurableActiveReblitCommitCleanupCompleteRecord::Complete => successor.clone(),
             },
         );
-        assert_receipt_retired(&fixture);
+        assert_eq!(installed_receipt_state(&fixture), receipt_before);
+        assert_installed_receipt_promoted(&fixture);
 
         if fault.durable == DurableActiveReblitCommitCleanupCompleteRecord::CommitCleanupComplete {
             let second = enter_boot(&fixture);
             assert_pending_phase(&second, Phase::Complete);
             assert_eq!(fixture.fixture.canonical_record(), successor);
-            assert_receipt_retired(&fixture);
+            assert_eq!(installed_receipt_state(&fixture), receipt_before);
+            assert_installed_receipt_promoted(&fixture);
         }
         fixture.fixture.source = successor;
-
-        let clean = enter_clean_boot(&fixture);
-        assert_canonical_absent(&fixture.fixture.installation.root);
-        assert_receipt_retired(&fixture);
-        drop(clean);
-
-        let clean_again = enter_clean_boot(&fixture);
-        assert_canonical_absent(&fixture.fixture.installation.root);
-        assert_receipt_retired(&fixture);
-        drop(clean_again);
     }
 }
 
@@ -237,7 +203,7 @@ fn complete_persistence_all_binding_windows_reject_same_bytes_on_a_new_inode() {
         let successor = exact_complete(&source);
         let journal = open_boot_sync_complete_journal(&fixture);
         let reservation = ActiveStateReservation::acquire().unwrap();
-        let retired = capture_retired(&fixture, &journal, &reservation);
+        let ready = capture_ready(&fixture, &journal, &reservation);
         let replacement = same_byte_different_inode_hook(
             &fixture,
             &format!("cleanup-complete-persistence-{hook:?}"),
@@ -265,7 +231,7 @@ fn complete_persistence_all_binding_windows_reject_same_bytes_on_a_new_inode() {
 
         let error = persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(
             journal,
-            retired,
+            ready,
         )
         .expect_err("same-byte journal inode substitution returned Complete authority");
 
@@ -291,7 +257,7 @@ fn complete_persistence_all_binding_windows_reject_same_bytes_on_a_new_inode() {
                 successor
             },
         );
-        assert_receipt_retired(&fixture);
+        assert_installed_receipt_promoted(&fixture);
     }
 }
 
@@ -320,7 +286,7 @@ fn completed_cleanup_database_and_namespace_races_fail_closed() {
     let successor = exact_complete(&fixture.fixture.source);
     let journal = open_boot_sync_complete_journal(&fixture);
     let reservation = ActiveStateReservation::acquire().unwrap();
-    let retired = capture_retired(&fixture, &journal, &reservation);
+    let ready = capture_ready(&fixture, &journal, &reservation);
     let staging = fixture.fixture.installation.root.join(".cast/root/staging");
     let mode = fs::metadata(&staging).unwrap().permissions().mode() & 0o7777;
     let changed_mode = if mode == 0o700 { 0o755 } else { 0o700 };
@@ -330,7 +296,7 @@ fn completed_cleanup_database_and_namespace_races_fail_closed() {
 
     let error = persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(
         journal,
-        retired,
+        ready,
     )
     .expect_err("completed cleanup namespace race returned Complete authority");
 
@@ -343,7 +309,7 @@ fn completed_cleanup_database_and_namespace_races_fail_closed() {
         }
     ));
     assert_eq!(fixture.fixture.canonical_record(), successor);
-    assert_receipt_retired(&fixture);
+    assert_installed_receipt_promoted(&fixture);
 }
 
 pub(super) fn commit_cleanup_complete_fixture(epoch: Epoch) -> BootRepairFixture {
@@ -408,11 +374,11 @@ impl NonReceiptDatabaseSnapshot {
     }
 }
 
-fn capture_retired<'reservation>(
+fn capture_ready<'reservation>(
     fixture: &BootRepairFixture,
     journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,
-) -> ActiveReblitCommitCleanupCompleteRetiredAuthority<'reservation> {
+) -> ActiveReblitCommitCleanupCompleteAuthority<'reservation> {
     let seal = ActiveReblitCommitCleanupCompleteSeal::new_for_test();
     match ActiveReblitCommitCleanupCompleteAuthority::capture(
         &seal,
@@ -424,47 +390,34 @@ fn capture_retired<'reservation>(
     )
     .unwrap()
     {
-        ActiveReblitCommitCleanupCompleteAdmission::Apply(authority) => {
-            authority.retire(journal).unwrap()
-        }
-        _ => panic!("exact promoted CommitCleanupComplete evidence did not admit Apply"),
+        ActiveReblitCommitCleanupCompleteAdmission::Ready(authority) => authority,
+        _ => panic!("exact promoted CommitCleanupComplete evidence did not admit Ready"),
     }
 }
 
-fn retire_receipt(fixture: &BootRepairFixture) {
+pub(super) fn installed_receipt_state(
+    fixture: &BootRepairFixture,
+) -> db::state::BootPublicationReceiptState {
     let pair = receipt_pair(fixture);
     fixture
         .fixture
         .database
-        .retire_promoted_boot_publication_receipt_head(
+        .load_exact_promoted_boot_publication_receipt_state(
             &fixture.fixture.source.transition_id,
             &pair,
         )
-        .unwrap();
-    assert_receipt_retired(fixture);
+        .unwrap()
 }
 
-pub(super) fn assert_receipt_retired(fixture: &BootRepairFixture) {
+pub(super) fn assert_installed_receipt_promoted(fixture: &BootRepairFixture) {
     let pair = receipt_pair(fixture);
-    assert_eq!(
-        fixture
-            .fixture
-            .database
-            .inspect_exact_boot_publication_receipt_retirement_state(
-                &fixture.fixture.source.transition_id,
-                &pair,
-            )
-            .unwrap(),
-        db::state::BootPublicationReceiptRetirementDurableState::Retired,
-    );
-    let state = fixture
-        .fixture
-        .database
-        .boot_publication_receipt_state()
-        .unwrap();
-    assert_eq!(state.head().committed(), None);
+    let state = installed_receipt_state(fixture);
+    assert_eq!(state.head().committed(), Some(pair.pending));
     assert!(state.head().pending().is_none());
-    assert!(state.committed().is_none());
+    assert_eq!(
+        state.committed().map(|receipt| receipt.fingerprint()),
+        Some(pair.pending),
+    );
     assert!(state.pending().is_none());
 }
 

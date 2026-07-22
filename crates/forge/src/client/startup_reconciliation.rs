@@ -81,7 +81,6 @@ pub(in crate::client) use active_reblit_commit_cleanup_complete_authority::{
     ActiveReblitCommitCleanupCompleteAuthorityError,
     ActiveReblitCommitCleanupCompletePostAdvanceAuthority,
     ActiveReblitCommitCleanupCompleteRecordAdvanceError,
-    ActiveReblitCommitCleanupCompleteRetiredAuthority,
 };
 pub(in crate::client) use active_reblit_complete_finalization_authority::{
     ActiveReblitCompleteFinalizationAdmission,
