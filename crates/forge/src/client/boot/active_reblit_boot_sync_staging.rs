@@ -160,7 +160,9 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
     }
 }
 
-impl<Plan> FreshStagedActiveReblitBootSync<'_, '_, '_, '_, Plan> {
+impl<'plan, 'inventory, Plan>
+    FreshStagedActiveReblitBootSync<'_, '_, 'plan, 'inventory, Plan>
+{
     pub(in crate::client) const fn record(&self) -> &TransitionRecord {
         self.staged.record()
     }
@@ -173,11 +175,13 @@ impl<Plan> FreshStagedActiveReblitBootSync<'_, '_, '_, '_, Plan> {
         self.staged.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn plan(&self) -> &Plan {
+    pub(in crate::client) const fn plan(&self) -> &'plan Plan {
         self.staged.plan
     }
 
-    pub(in crate::client) const fn inventory(&self) -> &PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(
+        &self,
+    ) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
         self.staged.inventory
     }
 }
@@ -783,6 +787,10 @@ pub(in crate::client) enum ActiveReblitBootSyncReconciliationError {
 
 #[path = "active_reblit_boot_sync_staging/immutable_publication_attempt.rs"]
 mod immutable_publication_attempt;
+
+#[path = "active_reblit_boot_sync_staging/promoted_receipt_validation.rs"]
+mod promoted_receipt_validation;
+pub(in crate::client) use promoted_receipt_validation::ActiveReblitBootSyncPromotedValidationError;
 
 #[cfg(test)]
 #[path = "active_reblit_boot_sync_staging_tests.rs"]

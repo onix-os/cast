@@ -8,7 +8,7 @@ fn missing_foreign_and_conflicting_preimages_fail_without_mutation() {
     let empty = Database::new(":memory:").unwrap();
     let requested = receipt('6', None, 0x61);
     assert!(matches!(
-        empty.promote_boot_publication_receipt(&requested),
+        empty.promote_boot_publication_receipt(&requested, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::MissingPending)
     ));
 
@@ -18,14 +18,17 @@ fn missing_foreign_and_conflicting_preimages_fail_without_mutation() {
     let before = database.boot_publication_receipt_state().unwrap();
     let foreign_transition = receipt('8', None, 0x81);
     assert!(matches!(
-        database.promote_boot_publication_receipt(&foreign_transition),
+        database.promote_boot_publication_receipt(&foreign_transition, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::PendingTransitionMismatch { .. })
     ));
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
 
     let same_transition_other_body = receipt('7', None, 0x72);
     assert!(matches!(
-        database.promote_boot_publication_receipt(&same_transition_other_body),
+        database.promote_boot_publication_receipt(
+            &same_transition_other_body,
+            promotion_deadline(),
+        ),
         Err(BootPublicationReceiptPromotionError::PendingFingerprintMismatch { .. })
     ));
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
@@ -36,7 +39,7 @@ fn missing_foreign_and_conflicting_preimages_fail_without_mutation() {
         0x73,
     );
     assert!(matches!(
-        database.promote_boot_publication_receipt(&wrong_predecessor),
+        database.promote_boot_publication_receipt(&wrong_predecessor, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::CommittedPredecessorMismatch { .. })
     ));
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
@@ -55,7 +58,7 @@ fn conditional_and_terminal_races_roll_back_to_the_exact_pending_state() {
         );
     });
     assert!(matches!(
-        before_race.promote_boot_publication_receipt(&first),
+        before_race.promote_boot_publication_receipt(&first, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::HeadUpdateRowMismatch { changed: 0 })
     ));
     assert_eq!(before_race.boot_publication_receipt_state().unwrap(), before);
@@ -71,7 +74,7 @@ fn conditional_and_terminal_races_roll_back_to_the_exact_pending_state() {
         );
     });
     assert!(matches!(
-        after_race.promote_boot_publication_receipt(&second),
+        after_race.promote_boot_publication_receipt(&second, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::State(
             BootPublicationReceiptStateError::DanglingReference { .. }
         ))
@@ -91,7 +94,7 @@ fn well_formed_nonterminal_revalidation_rolls_back_instead_of_committing() {
     });
 
     assert!(matches!(
-        database.promote_boot_publication_receipt(&pending),
+        database.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::TerminalRevalidationMismatch)
     ));
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
@@ -125,7 +128,8 @@ fn genuine_commit_failure_reconciles_the_rolled_back_pending_state() {
             .unwrap();
     });
 
-    let result = database.promote_boot_publication_receipt(&pending);
+    let result =
+        database.promote_boot_publication_receipt(&pending, promotion_deadline());
     assert!(matches!(
         &result,
         Err(BootPublicationReceiptPromotionError::CommitReport {
@@ -135,7 +139,9 @@ fn genuine_commit_failure_reconciles_the_rolled_back_pending_state() {
     ), "{result:?}");
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
     assert_eq!(
-        database.promote_boot_publication_receipt(&pending).unwrap(),
+        database
+            .promote_boot_publication_receipt(&pending, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
     let promoted = database.boot_publication_receipt_state().unwrap();
@@ -161,7 +167,7 @@ fn storage_failure_rolls_back_and_ambiguous_success_is_exactly_classified() {
             .unwrap();
     });
     assert!(matches!(
-        rejected.promote_boot_publication_receipt(&pending),
+        rejected.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::Database(_))
     ));
     assert_eq!(rejected.boot_publication_receipt_state().unwrap(), before);
@@ -169,9 +175,9 @@ fn storage_failure_rolls_back_and_ambiguous_success_is_exactly_classified() {
     let ambiguous = Database::new(":memory:").unwrap();
     let pending = receipt('e', None, 0xe1);
     stage(&ambiguous, &pending);
-    arm_after_commit_before_return(|| Err(DatabaseError::RowNotFound));
+    arm_boot_publication_receipt_promotion_after_commit_error(DatabaseError::RowNotFound);
     assert!(matches!(
-        ambiguous.promote_boot_publication_receipt(&pending),
+        ambiguous.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::CommitReport {
             durable: BootPublicationReceiptPromotionDurableState::Promoted,
             ..
@@ -181,7 +187,9 @@ fn storage_failure_rolls_back_and_ambiguous_success_is_exactly_classified() {
     assert_eq!(state.committed(), Some(&pending));
     assert!(state.pending().is_none());
     assert_eq!(
-        ambiguous.promote_boot_publication_receipt(&pending).unwrap(),
+        ambiguous
+            .promote_boot_publication_receipt(&pending, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::AlreadyPromoted,
     );
 }

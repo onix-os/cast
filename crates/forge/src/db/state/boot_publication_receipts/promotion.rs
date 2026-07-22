@@ -5,6 +5,8 @@
 //! update and retry. This module grants no journal, filesystem, publication,
 //! replacement, deletion, cleanup, or garbage-collection authority.
 
+use std::time::Instant;
+
 use diesel::{
     Connection as _, SqliteConnection,
     connection::{AnsiTransactionManager, TransactionManager as _},
@@ -36,13 +38,35 @@ pub(crate) enum BootPublicationReceiptPromotionDurableState {
 }
 
 impl Database {
+    /// Require one exact canonical receipt to be the durable committed head.
+    ///
+    /// This check is read-only and uses an ordinary deferred transaction. It
+    /// rejects the otherwise-valid pending state and strictly reloads the
+    /// committed predecessor body when the receipt names one.
+    pub(crate) fn require_promoted_boot_publication_receipt(
+        &self,
+        receipt: &CanonicalBootPublicationReceipt,
+    ) -> Result<(), BootPublicationReceiptPromotionError> {
+        let durable = self.conn.exec(|connection| {
+            connection.transaction(|connection| inspect_exact_state(connection, receipt))
+        })?;
+        if durable == BootPublicationReceiptPromotionDurableState::Pending {
+            return Err(BootPublicationReceiptPromotionError::RequiredPromotedReceiptStillPending);
+        }
+        Ok(())
+    }
+
     /// Atomically make one exact pending canonical receipt the committed head.
     ///
     /// Every identity is derived from `receipt`. Exact retry after a prior
-    /// successful commit is read-only. Any other head/body state fails closed.
+    /// successful commit is read-only. A pending promotion rechecks the
+    /// inherited monotonic deadline inside the exclusive transaction,
+    /// immediately before the only head mutation. Any other head/body state
+    /// fails closed.
     pub(crate) fn promote_boot_publication_receipt(
         &self,
         receipt: &CanonicalBootPublicationReceipt,
+        deadline: Instant,
     ) -> Result<BootPublicationReceiptPromotionOutcome, BootPublicationReceiptPromotionError> {
         let preflight = self.conn.exec(|connection| {
             connection.transaction(|connection| inspect_exact_state(connection, receipt))
@@ -53,7 +77,7 @@ impl Database {
 
         let mut transaction_body_succeeded = false;
         let transaction = self.conn.exclusive_tx(|connection| {
-            let outcome = promote_receipt(connection, receipt)?;
+            let outcome = promote_receipt(connection, receipt, deadline)?;
             transaction_body_succeeded = true;
             Ok(outcome)
         });
@@ -85,6 +109,7 @@ impl Database {
 fn promote_receipt(
     connection: &mut SqliteConnection,
     receipt: &CanonicalBootPublicationReceipt,
+    deadline: Instant,
 ) -> Result<BootPublicationReceiptPromotionOutcome, BootPublicationReceiptPromotionError> {
     if inspect_exact_state(connection, receipt)?
         == BootPublicationReceiptPromotionDurableState::Promoted
@@ -94,6 +119,7 @@ fn promote_receipt(
 
     let pair = receipt_pair(receipt);
     before_head_update(connection);
+    require_promotion_deadline(deadline)?;
     let changed = promote_pending_row(connection, receipt.body().transition_id(), &pair)?;
     if changed != 1 {
         return Err(BootPublicationReceiptPromotionError::HeadUpdateRowMismatch {
@@ -107,6 +133,15 @@ fn promote_receipt(
         return Err(BootPublicationReceiptPromotionError::TerminalRevalidationMismatch);
     }
     Ok(BootPublicationReceiptPromotionOutcome::Promoted)
+}
+
+fn require_promotion_deadline(
+    deadline: Instant,
+) -> Result<(), BootPublicationReceiptPromotionError> {
+    if promotion_deadline_now() > deadline {
+        return Err(BootPublicationReceiptPromotionError::DeadlineExceeded { deadline });
+    }
+    Ok(())
 }
 
 fn inspect_exact_state(
@@ -265,6 +300,8 @@ pub(crate) enum BootPublicationReceiptPromotionError {
     State(#[from] BootPublicationReceiptStateError),
     #[error("the receipt head has no pending publication to promote")]
     MissingPending,
+    #[error("the exact canonical boot-publication receipt is still pending, not promoted")]
+    RequiredPromotedReceiptStillPending,
     #[error("the pending receipt committed predecessor differs from the exact head")]
     CommittedPredecessorMismatch {
         expected: Option<BootPublicationReceiptFingerprint>,
@@ -282,6 +319,8 @@ pub(crate) enum BootPublicationReceiptPromotionError {
     },
     #[error("the pending canonical receipt body differs from the supplied exact body")]
     PendingBodyMismatch,
+    #[error("the receipt-promotion deadline {deadline:?} expired before head mutation")]
+    DeadlineExceeded { deadline: Instant },
     #[error("the conditional receipt-head promotion changed {changed} rows instead of exactly one")]
     HeadUpdateRowMismatch { changed: usize },
     #[error("the in-transaction promoted receipt state failed exact terminal revalidation")]
@@ -335,6 +374,8 @@ std::thread_local! {
         const { std::cell::RefCell::new(None) };
     static AFTER_COMMIT_BEFORE_RETURN: std::cell::RefCell<Option<Box<dyn FnOnce() -> Result<(), DatabaseError>>>> =
         const { std::cell::RefCell::new(None) };
+    static PROMOTION_DEADLINE_NOW: std::cell::Cell<Option<Instant>> =
+        const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -354,12 +395,34 @@ fn arm_after_head_update_before_commit(
 }
 
 #[cfg(test)]
-fn arm_after_commit_before_return(
-    callback: impl FnOnce() -> Result<(), DatabaseError> + 'static,
+pub(crate) fn arm_boot_publication_receipt_promotion_after_commit_error(
+    source: DatabaseError,
 ) {
     AFTER_COMMIT_BEFORE_RETURN.with(|slot| {
-        assert!(slot.borrow_mut().replace(Box::new(callback)).is_none());
+        assert!(
+            slot
+                .borrow_mut()
+                .replace(Box::new(move || Err(source)))
+                .is_none(),
+        );
     });
+}
+
+#[cfg(test)]
+fn arm_promotion_deadline_now(now: Instant) {
+    PROMOTION_DEADLINE_NOW.with(|slot| {
+        assert!(slot.replace(Some(now)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn promotion_deadline_now() -> Instant {
+    PROMOTION_DEADLINE_NOW.with(|slot| slot.take().unwrap_or_else(Instant::now))
+}
+
+#[cfg(not(test))]
+fn promotion_deadline_now() -> Instant {
+    Instant::now()
 }
 
 #[cfg(test)]

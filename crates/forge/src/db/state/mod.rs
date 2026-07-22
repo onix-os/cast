@@ -41,6 +41,9 @@ pub(crate) use boot_publication_receipts::{
     BootPublicationReceiptStateError,
 };
 #[cfg(test)]
+#[allow(unused_imports)] // consumed by cross-module receipt-promotion fault tests
+pub(crate) use boot_publication_receipts::arm_boot_publication_receipt_promotion_after_commit_error;
+#[cfg(test)]
 #[allow(unused_imports)] // consumed by cross-module receipt-race tests
 pub(crate) use boot_publication_receipt_head::BootPublicationReceiptHeadRawForTest;
 #[cfg(test)]

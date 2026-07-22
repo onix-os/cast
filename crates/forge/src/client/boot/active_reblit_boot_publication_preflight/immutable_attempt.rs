@@ -5,8 +5,10 @@
 //! effect, revalidates the exact staged `BootSyncStarted` evidence immediately
 //! before the first namespace mutation, and consumes that staging authority on
 //! every result. Success means every requested leaf was terminally observed
-//! exact while the original topology and durable staged evidence still held;
-//! it does not promote the receipt or advance the journal.
+//! exact while the original topology and durable staged evidence still held.
+//! This publication step itself does not promote the receipt or advance the
+//! journal; its terminal token may be consumed by the separate promotion
+//! bridge below.
 
 use std::{collections::TryReserveError, path::Path, time::Instant};
 
@@ -68,8 +70,10 @@ pub(in crate::client) struct ActiveReblitBootPublicationEffectSeal {
 /// Terminal exact-output evidence which still owns the original staged
 /// `BootSyncStarted` authority.
 ///
-/// This value is deliberately non-`Clone`. It grants no receipt promotion,
-/// pending-head clearing, replacement, removal, or journal-advance operation.
+/// This value is deliberately non-`Clone`. It grants no direct pending-head
+/// mutation, replacement, removal, or journal-advance operation; exact receipt
+/// promotion is available only by consuming the complete token.
+#[must_use = "terminal boot-publication evidence must be promoted or deliberately discarded"]
 pub(in crate::client) struct StagedExactActiveReblitBootPublication<
     'plan,
     'inventory,
@@ -712,3 +716,10 @@ fn require_attempt_deadline(
 #[cfg(test)]
 #[path = "immutable_attempt/tests.rs"]
 mod tests;
+
+#[path = "immutable_attempt/receipt_promotion.rs"]
+mod receipt_promotion;
+pub(in crate::client) use receipt_promotion::{
+    ActiveReblitBootReceiptPromotionError,
+    PromotedExactActiveReblitBootPublication,
+};

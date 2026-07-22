@@ -50,6 +50,11 @@ pub(in crate::client) use immutable_attempt::{
     ActiveReblitBootImmutablePublicationAttemptError,
     StagedExactActiveReblitBootPublication,
 };
+#[allow(unused_imports)] // consumed by the next durable BootSyncComplete wiring slice
+pub(in crate::client) use immutable_attempt::{
+    ActiveReblitBootReceiptPromotionError,
+    PromotedExactActiveReblitBootPublication,
+};
 
 /// Exact read-only inputs retained for one later publication attempt.
 ///

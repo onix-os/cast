@@ -9,7 +9,9 @@ fn first_pending_receipt_promotes_atomically_and_retains_its_body() {
     stage(&database, &pending);
 
     assert_eq!(
-        database.promote_boot_publication_receipt(&pending).unwrap(),
+        database
+            .promote_boot_publication_receipt(&pending, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
     let state = database.boot_publication_receipt_state().unwrap();
@@ -30,7 +32,9 @@ fn chained_promotion_preserves_predecessor_and_successor_bodies() {
     stage(&database, &pending);
 
     assert_eq!(
-        database.promote_boot_publication_receipt(&pending).unwrap(),
+        database
+            .promote_boot_publication_receipt(&pending, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
     let state = database.boot_publication_receipt_state().unwrap();
@@ -63,7 +67,9 @@ fn exact_promoted_retry_is_read_only_even_when_updates_are_rejected() {
     });
 
     assert_eq!(
-        database.promote_boot_publication_receipt(&receipt).unwrap(),
+        database
+            .promote_boot_publication_receipt(&receipt, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::AlreadyPromoted,
     );
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
@@ -89,7 +95,9 @@ fn exact_promoted_retry_uses_no_exclusive_lock_against_an_independent_reader() {
     assert_eq!(rows, 1);
 
     assert_eq!(
-        database.promote_boot_publication_receipt(&receipt).unwrap(),
+        database
+            .promote_boot_publication_receipt(&receipt, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::AlreadyPromoted,
     );
     reader.batch_execute("ROLLBACK").unwrap();
@@ -105,7 +113,7 @@ fn stale_replay_cannot_displace_a_pending_or_promoted_successor() {
 
     let pending_successor = database.boot_publication_receipt_state().unwrap();
     assert!(matches!(
-        database.promote_boot_publication_receipt(&predecessor),
+        database.promote_boot_publication_receipt(&predecessor, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::CommittedPredecessorMismatch { .. })
     ));
     assert_eq!(
@@ -114,12 +122,14 @@ fn stale_replay_cannot_displace_a_pending_or_promoted_successor() {
     );
 
     assert_eq!(
-        database.promote_boot_publication_receipt(&successor).unwrap(),
+        database
+            .promote_boot_publication_receipt(&successor, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
     let promoted_successor = database.boot_publication_receipt_state().unwrap();
     assert!(matches!(
-        database.promote_boot_publication_receipt(&predecessor),
+        database.promote_boot_publication_receipt(&predecessor, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::CommittedPredecessorMismatch { .. })
     ));
     assert_eq!(
@@ -146,7 +156,9 @@ fn promoted_head_and_body_survive_a_real_database_reopen() {
     assert!(state.pending().is_none());
     assert_eq!(receipt_row_count(&reopened), 1);
     assert_eq!(
-        reopened.promote_boot_publication_receipt(&receipt).unwrap(),
+        reopened
+            .promote_boot_publication_receipt(&receipt, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::AlreadyPromoted,
     );
 }

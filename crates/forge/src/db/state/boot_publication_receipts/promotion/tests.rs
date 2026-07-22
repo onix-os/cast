@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use diesel::{ExpressionMethods as _, QueryDsl as _, RunQueryDsl as _};
 
 use super::*;
@@ -66,10 +68,16 @@ fn stage(database: &Database, receipt: &CanonicalBootPublicationReceipt) {
     );
 }
 
+fn promotion_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60)
+}
+
 fn stage_and_promote(database: &Database, receipt: &CanonicalBootPublicationReceipt) {
     stage(database, receipt);
     assert_eq!(
-        database.promote_boot_publication_receipt(receipt).unwrap(),
+        database
+            .promote_boot_publication_receipt(receipt, promotion_deadline())
+            .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
 }
@@ -156,3 +164,7 @@ mod api;
 mod failures;
 #[path = "tests/corruption.rs"]
 mod corruption;
+#[path = "tests/promoted_validation.rs"]
+mod promoted_validation;
+#[path = "tests/deadline.rs"]
+mod deadline;

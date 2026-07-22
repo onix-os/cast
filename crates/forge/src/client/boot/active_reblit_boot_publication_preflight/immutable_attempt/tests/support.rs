@@ -138,8 +138,13 @@ pub(super) fn assert_pending_boot_sync_started(
 }
 
 macro_rules! with_staged_alias_attempt {
-    (|$fixture:ident, $topology_fixture:ident, $plan:ident, $inventory:ident,
-       $client:ident, $staged:ident, $expected_record:ident, $fingerprint:ident| $body:block) => {{
+    (
+        $(before_stage |$setup_client:ident, $setup_plan:ident, $setup_inventory:ident,
+            $setup_claims:ident, $setup_predecessor:ident, $setup_deadline:ident| $setup:block,
+        )?
+        |$fixture:ident, $topology_fixture:ident, $plan:ident, $inventory:ident,
+            $client:ident, $staged:ident, $expected_record:ident, $fingerprint:ident| $body:block
+    ) => {{
         let deadline = render_support::future_deadline();
         let $fixture = render_support::simple_fixture();
         let $client = support::staging_client(&$fixture, $fixture.state_db.clone());
@@ -200,6 +205,15 @@ macro_rules! with_staged_alias_attempt {
         let claims = support::claim_bindings(&$inventory);
         let (journal, predecessor, binding) =
             support::exact_boot_sync_journal(&$client.installation);
+        $({
+            let $setup_client = &$client;
+            let $setup_plan = &$plan;
+            let $setup_inventory = &$inventory;
+            let $setup_claims = &claims;
+            let $setup_predecessor = &predecessor;
+            let $setup_deadline = deadline;
+            $setup
+        })?
         let $staged = $client
             .stage_active_reblit_boot_sync(
                 &$plan,

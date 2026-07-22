@@ -43,6 +43,8 @@ pub(crate) use promotion::{
     BootPublicationReceiptPromotionError,
     BootPublicationReceiptPromotionOutcome,
 };
+#[cfg(test)]
+pub(crate) use promotion::arm_boot_publication_receipt_promotion_after_commit_error;
 
 /// One strictly decoded state of the compact head and its referenced bodies.
 ///

@@ -10,7 +10,7 @@ fn dangling_and_tampered_pending_bodies_fail_before_head_mutation() {
     let head = dangling.boot_publication_receipt_head().unwrap();
     dangling.delete_boot_publication_receipt_body_for_test(pending.fingerprint());
     assert!(matches!(
-        dangling.promote_boot_publication_receipt(&pending),
+        dangling.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::State(
             BootPublicationReceiptStateError::DanglingReference {
                 reference: ReceiptReference::Pending,
@@ -38,7 +38,7 @@ fn dangling_and_tampered_pending_bodies_fail_before_head_mutation() {
         assert_eq!(changed, 1);
     });
     assert!(matches!(
-        tampered.promote_boot_publication_receipt(&pending),
+        tampered.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::State(
             BootPublicationReceiptStateError::BodyFingerprintMismatch { .. }
         ))
@@ -56,7 +56,7 @@ fn dangling_and_tampered_committed_predecessors_block_promotion() {
     let head = dangling.boot_publication_receipt_head().unwrap();
     dangling.delete_boot_publication_receipt_body_for_test(predecessor.fingerprint());
     assert!(matches!(
-        dangling.promote_boot_publication_receipt(&pending),
+        dangling.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::State(
             BootPublicationReceiptStateError::DanglingReference {
                 reference: ReceiptReference::Committed,
@@ -85,7 +85,7 @@ fn dangling_and_tampered_committed_predecessors_block_promotion() {
         assert_eq!(changed, 1);
     });
     assert!(matches!(
-        tampered.promote_boot_publication_receipt(&pending),
+        tampered.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::State(
             BootPublicationReceiptStateError::BodyFingerprintMismatch { .. }
         ))
@@ -116,7 +116,7 @@ fn terminal_validation_and_exact_retry_require_the_committed_predecessor_body() 
             .unwrap();
     });
     assert!(matches!(
-        terminal.promote_boot_publication_receipt(&pending),
+        terminal.promote_boot_publication_receipt(&pending, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::State(
             BootPublicationReceiptStateError::DanglingReference {
                 reference: ReceiptReference::CommittedPredecessor,
@@ -134,7 +134,7 @@ fn terminal_validation_and_exact_retry_require_the_committed_predecessor_body() 
     stage_and_promote(&retry, &committed);
     retry.delete_boot_publication_receipt_body_for_test(predecessor.fingerprint());
     assert!(matches!(
-        retry.promote_boot_publication_receipt(&committed),
+        retry.promote_boot_publication_receipt(&committed, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::State(
             BootPublicationReceiptStateError::DanglingReference {
                 reference: ReceiptReference::CommittedPredecessor,

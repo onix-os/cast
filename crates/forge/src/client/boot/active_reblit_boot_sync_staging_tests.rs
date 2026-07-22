@@ -16,7 +16,12 @@ use crate::{
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
         active_reblit_mounted_boot_topology::AliasFixture,
     },
-    db, repository,
+    db,
+    db::state::{
+        BootPublicationReceiptPromotionError,
+        BootPublicationReceiptPromotionOutcome,
+    },
+    repository,
     state::{self, TransitionId},
     transition_journal::{
         BootId, MountNamespaceIdentity, Previous, PreviousOrigin,
@@ -371,6 +376,62 @@ fn fresh_view_retains_the_exact_original_bound_plan_and_inventory() {
             fresh.receipt().body().desired_inventory_sha256().as_bytes(),
             fresh.inventory().fingerprint().as_bytes(),
         );
+        assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
+    });
+}
+
+#[test]
+fn promoted_view_requires_exact_committed_receipt_and_retains_started_binding() {
+    crate::client::boot::reset_boot_synchronize_attempt_count();
+    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+        let client = staging_client(&fixture, fixture.state_db.clone());
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal(&fixture.installation);
+        let staged = stage_with_retained_stores(
+            &fixture.installation,
+            &fixture.state_db,
+            &plan,
+            &inventory,
+            &claims,
+            journal,
+            predecessor,
+            binding,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            staged.revalidate_promoted_against(&client),
+            Err(ActiveReblitBootSyncPromotedValidationError::ReceiptState(
+                BootPublicationReceiptPromotionError::RequiredPromotedReceiptStillPending,
+            )),
+        ));
+        assert_eq!(
+            fixture
+                .state_db
+                .promote_boot_publication_receipt(staged.receipt(), plan.input_deadline())
+                .unwrap(),
+            BootPublicationReceiptPromotionOutcome::Promoted,
+        );
+
+        let fresh = staged.revalidate_promoted_against(&client).unwrap();
+        assert_eq!(fresh.record(), staged.record());
+        assert_eq!(fresh.receipt(), staged.receipt());
+        assert_eq!(fresh.receipt_fingerprint(), staged.receipt_fingerprint());
+        assert!(std::ptr::eq(fresh.plan(), &plan));
+        assert!(std::ptr::eq(fresh.inventory(), &inventory));
+        let state = fixture.state_db.boot_publication_receipt_state().unwrap();
+        assert_eq!(state.committed(), Some(staged.receipt()));
+        assert!(state.pending().is_none());
+        assert!(state.head().pending().is_none());
+        drop(fresh);
+
+        let (journal, record, binding) = staged.into_parts();
+        let cast = fixture
+            .installation
+            .retained_mutable_cast_directory()
+            .unwrap();
+        assert!(journal.has_record_binding(cast, &binding, &record).unwrap());
+        assert_eq!(record.phase, Phase::BootSyncStarted);
         assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
     });
 }

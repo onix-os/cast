@@ -55,3 +55,5 @@ mod integration;
 mod durable_state;
 #[path = "tests/failures.rs"]
 mod failures;
+#[path = "receipt_promotion/tests.rs"]
+mod receipt_promotion;

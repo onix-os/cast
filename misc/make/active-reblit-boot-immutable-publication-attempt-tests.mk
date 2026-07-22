@@ -11,7 +11,7 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 4; \
+	test "$$( grep -Ec "^$$prefix(routing|integration|durable_state|failures)::.*: test$$" "$$listed" )" = 4; \
 	for name in \
 		routing::alias_and_distinct_routes_preserve_global_plan_order \
 		integration::staged_alias_attempt_publishes_in_phase_order_and_terminally_observes_exact \
