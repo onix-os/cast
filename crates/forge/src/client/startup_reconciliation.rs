@@ -24,7 +24,6 @@ use crate::{
 };
 
 mod activation_namespace;
-#[allow(dead_code)] // sealed cleanup effect; persistence and startup dispatch are the next slice
 mod active_reblit_commit_cleanup_authority;
 #[allow(dead_code)] // read-only startup boundary; live dispatch is deliberately a later slice
 mod active_reblit_boot_sync_complete_authority;
@@ -64,7 +63,7 @@ pub(in crate::client) use active_reblit_boot_sync_complete_authority::{
 pub(in crate::client) use active_reblit_boot_sync_complete_authority::arm_between_active_reblit_boot_sync_complete_database_captures;
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
-#[allow(unused_imports)] // exported for focused effect contracts and the next persistence/dispatch slice
+#[allow(unused_imports)] // exported for the specialized cleanup path and focused contracts
 pub(in crate::client) use active_reblit_commit_cleanup_authority::{
     ActiveReblitCommitCleanupAdmission, ActiveReblitCommitCleanupApplyAuthority,
     ActiveReblitCommitCleanupApplyEffectAuthority, ActiveReblitCommitCleanupApplyReconciliation,
@@ -72,6 +71,7 @@ pub(in crate::client) use active_reblit_commit_cleanup_authority::{
     ActiveReblitCommitCleanupDurableAuthority, ActiveReblitCommitCleanupEffectError,
     ActiveReblitCommitCleanupFinishAuthority, ActiveReblitCommitCleanupFinishEffectAuthority,
     ActiveReblitCommitCleanupPendingDurabilityAuthority,
+    ActiveReblitCommitCleanupPostAdvanceAuthority, ActiveReblitCommitCleanupRecordAdvanceError,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_commit_cleanup_authority::arm_between_active_reblit_commit_cleanup_database_captures;

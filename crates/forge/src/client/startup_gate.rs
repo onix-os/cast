@@ -9,6 +9,7 @@ use super::{
 };
 
 mod active_reblit_boot_sync_complete;
+mod active_reblit_commit_cleanup;
 mod default_system_intent;
 #[cfg(test)]
 mod root_links_terminal_process_harness;
@@ -189,6 +190,34 @@ impl CleanSystemStartup {
                     (journal, record)
                 }
                 active_reblit_boot_sync_complete::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+            };
+
+            // Handle at most the exact CommitDecided cleanup checkpoint before
+            // replacement mutation, root-ABI normalization, or rollback. A
+            // handled source or freshly persisted successor ends this startup
+            // entry and is never redispatched here.
+            let (journal, record) = match active_reblit_commit_cleanup::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+            )? {
+                active_reblit_commit_cleanup::Dispatch::Unhandled { journal, record } => {
+                    (journal, record)
+                }
+                active_reblit_commit_cleanup::Dispatch::Handled { journal, record } => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
                         installation,
@@ -599,6 +628,8 @@ pub(super) enum Error {
     ActiveReblitReplacementRecovery(#[from] transition_identity::ActiveReblitReplacementRecoveryError),
     #[error("dispatch the exact forward startup ActiveReblit BootSyncComplete checkpoint")]
     ActiveReblitBootSyncCompleteDispatch(#[from] active_reblit_boot_sync_complete::Error),
+    #[error("dispatch the exact forward startup ActiveReblit CommitDecided cleanup checkpoint")]
+    ActiveReblitCommitCleanupDispatch(#[from] active_reblit_commit_cleanup::Error),
     #[error("capture exact startup /usr rollback-decision authority")]
     UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
     #[error("capture exact startup UsrExchanged root ABI normalization authority")]

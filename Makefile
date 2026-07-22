@@ -95,7 +95,7 @@ include misc/make/startup-rollback-active-reblit-candidate-dispatch-tests.mk
 include misc/make/startup-rollback-active-reblit-complete-route-tests.mk
 include misc/make/startup-active-reblit-boot-repair-required-tests.mk
 include misc/make/startup-active-reblit-boot-repair-unverified-tests.mk
-include misc/make/startup-active-reblit-boot-repair-complete-tests.mk misc/make/startup-active-reblit-boot-sync-complete-tests.mk misc/make/startup-active-reblit-commit-cleanup-authority-tests.mk misc/make/startup-active-reblit-commit-cleanup-effect-tests.mk
+include misc/make/startup-active-reblit-boot-repair-complete-tests.mk misc/make/startup-active-reblit-boot-sync-complete-tests.mk misc/make/startup-active-reblit-commit-cleanup-authority-tests.mk misc/make/startup-active-reblit-commit-cleanup-effect-tests.mk misc/make/startup-active-reblit-commit-cleanup-dispatch-tests.mk
 include misc/make/startup-rollback-activate-archived-complete-route-tests.mk
 include misc/make/startup-rollback-activate-archived-finalization-tests.mk
 include misc/make/startup-rollback-active-reblit-finalization-tests.mk

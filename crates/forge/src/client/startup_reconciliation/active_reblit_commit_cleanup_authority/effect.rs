@@ -1,5 +1,11 @@
 //! One-shot cleanup reconciliation and shared fixed durability suffix.
 
+mod record_advance;
+
+pub(in crate::client) use record_advance::{
+    ActiveReblitCommitCleanupPostAdvanceAuthority, ActiveReblitCommitCleanupRecordAdvanceError,
+};
+
 use crate::transition_journal::TransitionJournalStore;
 
 use super::{
@@ -33,7 +39,8 @@ pub(in crate::client) struct ActiveReblitCommitCleanupPendingDurabilityAuthority
 }
 
 /// Sealed authority returned only after the fixed suffix and trailing exact
-/// evidence checks complete. It exposes no persistence operation here.
+/// evidence checks complete. Only the cleanup-complete persistence boundary
+/// can consume it.
 #[must_use = "durable ActiveReblit cleanup authority must remain sealed"]
 pub(in crate::client) struct ActiveReblitCommitCleanupDurableAuthority<'reservation> {
     evidence: ActiveReblitCommitCleanupCommonEvidence<'reservation>,
@@ -138,7 +145,6 @@ impl<'reservation> ActiveReblitCommitCleanupPendingDurabilityAuthority<'reservat
 
 impl ActiveReblitCommitCleanupDurableAuthority<'_> {
     /// Freshly revalidate durable evidence without repeating any barrier.
-    #[allow(dead_code)]
     pub(in crate::client) fn revalidate(
         &self,
         journal: &TransitionJournalStore,

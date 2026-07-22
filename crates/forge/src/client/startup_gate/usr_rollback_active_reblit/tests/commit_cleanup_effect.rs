@@ -26,12 +26,12 @@ use super::{
 };
 
 #[derive(Clone, Copy)]
-enum CleanupLayout {
+pub(super) enum CleanupLayout {
     Apply,
     Finish,
 }
 
-fn commit_decided_fixture(epoch: Epoch, layout: CleanupLayout) -> BootRepairFixture {
+pub(super) fn commit_decided_fixture(epoch: Epoch, layout: CleanupLayout) -> BootRepairFixture {
     let mut fixture = boot_sync_complete_fixture(epoch, true);
     let decided = fixture.fixture.source.forward_successor(None).unwrap();
     assert_eq!(decided.phase, Phase::CommitDecided);
@@ -54,7 +54,7 @@ fn exchange_cleanup_wrappers(fixture: &BootRepairFixture) {
     fs::rename(&temporary, replacement).unwrap();
 }
 
-fn capture_apply_pending<'reservation>(
+pub(super) fn capture_apply_pending<'reservation>(
     fixture: &BootRepairFixture,
     journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,
@@ -78,7 +78,7 @@ fn capture_apply_pending<'reservation>(
     }
 }
 
-fn capture_finish_pending<'reservation>(
+pub(super) fn capture_finish_pending<'reservation>(
     fixture: &BootRepairFixture,
     journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,

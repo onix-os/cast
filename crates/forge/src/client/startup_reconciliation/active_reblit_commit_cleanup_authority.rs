@@ -5,8 +5,8 @@
 //! complete state and provenance, active selection and reservation, exact
 //! journal-record inode, and a descriptor-backed Apply or Finish namespace
 //! proof. Admission remains read-only; the specialized child owns the exact
-//! namespace effect and durability suffix. Persistence and startup dispatch
-//! remain the next slice.
+//! namespace effect and durability suffix, then the sole bound
+//! `CommitCleanupComplete` persistence edge.
 
 mod effect;
 
@@ -35,6 +35,7 @@ use super::activation_namespace::{
 pub(in crate::client) use effect::{
     ActiveReblitCommitCleanupApplyReconciliation, ActiveReblitCommitCleanupDurableAuthority,
     ActiveReblitCommitCleanupEffectError, ActiveReblitCommitCleanupPendingDurabilityAuthority,
+    ActiveReblitCommitCleanupPostAdvanceAuthority, ActiveReblitCommitCleanupRecordAdvanceError,
 };
 
 /// Layout-specific result of exact read-only cleanup admission.
@@ -569,6 +570,8 @@ enum ActiveReblitCommitCleanupAuthorityErrorKind {
     Record(#[source] CodecError),
     #[error("the exact ActiveReblit CommitDecided journal-record binding changed")]
     JournalRecordBindingChanged,
+    #[error("the exact ActiveReblit CommitCleanupComplete successor binding changed")]
+    SuccessorRecordBindingChanged,
     #[error("read or revalidate the exact bound ActiveReblit CommitDecided journal")]
     Journal(#[source] StorageError),
     #[error("strictly load canonical promoted boot-publication receipt state")]
@@ -594,6 +597,8 @@ enum ActiveReblitCommitCleanupAuthorityErrorKind {
     RouteEvidenceChanged,
     #[error("the ActiveReblit cleanup active selection changed during admission")]
     ActiveSelectionChanged,
+    #[error("the retained record is not the exact ActiveReblit CommitCleanupComplete successor")]
+    UnexpectedSuccessor,
     #[error("revalidate retained mutable installation namespace")]
     Installation(#[source] crate::installation::Error),
 }
