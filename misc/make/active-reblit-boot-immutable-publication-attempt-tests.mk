@@ -11,7 +11,7 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::'; \
-	test "$$( grep -Ec "^$$prefix(routing|integration|durable_state|failures|installed_replacement)::.*: test$$" "$$listed" )" = 7; \
+	test "$$( grep -Ec "^$$prefix(routing|integration|durable_state|failures|installed_replacement)::.*: test$$" "$$listed" )" = 9; \
 	for name in \
 		routing::alias_and_distinct_routes_preserve_global_plan_order \
 		integration::staged_alias_attempt_publishes_in_phase_order_and_terminally_observes_exact \
@@ -19,6 +19,8 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 		durable_state::sealed_classification_drift_fails_before_effect_authority_exists \
 		durable_state::immediate_post_schedule_journal_drift_fails_before_any_effect \
 		installed_replacement::authentic_installed_delta_executes_all_desired_actions_and_defers_cleanup \
+		installed_replacement::missing_owned_replacement_sidecar_blocks_receipt_promotion \
+		installed_replacement::same_bytes_different_owned_replacement_sidecar_inode_blocks_receipt_promotion \
 		failures::leaf_failure_stops_before_later_outputs_and_retains_pending_started; do \
 		grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
@@ -47,6 +49,9 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 	grep -Fq 'authority.sidecar_leaf()' "$$installed_replacement"; \
 	grep -Fq 'let promoted = match promoted.try_into_cleaned()' "$$installed_replacement"; \
 	grep -Fq 'rejected cleanup conversion retains replacement authority' "$$installed_replacement"; \
+	grep -Fq 'PromotionPairCase::MissingRollbackSidecar' "$$installed_replacement"; \
+	grep -Fq 'PromotionPairCase::SameBytesDifferentSidecarInode' "$$installed_replacement"; \
+	grep -Fq 'checkpoint: "initial terminal admission"' "$$installed_replacement"; \
 	grep -Fq 'ActiveReblitBootImmutableLeafPublicationError::DestinationStateChanged' "$$leaf"; \
 	grep -Fq '.replace_exact_boot_file_until(' "$$replacement"; \
 	if rg -n 'Phase::BootSyncComplete|forward_successor|advance_record_binding|promote_boot_publication|clear_boot_publication|delete_boot_publication' "$$staging" "$$attempt" "$$execution" "$$evidence" "$$leaf"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \

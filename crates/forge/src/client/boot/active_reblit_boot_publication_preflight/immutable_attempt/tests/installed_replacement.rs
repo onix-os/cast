@@ -24,6 +24,7 @@ use crate::{
     db::state::BootPublicationReceiptPromotionOutcome,
     transition_journal::{CodecError, Phase},
 };
+use super::super::receipt_promotion::ActiveReblitBootTerminalEvidenceValidationError;
 
 #[derive(Debug)]
 struct MaterializedPriorOutput {
@@ -33,6 +34,23 @@ struct MaterializedPriorOutput {
     xxh3: u128,
     sha256: [u8; 32],
     inode: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PromotionPairCase {
+    Exact,
+    MissingRollbackSidecar,
+    SameBytesDifferentSidecarInode,
+}
+
+impl PromotionPairCase {
+    const fn validation_count(self) -> usize {
+        match self {
+            Self::Exact => 4,
+            Self::MissingRollbackSidecar
+            | Self::SameBytesDifferentSidecarInode => 1,
+        }
+    }
 }
 
 fn system_triggers_complete(mut record: TransitionRecord) -> TransitionRecord {
@@ -114,6 +132,24 @@ fn classified_action_at(
 
 #[test]
 fn authentic_installed_delta_executes_all_desired_actions_and_defers_cleanup() {
+    run_authentic_installed_replacement_case(PromotionPairCase::Exact);
+}
+
+#[test]
+fn missing_owned_replacement_sidecar_blocks_receipt_promotion() {
+    run_authentic_installed_replacement_case(
+        PromotionPairCase::MissingRollbackSidecar,
+    );
+}
+
+#[test]
+fn same_bytes_different_owned_replacement_sidecar_inode_blocks_receipt_promotion() {
+    run_authentic_installed_replacement_case(
+        PromotionPairCase::SameBytesDifferentSidecarInode,
+    );
+}
+
+fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
     let deadline = render_support::future_deadline();
     let fixture = render_support::RenderFixture::new(
         render_support::StateSpec::one_kernel("6.12"),
@@ -389,7 +425,11 @@ fn authentic_installed_delta_executes_all_desired_actions_and_defers_cleanup() {
         }),
     );
     let replacement_assessment =
-        arm_fixture_owned_replacement_assessments(root.clone(), 1, 4);
+        arm_fixture_owned_replacement_assessments(
+            root.clone(),
+            1,
+            case.validation_count(),
+        );
     let leaf = arm_fixture_immutable_leaf_assessments(
         root.clone(),
         plan.publication_count() - 1,
@@ -400,7 +440,10 @@ fn authentic_installed_delta_executes_all_desired_actions_and_defers_cleanup() {
     assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
     assert_eq!(fixture_immutable_leaf_assessments_remaining(), 0);
     assert_eq!(fixture_owned_replacement_assessments_remaining(), 0);
-    assert_eq!(fixture_owned_replacement_validations_remaining(), 4);
+    assert_eq!(
+        fixture_owned_replacement_validations_remaining(),
+        case.validation_count(),
+    );
     drop(leaf);
     drop(aggregate);
 
@@ -477,6 +520,99 @@ fn authentic_installed_delta_executes_all_desired_actions_and_defers_cleanup() {
             .record(),
         &expected_record,
     );
+
+    if case != PromotionPairCase::Exact {
+        let receipt_state_before = fixture
+            .state_db
+            .boot_publication_receipt_state()
+            .unwrap();
+        assert_eq!(
+            receipt_state_before.head().committed(),
+            Some(prior_fingerprint),
+        );
+        assert_eq!(
+            receipt_state_before
+                .head()
+                .pending()
+                .unwrap()
+                .fingerprint(),
+            pending_fingerprint,
+        );
+        assert_eq!(
+            receipt_state_before.pending().unwrap().fingerprint(),
+            pending_fingerprint,
+        );
+
+        let displaced_sidecar = match case {
+            PromotionPairCase::MissingRollbackSidecar => {
+                fs::remove_file(&sidecar).unwrap();
+                None
+            }
+            PromotionPairCase::SameBytesDifferentSidecarInode => {
+                let permissions = fs::metadata(&sidecar).unwrap().permissions();
+                let displaced = sidecar
+                    .parent()
+                    .unwrap()
+                    .join("displaced-installed-sidecar");
+                fs::rename(&sidecar, &displaced).unwrap();
+                fs::write(&sidecar, &prior_head_entry.bytes).unwrap();
+                fs::set_permissions(&sidecar, permissions).unwrap();
+                assert_eq!(fs::metadata(&displaced).unwrap().ino(), installed_inode);
+                assert_ne!(fs::metadata(&sidecar).unwrap().ino(), installed_inode);
+                Some(displaced)
+            }
+            PromotionPairCase::Exact => unreachable!(),
+        };
+
+        let promotion_assessments = arm_fixture_boot_namespace_assessments([
+            FixtureBootNamespaceAssessment::new(
+                BootTargetRole::Esp,
+                root.clone(),
+            ),
+        ]);
+        let error = terminal
+            .promote_terminal_receipt(&client)
+            .unwrap_err();
+        assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
+        assert_eq!(fixture_owned_replacement_validations_remaining(), 0);
+        drop(promotion_assessments);
+        drop(replacement_assessment);
+        assert!(error.durable_promotion_outcome().is_none());
+        assert!(error.durable_receipt_state().is_none());
+        assert!(matches!(
+            error,
+            ActiveReblitBootReceiptPromotionError::TerminalEvidence(
+                ActiveReblitBootTerminalEvidenceValidationError::ReplacementPair {
+                    checkpoint: "initial terminal admission",
+                    role: BootTargetRole::Esp,
+                    plan_index,
+                    ..
+                }
+            ) if plan_index == replacement_index
+        ));
+        assert_eq!(
+            fixture
+                .state_db
+                .boot_publication_receipt_state()
+                .unwrap(),
+            receipt_state_before,
+        );
+        assert_eq!(fs::read(&canonical).unwrap(), replacement_bytes);
+        assert_eq!(fs::metadata(&canonical).unwrap().ino(), replacement_inode);
+        assert_eq!(fs::read(&stale).unwrap(), prior_history_entry.bytes);
+        assert_eq!(fs::metadata(&stale).unwrap().ino(), prior_history_entry.inode);
+        match displaced_sidecar {
+            Some(displaced) => {
+                assert_eq!(fs::read(&sidecar).unwrap(), prior_head_entry.bytes);
+                assert_ne!(fs::metadata(&sidecar).unwrap().ino(), installed_inode);
+                assert_eq!(fs::read(&displaced).unwrap(), prior_head_entry.bytes);
+                assert_eq!(fs::metadata(&displaced).unwrap().ino(), installed_inode);
+            }
+            None => assert!(!sidecar.exists()),
+        }
+        topology_fixture.assert_outside_unchanged();
+        return;
+    }
 
     let promotion_assessments = arm_fixture_boot_namespace_assessments(
         (0..4).map(|_| {
