@@ -8,6 +8,7 @@
 
 mod active_reblit_boot_sync_commit_decision;
 mod active_reblit_commit_cleanup_complete;
+mod active_reblit_commit_cleanup_complete_to_complete;
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_exchanged_root_abi_normalization;
@@ -130,6 +131,11 @@ pub(super) use active_reblit_commit_cleanup_complete::{
     persist_active_reblit_commit_cleanup_complete_and_reopen,
 };
 
+pub(super) use active_reblit_commit_cleanup_complete_to_complete::{
+    ActiveReblitCommitCleanupCompletePersistenceError,
+    persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen,
+};
+
 pub(super) use usr_rollback_active_reblit_boot_repair_complete::{
     UsrRollbackActiveReblitBootRepairCompletePersistenceError,
     persist_usr_rollback_active_reblit_boot_repair_complete_and_reopen,
@@ -200,6 +206,18 @@ pub(in crate::client) use active_reblit_commit_cleanup_complete::{
     arm_before_active_reblit_commit_cleanup_fresh_binding_validation,
     arm_before_active_reblit_commit_cleanup_reopened_validation,
     arm_before_active_reblit_commit_cleanup_same_store_validation,
+};
+
+#[cfg(test)]
+pub(in crate::client) use active_reblit_commit_cleanup_complete_to_complete::{
+    ActiveReblitCommitCleanupCompleteValidationStage,
+    DurableActiveReblitCommitCleanupCompleteRecord,
+    arm_after_active_reblit_commit_cleanup_complete_old_binding_validation,
+    arm_after_active_reblit_commit_cleanup_complete_same_store_before_reopen,
+    arm_before_active_reblit_commit_cleanup_complete_final_revalidation,
+    arm_before_active_reblit_commit_cleanup_complete_fresh_binding_validation,
+    arm_before_active_reblit_commit_cleanup_complete_reopened_validation,
+    arm_before_active_reblit_commit_cleanup_complete_same_store_validation,
 };
 
 #[cfg(test)]

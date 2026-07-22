@@ -34,6 +34,21 @@ pub(crate) enum BootPublicationReceiptRetirementDurableState {
 }
 
 impl Database {
+    /// Authenticate whether one exact receipt chain is still promoted or has
+    /// already had its singleton head retired. This is a read-only deferred
+    /// transaction and retains no mutation authority.
+    pub(crate) fn inspect_exact_boot_publication_receipt_retirement_state(
+        &self,
+        transition_id: &TransitionId,
+        pair: &BootPublicationReceiptPair,
+    ) -> Result<BootPublicationReceiptRetirementDurableState, BootPublicationReceiptRetirementError> {
+        self.conn.exec(|connection| {
+            connection.transaction(|connection| {
+                inspect_exact_state(connection, transition_id, pair)
+            })
+        })
+    }
+
     /// Retire one exact promoted receipt head without deleting immutable bodies.
     ///
     /// Exact identity is supplied as the transition ID and compact receipt
@@ -44,11 +59,10 @@ impl Database {
         transition_id: &TransitionId,
         pair: &BootPublicationReceiptPair,
     ) -> Result<BootPublicationReceiptRetirementOutcome, BootPublicationReceiptRetirementError> {
-        let preflight = self.conn.exec(|connection| {
-            connection.transaction(|connection| {
-                inspect_exact_state(connection, transition_id, pair)
-            })
-        })?;
+        let preflight = self.inspect_exact_boot_publication_receipt_retirement_state(
+            transition_id,
+            pair,
+        )?;
         if preflight == BootPublicationReceiptRetirementDurableState::Retired {
             return Ok(BootPublicationReceiptRetirementOutcome::AlreadyRetired);
         }

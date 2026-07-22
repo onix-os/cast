@@ -190,6 +190,22 @@ impl ActiveReblitCommitCleanupFinishNamespaceProof {
             after: self.after,
         }
     }
+
+    /// Revalidate the completed cleanup layout after the source journal inode
+    /// has been consumed by its bound successor advance.
+    pub(in crate::client::startup_reconciliation) fn revalidate_completed_namespace(
+        &self,
+        installation: &Installation,
+        expected: &TransitionRecord,
+    ) -> Result<(), ActiveReblitCommitCleanupNamespaceError> {
+        revalidate_namespace_only(
+            installation,
+            expected,
+            &self.before,
+            &self.after,
+            ActiveReblitCommitCleanupLayout::Finish,
+        )
+    }
 }
 
 impl ActiveReblitCommitCleanupApplyNamespaceEffectEvidence {
@@ -253,6 +269,33 @@ fn revalidate_proof(
     Ok(())
 }
 
+fn revalidate_namespace_only(
+    installation: &Installation,
+    expected: &TransitionRecord,
+    before: &RetainedActiveReblitCommitCleanupNamespace,
+    after: &RetainedActiveReblitCommitCleanupNamespace,
+    layout: ActiveReblitCommitCleanupLayout,
+) -> Result<(), ActiveReblitCommitCleanupNamespaceError> {
+    installation.revalidate_mutable_namespace()?;
+    before.revalidate(expected)?;
+    after.revalidate(expected)?;
+    require_matching_fingerprints(before, after)?;
+    require_retained_layout(before, layout)?;
+    require_retained_layout(after, layout)?;
+    run_before_fresh_namespace_capture();
+    let fresh = RetainedActiveReblitCommitCleanupNamespace::capture(
+        capture_snapshot(installation, expected)?,
+        expected,
+    )?;
+    fresh.revalidate(expected)?;
+    require_matching_fingerprints(before, &fresh)?;
+    require_retained_layout(&fresh, layout)?;
+    before.revalidate(expected)?;
+    after.revalidate(expected)?;
+    installation.revalidate_mutable_namespace()?;
+    Ok(())
+}
+
 fn exact_layout(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
@@ -274,7 +317,7 @@ fn classify_layout(layout: LayoutAlternative) -> Option<ActiveReblitCommitCleanu
 
 fn require_exact_source(record: &TransitionRecord) -> Result<(), ActiveReblitCommitCleanupNamespaceError> {
     if record.operation == Operation::ActiveReblit
-        && record.phase == Phase::CommitDecided
+        && matches!(record.phase, Phase::CommitDecided | Phase::CommitCleanupComplete)
         && record.rollback.is_none()
     {
         Ok(())

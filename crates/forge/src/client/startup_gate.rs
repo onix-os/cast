@@ -10,6 +10,7 @@ use super::{
 
 mod active_reblit_boot_sync_complete;
 mod active_reblit_commit_cleanup;
+mod active_reblit_commit_cleanup_complete;
 mod default_system_intent;
 #[cfg(test)]
 mod root_links_terminal_process_harness;
@@ -77,6 +78,23 @@ pub(in crate::client) struct ActiveReblitBootSyncCompleteSeal {
 }
 
 impl ActiveReblitBootSyncCompleteSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
+/// Unforgeable safe-code token limiting exact forward ActiveReblit
+/// `CommitCleanupComplete` receipt retirement to this writer-first gate.
+pub(in crate::client) struct ActiveReblitCommitCleanupCompleteSeal {
+    _private: (),
+}
+
+impl ActiveReblitCommitCleanupCompleteSeal {
     fn new() -> Self {
         Self { _private: () }
     }
@@ -218,6 +236,35 @@ impl CleanSystemStartup {
                     (journal, record)
                 }
                 active_reblit_commit_cleanup::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+            };
+
+            // Retire the exact receipt head only after cleanup is durably
+            // complete, then advance once to Complete. A deferred source,
+            // retirement retry, or newly persisted successor ends this entry
+            // and can never fall through to rollback admission.
+            let (journal, record) = match active_reblit_commit_cleanup_complete::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+            )? {
+                active_reblit_commit_cleanup_complete::Dispatch::Unhandled {
+                    journal,
+                    record,
+                } => (journal, record),
+                active_reblit_commit_cleanup_complete::Dispatch::Handled { journal, record } => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
                         installation,
@@ -630,6 +677,10 @@ pub(super) enum Error {
     ActiveReblitBootSyncCompleteDispatch(#[from] active_reblit_boot_sync_complete::Error),
     #[error("dispatch the exact forward startup ActiveReblit CommitDecided cleanup checkpoint")]
     ActiveReblitCommitCleanupDispatch(#[from] active_reblit_commit_cleanup::Error),
+    #[error("dispatch the exact forward startup ActiveReblit CommitCleanupComplete checkpoint")]
+    ActiveReblitCommitCleanupCompleteDispatch(
+        #[from] active_reblit_commit_cleanup_complete::Error,
+    ),
     #[error("capture exact startup /usr rollback-decision authority")]
     UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
     #[error("capture exact startup UsrExchanged root ABI normalization authority")]
