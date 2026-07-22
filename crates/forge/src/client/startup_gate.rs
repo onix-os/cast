@@ -90,7 +90,8 @@ impl ActiveReblitBootSyncCompleteSeal {
 }
 
 /// Unforgeable safe-code token limiting exact forward ActiveReblit
-/// `CommitCleanupComplete` receipt retirement to this writer-first gate.
+/// `CommitCleanupComplete` installed-receipt authentication and record advance
+/// to this writer-first gate.
 pub(in crate::client) struct ActiveReblitCommitCleanupCompleteSeal {
     _private: (),
 }
@@ -267,10 +268,10 @@ impl CleanSystemStartup {
                 }
             };
 
-            // Retire the exact receipt head only after cleanup is durably
-            // complete, then advance once to Complete. A deferred source,
-            // retirement retry, or newly persisted successor ends this entry
-            // and can never fall through to rollback admission.
+            // Authenticate the installed receipt only after cleanup is durably
+            // complete, then advance once to Complete without changing that
+            // receipt. A deferred source or newly persisted successor ends
+            // this entry and can never fall through to rollback admission.
             let (journal, record) = match active_reblit_commit_cleanup_complete::dispatch(
                 installation,
                 state_db,

@@ -5,7 +5,7 @@
 //! staging authority to the journal state owner, then repeats completed
 //! cross-store and terminal evidence before returning a non-cloneable result.
 //! Every error consumes all authority. This slice performs no later commit,
-//! receipt retirement, boot-file replacement, or transition cleanup.
+//! installed-receipt mutation, boot-file replacement, or transition cleanup.
 
 use thiserror::Error;
 
