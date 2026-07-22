@@ -4,7 +4,7 @@ use std::os::fd::AsRawFd as _;
 #[test]
 fn all_already_exact_terminal_evidence_promotes_without_republishing() {
     with_staged_alias_attempt!(
-        |fixture, topology_fixture, plan, _inventory, client, staged, _expected_record, fingerprint| {
+        before_stage |_client, plan, _inventory, _claims, _predecessor, _deadline, topology_fixture| {
             for output in plan.outputs() {
                 let bytes = match output.generated_bytes() {
                     Some(bytes) => bytes.to_vec(),
@@ -45,6 +45,8 @@ fn all_already_exact_terminal_evidence_promotes_without_republishing() {
                 )
                 .unwrap();
             }
+        },
+        |fixture, topology_fixture, plan, _inventory, client, staged, _expected_record, fingerprint| {
 
             let terminal = publish_terminal_alias!(
                 staged,
@@ -137,7 +139,7 @@ fn chained_predecessor_terminal_receipt_promotes_and_retains_the_chain() {
 #[test]
 fn mixed_terminal_evidence_promotes_once_and_preserves_journal_and_counters() {
     with_staged_alias_attempt!(
-        |fixture, topology_fixture, plan, _inventory, client, staged, expected_record, fingerprint| {
+        before_stage |_client, plan, _inventory, _claims, _predecessor, _deadline, topology_fixture| {
             let exact = plan
                 .outputs()
                 .find_map(|output| {
@@ -151,6 +153,8 @@ fn mixed_terminal_evidence_promotes_once_and_preserves_journal_and_counters() {
             set_safe_publication_parents(topology_fixture.publication_root(), &exact.0);
             fs::write(&exact_path, &exact.1).unwrap();
             fs::set_permissions(&exact_path, fs::Permissions::from_mode(0o644)).unwrap();
+        },
+        |fixture, topology_fixture, plan, _inventory, client, staged, expected_record, fingerprint| {
 
             let terminal = publish_terminal_alias!(
                 staged,
@@ -159,7 +163,7 @@ fn mixed_terminal_evidence_promotes_once_and_preserves_journal_and_counters() {
                 topology_fixture.publication_root()
             );
             assert_eq!(terminal.already_exact_count(), 1);
-            let evidence = terminal.evidence().to_vec();
+            let evidence = evidence_snapshot(terminal.evidence());
             let record_path = fixture
                 .installation
                 .root
@@ -181,7 +185,7 @@ fn mixed_terminal_evidence_promotes_once_and_preserves_journal_and_counters() {
             assert_eq!(promoted.publication_count(), plan.publication_count());
             assert_eq!(promoted.published_count(), plan.publication_count() - 1);
             assert_eq!(promoted.already_exact_count(), 1);
-            assert_eq!(promoted.evidence(), evidence);
+            assert_eq!(evidence_snapshot(promoted.evidence()), evidence);
             assert_eq!(fs::metadata(&record_path).unwrap().ino(), record_inode);
             assert_eq!(fs::read(&record_path).unwrap(), record_bytes);
             assert_promoted_state(

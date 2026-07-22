@@ -1,6 +1,53 @@
 use super::*;
 
-pub(super) const SCENARIO_COUNT: usize = 2;
+pub(super) const SCENARIO_COUNT: usize = 3;
+
+#[test]
+fn cleaned_promoted_typestate_preserves_exact_authority() {
+    with_staged_alias_attempt!(
+        |fixture, topology_fixture, plan, _inventory, client, staged, _expected_record, fingerprint| {
+            let terminal = publish_terminal_alias!(
+                staged,
+                &client,
+                &plan,
+                topology_fixture.publication_root()
+            );
+            let assessments =
+                arm_exact_alias_assessments(topology_fixture.publication_root(), 4);
+            let promoted = terminal.promote_terminal_receipt(&client).unwrap();
+            assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
+            drop(assessments);
+
+            let database_outcome = promoted.database_outcome();
+            let publication_count = promoted.publication_count();
+            let published_count = promoted.published_count();
+            let already_exact_count = promoted.already_exact_count();
+            let replaced_count = promoted.replaced_count();
+            let evidence = evidence_snapshot(promoted.evidence());
+            assert!(!promoted.promoted_cleanup_required());
+
+            let cleaned = promoted
+                .try_into_cleaned()
+                .expect("exact alias fixture requires no cleanup");
+            assert_eq!(cleaned.receipt_fingerprint(), fingerprint);
+            assert_eq!(cleaned.database_outcome(), database_outcome);
+            assert_eq!(cleaned.publication_count(), publication_count);
+            assert_eq!(cleaned.published_count(), published_count);
+            assert_eq!(cleaned.already_exact_count(), already_exact_count);
+            assert_eq!(cleaned.replaced_count(), replaced_count);
+            assert_eq!(evidence_snapshot(cleaned.evidence()), evidence);
+            assert_eq!(
+                fixture
+                    .state_db
+                    .boot_publication_receipt_state()
+                    .unwrap()
+                    .head()
+                    .committed(),
+                Some(fingerprint),
+            );
+        }
+    );
+}
 
 #[test]
 fn first_adoption_completion_persists_only_exact_boot_sync_complete() {
@@ -32,7 +79,7 @@ fn first_adoption_completion_persists_only_exact_boot_sync_complete() {
                 &plan,
                 topology_fixture.publication_root()
             );
-            let evidence = promoted.evidence().to_vec();
+            let evidence = evidence_snapshot(promoted.evidence());
             let publication_count = promoted.publication_count();
             let published_count = promoted.published_count();
             let already_exact_count = promoted.already_exact_count();
@@ -64,7 +111,7 @@ fn first_adoption_completion_persists_only_exact_boot_sync_complete() {
             assert_eq!(completed.publication_count(), publication_count);
             assert_eq!(completed.published_count(), published_count);
             assert_eq!(completed.already_exact_count(), already_exact_count);
-            assert_eq!(completed.evidence(), evidence);
+            assert_eq!(evidence_snapshot(completed.evidence()), evidence);
             let completed_inode = fs::metadata(&canonical).unwrap().ino();
             assert_ne!(
                 completed_inode, predecessor_inode,
@@ -145,6 +192,9 @@ fn chained_already_promoted_completion_preserves_pair_bodies_and_outputs() {
                 promoted.database_outcome(),
                 BootPublicationReceiptPromotionOutcome::AlreadyPromoted,
             );
+            let promoted = promoted
+                .try_into_cleaned()
+                .expect("already-promoted alias fixture requires no cleanup");
 
             let pair = expected_record
                 .boot_publication_receipt_correlation()

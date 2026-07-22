@@ -11,22 +11,26 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::receipt_promotion::completion::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 9; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 10; \
 	for name in \
-		completion_behavioral_scenario_inventory_is_exactly_nineteen \
+		completion_behavioral_scenario_inventory_is_exactly_twenty \
 		deadline::inherited_completion_deadline_expires_without_journal_advance_or_token \
 		drift::final_return_revalidation_catches_late_drift_after_durable_completion \
 		drift::post_advance_namespace_database_journal_and_plan_drift_returns_no_completion_token \
 		drift::pre_advance_wrong_client_and_four_drift_axes_never_reach_boot_sync_complete \
 		reconciliation::completion_journal_faults_reconcile_only_exact_started_or_complete_without_token \
 		reconciliation::completion_reconciliation_rejects_representative_wrong_generation_record \
+		success::cleaned_promoted_typestate_preserves_exact_authority \
 		success::chained_already_promoted_completion_preserves_pair_bodies_and_outputs \
 		success::first_adoption_completion_persists_only_exact_boot_sync_complete; do \
 		grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	forge_root="$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/crates/forge/src"; \
 	attempt="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt.rs"; \
+	promotion="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion.rs"; \
 	outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion.rs"; \
+	terminal="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/terminal_evidence.rs"; \
+	evidence="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/effect_evidence.rs"; \
 	staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence.rs"; \
 	staging_parent="$$forge_root/client/boot/active_reblit_boot_sync_staging.rs"; \
 	seal_mints="$$( rg -n -F 'ActiveReblitBootSyncCompletionSeal { _private: () }' "$$forge_root" \
@@ -39,6 +43,15 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	grep -Fq "$$outer:" <<<"$$seal_mints"; \
 	test "$$( grep -Fc 'pub(in crate::client) fn persist_boot_sync_complete(' "$$outer" )" = 1; \
 	test "$$( grep -Fc 'pub(in crate::client) fn persist_boot_sync_complete(' "$$staging" )" = 1; \
+	grep -Fq 'pub(in crate::client) struct CleanedPromotedExactActiveReblitBootPublication<' "$$promotion"; \
+	grep -Fq 'promoted: PromotedExactActiveReblitBootPublication<' "$$promotion"; \
+	grep -Fq 'pub(in crate::client) fn try_into_cleaned(' "$$promotion"; \
+	grep -Fq 'Err(self)' "$$promotion"; \
+	grep -Fq 'Ok(CleanedPromotedExactActiveReblitBootPublication { promoted: self })' "$$promotion"; \
+	grep -Fq 'CleanedPromotedExactActiveReblitBootPublication {' "$$outer"; \
+	if rg -n 'CleanupRequired|require_cleaned_promoted' "$$promotion" "$$outer"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	grep -Fq 'ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired' "$$terminal"; \
+	grep -Fq 'ReplacedOwned {' "$$evidence"; \
 	grep -Fq '.revalidate_promoted_against(client)' "$$outer"; \
 	if rg -n '[.]staged[.]plan|[.]terminal[.]staged[.]plan' "$$outer"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$( grep -Fc '.boot_sync_complete_successor(pair)' "$$staging" )" = 1; \
@@ -70,11 +83,14 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	test "$$drop_old_binding_line" -lt "$$final_validation_line"; \
 	grep -Fq 'DurableActiveReblitBootSyncCompletionRecord::BootSyncStarted' "$$staging"; \
 	grep -Fq 'DurableActiveReblitBootSyncCompletionRecord::BootSyncComplete' "$$staging"; \
-	if rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct (?:ActiveReblitBootSyncCompletionSeal|CompletedStagedActiveReblitBootSync|FreshCompletedStagedActiveReblitBootSync|CompletedExactActiveReblitBootPublication)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:ActiveReblitBootSyncCompletionSeal|CompletedStagedActiveReblitBootSync|FreshCompletedStagedActiveReblitBootSync|CompletedExactActiveReblitBootPublication)' "$$attempt" "$$outer" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	if rg -n '[.]advance_record_binding\(|Phase::CommitDecided|[.]promote_boot_publication_receipt\(|[.]publish_preflighted_immutable_leaf\(|[.]delete_record_binding\(|remove_(?:file|dir)|unlinkat|renameat|Command::new|nix::mount|libc::mount' "$$outer" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct (?:ActiveReblitBootSyncCompletionSeal|CleanedPromotedExactActiveReblitBootPublication|CompletedStagedActiveReblitBootSync|FreshCompletedStagedActiveReblitBootSync|CompletedExactActiveReblitBootPublication)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:ActiveReblitBootSyncCompletionSeal|CleanedPromotedExactActiveReblitBootPublication|CompletedStagedActiveReblitBootSync|FreshCompletedStagedActiveReblitBootSync|CompletedExactActiveReblitBootPublication)' "$$attempt" "$$promotion" "$$outer" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n '[.]advance_record_binding\(|Phase::CommitDecided|[.]promote_boot_publication_receipt\(|[.]publish_preflighted_immutable_leaf\(|[.]delete_record_binding\(|remove_(?:file|dir)|unlinkat|renameat|Command::new|nix::mount|libc::mount' "$$outer" "$$terminal" "$$evidence" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	for file in \
 		"$$attempt" \
+		"$$promotion" \
 		"$$outer" \
+		"$$terminal" \
+		"$$evidence" \
 		"$$staging" \
 		"$$staging_parent" \
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion.rs \

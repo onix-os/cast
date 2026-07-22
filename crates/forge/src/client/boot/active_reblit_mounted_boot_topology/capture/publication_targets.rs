@@ -54,6 +54,13 @@ pub(in crate::client) use immutable_leaf::{
     arm_fixture_immutable_leaf_assessments,
     fixture_immutable_leaf_assessments_remaining,
 };
+#[cfg(test)]
+pub(in crate::client) use owned_replacement::{
+    FixtureOwnedReplacementAssessmentGuard,
+    arm_fixture_owned_replacement_assessments,
+    fixture_owned_replacement_assessments_remaining,
+    fixture_owned_replacement_validations_remaining,
+};
 
 /// Failure while bracketing opaque publication targets with full topology
 /// revalidation.

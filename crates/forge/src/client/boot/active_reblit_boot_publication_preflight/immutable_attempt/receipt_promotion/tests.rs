@@ -23,6 +23,7 @@ use crate::{
             arm_fixture_immutable_leaf_assessments,
             fixture_immutable_leaf_assessments_remaining,
         },
+        active_reblit_installed_boot_publication_delta::ActiveReblitBootPublicationDeltaAction,
     },
     db::state::{
         BootPublicationReceiptPromotionOutcome,
@@ -63,9 +64,34 @@ fn assert_promoted_state(
     assert_eq!(state.committed().unwrap().fingerprint(), fingerprint);
 }
 
+fn evidence_snapshot(
+    evidence: &[ValidatedActiveReblitBootPublicationEffect],
+) -> Vec<(
+    usize,
+    ActiveReblitBootPublicationDeltaAction,
+    u64,
+    u128,
+    [u8; 32],
+    Option<[u8; 32]>,
+)> {
+    evidence
+        .iter()
+        .map(|evidence| {
+            (
+                evidence.plan_index(),
+                evidence.action(),
+                evidence.length(),
+                evidence.xxh3(),
+                evidence.sha256(),
+                evidence.replacement_owner().map(|owner| owner.as_bytes()),
+            )
+        })
+        .collect()
+}
+
 macro_rules! publish_terminal_alias {
     ($staged:expr, $client:expr, $plan:expr, $root:expr) => {{
-        let aggregate = arm_exact_alias_assessments($root, 2);
+        let aggregate = arm_exact_alias_assessments($root, 3);
         let leaf = arm_fixture_immutable_leaf_assessments(
             ($root).to_owned(),
             ($plan).publication_count(),

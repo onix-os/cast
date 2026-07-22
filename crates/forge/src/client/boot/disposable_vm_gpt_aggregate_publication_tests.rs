@@ -14,6 +14,7 @@ use crate::{
         active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
         active_reblit_boot_inputs::PreparedActiveReblitStoneBootInputs,
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
+        active_reblit_boot_publication_preflight::ValidatedActiveReblitBootPublicationEffect,
         active_reblit_mounted_boot_topology::{
             BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology,
             PreparedActiveReblitMountedBootTopology,
@@ -25,9 +26,7 @@ use crate::{
         },
     },
     db::state::BootPublicationReceiptStageOutcome,
-    linux_fs::mount_namespace::{
-        RetainedBootFilePublicationOutcome, ValidatedRetainedBootFilePublication,
-    },
+    linux_fs::mount_namespace::RetainedBootFilePublicationOutcome,
     state::{self, TransitionId},
     transition_journal::{
         BootId, CodecError, MountNamespaceIdentity, Operation, Phase, Previous,
@@ -384,11 +383,14 @@ fn expected_paths(state: state::Id) -> Vec<PathBuf> {
 }
 
 fn assert_output(
-    evidence: &ValidatedRetainedBootFilePublication,
+    effect: &ValidatedActiveReblitBootPublicationEffect,
     output: &super::active_reblit_bls_renderer::BoundActiveReblitBlsPublication<'_, '_>,
     target: &ExpectedTarget,
     expected_outcome: RetainedBootFilePublicationOutcome,
 ) {
+    let evidence = effect
+        .immutable_evidence()
+        .expect("A-to-A aggregate campaign expects an immutable publication effect");
     assert_eq!(evidence.outcome(), expected_outcome);
     assert_eq!(evidence.destination_device(), target.device);
     assert_eq!(evidence.destination_mount_id(), target.mount_id);

@@ -102,6 +102,34 @@ impl ValidatedRetainedBootFileReplacement {
     pub(crate) const fn replacement_file_inode(&self) -> u64 {
         self.replacement_file.inode
     }
+
+    pub(crate) const fn installed_length(&self) -> u64 {
+        self.installed.length
+    }
+
+    pub(crate) const fn installed_xxh3(&self) -> u128 {
+        self.installed.xxh3
+    }
+
+    pub(crate) const fn installed_sha256(&self) -> [u8; 32] {
+        self.installed.sha256
+    }
+
+    pub(crate) const fn replacement_length(&self) -> u64 {
+        self.replacement.length
+    }
+
+    pub(crate) const fn replacement_xxh3(&self) -> u128 {
+        self.replacement.xxh3
+    }
+
+    pub(crate) const fn replacement_sha256(&self) -> [u8; 32] {
+        self.replacement.sha256
+    }
+
+    pub(crate) const fn owner(&self) -> RetainedBootFileMutationFingerprint {
+        self.owner
+    }
 }
 
 /// Non-cloneable exact authority after rollback restored the predecessor.

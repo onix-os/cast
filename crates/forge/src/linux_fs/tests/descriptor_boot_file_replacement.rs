@@ -175,6 +175,84 @@ fn exact_exchange_retains_predecessor_and_fresh_authority_cleans_it() {
 }
 
 #[test]
+fn borrowing_applied_pair_validation_accepts_the_exact_bound_pair() {
+    let fixture = Fixture::new("forge-boot-replace-validate-exact-");
+    let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
+    let parent = view.retain_boot_publication_parent_until(&["EFI"], deadline()).unwrap();
+    publish_installed(&parent);
+
+    let applied = parent
+        .replace_exact_boot_file_until(
+            replacement_request(),
+            &RetainedBootNamespaceExpectedSource::generated(REPLACEMENT),
+            RetainedBootFilePublicationLimits::default(),
+            deadline(),
+        )
+        .unwrap();
+
+    parent
+        .validate_applied_boot_file_replacement_until(&applied, deadline())
+        .unwrap();
+    assert_eq!(fs::read(fixture.root.join("EFI").join(LEAF)).unwrap(), REPLACEMENT);
+    assert_eq!(
+        fs::read(fixture.root.join("EFI").join(applied.sidecar_leaf())).unwrap(),
+        INSTALLED,
+    );
+}
+
+#[test]
+fn borrowing_applied_pair_validation_rejects_a_missing_sidecar() {
+    let fixture = Fixture::new("forge-boot-replace-validate-missing-");
+    let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
+    let parent = view.retain_boot_publication_parent_until(&["EFI"], deadline()).unwrap();
+    publish_installed(&parent);
+
+    let applied = parent
+        .replace_exact_boot_file_until(
+            replacement_request(),
+            &RetainedBootNamespaceExpectedSource::generated(REPLACEMENT),
+            RetainedBootFilePublicationLimits::default(),
+            deadline(),
+        )
+        .unwrap();
+    fs::remove_file(fixture.root.join("EFI").join(applied.sidecar_leaf())).unwrap();
+
+    assert!(parent
+        .validate_applied_boot_file_replacement_until(&applied, deadline())
+        .is_err());
+}
+
+#[test]
+fn borrowing_applied_pair_validation_rejects_same_bytes_on_another_inode() {
+    let fixture = Fixture::new("forge-boot-replace-validate-inode-");
+    let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
+    let parent = view.retain_boot_publication_parent_until(&["EFI"], deadline()).unwrap();
+    publish_installed(&parent);
+
+    let applied = parent
+        .replace_exact_boot_file_until(
+            replacement_request(),
+            &RetainedBootNamespaceExpectedSource::generated(REPLACEMENT),
+            RetainedBootFilePublicationLimits::default(),
+            deadline(),
+        )
+        .unwrap();
+    let sidecar = fixture.root.join("EFI").join(applied.sidecar_leaf());
+    let displaced = fixture.root.join("EFI/displaced-installed-sidecar");
+    fs::rename(&sidecar, &displaced).unwrap();
+    fs::write(&sidecar, INSTALLED).unwrap();
+    fs::set_permissions(&sidecar, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_ne!(fs::metadata(&sidecar).unwrap().ino(), applied.installed_file_inode());
+
+    assert!(matches!(
+        parent.validate_applied_boot_file_replacement_until(&applied, deadline()),
+        Err(RetainedBootFileReplacementError::ExchangeAmbiguous)
+    ));
+    assert_eq!(fs::read(&sidecar).unwrap(), INSTALLED);
+    assert_eq!(fs::read(&displaced).unwrap(), INSTALLED);
+}
+
+#[test]
 fn applied_error_report_is_reconciled_then_one_reverse_exchange_restores_predecessor() {
     let fixture = Fixture::new("forge-boot-replace-restore-");
     let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();

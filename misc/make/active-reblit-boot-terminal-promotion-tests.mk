@@ -37,11 +37,20 @@ forge-active-reblit-boot-terminal-promotion-test: forge-active-reblit-boot-immut
 	done; \
 	attempt="$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt.rs"; \
 	bridge="$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion.rs"; \
+	terminal="$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/terminal_evidence.rs"; \
+	replacement_pairs="$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/replacement_pair_validation.rs"; \
 	staging="$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging/promoted_receipt_validation.rs"; \
 	promotion="$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipts/promotion.rs"; \
 	forge_root="$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)/crates/forge/src"; \
 	grep -Fq 'pub(in crate::client) fn promote_terminal_receipt(' "$$bridge"; \
 	grep -Fq '.promote_boot_publication_receipt(self.staged.receipt(), plan.input_deadline())' "$$bridge"; \
+	grep -Fq 'validate_exact_terminal_evidence_snapshot(' "$$bridge"; \
+	grep -Fq 'ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired' "$$terminal"; \
+	grep -Fq 'retained.owner_matches_receipt(receipt_fingerprint)' "$$terminal"; \
+	grep -Fq 'replaced_count: usize' "$$terminal"; \
+	grep -Fq 'validate_applied_replacement_pairs' "$$replacement_pairs"; \
+	grep -Fq '.any(|retained| retained.replacement_authority().is_some())' "$$replacement_pairs"; \
+	grep -Fq '.validate_applied_owned_leaf_replacement(' "$$replacement_pairs"; \
 	test "$$( grep -Fc '.promote_boot_publication_receipt(' "$$bridge" )" = 1; \
 	grep -Fq 'pub(crate) fn promote_boot_publication_receipt(' "$$promotion"; \
 	promotion_mentions="$$( rg -n -o '\bpromote_boot_publication_receipt\b' "$$promotion" )"; \
@@ -49,6 +58,7 @@ forge-active-reblit-boot-terminal-promotion-test: forge-active-reblit-boot-immut
 	production_mentions="$$( rg -n -o '\bpromote_boot_publication_receipt\b' "$$forge_root" \
 		--glob '*.rs' \
 		--glob '!**/tests/**' \
+		--glob '!**/*_tests/**' \
 		--glob '!**/tests.rs' \
 		--glob '!**/*_tests.rs' \
 		--glob '!**/*_test.rs' \
@@ -64,7 +74,7 @@ forge-active-reblit-boot-terminal-promotion-test: forge-active-reblit-boot-immut
 	test "$$( grep -Fc "$$promotion:" <<<"$$production_mentions" )" = 1; \
 	test "$$( grep -Fc "$$bridge:" <<<"$$production_mentions" )" = 1; \
 	grep -Fq '#[must_use = "terminal boot-publication evidence must be promoted or deliberately discarded"]' "$$attempt"; \
-	grep -Fq '#[must_use = "promoted boot-publication authority must be durably completed or deliberately discarded"]' "$$bridge"; \
+	grep -Fq '#[must_use = "promoted boot-publication authority must be cleaned or deliberately discarded"]' "$$bridge"; \
 	grep -Fq 'before_fresh_admission();' "$$bridge"; \
 	grep -Fq 'before_immediate_pre_promotion_terminal_check();' "$$bridge"; \
 	grep -Fq 'after_pre_promotion_revalidation();' "$$bridge"; \
@@ -73,10 +83,12 @@ forge-active-reblit-boot-terminal-promotion-test: forge-active-reblit-boot-immut
 	grep -Fq '.revalidate_promoted_against(client)' "$$bridge"; \
 	grep -Fq '.require_promoted_boot_publication_receipt(&self.receipt)' "$$staging"; \
 	if rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct (?:StagedExact|PromotedExact)ActiveReblitBootPublication|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:StagedExact|PromotedExact)ActiveReblitBootPublication' "$$attempt" "$$bridge"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	if rg -n 'Phase::BootSyncComplete|forward_successor|advance_record_binding|journal[.]advance|publish_preflighted_immutable_leaf|renameat|unlinkat|remove_(?:file|dir)|delete_|Command::new|nix::mount|libc::mount' "$$bridge" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'Phase::BootSyncComplete|forward_successor|advance_record_binding|journal[.]advance|publish_preflighted_immutable_leaf|renameat|unlinkat|remove_(?:file|dir)|delete_|Command::new|nix::mount|libc::mount' "$$bridge" "$$terminal" "$$replacement_pairs" "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	for file in \
 		"$$attempt" \
 		"$$bridge" \
+		"$$terminal" \
+		"$$replacement_pairs" \
 		"$$staging" \
 		"$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests.rs \
 		"$(ACTIVE_REBLIT_BOOT_TERMINAL_PROMOTION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/*.rs \

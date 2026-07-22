@@ -5,6 +5,24 @@ use super::*;
 #[test]
 fn staged_alias_attempt_publishes_in_phase_order_and_terminally_observes_exact() {
     support::with_staged_alias_attempt!(
+        before_stage |_client, plan, _inventory, _claims, _predecessor, _deadline, topology_fixture| {
+            let exact = plan
+                .outputs()
+                .find_map(|output| {
+                    output.generated_bytes().map(|bytes| {
+                        (output.relative_path().to_owned(), bytes.to_vec())
+                    })
+                })
+                .expect("render plan must contain generated output");
+            let exact_path = topology_fixture.publication_root().join(&exact.0);
+            fs::create_dir_all(exact_path.parent().unwrap()).unwrap();
+            support::set_safe_publication_parents(
+                topology_fixture.publication_root(),
+                &exact.0,
+            );
+            fs::write(&exact_path, exact.1).unwrap();
+            fs::set_permissions(&exact_path, fs::Permissions::from_mode(0o644)).unwrap();
+        },
         |fixture, topology_fixture, plan, _inventory, client, staged, expected_record, fingerprint| {
             let exact_index = plan
                 .outputs()
@@ -12,17 +30,12 @@ fn staged_alias_attempt_publishes_in_phase_order_and_terminally_observes_exact()
                 .find_map(|(index, output)| output.generated_bytes().map(|bytes| (index, output.relative_path().to_owned(), bytes.to_vec())))
                 .expect("render plan must contain generated output");
             let exact_path = topology_fixture.publication_root().join(&exact_index.1);
-            fs::create_dir_all(exact_path.parent().unwrap()).unwrap();
-            support::set_safe_publication_parents(
-                topology_fixture.publication_root(),
-                &exact_index.1,
-            );
-            fs::write(&exact_path, &exact_index.2).unwrap();
-            fs::set_permissions(&exact_path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(fs::read(&exact_path).unwrap(), exact_index.2);
             let exact_inode = fs::metadata(&exact_path).unwrap().ino();
 
             let root = topology_fixture.publication_root().to_owned();
             let _aggregate = arm_fixture_boot_namespace_assessments([
+                FixtureBootNamespaceAssessment::new(BootTargetRole::Esp, root.clone()),
                 FixtureBootNamespaceAssessment::new(BootTargetRole::Esp, root.clone()),
                 FixtureBootNamespaceAssessment::new(BootTargetRole::Esp, root.clone()),
             ]);
@@ -32,6 +45,7 @@ fn staged_alias_attempt_publishes_in_phase_order_and_terminally_observes_exact()
             assert_eq!(result.publication_count(), plan.publication_count());
             assert_eq!(result.published_count(), plan.publication_count() - 1);
             assert_eq!(result.already_exact_count(), 1);
+            assert_eq!(result.replaced_count(), 0);
             assert_eq!(result.evidence().len(), plan.publication_count());
             let mut previous_phase = None;
             for (evidence, output) in result.evidence().iter().zip(plan.outputs()) {

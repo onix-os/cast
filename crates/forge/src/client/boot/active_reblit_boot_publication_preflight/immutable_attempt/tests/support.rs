@@ -140,7 +140,8 @@ pub(super) fn assert_pending_boot_sync_started(
 macro_rules! with_staged_alias_attempt {
     (
         $(before_stage |$setup_client:ident, $setup_plan:ident, $setup_inventory:ident,
-            $setup_claims:ident, $setup_predecessor:ident, $setup_deadline:ident| $setup:block,
+            $setup_claims:ident, $setup_predecessor:ident, $setup_deadline:ident
+            $(, $setup_topology_fixture:ident)?| $setup:block,
         )?
         |$fixture:ident, $topology_fixture:ident, $plan:ident, $inventory:ident,
             $client:ident, $staged:ident, $expected_record:ident, $fingerprint:ident| $body:block
@@ -213,6 +214,7 @@ macro_rules! with_staged_alias_attempt {
             let $setup_claims = &claims;
             let $setup_predecessor = &predecessor;
             let $setup_deadline = deadline;
+            $(let $setup_topology_fixture = &$topology_fixture;)?
             $setup
         })?
         let staging_preflight = arm_fixture_boot_namespace_assessments([

@@ -1,10 +1,11 @@
 //! Consuming promoted terminal evidence into durable `BootSyncComplete`.
 //!
-//! This is the only bridge which may mint the completion seal. It repeats the
-//! promoted cross-store and terminal-output evidence before handing the owned
-//! staging authority to the journal state owner, then repeats completed
-//! cross-store and terminal evidence before returning a non-cloneable result.
-//! Every error consumes all authority. This slice performs no later commit,
+//! This is the only bridge which may mint the completion seal, and its entry
+//! point exists only on the cleaned-promoted typestate. It repeats the promoted
+//! cross-store and terminal-output evidence before handing the owned staging
+//! authority to the journal state owner, then repeats completed cross-store and
+//! terminal evidence before returning a non-cloneable result. Every error
+//! consumes all authority. This slice performs no later commit,
 //! installed-receipt mutation, boot-file replacement, or transition cleanup.
 
 use thiserror::Error;
@@ -23,13 +24,13 @@ use crate::{
         },
     },
     db::state::BootPublicationReceiptPromotionOutcome,
-    linux_fs::mount_namespace::ValidatedRetainedBootFilePublication,
     transition_journal::TransitionRecord,
 };
 
 use super::{
     ActiveReblitBootPostPromotionValidationError,
     ActiveReblitBootTerminalEvidenceValidationError,
+    CleanedPromotedExactActiveReblitBootPublication,
     PromotedExactActiveReblitBootPublication,
     require_deadline,
     validate_exact_terminal_evidence_snapshot,
@@ -37,6 +38,7 @@ use super::{
 use super::super::{
     ActiveReblitBootSyncCompletionSeal,
     StagedExactActiveReblitBootPublication,
+    ValidatedActiveReblitBootPublicationEffect,
 };
 
 /// Exact terminal publication whose promoted receipt and journal are durably
@@ -71,7 +73,8 @@ pub(in crate::client) struct CompletedExactActiveReblitBootPublication<
     publication_count: usize,
     published_count: usize,
     already_exact_count: usize,
-    evidence: Vec<ValidatedRetainedBootFilePublication>,
+    replaced_count: usize,
+    evidence: Vec<ValidatedActiveReblitBootPublicationEffect>,
 }
 
 impl std::fmt::Debug
@@ -85,6 +88,7 @@ impl std::fmt::Debug
             .field("publication_count", &self.publication_count)
             .field("published_count", &self.published_count)
             .field("already_exact_count", &self.already_exact_count)
+            .field("replaced_count", &self.replaced_count)
             .field("durable_phase", &"BootSyncComplete")
             .finish_non_exhaustive()
     }
@@ -119,7 +123,11 @@ impl CompletedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.already_exact_count
     }
 
-    pub(in crate::client) fn evidence(&self) -> &[ValidatedRetainedBootFilePublication] {
+    pub(in crate::client) const fn replaced_count(&self) -> usize {
+        self.replaced_count
+    }
+
+    pub(in crate::client) fn evidence(&self) -> &[ValidatedActiveReblitBootPublicationEffect] {
         &self.evidence
     }
 }
@@ -181,7 +189,7 @@ impl<
         'stone,
         'roots,
     >
-    PromotedExactActiveReblitBootPublication<
+    CleanedPromotedExactActiveReblitBootPublication<
         'plan,
         'inventory,
         'input,
@@ -228,17 +236,21 @@ where
         require_deadline("immediate completion persistence", retained_plan.input_deadline())
             .map_err(ActiveReblitBootSyncCompletionError::Deadline)?;
 
+        let CleanedPromotedExactActiveReblitBootPublication { promoted } = self;
         let PromotedExactActiveReblitBootPublication {
             terminal,
             database_outcome,
-        } = self;
+        } = promoted;
         let StagedExactActiveReblitBootPublication {
             staged,
             publication_count,
             published_count,
             already_exact_count,
+            replaced_count,
+            promoted_cleanup_required,
             evidence,
         } = terminal;
+        debug_assert!(!promoted_cleanup_required);
         let seal = ActiveReblitBootSyncCompletionSeal { _private: () };
         let completed = staged
             .persist_boot_sync_complete(client, seal)
@@ -252,6 +264,7 @@ where
             publication_count,
             published_count,
             already_exact_count,
+            replaced_count,
             &evidence,
             "post-persistence",
         ) {
@@ -266,6 +279,7 @@ where
             publication_count,
             published_count,
             already_exact_count,
+            replaced_count,
             &evidence,
             "final return",
         ) {
@@ -278,6 +292,7 @@ where
             publication_count,
             published_count,
             already_exact_count,
+            replaced_count,
             evidence,
         })
     }
@@ -306,6 +321,7 @@ where
         ActiveReblitBootPostPromotionValidationError,
     > {
         let fresh = self
+            .promoted
             .terminal
             .staged
             .revalidate_promoted_against(client)
@@ -325,10 +341,12 @@ where
         }
         validate_exact_terminal_evidence_snapshot(
             retained_plan,
-            self.terminal.publication_count,
-            self.terminal.published_count,
-            self.terminal.already_exact_count,
-            &self.terminal.evidence,
+            self.receipt_fingerprint(),
+            self.promoted.terminal.publication_count,
+            self.promoted.terminal.published_count,
+            self.promoted.terminal.already_exact_count,
+            self.promoted.terminal.replaced_count,
+            &self.promoted.terminal.evidence,
             checkpoint,
         )
         .map_err(|source| {
@@ -338,6 +356,7 @@ where
             }
         })?;
         let final_fresh = self
+            .promoted
             .terminal
             .staged
             .revalidate_promoted_against(client)
@@ -391,7 +410,8 @@ fn validate_completed_terminal_sandwich<
     publication_count: usize,
     published_count: usize,
     already_exact_count: usize,
-    evidence: &[ValidatedRetainedBootFilePublication],
+    replaced_count: usize,
+    evidence: &[ValidatedActiveReblitBootPublicationEffect],
     checkpoint: &'static str,
 ) -> Result<(), ActiveReblitBootPostCompletionValidationError>
 where
@@ -410,9 +430,11 @@ where
     }
     validate_exact_terminal_evidence_snapshot(
         retained_plan,
+        completed.receipt_fingerprint(),
         publication_count,
         published_count,
         already_exact_count,
+        replaced_count,
         evidence,
         checkpoint,
     )

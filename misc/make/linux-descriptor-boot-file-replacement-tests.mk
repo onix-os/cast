@@ -10,10 +10,11 @@ forge-linux-descriptor-boot-file-replacement-test:
 	tests="$(DESCRIPTOR_BOOT_FILE_REPLACEMENT_TOP_DIR)/crates/forge/src/linux_fs/tests/descriptor_boot_file_replacement.rs"; \
 	listed="$$( $(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_FILE_REPLACEMENT_TOP_DIR)/Cargo.toml" -p forge --lib -- --list )"; \
 	prefix='linux_fs::tests::descriptor_boot_file_replacement::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" <<<"$$listed" )" = 5; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" <<<"$$listed" )" = 8; \
 	grep -Fq 'renameat2_exchange_once(parent, canonical_name, parent, sidecar_name)' "$$module_dir/effect.rs"; \
 	test "$$( grep -Fc 'effect::exchange_once(&parent, &names.canonical, &names.sidecar)' "$$module" )" = 2; \
 	grep -Fq 'authenticate_applied_boot_file_replacement_until' "$$module"; \
+	grep -Fq 'validate_applied_boot_file_replacement_until' "$$module"; \
 	grep -Fq 'restore_exact_boot_file_replacement_until' "$$module"; \
 	grep -Fq 'cleanup_replaced_boot_file_sidecar_until' "$$module"; \
 	grep -Fq 'cleanup_restored_boot_file_sidecar_until' "$$module"; \

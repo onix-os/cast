@@ -10,7 +10,6 @@
 use thiserror::Error;
 
 use crate::{
-    boot_publication::BootPublicationReceiptFingerprint,
     client::{
         active_reblit_bls_renderer::BoundActiveReblitBlsPublication,
         active_reblit_boot_publication_preflight::ActiveReblitBootPublicationEffectSeal,
@@ -35,6 +34,20 @@ use crate::{
 };
 
 use super::RevalidatedActiveReblitBootPublicationTarget;
+
+#[cfg(test)]
+#[path = "owned_replacement/fixture.rs"]
+mod fixture;
+#[path = "owned_replacement/validation.rs"]
+mod validation;
+
+#[cfg(test)]
+pub(in crate::client) use fixture::{
+    FixtureOwnedReplacementAssessmentGuard,
+    arm_fixture_owned_replacement_assessments,
+    fixture_owned_replacement_assessments_remaining,
+    fixture_owned_replacement_validations_remaining,
+};
 
 /// Failure while replacing one exact receipt-owned output through an opaque
 /// ESP/XBOOTLDR target.
@@ -100,6 +113,10 @@ pub(in crate::client) enum ActiveReblitBootOwnedLeafReplacementError {
     ReplacementLeafIdentity,
     #[error("the replacement evidence contains an invalid or aliased inode pair")]
     ReplacementFileIdentity,
+    #[error("the applied replacement evidence differs from bound publication {plan_index}")]
+    ReplacementPlanIdentity { plan_index: usize },
+    #[error("validate the exact applied owned replacement without mutating it")]
+    LeafReplacementValidation(#[source] RetainedBootFileReplacementError),
 }
 
 impl RevalidatedActiveReblitBootPublicationTarget<'_> {
@@ -115,7 +132,6 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
         expected_source: &RetainedBootNamespaceExpectedSource<'_>,
         desired_expected: ActiveReblitBootPublicationDeltaExpected,
         installed_expected: ActiveReblitBootPublicationDeltaExpected,
-        pending_receipt: BootPublicationReceiptFingerprint,
     ) -> Result<ValidatedRetainedBootFileReplacement, ActiveReblitBootOwnedLeafReplacementError> {
         if output.mode() != ACTIVE_REBLIT_BOOT_OUTPUT_MODE {
             return Err(ActiveReblitBootOwnedLeafReplacementError::PublicationMode {
@@ -156,13 +172,53 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
 
         let desired = publication_request(path.leaf, desired_expected);
         let installed = publication_request(path.leaf, installed_expected);
-        let desired_state = reassess_desired_state(self, namespace_request, expected_source)?;
+        #[cfg(test)]
+        let fixture_assessment = fixture::take(
+            self,
+            namespace_request,
+            expected_source,
+        );
+        #[cfg(test)]
+        let desired_state = match &fixture_assessment {
+            Some(assessment) => assessment.state(),
+            None => reassess_desired_state(self, namespace_request, expected_source)?,
+        };
+        #[cfg(not(test))]
+        let desired_state =
+            reassess_desired_state(self, namespace_request, expected_source)?;
         if desired_state != BootNamespaceDestinationState::Different {
             return Err(
                 ActiveReblitBootOwnedLeafReplacementError::DestinationNotDifferent {
                     found: desired_state,
                 },
             );
+        }
+
+        #[cfg(test)]
+        if let Some(fixture_assessment) = fixture_assessment {
+            let evidence = fixture_assessment.replace(
+                path.parents(),
+                installed,
+                desired,
+                expected_source,
+                mutation_owner(_effect_seal),
+                self.deadline,
+            )?;
+            if evidence.canonical_leaf() != path.leaf {
+                return Err(
+                    ActiveReblitBootOwnedLeafReplacementError::ReplacementLeafIdentity,
+                );
+            }
+            if evidence.installed_file_inode() == 0
+                || evidence.replacement_file_inode() == 0
+                || evidence.installed_file_inode()
+                    == evidence.replacement_file_inode()
+            {
+                return Err(
+                    ActiveReblitBootOwnedLeafReplacementError::ReplacementFileIdentity,
+                );
+            }
+            return Ok(evidence);
         }
 
         let installed_assessment = self
@@ -195,7 +251,7 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
         let request = RetainedBootFileReplacementRequest::new(
             installed,
             desired,
-            mutation_owner(pending_receipt),
+            mutation_owner(_effect_seal),
         );
         let evidence = parent
             .replace_exact_boot_file_until(
@@ -231,9 +287,9 @@ fn publication_request(
 }
 
 fn mutation_owner(
-    pending_receipt: BootPublicationReceiptFingerprint,
+    effect_seal: &ActiveReblitBootPublicationEffectSeal,
 ) -> RetainedBootFileMutationFingerprint {
-    RetainedBootFileMutationFingerprint::new(*pending_receipt.as_bytes())
+    RetainedBootFileMutationFingerprint::new(*effect_seal.pending_receipt().as_bytes())
 }
 
 fn expected_matches_output(

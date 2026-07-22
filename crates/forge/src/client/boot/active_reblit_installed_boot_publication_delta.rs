@@ -37,9 +37,7 @@ use crate::{
         BootPublicationOutputProvenanceClaim, BootPublicationOutputRole, BootPublicationSha256,
         BootPublicationPublicationPhase, BootPublicationRoot,
     },
-    db::state::{
-        CurrentExactPromotedBootPublicationReceiptChain,
-    },
+    db::state::CurrentExactPromotedBootPublicationReceiptChain,
 };
 
 #[cfg(test)]
@@ -734,6 +732,13 @@ pub(in crate::client) enum ActiveReblitBootPublicationDeltaError {
 
 #[path = "active_reblit_installed_boot_publication_delta/live_classification.rs"]
 mod live_classification;
+#[path = "active_reblit_installed_boot_publication_delta/effect_schedule.rs"]
+mod effect_schedule;
+
+pub(in crate::client) use effect_schedule::{
+    ActiveReblitBootPublicationEffectSchedule,
+    ActiveReblitBootPublicationEffectScheduleError,
+};
 
 #[cfg(test)]
 #[path = "active_reblit_installed_boot_publication_delta_tests.rs"]

@@ -1,4 +1,7 @@
 use super::*;
+use crate::client::active_reblit_publication_plan::{
+    ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot,
+};
 
 #[test]
 fn alias_and_distinct_routes_preserve_global_plan_order() {

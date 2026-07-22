@@ -19,7 +19,10 @@ use crate::{
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
         active_reblit_mounted_boot_topology::{
             AliasFixture, arm_fixture_immutable_leaf_assessments,
+            arm_fixture_owned_replacement_assessments,
             fixture_immutable_leaf_assessments_remaining,
+            fixture_owned_replacement_assessments_remaining,
+            fixture_owned_replacement_validations_remaining,
         },
     },
     linux_fs::mount_namespace::{
@@ -51,6 +54,8 @@ mod support;
 mod routing;
 #[path = "tests/integration.rs"]
 mod integration;
+#[path = "tests/installed_replacement.rs"]
+mod installed_replacement;
 #[path = "tests/durable_state.rs"]
 mod durable_state;
 #[path = "tests/failures.rs"]

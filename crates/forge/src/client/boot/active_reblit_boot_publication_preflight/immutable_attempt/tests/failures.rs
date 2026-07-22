@@ -27,7 +27,7 @@ fn leaf_failure_stops_before_later_outputs_and_retains_pending_started() {
                     ..
                 },
             ), "unexpected leaf failure: {error:?}");
-            assert_eq!(fixture_boot_namespace_assessments_remaining(), 1);
+            assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
             assert_eq!(fixture_immutable_leaf_assessments_remaining(), plan.publication_count() - 1);
             for output in plan.outputs() {
                 assert!(!topology_fixture.publication_root().join(output.relative_path()).exists());

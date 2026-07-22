@@ -42,9 +42,3 @@ fn malformed_root_only_and_overdeep_paths_fail_before_effects() {
         }),
     ));
 }
-
-#[test]
-fn private_mutation_owner_is_exactly_pending_receipt_derived() {
-    let pending = BootPublicationReceiptFingerprint::from_bytes([0xa7; 32]);
-    assert_eq!(mutation_owner(pending).as_bytes(), *pending.as_bytes());
-}

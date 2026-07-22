@@ -46,6 +46,8 @@ macro_rules! promote_alias_for_completion {
         assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
         drop(assessments);
         promoted
+            .try_into_cleaned()
+            .expect("exact alias completion fixture requires no cleanup")
     }};
 }
 
@@ -157,17 +159,17 @@ mod reconciliation;
 #[path = "completion/drift.rs"]
 mod drift;
 
-const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 19;
+const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 20;
 
 #[test]
-fn completion_behavioral_scenario_inventory_is_exactly_nineteen() {
+fn completion_behavioral_scenario_inventory_is_exactly_twenty() {
     let module_counts = [
         success::SCENARIO_COUNT,
         deadline::SCENARIO_COUNT,
         reconciliation::SCENARIO_COUNT,
         drift::SCENARIO_COUNT,
     ];
-    assert_eq!(module_counts, [2, 1, 6, 10]);
+    assert_eq!(module_counts, [3, 1, 6, 10]);
     assert_eq!(
         module_counts.into_iter().sum::<usize>(),
         EXPECTED_BEHAVIORAL_SCENARIO_COUNT,

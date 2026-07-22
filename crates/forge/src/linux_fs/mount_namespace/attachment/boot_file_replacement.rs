@@ -250,6 +250,52 @@ impl RetainedBootPublicationParent<'_, '_> {
         ))
     }
 
+    /// Borrow and freshly validate an existing applied replacement authority.
+    ///
+    /// This performs no namespace mutation and neither consumes nor recreates
+    /// the authority. Both names, contents, and inode identities must still be
+    /// the exact applied pair bound by the original authority.
+    pub(crate) fn validate_applied_boot_file_replacement_until(
+        &self,
+        authority: &ValidatedRetainedBootFileReplacement,
+        deadline: Instant,
+    ) -> Result<(), RetainedBootFileReplacementError> {
+        require_authority_destination(self, authority)?;
+        let request = authority_request(authority);
+        let names = authority_names(authority)?;
+        let parent = open_parent(self, authority.destination, deadline)?;
+        require_pair(
+            &parent,
+            &names,
+            request,
+            authority.destination,
+            authority.installed_file,
+            authority.replacement_file,
+            PairState::Applied,
+            deadline,
+        )?;
+        self.require_publication_parent_until(
+            "terminally revalidating the applied boot-file replacement",
+            deadline,
+        )
+        .map_err(|source| {
+            publication(
+                "terminally revalidating the applied boot-file replacement",
+                source,
+            )
+        })?;
+        require_pair(
+            &parent,
+            &names,
+            request,
+            authority.destination,
+            authority.installed_file,
+            authority.replacement_file,
+            PairState::Applied,
+            deadline,
+        )
+    }
+
     /// Restore the installed predecessor with exactly one reverse exchange.
     pub(crate) fn restore_exact_boot_file_replacement_until(
         &self,
