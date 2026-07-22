@@ -101,6 +101,9 @@ mod active_reblit_boot_sync_staging;
 #[allow(dead_code)] // pure owned desired-publication inventory for later desired-state comparison
 #[path = "boot/active_reblit_desired_publication.rs"]
 mod active_reblit_desired_publication;
+#[allow(dead_code)] // pure installed-versus-desired delta; mutation wiring follows separately
+#[path = "boot/active_reblit_installed_boot_publication_delta.rs"]
+mod active_reblit_installed_boot_publication_delta;
 #[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
 #[path = "boot/active_reblit_projection.rs"]
 pub(crate) mod active_reblit_boot_projection;

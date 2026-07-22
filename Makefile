@@ -71,7 +71,7 @@ include misc/make/active-reblit-boot-render-input-tests.mk
 include misc/make/active-reblit-bls-renderer-tests.mk
 include misc/make/active-reblit-desired-publication-tests.mk
 include misc/make/active-reblit-boot-publication-receipt-tests.mk
-include misc/make/active-reblit-boot-namespace-input-tests.mk misc/make/active-reblit-boot-publication-preflight-tests.mk misc/make/active-reblit-boot-immutable-publication-attempt-tests.mk misc/make/active-reblit-boot-terminal-promotion-tests.mk misc/make/active-reblit-boot-sync-completion-tests.mk
+include misc/make/active-reblit-boot-namespace-input-tests.mk misc/make/active-reblit-boot-publication-preflight-tests.mk misc/make/active-reblit-boot-immutable-publication-attempt-tests.mk misc/make/active-reblit-boot-terminal-promotion-tests.mk misc/make/active-reblit-boot-sync-completion-tests.mk misc/make/active-reblit-installed-boot-publication-delta-tests.mk
 include misc/make/startup-recovery-tests.mk
 include misc/make/startup-root-abi-normalization-tests.mk
 include misc/make/startup-exchange-durability-tests.mk
