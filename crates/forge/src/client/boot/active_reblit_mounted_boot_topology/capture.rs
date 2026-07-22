@@ -38,6 +38,8 @@ pub(in crate::client) use publication_targets::{
     ActiveReblitBootOwnedCleanupOutcome,
     ActiveReblitBootOwnedLeafReplacementError,
     ActiveReblitBootPublicationTargetsError,
+    ActiveReblitBootReceiptTargetValidationError,
+    ReceiptValidatedActiveReblitBootPublicationTargets,
     RevalidatedActiveReblitBootPublicationTarget,
     RevalidatedActiveReblitBootPublicationTargets,
 };

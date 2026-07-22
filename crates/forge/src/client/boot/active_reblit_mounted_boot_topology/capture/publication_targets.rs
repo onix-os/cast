@@ -15,16 +15,19 @@ use std::{io, time::Instant};
 
 use thiserror::Error;
 
-use crate::linux_fs::{
-    descriptor_boot_namespace::{
-        BootNamespaceAssessmentLimits, BootNamespaceRequest,
-        RetainedBootNamespaceAssessmentLimits,
-        RetainedBootNamespaceExpectedSource,
-    },
-    mount_namespace::{
-        RevalidatedTaskRootedAttachment,
-        TaskRootBootNamespaceAssessmentError,
-        ValidatedTaskRootBootNamespaceAssessment,
+use crate::{
+    boot_publication::BootPublicationReceiptFingerprint,
+    linux_fs::{
+        descriptor_boot_namespace::{
+            BootNamespaceAssessmentLimits, BootNamespaceRequest,
+            RetainedBootNamespaceAssessmentLimits,
+            RetainedBootNamespaceExpectedSource,
+        },
+        mount_namespace::{
+            RevalidatedTaskRootedAttachment,
+            TaskRootBootNamespaceAssessmentError,
+            ValidatedTaskRootBootNamespaceAssessment,
+        },
     },
 };
 
@@ -46,11 +49,14 @@ mod immutable_leaf;
 mod owned_cleanup;
 #[path = "publication_targets/owned_replacement.rs"]
 mod owned_replacement;
+#[path = "publication_targets/receipt_validation.rs"]
+mod receipt_validation;
 
 pub(in crate::client) use immutable_leaf::ActiveReblitBootImmutableLeafPublicationError;
 pub(in crate::client) use owned_cleanup::{
     ActiveReblitBootOwnedCleanupError, ActiveReblitBootOwnedCleanupOutcome,
 };
+pub(in crate::client) use receipt_validation::ActiveReblitBootReceiptTargetValidationError;
 #[allow(unused_imports)] // consumed by the aggregate owned-replacement executor
 pub(in crate::client) use owned_replacement::ActiveReblitBootOwnedLeafReplacementError;
 #[cfg(test)]
@@ -193,6 +199,30 @@ pub(in crate::client) enum RevalidatedActiveReblitBootPublicationTargets<'prepar
         esp: RevalidatedActiveReblitBootPublicationTarget<'prepared>,
         xbootldr: RevalidatedActiveReblitBootPublicationTarget<'prepared>,
     },
+}
+
+/// Fresh live boot targets whose stable partition identities match one exact
+/// promoted installed receipt.
+///
+/// The wrapper is deliberately non-`Clone`. Historical receipt device,
+/// inode, mount, and disk-sequence witnesses are not retained or compared;
+/// the underlying targets already carry freshly authenticated live runtime
+/// authority.
+pub(in crate::client) struct ReceiptValidatedActiveReblitBootPublicationTargets<'prepared> {
+    targets: RevalidatedActiveReblitBootPublicationTargets<'prepared>,
+    promoted_receipt: BootPublicationReceiptFingerprint,
+    aliases_esp: bool,
+}
+
+impl std::fmt::Debug for ReceiptValidatedActiveReblitBootPublicationTargets<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ReceiptValidatedActiveReblitBootPublicationTargets")
+            .field("promoted_receipt", &self.promoted_receipt)
+            .field("aliases_esp", &self.aliases_esp)
+            .field("targets", &self.targets)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for RevalidatedActiveReblitBootPublicationTargets<'_> {

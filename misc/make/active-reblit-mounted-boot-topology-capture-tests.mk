@@ -11,7 +11,9 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	timeout 300s $(CARGO) test --manifest-path "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_mounted_boot_topology::capture_tests::'; \
+	receipt_prefix='client::active_reblit_mounted_boot_topology::capture::publication_targets::receipt_validation::tests::'; \
 	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 28; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$receipt_prefix.*: test$$" "$$listed" )" = 4; \
 	for name in \
 		stable::alias_fixture_retains_exact_descriptor_backed_scalar_facts \
 		stable::repeated_revalidation_keeps_the_bootstrap_topology_exact \
@@ -47,6 +49,8 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	capture="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology/capture.rs"; \
 	core="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology/capture"; \
 	publication_targets="$$core/publication_targets.rs"; \
+	receipt_validation="$$core/publication_targets/receipt_validation.rs"; \
+	receipt_tests="$$core/publication_targets/receipt_validation/tests.rs"; \
 	renderer="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer.rs"; \
 	tests="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology_capture_tests.rs"; \
 	test_core="$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology_capture_tests"; \
@@ -72,8 +76,13 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	grep -Fq 'BootNamespaceAssessmentLimits::default()' "$$publication_targets"; \
 	grep -Fq 'RetainedBootNamespaceAssessmentLimits::default()' "$$publication_targets"; \
 	grep -Fq 'self.deadline,' "$$publication_targets"; \
+	grep -Fq 'pub(in crate::client) struct ReceiptValidatedActiveReblitBootPublicationTargets' "$$publication_targets"; \
+	grep -Fq 'fn revalidate_promoted_receipt_targets' "$$receipt_validation"; \
+	grep -Fq 'receipt.partuuid()' "$$receipt_validation"; \
+	grep -Fq 'receipt.partition_number()' "$$receipt_validation"; \
+	if rg -n 'historical_runtime_witness\(|destination_device\(|destination_inode\(|mount_id\(|disk_sequence\(' "$$receipt_validation"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'self.topology.revalidate_publication_targets()' "$$renderer"; \
-	if timeout 10s rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) (?:struct RevalidatedActiveReblitBootPublicationTarget|enum RevalidatedActiveReblitBootPublicationTargets)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:RevalidatedActiveReblitBootPublicationTarget|RevalidatedActiveReblitBootPublicationTargets)' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) (?:struct RevalidatedActiveReblitBootPublicationTarget|enum RevalidatedActiveReblitBootPublicationTargets|struct ReceiptValidatedActiveReblitBootPublicationTargets)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:RevalidatedActiveReblitBootPublicationTarget|RevalidatedActiveReblitBootPublicationTargets|ReceiptValidatedActiveReblitBootPublicationTargets)' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg --pcre2 -U -n 'pub\(in crate::client\)\s+fn\s+[[:alnum:]_]+[^\{;]{0,300}(?:RevalidatedTaskRootedAttachment|PreparedTaskRootedAttachment|std::fs::File|OwnedFd|BorrowedFd|RawFd|PathBuf|&Path)|pub\(in crate::client\).*attachment\s*:' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'retain_boot_publication_parent|publish_immutable_boot_file|create_dir|mkdir|rename|unlink|remove_file|syncfs|sync_all' "$$publication_targets"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for phase in Pass1 Pass2 Terminal; do timeout 10s grep -Fq "ObservationPhase::$$phase" "$$core/preparation.rs"; done; \
@@ -90,7 +99,8 @@ forge-active-reblit-mounted-boot-topology-capture-test: host-storage-safety-test
 	host_root_pattern='/''(boot|efi|esp)(/|["[:space:]]|$$)'; \
 	if timeout 10s rg -n "$$host_root_pattern" "$$capture" "$$core"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg --pcre2 -U -n '#\[derive\([^\]]*Clone[^\]]*\)\]\s*pub\(in crate::client\) struct PreparedActiveReblitMountedBootTopology' "$$core/model.rs"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	for file in "$$root" "$$capture" "$$core"/*.rs "$$tests" "$$test_core"/*.rs "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/misc/make/active-reblit-mounted-boot-topology-capture-tests.mk"; do \
+	for file in "$$root" "$$capture" "$$core"/*.rs "$$receipt_validation" "$$receipt_tests" "$$tests" "$$test_core"/*.rs "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/misc/make/active-reblit-mounted-boot-topology-capture-tests.mk"; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
-	timeout 1200s $(CARGO) test --manifest-path "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1
+	timeout 1200s $(CARGO) test --manifest-path "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1; \
+	timeout 1200s $(CARGO) test --manifest-path "$(MOUNTED_BOOT_CAPTURE_TOP_DIR)/Cargo.toml" -p forge --lib "$$receipt_prefix" -- --test-threads=1
