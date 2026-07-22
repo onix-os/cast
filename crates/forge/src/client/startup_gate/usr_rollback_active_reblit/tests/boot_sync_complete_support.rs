@@ -52,14 +52,8 @@ impl BootSyncCompleteReadOnlySnapshot {
     }
 }
 
-pub(super) fn boot_sync_complete_fixture(epoch: Epoch, promote_receipt: bool) -> BootRepairFixture {
-    let mut fixture = build_boot_sync_started(epoch, BootSyncStartedLayout::Post);
-    let pair = fixture
-        .fixture
-        .source
-        .boot_publication_receipt_correlation()
-        .unwrap()
-        .unwrap();
+pub(super) fn boot_sync_started_fixture(epoch: Epoch, promote_receipt: bool) -> BootRepairFixture {
+    let fixture = build_boot_sync_started(epoch, BootSyncStartedLayout::Post);
     if promote_receipt {
         let receipt_state = fixture.fixture.database.boot_publication_receipt_state().unwrap();
         let pending = receipt_state.pending().expect("fixture carries the staged receipt");
@@ -69,6 +63,17 @@ pub(super) fn boot_sync_complete_fixture(epoch: Epoch, promote_receipt: bool) ->
             .promote_boot_publication_receipt(pending, Instant::now() + Duration::from_secs(30))
             .unwrap();
     }
+    fixture
+}
+
+pub(super) fn boot_sync_complete_fixture(epoch: Epoch, promote_receipt: bool) -> BootRepairFixture {
+    let mut fixture = boot_sync_started_fixture(epoch, promote_receipt);
+    let pair = fixture
+        .fixture
+        .source
+        .boot_publication_receipt_correlation()
+        .unwrap()
+        .unwrap();
     let completed = fixture
         .fixture
         .source

@@ -24,6 +24,7 @@ use crate::{
 };
 
 mod activation_namespace;
+mod active_reblit_boot_sync_started_guard;
 mod active_reblit_commit_cleanup_authority;
 mod active_reblit_commit_cleanup_complete_authority;
 mod active_reblit_complete_finalization_authority;
@@ -54,6 +55,11 @@ mod usr_exchanged_root_abi_authority;
 
 #[cfg(test)]
 pub(in crate::client) use focused_test_exports::*;
+
+pub(in crate::client) use active_reblit_boot_sync_started_guard::{
+    ActiveReblitBootSyncStartedGuard, ActiveReblitBootSyncStartedGuardAdmission,
+    ActiveReblitBootSyncStartedGuardError,
+};
 
 #[allow(unused_imports)] // exported for focused startup adoption and the later persistence leaf
 pub(in crate::client) use active_reblit_boot_sync_complete_authority::{

@@ -71,6 +71,8 @@ fn startup_boot_sync_complete_all_five_journal_faults_classify_and_converge_with
             let fixture = boot_sync_complete_fixture(epoch, true);
             let source = fixture.fixture.source.clone();
             let successor = exact_commit_decided(&fixture);
+            let cleanup_complete = successor.forward_successor(None).unwrap();
+            assert_eq!(cleanup_complete.phase, Phase::CommitCleanupComplete);
             let first_read_only = BootSyncCompleteReadOnlySnapshot::capture(&fixture);
             reset_complete_route_effect_observers();
             (fault.arm)();
@@ -89,12 +91,23 @@ fn startup_boot_sync_complete_all_five_journal_faults_classify_and_converge_with
             first_read_only.assert_unchanged(&fixture);
             assert_complete_route_journal_only();
 
-            let second_read_only = BootSyncCompleteReadOnlySnapshot::capture(&fixture);
+            let second_read_only = match fault.durable {
+                DurableActiveReblitBootSyncCommitDecisionRecord::BootSyncComplete => {
+                    Some(BootSyncCompleteReadOnlySnapshot::capture(&fixture))
+                }
+                DurableActiveReblitBootSyncCommitDecisionRecord::CommitDecided => None,
+            };
             let second = enter_boot(&fixture);
 
-            assert_pending_phase(&second, Phase::CommitDecided);
-            assert_eq!(fixture.fixture.canonical_record(), successor);
-            second_read_only.assert_unchanged(&fixture);
+            let second_successor = match fault.durable {
+                DurableActiveReblitBootSyncCommitDecisionRecord::BootSyncComplete => successor,
+                DurableActiveReblitBootSyncCommitDecisionRecord::CommitDecided => cleanup_complete,
+            };
+            assert_pending_phase(&second, second_successor.phase);
+            assert_eq!(fixture.fixture.canonical_record(), second_successor);
+            if let Some(second_read_only) = second_read_only {
+                second_read_only.assert_unchanged(&fixture);
+            }
             assert_complete_route_journal_only();
             cases += 1;
         }

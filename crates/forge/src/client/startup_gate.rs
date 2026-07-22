@@ -9,6 +9,7 @@ use super::{
 };
 
 mod active_reblit_boot_sync_complete;
+mod active_reblit_boot_sync_started;
 mod active_reblit_commit_cleanup;
 mod active_reblit_commit_cleanup_complete;
 mod active_reblit_complete_finalization;
@@ -211,6 +212,32 @@ impl CleanSystemStartup {
         namespace?;
         let in_flight = in_flight?;
         if let Some(record) = record {
+            // Receipt promotion is the irreversible boundary inside
+            // BootSyncStarted. An exactly pending or legacy receipt remains
+            // rollback-eligible, while an exactly promoted receipt stays at
+            // this forward checkpoint until cleanup recovery can resume it.
+            let (journal, record) = match active_reblit_boot_sync_started::dispatch(
+                state_db,
+                journal,
+                record,
+            )? {
+                active_reblit_boot_sync_started::Dispatch::Unhandled { journal, record } => {
+                    (journal, record)
+                }
+                active_reblit_boot_sync_started::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+            };
+
             // Adopt forward boot completion before any replacement cleanup,
             // root-ABI normalization, or rollback admission. Both deferred
             // evidence and the one durable successor end this startup entry,
@@ -728,6 +755,8 @@ pub(super) enum Error {
     ArchivedStatePruneResidue(#[from] transition_identity::ArchivedStatePruneResidueError),
     #[error("recover CandidatePrepared active-reblit replacement residue")]
     ActiveReblitReplacementRecovery(#[from] transition_identity::ActiveReblitReplacementRecoveryError),
+    #[error("guard the ActiveReblit BootSyncStarted receipt-promotion boundary")]
+    ActiveReblitBootSyncStartedDispatch(#[from] active_reblit_boot_sync_started::Error),
     #[error("dispatch the exact forward startup ActiveReblit BootSyncComplete checkpoint")]
     ActiveReblitBootSyncCompleteDispatch(#[from] active_reblit_boot_sync_complete::Error),
     #[error("dispatch the exact forward startup ActiveReblit CommitDecided cleanup checkpoint")]

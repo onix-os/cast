@@ -20,6 +20,7 @@ mod boot_sync_complete_startup_authority;
 mod boot_sync_complete_startup_dispatch;
 mod boot_sync_complete_startup_evidence_races;
 mod boot_sync_complete_startup_storage_faults;
+mod boot_sync_started_guard_dispatch;
 mod candidate_wrapper_exchange_kill_boundaries;
 mod candidate_wrapper_exchange_process_harness;
 mod candidate_wrapper_exchange_process_kill;

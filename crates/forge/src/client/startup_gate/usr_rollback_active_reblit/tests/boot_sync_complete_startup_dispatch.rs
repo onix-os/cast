@@ -21,11 +21,13 @@ use super::{
 };
 
 #[test]
-fn startup_boot_sync_complete_current_and_historical_advance_once_to_exact_commit_decided() {
+fn startup_boot_sync_complete_advances_one_checkpoint_per_entry() {
     for epoch in Epoch::ALL {
         let fixture = boot_sync_complete_fixture(epoch, true);
         let source = fixture.fixture.source.clone();
         let expected = exact_commit_decided(&fixture);
+        let cleanup_complete = expected.forward_successor(None).unwrap();
+        assert_eq!(cleanup_complete.phase, Phase::CommitCleanupComplete);
         let receipt_before = exact_promoted_receipt_state(&fixture);
         let read_only = BootSyncCompleteReadOnlySnapshot::capture(&fixture);
         reset_complete_route_effect_observers();
@@ -40,11 +42,11 @@ fn startup_boot_sync_complete_current_and_historical_advance_once_to_exact_commi
         read_only.assert_unchanged(&fixture);
         assert_complete_route_journal_only();
 
-        // The new successor is returned immediately. A later entry still sees
-        // that exact record; this slice performs no cleanup or redispatch.
+        // The new successor is returned immediately. A later entry may then
+        // execute the separately gated cleanup checkpoint.
         let second = enter_boot(&fixture);
-        assert_pending_phase(&second, Phase::CommitDecided);
-        assert_eq!(fixture.fixture.canonical_record(), expected);
+        assert_pending_phase(&second, Phase::CommitCleanupComplete);
+        assert_eq!(fixture.fixture.canonical_record(), cleanup_complete);
         assert_complete_route_journal_only();
     }
 }
