@@ -112,6 +112,118 @@ fn stored_body(
 }
 
 #[test]
+fn current_chain_admits_only_a_strictly_empty_database() {
+    let empty = Database::new(":memory:").unwrap();
+    assert_eq!(
+        empty
+            .load_current_exact_promoted_boot_publication_receipt_chain()
+            .unwrap(),
+        CurrentExactPromotedBootPublicationReceiptChain::Empty,
+    );
+
+    let orphaned = Database::new(":memory:").unwrap();
+    let orphan = receipt('1', None, 0x11);
+    orphaned.conn.exec(|connection| {
+        insert_receipt(connection, &orphan).unwrap();
+    });
+    assert!(matches!(
+        orphaned.load_current_exact_promoted_boot_publication_receipt_chain(),
+        Err(
+            CurrentExactPromotedBootPublicationReceiptChainError::ReceiptBodiesWithoutCommittedHead {
+                count: 1,
+            }
+        )
+    ));
+}
+
+#[test]
+fn current_chain_derives_the_installed_identity_and_predecessor_from_storage() {
+    let database = Database::new(":memory:").unwrap();
+    let predecessor = receipt('2', None, 0x21);
+    stage_and_promote(&database, &predecessor);
+    let installed = receipt('3', Some(predecessor.fingerprint()), 0x31);
+    stage_and_promote(&database, &installed);
+
+    let current = database
+        .load_current_exact_promoted_boot_publication_receipt_chain()
+        .unwrap();
+    let CurrentExactPromotedBootPublicationReceiptChain::Installed(chain) = current else {
+        panic!("a committed receipt must load as installed");
+    };
+    assert_eq!(chain.installed_receipt(), &installed);
+    assert_eq!(
+        chain.committed_predecessor_receipt(),
+        Some(&predecessor),
+    );
+}
+
+#[test]
+fn current_chain_rejects_pending_state_without_caller_correlation() {
+    let database = Database::new(":memory:").unwrap();
+    let pending = receipt('4', None, 0x41);
+    stage(&database, &pending);
+
+    assert!(matches!(
+        database.load_current_exact_promoted_boot_publication_receipt_chain(),
+        Err(CurrentExactPromotedBootPublicationReceiptChainError::ExactPromoted(
+            ExactPromotedBootPublicationReceiptStateError::PendingHeadPresent {
+                transition_id,
+                fingerprint,
+            }
+        )) if transition_id == *pending.body().transition_id()
+            && fingerprint == pending.fingerprint()
+    ));
+}
+
+#[test]
+fn current_chain_rejects_dangling_and_mismatched_immutable_bodies() {
+    let dangling = Database::new(":memory:").unwrap();
+    let predecessor = receipt('5', None, 0x51);
+    stage_and_promote(&dangling, &predecessor);
+    let installed = receipt('6', Some(predecessor.fingerprint()), 0x61);
+    stage_and_promote(&dangling, &installed);
+    dangling.delete_boot_publication_receipt_body_for_test(predecessor.fingerprint());
+    assert!(matches!(
+        dangling.load_current_exact_promoted_boot_publication_receipt_chain(),
+        Err(CurrentExactPromotedBootPublicationReceiptChainError::ExactPromoted(
+            ExactPromotedBootPublicationReceiptStateError::State(
+                BootPublicationReceiptStateError::DanglingReference {
+                    reference: ReceiptReference::CommittedPredecessor,
+                    fingerprint,
+                }
+            )
+        )) if fingerprint == predecessor.fingerprint()
+    ));
+
+    let mismatched = Database::new(":memory:").unwrap();
+    let installed = receipt('7', None, 0x71);
+    stage_and_promote(&mismatched, &installed);
+    let foreign_transition = transition('8');
+    mismatched.conn.exec(|connection| {
+        let changed = diesel::update(
+            boot_publication_receipts::table.filter(
+                boot_publication_receipts::receipt_sha256
+                    .eq(installed.fingerprint().as_bytes().as_slice()),
+            ),
+        )
+        .set(
+            boot_publication_receipts::transition_id.eq(foreign_transition.as_str()),
+        )
+        .execute(connection)
+        .unwrap();
+        assert_eq!(changed, 1);
+    });
+    assert!(matches!(
+        mismatched.load_current_exact_promoted_boot_publication_receipt_chain(),
+        Err(CurrentExactPromotedBootPublicationReceiptChainError::ExactPromoted(
+            ExactPromotedBootPublicationReceiptStateError::State(
+                BootPublicationReceiptStateError::BodyTransitionMismatch { stored, body }
+            )
+        )) if stored == foreign_transition && body == *installed.body().transition_id()
+    ));
+}
+
+#[test]
 fn exact_chain_loads_a_promoted_installed_receipt_without_a_predecessor() {
     let database = Database::new(":memory:").unwrap();
     let installed = receipt('3', None, 0x31);
@@ -234,7 +346,7 @@ fn exact_chain_requires_the_named_predecessor_body_without_mutation() {
 }
 
 #[test]
-fn exact_chain_loader_is_read_only_and_uses_no_exclusive_lock() {
+fn current_chain_loader_is_read_only_and_uses_no_exclusive_lock() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("state.db");
     let url = path.to_str().unwrap();
@@ -281,12 +393,12 @@ fn exact_chain_loader_is_read_only_and_uses_no_exclusive_lock() {
         .unwrap();
     assert_eq!(independent_rows, rows_before);
 
-    let chain = database
-        .load_exact_promoted_boot_publication_receipt_chain(
-            installed.body().transition_id(),
-            &receipt_pair(&installed),
-        )
+    let current = database
+        .load_current_exact_promoted_boot_publication_receipt_chain()
         .unwrap();
+    let CurrentExactPromotedBootPublicationReceiptChain::Installed(chain) = current else {
+        panic!("a committed receipt must load as installed");
+    };
     assert_eq!(chain.installed_receipt(), &installed);
     assert_eq!(
         chain.committed_predecessor_receipt(),

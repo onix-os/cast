@@ -37,6 +37,8 @@ pub(crate) use boot_publication_receipts::{
     BootPublicationReceiptPromotionDurableState,
     BootPublicationReceiptPromotionError,
     BootPublicationReceiptPromotionOutcome,
+    CurrentExactPromotedBootPublicationReceiptChain,
+    CurrentExactPromotedBootPublicationReceiptChainError,
     ExactPromotedBootPublicationReceiptChain,
     BootPublicationReceiptState,
     BootPublicationReceiptStateError,

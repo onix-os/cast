@@ -41,7 +41,11 @@ mod promotion;
 #[allow(dead_code)] // crash-recovery foundation; client integration follows separately
 #[path = "boot_publication_receipts/exact_promoted_receipt_chain.rs"]
 mod exact_promoted_receipt_chain;
-pub(crate) use exact_promoted_receipt_chain::ExactPromotedBootPublicationReceiptChain;
+pub(crate) use exact_promoted_receipt_chain::{
+    CurrentExactPromotedBootPublicationReceiptChain,
+    CurrentExactPromotedBootPublicationReceiptChainError,
+    ExactPromotedBootPublicationReceiptChain,
+};
 pub(crate) use promotion::{
     BootPublicationReceiptPromotionDurableState,
     BootPublicationReceiptPromotionError,
