@@ -3,15 +3,16 @@
 //! This layer is the first composition point which retains the exact rendered
 //! plan, its zero-copy namespace inputs, and freshly revalidated opaque
 //! ESP/XBOOTLDR targets together. It assesses every collision domain before a
-//! later publisher can create even a parent directory, rejects every
-//! pre-existing non-exact destination, and brackets that assessment with a
-//! second complete mounted-topology revalidation.
+//! later publisher can create even a parent directory, retains `Different` as
+//! read-only evidence for authenticated delta classification, and brackets
+//! that assessment with a second complete mounted-topology revalidation.
 //!
 //! Success is deliberately not mutation authority by itself. The value is
 //! non-cloneable, keeps every descriptor behind the opaque target bridge, and
-//! exposes only scalar initial states. It does not publish, replace, remove,
-//! promote a receipt, advance a journal, rediscover a target, or mint a fresh
-//! deadline.
+//! exposes scalar initial states only for diagnostics and an unforgeable
+//! internal assessment seal only to the delta bridge. It does not publish,
+//! replace, remove, promote a receipt, advance a journal, rediscover a target,
+//! or mint a fresh deadline.
 
 use std::{collections::TryReserveError, time::Instant};
 
@@ -42,8 +43,17 @@ use super::{
 #[cfg(test)]
 #[path = "active_reblit_boot_publication_preflight/fixture_assessment.rs"]
 mod fixture_assessment;
+#[path = "active_reblit_boot_publication_preflight/assessment_seal.rs"]
+mod assessment_seal;
+#[path = "active_reblit_boot_publication_preflight/delta_classification.rs"]
+mod delta_classification;
 #[path = "active_reblit_boot_publication_preflight/immutable_attempt.rs"]
 mod immutable_attempt;
+
+pub(in crate::client) use assessment_seal::{
+    ActiveReblitBootPublicationAssessmentSeal,
+    SealedActiveReblitBootPublicationDesiredState,
+};
 
 pub(in crate::client) use immutable_attempt::{
     ActiveReblitBootPublicationEffectSeal,
@@ -84,6 +94,7 @@ pub(in crate::client) struct RevalidatedActiveReblitBootPublicationPreflight<
     namespace_inputs: BoundActiveReblitBootNamespaceInputs<'plan>,
     targets: RevalidatedActiveReblitBootPublicationTargets<'plan>,
     initial_states: Box<[BootNamespaceDestinationState]>,
+    assessment_seal: ActiveReblitBootPublicationAssessmentSeal<'plan>,
 }
 
 impl std::fmt::Debug
@@ -190,11 +201,6 @@ pub(in crate::client) enum ActiveReblitBootPublicationPreflightError {
     DuplicatePlanIndex { plan_index: usize },
     #[error("boot-publication plan index {plan_index} is absent from the retained namespace inputs")]
     MissingPlanIndex { plan_index: usize },
-    #[error("boot-publication plan index {plan_index} in the {role:?} namespace is already non-exact")]
-    DifferentDestination {
-        role: BootTargetRole,
-        plan_index: usize,
-    },
     #[error("allocate the bounded global boot-publication preflight state map")]
     StateAllocation {
         #[source]
@@ -379,12 +385,14 @@ impl<
         require_target_deadline("terminal target capture", deadline, &terminal_targets)?;
         require_same_target_set(&targets, &terminal_targets)?;
         require_deadline("terminal", deadline, now)?;
+        let assessment_seal = assessment_seal::seal_bound_desired_states(self, &initial_states)?;
 
         Ok(RevalidatedActiveReblitBootPublicationPreflight {
             plan: self,
             namespace_inputs,
             targets,
             initial_states,
+            assessment_seal,
         })
     }
 
@@ -450,7 +458,7 @@ fn assess_bound_namespaces_with(
     states
         .try_reserve_exact(publication_count)
         .map_err(|source| ActiveReblitBootPublicationPreflightError::StateAllocation { source })?;
-    states.resize(publication_count, BootNamespaceDestinationState::Different);
+    states.resize(publication_count, None);
 
     match (targets, inputs) {
         (
@@ -501,17 +509,21 @@ fn require_publication_count(
 }
 
 fn close_global_states(
-    states: Vec<BootNamespaceDestinationState>,
+    states: Vec<Option<BootNamespaceDestinationState>>,
 ) -> Result<Box<[BootNamespaceDestinationState]>, ActiveReblitBootPublicationPreflightError> {
-    if let Some(plan_index) = states
-        .iter()
-        .position(|state| *state == BootNamespaceDestinationState::Different)
-    {
-        return Err(ActiveReblitBootPublicationPreflightError::MissingPlanIndex {
-            plan_index,
-        });
+    let mut closed = Vec::new();
+    closed
+        .try_reserve_exact(states.len())
+        .map_err(|source| ActiveReblitBootPublicationPreflightError::StateAllocation { source })?;
+    for (plan_index, state) in states.into_iter().enumerate() {
+        let Some(state) = state else {
+            return Err(ActiveReblitBootPublicationPreflightError::MissingPlanIndex {
+                plan_index,
+            });
+        };
+        closed.push(state);
     }
-    Ok(states.into_boxed_slice())
+    Ok(closed.into_boxed_slice())
 }
 
 fn retained_publication_count(inputs: &BoundActiveReblitBootNamespaceInputs<'_>) -> usize {
@@ -533,7 +545,7 @@ fn assess_domain_with(
     role: BootTargetRole,
     target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
     domain: &BoundActiveReblitBootNamespaceDomain<'_>,
-    global_states: &mut [BootNamespaceDestinationState],
+    global_states: &mut [Option<BootNamespaceDestinationState>],
     assess: &mut impl FnMut(
         BootTargetRole,
         &RevalidatedActiveReblitBootPublicationTarget<'_>,
@@ -575,7 +587,7 @@ fn merge_domain_assessment(
     expected_identity: BootPublicationAssessmentIdentity,
     indices: &[usize],
     assessment: &BootPublicationNamespaceAssessment,
-    global_states: &mut [BootNamespaceDestinationState],
+    global_states: &mut [Option<BootNamespaceDestinationState>],
 ) -> Result<(), ActiveReblitBootPublicationPreflightError> {
     require_assessment_identity(role, expected_identity, assessment)?;
     if assessment.states().len() != indices.len() {
@@ -607,22 +619,14 @@ fn merge_domain_assessment(
             }
         }
         previous = Some(plan_index);
-        if state == BootNamespaceDestinationState::Different {
-            return Err(
-                ActiveReblitBootPublicationPreflightError::DifferentDestination {
-                    role,
-                    plan_index,
-                },
-            );
-        }
-        if global_states[plan_index] != BootNamespaceDestinationState::Different {
+        if global_states[plan_index].is_some() {
             return Err(
                 ActiveReblitBootPublicationPreflightError::DuplicatePlanIndex {
                     plan_index,
                 },
             );
         }
-        global_states[plan_index] = state;
+        global_states[plan_index] = Some(state);
     }
     Ok(())
 }

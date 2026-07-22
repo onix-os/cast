@@ -18,6 +18,7 @@ use crate::{
         BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
         Database as StateDatabase,
     },
+    linux_fs::descriptor_boot_namespace::BootNamespaceDestinationState,
     state::TransitionId,
 };
 
@@ -80,52 +81,36 @@ fn request(
 fn prepared(
     requests: Vec<ActiveReblitBootPublicationDeltaRequest>,
 ) -> PreparedActiveReblitBootPublicationDelta {
-    PreparedActiveReblitBootPublicationDelta { requests }
-}
-
-fn actions(
-    delta: &PreparedActiveReblitBootPublicationDelta,
-    observations: &[ActiveReblitBootPublicationDeltaObservation],
-) -> Vec<ActiveReblitBootPublicationDeltaAction> {
-    delta
-        .classify(observations)
-        .unwrap()
-        .entries()
-        .iter()
-        .map(ClassifiedActiveReblitBootPublicationDeltaEntry::action)
-        .collect()
+    PreparedActiveReblitBootPublicationDelta {
+        destination_layout: ActiveReblitBootDestinationLayout::BootAliasesEsp,
+        requests,
+    }
 }
 
 #[test]
 fn desired_absent_exact_and_owned_different_have_closed_actions() {
     let old = expected(1);
     let new = expected(2);
-    let delta = prepared(vec![
+    let requests = [
         request(Some(new), None, false),
         request(Some(new), Some(new), true),
         request(Some(new), None, false),
         request(Some(new), Some(old), true),
-    ]);
+    ];
     assert_eq!(
-        actions(
-            &delta,
-            &[
-                ActiveReblitBootPublicationDeltaObservation::desired_only(
-                    BootNamespaceDestinationState::Absent,
-                ),
-                ActiveReblitBootPublicationDeltaObservation::both(
-                    BootNamespaceDestinationState::Exact,
-                    BootNamespaceDestinationState::Exact,
-                ),
-                ActiveReblitBootPublicationDeltaObservation::desired_only(
-                    BootNamespaceDestinationState::Exact,
-                ),
-                ActiveReblitBootPublicationDeltaObservation::both(
-                    BootNamespaceDestinationState::Different,
-                    BootNamespaceDestinationState::Exact,
-                ),
-            ],
-        ),
+        requests
+            .iter()
+            .zip([
+                BootNamespaceDestinationState::Absent,
+                BootNamespaceDestinationState::Exact,
+                BootNamespaceDestinationState::Exact,
+                BootNamespaceDestinationState::Different,
+            ])
+            .enumerate()
+            .map(|(index, (request, state))| {
+                live_classification::classify_desired_for_test(index, request, state).unwrap()
+            })
+            .collect::<Vec<_>>(),
         [
             ActiveReblitBootPublicationDeltaAction::PublishDesired,
             ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired,
@@ -138,80 +123,55 @@ fn desired_absent_exact_and_owned_different_have_closed_actions() {
 #[test]
 fn stale_owned_is_post_promotion_deletion_and_stale_unowned_is_preserved() {
     let old = expected(3);
-    let delta = prepared(vec![
+    let requests = [
         request(None, Some(old), true),
         request(None, Some(old), false),
-        request(None, Some(old), true),
-        request(None, Some(old), true),
-    ]);
+    ];
     assert_eq!(
-        actions(
-            &delta,
-            &[
-                ActiveReblitBootPublicationDeltaObservation::installed_only(
-                    BootNamespaceDestinationState::Exact,
-                ),
-                ActiveReblitBootPublicationDeltaObservation::installed_only(
-                    BootNamespaceDestinationState::Exact,
-                ),
-                ActiveReblitBootPublicationDeltaObservation::installed_only(
-                    BootNamespaceDestinationState::Different,
-                ),
-                ActiveReblitBootPublicationDeltaObservation::installed_only(
-                    BootNamespaceDestinationState::Absent,
-                ),
-            ],
-        ),
+        requests
+            .iter()
+            .enumerate()
+            .map(|(index, request)| {
+                live_classification::classify_stale_for_test(index, request).unwrap()
+            })
+            .collect::<Vec<_>>(),
         [
             ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion,
-            ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale,
             ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale,
         ],
     );
 }
 
 #[test]
-fn different_desired_without_exact_authenticated_owned_predecessor_fails_closed() {
+fn different_desired_without_authenticated_owned_predecessor_fails_closed() {
     let new = expected(4);
     let old = expected(5);
-    for (installed, owned, installed_state) in [
-        (None, false, None),
-        (Some(old), false, Some(BootNamespaceDestinationState::Exact)),
-        (Some(old), true, Some(BootNamespaceDestinationState::Different)),
-    ] {
-        let delta = prepared(vec![request(Some(new), installed, owned)]);
-        let observation = match installed_state {
-            Some(installed) => ActiveReblitBootPublicationDeltaObservation::both(
-                BootNamespaceDestinationState::Different,
-                installed,
-            ),
-            None => ActiveReblitBootPublicationDeltaObservation::desired_only(
-                BootNamespaceDestinationState::Different,
-            ),
-        };
+    for (installed, owned) in [(None, false), (Some(old), false)] {
+        let request = request(Some(new), installed, owned);
         assert!(matches!(
-            delta.classify(&[observation]),
+            live_classification::classify_desired_for_test(
+                0,
+                &request,
+                BootNamespaceDestinationState::Different,
+            ),
             Err(ActiveReblitBootPublicationDeltaError::UnownedDifferentDesired { index: 0 })
         ));
     }
 }
 
 #[test]
-fn observation_shape_and_same_expected_conflicts_fail_closed() {
+fn owned_marker_without_installed_identity_fails_closed() {
     let same = expected(6);
-    let delta = prepared(vec![request(Some(same), Some(same), true)]);
+    let request = request(Some(same), None, true);
     assert!(matches!(
-        delta.classify(&[ActiveReblitBootPublicationDeltaObservation::desired_only(
+        live_classification::classify_desired_for_test(
+            0,
+            &request,
             BootNamespaceDestinationState::Exact,
-        )]),
-        Err(ActiveReblitBootPublicationDeltaError::ObservationShapeMismatch { index: 0 })
-    ));
-    assert!(matches!(
-        delta.classify(&[ActiveReblitBootPublicationDeltaObservation::both(
-            BootNamespaceDestinationState::Exact,
-            BootNamespaceDestinationState::Different,
-        )]),
-        Err(ActiveReblitBootPublicationDeltaError::ConflictingObservations { index: 0 })
+        ),
+        Err(ActiveReblitBootPublicationDeltaError::OwnedOutputWithoutInstalledIdentity {
+            index: 0,
+        })
     ));
 }
 
@@ -342,6 +302,7 @@ fn desired_entry(
         root: output.root(),
         relative_path: output.relative_path().to_str().unwrap().into(),
         desired_expected: Some(desired_expected(output)),
+        installed_expected: None,
         action,
     }
 }
@@ -380,12 +341,14 @@ fn receipt_claim_bridge_uses_inventory_order_and_ignores_stale_entries() {
             root: ActiveReblitBootDestinationRoot::Boot,
             relative_path: "EFI/cast/stale-owned".into(),
             desired_expected: None,
+            installed_expected: Some(expected(90)),
             action: ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion,
         });
         entries.push(ClassifiedActiveReblitBootPublicationDeltaEntry {
             root: ActiveReblitBootDestinationRoot::Esp,
             relative_path: "EFI/cast/stale-borrowed".into(),
             desired_expected: None,
+            installed_expected: Some(expected(91)),
             action: ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale,
         });
         let delta = ClassifiedActiveReblitBootPublicationDelta { entries };
@@ -483,6 +446,7 @@ fn receipt_claim_bridge_rejects_a_desired_action_with_no_desired_key() {
             root: ActiveReblitBootDestinationRoot::Boot,
             relative_path: "EFI/cast/not-in-desired-inventory".into(),
             desired_expected: Some(expected(99)),
+            installed_expected: None,
             action: ActiveReblitBootPublicationDeltaAction::PublishDesired,
         });
         assert!(matches!(

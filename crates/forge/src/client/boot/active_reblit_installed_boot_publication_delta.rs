@@ -1,8 +1,8 @@
 //! Pure authenticated installed-versus-desired boot-publication delta.
 //!
 //! This module turns one exact database receipt snapshot, one bound desired
-//! plan and scalar namespace observations into inert actions. It owns no file,
-//! descriptor, database handle, journal handle or mutation callback. In
+//! plan and an unforgeable retained-preflight assessment into inert actions.
+//! It owns no file, descriptor, database handle, journal handle or mutation callback. In
 //! particular, a decoded receipt or caller-authored provenance claim cannot be
 //! passed directly: ownership is considered only after the receipt is proven
 //! to be the sole promoted database head named by its exact durable
@@ -39,9 +39,6 @@ use crate::{
     },
     db::state::{BootPublicationReceiptState, ExactPromotedBootPublicationReceiptChain},
 };
-
-#[cfg(test)]
-use crate::linux_fs::descriptor_boot_namespace::BootNamespaceDestinationState;
 
 /// Opaque exact installed chain derived from one strict database snapshot.
 ///
@@ -144,51 +141,6 @@ impl ActiveReblitBootPublicationDeltaRequest {
     }
 }
 
-/// Scalar observations for one request, in exact [`requests`](PreparedActiveReblitBootPublicationDelta::requests)
-/// order. A side must be present exactly when that request exposes an expected
-/// identity for it.
-///
-/// This synthetic carrier is test-only. Production classification must later
-/// be introduced by a retained-target assessment bridge that cannot be forged
-/// from caller-authored scalar states.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ActiveReblitBootPublicationDeltaObservation {
-    desired: Option<BootNamespaceDestinationState>,
-    installed: Option<BootNamespaceDestinationState>,
-}
-
-#[cfg(test)]
-impl ActiveReblitBootPublicationDeltaObservation {
-    const fn desired_only(
-        desired: BootNamespaceDestinationState,
-    ) -> Self {
-        Self {
-            desired: Some(desired),
-            installed: None,
-        }
-    }
-
-    const fn installed_only(
-        installed: BootNamespaceDestinationState,
-    ) -> Self {
-        Self {
-            desired: None,
-            installed: Some(installed),
-        }
-    }
-
-    const fn both(
-        desired: BootNamespaceDestinationState,
-        installed: BootNamespaceDestinationState,
-    ) -> Self {
-        Self {
-            desired: Some(desired),
-            installed: Some(installed),
-        }
-    }
-}
-
 /// Pure action class. Deletion is deliberately named as post-promotion work;
 /// this value contains no capability to perform it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -201,12 +153,14 @@ pub(in crate::client) enum ActiveReblitBootPublicationDeltaAction {
     PreserveUnownedStale,
 }
 
-/// One inert classified action, retaining its exact canonical union key.
+/// One inert classified action, retaining its exact canonical union key and
+/// both old and new byte identities when those sides exist.
 #[derive(Debug, Eq, PartialEq)]
 pub(in crate::client) struct ClassifiedActiveReblitBootPublicationDeltaEntry {
     root: ActiveReblitBootDestinationRoot,
     relative_path: Box<str>,
     desired_expected: Option<ActiveReblitBootPublicationDeltaExpected>,
+    installed_expected: Option<ActiveReblitBootPublicationDeltaExpected>,
     action: ActiveReblitBootPublicationDeltaAction,
 }
 
@@ -217,6 +171,18 @@ impl ClassifiedActiveReblitBootPublicationDeltaEntry {
 
     pub(in crate::client) fn relative_path(&self) -> &str {
         &self.relative_path
+    }
+
+    pub(in crate::client) const fn desired_expected(
+        &self,
+    ) -> Option<ActiveReblitBootPublicationDeltaExpected> {
+        self.desired_expected
+    }
+
+    pub(in crate::client) const fn installed_expected(
+        &self,
+    ) -> Option<ActiveReblitBootPublicationDeltaExpected> {
+        self.installed_expected
     }
 
     pub(in crate::client) const fn action(&self) -> ActiveReblitBootPublicationDeltaAction {
@@ -343,10 +309,11 @@ const fn receipt_claim_for_desired_action(
     }
 }
 
-/// Authenticated, bounded union request set awaiting fresh scalar namespace
-/// observations. It retains no database state or effect authority.
+/// Authenticated, bounded union request set awaiting one private retained-
+/// preflight assessment seal. It retains no database state or effect authority.
 #[derive(Debug, Eq, PartialEq)]
 pub(in crate::client) struct PreparedActiveReblitBootPublicationDelta {
+    destination_layout: ActiveReblitBootDestinationLayout,
     requests: Vec<ActiveReblitBootPublicationDeltaRequest>,
 }
 
@@ -355,40 +322,6 @@ impl PreparedActiveReblitBootPublicationDelta {
         &self.requests
     }
 
-    /// Synthetic classification is deliberately test-only. No production
-    /// caller can turn forgeable scalar observations into receipt claims.
-    #[cfg(test)]
-    fn classify(
-        &self,
-        observations: &[ActiveReblitBootPublicationDeltaObservation],
-    ) -> Result<ClassifiedActiveReblitBootPublicationDelta, ActiveReblitBootPublicationDeltaError> {
-        if observations.len() != self.requests.len() {
-            return Err(ActiveReblitBootPublicationDeltaError::ObservationCountMismatch {
-                expected: self.requests.len(),
-                actual: observations.len(),
-            });
-        }
-        let mut entries = Vec::new();
-        entries.try_reserve_exact(self.requests.len()).map_err(|source| {
-            ActiveReblitBootPublicationDeltaError::Allocation {
-                resource: "classified delta entries",
-                source,
-            }
-        })?;
-        for (index, (request, observation)) in self.requests.iter().zip(observations).enumerate() {
-            let action = classify_request(index, request, *observation)?;
-            let Some(action) = action else {
-                continue;
-            };
-            entries.push(ClassifiedActiveReblitBootPublicationDeltaEntry {
-                root: request.root,
-                relative_path: clone_text(&request.relative_path, "classified relative path")?,
-                desired_expected: request.desired,
-                action,
-            });
-        }
-        Ok(ClassifiedActiveReblitBootPublicationDelta { entries })
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -570,7 +503,10 @@ fn prepare_union(
         installed: entry.installed,
         installed_owned: entry.installed_owned,
     }));
-    Ok(PreparedActiveReblitBootPublicationDelta { requests })
+    Ok(PreparedActiveReblitBootPublicationDelta {
+        destination_layout: layout,
+        requests,
+    })
 }
 
 fn require_no_union_hierarchy_conflicts(
@@ -589,59 +525,6 @@ fn require_no_union_hierarchy_conflicts(
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-fn classify_request(
-    index: usize,
-    request: &ActiveReblitBootPublicationDeltaRequest,
-    observation: ActiveReblitBootPublicationDeltaObservation,
-) -> Result<Option<ActiveReblitBootPublicationDeltaAction>, ActiveReblitBootPublicationDeltaError> {
-    if request.desired.is_some() != observation.desired.is_some()
-        || request.installed.is_some() != observation.installed.is_some()
-    {
-        return Err(ActiveReblitBootPublicationDeltaError::ObservationShapeMismatch { index });
-    }
-    if let (Some(desired_state), Some(installed_state)) = (observation.desired, observation.installed) {
-        if matches!(desired_state, BootNamespaceDestinationState::Absent)
-            != matches!(installed_state, BootNamespaceDestinationState::Absent)
-        {
-            return Err(ActiveReblitBootPublicationDeltaError::ConflictingObservations { index });
-        }
-        if request.desired == request.installed && desired_state != installed_state {
-            return Err(ActiveReblitBootPublicationDeltaError::ConflictingObservations { index });
-        }
-    }
-    let action = match observation.desired {
-        Some(BootNamespaceDestinationState::Absent) => {
-            ActiveReblitBootPublicationDeltaAction::PublishDesired
-        }
-        Some(BootNamespaceDestinationState::Exact) if request.installed_owned => {
-            ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired
-        }
-        Some(BootNamespaceDestinationState::Exact) => {
-            ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired
-        }
-        Some(BootNamespaceDestinationState::Different)
-            if request.installed_owned
-                && observation.installed == Some(BootNamespaceDestinationState::Exact) =>
-        {
-            ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired
-        }
-        Some(BootNamespaceDestinationState::Different) => {
-            return Err(ActiveReblitBootPublicationDeltaError::UnownedDifferentDesired { index });
-        }
-        None => match observation.installed.expect("validated installed-only observation") {
-            BootNamespaceDestinationState::Absent => return Ok(None),
-            BootNamespaceDestinationState::Exact if request.installed_owned => {
-                ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion
-            }
-            BootNamespaceDestinationState::Exact | BootNamespaceDestinationState::Different => {
-                ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale
-            }
-        },
-    };
-    Ok(Some(action))
 }
 
 fn physical_key(
@@ -805,15 +688,26 @@ pub(in crate::client) enum ActiveReblitBootPublicationDeltaError {
         #[source]
         source: TryReserveError,
     },
-    #[error("the delta expected {expected} observations but received {actual}")]
-    ObservationCountMismatch { expected: usize, actual: usize },
-    #[error("delta observation {index} does not match its request shape")]
-    ObservationShapeMismatch { index: usize },
-    #[error("delta observation {index} contains conflicting views of one physical key")]
-    ConflictingObservations { index: usize },
+    #[error("the sealed preflight expected {expected} desired outputs but the delta contains {actual}")]
+    PreflightDesiredCountMismatch { expected: usize, actual: usize },
+    #[error("the sealed preflight and installed delta have different destination layouts")]
+    PreflightDestinationLayoutMismatch,
+    #[error("delta desired output {index} has no exact root/path in the sealed preflight")]
+    MissingPreflightDesiredKey { index: usize },
+    #[error("delta desired output {index} does not match the sealed preflight byte identity")]
+    PreflightDesiredExpectationMismatch { index: usize },
+    #[error("the sealed preflight contains a duplicate desired root/path")]
+    DuplicatePreflightDesiredKey,
+    #[error("sealed preflight desired output {plan_index} was not consumed by the exact delta")]
+    UnmatchedPreflightDesiredKey { plan_index: usize },
+    #[error("delta output {index} is marked owned without an authenticated installed-byte identity")]
+    OwnedOutputWithoutInstalledIdentity { index: usize },
     #[error("desired output {index} is different and not authenticated as exact predecessor-owned content")]
     UnownedDifferentDesired { index: usize },
 }
+
+#[path = "active_reblit_installed_boot_publication_delta/live_classification.rs"]
+mod live_classification;
 
 #[cfg(test)]
 #[path = "active_reblit_installed_boot_publication_delta_tests.rs"]

@@ -71,6 +71,6 @@ pub(super) fn fixture_assessment(
     BootPublicationNamespaceAssessment::fixture(identity, states)
 }
 
-pub(super) fn empty_global_states(count: usize) -> Vec<BootNamespaceDestinationState> {
-    vec![BootNamespaceDestinationState::Different; count]
+pub(super) fn empty_global_states(count: usize) -> Vec<Option<BootNamespaceDestinationState>> {
+    vec![None; count]
 }

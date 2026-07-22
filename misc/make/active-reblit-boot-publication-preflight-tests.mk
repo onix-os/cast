@@ -14,7 +14,7 @@ forge-active-reblit-boot-publication-preflight-test: host-storage-safety-test fo
 	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 5; \
 	for name in \
 		global_merge::alias_and_distinct_domains_restore_exact_global_plan_order \
-		global_merge::different_count_index_and_identity_evidence_fail_closed \
+		global_merge::different_is_retained_while_count_index_and_identity_evidence_fail_closed \
 		integration::full_alias_preflight_retains_global_states_and_deadline_without_effects \
 		integration::inherited_deadline_fails_closed_at_each_outer_preflight_boundary \
 		integration::collision_and_terminal_topology_drift_fail_after_read_only_assessment; do \
@@ -35,7 +35,9 @@ forge-active-reblit-boot-publication-preflight-test: host-storage-safety-test fo
 	grep -Fq 'if !self.collision_domains_still_match() {' "$$core"; \
 	grep -Fq 'require_same_target_set(&targets, &terminal_targets)?;' "$$core"; \
 	grep -Fq '.try_reserve_exact(publication_count)' "$$core"; \
-	grep -Fq 'ActiveReblitBootPublicationPreflightError::DifferentDestination' "$$core"; \
+	grep -Fq 'states.resize(publication_count, None);' "$$core"; \
+	grep -Fq 'global_states[plan_index] = Some(state);' "$$core"; \
+	if grep -Fq 'ActiveReblitBootPublicationPreflightError::DifferentDestination' "$$core"; then exit 1; fi; \
 	grep -Fq 'BootPublicationNamespaceAssessment::fixture' "$$test_core/support.rs"; \
 	grep -Fq '&[1, 3]' "$$test_core/global_merge.rs"; \
 	grep -Fq '&[0, 2, 4]' "$$test_core/global_merge.rs"; \

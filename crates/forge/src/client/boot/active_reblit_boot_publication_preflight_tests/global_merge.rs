@@ -77,26 +77,25 @@ fn alias_and_distinct_domains_restore_exact_global_plan_order() {
 }
 
 #[test]
-fn different_count_index_and_identity_evidence_fail_closed() {
+fn different_is_retained_while_count_index_and_identity_evidence_fail_closed() {
     let identity = support::identity(10, 20, 30);
     let different = support::fixture_assessment(
         identity,
         [BootNamespaceDestinationState::Different],
     );
     let mut states = support::empty_global_states(2);
-    assert!(matches!(
-        merge_domain_assessment(
-            BootTargetRole::Xbootldr,
-            identity,
-            &[1],
-            &different,
-            &mut states,
-        ),
-        Err(ActiveReblitBootPublicationPreflightError::DifferentDestination {
-            role: BootTargetRole::Xbootldr,
-            plan_index: 1,
-        })
-    ));
+    merge_domain_assessment(
+        BootTargetRole::Xbootldr,
+        identity,
+        &[1],
+        &different,
+        &mut states,
+    )
+    .unwrap();
+    assert_eq!(
+        states[1],
+        Some(BootNamespaceDestinationState::Different),
+    );
 
     assert!(matches!(
         require_publication_count(3, 2),
