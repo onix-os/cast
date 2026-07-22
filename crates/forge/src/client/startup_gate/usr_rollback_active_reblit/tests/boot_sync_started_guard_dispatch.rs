@@ -18,10 +18,7 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, active_reblit_boot_sync_started},
-        startup_reconciliation::{
-            ActiveReblitBootSyncStartedGuardError,
-            arm_between_usr_rollback_decision_database_captures,
-        },
+        startup_reconciliation::arm_between_usr_rollback_decision_database_captures,
     },
     db,
     transition_journal::{
@@ -179,15 +176,14 @@ fn startup_conflicting_pending_receipt_correlation_fails_stop_without_rollback()
 
     assert!(
         matches!(
-            error,
+            &error,
             startup_gate::Error::ActiveReblitBootSyncStartedDispatch(
-                active_reblit_boot_sync_started::Error::Guard(
-                    ActiveReblitBootSyncStartedGuardError::PendingReceiptCorrelationMismatch
-                )
+                active_reblit_boot_sync_started::Error::Authority(_)
             )
         ),
         "expected conflicting pending receipt correlation to fail stop, got {error:?}"
     );
+    assert!(format!("{error:?}").contains("PendingReceiptCorrelationMismatch"));
     assert_eq!(fixture.fixture.canonical_record(), conflicting);
     assert_eq!(conflicting.rollback, None);
     read_only.assert_unchanged(&fixture);
@@ -217,19 +213,14 @@ fn startup_dangling_pending_receipt_body_fails_stop_without_journal_or_rollback_
 
     assert!(
         matches!(
-            error,
+            &error,
             startup_gate::Error::ActiveReblitBootSyncStartedDispatch(
-                active_reblit_boot_sync_started::Error::Guard(
-                    ActiveReblitBootSyncStartedGuardError::ReceiptCorrelation(
-                        db::state::ExactPromotedBootPublicationReceiptStateError::State(
-                            db::state::BootPublicationReceiptStateError::DanglingReference { .. }
-                        )
-                    )
-                )
+                active_reblit_boot_sync_started::Error::Authority(_)
             )
         ),
         "expected dangling pending receipt body to fail stop, got {error:?}"
     );
+    assert!(format!("{error:?}").contains("DanglingReference"));
     assert_eq!(fixture.fixture.canonical_record(), source);
     assert_eq!(source.rollback, None);
     journal.assert_unchanged(&fixture);

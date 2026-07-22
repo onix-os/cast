@@ -1,6 +1,10 @@
 use thiserror::Error;
 
-use crate::{Installation, db, installation, transition_identity, transition_journal};
+use crate::{
+    Installation,
+    boot_publication::BootPublicationReceiptFingerprint,
+    db, installation, transition_identity, transition_journal,
+};
 
 use super::{
     MutableSystemCapabilities,
@@ -87,6 +91,35 @@ impl ActiveReblitBootSyncCompleteSeal {
     #[cfg(test)]
     pub(in crate::client) fn new_for_test() -> Self {
         Self::new()
+    }
+}
+
+/// Unforgeable proof that restart cleanup belongs to the exact receipt which
+/// is already the committed boot-publication head at `BootSyncStarted`.
+///
+/// Only the writer-first startup child can construct this value. Read-only
+/// target adapters may inspect the inert owner fingerprint but cannot mint
+/// cleanup admission themselves.
+pub(in crate::client) struct ActiveReblitBootSyncStartedCleanupSeal {
+    promoted_receipt: BootPublicationReceiptFingerprint,
+}
+
+impl ActiveReblitBootSyncStartedCleanupSeal {
+    fn new(promoted_receipt: BootPublicationReceiptFingerprint) -> Self {
+        Self { promoted_receipt }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test(
+        promoted_receipt: BootPublicationReceiptFingerprint,
+    ) -> Self {
+        Self::new(promoted_receipt)
+    }
+
+    pub(in crate::client) const fn promoted_receipt(
+        &self,
+    ) -> BootPublicationReceiptFingerprint {
+        self.promoted_receipt
     }
 }
 
@@ -217,7 +250,9 @@ impl CleanSystemStartup {
             // rollback-eligible, while an exactly promoted receipt stays at
             // this forward checkpoint until cleanup recovery can resume it.
             let (journal, record) = match active_reblit_boot_sync_started::dispatch(
+                installation,
                 state_db,
+                active_state_reservation,
                 journal,
                 record,
             )? {

@@ -9,10 +9,16 @@ use std::{
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_gate::ActiveReblitBootSyncCompleteSeal,
+        startup_gate::{
+            ActiveReblitBootSyncCompleteSeal,
+            ActiveReblitBootSyncStartedCleanupSeal,
+        },
         startup_reconciliation::{
             ActiveReblitBootSyncCompleteAdmission, ActiveReblitBootSyncCompleteAuthority,
             ActiveReblitBootSyncCompleteAuthorityError,
+            ActiveReblitBootSyncStartedRecoveryAdmission,
+            ActiveReblitBootSyncStartedRecoveryAuthority,
+            ActiveReblitBootSyncStartedRecoveryAuthorityError,
         },
     },
     db,
@@ -182,6 +188,53 @@ pub(super) fn capture_boot_sync_complete_ready<'reservation>(
     match capture_boot_sync_complete(fixture, journal, reservation).unwrap() {
         ActiveReblitBootSyncCompleteAdmission::Ready(authority) => authority,
         _ => panic!("exact promoted ActiveReblit BootSyncComplete evidence did not admit"),
+    }
+}
+
+pub(super) fn capture_boot_sync_started<'reservation>(
+    fixture: &BootRepairFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+) -> Result<ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
+    capture_boot_sync_started_record(
+        fixture,
+        journal,
+        reservation,
+        &fixture.fixture.source,
+    )
+}
+
+pub(super) fn capture_boot_sync_started_record<'reservation>(
+    fixture: &BootRepairFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+    record: &TransitionRecord,
+) -> Result<ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
+    let pair = fixture
+        .fixture
+        .source
+        .boot_publication_receipt_correlation()
+        .unwrap()
+        .expect("focused recovery capture requires a v3 receipt pair");
+    let seal = ActiveReblitBootSyncStartedCleanupSeal::new_for_test(pair.pending);
+    ActiveReblitBootSyncStartedRecoveryAuthority::capture(
+        seal,
+        &fixture.fixture.installation,
+        journal,
+        &fixture.fixture.database,
+        reservation,
+        record,
+    )
+}
+
+pub(super) fn capture_boot_sync_started_ready<'reservation>(
+    fixture: &BootRepairFixture,
+    journal: &TransitionJournalStore,
+    reservation: &'reservation ActiveStateReservation,
+) -> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
+    match capture_boot_sync_started(fixture, journal, reservation).unwrap() {
+        ActiveReblitBootSyncStartedRecoveryAdmission::Ready(authority) => authority,
+        _ => panic!("exact promoted ActiveReblit BootSyncStarted evidence did not admit"),
     }
 }
 
