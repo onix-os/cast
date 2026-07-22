@@ -35,7 +35,7 @@ include misc/make/private-device-service-tests.mk
 include misc/make/host-storage-safety-tests.mk
 include misc/make/disposable-vm-uefi-boot-storage-campaign.mk
 include misc/make/linux-descriptor-boot-filesystem-tests.mk
-include misc/make/linux-descriptor-boot-file-publication-tests.mk
+include misc/make/linux-descriptor-boot-file-publication-tests.mk misc/make/linux-descriptor-boot-file-replacement-tests.mk
 include misc/make/linux-descriptor-boot-publication-parent-tests.mk
 include misc/make/disposable-vm-uefi-boot-gpt-topology-campaign.mk misc/make/disposable-vm-uefi-boot-gpt-aggregate-campaign.mk
 include misc/make/linux-descriptor-boot-namespace-tests.mk

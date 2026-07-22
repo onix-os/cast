@@ -87,7 +87,7 @@ pub(super) fn fault(point: FixtureRetainedBootFilePublicationFault) -> Result<()
     Ok(())
 }
 
-pub(super) fn stream_expected_source(
+pub(in crate::linux_fs::mount_namespace::attachment) fn stream_expected_source(
     source: &mut BoundRetainedBootFileSource<'_, '_, '_>,
     destination: &File,
     request: RetainedBootFilePublicationRequest<'_>,

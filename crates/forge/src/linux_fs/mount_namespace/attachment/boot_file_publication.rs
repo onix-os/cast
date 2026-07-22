@@ -59,9 +59,9 @@ use crate::linux_fs::{
 };
 
 #[path = "boot_file_publication/destination.rs"]
-mod destination;
+pub(super) mod destination;
 #[path = "boot_file_publication/effect.rs"]
-mod effect;
+pub(super) mod effect;
 #[path = "boot_file_publication/error.rs"]
 mod error;
 #[path = "boot_file_publication/model.rs"]
@@ -80,7 +80,7 @@ pub(crate) use model::{
 pub(crate) use effect::{
     arm_retained_boot_file_private_name_substitution, arm_retained_boot_file_publication_fault,
 };
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct AttachmentIdentity {
     pub(super) device: u64,
     pub(super) inode: u64,
@@ -572,7 +572,7 @@ impl RetainedBootFilePublicationTarget for RevalidatedTaskRootedAttachment<'_> {
     }
 }
 
-fn validate_request(
+pub(super) fn validate_request(
     request: RetainedBootFilePublicationRequest<'_>,
     limits: RetainedBootFilePublicationLimits,
     deadline: Instant,

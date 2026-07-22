@@ -23,10 +23,10 @@ use crate::linux_fs::{controlled_resolution, descriptor_mount_id_until, openat2_
 const READ_BUFFER_BYTES: usize = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct FileIdentity {
-    pub(super) device: u64,
-    pub(super) inode: u64,
-    pub(super) mount_id: u64,
+pub(in crate::linux_fs::mount_namespace::attachment) struct FileIdentity {
+    pub(in crate::linux_fs::mount_namespace::attachment) device: u64,
+    pub(in crate::linux_fs::mount_namespace::attachment) inode: u64,
+    pub(in crate::linux_fs::mount_namespace::attachment) mount_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,7 +36,7 @@ pub(super) enum ReconciledMove {
     Ambiguous,
 }
 
-pub(super) fn open_parent_io(
+pub(in crate::linux_fs::mount_namespace::attachment) fn open_parent_io(
     retained_parent: &File,
     expected: AttachmentIdentity,
     deadline: Instant,
@@ -62,7 +62,7 @@ pub(super) fn open_parent_io(
     Ok(opened)
 }
 
-pub(super) fn create_private_exclusive(
+pub(in crate::linux_fs::mount_namespace::attachment) fn create_private_exclusive(
     parent: &File,
     name: &CStr,
     expected_parent: AttachmentIdentity,
@@ -125,7 +125,7 @@ pub(super) fn create_private_exclusive(
     Ok(file)
 }
 
-pub(super) fn open_and_verify(
+pub(in crate::linux_fs::mount_namespace::attachment) fn open_and_verify(
     parent: &File,
     name: &CStr,
     request: RetainedBootFilePublicationRequest<'_>,
@@ -149,7 +149,7 @@ pub(super) fn open_and_verify(
     Ok((file, identity))
 }
 
-pub(super) fn verify_open_file(
+pub(in crate::linux_fs::mount_namespace::attachment) fn verify_open_file(
     file: &File,
     request: RetainedBootFilePublicationRequest<'_>,
     expected_parent: AttachmentIdentity,
@@ -244,7 +244,7 @@ pub(super) fn verify_open_file(
     })
 }
 
-pub(super) fn require_named_identity(
+pub(in crate::linux_fs::mount_namespace::attachment) fn require_named_identity(
     parent: &File,
     name: &CStr,
     expected: FileIdentity,
@@ -274,7 +274,7 @@ pub(super) fn reconcile_move(
     })
 }
 
-fn observe_named_identity(
+pub(in crate::linux_fs::mount_namespace::attachment) fn observe_named_identity(
     parent: &File,
     name: &CStr,
     deadline: Instant,

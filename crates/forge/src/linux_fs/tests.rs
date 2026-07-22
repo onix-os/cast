@@ -14,6 +14,7 @@ mod boot_mount_policy;
 mod chmod_once;
 mod descriptor_boot_filesystem;
 mod descriptor_boot_file_publication;
+mod descriptor_boot_file_replacement;
 mod descriptor_boot_publication_parent;
 mod descriptor_boot_namespace;
 mod descriptor_boot_namespace_production;

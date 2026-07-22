@@ -26,6 +26,7 @@ use std::{
 
 mod boot_namespace;
 mod boot_file_publication;
+mod boot_file_replacement;
 mod boot_publication_parent;
 mod capture;
 mod device;
@@ -38,6 +39,16 @@ pub(crate) use boot_file_publication::{
     RetainedBootFilePublicationError, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
     RetainedBootFilePublicationRequest, ValidatedRetainedBootFilePublication,
 };
+pub(crate) use boot_file_replacement::{
+    AuthenticatedRetainedBootFileStaleCleanup, RetainedBootFileMutationFingerprint,
+    RetainedBootFileAppliedSidecarCleanupState,
+    RetainedBootFileRestoredSidecarCleanupState,
+    RetainedBootFileStaleCleanupOutcome, RetainedBootFileStaleCleanupRequest,
+    RetainedBootFileStaleCleanupState,
+    RetainedBootFileReplacementError,
+    RetainedBootFileReplacementRequest, RetainedBootFileSidecarCleanupOutcome,
+    ValidatedRetainedBootFileReplacement, ValidatedRetainedBootFileRestoration,
+};
 pub(crate) use boot_publication_parent::{
     RetainedBootPublicationParent, RetainedBootPublicationParentError,
 };
@@ -45,6 +56,14 @@ pub(crate) use boot_publication_parent::{
 pub(crate) use boot_file_publication::{
     FixtureRetainedBootFilePublicationFault, arm_retained_boot_file_private_name_substitution,
     arm_retained_boot_file_publication_fault,
+};
+#[cfg(test)]
+pub(crate) use boot_file_replacement::{
+    arm_boot_file_exchange_error_after_applied,
+    arm_boot_file_replacement_stop_before_exchange,
+    arm_boot_file_sidecar_stop_after_unlink,
+    arm_stale_boot_file_detach_error_after_applied,
+    arm_stale_boot_file_stop_after_detach,
 };
 #[cfg(test)]
 pub(crate) use boot_publication_parent::{

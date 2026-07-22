@@ -29,8 +29,15 @@ mod mountinfo_snapshot;
 pub(crate) use attachment::{
     PreparedTaskRootedAttachment, RetainedBootFilePublicationError, RetainedBootFilePublicationLimits,
     RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest, RevalidatedTaskRootedAttachment,
+    AuthenticatedRetainedBootFileStaleCleanup, RetainedBootFileMutationFingerprint,
+    RetainedBootFileAppliedSidecarCleanupState,
+    RetainedBootFileRestoredSidecarCleanupState,
+    RetainedBootFileReplacementError, RetainedBootFileStaleCleanupOutcome,
+    RetainedBootFileStaleCleanupRequest, RetainedBootFileStaleCleanupState,
+    RetainedBootFileReplacementRequest, RetainedBootFileSidecarCleanupOutcome,
     RetainedBootPublicationParent, RetainedBootPublicationParentError, TaskRootBootNamespaceAssessmentError,
-    ValidatedRetainedBootFilePublication,
+    ValidatedRetainedBootFilePublication, ValidatedRetainedBootFileReplacement,
+    ValidatedRetainedBootFileRestoration,
     ValidatedTaskRootBootNamespaceAssessment,
 };
 #[allow(unused_imports)] // consumed by the authenticated mounted-topology aggregate
@@ -42,6 +49,9 @@ pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
 
 #[cfg(test)]
 pub(crate) use attachment::{
+    arm_boot_file_exchange_error_after_applied, arm_boot_file_replacement_stop_before_exchange,
+    arm_boot_file_sidecar_stop_after_unlink, arm_stale_boot_file_detach_error_after_applied,
+    arm_stale_boot_file_stop_after_detach,
     FixtureRetainedBootFilePublicationFault, FixtureRetainedBootPublicationParentCheckpoint,
     FixtureRetainedBootPublicationParentFault,
     arm_retained_boot_file_private_name_substitution, arm_retained_boot_file_publication_fault,
