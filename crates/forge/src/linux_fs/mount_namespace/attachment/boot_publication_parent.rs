@@ -8,7 +8,10 @@
 //!
 //! Missing directories receive one `mkdirat(2)` attempt. Every raw report is
 //! reconciled by opening and retaining the named inode; no failed attempt is
-//! retried and no scalar identity is promoted into authority. The complete
+//! retried and no scalar identity is promoted into authority. Replacement and
+//! cleanup callers use a separate existing-only entry point which shares the
+//! same retained-chain engine but can neither create nor synchronize a parent.
+//! The complete
 //! chain is restricted to the root filesystem device and mount ID, excludes
 //! symlink, magic-link, and nested-mount traversal, and remains borrowed from
 //! the freshly revalidated root attachment. Durability always proceeds from
@@ -43,6 +46,8 @@ use crate::linux_fs::{
 
 #[path = "boot_publication_parent/effect.rs"]
 mod effect;
+#[path = "boot_publication_parent/existing.rs"]
+mod existing;
 
 use effect::FixtureRetainedBootPublicationParentCheckpoint as ParentCheckpoint;
 
@@ -85,6 +90,8 @@ pub(crate) enum RetainedBootPublicationParentError {
         #[source]
         source: io::Error,
     },
+    #[error("required existing boot publication-parent component {index} is absent")]
+    ExistingComponentMissing { index: usize },
     #[error("boot publication-parent component {index} changed identity while {action}")]
     DirectoryIdentityChanged { index: usize, action: &'static str },
     #[error("boot publication-parent component {index} has unsafe owner or writable permissions")]
@@ -155,40 +162,87 @@ impl<'prepared> RevalidatedTaskRootedAttachment<'prepared> {
         admitted_parent_components: &[&str],
         deadline: Instant,
     ) -> Result<RetainedBootPublicationParent<'view, 'prepared>, RetainedBootPublicationParentError> {
-        require_deadline(deadline)?;
-        let names = copy_components(admitted_parent_components)?;
-        self.require_publication_parent_until("opening boot publication-parent creation", deadline)
-            .map_err(|source| RetainedBootPublicationParentError::RootAttachment {
-                action: "opening boot publication-parent creation",
+        retain_boot_publication_parent_with(
+            self,
+            admitted_parent_components,
+            ParentRetentionMode::CreateMissing,
+            deadline,
+        )
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ParentRetentionMode {
+    CreateMissing,
+    ExistingOnly,
+}
+
+fn retain_boot_publication_parent_with<'view, 'prepared>(
+    root: &'view RevalidatedTaskRootedAttachment<'prepared>,
+    admitted_parent_components: &[&str],
+    mode: ParentRetentionMode,
+    deadline: Instant,
+) -> Result<RetainedBootPublicationParent<'view, 'prepared>, RetainedBootPublicationParentError> {
+    require_deadline(deadline)?;
+    let names = copy_components(admitted_parent_components)?;
+    let opening_action = match mode {
+        ParentRetentionMode::CreateMissing => "opening boot publication-parent creation",
+        ParentRetentionMode::ExistingOnly => "opening existing boot publication-parent retention",
+    };
+    root.require_publication_parent_until(opening_action, deadline)
+        .map_err(|source| RetainedBootPublicationParentError::RootAttachment {
+            action: opening_action,
+            source,
+        })?;
+    let root_attachment = root.publication_parent_identity();
+    let (root_file, root_identity) =
+        open_directory_alias(root.publication_parent(), root_attachment, 0, deadline)?;
+    let mut chain = Vec::new();
+    chain.try_reserve_exact(names.len()).map_err(|source| {
+        RetainedBootPublicationParentError::Filesystem {
+            index: 0,
+            action: "allocating retained publication-parent descriptors",
+            source: io::Error::other(source.to_string()),
+        }
+    })?;
+
+    for (index, name) in names.into_iter().enumerate() {
+        require_named_chain(root, &root_file, root_identity, &chain, deadline).map_err(|source| {
+            RetainedBootPublicationParentError::RootAttachment {
+                action: "revalidating boot publication-parent prefix before descent",
                 source,
-            })?;
-        let root_attachment = self.publication_parent_identity();
-        let (root_file, root_identity) =
-            open_directory_alias(self.publication_parent(), root_attachment, 0, deadline)?;
-        let mut chain = Vec::new();
-        chain.try_reserve_exact(names.len()).map_err(|source| {
-            RetainedBootPublicationParentError::Filesystem {
-                index: 0,
-                action: "allocating retained publication-parent descriptors",
-                source: io::Error::other(source.to_string()),
             }
         })?;
-
-        for (index, name) in names.into_iter().enumerate() {
-            require_named_chain(self, &root_file, root_identity, &chain, deadline).map_err(|source| {
-                RetainedBootPublicationParentError::RootAttachment {
-                    action: "revalidating boot publication-parent prefix before descent",
-                    source,
-                }
-            })?;
-            let parent = chain.last().map_or(&root_file, |entry: &RetainedPublicationDirectory| &entry.file);
-            let parent_identity = chain
-                .last()
-                .map_or(root_identity, |entry: &RetainedPublicationDirectory| entry.identity);
-            let (file, created) =
-                open_or_create_component(parent, parent_identity, &name, root_identity, index, deadline)?;
-            let identity = observe_directory(&file, root_identity, index, "retaining publication-parent component", deadline)?;
-            chain.push(RetainedPublicationDirectory { name, file, identity });
+        let parent = chain.last().map_or(
+            &root_file,
+            |entry: &RetainedPublicationDirectory| &entry.file,
+        );
+        let parent_identity = chain
+            .last()
+            .map_or(root_identity, |entry: &RetainedPublicationDirectory| entry.identity);
+        let (file, created) = match mode {
+            ParentRetentionMode::CreateMissing => open_or_create_component(
+                parent,
+                parent_identity,
+                &name,
+                root_identity,
+                index,
+                deadline,
+            )?,
+            ParentRetentionMode::ExistingOnly => (
+                open_existing_component(parent, &name, index, deadline)?,
+                false,
+            ),
+        };
+        let identity = observe_directory(
+            &file,
+            root_identity,
+            index,
+            "retaining publication-parent component",
+            deadline,
+        )?;
+        chain.push(RetainedPublicationDirectory { name, file, identity });
+        if mode == ParentRetentionMode::CreateMissing {
             effect::emit(ParentCheckpoint::DirectoryRetained {
                 depth: index + 1,
                 created,
@@ -197,22 +251,30 @@ impl<'prepared> RevalidatedTaskRootedAttachment<'prepared> {
                 return Err(RetainedBootPublicationParentError::InjectedFault { index });
             }
         }
+    }
 
+    if mode == ParentRetentionMode::CreateMissing {
         sync_chain(&root_file, root_identity, &chain, deadline)?;
         effect::emit(ParentCheckpoint::BeforeTerminalRevalidation);
-        require_named_chain(self, &root_file, root_identity, &chain, deadline).map_err(|source| {
-            RetainedBootPublicationParentError::RootAttachment {
-                action: "terminally revalidating boot publication-parent creation",
-                source,
-            }
-        })?;
-        Ok(RetainedBootPublicationParent {
-            root: self,
-            root_file,
-            root_identity,
-            chain,
-        })
     }
+    let closing_action = match mode {
+        ParentRetentionMode::CreateMissing => "terminally revalidating boot publication-parent creation",
+        ParentRetentionMode::ExistingOnly => {
+            "terminally revalidating existing boot publication-parent retention"
+        }
+    };
+    require_named_chain(root, &root_file, root_identity, &chain, deadline).map_err(|source| {
+        RetainedBootPublicationParentError::RootAttachment {
+            action: closing_action,
+            source,
+        }
+    })?;
+    Ok(RetainedBootPublicationParent {
+        root,
+        root_file,
+        root_identity,
+        chain,
+    })
 }
 
 impl RetainedBootPublicationParent<'_, '_> {
@@ -409,6 +471,25 @@ fn open_or_create_component(
             source,
         }),
     }
+}
+
+fn open_existing_component(
+    parent: &File,
+    name: &CStr,
+    index: usize,
+    deadline: Instant,
+) -> Result<File, RetainedBootPublicationParentError> {
+    open_component(parent, name, index, deadline).map_err(|source| {
+        if source.raw_os_error() == Some(nix::libc::ENOENT) {
+            RetainedBootPublicationParentError::ExistingComponentMissing { index }
+        } else {
+            RetainedBootPublicationParentError::Filesystem {
+                index,
+                action: "opening required existing publication-parent component",
+                source,
+            }
+        }
+    })
 }
 
 fn open_component(parent: &File, name: &CStr, _index: usize, deadline: Instant) -> io::Result<File> {

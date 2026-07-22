@@ -95,6 +95,80 @@ fn existing_parent_chain_is_reused_without_inode_replacement() {
 }
 
 #[test]
+fn existing_only_parent_chain_is_retained_without_effect_emission() {
+    let fixture = ParentFixture::new("forge-boot-parent-existing-only-");
+    create_safe_directory(&fixture.root.join("EFI"));
+    create_safe_directory(&fixture.root.join("EFI/Linux"));
+    let destination = fs::metadata(fixture.root.join("EFI/Linux")).unwrap().ino();
+    let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let hook_output = Rc::clone(&observed);
+    let _hook = arm_retained_boot_publication_parent_checkpoint_hook(move |point| {
+        hook_output.borrow_mut().push(point);
+    });
+
+    let parent = view
+        .retain_existing_boot_publication_parent_until(&["EFI", "Linux"], deadline())
+        .unwrap();
+
+    assert_eq!(parent.component_count(), 2);
+    assert_eq!(parent.destination_inode(), destination);
+    assert!(observed.borrow().is_empty());
+}
+
+#[test]
+fn existing_only_parent_retention_never_creates_a_missing_component() {
+    let fixture = ParentFixture::new("forge-boot-parent-existing-missing-");
+    let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
+
+    assert!(matches!(
+        view.retain_existing_boot_publication_parent_until(&["EFI", "Linux"], deadline()),
+        Err(RetainedBootPublicationParentError::ExistingComponentMissing { index: 0 })
+    ));
+    assert!(fs::read_dir(&fixture.root).unwrap().next().is_none());
+}
+
+#[test]
+fn existing_only_parent_retention_never_recreates_a_post_assessment_race() {
+    use crate::linux_fs::mount_namespace::{
+        RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
+        RetainedBootLeafAssessmentState,
+    };
+
+    let fixture = ParentFixture::new("forge-boot-parent-existing-race-");
+    create_safe_directory(&fixture.root.join("EFI"));
+    create_safe_directory(&fixture.root.join("EFI/Linux"));
+    let bytes = b"installed receipt-owned boot payload\n";
+    let leaf = fixture.root.join("EFI/Linux").join(LEAF);
+    fs::write(&leaf, bytes).unwrap();
+    set_mode(&leaf, 0o644);
+    let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
+    let assessment = view
+        .assess_boot_leaf_below_parent_until(
+            &["EFI", "Linux"],
+            RetainedBootLeafAssessmentRequest::new(
+                LEAF,
+                bytes.len() as u64,
+                xxh3_128(bytes),
+                Sha256::digest(bytes).into(),
+            ),
+            RetainedBootLeafAssessmentLimits::default(),
+            deadline(),
+        )
+        .unwrap();
+    assert_eq!(assessment.state(), RetainedBootLeafAssessmentState::Exact);
+
+    fs::remove_file(&leaf).unwrap();
+    fs::remove_dir(fixture.root.join("EFI/Linux")).unwrap();
+    fs::remove_dir(fixture.root.join("EFI")).unwrap();
+    assert!(matches!(
+        view.retain_existing_boot_publication_parent_until(&["EFI", "Linux"], deadline()),
+        Err(RetainedBootPublicationParentError::ExistingComponentMissing { index: 0 })
+    ));
+    assert!(!fixture.root.join("EFI").exists());
+}
+
+#[test]
 fn multi_component_chain_is_created_retained_and_same_root_bound() {
     let fixture = ParentFixture::new("forge-boot-parent-create-");
     let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();

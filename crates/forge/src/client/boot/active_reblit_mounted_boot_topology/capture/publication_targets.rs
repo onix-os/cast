@@ -42,8 +42,12 @@ use super::super::{
 
 #[path = "publication_targets/immutable_leaf.rs"]
 mod immutable_leaf;
+#[path = "publication_targets/owned_replacement.rs"]
+mod owned_replacement;
 
 pub(in crate::client) use immutable_leaf::ActiveReblitBootImmutableLeafPublicationError;
+#[allow(unused_imports)] // consumed by the aggregate owned-replacement executor
+pub(in crate::client) use owned_replacement::ActiveReblitBootOwnedLeafReplacementError;
 #[cfg(test)]
 pub(in crate::client) use immutable_leaf::{
     FixtureImmutableLeafAssessmentGuard,

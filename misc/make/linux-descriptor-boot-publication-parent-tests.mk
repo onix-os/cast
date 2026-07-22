@@ -15,9 +15,12 @@ forge-linux-descriptor-boot-publication-parent-test: host-storage-safety-test fo
 	$(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	grep -q . "$$listed"; \
 	prefix='linux_fs::tests::descriptor_boot_publication_parent::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 12; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 15; \
 	for name in \
 		existing_parent_chain_is_reused_without_inode_replacement \
+		existing_only_parent_chain_is_retained_without_effect_emission \
+		existing_only_parent_retention_never_creates_a_missing_component \
+		existing_only_parent_retention_never_recreates_a_post_assessment_race \
 		multi_component_chain_is_created_retained_and_same_root_bound \
 		mkdir_error_report_after_applied_is_reconciled_without_second_attempt \
 		interrupted_creation_residue_is_re_admitted_with_the_same_inode \
@@ -32,6 +35,7 @@ forge-linux-descriptor-boot-publication-parent-test: host-storage-safety-test fo
 		grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	module="$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace/attachment/boot_publication_parent.rs"; \
+	existing="$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace/attachment/boot_publication_parent/existing.rs"; \
 	effect="$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace/attachment/boot_publication_parent/effect.rs"; \
 	leaf="$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/crates/forge/src/linux_fs/mount_namespace/attachment/boot_file_publication.rs"; \
 	access="$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/crates/forge/src/linux_fs/descriptor_access.rs"; \
@@ -40,7 +44,14 @@ forge-linux-descriptor-boot-publication-parent-test: host-storage-safety-test fo
 	grep -Fq "root: &'view RevalidatedTaskRootedAttachment" "$$module"; \
 	grep -Fq 'chain: Vec<RetainedPublicationDirectory>' "$$module"; \
 	grep -Fq 'pub(crate) fn retain_boot_publication_parent_until' "$$module"; \
+	grep -Fq 'pub(crate) fn retain_existing_boot_publication_parent_until' "$$existing"; \
 	test "$$( grep -Fc 'mkdirat_once(parent, name, CREATED_DIRECTORY_MODE)' "$$module" )" = 1; \
+	grep -Fq 'ParentRetentionMode::ExistingOnly' "$$existing"; \
+	grep -Fq 'ParentRetentionMode::ExistingOnly => (' "$$module"; \
+	grep -Fq 'open_existing_component(parent, &name, index, deadline)?' "$$module"; \
+	grep -Fq 'ExistingComponentMissing { index }' "$$module"; \
+	test "$$( grep -Fc 'if mode == ParentRetentionMode::CreateMissing {' "$$module" )" = 2; \
+	if rg -n 'mkdirat_once|sync_filesystem_until|\.sync_all\(|effect::|ParentCheckpoint' "$$existing"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	grep -Fq 'controlled_resolution()' "$$module"; \
 	grep -Fq 'nix::libc::RESOLVE_NO_MAGICLINKS' "$$access"; \
 	grep -Fq 'nix::libc::RESOLVE_NO_SYMLINKS' "$$access"; \
@@ -62,9 +73,9 @@ forge-linux-descriptor-boot-publication-parent-test: host-storage-safety-test fo
 	grep -Fq 'std::slice::from_ref(expected_source)' "$$leaf"; \
 	if rg -n '#\[derive\([^]]*Clone[^]]*\)\][[:space:]]*pub\(crate\) struct RetainedBootPublicationParent' "$$module"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if rg -n 'pub\(crate\) fn (descriptor|file|fd)\(|pub\(crate\) fn [^(]*\([^)]*\b(File|RawFd|BorrowedFd|OwnedFd)\b' "$$module"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	if rg -n '\x1b' "$$module" "$$effect" "$$leaf" "$$tests" "$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/misc/make/linux-descriptor-boot-publication-parent-tests.mk"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n '\x1b' "$$module" "$$existing" "$$effect" "$$leaf" "$$tests" "$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/misc/make/linux-descriptor-boot-publication-parent-tests.mk"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if rg -n 'create_dir|create_dir_all|canonicalize\(|std::process|process::Command|Command::new|nix::mount|libc::mount|umount|setns|unshare|chroot|pivot_root|/dev/|/(boot|efi|esp)(/|`)' "$$module" "$$effect"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	for file in "$$module" "$$effect" "$$leaf" "$$tests" "$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/misc/make/linux-descriptor-boot-publication-parent-tests.mk"; do \
+	for file in "$$module" "$$existing" "$$effect" "$$leaf" "$$tests" "$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/misc/make/linux-descriptor-boot-publication-parent-tests.mk"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
 	$(CARGO) test --manifest-path "$(DESCRIPTOR_BOOT_PUBLICATION_PARENT_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1
