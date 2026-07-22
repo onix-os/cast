@@ -63,6 +63,7 @@ pub(in crate::client) use assessment_seal::{
 #[allow(unused_imports)] // mixed evidence is named by VM and cleanup validation slices
 pub(in crate::client) use immutable_attempt::{
     ActiveReblitBootPublicationEffectSeal,
+    ActiveReblitBootPromotedCleanupSeal,
     ActiveReblitBootSyncCompletionSeal,
     ActiveReblitBootImmutablePublicationAttemptError,
     StagedExactActiveReblitBootPublication,
@@ -70,6 +71,7 @@ pub(in crate::client) use immutable_attempt::{
 };
 #[allow(unused_imports)] // completed authority is retained for commit coordination
 pub(in crate::client) use immutable_attempt::{
+    ActiveReblitBootPromotedCleanupError,
     ActiveReblitBootSyncCompletionError,
     ActiveReblitBootReceiptPromotionError,
     CleanedPromotedExactActiveReblitBootPublication,

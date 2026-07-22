@@ -77,6 +77,28 @@ impl ActiveReblitBootPublicationEffectSeal {
     }
 }
 
+/// Unforgeable proof that cleanup belongs to the exact receipt which has
+/// already become the committed boot-publication head.
+///
+/// The opaque target bridge can inspect the owner fingerprint but cannot mint
+/// this value. Only the consuming promoted-publication cleanup path can do so
+/// after repeating its journal, database, plan, and namespace admission.
+pub(in crate::client) struct ActiveReblitBootPromotedCleanupSeal {
+    promoted_receipt: BootPublicationReceiptFingerprint,
+}
+
+impl ActiveReblitBootPromotedCleanupSeal {
+    const fn new(promoted_receipt: BootPublicationReceiptFingerprint) -> Self {
+        Self { promoted_receipt }
+    }
+
+    pub(in crate::client) const fn promoted_receipt(
+        &self,
+    ) -> BootPublicationReceiptFingerprint {
+        self.promoted_receipt
+    }
+}
+
 /// Unforgeable safe-code proof that exact promoted terminal publication
 /// evidence passed the completion handoff. Only descendants of this module
 /// can construct the fieldless seal; the staging state owner may consume it
@@ -648,6 +670,7 @@ mod tests;
 #[path = "immutable_attempt/receipt_promotion.rs"]
 mod receipt_promotion;
 pub(in crate::client) use receipt_promotion::{
+    ActiveReblitBootPromotedCleanupError,
     ActiveReblitBootSyncCompletionError,
     ActiveReblitBootReceiptPromotionError,
     CleanedPromotedExactActiveReblitBootPublication,

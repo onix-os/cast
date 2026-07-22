@@ -19,8 +19,10 @@ use crate::{
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
         active_reblit_mounted_boot_topology::{
             AliasFixture, arm_fixture_immutable_leaf_assessments,
+            arm_fixture_owned_cleanup_targets,
             arm_fixture_owned_replacement_assessments,
             fixture_immutable_leaf_assessments_remaining,
+            fixture_owned_cleanup_targets_remaining,
             fixture_owned_replacement_assessments_remaining,
             fixture_owned_replacement_validations_remaining,
         },

@@ -42,10 +42,15 @@ use super::super::{
 
 #[path = "publication_targets/immutable_leaf.rs"]
 mod immutable_leaf;
+#[path = "publication_targets/owned_cleanup.rs"]
+mod owned_cleanup;
 #[path = "publication_targets/owned_replacement.rs"]
 mod owned_replacement;
 
 pub(in crate::client) use immutable_leaf::ActiveReblitBootImmutableLeafPublicationError;
+pub(in crate::client) use owned_cleanup::{
+    ActiveReblitBootOwnedCleanupError, ActiveReblitBootOwnedCleanupOutcome,
+};
 #[allow(unused_imports)] // consumed by the aggregate owned-replacement executor
 pub(in crate::client) use owned_replacement::ActiveReblitBootOwnedLeafReplacementError;
 #[cfg(test)]
@@ -53,6 +58,11 @@ pub(in crate::client) use immutable_leaf::{
     FixtureImmutableLeafAssessmentGuard,
     arm_fixture_immutable_leaf_assessments,
     fixture_immutable_leaf_assessments_remaining,
+};
+#[cfg(test)]
+pub(in crate::client) use owned_cleanup::{
+    FixtureOwnedCleanupTargetGuard, arm_fixture_owned_cleanup_targets,
+    fixture_owned_cleanup_targets_remaining,
 };
 #[cfg(test)]
 pub(in crate::client) use owned_replacement::{

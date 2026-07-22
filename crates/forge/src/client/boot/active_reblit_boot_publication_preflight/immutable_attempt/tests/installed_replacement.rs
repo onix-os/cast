@@ -131,7 +131,7 @@ fn classified_action_at(
 }
 
 #[test]
-fn authentic_installed_delta_executes_all_desired_actions_and_defers_cleanup() {
+fn authentic_installed_delta_executes_desired_actions_and_promoted_cleanup() {
     run_authentic_installed_replacement_case(PromotionPairCase::Exact);
 }
 
@@ -180,6 +180,7 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
         prior_fallback,
         prior_loader_control,
         prior_history_entry,
+        prior_history_payload,
     ) = {
         let topology_prepared = topology_fixture
             .prepare_for_installation_until(&client.installation, deadline)
@@ -235,7 +236,9 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
                     || path == "EFI/Boot/BOOTX64.EFI"
                 {
                     BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast
-                } else if path == "loader/loader.conf" {
+                } else if path == "loader/loader.conf"
+                    || path.starts_with("EFI/history0/")
+                {
                     BootPublicationOutputProvenanceClaim::BorrowedFirstAdoption
                 } else {
                     BootPublicationOutputProvenanceClaim::UnclaimedAbsent
@@ -280,6 +283,7 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
         let mut fallback = None;
         let mut loader_control = None;
         let mut history_entry = None;
+        let mut history_payload = None;
         for output in plan.outputs() {
             let path = output.relative_path().to_str().unwrap();
             let slot = if path.starts_with("loader/entries/head-6.12-") {
@@ -290,6 +294,8 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
                 Some(&mut loader_control)
             } else if path.starts_with("loader/entries/history0-5.15-") {
                 Some(&mut history_entry)
+            } else if path.starts_with("EFI/history0/") {
+                Some(&mut history_payload)
             } else {
                 None
             };
@@ -307,6 +313,7 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
             fallback.expect("prior plan has a fallback bootloader"),
             loader_control.expect("prior plan has loader control"),
             history_entry.expect("prior plan has a history entry"),
+            history_payload.expect("prior plan has one history payload"),
         )
     };
 
@@ -412,6 +419,10 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
             classified_action_at(entries, &prior_history_entry.relative_path),
             ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion,
         );
+        assert_eq!(
+            classified_action_at(entries, &prior_history_payload.relative_path),
+            ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale,
+        );
         assert!(entries.iter().any(|entry| {
             entry.action()
                 == ActiveReblitBootPublicationDeltaAction::PublishDesired
@@ -509,9 +520,15 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
     assert_eq!(fs::metadata(&canonical).unwrap().ino(), replacement_inode);
     assert_eq!(fs::read(&sidecar).unwrap(), prior_head_entry.bytes);
     assert_eq!(fs::metadata(&sidecar).unwrap().ino(), installed_inode);
-    let stale = root.join(&prior_history_entry.relative_path);
-    assert_eq!(fs::read(&stale).unwrap(), prior_history_entry.bytes);
-    assert_eq!(fs::metadata(&stale).unwrap().ino(), prior_history_entry.inode);
+    let owned_stale = root.join(&prior_history_entry.relative_path);
+    assert_eq!(fs::read(&owned_stale).unwrap(), prior_history_entry.bytes);
+    assert_eq!(fs::metadata(&owned_stale).unwrap().ino(), prior_history_entry.inode);
+    let borrowed_stale = root.join(&prior_history_payload.relative_path);
+    assert_eq!(fs::read(&borrowed_stale).unwrap(), prior_history_payload.bytes);
+    assert_eq!(
+        fs::metadata(&borrowed_stale).unwrap().ino(),
+        prior_history_payload.inode,
+    );
     assert_eq!(
         terminal
             .staged
@@ -599,8 +616,16 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
         );
         assert_eq!(fs::read(&canonical).unwrap(), replacement_bytes);
         assert_eq!(fs::metadata(&canonical).unwrap().ino(), replacement_inode);
-        assert_eq!(fs::read(&stale).unwrap(), prior_history_entry.bytes);
-        assert_eq!(fs::metadata(&stale).unwrap().ino(), prior_history_entry.inode);
+        assert_eq!(fs::read(&owned_stale).unwrap(), prior_history_entry.bytes);
+        assert_eq!(
+            fs::metadata(&owned_stale).unwrap().ino(),
+            prior_history_entry.inode,
+        );
+        assert_eq!(fs::read(&borrowed_stale).unwrap(), prior_history_payload.bytes);
+        assert_eq!(
+            fs::metadata(&borrowed_stale).unwrap().ino(),
+            prior_history_payload.inode,
+        );
         match displaced_sidecar {
             Some(displaced) => {
                 assert_eq!(fs::read(&sidecar).unwrap(), prior_head_entry.bytes);
@@ -647,7 +672,14 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
         pending_fingerprint,
     );
     assert_eq!(fs::metadata(&sidecar).unwrap().ino(), installed_inode);
-    assert_eq!(fs::metadata(&stale).unwrap().ino(), prior_history_entry.inode);
+    assert_eq!(
+        fs::metadata(&owned_stale).unwrap().ino(),
+        prior_history_entry.inode,
+    );
+    assert_eq!(
+        fs::metadata(&borrowed_stale).unwrap().ino(),
+        prior_history_payload.inode,
+    );
 
     let journal_path = fixture
         .installation
@@ -670,8 +702,45 @@ fn run_authentic_installed_replacement_case(case: PromotionPairCase) {
     assert_eq!(fs::metadata(&journal_path).unwrap().ino(), journal_inode);
     assert_eq!(fs::metadata(&sidecar).unwrap().ino(), installed_inode);
     assert_eq!(fs::read(&sidecar).unwrap(), prior_head_entry.bytes);
-    assert_eq!(fs::metadata(&stale).unwrap().ino(), prior_history_entry.inode);
-    assert_eq!(fs::read(&stale).unwrap(), prior_history_entry.bytes);
-    drop(promoted);
+    assert_eq!(
+        fs::metadata(&owned_stale).unwrap().ino(),
+        prior_history_entry.inode,
+    );
+    assert_eq!(fs::read(&owned_stale).unwrap(), prior_history_entry.bytes);
+    assert_eq!(
+        fs::metadata(&borrowed_stale).unwrap().ino(),
+        prior_history_payload.inode,
+    );
+    assert_eq!(fs::read(&borrowed_stale).unwrap(), prior_history_payload.bytes);
+
+    let cleanup_assessments = arm_fixture_boot_namespace_assessments(
+        (0..2).map(|_| {
+            FixtureBootNamespaceAssessment::new(
+                BootTargetRole::Esp,
+                root.clone(),
+            )
+        }),
+    );
+    let cleanup_targets =
+        arm_fixture_owned_cleanup_targets(root.clone(), 2);
+    let cleaned = promoted.cleanup_promoted_outputs(&client).unwrap();
+    assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
+    assert_eq!(fixture_owned_cleanup_targets_remaining(), 0);
+    assert_eq!(fixture_owned_replacement_validations_remaining(), 0);
+    drop(cleanup_targets);
+    drop(cleanup_assessments);
+    assert_eq!(cleaned.receipt_fingerprint(), pending_fingerprint);
+    assert_eq!(cleaned.replaced_count(), 1);
+    assert_eq!(cleaned.evidence().len(), plan.publication_count());
+    assert_eq!(fs::metadata(&journal_path).unwrap().ino(), journal_inode);
+    assert!(!sidecar.exists());
+    assert!(!owned_stale.exists());
+    assert_eq!(fs::read(&borrowed_stale).unwrap(), prior_history_payload.bytes);
+    assert_eq!(
+        fs::metadata(&borrowed_stale).unwrap().ino(),
+        prior_history_payload.inode,
+    );
+    assert_eq!(fs::read(&canonical).unwrap(), replacement_bytes);
+    assert_eq!(fs::metadata(&canonical).unwrap().ino(), replacement_inode);
     topology_fixture.assert_outside_unchanged();
 }

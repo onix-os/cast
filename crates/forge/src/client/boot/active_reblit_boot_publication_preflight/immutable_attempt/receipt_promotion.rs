@@ -671,6 +671,10 @@ pub(in crate::client) use terminal_evidence::ActiveReblitBootTerminalEvidenceVal
 #[path = "receipt_promotion/replacement_pair_validation.rs"]
 mod replacement_pair_validation;
 
+#[path = "receipt_promotion/promoted_cleanup.rs"]
+mod promoted_cleanup;
+pub(in crate::client) use promoted_cleanup::ActiveReblitBootPromotedCleanupError;
+
 #[path = "receipt_promotion/boot_sync_completion.rs"]
 mod boot_sync_completion;
 pub(in crate::client) use boot_sync_completion::{

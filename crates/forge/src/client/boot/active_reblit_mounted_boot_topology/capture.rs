@@ -34,6 +34,8 @@ pub(in crate::client) use model::{
 };
 pub(in crate::client) use publication_targets::{
     ActiveReblitBootImmutableLeafPublicationError,
+    ActiveReblitBootOwnedCleanupError,
+    ActiveReblitBootOwnedCleanupOutcome,
     ActiveReblitBootOwnedLeafReplacementError,
     ActiveReblitBootPublicationTargetsError,
     RevalidatedActiveReblitBootPublicationTarget,
@@ -42,10 +44,13 @@ pub(in crate::client) use publication_targets::{
 #[cfg(test)]
 pub(in crate::client) use publication_targets::{
     FixtureImmutableLeafAssessmentGuard,
+    FixtureOwnedCleanupTargetGuard,
     FixtureOwnedReplacementAssessmentGuard,
     arm_fixture_immutable_leaf_assessments,
+    arm_fixture_owned_cleanup_targets,
     arm_fixture_owned_replacement_assessments,
     fixture_immutable_leaf_assessments_remaining,
+    fixture_owned_cleanup_targets_remaining,
     fixture_owned_replacement_assessments_remaining,
     fixture_owned_replacement_validations_remaining,
 };

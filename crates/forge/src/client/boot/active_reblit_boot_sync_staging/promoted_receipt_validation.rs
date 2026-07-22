@@ -12,7 +12,10 @@ use crate::{
         BootPublicationReceiptFingerprint, BootPublicationReceiptPair,
         CanonicalBootPublicationReceipt,
     },
-    client::active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
+    client::{
+        active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
+        active_reblit_installed_boot_publication_delta::ClassifiedActiveReblitBootPublicationDelta,
+    },
     db::state::BootPublicationReceiptPromotionError,
     installation,
     transition_journal::{CodecError, Operation, Phase, StorageError, TransitionRecord},
@@ -162,6 +165,15 @@ impl<'plan, 'inventory, Plan>
         &self,
     ) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
         self.staged.inventory
+    }
+
+    /// Borrow the sealed staging-time action set after proving this exact
+    /// receipt is the promoted head. The action data grants no cleanup
+    /// authority by itself.
+    pub(in crate::client) const fn classified_delta(
+        &self,
+    ) -> &ClassifiedActiveReblitBootPublicationDelta {
+        &self.staged.classified_delta
     }
 }
 
