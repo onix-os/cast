@@ -43,7 +43,10 @@ use crate::{
 use super::{
     boot_sync_complete_support::{open_boot_sync_complete_journal, same_byte_different_inode_hook},
     commit_cleanup_effect::{CleanupLayout, commit_decided_fixture},
-    support::{BootRepairFixture, Epoch, assert_pending_phase, enter_boot},
+    support::{
+        BootRepairFixture, Epoch, assert_canonical_absent, assert_pending_phase,
+        enter_boot, enter_clean_boot,
+    },
 };
 
 #[derive(Clone, Copy)]
@@ -72,12 +75,18 @@ fn completed_cleanup_current_and_historical_apply_and_finish_reaches_complete_on
             assert_receipt_retired(&fixture);
             fixture.fixture.source = successor.clone();
 
-            let second = enter_boot(&fixture);
+            let clean = enter_clean_boot(&fixture);
 
-            assert_pending_phase(&second, Phase::Complete);
-            assert_eq!(fixture.fixture.canonical_record(), successor);
+            assert_canonical_absent(&fixture.fixture.installation.root);
             state_before.assert_unchanged(&fixture);
             assert_receipt_retired(&fixture);
+            drop(clean);
+
+            let clean_again = enter_clean_boot(&fixture);
+            assert_canonical_absent(&fixture.fixture.installation.root);
+            state_before.assert_unchanged(&fixture);
+            assert_receipt_retired(&fixture);
+            drop(clean_again);
         }
     }
 }
@@ -163,12 +172,23 @@ fn completed_cleanup_all_five_journal_faults_classify_and_converge() {
         );
         assert_receipt_retired(&fixture);
 
-        let second = enter_boot(&fixture);
-
-        assert_pending_phase(&second, Phase::Complete);
-        assert_eq!(fixture.fixture.canonical_record(), successor);
-        assert_receipt_retired(&fixture);
+        if fault.durable == DurableActiveReblitCommitCleanupCompleteRecord::CommitCleanupComplete {
+            let second = enter_boot(&fixture);
+            assert_pending_phase(&second, Phase::Complete);
+            assert_eq!(fixture.fixture.canonical_record(), successor);
+            assert_receipt_retired(&fixture);
+        }
         fixture.fixture.source = successor;
+
+        let clean = enter_clean_boot(&fixture);
+        assert_canonical_absent(&fixture.fixture.installation.root);
+        assert_receipt_retired(&fixture);
+        drop(clean);
+
+        let clean_again = enter_clean_boot(&fixture);
+        assert_canonical_absent(&fixture.fixture.installation.root);
+        assert_receipt_retired(&fixture);
+        drop(clean_again);
     }
 }
 
@@ -326,7 +346,7 @@ fn completed_cleanup_database_and_namespace_races_fail_closed() {
     assert_receipt_retired(&fixture);
 }
 
-fn commit_cleanup_complete_fixture(epoch: Epoch) -> BootRepairFixture {
+pub(super) fn commit_cleanup_complete_fixture(epoch: Epoch) -> BootRepairFixture {
     let mut fixture = commit_decided_fixture(epoch, CleanupLayout::Finish);
     let successor = fixture.fixture.source.forward_successor(None).unwrap();
     assert_eq!(successor.phase, Phase::CommitCleanupComplete);
@@ -424,7 +444,7 @@ fn retire_receipt(fixture: &BootRepairFixture) {
     assert_receipt_retired(fixture);
 }
 
-fn assert_receipt_retired(fixture: &BootRepairFixture) {
+pub(super) fn assert_receipt_retired(fixture: &BootRepairFixture) {
     let pair = receipt_pair(fixture);
     assert_eq!(
         fixture

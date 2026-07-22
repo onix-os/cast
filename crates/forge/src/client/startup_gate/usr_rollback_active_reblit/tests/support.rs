@@ -580,6 +580,12 @@ pub(super) fn enter_boot(fixture: &BootRepairFixture) -> startup_gate::Error {
     enter(&fixture.fixture.system)
 }
 
+pub(super) fn enter_clean_boot(fixture: &BootRepairFixture) -> CleanSystemStartup {
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    CleanSystemStartup::enter(&fixture.fixture.system, &reservation)
+        .expect("exact forward ActiveReblit Complete evidence did not admit clean startup")
+}
+
 pub(super) fn enter_clean_candidate(fixture: &CandidatePreserveFixture) -> CleanSystemStartup {
     let reservation = ActiveStateReservation::acquire().unwrap();
     CleanSystemStartup::enter(&fixture.fixture.system, &reservation)

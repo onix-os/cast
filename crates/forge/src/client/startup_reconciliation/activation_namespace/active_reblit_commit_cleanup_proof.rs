@@ -206,6 +206,28 @@ impl ActiveReblitCommitCleanupFinishNamespaceProof {
             ActiveReblitCommitCleanupLayout::Finish,
         )
     }
+
+    /// Consume no namespace authority after terminal deletion; instead prove
+    /// that the completed cleanup layout remains exact while the same locked
+    /// journal store reports public absence before and after a fresh capture.
+    pub(in crate::client::startup_reconciliation) fn revalidate_completed_namespace_after_journal_delete(
+        &self,
+        installation: &Installation,
+        journal: &TransitionJournalStore,
+        expected: &TransitionRecord,
+    ) -> Result<(), ActiveReblitCommitCleanupNamespaceError> {
+        require_exact_public_journal_absence(installation, journal)?;
+        revalidate_namespace_only(
+            installation,
+            expected,
+            &self.before,
+            &self.after,
+            ActiveReblitCommitCleanupLayout::Finish,
+        )?;
+        require_exact_public_journal_absence(installation, journal)?;
+        installation.revalidate_mutable_namespace()?;
+        Ok(())
+    }
 }
 
 impl ActiveReblitCommitCleanupApplyNamespaceEffectEvidence {
@@ -317,13 +339,29 @@ fn classify_layout(layout: LayoutAlternative) -> Option<ActiveReblitCommitCleanu
 
 fn require_exact_source(record: &TransitionRecord) -> Result<(), ActiveReblitCommitCleanupNamespaceError> {
     if record.operation == Operation::ActiveReblit
-        && matches!(record.phase, Phase::CommitDecided | Phase::CommitCleanupComplete)
+        && matches!(
+            record.phase,
+            Phase::CommitDecided | Phase::CommitCleanupComplete | Phase::Complete
+        )
         && record.rollback.is_none()
     {
         Ok(())
     } else {
         Err(ActiveReblitCommitCleanupNamespaceError::WrongSource)
     }
+}
+
+fn require_exact_public_journal_absence(
+    installation: &Installation,
+    journal: &TransitionJournalStore,
+) -> Result<(), ActiveReblitCommitCleanupNamespaceError> {
+    installation.revalidate_mutable_namespace()?;
+    let cast = installation.retained_mutable_cast_directory()?;
+    if journal.load_revalidated_retained_cast(cast)?.is_some() {
+        return Err(ActiveReblitCommitCleanupNamespaceError::JournalPresentAfterDelete);
+    }
+    installation.revalidate_mutable_namespace()?;
+    Ok(())
 }
 
 fn require_retained_layout(
@@ -381,6 +419,8 @@ pub(in crate::client::startup_reconciliation) enum ActiveReblitCommitCleanupName
     UnsupportedLayout,
     #[error("the exact ActiveReblit CommitDecided journal binding changed during namespace proof")]
     JournalChanged,
+    #[error("the ActiveReblit terminal journal is publicly present after bound deletion")]
+    JournalPresentAfterDelete,
     #[error("the ActiveReblit CommitDecided namespace changed during proof")]
     NamespaceChanged,
     #[error("the exact ActiveReblit CommitDecided layout changed during proof")]
@@ -400,6 +440,7 @@ pub(in crate::client::startup_reconciliation) fn active_reblit_commit_cleanup_na
         | ActiveReblitCommitCleanupNamespaceError::UnsupportedLayout => true,
         ActiveReblitCommitCleanupNamespaceError::Journal(_)
         | ActiveReblitCommitCleanupNamespaceError::JournalChanged
+        | ActiveReblitCommitCleanupNamespaceError::JournalPresentAfterDelete
         | ActiveReblitCommitCleanupNamespaceError::NamespaceChanged
         | ActiveReblitCommitCleanupNamespaceError::LayoutChanged
         | ActiveReblitCommitCleanupNamespaceError::Installation(_) => false,

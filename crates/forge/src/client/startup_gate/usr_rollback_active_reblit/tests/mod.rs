@@ -28,6 +28,7 @@ mod commit_cleanup_complete_startup_dispatch;
 mod commit_cleanup_startup_dispatch;
 mod commit_cleanup_startup_authority;
 mod complete_authority_binding;
+mod complete_forward_finalization;
 mod complete_evidence_races;
 mod complete_exclusions;
 mod complete_matrix;

@@ -26,6 +26,7 @@ use crate::{
 mod activation_namespace;
 mod active_reblit_commit_cleanup_authority;
 mod active_reblit_commit_cleanup_complete_authority;
+mod active_reblit_complete_finalization_authority;
 #[allow(dead_code)] // read-only startup boundary; live dispatch is deliberately a later slice
 mod active_reblit_boot_sync_complete_authority;
 mod active_reblit_boot_repair_evidence;
@@ -81,6 +82,17 @@ pub(in crate::client) use active_reblit_commit_cleanup_complete_authority::{
     ActiveReblitCommitCleanupCompletePostAdvanceAuthority,
     ActiveReblitCommitCleanupCompleteRecordAdvanceError,
     ActiveReblitCommitCleanupCompleteRetiredAuthority,
+};
+pub(in crate::client) use active_reblit_complete_finalization_authority::{
+    ActiveReblitCompleteFinalizationAdmission,
+    ActiveReblitCompleteFinalizationAfterDeleteAuthority,
+    ActiveReblitCompleteFinalizationAuthority,
+    ActiveReblitCompleteFinalizationAuthorityError,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_complete_finalization_authority::{
+    arm_between_active_reblit_complete_finalization_database_captures,
+    arm_between_active_reblit_complete_finalization_post_delete_database_captures,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_commit_cleanup_complete_authority::arm_between_active_reblit_commit_cleanup_complete_database_captures;

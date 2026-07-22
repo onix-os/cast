@@ -9,6 +9,7 @@
 mod active_reblit_boot_sync_commit_decision;
 mod active_reblit_commit_cleanup_complete;
 mod active_reblit_commit_cleanup_complete_to_complete;
+mod active_reblit_complete_finalization;
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_exchanged_root_abi_normalization;
@@ -134,6 +135,16 @@ pub(super) use active_reblit_commit_cleanup_complete::{
 pub(super) use active_reblit_commit_cleanup_complete_to_complete::{
     ActiveReblitCommitCleanupCompletePersistenceError,
     persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen,
+};
+
+pub(super) use active_reblit_complete_finalization::{
+    ActiveReblitCompleteFinalizationError, finalize_active_reblit_complete,
+};
+
+#[cfg(test)]
+pub(in crate::client) use active_reblit_complete_finalization::{
+    arm_after_active_reblit_complete_finalization_delete,
+    arm_before_active_reblit_complete_finalization_final_revalidation,
 };
 
 pub(super) use usr_rollback_active_reblit_boot_repair_complete::{

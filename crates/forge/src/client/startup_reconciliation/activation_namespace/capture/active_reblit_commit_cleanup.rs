@@ -151,7 +151,10 @@ impl ProjectedActiveReblitCommitCleanupNamespace {
         if record.operation != Operation::ActiveReblit {
             return Err(ActiveReblitCommitCleanupCaptureError::WrongOperation);
         }
-        if !matches!(record.phase, Phase::CommitDecided | Phase::CommitCleanupComplete)
+        if !matches!(
+            record.phase,
+            Phase::CommitDecided | Phase::CommitCleanupComplete | Phase::Complete
+        )
             || record.rollback.is_some()
         {
             return Err(ActiveReblitCommitCleanupCaptureError::WrongPhase);

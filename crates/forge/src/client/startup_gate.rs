@@ -11,6 +11,7 @@ use super::{
 mod active_reblit_boot_sync_complete;
 mod active_reblit_commit_cleanup;
 mod active_reblit_commit_cleanup_complete;
+mod active_reblit_complete_finalization;
 mod default_system_intent;
 #[cfg(test)]
 mod root_links_terminal_process_harness;
@@ -95,6 +96,23 @@ pub(in crate::client) struct ActiveReblitCommitCleanupCompleteSeal {
 }
 
 impl ActiveReblitCommitCleanupCompleteSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
+/// Unforgeable safe-code token limiting exact forward ActiveReblit
+/// `Complete` terminal finalization to this writer-first startup gate.
+pub(in crate::client) struct ActiveReblitCompleteFinalizationSeal {
+    _private: (),
+}
+
+impl ActiveReblitCompleteFinalizationSeal {
     fn new() -> Self {
         Self { _private: () }
     }
@@ -275,6 +293,42 @@ impl CleanSystemStartup {
                     )
                     .map_err(map_reconciliation_error)?;
                     return Err(Error::RecoveryPending(pending));
+                }
+            };
+
+            // Exact forward Complete owns this entry before replacement or
+            // rollback logic. Incompatible evidence remains pending; exact
+            // evidence consumes one bound deletion and hands the same locked
+            // store directly to shared clean admission.
+            let (journal, record) = match active_reblit_complete_finalization::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+            )? {
+                active_reblit_complete_finalization::Dispatch::Unhandled {
+                    journal,
+                    record,
+                } => (journal, record),
+                active_reblit_complete_finalization::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+                active_reblit_complete_finalization::Dispatch::Finalized { journal } => {
+                    return Self::admit_clean_after_terminal_finalization(
+                        installation,
+                        state_db,
+                        journal,
+                    );
                 }
             };
 
@@ -680,6 +734,10 @@ pub(super) enum Error {
     #[error("dispatch the exact forward startup ActiveReblit CommitCleanupComplete checkpoint")]
     ActiveReblitCommitCleanupCompleteDispatch(
         #[from] active_reblit_commit_cleanup_complete::Error,
+    ),
+    #[error("dispatch the exact forward startup ActiveReblit Complete finalizer")]
+    ActiveReblitCompleteFinalizationDispatch(
+        #[from] active_reblit_complete_finalization::Error,
     ),
     #[error("capture exact startup /usr rollback-decision authority")]
     UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
