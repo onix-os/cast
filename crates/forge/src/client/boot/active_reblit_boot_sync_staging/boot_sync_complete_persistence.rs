@@ -310,6 +310,8 @@ where
             journal,
             database,
             installation,
+            prepared_delta: _,
+            classified_delta: _,
         } = self;
         let cast = installation
             .retained_mutable_cast_directory()

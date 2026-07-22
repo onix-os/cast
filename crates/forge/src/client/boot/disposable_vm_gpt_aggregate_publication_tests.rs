@@ -9,16 +9,11 @@ use sha2::{Digest as _, Sha256};
 use super::{Client, Scope};
 use crate::{
     Installation, db, repository,
-    boot_publication::{
-        BootPublicationOutputProvenanceClaim, BootPublicationReceiptFingerprint,
-        BootPublicationSha256,
-    },
+    boot_publication::BootPublicationReceiptFingerprint,
     client::{
         active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
         active_reblit_boot_inputs::PreparedActiveReblitStoneBootInputs,
-        active_reblit_boot_publication_receipt::BorrowedActiveReblitBootPublicationProvenanceClaim,
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
-        active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
         active_reblit_mounted_boot_topology::{
             BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology,
             PreparedActiveReblitMountedBootTopology,
@@ -316,29 +311,6 @@ fn exact_system_triggers_complete_journal(
     (journal, predecessor, binding)
 }
 
-fn claim_bindings<'inventory>(
-    inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
-    phase: &str,
-) -> Vec<BorrowedActiveReblitBootPublicationProvenanceClaim<'inventory>> {
-    let claim = match phase {
-        "publish" => BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
-        "revalidate" => BootPublicationOutputProvenanceClaim::BorrowedFirstAdoption,
-        _ => unreachable!(),
-    };
-    inventory
-        .outputs()
-        .iter()
-        .map(|output| {
-            BorrowedActiveReblitBootPublicationProvenanceClaim::new(
-                output.root(),
-                output.relative_path(),
-                BootPublicationSha256::from_bytes(*output.content_identity().as_bytes()),
-                claim,
-            )
-        })
-        .collect()
-}
-
 fn expected_target(
     target: BoundActiveReblitMountedBootTarget<'_>,
     path: PathBuf,
@@ -558,14 +530,12 @@ fn disposable_vm_receipt_bound_aggregate_publication() {
 
     let inventory = plan.prepare_desired_publication_inventory().unwrap();
     assert_eq!(inventory.outputs().len(), 5);
-    let claims = claim_bindings(&inventory, &phase);
     let (journal, predecessor, binding) =
         exact_system_triggers_complete_journal(&client.installation);
     let staged = client
         .stage_active_reblit_boot_sync(
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,

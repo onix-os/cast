@@ -19,6 +19,23 @@ pub(super) fn set_safe_publication_parents(
     }
 }
 
+pub(super) fn claim_bindings(
+    inventory: &PreparedActiveReblitDesiredPublicationInventory,
+) -> Vec<BorrowedActiveReblitBootPublicationProvenanceClaim<'_>> {
+    inventory
+        .outputs()
+        .iter()
+        .map(|output| {
+            BorrowedActiveReblitBootPublicationProvenanceClaim::new(
+                output.root(),
+                output.relative_path(),
+                BootPublicationSha256::from_bytes(*output.content_identity().as_bytes()),
+                BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
+            )
+        })
+        .collect()
+}
+
 pub(super) fn preparing_record() -> TransitionRecord {
     TransitionRecord::preparing(
         TransitionId::parse("0123456789abcdef0123456789abcdef").unwrap(),
@@ -78,23 +95,6 @@ pub(super) fn exact_boot_sync_journal(
     assert_eq!(predecessor.phase, Phase::SystemTriggersComplete);
     let binding = journal.record_binding(cast, &predecessor).unwrap();
     (journal, predecessor, binding)
-}
-
-pub(super) fn claim_bindings(
-    inventory: &PreparedActiveReblitDesiredPublicationInventory,
-) -> Vec<BorrowedActiveReblitBootPublicationProvenanceClaim<'_>> {
-    inventory
-        .outputs()
-        .iter()
-        .map(|output| {
-            BorrowedActiveReblitBootPublicationProvenanceClaim::new(
-                output.root(),
-                output.relative_path(),
-                BootPublicationSha256::from_bytes(*output.content_identity().as_bytes()),
-                BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
-            )
-        })
-        .collect()
 }
 
 pub(super) fn staging_client(
@@ -202,6 +202,7 @@ macro_rules! with_staged_alias_attempt {
         let rendered = RenderedActiveReblitBlsRequests::render(&inputs).unwrap();
         let $plan = rendered.into_publication_plan(&topology).unwrap();
         let $inventory = $plan.prepare_desired_publication_inventory().unwrap();
+        #[allow(unused_variables)]
         let claims = support::claim_bindings(&$inventory);
         let (journal, predecessor, binding) =
             support::exact_boot_sync_journal(&$client.installation);
@@ -214,16 +215,22 @@ macro_rules! with_staged_alias_attempt {
             let $setup_deadline = deadline;
             $setup
         })?
+        let staging_preflight = arm_fixture_boot_namespace_assessments([
+            FixtureBootNamespaceAssessment::new(
+                BootTargetRole::Esp,
+                $topology_fixture.publication_root().to_owned(),
+            ),
+        ]);
         let $staged = $client
             .stage_active_reblit_boot_sync(
                 &$plan,
                 &$inventory,
-                &claims,
                 journal,
                 predecessor,
                 binding,
             )
             .unwrap();
+        drop(staging_preflight);
         let $expected_record = $staged.record().clone();
         let $fingerprint = $staged.receipt_fingerprint();
         $body

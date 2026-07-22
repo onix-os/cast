@@ -16,7 +16,10 @@ forge-boot-publication-installed-receipt-test: forge-boot-publication-receipt-pr
 	head="$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipt_head.rs"; \
 	tests="$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipts/installed_receipt_tests.rs"; \
 	grep -Fq 'pub(crate) fn load_exact_promoted_boot_publication_receipt_state(' "$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipts/promotion.rs"; \
-	grep -Fq 'let committed_predecessor = admitted_state.head().committed();' "$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging.rs"; \
+	staging="$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging.rs"; \
+	grep -Fq '.load_current_exact_promoted_boot_publication_receipt_chain()' "$$staging"; \
+	grep -Fq 'AuthenticatedActiveReblitInstalledBootPublication::from_current_exact_promoted_chain(' "$$staging"; \
+	grep -Fq '.map(CanonicalBootPublicationReceipt::fingerprint);' "$$staging"; \
 	if rg -n 'retire_committed_row|BootPublicationReceiptRetirement|ReceiptReference::Retired|boot_publication_receipts/retirement.rs' "$$state" "$$head" "$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/crates/forge/src/db/state/mod.rs"; then exit 1; else result="$$?"; test "$$result" = 1; fi; \
 	for file in "$$tests" "$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/misc/make/boot-publication-installed-receipt-tests.mk"; do test "$$( wc -l < "$$file" )" -le 1000; done; \
 	$(CARGO) test --manifest-path "$(BOOT_PUBLICATION_INSTALLED_RECEIPT_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1 --include-ignored

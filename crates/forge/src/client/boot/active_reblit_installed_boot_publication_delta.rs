@@ -37,7 +37,15 @@ use crate::{
         BootPublicationOutputProvenanceClaim, BootPublicationOutputRole, BootPublicationSha256,
         BootPublicationPublicationPhase, BootPublicationRoot,
     },
-    db::state::{BootPublicationReceiptState, ExactPromotedBootPublicationReceiptChain},
+    db::state::{
+        CurrentExactPromotedBootPublicationReceiptChain,
+    },
+};
+
+#[cfg(test)]
+use crate::db::state::{
+    BootPublicationReceiptState,
+    ExactPromotedBootPublicationReceiptChain,
 };
 
 /// Opaque exact installed chain derived from one strict database snapshot.
@@ -51,8 +59,25 @@ pub(in crate::client) struct AuthenticatedActiveReblitInstalledBootPublication<'
 }
 
 impl<'state> AuthenticatedActiveReblitInstalledBootPublication<'state> {
-    /// Authenticate the absence of an installed receipt from a strict empty
-    /// database snapshot. Any head or body, including pending state, fails.
+    /// Borrow installed state only from the zero-argument current-chain
+    /// loader. Its `Empty` variant has authenticated both an empty head and
+    /// empty immutable body store; `Installed` retains the exact promoted
+    /// head/body/predecessor chain from the same read transaction.
+    pub(in crate::client) fn from_current_exact_promoted_chain(
+        chain: &'state CurrentExactPromotedBootPublicationReceiptChain,
+    ) -> Self {
+        match chain {
+            CurrentExactPromotedBootPublicationReceiptChain::Empty => Self { receipt: None },
+            CurrentExactPromotedBootPublicationReceiptChain::Installed(chain) => Self {
+                receipt: Some(chain.installed_receipt()),
+            },
+        }
+    }
+
+    /// Test-only scalar fixture. Production can authenticate emptiness only
+    /// through `CurrentExactPromotedBootPublicationReceiptChain::Empty`, which
+    /// additionally proves that immutable storage contains zero orphan rows.
+    #[cfg(test)]
     pub(in crate::client) fn from_strict_empty_state(
         state: &'state BootPublicationReceiptState,
     ) -> Result<Self, ActiveReblitBootPublicationDeltaError> {
@@ -68,6 +93,7 @@ impl<'state> AuthenticatedActiveReblitInstalledBootPublication<'state> {
     /// Borrow the installed body only from the opaque exact promoted-chain
     /// loader, which has already authenticated head, body, transition and
     /// predecessor correlation in one database transaction.
+    #[cfg(test)]
     pub(in crate::client) fn from_exact_promoted_chain(
         chain: &'state ExactPromotedBootPublicationReceiptChain,
     ) -> Self {

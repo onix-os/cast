@@ -13,8 +13,14 @@ use crate::{
             RenderedActiveReblitBlsRequests, arm_bound_plan_collision_drift,
         },
         active_reblit_boot_inputs::PreparedActiveReblitStoneBootInputs,
+        active_reblit_boot_publication_preflight::{
+            FixtureBootNamespaceAssessment,
+            arm_fixture_boot_namespace_assessments,
+        },
+        active_reblit_boot_publication_receipt::BorrowedActiveReblitBootPublicationProvenanceClaim,
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
-        active_reblit_mounted_boot_topology::AliasFixture,
+        active_reblit_installed_boot_publication_delta::ActiveReblitBootPublicationDeltaAction,
+        active_reblit_mounted_boot_topology::{AliasFixture, BootTargetRole},
     },
     db,
     db::state::{
@@ -133,31 +139,6 @@ fn claim_bindings<'inventory>(
         .collect()
 }
 
-fn mismatched_claim_bindings(
-    inventory: &PreparedActiveReblitDesiredPublicationInventory,
-) -> Vec<BorrowedActiveReblitBootPublicationProvenanceClaim<'_>> {
-    inventory
-        .outputs()
-        .iter()
-        .enumerate()
-        .map(|(index, output)| {
-            let content = if index == 0 {
-                BootPublicationSha256::from_bytes([0x99; 32])
-            } else {
-                BootPublicationSha256::from_bytes(
-                    *output.content_identity().as_bytes(),
-                )
-            };
-            BorrowedActiveReblitBootPublicationProvenanceClaim::new(
-                output.root(),
-                output.relative_path(),
-                content,
-                BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
-            )
-        })
-        .collect()
-}
-
 fn assert_exact_database_receipt(
     database: &Database,
     receipt: &CanonicalBootPublicationReceipt,
@@ -244,6 +225,12 @@ macro_rules! with_bound_staging_plan {
         let rendered = RenderedActiveReblitBlsRequests::render(&inputs).unwrap();
         let $plan = rendered.into_publication_plan(&topology).unwrap();
         let $inventory = $plan.prepare_desired_publication_inventory().unwrap();
+        let _staging_preflight = arm_fixture_boot_namespace_assessments([
+            FixtureBootNamespaceAssessment::new(
+                BootTargetRole::Esp,
+                topology_fixture.publication_root().to_owned(),
+            ),
+        ]);
         let $claims = claim_bindings(
             &$inventory,
             BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
@@ -281,6 +268,12 @@ macro_rules! with_cross_installation_staging_plan {
         let rendered = RenderedActiveReblitBlsRequests::render(&inputs).unwrap();
         let $plan = rendered.into_publication_plan(&topology).unwrap();
         let $inventory = $plan.prepare_desired_publication_inventory().unwrap();
+        let _staging_preflight = arm_fixture_boot_namespace_assessments([
+            FixtureBootNamespaceAssessment::new(
+                BootTargetRole::Esp,
+                topology_fixture.publication_root().to_owned(),
+            ),
+        ]);
         let $claims = claim_bindings(
             &$inventory,
             BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
@@ -316,7 +309,6 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -353,7 +345,7 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
 #[test]
 fn fresh_view_retains_the_exact_original_bound_plan_and_inventory() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
-    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+    with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
         let (journal, predecessor, binding) =
             exact_boot_sync_journal(&fixture.installation);
@@ -362,7 +354,6 @@ fn fresh_view_retains_the_exact_original_bound_plan_and_inventory() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -383,7 +374,7 @@ fn fresh_view_retains_the_exact_original_bound_plan_and_inventory() {
 #[test]
 fn promoted_view_requires_exact_committed_receipt_and_retains_started_binding() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
-    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+    with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
         let (journal, predecessor, binding) =
             exact_boot_sync_journal(&fixture.installation);
@@ -392,7 +383,6 @@ fn promoted_view_requires_exact_committed_receipt_and_retains_started_binding() 
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -460,7 +450,6 @@ fn fresh_revalidation_rejects_a_mixed_client_before_reading_effect_evidence() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -496,7 +485,6 @@ fn fresh_revalidation_rejects_successor_inode_drift_without_boot_effects() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -532,7 +520,7 @@ fn fresh_revalidation_rejects_successor_inode_drift_without_boot_effects() {
 #[test]
 fn fresh_revalidation_rejects_pending_body_drift_without_boot_effects() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
-    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+    with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
         let (journal, predecessor, binding) =
             exact_boot_sync_journal(&fixture.installation);
@@ -541,7 +529,6 @@ fn fresh_revalidation_rejects_pending_body_drift_without_boot_effects() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -571,10 +558,11 @@ fn fresh_revalidation_rejects_pending_body_drift_without_boot_effects() {
 }
 
 #[test]
-fn exact_internally_derived_pre_staged_retry_is_read_only_and_advances() {
+fn pending_receipt_requires_recovery_instead_of_direct_staging_retry() {
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
         let (journal, predecessor, binding) =
             exact_boot_sync_journal(&fixture.installation);
+        let expected_predecessor = predecessor.clone();
         let expected = plan
             .prepare_complete_boot_publication_receipt(
                 &inventory,
@@ -591,41 +579,11 @@ fn exact_internally_derived_pre_staged_retry_is_read_only_and_advances() {
             BootPublicationReceiptStageOutcome::Staged,
         );
 
-        let staged = stage_with_retained_stores(
-            &fixture.installation,
-            &fixture.state_db,
-            &plan,
-            &inventory,
-            &claims,
-            journal,
-            predecessor,
-            binding,
-        )
-        .unwrap();
-
-        assert_eq!(
-            staged.database_outcome(),
-            BootPublicationReceiptStageOutcome::AlreadyStaged,
-        );
-        assert_eq!(staged.record().phase, Phase::BootSyncStarted);
-        assert_exact_database_receipt(&fixture.state_db, &expected);
-    });
-}
-
-#[test]
-fn unbound_provenance_inputs_fail_before_database_or_journal_change() {
-    with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
-        let bad_claims = mismatched_claim_bindings(&inventory);
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
-        let expected_predecessor = predecessor.clone();
-
         let error = stage_with_retained_stores(
             &fixture.installation,
             &fixture.state_db,
             &plan,
             &inventory,
-            &bad_claims,
             journal,
             predecessor,
             binding,
@@ -634,30 +592,50 @@ fn unbound_provenance_inputs_fail_before_database_or_journal_change() {
 
         assert!(matches!(
             error,
-            ActiveReblitBootSyncStagingError::ReceiptMapping(
-                ActiveReblitBootPublicationReceiptError::ProvenanceClaimBindingMismatch {
-                    index: 0,
-                },
-            ),
+            ActiveReblitBootSyncStagingError::CurrentInstalledChain(_),
         ));
-        assert!(
-            fixture
-                .state_db
-                .boot_publication_receipt_state()
-                .unwrap()
-                .pending()
-                .is_none(),
-        );
-        assert_exact_journal_record(
+        assert_exact_database_receipt(&fixture.state_db, &expected);
+        assert_exact_journal_record(&fixture.installation, &expected_predecessor);
+    });
+}
+
+#[test]
+fn fresh_view_retains_authenticated_inert_delta_and_internal_claims() {
+    with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
+        let client = staging_client(&fixture, fixture.state_db.clone());
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal(&fixture.installation);
+
+        let staged = stage_with_retained_stores(
             &fixture.installation,
-            &expected_predecessor,
-        );
+            &fixture.state_db,
+            &plan,
+            &inventory,
+            journal,
+            predecessor,
+            binding,
+        )
+        .unwrap();
+        let fresh = staged.revalidate_against(&client).unwrap();
+        assert_eq!(fresh.prepared_delta().requests().len(), inventory.outputs().len());
+        assert_eq!(fresh.classified_delta().entries().len(), inventory.outputs().len());
+        let claims = fresh
+            .classified_delta()
+            .derive_receipt_provenance_claims(&inventory)
+            .unwrap();
+
+        assert!(claims.iter().copied().all(|claim| {
+            claim.claim() == BootPublicationOutputProvenanceClaim::UnclaimedAbsent
+        }));
+        assert!(fresh.classified_delta().entries().iter().all(|entry| {
+            entry.action() == ActiveReblitBootPublicationDeltaAction::PublishDesired
+        }));
     });
 }
 
 #[test]
 fn cross_installation_bound_plan_is_rejected_before_database_staging() {
-    with_cross_installation_staging_plan!(|fixture, plan, inventory, claims| {
+    with_cross_installation_staging_plan!(|fixture, plan, inventory, _claims| {
         let (journal, predecessor, binding) =
             exact_boot_sync_journal(&fixture.installation);
         let expected_predecessor = predecessor.clone();
@@ -667,7 +645,6 @@ fn cross_installation_bound_plan_is_rejected_before_database_staging() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -694,8 +671,8 @@ fn cross_installation_bound_plan_is_rejected_before_database_staging() {
 }
 
 #[test]
-fn conflicting_internally_derived_pending_receipt_does_not_advance() {
-    with_bound_staging_plan!(|fixture, plan, inventory, claims| {
+fn orphan_immutable_receipt_body_cannot_be_reinterpreted_as_first_adoption() {
+    with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let conflicting_claims = claim_bindings(
             &inventory,
             BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast,
@@ -715,13 +692,16 @@ fn conflicting_internally_derived_pending_receipt_does_not_advance() {
             .state_db
             .stage_boot_publication_receipt(&conflict)
             .unwrap();
+        fixture
+            .state_db
+            .clear_boot_publication_receipt_head_for_test()
+            .unwrap();
 
         let error = stage_with_retained_stores(
             &fixture.installation,
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -730,11 +710,10 @@ fn conflicting_internally_derived_pending_receipt_does_not_advance() {
 
         assert!(matches!(
             error,
-            ActiveReblitBootSyncStagingError::DatabaseStage(
-                BootPublicationReceiptStateError::PendingConflict { .. },
+            ActiveReblitBootSyncStagingError::CurrentInstalledChain(
+                CurrentExactPromotedBootPublicationReceiptChainError::ReceiptBodiesWithoutCommittedHead { .. },
             ),
         ));
-        assert_exact_database_receipt(&fixture.state_db, &conflict);
         assert_exact_journal_record(
             &fixture.installation,
             &expected_predecessor,
@@ -771,7 +750,6 @@ fn dangling_pending_body_fails_database_admission_before_advancing() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -780,9 +758,7 @@ fn dangling_pending_body_fails_database_admission_before_advancing() {
 
         assert!(matches!(
             error,
-            ActiveReblitBootSyncStagingError::DatabaseAdmission(
-                BootPublicationReceiptStateError::DanglingReference { .. },
-            ),
+            ActiveReblitBootSyncStagingError::CurrentInstalledChain(_),
         ));
         assert_exact_journal_record(
             &fixture.installation,
@@ -849,7 +825,6 @@ fn every_journal_update_fault_is_classified_as_exact_predecessor_or_successor() 
                 &fixture.state_db,
                 &plan,
                 &inventory,
-                &claims,
                 journal,
                 predecessor,
                 binding,
@@ -911,7 +886,6 @@ fn post_advance_successor_inode_substitution_is_fail_stop_boot_sync_started() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -961,7 +935,6 @@ fn bound_plan_drift_after_staging_never_reaches_boot_sync_started() {
             &fixture.state_db,
             &plan,
             &inventory,
-            &claims,
             journal,
             predecessor,
             binding,
@@ -981,3 +954,6 @@ fn bound_plan_drift_after_staging_never_reaches_boot_sync_started() {
         );
     });
 }
+
+#[path = "active_reblit_boot_sync_staging_tests/installed_chain.rs"]
+mod installed_chain;

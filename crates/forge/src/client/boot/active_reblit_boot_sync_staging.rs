@@ -1,15 +1,18 @@
 //! Effect-free durable entry into ActiveReblit boot synchronization.
 //!
-//! The production entry accepts the existing lifetime-bound publication plan,
-//! its prepared desired inventory, and per-output provenance bindings. It does
-//! not accept a detached canonical receipt. The receipt is derived internally
-//! from the exact retained pre-boot journal record and the committed database
-//! head, staged atomically, then derived again from the same bound inputs
-//! immediately before the receipt-bearing `BootSyncStarted` journal advance.
+//! The production entry accepts the existing lifetime-bound publication plan
+//! and its prepared desired inventory. It does not accept provenance claims or
+//! a detached canonical receipt. Instead it authenticates the complete current
+//! installed chain from one strict database snapshot, prepares the installed-
+//! versus-desired delta, classifies it through a bound read-only namespace
+//! preflight, and derives receipt claims internally. The receipt is staged
+//! atomically, then derived again from the same bound inputs immediately before
+//! the receipt-bearing `BootSyncStarted` journal advance.
 //!
-//! This component never opens a boot destination, writes or removes an output,
-//! invokes legacy boot synchronization, or turns receipt claim data into effect
-//! authority. SQLite and the journal filesystem cannot share one transaction,
+//! This component opens boot destinations only for bound read-only assessment;
+//! it never writes, publishes, replaces, or removes an output, invokes legacy
+//! boot synchronization, or turns receipt claim data into effect authority.
+//! SQLite and the journal filesystem cannot share one transaction,
 //! so cross-store uncertainty drops and reopens the journal for exact
 //! predecessor-or-successor classification. Any failure to classify is
 //! reported explicitly as a fail-stop reconciliation error.
@@ -23,7 +26,8 @@ use crate::{
         CanonicalBootPublicationReceipt,
     },
     db::state::{
-        BootPublicationReceiptStageOutcome, BootPublicationReceiptStateError, Database,
+        BootPublicationReceiptStageOutcome, BootPublicationReceiptStateError,
+        CurrentExactPromotedBootPublicationReceiptChainError, Database,
     },
     installation,
     transition_journal::{
@@ -35,11 +39,15 @@ use crate::{
 use super::{
     Client,
     active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
-    active_reblit_boot_publication_receipt::{
-        ActiveReblitBootPublicationReceiptError,
-        BorrowedActiveReblitBootPublicationProvenanceClaim,
-    },
+    active_reblit_boot_publication_receipt::ActiveReblitBootPublicationReceiptError,
+    active_reblit_boot_publication_preflight::ActiveReblitBootPublicationPreflightError,
     active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
+    active_reblit_installed_boot_publication_delta::{
+        ActiveReblitBootPublicationDeltaError,
+        AuthenticatedActiveReblitInstalledBootPublication,
+        ClassifiedActiveReblitBootPublicationDelta,
+        PreparedActiveReblitBootPublicationDelta,
+    },
 };
 
 /// Exact durable journal record observed after a fail-stop boundary.
@@ -58,6 +66,8 @@ pub(in crate::client) struct StagedActiveReblitBootSync<'plan, 'inventory, Plan>
     record_binding: TransitionJournalRecordBinding,
     database_outcome: BootPublicationReceiptStageOutcome,
     receipt: CanonicalBootPublicationReceipt,
+    prepared_delta: PreparedActiveReblitBootPublicationDelta,
+    classified_delta: ClassifiedActiveReblitBootPublicationDelta,
     plan: &'plan Plan,
     inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
     journal: TransitionJournalStore,
@@ -184,6 +194,22 @@ impl<'plan, 'inventory, Plan>
     ) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
         self.staged.inventory
     }
+
+    /// Borrow the exact authenticated installed-versus-desired union retained
+    /// at staging. This inert value grants no filesystem or cleanup authority.
+    pub(in crate::client) const fn prepared_delta(
+        &self,
+    ) -> &PreparedActiveReblitBootPublicationDelta {
+        &self.staged.prepared_delta
+    }
+
+    /// Borrow the initial sealed live classification retained at staging.
+    /// Later effect code must recapture and compare it before any mutation.
+    pub(in crate::client) const fn classified_delta(
+        &self,
+    ) -> &ClassifiedActiveReblitBootPublicationDelta {
+        &self.staged.classified_delta
+    }
 }
 
 impl Client {
@@ -210,7 +236,6 @@ impl Client {
             'roots,
         >,
         inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
-        provenance_claims: &[BorrowedActiveReblitBootPublicationProvenanceClaim<'_>],
         journal: TransitionJournalStore,
         predecessor: TransitionRecord,
         predecessor_binding: TransitionJournalRecordBinding,
@@ -234,7 +259,6 @@ impl Client {
             &self.state_db,
             plan,
             inventory,
-            provenance_claims,
             journal,
             predecessor,
             predecessor_binding,
@@ -264,7 +288,6 @@ fn stage_with_retained_stores<
         'roots,
     >,
     inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
-    provenance_claims: &[BorrowedActiveReblitBootPublicationProvenanceClaim<'_>],
     journal: TransitionJournalStore,
     predecessor: TransitionRecord,
     predecessor_binding: TransitionJournalRecordBinding,
@@ -295,18 +318,37 @@ fn stage_with_retained_stores<
     }
     require_active_reblit_predecessor(&predecessor)?;
 
-    // The committed predecessor is database-owned. It is never accepted from
-    // the caller or copied from a detached receipt.
-    let admitted_state = database
-        .boot_publication_receipt_state()
-        .map_err(ActiveReblitBootSyncStagingError::DatabaseAdmission)?;
-    let committed_predecessor = admitted_state.head().committed();
+    // Installed ownership and predecessor identity come only from one strict
+    // database-authenticated current-chain snapshot. Empty means both the head
+    // and immutable receipt store are empty; pending or dangling state fails.
+    let current_chain = database
+        .load_current_exact_promoted_boot_publication_receipt_chain()
+        .map_err(ActiveReblitBootSyncStagingError::CurrentInstalledChain)?;
+    let installed =
+        AuthenticatedActiveReblitInstalledBootPublication::from_current_exact_promoted_chain(
+            &current_chain,
+        );
+    let committed_predecessor = installed
+        .receipt()
+        .map(CanonicalBootPublicationReceipt::fingerprint);
+    let prepared_delta = plan
+        .prepare_installed_boot_publication_delta(inventory, installed)
+        .map_err(ActiveReblitBootSyncStagingError::DeltaPreparation)?;
+    let preflight = plan
+        .prepare_boot_publication_preflight()
+        .map_err(ActiveReblitBootSyncStagingError::InitialPreflight)?;
+    let classified_delta = preflight
+        .classify_installed_boot_publication_delta(&prepared_delta)
+        .map_err(ActiveReblitBootSyncStagingError::DeltaClassification)?;
+    let provenance_claims = classified_delta
+        .derive_receipt_provenance_claims(inventory)
+        .map_err(ActiveReblitBootSyncStagingError::ReceiptClaimDerivation)?;
     let receipt = plan
         .prepare_complete_boot_publication_receipt(
             inventory,
             &predecessor,
             committed_predecessor,
-            provenance_claims,
+            &provenance_claims,
         )
         .map_err(ActiveReblitBootSyncStagingError::ReceiptMapping)?;
     let pair = receipt_pair(&receipt);
@@ -355,7 +397,7 @@ fn stage_with_retained_stores<
             inventory,
             &predecessor,
             rederived_committed_predecessor,
-            provenance_claims,
+            &provenance_claims,
         )
         .map_err(ActiveReblitBootSyncStagingError::ReceiptRederivation)?;
     if rederived.fingerprint() != receipt.fingerprint()
@@ -385,6 +427,8 @@ fn stage_with_retained_stores<
                     record_binding: successor_binding,
                     database_outcome,
                     receipt: rederived,
+                    prepared_delta,
+                    classified_delta,
                     plan,
                     inventory,
                 }),
@@ -725,8 +769,16 @@ pub(in crate::client) enum ActiveReblitBootSyncStagingError {
     Successor(#[source] CodecError),
     #[error("the typed boot-sync successor violated its ActiveReblit correlation contract")]
     UnexpectedSuccessor,
-    #[error("strictly load receipt state before deriving its committed predecessor")]
-    DatabaseAdmission(#[source] BootPublicationReceiptStateError),
+    #[error("authenticate the complete current installed boot-publication receipt chain")]
+    CurrentInstalledChain(#[source] CurrentExactPromotedBootPublicationReceiptChainError),
+    #[error("prepare the authenticated installed-versus-desired boot-publication delta")]
+    DeltaPreparation(#[source] ActiveReblitBootPublicationDeltaError),
+    #[error("perform the bound read-only boot-publication preflight before receipt staging")]
+    InitialPreflight(#[source] ActiveReblitBootPublicationPreflightError),
+    #[error("classify the installed delta from the sealed live preflight")]
+    DeltaClassification(#[source] ActiveReblitBootPublicationDeltaError),
+    #[error("derive receipt provenance claims from the classified installed delta")]
+    ReceiptClaimDerivation(#[source] ActiveReblitBootPublicationDeltaError),
     #[error("map the bound plan, desired inventory, and provenance inputs into the staged receipt")]
     ReceiptMapping(#[source] ActiveReblitBootPublicationReceiptError),
     #[error("atomically stage the internally derived canonical receipt body and pending head")]

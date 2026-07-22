@@ -43,6 +43,11 @@ use super::{
 #[cfg(test)]
 #[path = "active_reblit_boot_publication_preflight/fixture_assessment.rs"]
 mod fixture_assessment;
+#[cfg(test)]
+pub(in crate::client) use fixture_assessment::{
+    FixtureBootNamespaceAssessment,
+    arm as arm_fixture_boot_namespace_assessments,
+};
 #[path = "active_reblit_boot_publication_preflight/assessment_seal.rs"]
 mod assessment_seal;
 #[path = "active_reblit_boot_publication_preflight/delta_classification.rs"]
