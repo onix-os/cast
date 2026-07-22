@@ -27,6 +27,7 @@ use std::{
 mod boot_namespace;
 mod boot_file_publication;
 mod boot_file_replacement;
+mod boot_leaf_assessment;
 mod boot_publication_parent;
 mod capture;
 mod device;
@@ -49,6 +50,11 @@ pub(crate) use boot_file_replacement::{
     RetainedBootFileReplacementRequest, RetainedBootFileSidecarCleanupOutcome,
     ValidatedRetainedBootFileReplacement, ValidatedRetainedBootFileRestoration,
 };
+pub(crate) use boot_leaf_assessment::{
+    RetainedBootLeafAssessmentError, RetainedBootLeafAssessmentLimits,
+    RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState,
+    ValidatedRetainedBootLeafAssessment,
+};
 pub(crate) use boot_publication_parent::{
     RetainedBootPublicationParent, RetainedBootPublicationParentError,
 };
@@ -64,6 +70,11 @@ pub(crate) use boot_file_replacement::{
     arm_boot_file_sidecar_stop_after_unlink,
     arm_stale_boot_file_detach_error_after_applied,
     arm_stale_boot_file_stop_after_detach,
+};
+#[cfg(test)]
+pub(crate) use boot_leaf_assessment::{
+    FixtureRetainedBootLeafAssessmentHookGuard,
+    arm_retained_boot_leaf_assessment_terminal_rebind_hook,
 };
 #[cfg(test)]
 pub(crate) use boot_publication_parent::{
