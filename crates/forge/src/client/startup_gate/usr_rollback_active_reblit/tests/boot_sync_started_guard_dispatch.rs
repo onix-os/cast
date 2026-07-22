@@ -96,7 +96,7 @@ impl ExactJournalSnapshot {
 }
 
 #[test]
-fn startup_promoted_boot_sync_started_is_intercepted_unchanged_before_rollback() {
+fn startup_promoted_boot_sync_started_enters_recovery_without_rollback() {
     for epoch in Epoch::ALL {
         let fixture = boot_sync_started_fixture(epoch, true);
         let source = fixture.fixture.source.clone();
@@ -106,7 +106,15 @@ fn startup_promoted_boot_sync_started_is_intercepted_unchanged_before_rollback()
 
         let error = enter_boot(&fixture);
 
-        assert_pending_phase(&error, Phase::BootSyncStarted);
+        assert!(
+            matches!(
+                &error,
+                startup_gate::Error::ActiveReblitBootSyncStartedDispatch(
+                    active_reblit_boot_sync_started::Error::Recovery(_)
+                )
+            ),
+            "expected promoted BootSyncStarted to enter forward recovery, got {error:?}"
+        );
         assert_eq!(fixture.fixture.canonical_record(), source);
         assert_eq!(source.rollback, None);
         journal.assert_unchanged(&fixture);

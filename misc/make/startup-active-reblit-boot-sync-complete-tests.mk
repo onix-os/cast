@@ -35,7 +35,7 @@ forge-startup-active-reblit-boot-sync-complete-leaf-test:
 	started_guard_prefix='client::startup_gate::usr_rollback_active_reblit::tests::boot_sync_started_guard_dispatch::'; \
 	test "$$( grep -Ec "^$$started_guard_prefix.*: test$$" "$$listed" )" = 6; \
 	for name in \
-		startup_promoted_boot_sync_started_is_intercepted_unchanged_before_rollback \
+		startup_promoted_boot_sync_started_enters_recovery_without_rollback \
 		startup_exact_pending_boot_sync_started_remains_rollback_eligible \
 		startup_legacy_boot_sync_started_remains_rollback_eligible \
 		startup_conflicting_pending_receipt_correlation_fails_stop_without_rollback \
@@ -51,6 +51,21 @@ forge-startup-active-reblit-boot-sync-complete-leaf-test:
 		database_receipt_chain_and_source_binding_races_fail_stop \
 		fresh_namespace_race_fails_full_plan_revalidation_without_effects; do \
 		grep -Fqx "$$started_authority_prefix$$name: test" "$$listed"; \
+	done; \
+	started_post_advance_prefix='client::startup_gate::usr_rollback_active_reblit::tests::boot_sync_started_post_advance_authority::'; \
+	test "$$( grep -Ec "^$$started_post_advance_prefix.*: test$$" "$$listed" )" = 2; \
+	for name in \
+		caller_supplied_non_successor_is_rejected_before_bound_persistence \
+		exact_successor_validates_same_store_and_canonical_reopen; do \
+		grep -Fqx "$$started_post_advance_prefix$$name: test" "$$listed"; \
+	done; \
+	started_completion_prefix='client::startup_gate::usr_rollback_active_reblit::tests::boot_sync_started_completion_persistence::'; \
+	test "$$( grep -Ec "^$$started_completion_prefix.*: test$$" "$$listed" )" = 3; \
+	for name in \
+		promoted_boot_sync_started_persists_exact_completion_and_returns_reopened_store \
+		promoted_boot_sync_started_all_five_update_faults_reconcile_source_or_successor \
+		promoted_boot_sync_started_all_six_binding_checks_reject_same_bytes_on_new_inode; do \
+		grep -Fqx "$$started_completion_prefix$$name: test" "$$listed"; \
 	done; \
 	races_prefix='client::startup_gate::usr_rollback_active_reblit::tests::boot_sync_complete_startup_evidence_races::'; \
 	test "$$( grep -Ec "^$$races_prefix.*: test$$" "$$listed" )" = 5; \
@@ -78,8 +93,11 @@ forge-startup-active-reblit-boot-sync-complete-leaf-test:
 	dispatch="$$root/startup_gate/active_reblit_boot_sync_complete.rs"; \
 	recovery="$$root/startup_recovery.rs"; \
 	persistence="$$root/startup_recovery/active_reblit_boot_sync_commit_decision.rs"; \
+	started_persistence="$$root/startup_recovery/active_reblit_boot_sync_started_completion.rs"; \
 	reconciliation="$$root/startup_reconciliation.rs"; \
 	started_authority="$$root/startup_reconciliation/active_reblit_boot_sync_started_recovery_authority.rs"; \
+	started_post_advance="$$root/startup_reconciliation/active_reblit_boot_sync_started_recovery_authority/post_advance.rs"; \
+	started_recovery="$$root/startup_gate/active_reblit_boot_sync_started/recovery.rs"; \
 	namespace_root="$$root/startup_reconciliation/activation_namespace.rs"; \
 	started_proof="$$root/startup_reconciliation/activation_namespace/active_reblit_boot_sync_started_proof.rs"; \
 	authority="$$root/startup_reconciliation/active_reblit_boot_sync_complete_authority.rs"; \
@@ -91,16 +109,21 @@ forge-startup-active-reblit-boot-sync-complete-leaf-test:
 	dispatch_tests="$$tests_root/boot_sync_complete_startup_dispatch.rs"; \
 	started_guard_tests="$$tests_root/boot_sync_started_guard_dispatch.rs"; \
 	started_authority_tests="$$tests_root/boot_sync_started_startup_authority.rs"; \
+	started_post_advance_tests="$$tests_root/boot_sync_started_post_advance_authority.rs"; \
+	started_persistence_tests="$$tests_root/boot_sync_started_completion_persistence.rs"; \
 	races_tests="$$tests_root/boot_sync_complete_startup_evidence_races.rs"; \
 	faults_tests="$$tests_root/boot_sync_complete_startup_storage_faults.rs"; \
 	grep -Fqx 'mod active_reblit_boot_sync_complete;' "$$gate"; \
 	grep -Fqx 'mod active_reblit_boot_sync_started;' "$$gate"; \
 	grep -Fqx 'mod active_reblit_boot_sync_commit_decision;' "$$recovery"; \
+	grep -Fqx 'mod active_reblit_boot_sync_started_completion;' "$$recovery"; \
 	grep -Fqx 'mod active_reblit_boot_sync_complete_authority;' "$$reconciliation"; \
 	grep -Fqx 'mod active_reblit_boot_sync_started_recovery_authority;' "$$reconciliation"; \
+	grep -Fqx 'pub(in crate::client) mod recovery;' "$$started_guard_dispatch"; \
+	grep -Fqx 'mod post_advance;' "$$started_authority"; \
 	grep -Fqx 'mod active_reblit_boot_sync_started_proof;' "$$namespace_root"; \
 	grep -Fqx 'mod active_reblit_boot_sync_complete_proof;' "$$namespace_root"; \
-	for module in boot_sync_complete_support boot_sync_complete_startup_authority boot_sync_complete_startup_dispatch boot_sync_complete_startup_evidence_races boot_sync_complete_startup_storage_faults boot_sync_started_guard_dispatch boot_sync_started_startup_authority; do \
+	for module in boot_sync_complete_support boot_sync_complete_startup_authority boot_sync_complete_startup_dispatch boot_sync_complete_startup_evidence_races boot_sync_complete_startup_storage_faults boot_sync_started_completion_persistence boot_sync_started_guard_dispatch boot_sync_started_post_advance_authority boot_sync_started_startup_authority; do \
 		grep -Fqx "mod $$module;" "$$tests_mod"; \
 	done; \
 	grep -Fq 'load_exact_promoted_boot_publication_receipt_chain' "$$started_authority"; \
@@ -128,6 +151,21 @@ forge-startup-active-reblit-boot-sync-complete-leaf-test:
 	grep -Fq 'ReopenedOldBindingAfterFreshCapture' "$$persistence"; \
 	grep -Fq 'after_active_reblit_boot_sync_commit_decision_old_binding_validation();' "$$persistence"; \
 	grep -Fq 'let old_binding_revalidation = post_advance_authority.revalidate_successor_reopened(' "$$persistence"; \
+	test "$$( grep -Fc 'reconcile_and_cleanup_restart_receipt_entry(' "$$started_recovery" )" = 1; \
+	test "$$( grep -Fc 'persist_active_reblit_boot_sync_started_completion_and_reopen(' "$$started_recovery" )" = 1; \
+	grep -Fq 'ActiveReblitPromotedBootCleanupDisposition::NoOp' "$$started_recovery"; \
+	grep -Fq 'ActiveReblitPromotedBootCleanupDisposition::PreserveUnownedStale' "$$started_recovery"; \
+	grep -Fq 'let post_cleanup_authority = authority.revalidate(&journal);' "$$started_recovery"; \
+	test "$$( grep -Fc '.boot_sync_complete_successor(pair)' "$$started_persistence" )" = 1; \
+	test "$$( grep -Fc '.advance_record_binding(&journal, &successor)' "$$started_persistence" )" = 1; \
+	grep -Fq 'reopen_canonical_journal(&installation)' "$$started_persistence"; \
+	grep -Fq 'ReopenedOldBindingAfterFreshCapture' "$$started_persistence"; \
+	grep -Fq 'let old_binding_revalidation =' "$$started_persistence"; \
+	grep -Fq 'post_advance_authority.revalidate_successor_reopened(' "$$started_persistence"; \
+	test "$$( grep -Fc '.advance_record_binding(cast, journal_record_binding, successor)' "$$started_post_advance" )" = 1; \
+	grep -Fq 'pub(in crate::client) fn revalidate_successor_same_store(' "$$started_post_advance"; \
+	grep -Fq 'pub(in crate::client) fn revalidate_successor_reopened(' "$$started_post_advance"; \
+	grep -Fq 'journal.has_reopened_record_binding(cast, binding, successor)?' "$$started_post_advance"; \
 	started_guard_line="$$( grep -nF 'match active_reblit_boot_sync_started::dispatch(' "$$gate" | head -n1 | cut -d: -f1 )"; \
 	dispatch_line="$$( grep -nF 'match active_reblit_boot_sync_complete::dispatch(' "$$gate" | head -n1 | cut -d: -f1 )"; \
 	mutation_line="$$( grep -nF 'ActiveReblitReplacementMutationAuthorityProvider::new(' "$$gate" | head -n1 | cut -d: -f1 )"; \
@@ -142,16 +180,19 @@ forge-startup-active-reblit-boot-sync-complete-leaf-test:
 	test "$$old_hook_line" -lt "$$fresh_capture_line"; test "$$fresh_capture_line" -lt "$$old_revalidation_line"; test "$$old_revalidation_line" -lt "$$fresh_validation_line"; \
 	if rg -n '[.]advance\(' "$$dispatch" "$$persistence" "$$authority" "$$proof"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if rg -n '[.](advance|advance_record_binding)\(' "$$started_guard_dispatch" "$$started_authority" "$$started_proof"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	if rg -n 'boot::|synchronize_(boot|databases|excluding)|run_(transaction|system)_triggers|finalize_usr|journal[.]delete|delete_record_binding|promote_boot_publication_receipt|stage_boot_publication_receipt|fs::(rename|remove|write|set_permissions)|renameat|unlinkat|Command::new|nix::mount|libc::mount' "$$started_guard_dispatch" "$$started_authority" "$$started_proof" "$$dispatch" "$$persistence" "$$authority" "$$proof"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n '[.]advance\(' "$$started_recovery" "$$started_persistence" "$$started_post_advance"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'boot::|synchronize_(boot|databases|excluding)|run_(transaction|system)_triggers|finalize_usr|journal[.]delete|delete_record_binding|promote_boot_publication_receipt|stage_boot_publication_receipt|fs::(rename|remove|write|set_permissions)|renameat|unlinkat|Command::new|nix::mount|libc::mount' "$$started_guard_dispatch" "$$started_authority" "$$started_proof" "$$started_recovery" "$$started_persistence" "$$started_post_advance" "$$dispatch" "$$persistence" "$$authority" "$$proof"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if rg --pcre2 -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct ActiveReblitBootSyncComplete(?:PostAdvance)?Authority|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+ActiveReblitBootSyncComplete(?:PostAdvance)?Authority' "$$authority"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	if rg --pcre2 -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct ActiveReblitBootSyncStartedRecoveryAuthority|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+ActiveReblitBootSyncStartedRecoveryAuthority' "$$started_authority"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	for file in "$$gate" "$$started_guard_dispatch" "$$dispatch" "$$recovery" "$$persistence" "$$reconciliation" "$$started_authority" "$$namespace_root" "$$started_proof" "$$authority" "$$proof" "$$tests_mod" "$$authority_tests" "$$support_tests" "$$dispatch_tests" "$$started_guard_tests" "$$started_authority_tests" "$$races_tests" "$$faults_tests" "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/misc/make/startup-active-reblit-boot-sync-complete-tests.mk"; do \
+	if rg --pcre2 -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct ActiveReblitBootSyncStarted(?:Recovery|PostAdvance)Authority|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+ActiveReblitBootSyncStarted(?:Recovery|PostAdvance)Authority' "$$started_authority" "$$started_post_advance"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	for file in "$$gate" "$$started_guard_dispatch" "$$started_recovery" "$$dispatch" "$$recovery" "$$started_persistence" "$$persistence" "$$reconciliation" "$$started_authority" "$$started_post_advance" "$$namespace_root" "$$started_proof" "$$authority" "$$proof" "$$tests_mod" "$$authority_tests" "$$support_tests" "$$dispatch_tests" "$$started_guard_tests" "$$started_authority_tests" "$$started_post_advance_tests" "$$started_persistence_tests" "$$races_tests" "$$faults_tests" "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/misc/make/startup-active-reblit-boot-sync-complete-tests.mk"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
 	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$authority_prefix" -- --test-threads=1; \
 	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$dispatch_prefix" -- --test-threads=1; \
 	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$started_guard_prefix" -- --test-threads=1; \
 	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$started_authority_prefix" -- --test-threads=1; \
+	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$started_post_advance_prefix" -- --test-threads=1; \
+	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$started_completion_prefix" -- --test-threads=1; \
 	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$races_prefix" -- --test-threads=1; \
 	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$faults_prefix" -- --test-threads=1; \
 	$(CARGO) test --manifest-path "$(STARTUP_ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_TOP_DIR)/Cargo.toml" -p forge --lib "$$classifier_prefix" -- --test-threads=1

@@ -18,6 +18,11 @@ use crate::{
 };
 
 use super::super::{
+    active_reblit_mounted_boot_topology::{
+        ActiveReblitBootReceiptTargetValidationError,
+        ReceiptValidatedActiveReblitBootPublicationTargets,
+        RevalidatedActiveReblitMountedBootTopology,
+    },
     active_reblit_promoted_boot_cleanup_plan::{
         ActiveReblitPromotedBootCleanupPlan,
         ActiveReblitPromotedBootCleanupPlanError,
@@ -35,6 +40,12 @@ use super::activation_namespace::{
     ActiveReblitBootSyncStartedNamespaceInspection,
     ActiveReblitBootSyncStartedNamespaceProof,
     active_reblit_boot_sync_started_namespace_error_is_mismatch,
+};
+
+mod post_advance;
+pub(in crate::client) use post_advance::{
+    ActiveReblitBootSyncStartedPostAdvanceAuthority,
+    ActiveReblitBootSyncStartedRecordAdvanceError,
 };
 
 /// Read-only result at the receipt-promotion boundary.
@@ -288,6 +299,48 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
             );
         }
         Ok(plan)
+    }
+
+    /// Expose only the inert cleanup seal; the exact receipt chain remains
+    /// private authority evidence.
+    pub(in crate::client) fn cleanup_seal(
+        &self,
+    ) -> &ActiveReblitBootSyncStartedCleanupSeal {
+        &self.cleanup_seal
+    }
+
+    /// Bind a freshly revalidated mounted topology to the private exact
+    /// promoted receipt chain without exposing that chain to the caller.
+    pub(in crate::client) fn revalidate_promoted_receipt_targets<'view>(
+        &self,
+        journal: &TransitionJournalStore,
+        topology: &'view RevalidatedActiveReblitMountedBootTopology<'_>,
+    ) -> Result<
+        ReceiptValidatedActiveReblitBootPublicationTargets<'view>,
+        ActiveReblitBootSyncStartedRecoveryAuthorityError,
+    > {
+        self.revalidate(journal)?;
+        if !topology.is_bound_to_installation(&self.installation) {
+            return Err(
+                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::TopologyInstallationMismatch
+                    .into(),
+            );
+        }
+        let targets = topology
+            .revalidate_promoted_receipt_targets(&self.database.receipt_chain);
+        let closing_authority = self.revalidate(journal);
+        match (targets, closing_authority) {
+            (Ok(targets), Ok(())) => Ok(targets),
+            (Err(source), Ok(())) => Err(source.into()),
+            (Ok(_), Err(source)) => Err(source),
+            (Err(targets), Err(authority)) => Err(
+                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptTargetsAndAuthorityChanged {
+                    targets,
+                    authority: Box::new(authority),
+                }
+                .into(),
+            ),
+        }
     }
 
     pub(in crate::client) fn installation(&self) -> &Installation {
@@ -592,6 +645,15 @@ impl From<ActiveReblitPromotedBootCleanupPlanError>
     }
 }
 
+impl From<ActiveReblitBootReceiptTargetValidationError>
+    for ActiveReblitBootSyncStartedRecoveryAuthorityError
+{
+    fn from(source: ActiveReblitBootReceiptTargetValidationError) -> Self {
+        ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptTargets(source)
+            .into()
+    }
+}
+
 impl From<crate::installation::Error>
     for ActiveReblitBootSyncStartedRecoveryAuthorityError
 {
@@ -614,6 +676,8 @@ enum ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind {
     CleanupSealReceiptMismatch,
     #[error("the exact ActiveReblit BootSyncStarted journal-record binding changed")]
     JournalRecordBindingChanged,
+    #[error("the exact ActiveReblit BootSyncComplete successor binding changed")]
+    SuccessorRecordBindingChanged,
     #[error("read or revalidate the exact bound ActiveReblit transition journal")]
     Journal(#[source] StorageError),
     #[error("strictly load the pending boot-publication receipt state")]
@@ -628,6 +692,15 @@ enum ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind {
     CleanupPlan(#[source] ActiveReblitPromotedBootCleanupPlanError),
     #[error("the cleanup plan does not name the exact promoted receipt")]
     CleanupPlanReceiptMismatch,
+    #[error("the live mounted boot topology is not bound to the retained installation")]
+    TopologyInstallationMismatch,
+    #[error("bind live boot publication targets to the exact promoted receipt chain")]
+    ReceiptTargets(#[source] ActiveReblitBootReceiptTargetValidationError),
+    #[error("live boot target validation failed ({targets}) and closing recovery-authority revalidation also failed ({authority})")]
+    ReceiptTargetsAndAuthorityChanged {
+        targets: ActiveReblitBootReceiptTargetValidationError,
+        authority: Box<ActiveReblitBootSyncStartedRecoveryAuthorityError>,
+    },
     #[error("inspect exact cleared ActiveReblit state and metadata provenance")]
     Inspection(#[source] InspectionError),
     #[error("load the complete ActiveReblit target state")]
@@ -645,6 +718,8 @@ enum ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind {
     Namespace(#[source] ActiveReblitBootSyncStartedNamespaceError),
     #[error("exact ActiveReblit BootSyncStarted recovery evidence changed")]
     RouteEvidenceChanged,
+    #[error("the retained record is not the exact ActiveReblit BootSyncComplete successor")]
+    UnexpectedSuccessor,
     #[error("revalidate retained mutable installation namespace")]
     Installation(#[source] crate::installation::Error),
 }

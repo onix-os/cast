@@ -60,6 +60,8 @@ pub(in crate::client) use active_reblit_boot_sync_started_recovery_authority::{
     ActiveReblitBootSyncStartedRecoveryAdmission,
     ActiveReblitBootSyncStartedRecoveryAuthority,
     ActiveReblitBootSyncStartedRecoveryAuthorityError,
+    ActiveReblitBootSyncStartedPostAdvanceAuthority,
+    ActiveReblitBootSyncStartedRecordAdvanceError,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_boot_sync_started_recovery_authority::arm_between_active_reblit_boot_sync_started_database_captures;

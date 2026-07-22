@@ -2,9 +2,8 @@
 //! at `BootSyncStarted`.
 //!
 //! Exact pending and legacy records remain available to conservative rollback.
-//! Exact promoted evidence is captured and revalidated without mutation, then
-//! deliberately discarded so it cannot fall through to rollback before the
-//! later cleanup executor is wired.
+//! Exact promoted evidence instead enters the receipt-owned cleanup
+//! coordinator and can advance only to the exact `BootSyncComplete` successor.
 
 use crate::{
     Installation, db,
@@ -20,6 +19,8 @@ use crate::client::{
         ActiveReblitBootSyncStartedRecoveryAuthorityError,
     },
 };
+
+pub(in crate::client) mod recovery;
 
 pub(super) enum Dispatch {
     Unhandled {
@@ -70,10 +71,8 @@ pub(super) fn dispatch<'reservation>(
             Ok(Dispatch::Handled { journal, record })
         }
         ActiveReblitBootSyncStartedRecoveryAdmission::Ready(authority) => {
-            let cleanup_plan = authority.cleanup_plan(&journal)?;
-            drop(cleanup_plan);
-            drop(authority);
-            Ok(Dispatch::Handled { journal, record })
+            recovery::recover_promoted_cleanup_and_complete(journal, authority)
+                .map_err(Error::Recovery)
         }
     }
 }
@@ -84,6 +83,8 @@ pub(in crate::client) enum Error {
     Record(#[source] CodecError),
     #[error("capture exact promoted ActiveReblit BootSyncStarted recovery authority")]
     Authority(#[from] ActiveReblitBootSyncStartedRecoveryAuthorityError),
+    #[error("resume exact promoted ActiveReblit BootSyncStarted cleanup")]
+    Recovery(#[from] recovery::Error),
     #[error("exact ActiveReblit BootSyncStarted record was rejected as not applicable")]
     ExactCheckpointRejectedAsNotApplicable,
 }
