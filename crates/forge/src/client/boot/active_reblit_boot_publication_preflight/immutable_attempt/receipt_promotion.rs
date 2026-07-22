@@ -5,9 +5,10 @@
 //! read-only publication preflight under the original deadline, authenticates
 //! the exact staged journal and database state before requesting the sole
 //! database mutation, and repeats both sides after a successful database
-//! return. The journal deliberately remains at `BootSyncStarted`; this module
-//! cannot mint `BootSyncComplete`, replace or delete a boot file, or clean old
-//! receipts.
+//! return. The promoted terminal value can then be consumed by this module's
+//! completion child to persist the exact receipt-bound `BootSyncComplete`
+//! successor. Neither boundary can replace or delete a boot file, decide the
+//! commit, or clean old receipts.
 
 use std::time::Instant;
 
@@ -45,8 +46,8 @@ use super::{
 /// Terminal exact publication whose canonical receipt is now committed.
 ///
 /// The original terminal token remains owned rather than being projected into
-/// detached receipt data. This value is non-`Clone` and is the intended input
-/// boundary for a later `BootSyncComplete` implementation.
+/// detached receipt data. This value is non-`Clone` and is the sole input to
+/// the exact `BootSyncComplete` persistence boundary.
 #[must_use = "promoted boot-publication authority must be durably completed or deliberately discarded"]
 pub(in crate::client) struct PromotedExactActiveReblitBootPublication<
     'plan,

@@ -616,11 +616,25 @@ closure remain authoritative in `PLAN.md`.
   update. Exact already-promoted adoption is read-only. A reconciled ambiguous
   COMMIT report exposes only durable classification and never a success token;
   every later drift likewise returns no token while retaining the exact returned
-  outcome for diagnosis. The journal remains byte-stable at `BootSyncStarted`.
-  Focused gates pass 20/20 terminal-bridge, 18/18 database, and 24/24 aggregate
-  tests. Journal persistence to `BootSyncComplete`, same-receipt startup
-  recovery, actual repair, replacement/deletion authority, selected-payload
-  bootability, reboot, and power-loss proof remain open.
+  outcome for diagnosis. Focused gates pass 20/20 terminal-bridge, 18/18
+  database, and 24/24 aggregate tests. Accepted commit
+  `58235570a8022e3bb2a307fbb4b6968628d37435` consumes the resulting exact
+  non-`Clone` promoted authority through the typed `BootSyncComplete` successor
+  and one deadline-bound journal advance. It twice revalidates promoted staging
+  against the exact terminal outputs, topology, receipt, plan, and inherited
+  monotonic deadline before that advance. Success validates the old store,
+  drops its old handle, reopens the canonical journal, proves the returned successor
+  inode, captures a fresh binding, drops the old-store binding, and completes
+  another exact receipt/terminal-state validation sandwich. All failures consume
+  authority. Fresh durable classification may expose only exact `BootSyncStarted`
+  or `BootSyncComplete`; when classification fails, the path fails stop.
+  The focused completion gate passes 9/9 tests covering 19 scenarios; its
+  terminal-promotion and direct-journal dependencies pass 20/20 and 132/132.
+  This is component-level same-process persistence with fresh-handle reopen,
+  not same-receipt startup recovery or live coordinator wiring. Actual repair,
+  boot replacement/deletion authority, selected-payload bootability and
+  durability, device flush, interruption, reboot, and power-loss proof remain
+  open.
   At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable
   UEFI guest passed the focused receipt/staging Make lane with its declared
   dependencies, all 12 receipt-database tests, and all 9 production staging
