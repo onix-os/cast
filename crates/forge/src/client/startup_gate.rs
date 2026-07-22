@@ -68,6 +68,24 @@ impl ActiveReblitReplacementMutationSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting exact forward ActiveReblit
+/// `BootSyncComplete` adoption to this writer-first startup gate.
+pub(in crate::client) struct ActiveReblitBootSyncCompleteSeal {
+    _private: (),
+}
+
+impl ActiveReblitBootSyncCompleteSeal {
+    #[allow(dead_code)] // live dispatch is deliberately outside the read-only authority slice
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
 /// Unforgeable safe-code token limiting rollback-decision authority capture
 /// to this writer-first startup gate.
 pub(in crate::client) struct UsrRollbackDecisionSeal {

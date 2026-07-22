@@ -50,7 +50,9 @@ pub(in crate::client::startup_reconciliation) fn started_namespace_error_is_stru
     }
 }
 
-fn capture_error_is_structural(error: &CaptureError) -> bool {
+pub(in crate::client::startup_reconciliation::activation_namespace) fn capture_error_is_structural(
+    error: &CaptureError,
+) -> bool {
     match error {
         CaptureError::Installation(_)
         | CaptureError::RuntimeEpoch(_)

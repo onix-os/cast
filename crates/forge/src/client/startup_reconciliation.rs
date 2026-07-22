@@ -24,6 +24,8 @@ use crate::{
 };
 
 mod activation_namespace;
+#[allow(dead_code)] // read-only startup boundary; live dispatch is deliberately a later slice
+mod active_reblit_boot_sync_complete_authority;
 mod active_reblit_boot_repair_evidence;
 mod database_evidence;
 #[cfg(test)]
@@ -50,6 +52,16 @@ mod usr_exchanged_root_abi_authority;
 #[cfg(test)]
 pub(in crate::client) use focused_test_exports::*;
 
+#[allow(unused_imports)] // exported for focused startup adoption and the later persistence leaf
+pub(in crate::client) use active_reblit_boot_sync_complete_authority::{
+    ActiveReblitBootSyncCompleteAdmission, ActiveReblitBootSyncCompleteAuthority,
+    ActiveReblitBootSyncCompleteAuthorityError, ActiveReblitBootSyncCompletePostAdvanceAuthority,
+    ActiveReblitBootSyncCompleteRecordAdvanceError,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_boot_sync_complete_authority::arm_between_active_reblit_boot_sync_complete_database_captures;
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::{
     UsrRollbackActivateArchivedCompleteRouteAdmission, UsrRollbackActivateArchivedCompleteRouteAuthority,

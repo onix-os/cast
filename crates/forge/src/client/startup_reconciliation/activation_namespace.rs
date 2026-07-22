@@ -19,6 +19,7 @@ mod active_reblit_boot_repair_complete_proof;
 mod active_reblit_boot_repair_required_proof;
 mod active_reblit_boot_repair_started_error_classification;
 mod active_reblit_boot_repair_started_proof;
+mod active_reblit_boot_sync_complete_proof;
 mod active_reblit_complete_route_proof;
 mod active_reblit_finalization_proof;
 mod candidate_preserve_proof;
@@ -84,6 +85,12 @@ pub(super) use active_reblit_boot_repair_started_proof::{
     UsrRollbackActiveReblitBootRepairStartedNamespaceError,
     UsrRollbackActiveReblitBootRepairStartedNamespaceInspection,
     UsrRollbackActiveReblitBootRepairStartedNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_boot_sync_complete_proof::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
+pub(super) use active_reblit_boot_sync_complete_proof::{
+    ActiveReblitBootSyncCompleteNamespaceError, ActiveReblitBootSyncCompleteNamespaceInspection,
+    ActiveReblitBootSyncCompleteNamespaceProof, active_reblit_boot_sync_complete_namespace_error_is_mismatch,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_complete_route_proof::arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture;

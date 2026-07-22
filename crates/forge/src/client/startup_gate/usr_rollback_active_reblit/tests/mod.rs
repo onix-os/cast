@@ -15,6 +15,7 @@ mod boot_repair_required_storage_faults;
 mod boot_repair_unverified_capture_faults;
 mod boot_repair_unverified_retention;
 mod boot_repair_unverified_storage_faults;
+mod boot_sync_complete_startup_authority;
 mod candidate_wrapper_exchange_kill_boundaries;
 mod candidate_wrapper_exchange_process_harness;
 mod candidate_wrapper_exchange_process_kill;
