@@ -628,13 +628,23 @@ closure remain authoritative in `PLAN.md`.
   another exact receipt/terminal-state validation sandwich. All failures consume
   authority. Fresh durable classification may expose only exact `BootSyncStarted`
   or `BootSyncComplete`; when classification fails, the path fails stop.
-  The focused completion gate passes 9/9 tests covering 19 scenarios; its
-  terminal-promotion and direct-journal dependencies pass 20/20 and 132/132.
-  This is component-level same-process persistence with fresh-handle reopen,
-  not same-receipt startup recovery or live coordinator wiring. Actual repair,
-  boot replacement/deletion authority, selected-payload bootability and
-  durability, device flush, interruption, reboot, and power-loss proof remain
-  open.
+  Accepted commit `591e8fd7` adds a separate production-startup authority for an
+  exact v3 ActiveReblit `BootSyncComplete` record backed by the promoted receipt,
+  full candidate state and provenance, selected active state, reservation, bound
+  journal inode, and unchanged namespace. Accepted commit `facd9729` dispatches
+  that checkpoint before replacement cleanup, root-ABI normalization, and every
+  rollback route. Ready authority performs exactly one bound advance to the sole
+  `CommitDecided` successor, validates it in the original store and canonical
+  reopen, repeats the old-binding proof after fresh-binding capture, and returns
+  `RecoveryPending` immediately; deferred legacy, unpromoted, or stable mismatch
+  evidence remains exact `BootSyncComplete` and cannot fall through to rollback.
+  The isolated prerequisite passes 20/20. The new leaf groups pass 6 authority,
+  4 dispatch, 5 race, 1 ten-case storage-fault matrix, and 2 classifier tests;
+  `make check` and source-LOC pass. The full aggregate dependency is not credited
+  because unrelated existing two-second Gluon deadline tests flaked under
+  cumulative load. `CommitDecided` cleanup, current receipt-head cleanup, later roll-forward through
+  `Complete` and finalization, process death, reboot, and power-loss proof remain
+  open, as do boot replacement/deletion and selected-payload bootability.
   At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable
   UEFI guest passed the focused receipt/staging Make lane with its declared
   dependencies, all 12 receipt-database tests, and all 9 production staging

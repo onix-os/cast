@@ -167,6 +167,20 @@ authority are deferred here.
   filesystem, descriptor, write, rename, unlink, and delete APIs. Reuse it only
   when those types remove duplication from the real authenticated publication
   path rather than adding another unconsumed foundation.
+- After the operation-specific recovery routes are complete and repeated
+  structure is measured, consider an optional generic typed roll-forward and
+  exchange-persistence framework. It may factor exact binding capture,
+  one-successor persistence, canonical reopen, and durable error
+  classification, but must not erase phase-specific sealed authorities or
+  weaken operation-specific database and namespace proofs. This is a later
+  refactor, not a prerequisite for finishing the explicit current routes.
+- Define a separate long-term retention and garbage-collection policy for old
+  immutable boot-receipt bodies and preserved corrupt or quarantined wrappers.
+  It must specify authenticated reachability, minimum forensic and rollback
+  retention, bounded storage policy, operator audit/export, deletion authority,
+  and crash-safe reconciliation before removing anything. Until that policy is
+  approved, ambiguous evidence stays preserved; this must not substitute for
+  cleanup or finalization already required by [`PLAN.md`](PLAN.md).
 
 ## Archived research
 
