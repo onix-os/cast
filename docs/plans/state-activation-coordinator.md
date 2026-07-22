@@ -642,8 +642,8 @@ closure remain authoritative in `PLAN.md`.
   4 dispatch, 5 race, 1 ten-case storage-fault matrix, and 2 classifier tests;
   `make check` and source-LOC pass. The full aggregate dependency is not credited
   because unrelated existing two-second Gluon deadline tests flaked under
-  cumulative load. `CommitDecided` cleanup, current receipt-head cleanup, later roll-forward through
-  `Complete` and finalization, process death, reboot, and power-loss proof remain
+  cumulative load. Accepted commits `c0aae8bc`, `eed3d733`, and `1167383e` production-wire exact `CommitDecided` through at most one cleanup exchange, the shared durability suffix, and one authenticated bound advance to `CommitCleanupComplete`; the 6 authority/classifier + 3 effect + 4 persistence/dispatch tests, `make check`, and source-LOC pass.
+  Current receipt-head cleanup, `CommitCleanupComplete` -> `Complete`, finalization, cleanup process death, reboot, and power-loss proof remain
   open, as do boot replacement/deletion and selected-payload bootability.
   At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable
   UEFI guest passed the focused receipt/staging Make lane with its declared
