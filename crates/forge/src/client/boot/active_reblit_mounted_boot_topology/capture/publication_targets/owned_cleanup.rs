@@ -34,6 +34,8 @@ use super::RevalidatedActiveReblitBootPublicationTarget;
 #[cfg(test)]
 #[path = "owned_cleanup/fixture.rs"]
 mod fixture;
+#[path = "owned_cleanup/restart.rs"]
+mod restart;
 
 #[cfg(test)]
 pub(in crate::client) use fixture::{
@@ -55,6 +57,23 @@ pub(in crate::client) enum ActiveReblitBootOwnedCleanupOutcome {
 /// request, recovered cleanup authority, or retry callback escapes.
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootOwnedCleanupError {
+    #[error("restart cleanup entry {entry_index} is outside the exact plan of {entry_count} entries")]
+    RestartEntryIndex {
+        entry_index: usize,
+        entry_count: usize,
+    },
+    #[error("the startup cleanup seal belongs to a different promoted receipt")]
+    RestartSealReceiptMismatch,
+    #[error("the live receipt-validated targets belong to a different promoted receipt")]
+    RestartTargetReceiptMismatch,
+    #[error("restart cleanup entry {entry_index} is not an owned mutation action")]
+    RestartDispositionRefused { entry_index: usize },
+    #[error("restart cleanup entry {entry_index} has an invalid replacement/stale shape")]
+    RestartEntryShape { entry_index: usize },
+    #[error("restart cleanup entry {entry_index} conflicts with the live alias/distinct target shape")]
+    RestartTargetShape { entry_index: usize },
+    #[error("restart cleanup entry {entry_index} routed to a target with the wrong role")]
+    RestartTargetRole { entry_index: usize },
     #[error("replacement plan output {plan_index} has unsupported mode {found:o}")]
     ReplacementMode { plan_index: usize, found: u32 },
     #[error("replacement plan output {plan_index} path is not UTF-8")]

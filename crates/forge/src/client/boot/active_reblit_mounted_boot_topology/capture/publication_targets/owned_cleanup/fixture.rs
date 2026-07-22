@@ -134,7 +134,7 @@ impl FixtureOwnedCleanupTarget {
         })
     }
 
-    fn with_real_target<Result>(
+    pub(super) fn with_real_target<Result>(
         self,
         synthetic: &RevalidatedActiveReblitBootPublicationTarget<'_>,
         operation: impl FnOnce(

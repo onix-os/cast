@@ -11,7 +11,9 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::'; \
+	restart_prefix='client::active_reblit_mounted_boot_topology::capture::publication_targets::owned_cleanup::restart::tests::'; \
 	test "$$( grep -Ec "^$$prefix(routing|integration|durable_state|failures|installed_replacement)::.*: test$$" "$$listed" )" = 9; \
+	test "$$( grep -Ec "^$$restart_prefix.*: test$$" "$$listed" )" = 4; \
 	for name in \
 		routing::alias_and_distinct_routes_preserve_global_plan_order \
 		integration::staged_alias_attempt_publishes_in_phase_order_and_terminally_observes_exact \
@@ -24,6 +26,13 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 		failures::leaf_failure_stops_before_later_outputs_and_retains_pending_started; do \
 		grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
+	for name in \
+		exact_receipt_plan_live_alias_targets_and_startup_seal_drive_restart_cleanup \
+		receipt_replacement_reconstructs_fresh_authority_then_is_already_clean \
+		receipt_stale_cleanup_reconciles_canonical_detached_and_already_clean \
+		restart_admission_refuses_receipt_drift_noop_and_unowned_preserve; do \
+		grep -Fqx "$$restart_prefix$$name: test" "$$listed"; \
+	done; \
 	staging="$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging/immutable_publication_attempt.rs"; \
 	attempt="$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt.rs"; \
 	execution="$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/execution_schedule.rs"; \
@@ -34,6 +43,8 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 	cleanup="$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/promoted_cleanup.rs"; \
 	cleanup_bridge="$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_mounted_boot_topology/capture/publication_targets/owned_cleanup.rs"; \
 	cleanup_fixture="$${cleanup_bridge%.rs}/fixture.rs"; \
+	restart_cleanup="$${cleanup_bridge%.rs}/restart.rs"; \
+	restart_cleanup_tests="$${cleanup_bridge%.rs}/restart_tests.rs"; \
 	tests="$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/tests"; \
 	installed_replacement="$$tests/installed_replacement.rs"; \
 	forge_root="$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/crates/forge/src"; \
@@ -76,6 +87,26 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 	grep -Fq '.cleanup_replaced_boot_file_sidecar_until(recovered, deadline)' "$$cleanup_bridge"; \
 	grep -Fq '.reconcile_stale_boot_file_cleanup_until(' "$$cleanup_bridge"; \
 	grep -Fq '.cleanup_authenticated_stale_boot_file_until(recovered, deadline)' "$$cleanup_bridge"; \
+	grep -Fq 'impl ReceiptValidatedActiveReblitBootPublicationTargets' "$$restart_cleanup"; \
+	grep -Fq 'fn reconcile_and_cleanup_restart_receipt_entry(' "$$restart_cleanup"; \
+	grep -Fq 'cleanup_seal: &ActiveReblitBootSyncStartedCleanupSeal' "$$restart_cleanup"; \
+	grep -Fq 'cleanup_seal.promoted_receipt()' "$$restart_cleanup"; \
+	grep -Fq 'plan.promoted_receipt()' "$$restart_cleanup"; \
+	grep -Fq 'validated.aliases_esp' "$$restart_cleanup"; \
+	grep -Fq 'BootPublicationRoot::Esp | BootPublicationRoot::Boot' "$$restart_cleanup"; \
+	grep -Fq 'BootTargetRole::Xbootldr' "$$restart_cleanup"; \
+	for disposition in ReplaceOwned DeleteOwnedStale NoOp PreserveUnownedStale; do \
+		grep -Fq "ActiveReblitPromotedBootCleanupDisposition::$$disposition" "$$restart_cleanup"; \
+	done; \
+	grep -Fq 'output.length()' "$$restart_cleanup"; \
+	grep -Fq 'output.xxh3().as_u128()' "$$restart_cleanup"; \
+	grep -Fq '*output.content_sha256().as_bytes()' "$$restart_cleanup"; \
+	grep -Fq '.reconcile_replaced_boot_file_sidecar_cleanup_until(' "$$restart_cleanup"; \
+	grep -Fq 'RetainedBootFileAppliedSidecarCleanupState::Pending(recovered)' "$$restart_cleanup"; \
+	grep -Fq '.cleanup_replaced_boot_file_sidecar_until(recovered, deadline)' "$$restart_cleanup"; \
+	grep -Fq '.reconcile_stale_boot_file_cleanup_until(' "$$restart_cleanup"; \
+	grep -Fq 'RetainedBootFileStaleCleanupState::Detached(recovered)' "$$restart_cleanup"; \
+	grep -Fq '.cleanup_authenticated_stale_boot_file_until(recovered, deadline)' "$$restart_cleanup"; \
 	seal_mentions="$$( rg -n -o 'ActiveReblitBootPromotedCleanupSeal::new\(' "$$forge_root" --glob '*.rs' --glob '!**/tests/**' --glob '!**/*_tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_test.rs' --glob '!**/test_support.rs' --glob '!**/*_test_support.rs' --glob '!**/fixtures/**' --glob '!**/fixtures.rs' --glob '!**/*_fixtures.rs' --glob '!**/*_fixture.rs' --glob '!**/fixture_support.rs' --glob '!**/*_fixture_support.rs' )"; \
 	test "$$( grep -c . <<<"$$seal_mentions" )" = 1; \
 	grep -Fq "$$cleanup:" <<<"$$seal_mentions"; \
@@ -84,8 +115,10 @@ forge-active-reblit-boot-immutable-publication-attempt-test: host-storage-safety
 	grep -Fq "$$cleanup:" <<<"$$clean_marks"; \
 	if rg -n 'Phase::BootSyncComplete|forward_successor|advance_record_binding|promote_boot_publication|clear_boot_publication|delete_boot_publication' "$$staging" "$$attempt" "$$execution" "$$evidence" "$$leaf"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if rg -n 'Phase::BootSyncComplete|boot_sync_complete_successor|advance_record_binding|promote_boot_publication_receipt|clear_boot_publication|delete_boot_publication|Command::new|nix::mount|libc::mount|[.]remove_file|[.]rename|unlinkat|renameat' "$$cleanup" "$$cleanup_bridge"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'historical_runtime_witness|ValidatedRetainedBootFileReplacement|ActiveReblitBootPromotedCleanupSeal|diesel::|SqliteConnection|TransitionJournal|std::fs|fs_err|Command::new|nix::mount|libc::mount' "$$restart_cleanup"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct StagedExactActiveReblitBootPublication|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+StagedExactActiveReblitBootPublication' "$$attempt"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	for file in "$$staging" "$$attempt" "$$execution" "$$evidence" "$$leaf" "$$replacement" "$$promoted_validation" "$$cleanup" "$$cleanup_bridge" "$$cleanup_fixture" "$$tests.rs" "$$tests"/*.rs "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/misc/make/active-reblit-boot-immutable-publication-attempt-tests.mk"; do \
+	for file in "$$staging" "$$attempt" "$$execution" "$$evidence" "$$leaf" "$$replacement" "$$promoted_validation" "$$cleanup" "$$cleanup_bridge" "$$cleanup_fixture" "$$restart_cleanup" "$$restart_cleanup_tests" "$$tests.rs" "$$tests"/*.rs "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/misc/make/active-reblit-boot-immutable-publication-attempt-tests.mk"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
-	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1
+	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1; \
+	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_IMMUTABLE_ATTEMPT_TOP_DIR)/Cargo.toml" -p forge --lib "$$restart_prefix" -- --test-threads=1
