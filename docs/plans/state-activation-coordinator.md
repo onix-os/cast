@@ -605,22 +605,22 @@ closure remain authoritative in `PLAN.md`.
   remount, a fresh deterministic invocation classified every output
   `AlreadyExact`. That campaign proves ordered immutable aggregate publication
   and remount persistence, not same-receipt continuity or boot completion.
-  Accepted commit `323f776e1121a0173338a312d67d371e2cd33439` adds the separate
-  database-only pending-to-committed receipt boundary. An ordinary strict read
-  returns exact already-promoted retries without taking an exclusive lock;
-  pending state is revalidated inside one exclusive transaction before one
-  conditional singleton-head update. Both canonical bodies and the immediate
-  predecessor remain mandatory through terminal and post-commit
-  reconciliation. A genuine deferred-foreign-key COMMIT failure is rolled back
-  through Diesel's transaction manager, classified as exact durable pending,
-  and followed successfully by another promotion on the same database handle.
-  The focused Make gate passes 14/14 tests. This primitive remains unwired and
-  grants no aggregate-result, journal, filesystem, publication, deletion,
-  cleanup, or `BootSyncComplete` authority. The next boundary must consume
-  authenticated terminal aggregate evidence before it may invoke promotion;
-  journal persistence to `BootSyncComplete`, same-receipt startup recovery,
-  actual repair, replacement/deletion authority, selected-payload bootability,
-  reboot, and power-loss proof remain open.
+  Accepted commit `323f776e1121a0173338a312d67d371e2cd33439` adds the exact
+  pending-to-committed receipt boundary. Accepted commit
+  `fffb79f70f9c0b1cb380f3e8df64a015ad241816` now gives it exactly one production
+  caller by consuming the non-Clone terminal aggregate publication authority.
+  Fresh complete namespace/topology and exact journal-inode/record, plan, and
+  database checks precede promotion and run twice after its successful return.
+  Pending mutation is revalidated inside one exclusive transaction; the same
+  inherited monotonic deadline is checked immediately before its sole head
+  update. Exact already-promoted adoption is read-only. A reconciled ambiguous
+  COMMIT report exposes only durable classification and never a success token;
+  every later drift likewise returns no token while retaining the exact returned
+  outcome for diagnosis. The journal remains byte-stable at `BootSyncStarted`.
+  Focused gates pass 20/20 terminal-bridge, 18/18 database, and 24/24 aggregate
+  tests. Journal persistence to `BootSyncComplete`, same-receipt startup
+  recovery, actual repair, replacement/deletion authority, selected-payload
+  bootability, reboot, and power-loss proof remain open.
   At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable
   UEFI guest passed the focused receipt/staging Make lane with its declared
   dependencies, all 12 receipt-database tests, and all 9 production staging
