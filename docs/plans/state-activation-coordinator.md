@@ -642,9 +642,9 @@ closure remain authoritative in `PLAN.md`.
   4 dispatch, 5 race, 1 ten-case storage-fault matrix, and 2 classifier tests;
   `make check` and source-LOC pass. The full aggregate dependency is not credited
   because unrelated existing two-second Gluon deadline tests flaked under
-  cumulative load. Accepted commits `c0aae8bc`, `eed3d733`, and `1167383e` production-wire exact `CommitDecided` through at most one cleanup exchange, the shared durability suffix, and one authenticated bound advance to `CommitCleanupComplete`; the 6 authority/classifier + 3 effect + 4 persistence/dispatch tests, `make check`, and source-LOC pass.
-  Current receipt-head cleanup, `CommitCleanupComplete` -> `Complete`, finalization, cleanup process death, reboot, and power-loss proof remain
-  open, as do boot replacement/deletion and selected-payload bootability.
+  cumulative load. Accepted commits `c0aae8bc`, `eed3d733`, and `1167383e` production-wire exact `CommitDecided` through at most one cleanup exchange, the shared durability suffix, and one authenticated bound advance to `CommitCleanupComplete`; the 6 authority/classifier + 3 effect + 4 persistence/dispatch tests, `make check`, and source-LOC pass. Accepted commit `84f16fd7` admits only exact v3 `CommitCleanupComplete`, retires a Promoted singleton receipt head once or accepts already-Retired evidence without a database mutation, retains and authenticates the current and optional predecessor immutable bodies, and publishes the sole bound `Complete` successor before immediate `RecoveryPending`.
+  Its 5 focused tests cover current/historical Apply and Finish with byte-stable `Complete` re-entry, after-commit retirement uncertainty and zero-mutation Finish recovery, all five journal faults, six same-byte/new-inode binding windows, and focused database/namespace races; the focused Make gate, `make check`, and source-LOC pass. Forward `Complete` finalization, cleanup process death, reboot, and power-loss proof remain
+  open, as do boot replacement/deletion and selected-payload bootability; long-term immutable-body GC remains in `FUTURE_PLAN.md`.
   At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the disposable
   UEFI guest passed the focused receipt/staging Make lane with its declared
   dependencies, all 12 receipt-database tests, and all 9 production staging
