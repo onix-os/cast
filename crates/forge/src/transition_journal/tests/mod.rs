@@ -243,6 +243,13 @@ fn advance_record(current: &TransitionRecord, phase: Phase) -> TransitionRecord 
 }
 
 fn legal_forward_advance(current: &TransitionRecord) -> TransitionRecord {
+    if current.phase == Phase::BootSyncStarted {
+        let expected_pair = current
+            .boot_publication_receipt_correlation()
+            .unwrap()
+            .expect("v3 boot-sync-started test record carries receipt correlation");
+        return current.boot_sync_complete_successor(expected_pair).unwrap();
+    }
     let current_phase = current.phase.forward().unwrap();
     let phase = next_forward_phase(current, current_phase).unwrap().into();
     advance_record(current, phase)
@@ -366,6 +373,7 @@ fn assert_no_journal_temporaries(root: &Path) {
 
 
 include!("boot_publication_receipts.rs");
+include!("boot_sync_complete_successor.rs");
 include!("record_contract.rs");
 include!("record_binding.rs");
 include!("record_binding_delete.rs");

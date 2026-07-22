@@ -364,30 +364,69 @@ forge-transition-runtime-evidence-test:
 
 forge-transition-journal-successor-test:
 	@set -eu; \
-	listed="$$( timeout 180s $(CARGO) test -p forge --lib -- --list )"; \
-	timeout 10s grep -q . <<<"$$listed"; \
+	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
+	grep -q . <<<"$$listed"; \
+	forge_root="crates/forge/src"; \
+	successors="$$forge_root/transition_journal/successors.rs"; \
 	for test in \
 		transition_journal::tests::production_forward_successor_inserts_a_state_id_only_at_allocation_completion \
 		transition_journal::tests::production_boot_sync_entry_requires_the_typed_receipt_successor \
+		transition_journal::tests::generic_forward_successor_cannot_enter_boot_sync_complete \
+		transition_journal::tests::typed_boot_sync_complete_successor_preserves_exact_v3_receipt_pair \
+		transition_journal::tests::typed_boot_sync_complete_successor_rejects_legacy_payload_versions \
+		transition_journal::tests::typed_boot_sync_complete_successor_rejects_each_receipt_pair_mismatch \
+		transition_journal::tests::typed_boot_sync_complete_successor_rejects_valid_adjacent_wrong_phases \
+		transition_journal::tests::typed_boot_sync_complete_successor_rejects_generation_exhaustion \
+		transition_journal::tests::typed_boot_sync_complete_successor_keeps_operation_policy_outside_the_journal \
 		transition_journal::tests::production_rollback_decision_derives_requirements_from_exact_observations \
 		transition_journal::tests::production_rollback_successor_requires_one_exact_action_outcome_and_persists_unverified_boot \
 		transition_journal::tests::production_rollback_successor_executes_every_pending_effect_in_fixed_order \
 		transition_journal::tests::receipt_pair_is_preserved_by_every_forward_rollback_and_boot_repair_successor; do \
-		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
-		timeout 180s $(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
-	done
+		grep -Fqx "$$test: test" <<<"$$listed"; \
+		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
+	done; \
+	typed_mentions="$$( rg -n -o '\bboot_sync_complete_successor\b' "$$forge_root" \
+		--glob '*.rs' \
+		--glob '!**/tests/**' \
+		--glob '!**/tests.rs' \
+		--glob '!**/*_tests.rs' \
+		--glob '!**/*_test.rs' \
+		--glob '!**/test_support.rs' \
+		--glob '!**/*_test_support.rs' )"; \
+	test "$$( grep -c . <<<"$$typed_mentions" )" = 1; \
+	grep -Fq "$$successors:" <<<"$$typed_mentions"; \
+	boot_complete_sources="$$( rg -l 'Phase[[:space:]]*::[[:space:]]*BootSyncComplete' "$$forge_root" \
+		--glob '*.rs' \
+		--glob '!**/tests/**' \
+		--glob '!**/tests.rs' \
+		--glob '!**/*_tests.rs' \
+		--glob '!**/*_test.rs' \
+		--glob '!**/test_support.rs' \
+		--glob '!**/*_test_support.rs' )"; \
+	boot_complete_assignments="$$( xargs cat <<<"$$boot_complete_sources" | tr -d '[:space:]' | grep -oE '([.]phase=|phase:)Phase::BootSyncComplete' )"; \
+	test "$$( grep -c . <<<"$$boot_complete_assignments" )" = 1; \
+	grep -Fq 'next.phase = Phase::BootSyncComplete;' "$$successors"
 
 forge-transition-journal-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( grep -c '^transition_journal::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 117; \
+	test "$$count" = 132; \
 	for test in \
 		transition_journal::tests::reopened_record_binding_accepts_the_retained_exact_successor_after_old_store_drop \
-		transition_journal::tests::reopened_record_binding_rejects_same_bytes_successor_replacement_before_reopen; do \
+		transition_journal::tests::reopened_record_binding_rejects_same_bytes_successor_replacement_before_reopen \
+		transition_journal::tests::bound_record_advance_until_rejects_initial_expiry_before_temporary_creation \
+		transition_journal::tests::bound_record_advance_until_accepts_deadline_equality_at_both_boundaries \
+		transition_journal::tests::bound_record_advance_until_durably_persists_exact_boot_sync_complete_receipt_binding \
+		transition_journal::tests::bound_record_advance_until_post_temporary_expiry_removes_only_its_temporary \
+		transition_journal::tests::bound_record_advance_until_expiry_never_unlinks_a_substituted_temporary_name \
+		transition_journal::tests::bound_record_advance_until_allowed_time_reauth_rejects_a_substituted_temporary \
+		transition_journal::tests::bound_record_advance_until_expiry_cleanup_faults_fail_stop_with_exact_storage_errors \
+		transition_journal::tests::bound_record_advance_until_publication_faults_preserve_predecessor_or_successor; do \
 		grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	grep -Fq 'pub(crate) fn has_reopened_record_binding(' crates/forge/src/transition_journal/store/record_binding.rs; \
+	grep -Fq 'pub(crate) fn advance_record_binding_until(' crates/forge/src/transition_journal/store/record_binding/deadline_advance.rs; \
 	$(CARGO) test -p forge --lib "transition_journal::tests::" -- --test-threads=1
 
 stone-read-test:

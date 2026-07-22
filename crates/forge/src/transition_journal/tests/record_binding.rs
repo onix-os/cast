@@ -227,3 +227,5 @@ fn reopened_record_binding_rejects_same_bytes_successor_replacement_before_reope
     assert_ne!((retained.dev(), retained.ino()), (replacement.dev(), replacement.ino()));
     assert_no_journal_temporaries(temporary.path());
 }
+
+include!("record_binding_deadline.rs");

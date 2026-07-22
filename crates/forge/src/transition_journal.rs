@@ -49,11 +49,15 @@ pub(crate) use runtime_evidence::RuntimeEvidenceError;
 pub(crate) use store::{
     DeleteResidueRecoveryDurabilityBoundary, DeleteResidueRecoveryRevalidationBoundary,
     JournalDeleteDurabilityBoundary, JournalUpdateDurabilityBoundary, PublicBindingRevalidationBoundary,
+    ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
+    arm_bound_advance_before_final_deadline_callback,
     arm_delete_residue_recovery_durability_callback, arm_delete_residue_recovery_revalidation_callback,
     arm_bound_delete_private_name_callback, arm_journal_delete_durability_callback,
     arm_journal_update_durability_callback, arm_public_binding_revalidation_callback,
     assert_delete_residue_recovery_durability_callback_consumed,
     assert_delete_residue_recovery_revalidation_callback_consumed,
+    assert_bound_advance_before_expired_cleanup_callback_consumed,
+    assert_bound_advance_before_final_deadline_callback_consumed,
     assert_bound_delete_private_name_callback_consumed, assert_public_binding_revalidation_callback_consumed,
 };
 #[allow(unused_imports)] // consumed by the bound terminal-finalizer wiring slice
@@ -254,6 +258,8 @@ pub(crate) enum StorageError {
     ExpectedRecordMismatch,
     #[error("invalid state-transition journal advance")]
     InvalidAdvance(#[source] CodecError),
+    #[error("bound state-transition journal advance deadline {deadline:?} was exceeded")]
+    BoundAdvanceDeadlineExceeded { deadline: std::time::Instant },
     #[error("a nonterminal state-transition journal cannot be deleted")]
     DeleteNonterminal,
     #[error("create or open the internal transition-journal lock")]

@@ -19,7 +19,10 @@ mod delete_residue_recovery;
 mod stale_temporary_cleanup;
 #[cfg(test)]
 pub(crate) use record_binding::{
-    arm_bound_delete_private_name_callback, assert_bound_delete_private_name_callback_consumed,
+    ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
+    arm_bound_advance_before_final_deadline_callback, arm_bound_delete_private_name_callback,
+    assert_bound_advance_before_expired_cleanup_callback_consumed,
+    assert_bound_advance_before_final_deadline_callback_consumed, assert_bound_delete_private_name_callback_consumed,
 };
 #[cfg(test)]
 pub(crate) use delete_residue_recovery::{
@@ -52,6 +55,8 @@ pub(super) enum StorageFaultPoint {
     UpdateFirstDirectorySync,
     DisplacedUnlink,
     UpdateFinalDirectorySync,
+    BoundAdvanceDeadlineCleanupUnlink,
+    BoundAdvanceDeadlineCleanupDirectorySync,
     BoundDeleteDetach,
     BoundDeleteDetachReport,
     CanonicalUnlink,

@@ -88,7 +88,8 @@ impl TransitionRecord {
     /// Construct an ordinary legal forward successor without exposing mutable
     /// record fields to the coordinator. A candidate ID is accepted only for
     /// the durable `FreshStateAllocating -> FreshStateAllocated` boundary;
-    /// boot-publication entry uses its receipt-bearing constructor instead.
+    /// boot-publication entry and completion use their receipt-bound
+    /// constructors instead.
     pub(crate) fn forward_successor(&self, allocated_candidate_id: Option<i32>) -> Result<Self, CodecError> {
         self.validate()?;
         let current = self.phase.forward().ok_or(CodecError::IllegalPhaseAdvance {
@@ -98,6 +99,9 @@ impl TransitionRecord {
         let next_phase = next_forward_phase(self, current).ok_or(CodecError::TerminalPhaseAdvance)?;
         if next_phase == ForwardPhase::BootSyncStarted {
             return Err(CodecError::ExplicitBootSyncStartedSuccessorRequired);
+        }
+        if next_phase == ForwardPhase::BootSyncComplete {
+            return Err(CodecError::ExplicitBootSyncCompleteSuccessorRequired);
         }
         let allocation_completed =
             (current, next_phase) == (ForwardPhase::FreshStateAllocating, ForwardPhase::FreshStateAllocated);
@@ -143,6 +147,36 @@ impl TransitionRecord {
         next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
         next.phase = Phase::BootSyncStarted;
         next.boot_publication_receipts = Some(receipts);
+        validate_advance(self, &next)?;
+        Ok(next)
+    }
+
+    /// Complete boot publication only for the exact receipt pair which the
+    /// validated v3 `BootSyncStarted` record already binds. Generic forward
+    /// advancement cannot cross this evidence-bearing boundary.
+    pub(crate) fn boot_sync_complete_successor(
+        &self,
+        expected_pair: crate::boot_publication::BootPublicationReceiptPair,
+    ) -> Result<Self, CodecError> {
+        self.validate()?;
+        if self.version != PAYLOAD_VERSION {
+            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(
+                self.version,
+            ));
+        }
+        if self.phase != Phase::BootSyncStarted {
+            return Err(CodecError::IllegalPhaseAdvance {
+                current: self.phase,
+                next: Phase::BootSyncComplete,
+            });
+        }
+        if self.boot_publication_receipts != Some(expected_pair) {
+            return Err(CodecError::BootPublicationReceiptsChangedIllegally);
+        }
+
+        let mut next = self.clone();
+        next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
+        next.phase = Phase::BootSyncComplete;
         validate_advance(self, &next)?;
         Ok(next)
     }

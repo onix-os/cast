@@ -15,6 +15,15 @@ use super::super::{
     validation::validate_advance,
 };
 
+mod deadline_advance;
+#[cfg(test)]
+pub(crate) use deadline_advance::{
+    ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
+    arm_bound_advance_before_final_deadline_callback,
+    assert_bound_advance_before_expired_cleanup_callback_consumed,
+    assert_bound_advance_before_final_deadline_callback_consumed,
+};
+
 /// Exact same-store public state authenticated after a failed bound deletion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TransitionJournalRecordDeleteState {

@@ -260,7 +260,8 @@ fn receipt_pair_is_preserved_by_every_forward_rollback_and_boot_repair_successor
     let receipts = boot_publication_receipts();
     let source = new_state_record(Phase::PreviousArchived);
     let started = source.boot_sync_started_successor(receipts).unwrap();
-    let mut forward = started.clone();
+    let mut forward = started.boot_sync_complete_successor(receipts).unwrap();
+    assert_receipts(&forward, receipts);
     while forward.phase != Phase::Complete {
         forward = forward.forward_successor(None).unwrap();
         assert_receipts(&forward, receipts);
@@ -309,7 +310,7 @@ fn receipt_pair_replacement_is_rejected_across_every_successor_family() {
         .boot_sync_started_successor(receipts)
         .unwrap();
 
-    let mut forward = started.forward_successor(None).unwrap();
+    let mut forward = started.boot_sync_complete_successor(receipts).unwrap();
     forward.boot_publication_receipts = Some(replacement);
     assert!(matches!(
         validate_advance(&started, &forward),
