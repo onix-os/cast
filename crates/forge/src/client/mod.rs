@@ -104,6 +104,9 @@ mod active_reblit_desired_publication;
 #[allow(dead_code)] // pure installed-versus-desired delta; mutation wiring follows separately
 #[path = "boot/active_reblit_installed_boot_publication_delta.rs"]
 mod active_reblit_installed_boot_publication_delta;
+#[allow(dead_code)] // pure exact-chain cleanup classifier; startup effect wiring follows separately
+#[path = "boot/active_reblit_promoted_boot_cleanup_plan.rs"]
+mod active_reblit_promoted_boot_cleanup_plan;
 #[allow(dead_code)] // DB-only substrate; consumed by the later asset-freeze slice
 #[path = "boot/active_reblit_projection.rs"]
 pub(crate) mod active_reblit_boot_projection;

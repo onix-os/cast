@@ -7,6 +7,8 @@ forge-active-reblit-installed-boot-publication-delta-test: host-storage-safety-t
 	@set -euo pipefail; \
 	root="$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/crates/forge/src/client/boot/active_reblit_installed_boot_publication_delta.rs"; \
 	tests="$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/crates/forge/src/client/boot/active_reblit_installed_boot_publication_delta_tests.rs"; \
+	cleanup_root="$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/crates/forge/src/client/boot/active_reblit_promoted_boot_cleanup_plan.rs"; \
+	cleanup_tests="$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/crates/forge/src/client/boot/active_reblit_promoted_boot_cleanup_plan_tests.rs"; \
 	live="$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/crates/forge/src/client/boot/active_reblit_installed_boot_publication_delta/live_classification.rs"; \
 	schedule="$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/crates/forge/src/client/boot/active_reblit_installed_boot_publication_delta/effect_schedule.rs"; \
 	preflight="$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_publication_preflight.rs"; \
@@ -16,7 +18,9 @@ forge-active-reblit-installed-boot-publication-delta-test: host-storage-safety-t
 	trap 'rm -f "$$listed"' EXIT; \
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	prefix='client::active_reblit_installed_boot_publication_delta::'; \
+	cleanup_prefix='client::active_reblit_promoted_boot_cleanup_plan::tests::'; \
 	test "$$(grep -Ec "^$${prefix}(tests|effect_schedule::tests)::.*: test$$" "$$listed")" = 12; \
+	test "$$(grep -Ec "^$${cleanup_prefix}.*: test$$" "$$listed")" = 8; \
 	for name in \
 		tests::desired_absent_exact_and_owned_different_have_closed_actions \
 		tests::stale_owned_is_post_promotion_deletion_and_stale_unowned_is_preserved \
@@ -32,6 +36,17 @@ forge-active-reblit-installed-boot-publication-delta-test: host-storage-safety-t
 		effect_schedule::tests::stale_and_ambiguous_identity_actions_never_enter_desired_schedule; do \
 		grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
+	for name in \
+		classifies_noop_replacement_owned_stale_and_unowned_preserve \
+		first_receipt_has_no_cleanup_and_rejects_false_prior_ownership \
+		historical_runtime_drift_does_not_change_stable_destination_identity \
+		destination_layout_partuuid_and_partition_number_mismatches_fail_closed \
+		fat_casefold_collision_with_different_path_semantics_fails_closed \
+		cross_receipt_ancestor_descendant_collision_fails_closed \
+		aliases_share_cross_root_keys_while_distinct_destinations_do_not \
+		borrowed_replacement_and_invalid_retained_provenance_fail_closed; do \
+		grep -Fqx "$$cleanup_prefix$$name: test" "$$listed"; \
+	done; \
 	grep -Fq 'from_exact_promoted_chain(' "$$root"; \
 	grep -Fq 'from_strict_empty_state(' "$$root"; \
 	grep -Fq 'prepare_installed_boot_publication_delta(' "$$root"; \
@@ -42,13 +57,24 @@ forge-active-reblit-installed-boot-publication-delta-test: host-storage-safety-t
 	grep -Fq 'installed_expected: request.installed,' "$$live"; \
 	grep -Fq 'fn prepare_effect_schedule(' "$$schedule"; \
 	grep -Fq 'validate_desired_action(' "$$schedule"; \
+	grep -Fq 'struct ActiveReblitPromotedBootCleanupPlan' "$$cleanup_root"; \
+	grep -Fq 'fn prepare_active_reblit_promoted_boot_cleanup_plan(' "$$cleanup_root"; \
+	for disposition in NoOp ReplaceOwned DeleteOwnedStale PreserveUnownedStale; do \
+		grep -Fq "$$disposition" "$$cleanup_root"; \
+	done; \
+	grep -Fq 'predecessor.partuuid() != installed.partuuid()' "$$cleanup_root"; \
+	grep -Fq 'predecessor.partition_number() != installed.partition_number()' "$$cleanup_root"; \
 	if rg -n 'ActiveReblitBootPublicationDeltaObservation|observations:' "$$root" "$$live" "$$bridge"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	if rg -n 'pub\(in crate::client\).*seal_bound_desired_states|pub\(crate\).*seal_bound_desired_states|pub fn seal_bound_desired_states' "$$seal"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'historical_runtime_witness\(|destination_device\(|destination_inode\(|mount_id\(|disk_sequence\(' "$$cleanup_root"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if grep -B1 -E '^pub\(in crate::client\) (enum|struct) ActiveReblitPromotedBootCleanup(Disposition|PlanEntry|Plan)' "$$cleanup_root" | grep -Eq '#\[derive\([^]]*Clone'; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	for action in PublishDesired RetainOwnedDesired PreserveBorrowedDesired ReplaceOwnedDesired DeleteOwnedStaleAfterPromotion PreserveUnownedStale; do \
 		grep -Fq "$$action" "$$root"; \
 	done; \
 	if rg -n 'std::fs|fs_err|OpenOptions|File::(?:open|create)|BorrowedFd|OwnedFd|RawFd|AsFd|create_dir|remove_(?:file|dir)|rename\(|std::process|process::Command|Command::new|promote_boot_publication_receipt\(|stage_boot_publication_receipt\(' "$$root" "$$live" "$$schedule" "$$bridge" "$$seal"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
-	for file in "$$root" "$$tests" "$$live" "$$schedule" "$$preflight" "$$bridge" "$$seal" "$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/misc/make/active-reblit-installed-boot-publication-delta-tests.mk"; do \
+	if rg -n 'std::fs|fs_err|OpenOptions|File::(?:open|create)|BorrowedFd|OwnedFd|RawFd|AsFd|create_dir|remove_(?:file|dir)|rename\(|std::process|process::Command|Command::new|promote_boot_publication_receipt\(|stage_boot_publication_receipt\(' "$$cleanup_root"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	for file in "$$root" "$$tests" "$$cleanup_root" "$$cleanup_tests" "$$live" "$$schedule" "$$preflight" "$$bridge" "$$seal" "$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/misc/make/active-reblit-installed-boot-publication-delta-tests.mk"; do \
 		test "$$(wc -l < "$$file")" -le 1000; \
 	done; \
-	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1
+	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/Cargo.toml" -p forge --lib "$$prefix" -- --test-threads=1; \
+	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_INSTALLED_BOOT_DELTA_TOP_DIR)/Cargo.toml" -p forge --lib "$$cleanup_prefix" -- --test-threads=1

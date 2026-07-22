@@ -21,6 +21,7 @@ pub(crate) use receipt_body::{
     BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
     BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationReceiptBodyError,
     BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
+    MAX_BOOT_PUBLICATION_RECEIPT_OUTPUTS,
 };
 #[allow(unused_imports)] // shared with durable receipt storage
 pub(crate) use receipt_codec::{
