@@ -8,6 +8,7 @@ use super::{
     startup_reconciliation,
 };
 
+mod active_reblit_boot_sync_complete;
 mod default_system_intent;
 #[cfg(test)]
 mod root_links_terminal_process_harness;
@@ -75,7 +76,6 @@ pub(in crate::client) struct ActiveReblitBootSyncCompleteSeal {
 }
 
 impl ActiveReblitBootSyncCompleteSeal {
-    #[allow(dead_code)] // live dispatch is deliberately outside the read-only authority slice
     fn new() -> Self {
         Self { _private: () }
     }
@@ -173,6 +173,35 @@ impl CleanSystemStartup {
         namespace?;
         let in_flight = in_flight?;
         if let Some(record) = record {
+            // Adopt forward boot completion before any replacement cleanup,
+            // root-ABI normalization, or rollback admission. Both deferred
+            // evidence and the one durable successor end this startup entry,
+            // so `BootSyncComplete` can never fall through and a newly written
+            // `CommitDecided` record can never be redispatched here.
+            let (journal, record) = match active_reblit_boot_sync_complete::dispatch(
+                installation,
+                state_db,
+                active_state_reservation,
+                journal,
+                record,
+            )? {
+                active_reblit_boot_sync_complete::Dispatch::Unhandled { journal, record } => {
+                    (journal, record)
+                }
+                active_reblit_boot_sync_complete::Dispatch::Handled { journal, record } => {
+                    let in_flight = state_db.audit_in_flight_transition()?;
+                    let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                        installation,
+                        state_db,
+                        journal,
+                        record,
+                        in_flight,
+                    )
+                    .map_err(map_reconciliation_error)?;
+                    return Err(Error::RecoveryPending(pending));
+                }
+            };
+
             {
                 let mutation_seal = ActiveReblitReplacementMutationSeal::new();
                 let mut mutation_authority =
@@ -568,6 +597,8 @@ pub(super) enum Error {
     ArchivedStatePruneResidue(#[from] transition_identity::ArchivedStatePruneResidueError),
     #[error("recover CandidatePrepared active-reblit replacement residue")]
     ActiveReblitReplacementRecovery(#[from] transition_identity::ActiveReblitReplacementRecoveryError),
+    #[error("dispatch the exact forward startup ActiveReblit BootSyncComplete checkpoint")]
+    ActiveReblitBootSyncCompleteDispatch(#[from] active_reblit_boot_sync_complete::Error),
     #[error("capture exact startup /usr rollback-decision authority")]
     UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
     #[error("capture exact startup UsrExchanged root ABI normalization authority")]

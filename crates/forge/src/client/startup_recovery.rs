@@ -6,6 +6,7 @@
 //! terminal absence for uninterrupted startup inspection; failure returns
 //! neither a store nor reusable authority.
 
+mod active_reblit_boot_sync_commit_decision;
 mod canonical_journal_reopen;
 mod usr_exchange_parent_durability;
 mod usr_exchanged_root_abi_normalization;
@@ -118,6 +119,11 @@ pub(super) use usr_rollback_active_reblit_complete_route::{
     UsrRollbackActiveReblitCompleteRoutePersistenceError, persist_usr_rollback_active_reblit_complete_route_and_reopen,
 };
 
+pub(super) use active_reblit_boot_sync_commit_decision::{
+    ActiveReblitBootSyncCommitDecisionPersistenceError,
+    persist_active_reblit_boot_sync_commit_decision_and_reopen,
+};
+
 pub(super) use usr_rollback_active_reblit_boot_repair_complete::{
     UsrRollbackActiveReblitBootRepairCompletePersistenceError,
     persist_usr_rollback_active_reblit_boot_repair_complete_and_reopen,
@@ -164,6 +170,18 @@ pub(in crate::client) use usr_rollback_active_reblit_complete_route::{
     arm_after_usr_rollback_active_reblit_complete_route_successor_binding_check_before_reopen,
     arm_before_usr_rollback_active_reblit_complete_route_final_revalidation,
     arm_before_usr_rollback_active_reblit_complete_route_successor_binding_revalidation,
+};
+
+#[cfg(test)]
+pub(in crate::client) use active_reblit_boot_sync_commit_decision::{
+    ActiveReblitBootSyncCommitDecisionValidationStage,
+    DurableActiveReblitBootSyncCommitDecisionRecord,
+    arm_after_active_reblit_boot_sync_commit_decision_old_binding_validation,
+    arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen,
+    arm_before_active_reblit_boot_sync_commit_decision_fresh_binding_validation,
+    arm_before_active_reblit_boot_sync_commit_decision_final_revalidation,
+    arm_before_active_reblit_boot_sync_commit_decision_reopened_validation,
+    arm_before_active_reblit_boot_sync_commit_decision_same_store_validation,
 };
 
 #[cfg(test)]
