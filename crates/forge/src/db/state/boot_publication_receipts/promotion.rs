@@ -38,6 +38,26 @@ pub(crate) enum BootPublicationReceiptPromotionDurableState {
 }
 
 impl Database {
+    /// Load the exact promoted receipt state named by durable startup evidence.
+    ///
+    /// The transition journal retains only a transition ID and compact receipt
+    /// pair, so startup cannot supply the canonical body used by the live
+    /// promotion path. This read-only deferred transaction therefore reloads
+    /// the head and canonical bodies together, then requires the pair to name
+    /// the sole committed body and its retained predecessor exactly. No
+    /// mutation or publication authority is returned.
+    pub(crate) fn load_exact_promoted_boot_publication_receipt_state(
+        &self,
+        transition_id: &TransitionId,
+        pair: &BootPublicationReceiptPair,
+    ) -> Result<BootPublicationReceiptState, ExactPromotedBootPublicationReceiptStateError> {
+        self.conn.exec(|connection| {
+            connection.transaction(|connection| {
+                load_exact_promoted_state(connection, transition_id, pair)
+            })
+        })
+    }
+
     /// Require one exact canonical receipt to be the durable committed head.
     ///
     /// This check is read-only and uses an ordinary deferred transaction. It
@@ -104,6 +124,61 @@ impl Database {
             Err(error) => Err(error),
         }
     }
+}
+
+fn load_exact_promoted_state(
+    connection: &mut SqliteConnection,
+    transition_id: &TransitionId,
+    pair: &BootPublicationReceiptPair,
+) -> Result<BootPublicationReceiptState, ExactPromotedBootPublicationReceiptStateError> {
+    let state = load_receipt_state(connection)?;
+
+    if let Some(pending) = state.head().pending() {
+        return Err(ExactPromotedBootPublicationReceiptStateError::PendingHeadPresent {
+            transition_id: pending.transition_id().clone(),
+            fingerprint: pending.fingerprint(),
+        });
+    }
+    if state.pending().is_some() {
+        return Err(ExactPromotedBootPublicationReceiptStateError::PendingBodyPresent);
+    }
+    if state.head().committed() != Some(pair.pending) {
+        return Err(ExactPromotedBootPublicationReceiptStateError::CommittedHeadMismatch {
+            expected: pair.pending,
+            actual: state.head().committed(),
+        });
+    }
+
+    let committed = state
+        .committed()
+        .ok_or(ExactPromotedBootPublicationReceiptStateError::MissingCommittedBody)?;
+    if committed.fingerprint() != pair.pending {
+        return Err(ExactPromotedBootPublicationReceiptStateError::CommittedBodyFingerprintMismatch {
+            expected: pair.pending,
+            actual: committed.fingerprint(),
+        });
+    }
+    if committed.body().transition_id() != transition_id {
+        return Err(ExactPromotedBootPublicationReceiptStateError::TransitionMismatch {
+            expected: transition_id.clone(),
+            actual: committed.body().transition_id().clone(),
+        });
+    }
+    if committed.body().committed_predecessor() != pair.committed {
+        return Err(ExactPromotedBootPublicationReceiptStateError::CommittedPredecessorMismatch {
+            expected: pair.committed,
+            actual: committed.body().committed_predecessor(),
+        });
+    }
+    if let Some(predecessor) = pair.committed {
+        load_required_receipt(
+            connection,
+            ReceiptReference::CommittedPredecessor,
+            predecessor,
+        )?;
+    }
+
+    Ok(state)
 }
 
 fn promote_receipt(
@@ -291,6 +366,48 @@ fn reset_transaction_after_report(database: &Database) -> Result<(), DatabaseErr
         }
         connection.transaction::<(), DatabaseError, _>(|_| Ok(()))
     })
+}
+
+/// Fail-closed mismatch from startup's exact promoted-receipt query.
+#[derive(Debug, Error)]
+pub(crate) enum ExactPromotedBootPublicationReceiptStateError {
+    #[error("strictly load canonical boot-publication receipt state")]
+    State(#[from] BootPublicationReceiptStateError),
+    #[error("the promoted receipt query found a pending head for transition {transition_id}")]
+    PendingHeadPresent {
+        transition_id: TransitionId,
+        fingerprint: BootPublicationReceiptFingerprint,
+    },
+    #[error("the promoted receipt query found a pending canonical body")]
+    PendingBodyPresent,
+    #[error("the committed receipt head differs from the exact promoted fingerprint")]
+    CommittedHeadMismatch {
+        expected: BootPublicationReceiptFingerprint,
+        actual: Option<BootPublicationReceiptFingerprint>,
+    },
+    #[error("the exact promoted receipt head has no retained committed body")]
+    MissingCommittedBody,
+    #[error("the committed canonical body differs from the exact promoted fingerprint")]
+    CommittedBodyFingerprintMismatch {
+        expected: BootPublicationReceiptFingerprint,
+        actual: BootPublicationReceiptFingerprint,
+    },
+    #[error("the promoted receipt body belongs to transition {actual}, expected {expected}")]
+    TransitionMismatch {
+        expected: TransitionId,
+        actual: TransitionId,
+    },
+    #[error("the promoted receipt body's committed predecessor differs from the exact pair")]
+    CommittedPredecessorMismatch {
+        expected: Option<BootPublicationReceiptFingerprint>,
+        actual: Option<BootPublicationReceiptFingerprint>,
+    },
+}
+
+impl From<diesel::result::Error> for ExactPromotedBootPublicationReceiptStateError {
+    fn from(source: diesel::result::Error) -> Self {
+        Self::State(BootPublicationReceiptStateError::from(source))
+    }
 }
 
 /// Fail-closed error from exact receipt promotion.

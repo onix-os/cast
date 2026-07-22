@@ -39,6 +39,7 @@ pub(crate) use boot_publication_receipts::{
     BootPublicationReceiptPromotionOutcome,
     BootPublicationReceiptState,
     BootPublicationReceiptStateError,
+    ExactPromotedBootPublicationReceiptStateError,
 };
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by cross-module receipt-promotion fault tests

@@ -6,7 +6,7 @@ forge-boot-publication-receipt-promotion-test: forge-boot-publication-receipt-st
 	@set -euo pipefail; \
 	listed="$$( $(CARGO) test --manifest-path "$(BOOT_PUBLICATION_RECEIPT_PROMOTION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list )"; \
 	prefix='db::state::boot_publication_receipts::promotion::tests::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" <<<"$$listed" )" = 18; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" <<<"$$listed" )" = 20; \
 	for name in \
 		deadline::deadline_expiring_after_exclusive_admission_blocks_head_mutation \
 		deadline::deadline_equality_at_exclusive_mutation_boundary_allows_promotion \
@@ -25,7 +25,9 @@ forge-boot-publication-receipt-promotion-test: forge-boot-publication-receipt-st
 		corruption::dangling_and_tampered_committed_predecessors_block_promotion \
 		corruption::terminal_validation_and_exact_retry_require_the_committed_predecessor_body \
 		promoted_validation::read_only_validator_rejects_pending_then_accepts_exact_promoted_without_writes_or_exclusive_lock \
-		promoted_validation::read_only_validator_requires_the_retained_committed_predecessor_body; do \
+		promoted_validation::read_only_validator_requires_the_retained_committed_predecessor_body \
+		promoted_validation::exact_startup_query_rejects_empty_pending_and_wrong_identity_without_mutation \
+		promoted_validation::exact_startup_query_rejects_a_corrupt_retained_predecessor_without_mutation; do \
 		grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
 	promotion="$(BOOT_PUBLICATION_RECEIPT_PROMOTION_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipts/promotion.rs"; \

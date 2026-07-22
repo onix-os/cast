@@ -42,6 +42,7 @@ pub(crate) use promotion::{
     BootPublicationReceiptPromotionDurableState,
     BootPublicationReceiptPromotionError,
     BootPublicationReceiptPromotionOutcome,
+    ExactPromotedBootPublicationReceiptStateError,
 };
 #[cfg(test)]
 pub(crate) use promotion::arm_boot_publication_receipt_promotion_after_commit_error;
