@@ -432,6 +432,31 @@ pub(super) fn promote_pending_row(
     }
 }
 
+/// Conditionally retire one exact committed fingerprint while preserving the
+/// singleton and every immutable receipt body.
+pub(super) fn retire_committed_row(
+    connection: &mut SqliteConnection,
+    fingerprint: BootPublicationReceiptFingerprint,
+) -> Result<usize, Error> {
+    diesel::update(
+        boot_publication_receipt_head::table
+            .filter(boot_publication_receipt_head::singleton.eq(RECEIPT_HEAD_SINGLETON))
+            .filter(
+                boot_publication_receipt_head::committed_receipt_sha256
+                    .eq(fingerprint.as_bytes().as_slice()),
+            )
+            .filter(boot_publication_receipt_head::pending_transition_id.is_null())
+            .filter(boot_publication_receipt_head::pending_receipt_sha256.is_null()),
+    )
+    .set((
+        boot_publication_receipt_head::committed_receipt_sha256.eq(None::<&[u8]>),
+        boot_publication_receipt_head::pending_transition_id.eq(None::<&str>),
+        boot_publication_receipt_head::pending_receipt_sha256.eq(None::<&[u8]>),
+    ))
+    .execute(connection)
+    .map_err(Error::from)
+}
+
 #[derive(Queryable)]
 struct StoredBootPublicationReceiptHeadShape {
     singleton: i32,
