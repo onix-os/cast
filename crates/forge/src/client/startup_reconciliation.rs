@@ -24,6 +24,8 @@ use crate::{
 };
 
 mod activation_namespace;
+#[allow(dead_code)] // read-only foundation; cleanup effect wiring is a later slice
+mod active_reblit_commit_cleanup_authority;
 #[allow(dead_code)] // read-only startup boundary; live dispatch is deliberately a later slice
 mod active_reblit_boot_sync_complete_authority;
 mod active_reblit_boot_repair_evidence;
@@ -62,6 +64,17 @@ pub(in crate::client) use active_reblit_boot_sync_complete_authority::{
 pub(in crate::client) use active_reblit_boot_sync_complete_authority::arm_between_active_reblit_boot_sync_complete_database_captures;
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
+#[allow(unused_imports)] // exported for the immediately following cleanup effect slice
+pub(in crate::client) use active_reblit_commit_cleanup_authority::{
+    ActiveReblitCommitCleanupAdmission, ActiveReblitCommitCleanupApplyAuthority,
+    ActiveReblitCommitCleanupApplyEffectAuthority, ActiveReblitCommitCleanupAuthority,
+    ActiveReblitCommitCleanupAuthorityError, ActiveReblitCommitCleanupFinishAuthority,
+    ActiveReblitCommitCleanupFinishEffectAuthority,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_commit_cleanup_authority::arm_between_active_reblit_commit_cleanup_database_captures;
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::arm_before_active_reblit_commit_cleanup_fresh_namespace_capture;
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::{
     UsrRollbackActivateArchivedCompleteRouteAdmission, UsrRollbackActivateArchivedCompleteRouteAuthority,

@@ -1,4 +1,5 @@
 mod active_reblit_candidate_preserve;
+mod active_reblit_commit_cleanup;
 mod archived_candidate_preserve;
 mod model;
 mod new_state_candidate_preserve;
@@ -44,6 +45,10 @@ pub(in crate::client::startup_reconciliation::activation_namespace) use active_r
     DurableActiveReblitCandidatePreservePostExchangeNamespace,
     PendingActiveReblitCandidatePreservePostExchangeDurability, PreparedActiveReblitCandidatePreserveExchange,
     ProjectedActiveReblitCandidatePreserveNamespace, RetainedActiveReblitCandidatePreserveParents,
+};
+pub(in crate::client::startup_reconciliation::activation_namespace) use active_reblit_commit_cleanup::{
+    ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupLayout,
+    RetainedActiveReblitCommitCleanupNamespace,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_candidate_preserve::{

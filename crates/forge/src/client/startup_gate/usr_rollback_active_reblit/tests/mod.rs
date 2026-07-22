@@ -23,6 +23,7 @@ mod boot_sync_complete_startup_storage_faults;
 mod candidate_wrapper_exchange_kill_boundaries;
 mod candidate_wrapper_exchange_process_harness;
 mod candidate_wrapper_exchange_process_kill;
+mod commit_cleanup_startup_authority;
 mod complete_authority_binding;
 mod complete_evidence_races;
 mod complete_exclusions;
