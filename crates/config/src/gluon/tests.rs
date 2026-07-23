@@ -1,4 +1,10 @@
-use std::{os::unix::fs::symlink, sync::mpsc, thread, time::Duration};
+use std::{
+    cell::Cell,
+    os::unix::fs::symlink,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use super::*;
 use crate::Scope;
@@ -42,6 +48,37 @@ impl GluonCodec for RawCodec {
 
     fn encode(&self, config: &Self::Config) -> Result<String, GluonCodecError> {
         Ok(config.clone())
+    }
+}
+
+struct DeadlineBoundaryCodec<'a> {
+    enumeration_finished: &'a Cell<bool>,
+    outside_delay: Duration,
+}
+
+impl GluonCodec for DeadlineBoundaryCodec<'_> {
+    type Config = String;
+
+    fn decode(&self, evaluator: &Evaluator, source: &Source) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
+        assert!(self.enumeration_finished.get());
+        assert_eq!(source.text(), "\"value\"");
+
+        // Manager has already read the root source, but Evaluator has not yet
+        // created its per-call deadline.
+        thread::sleep(self.outside_delay);
+        let evaluation = evaluator.evaluate::<String>(source)?;
+
+        // Typed/domain conversion happens after Evaluator has stopped
+        // enforcing that deadline.
+        thread::sleep(self.outside_delay);
+        Ok(DecodedGluon {
+            value: format!("converted:{}", evaluation.value),
+            fingerprint: evaluation.fingerprint,
+        })
+    }
+
+    fn encode(&self, config: &Self::Config) -> Result<String, GluonCodecError> {
+        Ok(format!("\"{config}\""))
     }
 }
 
@@ -151,6 +188,74 @@ fn gluon_fragments_have_deterministic_order_and_explicit_precedence() {
             ("z", "vendor-z"),
         ]
     );
+}
+
+#[test]
+fn shadowed_lower_priority_fragment_is_still_evaluated_and_can_fail() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("root");
+    let user = temporary.path().join("user");
+    let program = "config-gluon-shadow-validation";
+    let lower = root
+        .join("usr/share")
+        .join(program)
+        .join("dummy.d/shared.glu");
+    let higher = user.join(program).join("dummy.d/shared.glu");
+    write(&lower, "let value = in value");
+    write(&higher, "\"valid higher layer\"");
+
+    let error = layered_manager(&root, &user, program)
+        .load_gluon(&Evaluator::default(), &StringCodec)
+        .unwrap_err();
+    let LoadGluonError::Evaluation { path, source } = error else {
+        panic!("invalid lower-priority fragment did not reach evaluation");
+    };
+    assert_eq!(path, lower);
+    assert_eq!(source.category, DiagnosticCategory::Parse);
+    assert_eq!(source.source_name.as_deref(), Some("dummy.d/shared.glu"));
+}
+
+#[test]
+fn manager_work_surrounding_evaluation_is_outside_the_fragment_deadline() {
+    let temporary = tempfile::tempdir().unwrap();
+    let manager = Manager::custom(temporary.path());
+    write(temporary.path().join("dummy.d/value.glu"), "\"value\"");
+
+    let evaluator_timeout = Duration::from_millis(200);
+    let outside_delay = Duration::from_millis(250);
+    let evaluator = Evaluator::new(Limits {
+        timeout: evaluator_timeout,
+        ..Limits::default()
+    });
+    // Keep this characterization about deadline placement rather than the
+    // first Gluon VM initialization on an unusually slow test worker.
+    assert_eq!(
+        evaluator
+            .evaluate::<String>(&Source::new("warmup.glu", "\"warm\""))
+            .unwrap()
+            .value,
+        "warm"
+    );
+
+    let enumeration_finished = Cell::new(false);
+    let codec = DeadlineBoundaryCodec {
+        enumeration_finished: &enumeration_finished,
+        outside_delay,
+    };
+    let started = Instant::now();
+    let loaded = manager
+        .load_gluon_with_hook(&evaluator, &codec, || {
+            // collect_gluon_paths has completed, but no per-fragment evaluator
+            // deadline exists yet.
+            enumeration_finished.set(true);
+            thread::sleep(outside_delay);
+        })
+        .unwrap();
+
+    assert!(enumeration_finished.get());
+    assert_eq!(loaded[0].value, "converted:value");
+    assert!(started.elapsed() >= outside_delay * 3);
+    assert!(started.elapsed() > evaluator_timeout);
 }
 
 #[test]
