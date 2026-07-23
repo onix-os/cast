@@ -4,8 +4,8 @@ use std::{error::Error, fmt};
 
 use config::GENERATED_GLUON_MARKER;
 use declarative_config::{
-    DeclarationCodec, DeclarationEvaluator, EngineId, Evaluation, LanguageId,
-    LanguageSpec, Source,
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    EngineId, Evaluation, LanguageId, LanguageSpec, Limits, Source, SourceRoot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,14 +59,27 @@ impl DeclarationEvaluator<TriggerDeclaration> for TriggerEvaluator {
         &self.language
     }
 
+    fn limits(&self) -> Limits {
+        Limits::default()
+    }
+
+    fn with_source_root(&self, _source_root: SourceRoot) -> Self {
+        Self::new()
+    }
+
     fn evaluate(
         &self,
         source: &Source,
-    ) -> Result<Evaluation<TriggerDeclaration, Self::Identity>, Self::Error> {
+    ) -> Result<
+        Evaluation<TriggerDeclaration, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
         let (name, command) = source
             .text()
             .split_once(':')
-            .ok_or(FixtureError("trigger shape"))?;
+            .ok_or_else(|| {
+                DeclarationEvaluationError::conversion(FixtureError("trigger shape"))
+            })?;
         Ok(Evaluation {
             value: TriggerDeclaration {
                 name: name.to_owned(),
@@ -97,14 +110,27 @@ impl DeclarationEvaluator<ProfileFragment> for ProfileCodec {
         &self.language
     }
 
+    fn limits(&self) -> Limits {
+        Limits::default()
+    }
+
+    fn with_source_root(&self, _source_root: SourceRoot) -> Self {
+        Self::new()
+    }
+
     fn evaluate(
         &self,
         source: &Source,
-    ) -> Result<Evaluation<ProfileFragment, Self::Identity>, Self::Error> {
+    ) -> Result<
+        Evaluation<ProfileFragment, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
         let (name, packages) = source
             .text()
             .split_once('=')
-            .ok_or(FixtureError("fragment shape"))?;
+            .ok_or_else(|| {
+                DeclarationEvaluationError::conversion(FixtureError("fragment shape"))
+            })?;
         Ok(Evaluation {
             value: ProfileFragment {
                 name: name.to_owned(),
@@ -148,7 +174,10 @@ fn fixture_identity(spec: &LanguageSpec, source: &Source) -> EvaluationIdentity 
 fn evaluate_read_only<T, E>(
     evaluator: &E,
     source: &Source,
-) -> Result<Evaluation<T, E::Identity>, E::Error>
+) -> Result<
+    Evaluation<T, E::Identity>,
+    DeclarationEvaluationError<E::Error>,
+>
 where
     E: DeclarationEvaluator<T>,
 {
@@ -158,12 +187,17 @@ where
 fn round_trip_writable<T, C>(
     codec: &C,
     source: &Source,
-) -> Result<Evaluation<T, C::Identity>, C::Error>
+) -> Result<
+    Evaluation<T, C::Identity>,
+    DeclarationEvaluationError<C::Error>,
+>
 where
     C: DeclarationCodec<T>,
 {
     let evaluation = codec.evaluate(source)?;
-    let _canonical_source = codec.encode(&evaluation.value)?;
+    let _canonical_source = codec
+        .encode(&evaluation.value)
+        .map_err(DeclarationEvaluationError::conversion)?;
     Ok(evaluation)
 }
 

@@ -1,8 +1,9 @@
 use std::{error::Error, path::Path};
 
 use crate::{
-    AbiCatalog, Diagnostic, EvaluationDeadline, ImportRequest, LanguageSpec, LimitKind, Limits,
-    ModuleView, NormalizedRelative, PreparedGraph, Source, SourceRoot, prepare_module_graph,
+    AbiCatalog, DeclarationEvaluationError, Diagnostic, EvaluationDeadline,
+    ImportRequest, LanguageSpec, LimitKind, Limits, ModuleView,
+    NormalizedRelative, PreparedGraph, Source, SourceRoot, prepare_module_graph,
 };
 
 /// An owned domain value paired with the identity produced by its engine.
@@ -19,10 +20,22 @@ pub trait DeclarationEvaluator<T> {
 
     fn language_spec(&self) -> &LanguageSpec;
 
+    fn limits(&self) -> Limits;
+
+    /// Return the same typed adapter rooted at one retained source authority.
+    /// Storage code uses this to bind relative imports without knowing which
+    /// engine the adapter contains.
+    fn with_source_root(&self, source_root: SourceRoot) -> Self
+    where
+        Self: Sized;
+
     fn evaluate(
         &self,
         source: &Source,
-    ) -> Result<Evaluation<T, Self::Identity>, Self::Error>;
+    ) -> Result<
+        Evaluation<T, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    >;
 }
 
 /// A writable declaration boundary adds canonical encoding without forcing

@@ -2,6 +2,7 @@
 
 mod content_hash;
 mod deadline;
+mod declaration_error;
 mod diagnostic;
 mod evaluation;
 mod language;
@@ -10,6 +11,7 @@ mod module_graph;
 mod source;
 
 pub use deadline::EvaluationDeadline;
+pub use declaration_error::DeclarationEvaluationError;
 pub use diagnostic::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
 pub use evaluation::{
     DeclarationCodec, DeclarationEvaluator, EngineAdapter, Evaluation, IdentityInputs,

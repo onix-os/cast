@@ -1,9 +1,11 @@
-use std::path::Path;
+use std::{convert::Infallible, path::Path};
 
 use declarative_config::{
-    AbiCatalog, EngineAdapter, EngineId, Evaluation as CoreEvaluation, EvaluationDeadline,
-    IdentityInputs, ImportRequest, LanguageId, LanguageSpec, Limits, ModuleView,
-    NormalizedRelative, PreparedGraph, Source, SourceRoot, TypedDecoder,
+    AbiCatalog, DeclarationEvaluationError, DeclarationEvaluator,
+    EngineAdapter, EngineId, Evaluation as CoreEvaluation,
+    EvaluationDeadline, IdentityInputs, ImportRequest, LanguageId,
+    LanguageSpec, Limits, ModuleView, NormalizedRelative, PreparedGraph,
+    Source, SourceRoot, TypedDecoder,
     evaluate as evaluate_declaration, evaluate_file as evaluate_declaration_file,
     evaluate_with_inputs as evaluate_declaration_with_inputs,
 };
@@ -250,5 +252,37 @@ impl EngineAdapter for GluonEngine {
         D: TypedDecoder<Self::Runtime>,
     {
         run_until_deadline(runtime, source, deadline, decoder)
+    }
+}
+
+impl<T> DeclarationEvaluator<T> for GluonEngine
+where
+    T: VmType + Send,
+    for<'vm, 'value> T: Getable<'vm, 'value>,
+{
+    type Identity = EvaluationFingerprint;
+    type Error = Infallible;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        GluonEngine::language_spec(self)
+    }
+
+    fn limits(&self) -> Limits {
+        GluonEngine::limits(self)
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        self.clone().with_source_root(source_root)
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        CoreEvaluation<T, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        evaluate_declaration(self, source, GluonGetable::new())
+            .map_err(DeclarationEvaluationError::Evaluation)
     }
 }
