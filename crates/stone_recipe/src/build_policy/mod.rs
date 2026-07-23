@@ -414,7 +414,7 @@ pub struct BuildRootPolicySpec {
 
 /// Stable guest paths mounted into every sandbox. These paths participate in
 /// policy identity instead of being ambient Mason constants.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct SandboxPolicySpec {
     pub hostname: String,
     pub credentials: SandboxCredentialPolicySpec,
@@ -429,7 +429,8 @@ pub struct SandboxPolicySpec {
 }
 
 /// Fixed credentials visible inside a frozen sandbox.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxCredentialPolicySpec {
     /// Namespace user/group ID zero maps only to the invoking caller.
     IsolatedRoot,
@@ -440,24 +441,27 @@ pub enum SandboxCredentialPolicySpec {
 /// Proc is unconditionally absent from frozen builds and is therefore not an
 /// authored policy value. The finite modes also cannot express any `/sys`
 /// mount or a full host `/dev` view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub struct SandboxFilesystemPolicySpec {
     pub tmp: SandboxTmpPolicySpec,
     pub sys: SandboxSysPolicySpec,
     pub dev: SandboxDevPolicySpec,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxTmpPolicySpec {
     Empty,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxSysPolicySpec {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxDevPolicySpec {
     None,
     Minimal,

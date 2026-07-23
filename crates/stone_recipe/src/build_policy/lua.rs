@@ -19,13 +19,19 @@ use serde::Deserialize;
 
 use super::{
     ArrayPatch, BuildCommandSpec, BuildProgramSpec, BuildToolSpec, CompilerFlagsSpec,
-    CompilerToolsSpec, ContextValue, EnvironmentBindingSpec, EnvironmentCondition,
-    InstallLayoutSpec, PlatformPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec,
-    ToolchainFlagsSpec, ToolchainsSpec, ValuePatch,
+    CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec,
+    EnvironmentCondition, InstallLayoutSpec, PlatformPolicySpec, TargetEmulationSpec,
+    TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
+    ValuePatch,
 };
 
 /// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
 fn text_vec(values: Vec<LuaTextSpec>) -> Vec<TextSpec> {
+    values.into_iter().map(Into::into).collect()
+}
+
+/// Map a `Vec` of Lua tool DTOs to a `Vec` of their domain values.
+fn tool_vec(values: Vec<LuaBuildToolSpec>) -> Vec<BuildToolSpec> {
     values.into_iter().map(Into::into).collect()
 }
 
@@ -361,11 +367,45 @@ impl From<LuaTargetPolicySpec> for TargetPolicySpec {
     }
 }
 
+/// The Lua encoding of a [`ToolchainInputPolicySpec`] — per-toolchain build-root
+/// tool inputs.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaToolchainInputPolicySpec {
+    pub llvm: Vec<LuaBuildToolSpec>,
+    pub gnu: Vec<LuaBuildToolSpec>,
+}
+
+impl From<LuaToolchainInputPolicySpec> for ToolchainInputPolicySpec {
+    fn from(inputs: LuaToolchainInputPolicySpec) -> Self {
+        Self {
+            llvm: tool_vec(inputs.llvm),
+            gnu: tool_vec(inputs.gnu),
+        }
+    }
+}
+
+/// The Lua encoding of an [`Emul32InputPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaEmul32InputPolicySpec {
+    pub base: Vec<LuaBuildToolSpec>,
+    pub toolchains: LuaToolchainInputPolicySpec,
+}
+
+impl From<LuaEmul32InputPolicySpec> for Emul32InputPolicySpec {
+    fn from(inputs: LuaEmul32InputPolicySpec) -> Self {
+        Self {
+            base: tool_vec(inputs.base),
+            toolchains: inputs.toolchains.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::Source;
     use lua_config::LuaEngine;
 
+    use super::super::{SandboxDevPolicySpec, SandboxPolicySpec};
     use super::*;
 
     fn decode<T: serde::de::DeserializeOwned>(source: &str) -> T {
@@ -517,6 +557,40 @@ return {
         assert_eq!(binding.name, "CFLAGS");
         assert_eq!(binding.value, TextSpec::Context(ContextValue::CFlags));
         assert_eq!(binding.condition, EnvironmentCondition::Always);
+    }
+
+    #[test]
+    fn the_sandbox_policy_decodes_directly_as_pure_data() {
+        let source = r#"
+return {
+    hostname = "builder",
+    credentials = "isolated_root",
+    filesystems = { tmp = "empty", sys = "none", dev = "minimal" },
+    guest_root = "/mason",
+    artifacts_dir = "/mason/artifacts",
+    build_dir = "/mason/build",
+    source_dir = "/mason/source",
+    recipe_dir = "/mason/recipe",
+    package_dir = "/mason/package",
+    install_dir = "/mason/install",
+}
+"#;
+        let sandbox: SandboxPolicySpec = decode(source);
+        assert_eq!(sandbox.hostname, "builder");
+        assert_eq!(sandbox.filesystems.dev, SandboxDevPolicySpec::Minimal);
+    }
+
+    #[test]
+    fn toolchain_input_tools_decode_through_the_wrapper() {
+        let source = r#"
+return {
+    llvm = { { kind = "package", value = "clang" } },
+    gnu = {},
+}
+"#;
+        let inputs: ToolchainInputPolicySpec = decode::<LuaToolchainInputPolicySpec>(source).into();
+        assert_eq!(inputs.llvm, vec![BuildToolSpec::Package("clang".to_owned())]);
+        assert!(inputs.gnu.is_empty());
     }
 
     fn literal_layout_field(name: &str) -> String {
