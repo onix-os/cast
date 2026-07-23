@@ -32,9 +32,9 @@ trigger-declaration-test:
 # Existing storage plus all twelve Gluon declaration roots stay green while the
 # boundary moves. The boot-related filters run evaluator tests backed only by
 # synthetic temporary trees; they do not mount, publish, or mutate host disks.
-declaration-regression-test: declarative-config-test gluon-adapter-test trigger-declaration-test config-declaration-manager-test config-rooted-declaration-loader-test config-fixed-root-declaration-loader-test
-	@$(CARGO) test -p config --lib -- --test-threads=1
+declaration-regression-test: declarative-config-test gluon-adapter-test trigger-declaration-test config-declaration-manager-test config-rooted-declaration-loader-test config-fixed-root-declaration-loader-test config-declaration-storage-test
 	@$(CARGO) test -p stone_recipe --test package_v3 -- --test-threads=1
+	@$(CARGO) test -p stone_recipe --test builders_v2 -- --test-threads=1
 	@$(CARGO) test -p mason --lib "recipe::tests::" -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test build_policy -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test build_policy_patch -- --test-threads=1
@@ -45,5 +45,6 @@ declaration-regression-test: declarative-config-test gluon-adapter-test trigger-
 	@$(CARGO) test -p mason --lib "profile::tests::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "repository::gluon::tests::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "system_model::gluon::tests::" -- --test-threads=1
+	@$(CARGO) test -p forge --lib "system_model::tests::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "client::active_reblit_boot_topology_intent::tests::evaluation::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "client::active_reblit_root_filesystem_intent::tests::evaluation::" -- --test-threads=1
