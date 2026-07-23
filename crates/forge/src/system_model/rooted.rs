@@ -245,7 +245,9 @@ fn retain(path: &Path, source: io::Error) -> LoadError {
 }
 
 fn evaluation(source: gluon_config::Diagnostic) -> LoadError {
-    LoadError::Evaluation(super::gluon::EvaluationError::from(source))
+    LoadError::Declaration(
+        declarative_config::DeclarationEvaluationError::Evaluation(source),
+    )
 }
 
 #[cfg(test)]

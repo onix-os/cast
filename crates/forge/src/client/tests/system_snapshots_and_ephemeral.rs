@@ -82,7 +82,7 @@ packages = ["alpha"],
     let snapshot_path = system_model::snapshot_path(&blit_root);
     let snapshot = fs::read_to_string(&snapshot_path).unwrap();
     let evaluated =
-        system_model::gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", snapshot.clone())).unwrap();
+        system_model::evaluate_snapshot(&Source::new("system-model.glu", snapshot.clone())).unwrap();
     let loaded_snapshot = system_model::load(&snapshot_path).unwrap().unwrap();
     let round_trip = SystemModel::try_from(loaded_snapshot).unwrap();
 

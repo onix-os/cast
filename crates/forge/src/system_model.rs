@@ -12,7 +12,10 @@ use config::declaration::{
     RootDeclarationSlot, TypedDeclarationEvaluatorSet,
     load_fixed_root_declaration,
 };
-use declarative_config::{DeclarationCodec, DeclarationEvaluator, Source};
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    Source,
+};
 use gluon_config::EvaluationFingerprint;
 use thiserror::Error;
 
@@ -33,6 +36,10 @@ pub const SYSTEM_INTENT_PATH: &str = "etc/cast/system.glu";
 pub const SYSTEM_SNAPSHOT_PATH: &str = "usr/lib/system-model.glu";
 
 const SOURCE_FINGERPRINT_PREFIX: &str = "// Authored source fingerprint: ";
+
+/// Engine-neutral failure to evaluate or convert a system declaration.
+pub type SystemDeclarationError =
+    DeclarationEvaluationError<spec::ConversionError>;
 
 pub fn intent_path(root: &Path) -> PathBuf {
     root.join(SYSTEM_INTENT_PATH)
@@ -89,10 +96,17 @@ impl SystemModel {
         }
     }
 
-    pub(super) fn regenerate(parts: SystemParts) -> Result<Self, gluon::EvaluationError> {
-        let normalized = spec::from_domain(parts.disable_warning, &parts.repositories, &parts.packages)?;
+    pub(super) fn regenerate(
+        parts: SystemParts,
+    ) -> Result<Self, SystemDeclarationError> {
+        let normalized = spec::from_domain(
+            parts.disable_warning,
+            &parts.repositories,
+            &parts.packages,
+        )
+        .map_err(DeclarationEvaluationError::conversion)?;
         let generated = spec::encode_generated_gluon(&normalized);
-        gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", generated))
+        evaluate_snapshot(&Source::new("system-model.glu", generated))
     }
 }
 
@@ -147,7 +161,7 @@ impl LoadedSystemModel {
 }
 
 impl TryFrom<LoadedSystemModel> for SystemModel {
-    type Error = gluon::EvaluationError;
+    type Error = SystemDeclarationError;
 
     fn try_from(system_model: LoadedSystemModel) -> Result<Self, Self::Error> {
         let provenance = *system_model.provenance;
@@ -203,7 +217,7 @@ fn load_source(
     source: Source,
     evaluator: &gluon::SystemIntentEvaluator,
 ) -> Result<LoadedSystemModel, LoadError> {
-    let evaluated = evaluator.evaluate(&source).map_err(gluon::EvaluationError::from)?;
+    let evaluated = evaluator.evaluate(&source)?;
     Ok(loaded_from_declaration(
         path,
         evaluated.value,
@@ -255,6 +269,17 @@ pub(crate) fn encode_snapshot(
     )
 }
 
+/// Evaluate one generated snapshot through the registered typed codec.
+pub(crate) fn evaluate_snapshot(
+    source: &Source,
+) -> Result<SystemModel, SystemDeclarationError> {
+    <gluon::SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
+        &gluon::SystemSnapshotCodec::default(),
+        source,
+    )
+    .map(|evaluation| evaluation.value)
+}
+
 /// Create a canonical generated system model.
 pub fn create(repositories: repository::Map, packages: BTreeSet<dependency::Provider>) -> SystemModel {
     create_with_options(false, repositories, packages)
@@ -274,7 +299,10 @@ pub(super) fn create_with_options(
 }
 
 impl SystemModel {
-    fn with_source_fingerprint(self, source_fingerprint: String) -> Result<Self, gluon::EvaluationError> {
+    fn with_source_fingerprint(
+        self,
+        source_fingerprint: String,
+    ) -> Result<Self, SystemDeclarationError> {
         let generated = self
             .generated_snapshot
             .strip_prefix(spec::GENERATED_GLUON_MARKER)
@@ -283,13 +311,13 @@ impl SystemModel {
             "{}{SOURCE_FINGERPRINT_PREFIX}{source_fingerprint}\n{generated}",
             spec::GENERATED_GLUON_MARKER
         );
-        gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", snapshot))
+        evaluate_snapshot(&Source::new("system-model.glu", snapshot))
     }
 
     fn regenerate_with_source(
         parts: SystemParts,
         source_fingerprint: Option<String>,
-    ) -> Result<Self, gluon::EvaluationError> {
+    ) -> Result<Self, SystemDeclarationError> {
         let model = Self::regenerate(parts)?;
         match source_fingerprint {
             Some(fingerprint) => model.with_source_fingerprint(fingerprint),
@@ -362,8 +390,8 @@ fn embedded_source_fingerprint(source: &str) -> Option<String> {
 pub enum LoadError {
     #[error("invalid system model path {0}")]
     InvalidPath(PathBuf),
-    #[error("evaluate system model")]
-    Evaluation(#[from] gluon::EvaluationError),
+    #[error("evaluate system declaration")]
+    Declaration(#[from] SystemDeclarationError),
     #[error("load fixed system declaration")]
     FixedDeclaration(
         #[from]
@@ -386,7 +414,7 @@ pub enum LoadError {
 #[derive(Debug, Error)]
 pub enum UpdateError {
     #[error("regenerate system model")]
-    Evaluation(#[from] gluon::EvaluationError),
+    Declaration(#[from] SystemDeclarationError),
 }
 
 #[cfg(test)]
@@ -705,7 +733,7 @@ let cast = import! cast.system.v1
         );
         assert!(!updated.repositories.contains_id(&repository::Id::new("not-added")));
         let evaluated =
-            gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", updated.encoded())).unwrap();
+            evaluate_snapshot(&Source::new("system-model.glu", updated.encoded())).unwrap();
         assert_eq!(evaluated.encoded(), updated.encoded());
         assert_eq!(evaluated.fingerprint(), updated.fingerprint());
     }

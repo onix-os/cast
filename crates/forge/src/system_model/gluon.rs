@@ -5,35 +5,11 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, ImportPolicy, Source};
-use thiserror::Error;
 
 use super::{SystemModel, spec};
 
 pub const SYSTEM_ABI_VERSION: u32 = 1;
 pub const GLUON_SYSTEM_ABI: &str = include_str!("../../gluon/system.glu");
-
-#[derive(Debug, Clone)]
-pub struct EvaluatedSystem {
-    pub model: SystemModel,
-    pub fingerprint: EvaluationFingerprint,
-}
-
-#[derive(Debug, Error)]
-pub enum EvaluationError {
-    #[error(transparent)]
-    Evaluation(#[from] Diagnostic),
-    #[error(transparent)]
-    Conversion(#[from] spec::ConversionError),
-}
-
-impl From<DeclarationEvaluationError<spec::ConversionError>> for EvaluationError {
-    fn from(error: DeclarationEvaluationError<spec::ConversionError>) -> Self {
-        match error {
-            DeclarationEvaluationError::Evaluation(source) => Self::Evaluation(source),
-            DeclarationEvaluationError::Conversion(source) => Self::Conversion(source),
-        }
-    }
-}
 
 /// Owned authored source and its normalized generated system model.
 #[derive(Debug, Clone)]
@@ -62,11 +38,6 @@ impl SystemIntentEvaluator {
         }
     }
 
-    fn from_engine(engine: GluonEngine) -> Result<Self, Diagnostic> {
-        Ok(Self {
-            engine: configured_engine(engine)?,
-        })
-    }
 }
 
 /// Stateful Gluon codec for canonical generated system snapshots.
@@ -89,11 +60,6 @@ impl SystemSnapshotCodec {
         }
     }
 
-    fn from_engine(engine: GluonEngine) -> Result<Self, Diagnostic> {
-        Ok(Self {
-            engine: configured_engine(engine)?,
-        })
-    }
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -225,8 +191,7 @@ impl DeclarationEvaluator<SystemIntentDeclaration> for SystemIntentEvaluator {
         let evaluated = evaluate_spec(&self.engine, source)?;
         let parts = spec::into_domain(evaluated.value)
             .map_err(DeclarationEvaluationError::Conversion)?;
-        let model = SystemModel::regenerate(parts)
-            .map_err(declaration_error)?;
+        let model = SystemModel::regenerate(parts)?;
 
         Ok(DeclarationEvaluation {
             value: SystemIntentDeclaration {
@@ -291,50 +256,6 @@ pub fn import_policy() -> Result<ImportPolicy, Diagnostic> {
     ImportPolicy::new().with_embedded_module("cast.system.v1", GLUON_SYSTEM_ABI)
 }
 
-pub fn evaluate(source: &Source) -> Result<EvaluatedSystem, EvaluationError> {
-    let evaluated = <SystemIntentEvaluator as DeclarationEvaluator<
-        SystemIntentDeclaration,
-    >>::evaluate(&SystemIntentEvaluator::default(), source)?;
-    Ok(EvaluatedSystem {
-        model: evaluated.value.model,
-        fingerprint: evaluated.identity,
-    })
-}
-
-pub fn evaluate_with(evaluator: &GluonEngine, source: &Source) -> Result<EvaluatedSystem, EvaluationError> {
-    let adapter = SystemIntentEvaluator::from_engine(evaluator.clone())?;
-    let evaluated = <SystemIntentEvaluator as DeclarationEvaluator<
-        SystemIntentDeclaration,
-    >>::evaluate(&adapter, source)?;
-
-    Ok(EvaluatedSystem {
-        model: evaluated.value.model,
-        fingerprint: evaluated.identity,
-    })
-}
-
-/// Evaluate a canonical generated snapshot without rewriting it.
-pub fn evaluate_generated_snapshot(source: &Source) -> Result<SystemModel, EvaluationError> {
-    let evaluated = <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
-        &SystemSnapshotCodec::default(),
-        source,
-    )?;
-    Ok(evaluated.value)
-}
-
-/// Evaluate a canonical generated snapshot with caller-selected limits/root.
-pub fn evaluate_generated_snapshot_with(
-    evaluator: &GluonEngine,
-    source: &Source,
-) -> Result<SystemModel, EvaluationError> {
-    let adapter = SystemSnapshotCodec::from_engine(evaluator.clone())?;
-    let evaluated = <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
-        &adapter,
-        source,
-    )?;
-    Ok(evaluated.value)
-}
-
 fn configured_engine(evaluator: GluonEngine) -> Result<GluonEngine, Diagnostic> {
     let mut policy = evaluator.import_policy().clone();
     policy.insert_embedded_module("cast.system.v1", GLUON_SYSTEM_ABI)?;
@@ -358,25 +279,46 @@ fn evaluate_spec(
     })
 }
 
-fn declaration_error(
-    error: EvaluationError,
-) -> DeclarationEvaluationError<spec::ConversionError> {
-    match error {
-        EvaluationError::Evaluation(source) => {
-            DeclarationEvaluationError::Evaluation(source)
-        }
-        EvaluationError::Conversion(source) => {
-            DeclarationEvaluationError::Conversion(source)
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use gluon_config::{DiagnosticCategory, Source};
 
     use super::*;
     use crate::{Provider, repository};
+
+    #[derive(Debug)]
+    struct EvaluatedSystem {
+        model: SystemModel,
+        fingerprint: EvaluationFingerprint,
+    }
+
+    fn evaluate(
+        source: &Source,
+    ) -> Result<
+        EvaluatedSystem,
+        DeclarationEvaluationError<spec::ConversionError>,
+    > {
+        let evaluated = <SystemIntentEvaluator as DeclarationEvaluator<
+            SystemIntentDeclaration,
+        >>::evaluate(&SystemIntentEvaluator::default(), source)?;
+        Ok(EvaluatedSystem {
+            model: evaluated.value.model,
+            fingerprint: evaluated.identity,
+        })
+    }
+
+    fn evaluate_generated_snapshot(
+        source: &Source,
+    ) -> Result<
+        SystemModel,
+        DeclarationEvaluationError<spec::ConversionError>,
+    > {
+        <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
+            &SystemSnapshotCodec::default(),
+            source,
+        )
+        .map(|evaluation| evaluation.value)
+    }
 
     fn authored(body: &str) -> Source {
         Source::new("system.glu", format!("let cast = import! cast.system.v1\n{body}"))
@@ -542,17 +484,17 @@ mod tests {
         ))
         .unwrap_err();
         assert!(
-            matches!(invalid_priority, EvaluationError::Conversion(ref error) if error.path() == "repositories[0].priority")
+            matches!(invalid_priority, DeclarationEvaluationError::Conversion(ref error) if error.path() == "repositories[0].priority")
         );
 
         let wrong_type = evaluate(&authored("{ packages = [1], .. cast.system }")).unwrap_err();
         assert!(
-            matches!(wrong_type, EvaluationError::Evaluation(ref error) if error.category == DiagnosticCategory::Type)
+            matches!(wrong_type, DeclarationEvaluationError::Evaluation(ref error) if error.category == DiagnosticCategory::Type)
         );
 
         let unknown = evaluate(&authored("{ package = [], .. cast.system }")).unwrap_err();
         assert!(
-            matches!(unknown, EvaluationError::Evaluation(ref error) if error.category == DiagnosticCategory::Type)
+            matches!(unknown, DeclarationEvaluationError::Evaluation(ref error) if error.category == DiagnosticCategory::Type)
         );
     }
 
@@ -560,7 +502,7 @@ mod tests {
     fn forbidden_effects_fail_and_fingerprints_are_deterministic() {
         let forbidden = evaluate(&authored("let _ = import! std.fs\ncast.system")).unwrap_err();
         assert!(
-            matches!(forbidden, EvaluationError::Evaluation(ref error) if error.category == DiagnosticCategory::Import)
+            matches!(forbidden, DeclarationEvaluationError::Evaluation(ref error) if error.category == DiagnosticCategory::Import)
         );
 
         let source = authored("cast.system");

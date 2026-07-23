@@ -391,7 +391,7 @@ mod tests {
         );
         let content = snapshot_content(&model);
         let evaluated =
-            system_model::gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", content.clone()))
+            system_model::evaluate_snapshot(&Source::new("system-model.glu", content.clone()))
                 .unwrap();
 
         assert!(content.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
