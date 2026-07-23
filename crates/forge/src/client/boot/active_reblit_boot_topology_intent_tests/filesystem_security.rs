@@ -8,9 +8,21 @@ use std::{
 };
 
 use super::{
-    super::ActiveReblitBootTopologyIntentError,
-    support::{ESP_PARTUUID, Fixture, TreeSnapshot, authored_alias, set_access_acl, set_test_xattr},
+    super::{
+        ActiveReblitBootTopologyIntentError, BoundActiveReblitBootPartitionSelector,
+        BoundActiveReblitBootTopologyIntent,
+    },
+    support::{
+        ESP_MOUNT_POINT, ESP_PARTUUID, Fixture, TreeSnapshot, authored_alias, set_access_acl,
+        set_test_xattr,
+    },
 };
+
+fn lua_alias(partuuid: &str) -> String {
+    format!(
+        "return {{ esp = {{ partuuid = \"{partuuid}\", mount_point = \"{ESP_MOUNT_POINT}\" }}, boot = {{ kind = \"alias_esp\" }} }}\n"
+    )
+}
 
 #[test]
 fn missing_machine_local_intent_is_a_hard_error_without_fallback() {
@@ -29,9 +41,10 @@ fn missing_machine_local_intent_is_a_hard_error_without_fallback() {
 }
 
 #[test]
-fn only_the_registered_gluon_extension_occupies_the_fixed_slot() {
+fn only_registered_extensions_occupy_the_fixed_slot() {
+    // An unregistered extension is never discovered.
     let fixture = Fixture::new();
-    let unknown = fixture.root.join("etc/cast/boot-topology.lua");
+    let unknown = fixture.root.join("etc/cast/boot-topology.txt");
     fs::write(&unknown, authored_alias(ESP_PARTUUID)).unwrap();
     fs::set_permissions(&unknown, fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -42,6 +55,32 @@ fn only_the_registered_gluon_extension_occupies_the_fixed_slot() {
 
     fixture.write_alias();
     fixture.prepare().unwrap();
+}
+
+#[test]
+fn a_lua_source_at_the_fixed_slot_is_discovered_revalidated_and_loaded() {
+    let fixture = Fixture::new();
+    let lua_path = fixture.root.join("etc/cast/boot-topology.lua");
+    fs::write(&lua_path, lua_alias(ESP_PARTUUID)).unwrap();
+    fs::set_permissions(&lua_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let prepared = fixture.prepare().unwrap();
+    let revalidated = prepared.revalidate(&fixture.installation).unwrap();
+
+    assert_eq!(
+        revalidated.topology(),
+        BoundActiveReblitBootTopologyIntent::BootAliasesEsp {
+            esp: BoundActiveReblitBootPartitionSelector {
+                partuuid: ESP_PARTUUID,
+                mount_point_hint: ESP_MOUNT_POINT,
+            },
+        }
+    );
+    // The fixed slot has one canonical logical name regardless of engine, and
+    // the Lua declaration imports nothing.
+    let fingerprint = revalidated.fingerprint();
+    assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.glu");
+    assert!(fingerprint.modules.is_empty());
 }
 
 #[test]
