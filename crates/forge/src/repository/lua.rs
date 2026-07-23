@@ -9,13 +9,18 @@
 
 use std::fmt::Write as _;
 
+use config::declaration::ConfigDeclarationEvaluator;
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
+    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+};
 use lua_config::{
-    GENERATED_LUA_MARKER, LuaOption, lua_optional_bool, lua_optional_integer, lua_optional_string,
-    lua_string,
+    GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_optional_bool, lua_optional_integer,
+    lua_optional_string, lua_string,
 };
 use serde::Deserialize;
 
-use super::gluon::{decode_specs, repository_to_spec};
+use super::gluon::{RepositoryCodec, decode_specs, repository_to_spec};
 use super::Map;
 use crate::repository::RepositoryConversionError;
 use crate::system_model::spec::{RepositorySourceSpec, RepositorySpec};
@@ -79,6 +84,119 @@ impl From<LuaRepositorySourceSpec> for RepositorySourceSpec {
 /// Convert decoded Lua repository fragments into the shared, validated map.
 fn decode_lua_specs(specs: Vec<LuaRepositorySpec>) -> Result<Map, RepositoryConversionError> {
     decode_specs(specs.into_iter().map(Into::into).collect())
+}
+
+/// Stateful Lua adapter for the repository declaration boundary. Decodes an
+/// authored `.lua` fragment into the same shared [`Map`] the Gluon codec
+/// produces, with an intentionally distinct evaluation identity.
+#[derive(Debug, Clone, Default)]
+pub struct LuaRepositoryCodec {
+    engine: LuaEngine,
+}
+
+impl DeclarationEvaluator<Map> for LuaRepositoryCodec {
+    type Identity = EvaluationIdentity;
+    type Error = RepositoryConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<Map, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        let evaluated = self
+            .engine
+            .evaluate_within_as::<Vec<LuaRepositorySpec>>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let map = decode_lua_specs(evaluated.value).map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(Evaluation {
+            value: map,
+            identity: evaluated.identity,
+        })
+    }
+}
+
+impl ConfigDeclarationEvaluator for LuaRepositoryCodec {
+    type Config = Map;
+}
+
+/// One registered repository declaration language (`.glu` or `.lua`), selected
+/// by file extension. Both engines reach the same [`Map`]; the conversion error
+/// type is shared, so no error unification is needed.
+#[derive(Debug, Clone)]
+pub enum RepositoryEvaluator {
+    Gluon(RepositoryCodec),
+    Lua(LuaRepositoryCodec),
+}
+
+impl DeclarationEvaluator<Map> for RepositoryEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = RepositoryConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        match self {
+            Self::Gluon(codec) => {
+                <RepositoryCodec as DeclarationEvaluator<Map>>::language_spec(codec)
+            }
+            Self::Lua(codec) => <LuaRepositoryCodec as DeclarationEvaluator<Map>>::language_spec(codec),
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        match self {
+            Self::Gluon(codec) => <RepositoryCodec as DeclarationEvaluator<Map>>::limits(codec),
+            Self::Lua(codec) => <LuaRepositoryCodec as DeclarationEvaluator<Map>>::limits(codec),
+        }
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        match self {
+            Self::Gluon(codec) => Self::Gluon(
+                <RepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
+            ),
+            Self::Lua(codec) => Self::Lua(
+                <LuaRepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
+            ),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<Map, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        match self {
+            Self::Gluon(codec) => codec.evaluate_within(source, deadline),
+            Self::Lua(codec) => codec.evaluate_within(source, deadline),
+        }
+    }
+}
+
+impl ConfigDeclarationEvaluator for RepositoryEvaluator {
+    type Config = Map;
+}
+
+impl RepositoryEvaluator {
+    /// The registered repository languages, `.glu` first, sharing a limit.
+    pub fn registered() -> [Self; 2] {
+        [
+            Self::Gluon(RepositoryCodec::default()),
+            Self::Lua(LuaRepositoryCodec::default()),
+        ]
+    }
 }
 
 /// Emit a repository [`Map`] as canonical, generated-marked Lua source that

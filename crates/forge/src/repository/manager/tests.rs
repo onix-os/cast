@@ -325,6 +325,49 @@ cast.repositories [cast.repository.direct "selected" "file:///z.index"]
 }
 
 #[test]
+fn config_manager_loads_a_lua_repository_fragment_by_extension() {
+    let config_directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(
+        config_directory.path(),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let fragments = config_directory.path().join("repo.d");
+    fs::create_dir_all(&fragments).unwrap();
+    fs::write(
+        fragments.join("main.lua"),
+        r#"
+return {
+    {
+        id = "lua-main",
+        description = { kind = "none" },
+        source = { kind = "direct_index", uri = "file:///lua.index" },
+        priority = { kind = "none" },
+        enabled = { kind = "none" },
+    },
+}
+"#,
+    )
+    .unwrap();
+
+    let (_root, installation) = test_installation();
+    let manager = Manager::with_config_manager(
+        config::Manager::custom(config_directory.path()),
+        installation,
+    )
+    .unwrap();
+    let selected = manager
+        .repositories
+        .get(&repository::Id::new("lua-main"))
+        .unwrap();
+    let repository::Source::DirectIndex(uri) = &selected.repository.source else {
+        panic!("expected direct repository source");
+    };
+    assert_eq!(uri.as_str(), "file:///lua.index");
+    assert!(selected.config_path.as_ref().unwrap().ends_with("repo.d/main.lua"));
+}
+
+#[test]
 fn repository_transport_errors_never_render_credentials() {
     let uri = Url::parse("https://user:secret@example.test/stone.index").unwrap();
     let error = validate_repository_transport(&uri).unwrap_err().to_string();
