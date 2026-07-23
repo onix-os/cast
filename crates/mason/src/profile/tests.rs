@@ -7,7 +7,11 @@ use config::declaration::{
     DeclarationEvaluatorSet, LoadManagedDeclarationError,
     SaveDeclarationError, SaveManagedDeclarationError,
 };
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+};
 use fs_err as fs;
+use gluon_config::Source as GluonSource;
 
 use super::*;
 
