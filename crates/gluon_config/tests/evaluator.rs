@@ -748,7 +748,7 @@ fn fingerprint_v1_process_probe() {
 }
 
 #[test]
-fn current_import_cycles_are_deduplicated_before_gluon_rejects_them() {
+fn import_cycles_are_rejected_during_preparation_before_gluon_runs() {
     let directory = tempfile::tempdir().unwrap();
 
     fs::write(
@@ -762,9 +762,6 @@ fn current_import_cycles_are_deduplicated_before_gluon_rejects_them() {
     )
     .unwrap();
     let limits = Limits {
-        // There are exactly two unique imported modules. Traversing the
-        // back-edge again would turn this into ImportCount instead of letting
-        // the pinned Gluon compiler report its current cycle behavior.
         max_imports: 2,
         ..Limits::default()
     };
@@ -773,11 +770,18 @@ fn current_import_cycles_are_deduplicated_before_gluon_rejects_them() {
         .evaluate::<i64>(&Source::new("cycle_root.glu", "import! \"cycle_a.glu\""))
         .unwrap_err();
 
-    assert_eq!(error.category, DiagnosticCategory::Runtime);
+    // Evaluator policy: the cycle is refused during graph preparation with an
+    // import diagnostic, before the Gluon runtime is ever created.
+    assert_eq!(error.category, DiagnosticCategory::Import);
     assert_eq!(error.limit, None);
     assert_eq!(error.source_name.as_deref(), Some("cycle_root.glu"));
-    assert_eq!(error.span, Some(SourceSpan { start: 0, end: 21 }));
-    assert!(error.message.contains("cycle_a -> cycle_b -> cycle_a"));
+    assert!(
+        error.message.contains("configuration import cycle detected"),
+        "unexpected diagnostic message: {}",
+        error.message
+    );
+    assert!(error.message.contains("relative:cycle_a.glu"));
+    assert!(error.message.contains("relative:cycle_b.glu"));
 }
 
 #[test]

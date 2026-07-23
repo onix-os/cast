@@ -116,7 +116,11 @@ fn resolves_only_reachable_catalog_and_rooted_modules_in_canonical_order() {
 }
 
 #[test]
-fn observes_cycle_back_edges_without_reenqueueing_modules() {
+fn rejects_import_cycles_before_preparation_completes() {
+    // Evaluator policy: an import cycle (root -> a -> b -> a) is refused with a
+    // stable import diagnostic during preparation, before any runtime exists.
+    // Reachable modules are still deduplicated, so the back-edge is observed
+    // rather than re-enqueued, but the cycle itself is fatal.
     let directory = tempfile::tempdir().unwrap();
     fs_err::write(directory.path().join("a.decl"), "a").unwrap();
     fs_err::write(directory.path().join("b.decl"), "b").unwrap();
@@ -126,7 +130,7 @@ fn observes_cycle_back_edges_without_reenqueueing_modules() {
         ..Limits::default()
     };
 
-    let graph = prepare_module_graph(
+    let error = prepare_module_graph(
         &AbiCatalog::new(),
         Some(&source_root),
         limits,
@@ -142,13 +146,16 @@ fn observes_cycle_back_edges_without_reenqueueing_modules() {
         },
         normalize_fixture,
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(graph.modules().len(), 2);
-    assert!(graph.dependencies().iter().any(|edge| {
-        edge.parent_identity == "relative:b.decl"
-            && edge.target_identity == "relative:a.decl"
-    }));
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert!(
+        error.message.contains("configuration import cycle detected"),
+        "unexpected diagnostic message: {}",
+        error.message
+    );
+    assert!(error.message.contains("relative:a.decl"));
+    assert!(error.message.contains("relative:b.decl"));
 }
 
 #[test]
@@ -166,11 +173,17 @@ fn enforces_catalog_count_file_and_aggregate_boundaries() {
         b"external-v1".to_vec()
     ));
     let root = Source::new("root.decl", "root");
-    let requests = |_: ModuleView<'_>| {
-        Ok(vec![
-            ImportRequest::embedded("abi.one"),
-            ImportRequest::embedded("runtime.one"),
-        ])
+    // Only the root imports the modules; embedded entries import nothing, so the
+    // graph is acyclic and this test isolates the count/byte boundaries.
+    let requests = |module: ModuleView<'_>| {
+        Ok(if module.class() == ModuleClass::Root {
+            vec![
+                ImportRequest::embedded("abi.one"),
+                ImportRequest::embedded("runtime.one"),
+            ]
+        } else {
+            Vec::new()
+        })
     };
 
     let count = prepare_module_graph(
@@ -197,7 +210,13 @@ fn enforces_catalog_count_file_and_aggregate_boundaries() {
         },
         &root,
         deadline(),
-        |_| Ok(vec![ImportRequest::embedded("abi.one")]),
+        |module| {
+            Ok(if module.class() == ModuleClass::Root {
+                vec![ImportRequest::embedded("abi.one")]
+            } else {
+                Vec::new()
+            })
+        },
         normalize_fixture,
     )
     .unwrap_err();
@@ -213,7 +232,13 @@ fn enforces_catalog_count_file_and_aggregate_boundaries() {
         },
         &root,
         deadline(),
-        |_| Ok(vec![ImportRequest::embedded("abi.one")]),
+        |module| {
+            Ok(if module.class() == ModuleClass::Root {
+                vec![ImportRequest::embedded("abi.one")]
+            } else {
+                Vec::new()
+            })
+        },
         normalize_fixture,
     )
     .unwrap();
@@ -226,7 +251,13 @@ fn enforces_catalog_count_file_and_aggregate_boundaries() {
         },
         &root,
         deadline(),
-        |_| Ok(vec![ImportRequest::embedded("abi.one")]),
+        |module| {
+            Ok(if module.class() == ModuleClass::Root {
+                vec![ImportRequest::embedded("abi.one")]
+            } else {
+                Vec::new()
+            })
+        },
         normalize_fixture,
     )
     .unwrap_err();

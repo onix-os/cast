@@ -367,8 +367,85 @@ where
         modules: graph.modules.into_values().collect(),
         dependencies: graph.dependencies.into_iter().collect(),
     };
+    // Evaluator policy: reject import cycles with a stable import diagnostic
+    // before any runtime is created. Reachable modules are still deduplicated;
+    // a cycle is a back-edge in the observed parent-to-target dependency graph.
+    if let Some(cycle) = detect_import_cycle(&prepared.dependencies) {
+        return Err(Diagnostic::import(
+            Some(evaluation_source_name.to_owned()),
+            format!(
+                "configuration import cycle detected: {}",
+                cycle.join(" -> ")
+            ),
+        ));
+    }
     deadline.check(evaluation_source_name)?;
     Ok(prepared)
+}
+
+/// Return one canonical cyclic path through the observed dependency edges, or
+/// `None` when the graph is acyclic. Detection is deterministic: adjacency is
+/// built from the already canonically-ordered dependency list and nodes are
+/// explored in sorted order.
+fn detect_import_cycle(dependencies: &[PreparedDependency]) -> Option<Vec<String>> {
+    let mut adjacency: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    let mut nodes: BTreeSet<&str> = BTreeSet::new();
+    for dependency in dependencies {
+        nodes.insert(dependency.parent_identity.as_str());
+        nodes.insert(dependency.target_identity.as_str());
+        adjacency
+            .entry(dependency.parent_identity.as_str())
+            .or_default()
+            .push(dependency.target_identity.as_str());
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Color {
+        White,
+        Gray,
+        Black,
+    }
+    let mut color: BTreeMap<&str, Color> =
+        nodes.iter().map(|&node| (node, Color::White)).collect();
+
+    for &start in &nodes {
+        if color[start] != Color::White {
+            continue;
+        }
+        let mut stack: Vec<(&str, usize)> = vec![(start, 0)];
+        let mut path: Vec<&str> = vec![start];
+        color.insert(start, Color::Gray);
+        while let Some(&(node, index)) = stack.last() {
+            let neighbors = adjacency.get(node).map(Vec::as_slice).unwrap_or(&[]);
+            if index < neighbors.len() {
+                stack.last_mut().expect("stack is non-empty").1 += 1;
+                let next = neighbors[index];
+                match color[next] {
+                    Color::White => {
+                        color.insert(next, Color::Gray);
+                        stack.push((next, 0));
+                        path.push(next);
+                    }
+                    Color::Gray => {
+                        let start_index = path
+                            .iter()
+                            .position(|&entry| entry == next)
+                            .expect("a gray node is on the active path");
+                        let mut cycle: Vec<String> =
+                            path[start_index..].iter().map(|entry| entry.to_string()).collect();
+                        cycle.push(next.to_owned());
+                        return Some(cycle);
+                    }
+                    Color::Black => {}
+                }
+            } else {
+                color.insert(node, Color::Black);
+                stack.pop();
+                path.pop();
+            }
+        }
+    }
+    None
 }
 
 struct ModuleGraph<'a> {
@@ -663,5 +740,95 @@ impl ModuleGraph<'_> {
                 parent.identity
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod cycle_tests {
+    use std::time::Duration;
+
+    use crate::{
+        AbiCatalog, DiagnosticCategory, EvaluationDeadline, ImportRequest,
+        Limits, ModuleClass, Source, prepare_module_graph,
+    };
+
+    fn embedded_catalog() -> AbiCatalog {
+        let mut catalog = AbiCatalog::new();
+        assert!(catalog.insert_source("a", "id.a", Source::new("id.a", "a body")));
+        assert!(catalog.insert_source("b", "id.b", Source::new("id.b", "b body")));
+        assert!(catalog.insert_source("c", "id.c", Source::new("id.c", "c body")));
+        catalog
+    }
+
+    fn prepare(
+        discover: impl Fn(&str) -> Vec<ImportRequest>,
+    ) -> Result<crate::PreparedGraph, crate::Diagnostic> {
+        let catalog = embedded_catalog();
+        let root = Source::new("root.decl", "root body");
+        let deadline = EvaluationDeadline::start(Duration::from_secs(30));
+        prepare_module_graph(
+            &catalog,
+            None,
+            Limits::default(),
+            &root,
+            deadline,
+            |view| Ok(discover(view.identity())),
+            |requested| Err(format!("no relative imports: {requested}")),
+        )
+    }
+
+    #[test]
+    fn import_cycles_are_rejected_with_a_stable_import_diagnostic() {
+        // root -> a -> b -> a is a cycle among embedded modules.
+        let error = prepare(|identity| match identity {
+            "root" => vec![ImportRequest::embedded("a")],
+            "id.a" => vec![ImportRequest::embedded("b")],
+            "id.b" => vec![ImportRequest::embedded("a")],
+            _ => Vec::new(),
+        })
+        .unwrap_err();
+
+        assert_eq!(error.category, DiagnosticCategory::Import);
+        assert!(
+            error.message.contains("configuration import cycle detected"),
+            "unexpected diagnostic message: {}",
+            error.message
+        );
+        assert!(error.message.contains("id.a"));
+        assert!(error.message.contains("id.b"));
+    }
+
+    #[test]
+    fn a_module_importing_itself_is_rejected() {
+        let error = prepare(|identity| match identity {
+            "root" => vec![ImportRequest::embedded("a")],
+            "id.a" => vec![ImportRequest::embedded("a")],
+            _ => Vec::new(),
+        })
+        .unwrap_err();
+
+        assert_eq!(error.category, DiagnosticCategory::Import);
+        assert!(error.message.contains("id.a"));
+    }
+
+    #[test]
+    fn a_shared_diamond_dependency_is_not_a_cycle() {
+        // root -> a -> c and root -> b -> c: `c` is reached twice but there is
+        // no back-edge, so preparation succeeds and dedupes `c` to one module.
+        let graph = prepare(|identity| match identity {
+            "root" => vec![ImportRequest::embedded("a"), ImportRequest::embedded("b")],
+            "id.a" => vec![ImportRequest::embedded("c")],
+            "id.b" => vec![ImportRequest::embedded("c")],
+            _ => Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(graph.modules().len(), 3);
+        assert!(
+            graph
+                .modules()
+                .iter()
+                .all(|module| module.class() == ModuleClass::Embedded)
+        );
     }
 }
