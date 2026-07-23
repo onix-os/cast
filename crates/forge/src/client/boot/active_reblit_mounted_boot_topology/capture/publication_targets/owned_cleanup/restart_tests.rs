@@ -614,3 +614,6 @@ fn restart_admission_refuses_receipt_drift_noop_and_unowned_preserve() {
     )
     .unwrap();
 }
+
+#[path = "../../../../active_reblit_owned_cleanup_component_process_kill_tests.rs"]
+mod component_process_kill;

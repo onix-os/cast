@@ -65,6 +65,8 @@ pub(crate) use boot_file_publication::{
 };
 #[cfg(test)]
 pub(crate) use boot_file_replacement::{
+    arm_after_boot_file_sidecar_unlink_callback,
+    arm_after_stale_boot_file_detach_callback,
     arm_boot_file_exchange_error_after_applied,
     arm_boot_file_replacement_stop_before_exchange,
     arm_boot_file_sidecar_stop_after_unlink,

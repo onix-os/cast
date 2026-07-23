@@ -65,6 +65,8 @@ use model::ExactContent;
 
 #[cfg(test)]
 pub(crate) use effect::{
+    arm_after_boot_file_sidecar_unlink_callback,
+    arm_after_stale_boot_file_detach_callback,
     arm_boot_file_exchange_error_after_applied,
     arm_boot_file_replacement_stop_before_exchange,
     arm_boot_file_sidecar_stop_after_unlink,
@@ -490,6 +492,7 @@ impl RetainedBootPublicationParent<'_, '_> {
         destination::require_named_identity(&parent, &private, authority.file, deadline)
             .map_err(|source| publication("rebinding detached stale boot file before unlink", source))?;
         synchronize_files(&[&private_file], &parent, deadline)?;
+        effect::after_stale_detach();
         if effect::stop_after_stale_detach() {
             return Err(RetainedBootFileReplacementError::InjectedFault {
                 point: "after-stale-detach-before-unlink",
@@ -503,6 +506,7 @@ impl RetainedBootPublicationParent<'_, '_> {
             authority.file,
             unlink_result,
         )?;
+        effect::after_sidecar_unlink();
         if effect::stop_after_sidecar_unlink() {
             return Err(RetainedBootFileReplacementError::InjectedFault {
                 point: "after-sidecar-unlink-before-durability",
@@ -577,6 +581,7 @@ impl RetainedBootPublicationParent<'_, '_> {
             sidecar_identity,
             unlink_result,
         )?;
+        effect::after_sidecar_unlink();
         if effect::stop_after_sidecar_unlink() {
             return Err(RetainedBootFileReplacementError::InjectedFault {
                 point: "after-sidecar-unlink-before-durability",

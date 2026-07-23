@@ -47,6 +47,12 @@ thread_local! {
     static STOP_BEFORE_EXCHANGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static STOP_AFTER_STALE_DETACH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static STOP_AFTER_SIDECAR_UNLINK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static AFTER_STALE_DETACH_CALLBACK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
+    static AFTER_SIDECAR_UNLINK_CALLBACK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const {
+        std::cell::RefCell::new(None)
+    };
 }
 
 #[cfg(test)]
@@ -72,6 +78,52 @@ pub(crate) fn arm_stale_boot_file_stop_after_detach() {
 #[cfg(test)]
 pub(crate) fn arm_boot_file_sidecar_stop_after_unlink() {
     STOP_AFTER_SIDECAR_UNLINK.with(|slot| assert!(!slot.replace(true), "post-unlink stop already armed"));
+}
+
+#[cfg(test)]
+/// Arms a one-shot callback after the detached stale inode plus its parent and
+/// filesystem have been synchronized, but before the private leaf is unlinked.
+pub(crate) fn arm_after_stale_boot_file_detach_callback(
+    callback: impl FnOnce() + 'static,
+) {
+    AFTER_STALE_DETACH_CALLBACK.with(|slot| {
+        assert!(
+            slot.borrow_mut().replace(Box::new(callback)).is_none(),
+            "post-detach callback already armed",
+        );
+    });
+}
+
+#[cfg(test)]
+/// Arms a one-shot callback after sidecar/private unlink reconciliation, but
+/// before its parent and filesystem durability boundary.
+pub(crate) fn arm_after_boot_file_sidecar_unlink_callback(
+    callback: impl FnOnce() + 'static,
+) {
+    AFTER_SIDECAR_UNLINK_CALLBACK.with(|slot| {
+        assert!(
+            slot.borrow_mut().replace(Box::new(callback)).is_none(),
+            "post-unlink callback already armed",
+        );
+    });
+}
+
+pub(super) fn after_stale_detach() {
+    #[cfg(test)]
+    AFTER_STALE_DETACH_CALLBACK.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().take() {
+            callback();
+        }
+    });
+}
+
+pub(super) fn after_sidecar_unlink() {
+    #[cfg(test)]
+    AFTER_SIDECAR_UNLINK_CALLBACK.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().take() {
+            callback();
+        }
+    });
 }
 
 pub(super) fn stop_before_exchange() -> bool {

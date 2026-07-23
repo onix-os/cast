@@ -51,6 +51,8 @@ pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
 
 #[cfg(test)]
 pub(crate) use attachment::{
+    arm_after_boot_file_sidecar_unlink_callback,
+    arm_after_stale_boot_file_detach_callback,
     arm_boot_file_exchange_error_after_applied, arm_boot_file_replacement_stop_before_exchange,
     arm_boot_file_sidecar_stop_after_unlink, arm_stale_boot_file_detach_error_after_applied,
     arm_stale_boot_file_stop_after_detach,
