@@ -35,11 +35,13 @@ trigger-declaration-test:
 declaration-regression-test: declarative-config-test gluon-adapter-test trigger-declaration-test config-declaration-manager-test config-rooted-declaration-loader-test config-fixed-root-declaration-loader-test
 	@$(CARGO) test -p config --lib -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test package_v3 -- --test-threads=1
+	@$(CARGO) test -p mason --lib "recipe::tests::" -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test build_policy -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test build_policy_patch -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test build_policy_layers -- --test-threads=1
 	@$(CARGO) test -p mason --lib "source_lock::tests::" -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --lib "derivation::build_lock::tests::" -- --test-threads=1
+	@$(CARGO) test -p mason --lib "build_lock::tests::" -- --test-threads=1
 	@$(CARGO) test -p mason --lib "profile::tests::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "repository::gluon::tests::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "system_model::gluon::tests::" -- --test-threads=1

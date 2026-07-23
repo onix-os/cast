@@ -1,9 +1,11 @@
 use std::path::Path;
 
+use declarative_config::DeclarationInputEvaluator;
 use gluon_config::{DiagnosticCategory, GluonEngine, Source, SourceRoot};
 use stone_recipe::package::{
     BuilderEnvironmentSpec, BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec, PACKAGE_ABI_VERSION,
-    PackageConversionError, PackageEvaluationError, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,
+    GluonPackageEvaluator, PackageConversionError, PackageEvaluationError,
+    ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,
     evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
@@ -860,9 +862,17 @@ b.mk_package (b.meta {
     let first = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
     let repeated = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
     let changed = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v2").unwrap();
+    let typed = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
+        &GluonPackageEvaluator::default(),
+        &source,
+        b"lock-v1",
+    )
+    .unwrap();
 
     assert_eq!(first.package, repeated.package);
     assert_eq!(first.fingerprint, repeated.fingerprint);
+    assert_eq!(typed.value, first.package);
+    assert_eq!(typed.identity, first.fingerprint);
     assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
 }
 

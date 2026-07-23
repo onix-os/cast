@@ -1,5 +1,10 @@
 //! Gluon evaluation boundary for package declarations.
 
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    LanguageSpec, Limits, SourceRoot,
+};
 use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
 use thiserror::Error;
 
@@ -55,6 +60,109 @@ pub enum PackageEvaluationError {
     Evaluation(#[from] Diagnostic),
     #[error(transparent)]
     Conversion(#[from] PackageConversionError),
+}
+
+/// Stateful Gluon package adapter with every package ABI fixed at construction.
+///
+/// The adapter implements the ordinary declaration role for authored packages
+/// without a source lock and the explicit-input role for callers which bind
+/// exact generated lock bytes into fingerprint v1.
+#[derive(Debug, Clone)]
+pub struct GluonPackageEvaluator {
+    engine: GluonEngine,
+}
+
+impl Default for GluonPackageEvaluator {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
+}
+
+impl GluonPackageEvaluator {
+    pub fn new(limits: Limits) -> Self {
+        Self::from_engine(GluonEngine::new(limits))
+            .expect("the embedded package and builder ABIs are valid and unique")
+    }
+
+    fn from_engine(engine: GluonEngine) -> Result<Self, Diagnostic> {
+        let mut import_policy = engine.import_policy().clone();
+        import_policy.enable_array_primitives();
+        import_policy.enable_string_primitives();
+        import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
+        import_policy.insert_embedded_module("cast.package.v3", GLUON_PACKAGE_ABI)?;
+        import_policy.insert_embedded_module("cast.builders.cmake.v2", GLUON_CMAKE_BUILDER_ABI)?;
+        import_policy.insert_embedded_module("cast.builders.meson.v2", GLUON_MESON_BUILDER_ABI)?;
+        import_policy.insert_embedded_module("cast.builders.cargo.v2", GLUON_CARGO_BUILDER_ABI)?;
+        import_policy.insert_embedded_module("cast.builders.autotools.v2", GLUON_AUTOTOOLS_BUILDER_ABI)?;
+        Ok(Self {
+            engine: engine.with_import_policy(import_policy),
+        })
+    }
+
+    fn evaluate_package(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<PackageSpec, EvaluationFingerprint>,
+        DeclarationEvaluationError<PackageConversionError>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let package = PackageSpec::from(evaluation.value);
+        package
+            .validate()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+
+        Ok(DeclarationEvaluation {
+            value: package,
+            identity: evaluation.fingerprint,
+        })
+    }
+}
+
+impl DeclarationEvaluator<PackageSpec> for GluonPackageEvaluator {
+    type Identity = EvaluationFingerprint;
+    type Error = PackageConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<PackageSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_package(source, &[])
+    }
+}
+
+impl DeclarationInputEvaluator<PackageSpec> for GluonPackageEvaluator {
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<PackageSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_package(source, explicit_inputs)
+    }
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -647,22 +755,24 @@ pub fn evaluate_gluon_with_inputs(
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    let mut import_policy = evaluator.import_policy().clone();
-    import_policy.enable_array_primitives();
-    import_policy.enable_string_primitives();
-    import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("cast.package.v3", GLUON_PACKAGE_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.cmake.v2", GLUON_CMAKE_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.meson.v2", GLUON_MESON_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.cargo.v2", GLUON_CARGO_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.autotools.v2", GLUON_AUTOTOOLS_BUILDER_ABI)?;
-    let evaluator = evaluator.clone().with_import_policy(import_policy);
-    let evaluation = evaluator.evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)?;
-    let package = PackageSpec::from(evaluation.value);
-    package.validate()?;
+    let evaluator = GluonPackageEvaluator::from_engine(evaluator.clone())?;
+    let evaluation =
+        <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
+            &evaluator,
+            source,
+            explicit_inputs,
+        )
+        .map_err(|error| match error {
+            DeclarationEvaluationError::Evaluation(error) => {
+                PackageEvaluationError::Evaluation(error)
+            }
+            DeclarationEvaluationError::Conversion(error) => {
+                PackageEvaluationError::Conversion(error)
+            }
+        })?;
 
     Ok(EvaluatedPackage {
-        package,
-        fingerprint: evaluation.fingerprint,
+        package: evaluation.value,
+        fingerprint: evaluation.identity,
     })
 }

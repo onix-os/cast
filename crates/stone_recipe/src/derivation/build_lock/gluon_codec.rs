@@ -1,24 +1,99 @@
 use std::{fmt::Write as _, str};
 
-use gluon_config::{GluonEngine, Source};
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+};
+use gluon_config::{EvaluationFingerprint, GluonEngine, Source};
 
 use super::{
     AnalyzerRole, BuildLock, BuildLockDecodeError, BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole,
-    GENERATED_GLUON_MARKER, InputOrigin, JobExecutableRole, JobStepSection, LockedIdentity, LockedOutput,
+    BUILD_LOCK_GENERATED_GLUON_MARKER, InputOrigin, JobExecutableRole, JobStepSection, LockedIdentity, LockedOutput,
     LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection, Platform, RepositorySnapshot,
     STANDALONE_GLUON_TYPES,
 };
 
+/// Stateful Gluon codec for the canonical generated build-lock domain.
+#[derive(Debug, Clone)]
+pub struct GluonBuildLockCodec {
+    engine: GluonEngine,
+}
+
+impl Default for GluonBuildLockCodec {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
+}
+
+impl GluonBuildLockCodec {
+    pub fn new(limits: Limits) -> Self {
+        Self {
+            engine: GluonEngine::new(limits),
+        }
+    }
+}
+
+impl DeclarationEvaluator<BuildLock> for GluonBuildLockCodec {
+    type Identity = EvaluationFingerprint;
+    type Error = BuildLockValidationError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<BuildLock, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate::<GluonBuildLock>(source)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let mut lock = BuildLock::try_from(evaluation.value)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        lock.normalize();
+        lock.validate()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value: lock,
+            identity: evaluation.fingerprint,
+        })
+    }
+}
+
+impl DeclarationCodec<BuildLock> for GluonBuildLockCodec {
+    fn encode(&self, lock: &BuildLock) -> Result<String, Self::Error> {
+        Ok(encode_build_lock(lock))
+    }
+}
+
 /// Decode a standalone generated lock using the restricted Gluon evaluator.
 pub fn decode_build_lock(logical_name: &str, bytes: &[u8]) -> Result<BuildLock, BuildLockDecodeError> {
     let source = str::from_utf8(bytes)?;
-    let evaluated = GluonEngine::default()
-        .evaluate::<GluonBuildLock>(&Source::new(logical_name, source))
-        .map_err(|error| BuildLockDecodeError::Evaluation(Box::new(error)))?;
-    let mut lock = BuildLock::try_from(evaluated.value)?;
-    lock.normalize();
-    lock.validate()?;
-    Ok(lock)
+    let evaluation = GluonBuildLockCodec::default()
+        .evaluate(&Source::new(logical_name, source))
+        .map_err(|error| match error {
+            DeclarationEvaluationError::Evaluation(error) => {
+                BuildLockDecodeError::Evaluation(Box::new(error))
+            }
+            DeclarationEvaluationError::Conversion(error) => {
+                BuildLockDecodeError::Validation(error)
+            }
+        })?;
+    Ok(evaluation.value)
 }
 
 /// Encode a canonical, import-free `build.lock.glu` value.
@@ -26,7 +101,7 @@ pub fn encode_build_lock(lock: &BuildLock) -> String {
     let mut lock = lock.clone();
     lock.normalize();
 
-    let mut output = String::from(GENERATED_GLUON_MARKER);
+    let mut output = String::from(BUILD_LOCK_GENERATED_GLUON_MARKER);
     output.push_str("// Canonical standalone build lock. Schema version is explicit below.\n");
     output.push_str(STANDALONE_GLUON_TYPES);
     output.push_str("{\n");

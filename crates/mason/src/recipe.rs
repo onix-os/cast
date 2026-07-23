@@ -1,12 +1,28 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use chrono::{DateTime, Utc};
+use config::declaration::{
+    LoadFixedRootDeclarationError, RootDeclarationSlot,
+    RootDeclarationSlotError,
+    TypedDeclarationEvaluatorSet, load_fixed_root_declaration,
+};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    LanguageSpec, Limits, Source, SourceRoot,
+};
 use fs_err as fs;
-use gluon_config::{EvaluationFingerprint, GluonEngine, SourceRoot};
+use gluon_config::EvaluationFingerprint;
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
-use stone_recipe::package::{BuilderSpec, HooksSpec, PackageSpec, PhasesSpec, ProfileSpec, evaluate_gluon_with_inputs};
+use stone_recipe::package::{
+    BuilderSpec, GluonPackageEvaluator, HooksSpec, PackageConversionError,
+    PackageSpec, PhasesSpec, ProfileSpec,
+};
 use thiserror::Error;
 
 use crate::{
@@ -149,13 +165,24 @@ fn load_gluon(
     source_lock_policy: SourceLockPolicy,
 ) -> Result<(String, PackageSpec, Option<SourceLock>, EvaluationFingerprint), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
-    let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
-    let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
-    let evaluator = GluonEngine::default();
-    let source = source_root
-        .load(Path::new(file_name), evaluator.limits().max_source_bytes)
-        .map_err(Error::LoadGluonSource)?;
-    let evaluator = evaluator.with_source_root(source_root);
+    let package = GluonPackageEvaluator::default();
+    let language =
+        <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(
+            &package,
+        );
+    if path.extension().and_then(|extension| extension.to_str())
+        != Some(language.extension())
+    {
+        return Err(Error::MissingRecipe(path.to_owned()));
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
+    let basename = path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
 
     let lock_path = path.with_file_name(SOURCE_LOCK_FILE_NAME);
     let (explicit_inputs, source_lock) = match source_lock_policy {
@@ -180,20 +207,116 @@ fn load_gluon(
         },
     };
 
-    let evaluated = evaluate_gluon_with_inputs(&evaluator, &source, &explicit_inputs)?;
+    let slot = RootDeclarationSlot::new(basename, file_name).map_err(|source| {
+        Error::InvalidRecipeSlot {
+            path: path.to_owned(),
+            source,
+        }
+    })?;
+    let evaluator = RecipeDeclarationEvaluator {
+        package,
+        explicit_inputs: Arc::from(explicit_inputs),
+    };
+    let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
+        .expect("the recipe registers one unique Gluon language");
+    let evaluated = load_fixed_root_declaration(parent, &slot, &evaluators)
+        .map_err(map_recipe_load_error)?
+        .ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     if let Some(lock) = source_lock.as_ref() {
-        lock.validate_against(&evaluated.package.sources)
+        lock.validate_against(&evaluated.value.package.sources)
             .map_err(|source| Error::StaleSourceLock {
                 path: lock_path,
                 source: Box::new(source),
             })?;
     }
     Ok((
-        source.text().to_owned(),
-        evaluated.package,
+        evaluated.value.source,
+        evaluated.value.package,
         source_lock,
-        evaluated.fingerprint,
+        evaluated.identity,
     ))
+}
+
+#[derive(Debug)]
+struct RecipeDeclaration {
+    source: String,
+    package: PackageSpec,
+}
+
+#[derive(Debug, Clone)]
+struct RecipeDeclarationEvaluator {
+    package: GluonPackageEvaluator,
+    explicit_inputs: Arc<[u8]>,
+}
+
+impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
+    type Identity = EvaluationFingerprint;
+    type Error = PackageConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(
+            &self.package,
+        )
+    }
+
+    fn limits(&self) -> Limits {
+        <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::limits(
+            &self.package,
+        )
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            package: <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::with_source_root(
+                &self.package,
+                source_root,
+            ),
+            explicit_inputs: self.explicit_inputs.clone(),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<RecipeDeclaration, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
+            &self.package,
+            source,
+            &self.explicit_inputs,
+        )?;
+        Ok(DeclarationEvaluation {
+            value: RecipeDeclaration {
+                source: source.text().to_owned(),
+                package: evaluation.value,
+            },
+            identity: evaluation.identity,
+        })
+    }
+}
+
+fn map_recipe_load_error(
+    error: LoadFixedRootDeclarationError<PackageConversionError>,
+) -> Error {
+    match error {
+        LoadFixedRootDeclarationError::Read { source, .. }
+        | LoadFixedRootDeclarationError::RetainSourceRoot { source, .. } => {
+            Error::LoadGluonSource(source)
+        }
+        LoadFixedRootDeclarationError::Evaluation { source, .. } => {
+            Error::EvaluateGluon(
+                stone_recipe::package::PackageEvaluationError::Evaluation(source),
+            )
+        }
+        LoadFixedRootDeclarationError::Conversion { source, .. } => {
+            Error::EvaluateGluon(
+                stone_recipe::package::PackageEvaluationError::Conversion(source),
+            )
+        }
+        error => Error::LoadRecipeDeclaration(Box::new(error)),
+    }
 }
 
 pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
@@ -213,8 +336,19 @@ pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
 pub enum Error {
     #[error("recipe file does not exist: {0:?}")]
     MissingRecipe(PathBuf),
+    #[error("recipe path {path:?} cannot identify a fixed declaration slot")]
+    InvalidRecipeSlot {
+        path: PathBuf,
+        #[source]
+        source: RootDeclarationSlotError,
+    },
     #[error("load Gluon recipe source")]
     LoadGluonSource(#[source] gluon_config::Diagnostic),
+    #[error("load recipe declaration")]
+    LoadRecipeDeclaration(
+        #[source]
+        Box<LoadFixedRootDeclarationError<PackageConversionError>>,
+    ),
     #[error("load Gluon source lock {path:?}")]
     LoadSourceLock {
         path: PathBuf,
@@ -417,6 +551,19 @@ let base = cast.mk_package (cast.meta {SOURCE_SPEC})
     }
 
     #[test]
+    fn explicit_unknown_extension_never_selects_a_sibling_gluon_recipe() {
+        let root = tempfile::tempdir().unwrap();
+        let gluon = root.path().join("custom.glu");
+        let unknown = root.path().join("custom.yaml");
+        fs::write(&gluon, gluon_recipe(SOURCE_SPEC)).unwrap();
+        fs::write(&unknown, gluon_recipe(SOURCE_SPEC)).unwrap();
+
+        let error = Recipe::load(&unknown).unwrap_err();
+
+        assert!(matches!(error, Error::MissingRecipe(path) if path == unknown.canonicalize().unwrap()));
+    }
+
+    #[test]
     fn directory_gluon_loads_contained_relative_imports() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("source.glu"), SOURCE_SPEC).unwrap();
@@ -517,7 +664,7 @@ cast.mk_package (cast.meta {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
-        let limit = gluon_config::Limits::default().max_source_bytes;
+        let limit = Limits::default().max_source_bytes;
         fs::File::create(&lock_path)
             .unwrap()
             .set_len(u64::try_from(limit).unwrap() + 1)

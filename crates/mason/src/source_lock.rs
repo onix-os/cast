@@ -8,14 +8,12 @@ use std::{
     cmp::Ordering,
     collections::BTreeMap,
     fmt::Write as _,
-    io::{self, Write as _},
-    path::{Path, PathBuf},
-    str,
-    sync::atomic::{AtomicU64, Ordering as AtomicOrdering},
+    io,
+    path::Path,
 };
 
-use fs_err as fs;
-use gluon_config::{Diagnostic, GluonEngine, Source as GluonSource};
+use declarative_config::{DeclarationCodec, DeclarationEvaluator};
+use gluon_config::Diagnostic;
 use stone_recipe::{
     UpstreamSpec,
     spec::{
@@ -24,7 +22,11 @@ use stone_recipe::{
 };
 use thiserror::Error;
 
-use crate::generated_lock;
+use crate::{generated_declaration, generated_lock};
+
+mod gluon_adapter;
+
+pub use gluon_adapter::GluonSourceLockCodec;
 
 /// Canonical file name for generated source resolution data.
 pub const SOURCE_LOCK_FILE_NAME: &str = "sources.lock.glu";
@@ -277,16 +279,7 @@ enum GluonSourceResolution {
     },
 }
 
-/// Decode a standalone lock with the shared restricted Gluon evaluator.
-pub fn decode_source_lock(logical_name: &str, bytes: &[u8]) -> Result<SourceLock, DecodeError> {
-    let source = str::from_utf8(bytes)?;
-    let evaluated = GluonEngine::default()
-        .evaluate::<GluonSourceLock>(&GluonSource::new(logical_name, source))
-        .map_err(|error| DecodeError::Evaluation(Box::new(error)))?;
-    let lock = SourceLock::try_from(evaluated.value)?;
-    lock.validate()?;
-    Ok(lock)
-}
+pub use gluon_adapter::decode_source_lock;
 
 impl TryFrom<GluonSourceLock> for SourceLock {
     type Error = ValidationError;
@@ -359,7 +352,7 @@ fn validate_equal(order: usize, field: &'static str, expected: &str, found: &str
 #[derive(Debug, Error)]
 pub enum DecodeError {
     #[error("source lock is not UTF-8")]
-    Utf8(#[from] str::Utf8Error),
+    Utf8(#[from] std::str::Utf8Error),
     #[error("evaluate source lock")]
     Evaluation(#[source] Box<Diagnostic>),
     #[error(transparent)]
@@ -519,7 +512,10 @@ fn gluon_string(value: &str) -> String {
 /// Atomically write a canonical lock, avoiding any replacement when its bytes
 /// are unchanged.
 pub fn write_source_lock(path: &Path, lock: &SourceLock) -> io::Result<WriteOutcome> {
-    let encoded = encode_source_lock(lock);
+    let codec = GluonSourceLockCodec::default();
+    let encoded = codec
+        .encode(lock)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     match generated_lock::read(path) {
         Ok(existing) if existing == encoded.as_bytes() => return Ok(WriteOutcome::Unchanged),
         Ok(_) => {}
@@ -527,67 +523,22 @@ pub fn write_source_lock(path: &Path, lock: &SourceLock) -> io::Result<WriteOutc
         Err(error) => return Err(error.into_io_error()),
     }
 
-    atomic_write_with(path, encoded.as_bytes(), |_| Ok(()))?;
+    let slot = generated_declaration::declaration_slot(
+        path,
+        SOURCE_LOCK_FILE_NAME,
+        codec.language_spec(),
+        GENERATED_GLUON_MARKER,
+        codec.limits().max_source_bytes,
+    )?;
+    slot.save(encoded.as_bytes())
+        .map_err(generated_declaration::save_error_into_io)?;
     Ok(WriteOutcome::Written)
-}
-
-static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn atomic_write_with(
-    path: &Path,
-    bytes: &[u8],
-    before_replace: impl FnOnce(&Path) -> io::Result<()>,
-) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source lock path has no file name"))?
-        .to_string_lossy();
-
-    let (temporary_path, mut file) = create_temporary(parent, &file_name)?;
-    let mut guard = TemporaryGuard(Some(temporary_path.clone()));
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-
-    before_replace(&temporary_path)?;
-    fs::rename(&temporary_path, path)?;
-    guard.0 = None;
-    fs::File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-fn create_temporary(parent: &Path, file_name: &str) -> io::Result<(PathBuf, fs::File)> {
-    for _ in 0..100 {
-        let counter = TEMPORARY_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
-        let path = parent.join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()));
-        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "unable to allocate a temporary source lock",
-    ))
-}
-
-struct TemporaryGuard(Option<PathBuf>);
-
-impl Drop for TemporaryGuard {
-    fn drop(&mut self) {
-        if let Some(path) = self.0.take() {
-            let _ = fs::remove_file(path);
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use fs_err as fs;
+
     use super::*;
 
     mod normalized_value_golden;
@@ -913,32 +864,15 @@ type SourceLock = {
     }
 
     #[test]
-    fn interrupted_atomic_replace_leaves_a_complete_old_or_new_lock() {
+    fn generated_slot_refuses_to_replace_an_authored_lock() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(SOURCE_LOCK_FILE_NAME);
-        let old_lock = sample_lock();
-        let mut new_lock = sample_lock();
-        new_lock.sources.push(SourceResolution::Archive(ArchiveResolution {
-            order: 2,
-            url: "https://example.invalid/second.tar.zst".to_owned(),
-            sha256: "b".repeat(64),
-        }));
-        let old = encode_source_lock(&old_lock);
-        let new = encode_source_lock(&new_lock);
-        fs::write(&path, &old).unwrap();
+        fs::write(&path, "authored lock\n").unwrap();
 
-        let error = atomic_write_with(&path, new.as_bytes(), |_| {
-            Err(io::Error::new(io::ErrorKind::Interrupted, "simulated interruption"))
-        })
-        .unwrap_err();
+        let error = write_source_lock(&path, &sample_lock()).unwrap_err();
 
-        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
-        let after_interruption = fs::read_to_string(&path).unwrap();
-        assert!(after_interruption == old || after_interruption == new);
-        assert_eq!(after_interruption, old);
-
-        assert_eq!(write_source_lock(&path, &new_lock).unwrap(), WriteOutcome::Written);
-        assert_eq!(fs::read_to_string(path).unwrap(), new);
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read_to_string(path).unwrap(), "authored lock\n");
     }
 
     fn sample_lock() -> SourceLock {

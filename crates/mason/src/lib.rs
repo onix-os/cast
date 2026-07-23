@@ -15,6 +15,7 @@ mod container;
 mod draft;
 mod env;
 mod executor;
+mod generated_declaration;
 mod generated_lock;
 mod linux_fs;
 mod package;
