@@ -16,6 +16,10 @@ use lua_config::LuaEngine;
 use super::{BuildLock, BuildLockValidationError};
 
 /// Stateful Lua adapter for the canonical build-lock declaration.
+///
+/// Proven by the parity tests below; the `.lua` build-lock loader wiring that
+/// constructs it in production is a later slice.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone, Default)]
 pub struct LuaBuildLockCodec {
     engine: LuaEngine,
