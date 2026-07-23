@@ -73,6 +73,64 @@ array.append ["one"] ["two"]"#,
 }
 
 #[test]
+fn pure_builtin_overrides_same_named_embedded_source_in_either_policy_order() {
+    let source = Source::new(
+        "array-overlap.glu",
+        r#"let array = import! std.array.prim
+array.append ["one"] ["two"]"#,
+    );
+    let mut builtin_only = ImportPolicy::new();
+    builtin_only.enable_array_primitives();
+    let expected = Evaluator::default()
+        .with_import_policy(builtin_only)
+        .evaluate::<Vec<String>>(&source)
+        .unwrap();
+
+    let mut source_then_builtin = ImportPolicy::new();
+    source_then_builtin
+        .insert_embedded_module("std.array.prim", "41")
+        .unwrap();
+    source_then_builtin.enable_array_primitives();
+
+    let mut builtin_then_source = ImportPolicy::new();
+    builtin_then_source.enable_array_primitives();
+    builtin_then_source
+        .insert_embedded_module("std.array.prim", "41")
+        .unwrap();
+
+    for policy in [source_then_builtin, builtin_then_source] {
+        let evaluated = Evaluator::default()
+            .with_import_policy(policy)
+            .evaluate::<Vec<String>>(&source)
+            .unwrap();
+        assert_eq!(evaluated.value, ["one", "two"]);
+        assert_eq!(evaluated.fingerprint, expected.fingerprint);
+    }
+}
+
+#[test]
+fn repeated_pure_builtin_counts_as_one_reachable_module() {
+    let source = Source::new(
+        "array-dedup.glu",
+        r#"let first = import! std.array.prim
+let second = import! std.array.prim
+second.append ["one"] ["two"]"#,
+    );
+    let mut policy = ImportPolicy::new();
+    policy.enable_array_primitives();
+    let evaluated = Evaluator::new(Limits {
+        max_imports: 1,
+        ..Limits::default()
+    })
+    .with_import_policy(policy)
+    .evaluate::<Vec<String>>(&source)
+    .unwrap();
+
+    assert_eq!(evaluated.value, ["one", "two"]);
+    assert_eq!(evaluated.fingerprint.imported_modules.len(), 1);
+}
+
+#[test]
 fn fingerprints_source_and_explicit_inputs() {
     let evaluator = Evaluator::default();
     let source = Source::new("literal.glu", "42");
@@ -352,6 +410,48 @@ fn parent_traversal_and_absolute_imports_are_rejected() {
         .unwrap_err();
     assert_eq!(absolute.category, DiagnosticCategory::Import);
     assert!(absolute.message.contains("absolute"));
+}
+
+#[test]
+fn graph_policy_rejections_precede_relative_path_normalization() {
+    let missing_root = Evaluator::default()
+        .evaluate::<i64>(&Source::new("root.glu", "import! \"../invalid.glu\""))
+        .unwrap_err();
+    assert!(missing_root.message.contains("explicit SourceRoot"));
+    assert!(!missing_root.message.contains("parent traversal"));
+
+    let directory = tempfile::tempdir().unwrap();
+    let policy = ImportPolicy::new()
+        .with_embedded_module("cast.parent", "import! \"../invalid.glu\"")
+        .unwrap();
+    let embedded = Evaluator::default()
+        .with_source_root(SourceRoot::new(directory.path()).unwrap())
+        .with_import_policy(policy)
+        .evaluate::<i64>(&Source::new("root.glu", "import! cast.parent"))
+        .unwrap_err();
+    assert!(embedded
+        .message
+        .contains("embedded modules cannot import source-root files"));
+    assert!(!embedded.message.contains("parent traversal"));
+}
+
+#[test]
+fn earlier_import_limit_wins_over_a_later_invalid_import_shape() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("large.glu"), "123").unwrap();
+    let evaluator = Evaluator::new(Limits {
+        max_imported_file_bytes: 2,
+        ..Limits::default()
+    })
+    .with_source_root(SourceRoot::new(directory.path()).unwrap());
+    let source = Source::new(
+        "root.glu",
+        "let large = import! \"large.glu\"\nlet invalid = import! 1\nlarge",
+    );
+
+    let error = evaluator.evaluate::<i64>(&source).unwrap_err();
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ImportedFileSize));
 }
 
 #[cfg(unix)]

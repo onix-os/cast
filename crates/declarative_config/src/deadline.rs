@@ -84,10 +84,10 @@ mod tests {
         };
 
         assert_eq!(deadline.remaining_at(started_at), None);
-        let error = deadline.exceeded("root.glu");
+        let error = deadline.exceeded("root.decl");
         assert_eq!(error.category, DiagnosticCategory::Limit);
         assert_eq!(error.limit, Some(LimitKind::Time));
-        assert_eq!(error.source_name.as_deref(), Some("root.glu"));
+        assert_eq!(error.source_name.as_deref(), Some("root.decl"));
     }
 
     #[test]

@@ -19,6 +19,7 @@ impl ModuleFingerprint {
         infallible(Self::new_checked(logical_name, source, &mut checkpoint))
     }
 
+    #[cfg(test)]
     pub(crate) fn new_checked<E>(
         logical_name: impl Into<String>,
         source: &str,

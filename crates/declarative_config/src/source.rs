@@ -581,23 +581,23 @@ mod tests {
         let modules = collection.join("modules");
         let nested = modules.join("nested");
         fs::create_dir_all(&nested).unwrap();
-        fs::write(collection.join("main.glu"), "import! \"modules/anchor.glu\"").unwrap();
-        fs::write(modules.join("anchor.glu"), "0").unwrap();
-        fs::write(nested.join("value.glu"), "\"retained\"").unwrap();
+        fs::write(collection.join("main.decl"), "root declaration").unwrap();
+        fs::write(modules.join("anchor.decl"), "anchor").unwrap();
+        fs::write(nested.join("value.decl"), "retained").unwrap();
         let retained = fs::File::open(&root).unwrap();
         let source_root = SourceRoot::from_directory(&root, &retained).unwrap();
 
-        source_root.load("rooted.d/main.glu", 1_024).unwrap();
+        source_root.load("rooted.d/main.decl", 1_024).unwrap();
         source_root
-            .load_import(std::path::Path::new("rooted.d/modules/anchor.glu"), 1_024)
+            .load_import(std::path::Path::new("rooted.d/modules/anchor.decl"), 1_024)
             .unwrap();
 
         fs::rename(&nested, temporary.path().join("detached-nested")).unwrap();
         fs::create_dir(&nested).unwrap();
-        fs::write(nested.join("value.glu"), "\"injected\"").unwrap();
+        fs::write(nested.join("value.decl"), "injected").unwrap();
 
         let error = source_root
-            .load_import(std::path::Path::new("rooted.d/modules/nested/value.glu"), 1_024)
+            .load_import(std::path::Path::new("rooted.d/modules/nested/value.decl"), 1_024)
             .unwrap_err();
         assert!(error.message.contains("source directory changed"));
     }

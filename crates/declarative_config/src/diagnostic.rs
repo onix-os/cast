@@ -107,13 +107,13 @@ mod tests {
     #[test]
     fn native_error_sources_remain_visible_after_cloning() {
         let diagnostic = Diagnostic::io(
-            Some("root.glu".to_owned()),
+            Some("root.decl".to_owned()),
             io::Error::new(io::ErrorKind::NotFound, "missing declaration"),
         );
         let cloned = diagnostic.clone();
 
         assert_eq!(cloned.category, DiagnosticCategory::Io);
-        assert_eq!(cloned.source_name.as_deref(), Some("root.glu"));
+        assert_eq!(cloned.source_name.as_deref(), Some("root.decl"));
         assert_eq!(cloned.to_string(), "missing declaration");
         assert_eq!(
             Error::source(&cloned).map(ToString::to_string),
