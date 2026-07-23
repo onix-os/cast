@@ -3,7 +3,8 @@
 use std::{ffi::OsStr, io, path::Path};
 
 use config::declaration::{
-    GeneratedDeclarationSlot, SaveDeclarationError,
+    GeneratedDeclarationAuthority, GeneratedDeclarationSlot,
+    SaveDeclarationError,
 };
 use declarative_config::LanguageSpec;
 
@@ -39,11 +40,16 @@ pub(crate) fn declaration_slot(
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
-    GeneratedDeclarationSlot::new(
-        directory,
-        basename,
+    let authority = GeneratedDeclarationAuthority::new(
         language.clone(),
         ownership_marker,
+    )
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+    GeneratedDeclarationSlot::with_registered_authorities(
+        directory,
+        basename,
+        [authority.clone()],
+        authority,
         max_generated_bytes,
         format!(".{expected_file_name}.tmp-"),
     )

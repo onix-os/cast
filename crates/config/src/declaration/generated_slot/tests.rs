@@ -36,15 +36,35 @@ fn slot(
     name: &str,
     marker: &str,
 ) -> GeneratedDeclarationSlot {
-    GeneratedDeclarationSlot::new(
+    single_authority_slot(
         directory,
         name,
-        language("fixture", "decl"),
         marker,
         1024,
         ".fixture-tmp-",
     )
     .unwrap()
+}
+
+fn single_authority_slot(
+    directory: &Path,
+    name: &str,
+    marker: impl Into<Vec<u8>>,
+    size_limit: usize,
+    temporary_prefix: &str,
+) -> Result<GeneratedDeclarationSlot, GeneratedDeclarationSlotError> {
+    let active = GeneratedDeclarationAuthority::new(
+        language("fixture", "decl"),
+        marker,
+    )?;
+    GeneratedDeclarationSlot::with_registered_authorities(
+        directory,
+        name,
+        [active.clone()],
+        active,
+        size_limit,
+        temporary_prefix,
+    )
 }
 
 fn registered_slot(
@@ -404,14 +424,13 @@ fn registered_slot_policy_validates_the_complete_authority_set() {
 }
 
 #[test]
-fn singleton_slot_policy_rejects_unsafe_names_prefixes_markers_and_limits() {
+fn registered_single_authority_rejects_unsafe_policy() {
     let directory = tempfile::tempdir().unwrap();
     for name in ["", ".", "..", "nested/name", "nested\\name"] {
         assert!(matches!(
-            GeneratedDeclarationSlot::new(
+            single_authority_slot(
                 directory.path(),
                 name,
-                language("fixture", "decl"),
                 "# marker\n",
                 1,
                 ".tmp-",
@@ -420,10 +439,9 @@ fn singleton_slot_policy_rejects_unsafe_names_prefixes_markers_and_limits() {
         ));
     }
     assert!(matches!(
-        GeneratedDeclarationSlot::new(
+        single_authority_slot(
             directory.path(),
             "safe",
-            language("fixture", "decl"),
             Vec::new(),
             1,
             ".tmp-",
@@ -431,10 +449,9 @@ fn singleton_slot_policy_rejects_unsafe_names_prefixes_markers_and_limits() {
         Err(GeneratedDeclarationSlotError::InvalidOwnershipMarker)
     ));
     assert!(matches!(
-        GeneratedDeclarationSlot::new(
+        single_authority_slot(
             directory.path(),
             "safe",
-            language("fixture", "decl"),
             "# marker\n",
             0,
             ".tmp-",
@@ -442,10 +459,9 @@ fn singleton_slot_policy_rejects_unsafe_names_prefixes_markers_and_limits() {
         Err(GeneratedDeclarationSlotError::ZeroSizeLimit)
     ));
     assert!(matches!(
-        GeneratedDeclarationSlot::new(
+        single_authority_slot(
             directory.path(),
             "safe",
-            language("fixture", "decl"),
             "# marker\n",
             32,
             "../tmp-",

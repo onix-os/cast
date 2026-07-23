@@ -285,8 +285,15 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
 
     let temporary = tempfile::tempdir().unwrap();
     let manager = config::Manager::custom(temporary.path());
+    let active_language = codec.language_spec().clone();
+    let evaluators = DeclarationEvaluatorSet::new([codec]).unwrap();
     let path = manager
-        .save_declaration("generated", &typed.value, &codec)
+        .save_declaration(
+            "generated",
+            &typed.value,
+            &evaluators,
+            &active_language,
+        )
         .unwrap();
     let generated = fs::read_to_string(path).unwrap();
     assert_eq!(
@@ -294,7 +301,6 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
         include_bytes!("../../../../tests/fixtures/gluon/goldens/profile-fragment.glu")
     );
 
-    let evaluators = DeclarationEvaluatorSet::new([codec]).unwrap();
     let loaded = manager.load_declarations(&evaluators).unwrap();
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].value.get(&Id::new("a-profile")).is_some());
@@ -313,7 +319,12 @@ fn generated_save_refuses_to_overwrite_an_authored_fragment() {
     let loaded = manager.load_declarations(&evaluators).unwrap();
 
     let error = manager
-        .save_declaration("owned", &loaded[0].value, &codec)
+        .save_declaration(
+            "owned",
+            &loaded[0].value,
+            &evaluators,
+            codec.language_spec(),
+        )
         .expect_err("authored fragment must be protected");
     assert!(matches!(
         error,

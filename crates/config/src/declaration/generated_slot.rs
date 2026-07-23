@@ -85,31 +85,6 @@ pub struct GeneratedDeclarationSlot {
 }
 
 impl GeneratedDeclarationSlot {
-    /// Singleton convenience retained while existing Gluon-only callers move
-    /// to [`Self::with_registered_authorities`]. The registered constructor is
-    /// the authoritative implementation.
-    pub fn new(
-        directory: impl Into<PathBuf>,
-        name: impl Into<String>,
-        language: LanguageSpec,
-        ownership_marker: impl Into<Vec<u8>>,
-        size_limit: usize,
-        temporary_prefix: impl Into<String>,
-    ) -> Result<Self, GeneratedDeclarationSlotError> {
-        let active = GeneratedDeclarationAuthority::new(
-            language,
-            ownership_marker,
-        )?;
-        Self::with_registered_authorities(
-            directory,
-            name,
-            [active.clone()],
-            active,
-            size_limit,
-            temporary_prefix,
-        )
-    }
-
     pub fn with_registered_authorities(
         directory: impl Into<PathBuf>,
         name: impl Into<String>,

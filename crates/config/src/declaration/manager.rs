@@ -1,14 +1,15 @@
 use std::{collections::BTreeMap, fmt, path::PathBuf};
 
 use declarative_config::{
-    DeclarationCodec, DeclarationEvaluationError,
+    DeclarationCodec, DeclarationEvaluationError, LanguageSpec,
 };
 
 use super::{
     ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
     DeclarationRevalidationPhase, DeleteManagedDeclarationError,
     DiscoveredFragmentDeclaration, FragmentDeclarationLimits,
-    FragmentDeclarationSet, GeneratedDeclarationSlot,
+    FragmentDeclarationSet, GeneratedDeclarationAuthority,
+    GeneratedDeclarationSlot,
     GeneratedDeclarationSlotError, LoadedDeclaration,
     LoadManagedDeclarationError, SaveManagedDeclarationError,
 };
@@ -126,17 +127,21 @@ impl Manager {
     }
 
     /// Canonically encode and atomically save one generated declaration.
-    /// The explicit codec supplies both the output extension and ownership
-    /// marker through its immutable language descriptor.
+    /// The complete evaluator set defines every extension that can own the
+    /// logical output. `active_language` selects one exact registered codec;
+    /// neither selection nor collision handling inspects declaration bytes.
     pub fn save_declaration<E>(
         &self,
         name: impl fmt::Display,
         value: &E::Config,
-        codec: &E,
+        evaluators: &DeclarationEvaluatorSet<E>,
+        active_language: &LanguageSpec,
     ) -> Result<PathBuf, SaveManagedDeclarationError<E::Error>>
     where
         E: ConfigDeclarationEvaluator + DeclarationCodec<E::Config>,
     {
+        let codec = active_evaluator(evaluators, active_language)
+            .map_err(|source| SaveManagedDeclarationError::SlotPolicy { source })?;
         let literal = codec
             .encode(value)
             .map_err(|source| SaveManagedDeclarationError::Conversion { source })?;
@@ -155,19 +160,22 @@ impl Manager {
         let slot = generated_slot(
             self.scope.save_dir(&E::Config::domain()),
             name.to_string(),
-            codec,
+            evaluators,
+            active_language,
         )
         .map_err(|source| SaveManagedDeclarationError::SlotPolicy { source })?;
         slot.save(generated.as_bytes())
             .map_err(|source| SaveManagedDeclarationError::Storage { source })
     }
 
-    /// Delete only the generated declaration selected by the explicit active
-    /// adapter. No extension or ownership marker is inferred from disk bytes.
+    /// Delete the sole generated declaration across the complete registered
+    /// language set. The exact active descriptor supplies policy only; disk
+    /// bytes never select an adapter.
     pub fn delete_declaration<E>(
         &self,
         name: impl fmt::Display,
-        adapter: &E,
+        evaluators: &DeclarationEvaluatorSet<E>,
+        active_language: &LanguageSpec,
     ) -> Result<(), DeleteManagedDeclarationError>
     where
         E: ConfigDeclarationEvaluator,
@@ -175,7 +183,8 @@ impl Manager {
         let slot = generated_slot(
             self.scope.save_dir(&E::Config::domain()),
             name.to_string(),
-            adapter,
+            evaluators,
+            active_language,
         )
         .map_err(|source| DeleteManagedDeclarationError::SlotPolicy { source })?;
         slot.delete()
@@ -203,19 +212,58 @@ fn revalidate<E>(
 fn generated_slot<E>(
     directory: PathBuf,
     name: String,
-    adapter: &E,
+    evaluators: &DeclarationEvaluatorSet<E>,
+    active_language: &LanguageSpec,
 ) -> Result<GeneratedDeclarationSlot, GeneratedDeclarationSlotError>
 where
     E: ConfigDeclarationEvaluator,
 {
-    let language = adapter.language_spec();
-    let temporary_prefix = format!(".{}-tmp-", language.language().as_str());
-    GeneratedDeclarationSlot::new(
+    active_evaluator(evaluators, active_language)?;
+    let authorities = evaluators
+        .languages()
+        .iter()
+        .map(|language| {
+            GeneratedDeclarationAuthority::new(
+                language.clone(),
+                language.generated_marker(),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let active_authority = authorities
+        .iter()
+        .find(|authority| authority.language_spec() == active_language)
+        .cloned()
+        .ok_or_else(|| unregistered_active(active_language))?;
+    let temporary_prefix = format!(
+        ".{}-tmp-",
+        active_language.language().as_str(),
+    );
+    GeneratedDeclarationSlot::with_registered_authorities(
         directory,
         name,
-        language.clone(),
-        language.generated_marker(),
+        authorities,
+        active_authority,
         MAX_GENERATED_DECLARATION_BYTES,
         temporary_prefix,
     )
+}
+
+fn active_evaluator<'a, E>(
+    evaluators: &'a DeclarationEvaluatorSet<E>,
+    active_language: &LanguageSpec,
+) -> Result<&'a E, GeneratedDeclarationSlotError>
+where
+    E: ConfigDeclarationEvaluator,
+{
+    evaluators
+        .get(active_language)
+        .ok_or_else(|| unregistered_active(active_language))
+}
+
+fn unregistered_active(
+    active_language: &LanguageSpec,
+) -> GeneratedDeclarationSlotError {
+    GeneratedDeclarationSlotError::ActiveAuthorityNotRegistered {
+        extension: active_language.extension().to_owned(),
+    }
 }

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use config::declaration::DeclarationEvaluatorSet;
+use declarative_config::DeclarationEvaluator as _;
 use fs_err as fs;
 use futures_util::{StreamExt, stream};
 use url::Url;
@@ -203,8 +204,16 @@ impl Manager {
         // multiple configuration files
         let map = repository::Map::with([(id.clone(), repository.clone())]);
         let codec = repository::RepositoryCodec::default();
+        let active_language = codec.language_spec().clone();
+        let evaluators = DeclarationEvaluatorSet::new([codec])
+            .expect("one validated repository adapter has no extension collision");
         let config_path = config
-            .save_declaration(&id, &map, &codec)?;
+            .save_declaration(
+                &id,
+                &map,
+                &evaluators,
+                &active_language,
+            )?;
 
         let (db, cache_dir) = open_meta_db(self.source.identifier(), &id, &repository, &self.installation)?;
 
@@ -500,7 +509,13 @@ impl Manager {
         // Delete config, only succeeds for configs that live in their
         // own config file w/ matching repo name
         let adapter = repository::RepositoryCodec::default();
-        if config.delete_declaration(&repo.id, &adapter).is_err() {
+        let active_language = adapter.language_spec().clone();
+        let evaluators = DeclarationEvaluatorSet::new([adapter])
+            .expect("one validated repository adapter has no extension collision");
+        if config
+            .delete_declaration(&repo.id, &evaluators, &active_language)
+            .is_err()
+        {
             return Ok(Removal::ConfigDeleted(false));
         }
         self.repositories.remove(&id);
@@ -529,8 +544,16 @@ impl Manager {
 
             let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
             let codec = repository::RepositoryCodec::default();
+            let active_language = codec.language_spec().clone();
+            let evaluators = DeclarationEvaluatorSet::new([codec])
+                .expect("one validated repository adapter has no extension collision");
             config
-                .save_declaration(id, &map, &codec)?;
+                .save_declaration(
+                    id,
+                    &map,
+                    &evaluators,
+                    &active_language,
+                )?;
         }
 
         Ok(())

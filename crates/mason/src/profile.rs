@@ -16,6 +16,7 @@ use config::{
     },
 };
 use derive_more::{Debug, Display};
+use declarative_config::DeclarationEvaluator as _;
 use forge::{Repository, repository};
 use stone_recipe::derivation::ProfileFragmentProvenance;
 use thiserror::Error;
@@ -380,9 +381,12 @@ impl<'a> Manager<'a> {
     pub fn save_profile(&mut self, id: Id, profile: Profile) -> Result<(), Error> {
         let map = Map::with([(id.clone(), profile)]);
         let codec = ProfileCodec::default();
+        let active_language = codec.language_spec().clone();
+        let evaluators = DeclarationEvaluatorSet::new([codec])
+            .expect("one validated profile adapter has no extension collision");
         self.env
             .config
-            .save_declaration(id, &map, &codec)?;
+            .save_declaration(id, &map, &evaluators, &active_language)?;
 
         // Saving changes both the resolved profile map and the ordered
         // evaluation provenance used by planning. Reload them atomically so a

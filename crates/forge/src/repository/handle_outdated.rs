@@ -6,6 +6,7 @@ use config::declaration::{
     DeclarationEvaluatorSet, SaveDeclarationError,
     SaveManagedDeclarationError,
 };
+use declarative_config::DeclarationEvaluator as _;
 use fs_err as fs;
 use tui::Styled;
 use url::Url;
@@ -85,7 +86,8 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
                 let declaration_path = match config_manager.save_declaration(
                     &current_config.logical_name,
                     &updated_map,
-                    &codec,
+                    &evaluators,
+                    codec.language_spec(),
                 ) {
                     Ok(path) => path,
                     Err(SaveManagedDeclarationError::Storage {
