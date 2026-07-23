@@ -26,6 +26,8 @@ use thiserror::Error;
 
 use crate::Env;
 
+mod root_declaration;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicy {
     pub spec: BuildPolicySpec,
@@ -33,17 +35,17 @@ pub struct BuildPolicy {
 }
 
 impl BuildPolicy {
-    const ROOT: &'static str = "policy.glu";
-
     pub fn load(env: &Env) -> Result<Self, Error> {
         Self::load_from(&env.data_dir.join("policy"))
     }
 
     fn load_from(policy_dir: &Path) -> Result<Self, Error> {
-        let source_root = SourceRoot::new(policy_dir).map_err(|source| Error::SourceRoot {
-            path: policy_dir.to_path_buf(),
-            source: Box::new(source),
-        })?;
+        let root_declaration::LoadedPolicyRoot {
+            path: root_path,
+            source_root,
+            source: root_source,
+            manifest,
+        } = root_declaration::load(policy_dir)?;
         let root_evaluator =
             <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::with_source_root(
                 &GluonBuildPolicyRootEvaluator::default(),
@@ -54,30 +56,6 @@ impl BuildPolicy {
                 &GluonBuildPolicyEvaluator::default(),
                 source_root.clone(),
             );
-        let root_path = policy_dir.join(Self::ROOT);
-        let root_source = source_root
-            .load(
-                Self::ROOT,
-                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::limits(
-                    &root_evaluator,
-                )
-                .max_source_bytes,
-            )
-            .map_err(|source| Error::LoadRoot {
-                path: root_path.clone(),
-                source: Box::new(source),
-            })?;
-        let evaluated_root =
-            <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::evaluate(
-                &root_evaluator,
-                &root_source,
-            )
-            .map_err(|source| Error::EvaluateRoot {
-                path: root_path.clone(),
-                source: Box::new(source),
-            })?;
-
-        let manifest = evaluated_root.value;
         let mut layers = Vec::with_capacity(manifest.layers.len());
         let mut state = None;
         let mut operation_order = 0;
@@ -302,6 +280,11 @@ pub enum Error {
         #[source]
         source: Box<DeclarationEvaluationError<BuildPolicyRootConversionError>>,
     },
+    #[error("load build-policy manifest declaration")]
+    LoadRootDeclaration(
+        #[source]
+        Box<config::declaration::LoadFixedRootDeclarationError<BuildPolicyRootConversionError>>,
+    ),
     #[error("finalize build-policy manifest identity {path:?}")]
     FinalizeRoot {
         path: PathBuf,
@@ -376,7 +359,10 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use fs_err as fs;
+    use gluon_config::{EvaluationFingerprint, ModuleFingerprint};
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -401,6 +387,28 @@ mod tests {
             "{:x}",
             Sha256::digest(policy_composition_identity(&provenance.name, &provenance.layers))
         )
+    }
+
+    fn assert_same_diagnostic(actual: &Diagnostic, expected: &Diagnostic) {
+        assert_eq!(actual.category, expected.category);
+        assert_eq!(actual.limit, expected.limit);
+        assert_eq!(actual.source_name, expected.source_name);
+        assert_eq!(actual.span, expected.span);
+        assert_eq!(actual.message, expected.message);
+        assert_eq!(
+            actual.source().map(ToString::to_string),
+            expected.source().map(ToString::to_string)
+        );
+        assert_eq!(
+            actual
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(std::io::Error::kind),
+            expected
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(std::io::Error::kind)
+        );
     }
 
     #[test]
@@ -430,6 +438,36 @@ mod tests {
         assert_eq!(
             policy.provenance.root.explicit_inputs_sha256,
             composition_digest(&policy.provenance)
+        );
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_complete_v1_fingerprint_golden() {
+        let policy = BuildPolicy::repository_for_tests();
+
+        assert_eq!(
+            policy.provenance.root,
+            EvaluationFingerprint {
+                root_logical_name: "policy.glu".to_owned(),
+                root_source_sha256:
+                    "758b6ad54d17bf82273f1e6f31acca3a8edb27ea473e4af128e04b8232dcd688"
+                        .to_owned(),
+                imported_modules: vec![ModuleFingerprint {
+                    logical_name: "cast.build_policy.layers.v1".to_owned(),
+                    sha256:
+                        "c70b6d7a4f816d639615f034c84fefb0d3c4918db657c124987f7f37a3bdd064"
+                            .to_owned(),
+                }],
+                gluon_version: "0.18.3",
+                configuration_abi_version: 1,
+                evaluator_policy_version: 1,
+                explicit_inputs_sha256:
+                    "7eb290dd9156dc641eec6f827394f412e7ef295164c18cafbfa4b9e13e47d252"
+                        .to_owned(),
+                sha256:
+                    "d97bce90558c046c881d3dcaa1560c4c0bc014b0609c7b7593d81613600362f4"
+                        .to_owned(),
+            }
         );
     }
 
@@ -758,5 +796,140 @@ b.policy_patch {
                         .all(|module| module.logical_name != "ignored.glu")
             })
         }));
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_v1_name_and_exact_source_bytes() {
+        let manifest = format!(
+            "{REPOSITORY_MANIFEST}\n// fixed-root discovery identity sentinel\n"
+        );
+        let root = fixture(&manifest);
+        fs::write(
+            root.path().join("policy.lua"),
+            "this unregistered neighbor must never be inspected",
+        )
+        .unwrap();
+
+        let policy = BuildPolicy::load_from(root.path()).unwrap();
+
+        assert_eq!(
+            policy.provenance.root.root_logical_name,
+            root_declaration::POLICY_ROOT_LOGICAL_NAME
+        );
+        assert_eq!(
+            policy.provenance.root.root_source_sha256,
+            format!("{:x}", Sha256::digest(manifest.as_bytes()))
+        );
+        policy.provenance.root.validate().unwrap();
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_symlink_diagnostics() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture(REPOSITORY_MANIFEST);
+        fs::remove_file(root.path().join("policy.glu")).unwrap();
+        fs::write(root.path().join("policy-target.glu"), REPOSITORY_MANIFEST)
+            .unwrap();
+        symlink("policy-target.glu", root.path().join("policy.glu")).unwrap();
+        let expected = SourceRoot::new(root.path())
+            .unwrap()
+            .load(
+                "policy.glu",
+                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                    BuildPolicyRootSpec,
+                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                .max_source_bytes,
+            )
+            .unwrap_err();
+
+        let error = BuildPolicy::load_from(root.path()).unwrap_err();
+
+        match error {
+            Error::LoadRoot { path, source } => {
+                assert_eq!(path, root.path().join("policy.glu"));
+                assert_same_diagnostic(&source, &expected);
+            }
+            error => panic!("expected legacy LoadRoot error, found {error:?}"),
+        }
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_missing_directory_diagnostics() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().join("missing-policy-root");
+        let expected = SourceRoot::new(&missing).unwrap_err();
+
+        let error = BuildPolicy::load_from(&missing).unwrap_err();
+
+        match error {
+            Error::SourceRoot { path, source } => {
+                assert_eq!(path, missing);
+                assert_same_diagnostic(&source, &expected);
+            }
+            error => panic!("expected legacy SourceRoot error, found {error:?}"),
+        }
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_missing_manifest_diagnostics() {
+        let root = fixture(REPOSITORY_MANIFEST);
+        fs::remove_file(root.path().join("policy.glu")).unwrap();
+        let expected = SourceRoot::new(root.path())
+            .unwrap()
+            .load(
+                "policy.glu",
+                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                    BuildPolicyRootSpec,
+                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                .max_source_bytes,
+            )
+            .unwrap_err();
+
+        let error = BuildPolicy::load_from(root.path()).unwrap_err();
+
+        match error {
+            Error::LoadRoot { path, source } => {
+                assert_eq!(path, root.path().join("policy.glu"));
+                assert_same_diagnostic(&source, &expected);
+            }
+            error => panic!("expected legacy LoadRoot error, found {error:?}"),
+        }
+    }
+
+    #[test]
+    fn registered_root_discovery_accepts_a_symlinked_policy_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture(REPOSITORY_MANIFEST);
+        let links = tempfile::tempdir().unwrap();
+        let linked = links.path().join("policy-root");
+        symlink(root.path(), &linked).unwrap();
+
+        let direct = BuildPolicy::load_from(root.path()).unwrap();
+        let through_link = BuildPolicy::load_from(&linked).unwrap();
+
+        assert_eq!(through_link, direct);
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_gluon_diagnostics() {
+        let root = fixture("let value = in value");
+
+        let error = BuildPolicy::load_from(root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::EvaluateRoot { path, source }
+                if path == root.path().join("policy.glu")
+                    && matches!(
+                        *source,
+                        DeclarationEvaluationError::Evaluation(Diagnostic {
+                            category: declarative_config::DiagnosticCategory::Parse,
+                            source_name: Some(ref source_name),
+                            ..
+                        }) if source_name == root_declaration::POLICY_ROOT_LOGICAL_NAME
+                    )
+        ));
     }
 }

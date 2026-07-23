@@ -1,6 +1,7 @@
 //! Typed loading for one language-neutral fixed declaration slot.
 
 use std::{
+    error::Error as _,
     ffi::CString,
     fs::Metadata,
     io,
@@ -16,14 +17,16 @@ use std::{
 };
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Source, SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Diagnostic,
+    LanguageSpec, Source, SourceRoot,
 };
 use fs_err as fs;
 
 use super::{
     DiscoveredRootDeclaration, FixedRootAuthorityError,
     FixedRootRevalidationPhase, LoadFixedRootDeclarationError,
-    LoadedDeclaration, RootDeclarationSlot, TypedDeclarationEvaluatorSet,
+    LoadedDeclaration, RootDeclarationDiscoveryError, RootDeclarationSlot,
+    TypedDeclarationEvaluatorSet,
 };
 
 /// Load the one registered-language declaration occupying `slot`.
@@ -155,6 +158,155 @@ where
         value: evaluation.value,
         identity: evaluation.identity,
     }))
+}
+
+/// Load one required fixed declaration through an already-pinned source root.
+///
+/// Unlike [`load_fixed_root_declaration`], this entry point deliberately does
+/// not reopen `directory` with no-follow root-path semantics. The caller owns
+/// how the root was established; in particular, [`SourceRoot::new`] accepts an
+/// ordinary symlinked root path and pins the resolved directory descriptor.
+/// Candidate selection still considers every registered language, ignores
+/// unknown extensions, rejects collisions, and evaluates with the same pinned
+/// root. When no candidate exists, the exact I/O diagnostic from loading
+/// `required_language` is returned instead of synthesizing an absence error.
+pub fn load_required_fixed_root_declaration_from_source_root<T, E>(
+    directory: impl AsRef<Path>,
+    source_root: &SourceRoot,
+    slot: &RootDeclarationSlot,
+    required_language: &LanguageSpec,
+    evaluators: &TypedDeclarationEvaluatorSet<T, E>,
+) -> Result<
+    LoadedDeclaration<T, E::Identity>,
+    LoadFixedRootDeclarationError<E::Error>,
+>
+where
+    E: DeclarationEvaluator<T>,
+{
+    let directory = directory.as_ref().to_owned();
+    if evaluators.get(required_language).is_none() {
+        return Err(LoadFixedRootDeclarationError::UnregisteredLanguage {
+            path: directory.join(format!(
+                "{}.{}",
+                slot.basename(),
+                required_language.extension()
+            )),
+            extension: required_language.extension().to_owned(),
+        });
+    }
+
+    let mut candidates = Vec::new();
+    let mut required_absence = None;
+    for language in evaluators.languages().iter() {
+        let relative_path = PathBuf::from(format!(
+            "{}.{}",
+            slot.basename(),
+            language.extension()
+        ));
+        let path = directory.join(&relative_path);
+        let evaluator = evaluators.get(language).ok_or_else(|| {
+            LoadFixedRootDeclarationError::UnregisteredLanguage {
+                path: path.clone(),
+                extension: language.extension().to_owned(),
+            }
+        })?;
+        match source_root.load(
+            &relative_path,
+            evaluator.limits().max_source_bytes,
+        ) {
+            Ok(source) => candidates.push(SourceRootCandidate {
+                path,
+                language: language.clone(),
+                source,
+            }),
+            Err(source) if diagnostic_is_not_found(&source) => {
+                if language == required_language {
+                    required_absence = Some((path, source));
+                }
+            }
+            Err(source) => {
+                return Err(LoadFixedRootDeclarationError::Read {
+                    path,
+                    source,
+                });
+            }
+        }
+    }
+
+    if candidates.len() > 1 {
+        return Err(LoadFixedRootDeclarationError::Discovery {
+            directory,
+            source: RootDeclarationDiscoveryError::Collision {
+                logical_name: slot.logical_name().to_owned(),
+                paths: candidates
+                    .into_iter()
+                    .map(|candidate| candidate.path)
+                    .collect(),
+            },
+        });
+    }
+    let Some(candidate) = candidates.pop() else {
+        let (path, source) = required_absence.expect(
+            "the registered required language produced absence evidence",
+        );
+        return Err(LoadFixedRootDeclarationError::Read { path, source });
+    };
+
+    let evaluator = evaluators.get(&candidate.language).ok_or_else(|| {
+        LoadFixedRootDeclarationError::UnregisteredLanguage {
+            path: candidate.path.clone(),
+            extension: candidate.language.extension().to_owned(),
+        }
+    })?;
+    let source = Source::new(
+        slot.logical_name(),
+        candidate.source.text().to_owned(),
+    );
+    let rooted = evaluator.with_source_root(source_root.clone());
+    let result = rooted.evaluate(&source);
+    // The pinned SourceRoot remains authoritative even when evaluation fails.
+    source_root.verify_retained_directories().map_err(|source| {
+        LoadFixedRootDeclarationError::Revalidation {
+            directory: directory.clone(),
+            phase: FixedRootRevalidationPhase::AfterEvaluation,
+            source: FixedRootAuthorityError::VerifySourceRoot { source },
+        }
+    })?;
+    let evaluation = result.map_err(|error| match error {
+        DeclarationEvaluationError::Evaluation(source) => {
+            LoadFixedRootDeclarationError::Evaluation {
+                path: candidate.path.clone(),
+                source,
+            }
+        }
+        DeclarationEvaluationError::Conversion(source) => {
+            LoadFixedRootDeclarationError::Conversion {
+                path: candidate.path.clone(),
+                source,
+            }
+        }
+    })?;
+
+    Ok(LoadedDeclaration {
+        logical_name: slot.logical_name().to_owned(),
+        path: candidate.path,
+        language: candidate.language,
+        value: evaluation.value,
+        identity: evaluation.identity,
+    })
+}
+
+struct SourceRootCandidate {
+    path: PathBuf,
+    language: LanguageSpec,
+    source: Source,
+}
+
+fn diagnostic_is_not_found(diagnostic: &Diagnostic) -> bool {
+    diagnostic
+        .source()
+        .and_then(|source| source.downcast_ref::<io::Error>())
+        .is_some_and(|error| error.kind() == io::ErrorKind::NotFound)
 }
 
 struct FixedRootAuthority<'a> {

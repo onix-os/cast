@@ -8,6 +8,7 @@ use config::declaration::{
     FixedRootRevalidationPhase, LoadFixedRootDeclarationError,
     RootDeclarationDiscoveryError, RootDeclarationSlot,
     TypedDeclarationEvaluatorSet, load_fixed_root_declaration,
+    load_required_fixed_root_declaration_from_source_root,
 };
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Diagnostic, EngineId,
@@ -322,4 +323,75 @@ fn evaluator_error_cannot_hide_directory_substitution() {
     ));
     assert!(held.join("fixed.alpha").exists());
     assert!(!directory.join("fixed.alpha").exists());
+}
+
+#[test]
+fn source_root_backed_loader_accepts_and_pins_a_symlinked_root() {
+    let temporary = tempdir().unwrap();
+    let real = temporary.path().join("real");
+    let held = temporary.path().join("held");
+    let linked = temporary.path().join("linked");
+    fs::create_dir(&real).unwrap();
+    fs::write(real.join("fixed.alpha"), "a:pinned-value").unwrap();
+    std::os::unix::fs::symlink(&real, &linked).unwrap();
+    let source_root = SourceRoot::new(&linked).unwrap();
+
+    fs::rename(&real, &held).unwrap();
+    fs::create_dir(&real).unwrap();
+    fs::write(real.join("fixed.alpha"), "a:replacement-value").unwrap();
+
+    let evaluators = evaluators(None);
+    let required_language = evaluators.languages().get("alpha").unwrap().clone();
+    let loaded = load_required_fixed_root_declaration_from_source_root(
+        &linked,
+        &source_root,
+        &slot(),
+        &required_language,
+        &evaluators,
+    )
+    .unwrap();
+
+    assert_eq!(loaded.path, linked.join("fixed.alpha"));
+    assert_eq!(loaded.value.value, "pinned-value");
+    assert_eq!(
+        fs::read_to_string(real.join("fixed.alpha")).unwrap(),
+        "a:replacement-value"
+    );
+}
+
+#[test]
+fn source_root_backed_loader_preserves_nonregular_load_diagnostics() {
+    let temporary = tempdir().unwrap();
+    let directory = temporary.path().join("declarations");
+    fs::create_dir(&directory).unwrap();
+    fs::write(directory.join("target.alpha"), "a:value").unwrap();
+    std::os::unix::fs::symlink(
+        "target.alpha",
+        directory.join("fixed.alpha"),
+    )
+    .unwrap();
+    let source_root = SourceRoot::new(&directory).unwrap();
+    let evaluators = evaluators(None);
+    let required_language = evaluators.languages().get("alpha").unwrap().clone();
+    let expected = source_root.load("fixed.alpha", 64).unwrap_err();
+
+    let error = load_required_fixed_root_declaration_from_source_root(
+        &directory,
+        &source_root,
+        &slot(),
+        &required_language,
+        &evaluators,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        LoadFixedRootDeclarationError::Read { path, source }
+            if path == directory.join("fixed.alpha")
+                && source.category == expected.category
+                && source.limit == expected.limit
+                && source.source_name == expected.source_name
+                && source.span == expected.span
+                && source.message == expected.message
+    ));
 }

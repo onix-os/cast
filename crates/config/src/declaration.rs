@@ -28,7 +28,10 @@ pub use fixed_root_load_error::{
     FixedRootAuthorityError, FixedRootRevalidationPhase,
     LoadFixedRootDeclarationError,
 };
-pub use fixed_root_loader::load_fixed_root_declaration;
+pub use fixed_root_loader::{
+    load_fixed_root_declaration,
+    load_required_fixed_root_declaration_from_source_root,
+};
 pub use fragment_set::{
     DiscoveredFragmentDeclaration, FragmentDeclarationLimits,
     FragmentDeclarationSet, FragmentDeclarationSetError,
