@@ -294,7 +294,7 @@ pub(super) fn decode_specs(specs: Vec<RepositorySpec>) -> Result<Map, Repository
     Ok(repositories)
 }
 
-fn repository_to_spec(
+pub(super) fn repository_to_spec(
     (id, value): (&repository::Id, &Repository),
 ) -> Result<RepositorySpec, RepositoryConversionError> {
     let priority = i64::try_from(u64::from(value.priority))
