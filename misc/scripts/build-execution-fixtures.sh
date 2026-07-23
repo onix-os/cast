@@ -146,6 +146,14 @@ test "$source_tree_count" -eq 24 || {
     exit 1
 }
 
+# Git does not record directory modes or the group/other write bits, so a
+# checkout under a permissive umask (for example 0002) yields group-writable
+# fixture trees and breaks the hermetic mode assertions. Normalize them to the
+# canonical non-group/other-writable modes while preserving user execute bits.
+if [ "$mode" = write ]; then
+    timeout 30s chmod -R go-w "$source_root"
+fi
+
 source_file_count=0
 for entry in "$source_file_root"/*; do
     test -f "$entry" && test ! -L "$entry" || {
