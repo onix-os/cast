@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use config::{LoadGluonError, SaveGluonError};
+use config::declaration::{
+    DeclarationEvaluatorSet, LoadManagedDeclarationError,
+    SaveDeclarationError, SaveManagedDeclarationError,
+};
 use fs_err as fs;
 
 use super::*;
@@ -63,10 +66,12 @@ fn conversion_error(source: String) -> (PathBuf, String) {
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("profile.d/invalid.glu");
     write(&path, &source);
+    let evaluators =
+        DeclarationEvaluatorSet::new([ProfileCodec::default()]).unwrap();
     let error = config::Manager::custom(temporary.path())
-        .load_gluon(&Evaluator::default(), &ProfileCodec::default())
+        .load_declarations(&evaluators)
         .expect_err("profile should be invalid");
-    let LoadGluonError::Conversion {
+    let LoadManagedDeclarationError::Conversion {
         path: error_path,
         source,
     } = error
@@ -239,7 +244,7 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
     let Error::LoadProfiles(error) = error else {
         panic!("expected visible evaluation error");
     };
-    let LoadGluonError::Evaluation {
+    let LoadManagedDeclarationError::Evaluation {
         path: error_path,
         source,
     } = *error
@@ -284,7 +289,7 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
     let temporary = tempfile::tempdir().unwrap();
     let manager = config::Manager::custom(temporary.path());
     let path = manager
-        .save_gluon("generated", &decoded.value, &ProfileCodec::default())
+        .save_declaration("generated", &typed.value, &codec)
         .unwrap();
     let generated = fs::read_to_string(path).unwrap();
     assert_eq!(
@@ -292,9 +297,8 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
         include_bytes!("../../../../tests/fixtures/gluon/goldens/profile-fragment.glu")
     );
 
-    let loaded = manager
-        .load_gluon(&evaluator, &ProfileCodec::default())
-        .unwrap();
+    let evaluators = DeclarationEvaluatorSet::new([codec]).unwrap();
+    let loaded = manager.load_declarations(&evaluators).unwrap();
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].value.get(&Id::new("a-profile")).is_some());
     assert!(loaded[0].value.get(&Id::new("z-profile")).is_some());
@@ -307,14 +311,21 @@ fn generated_save_refuses_to_overwrite_an_authored_fragment() {
     let source = authored("cast.profiles [cast.profile \"owned\" []]");
     write(&path, &source);
     let manager = config::Manager::custom(temporary.path());
-    let loaded = manager
-        .load_gluon(&Evaluator::default(), &ProfileCodec::default())
-        .unwrap();
+    let codec = ProfileCodec::default();
+    let evaluators = DeclarationEvaluatorSet::new([codec.clone()]).unwrap();
+    let loaded = manager.load_declarations(&evaluators).unwrap();
 
     let error = manager
-        .save_gluon("owned", &loaded[0].value, &ProfileCodec::default())
+        .save_declaration("owned", &loaded[0].value, &codec)
         .expect_err("authored fragment must be protected");
-    assert!(matches!(error, SaveGluonError::AuthoredFragment { path: ref error_path } if error_path == &path));
+    assert!(matches!(
+        error,
+        SaveManagedDeclarationError::Storage {
+            source: SaveDeclarationError::AuthoredDeclaration {
+                path: ref error_path,
+            },
+        } if error_path == &path
+    ));
     assert_eq!(fs::read_to_string(path).unwrap(), source);
 }
 
@@ -391,16 +402,16 @@ fn saving_a_profile_refreshes_values_and_provenance_together() {
 
 #[test]
 fn repository_owned_default_profile_is_valid_gluon() {
-    let decoded = ProfileCodec::default()
-        .decode(
-            &Evaluator::default(),
-            &GluonSource::new(
-                "default-x86_64.glu",
-                include_str!("../../data/profile.d/default-x86_64.glu"),
-            ),
-        )
-        .unwrap();
-    let profile = decoded.value.get(&Id::new("default-x86_64")).unwrap();
+    let source = GluonSource::new(
+        "default-x86_64.glu",
+        include_str!("../../data/profile.d/default-x86_64.glu"),
+    );
+    let evaluated = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &ProfileCodec::default(),
+        &source,
+    )
+    .unwrap();
+    let profile = evaluated.value.get(&Id::new("default-x86_64")).unwrap();
     let volatile = profile.repositories.get(&repository::Id::new("volatile")).unwrap();
     assert_eq!(volatile.description, "AerynOS volatile stream (CDN)");
     assert!(volatile.active);

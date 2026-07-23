@@ -10,7 +10,10 @@ use std::{
 
 use config::{
     Config, DecodedGluon, GluonCodec, GluonCodecError,
-    declaration::ConfigDeclarationEvaluator,
+    declaration::{
+        ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
+        LoadManagedDeclarationError, SaveManagedDeclarationError,
+    },
 };
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
@@ -671,14 +674,14 @@ pub struct Manager<'a> {
 
 impl<'a> Manager<'a> {
     pub fn new(env: &'a Env) -> Result<Manager<'a>, Error> {
-        let loaded = env
-            .config
-            .load_gluon(&Evaluator::default(), &ProfileCodec::default())?;
+        let evaluators = DeclarationEvaluatorSet::new([ProfileCodec::default()])
+            .expect("one validated profile adapter has no extension collision");
+        let loaded = env.config.load_declarations(&evaluators)?;
         let fragments = loaded
             .iter()
             .map(|loaded| ProfileFragmentProvenance {
                 logical_name: loaded.logical_name.clone(),
-                evaluation: loaded.fingerprint.clone(),
+                evaluation: loaded.identity.clone(),
             })
             .collect();
         let profiles = loaded
@@ -729,9 +732,10 @@ impl<'a> Manager<'a> {
 
     pub fn save_profile(&mut self, id: Id, profile: Profile) -> Result<(), Error> {
         let map = Map::with([(id.clone(), profile)]);
+        let codec = ProfileCodec::default();
         self.env
             .config
-            .save_gluon(id, &map, &ProfileCodec::default())?;
+            .save_declaration(id, &map, &codec)?;
 
         // Saving changes both the resolved profile map and the ordered
         // evaluation provenance used by planning. Reload them atomically so a
@@ -759,19 +763,23 @@ pub enum Error {
         requested: String,
     },
     #[error("load profiles")]
-    LoadProfiles(#[source] Box<config::LoadGluonError>),
+    LoadProfiles(
+        #[source] Box<LoadManagedDeclarationError<ProfileConversionError>>,
+    ),
     #[error("save profile")]
-    SaveProfile(#[source] Box<config::SaveGluonError>),
+    SaveProfile(
+        #[source] Box<SaveManagedDeclarationError<ProfileConversionError>>,
+    ),
 }
 
-impl From<config::LoadGluonError> for Error {
-    fn from(error: config::LoadGluonError) -> Self {
+impl From<LoadManagedDeclarationError<ProfileConversionError>> for Error {
+    fn from(error: LoadManagedDeclarationError<ProfileConversionError>) -> Self {
         Self::LoadProfiles(Box::new(error))
     }
 }
 
-impl From<config::SaveGluonError> for Error {
-    fn from(error: config::SaveGluonError) -> Self {
+impl From<SaveManagedDeclarationError<ProfileConversionError>> for Error {
+    fn from(error: SaveManagedDeclarationError<ProfileConversionError>) -> Self {
         Self::SaveProfile(Box::new(error))
     }
 }
