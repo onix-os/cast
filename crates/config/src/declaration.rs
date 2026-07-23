@@ -18,7 +18,7 @@ pub(crate) mod managed_directory;
 pub use generated_slot::GeneratedDeclarationSlot;
 pub use evaluator_set::{
     ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
-    DeclarationEvaluatorSetError,
+    DeclarationEvaluatorSetError, TypedDeclarationEvaluatorSet,
 };
 pub use fragment_set::{
     DiscoveredFragmentDeclaration, FragmentDeclarationLimits,

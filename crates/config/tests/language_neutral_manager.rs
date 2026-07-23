@@ -1,4 +1,5 @@
 use std::{
+    convert::Infallible,
     error::Error,
     fmt,
     path::{Path, PathBuf},
@@ -11,7 +12,7 @@ use config::{
         ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
         DeleteManagedDeclarationError, FragmentDeclarationSetError,
         LoadManagedDeclarationError, SaveDeclarationError,
-        SaveManagedDeclarationError,
+        SaveManagedDeclarationError, TypedDeclarationEvaluatorSet,
     },
 };
 use declarative_config::{
@@ -208,12 +209,95 @@ fn language(name: &str, extension: &str) -> LanguageSpec {
     .unwrap()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DetachedValue(u8);
+
+#[derive(Debug, Clone)]
+enum DetachedAdapter {
+    First(LanguageSpec),
+    Second(LanguageSpec),
+}
+
+impl DetachedAdapter {
+    fn descriptor(&self) -> &LanguageSpec {
+        match self {
+            Self::First(language) | Self::Second(language) => language,
+        }
+    }
+}
+
+impl DeclarationEvaluator<DetachedValue> for DetachedAdapter {
+    type Identity = &'static str;
+    type Error = Infallible;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.descriptor()
+    }
+
+    fn limits(&self) -> Limits {
+        Limits::default()
+    }
+
+    fn with_source_root(&self, _source_root: SourceRoot) -> Self {
+        self.clone()
+    }
+
+    fn evaluate(
+        &self,
+        _source: &Source,
+    ) -> Result<
+        Evaluation<DetachedValue, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let (value, identity) = match self {
+            Self::First(_) => (1, "first"),
+            Self::Second(_) => (2, "second"),
+        };
+        Ok(Evaluation {
+            value: DetachedValue(value),
+            identity,
+        })
+    }
+}
+
 fn evaluators(log: Arc<Mutex<Vec<String>>>) -> DeclarationEvaluatorSet<FixtureAdapter> {
     DeclarationEvaluatorSet::new([
         FixtureAdapter::first(Arc::clone(&log)),
         FixtureAdapter::second(log),
     ])
     .unwrap()
+}
+
+#[test]
+fn typed_registry_dispatches_non_config_values_by_exact_descriptor() {
+    let first = language("detached-first", "alpha");
+    let second = language("detached-second", "beta");
+    let set: TypedDeclarationEvaluatorSet<DetachedValue, DetachedAdapter> =
+        TypedDeclarationEvaluatorSet::new([
+            DetachedAdapter::First(first.clone()),
+            DetachedAdapter::Second(second.clone()),
+        ])
+        .unwrap();
+
+    assert_eq!(set.len(), 2);
+    assert_eq!(set.languages().len(), 2);
+    let first_value = set
+        .get(&first)
+        .unwrap()
+        .evaluate(&Source::new("fixture.alpha", "ignored"))
+        .unwrap();
+    let second_value = set
+        .get(&second)
+        .unwrap()
+        .evaluate(&Source::new("fixture.beta", "ignored"))
+        .unwrap();
+    assert_eq!(first_value.value, DetachedValue(1));
+    assert_eq!(first_value.identity, "first");
+    assert_eq!(second_value.value, DetachedValue(2));
+    assert_eq!(second_value.identity, "second");
+
+    let wrong_descriptor = language("detached-other", "alpha");
+    assert!(set.get(&wrong_descriptor).is_none());
 }
 
 fn write(path: impl AsRef<Path>, contents: &str) {
