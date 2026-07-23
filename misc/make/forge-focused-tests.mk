@@ -8,9 +8,9 @@ config-rooted-gluon-test:
 		$(CARGO) test -p config --lib "$$test" -- --exact --test-threads=1; \
 	done; \
 	chain_test=source::tests::descriptor_root_rejects_substitution_beneath_a_retained_import_directory; \
-	gluon_listed="$$( $(CARGO) test -p gluon_config --lib -- --list )"; \
-	printf '%s\n' "$$gluon_listed" | grep -Fqx "$$chain_test: test"; \
-	$(CARGO) test -p gluon_config --lib "$$chain_test" -- --exact --test-threads=1
+	core_listed="$$( $(CARGO) test -p declarative_config --lib -- --list )"; \
+	printf '%s\n' "$$core_listed" | grep -Fqx "$$chain_test: test"; \
+	$(CARGO) test -p declarative_config --lib "$$chain_test" -- --exact --test-threads=1
 
 forge-active-state-snapshot-test:
 	@set -eu; \
