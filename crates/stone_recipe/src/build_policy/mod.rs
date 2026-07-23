@@ -216,14 +216,14 @@ pub struct NamedTuningFlagSpec {
 }
 
 /// Flag references activated or suppressed by a tuning group or choice.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct TuningOptionSpec {
     pub enabled: Vec<String>,
     pub disabled: Vec<String>,
 }
 
 /// One named choice within a tuning group.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct NamedTuningChoiceSpec {
     pub name: String,
     pub value: TuningOptionSpec,
@@ -560,7 +560,8 @@ pub struct PgoPolicySpec {
 }
 
 /// One repository-authorized package analyzer in execution order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AnalyzerKind {
     IgnoreBlocked,
     Binary,

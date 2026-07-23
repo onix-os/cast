@@ -19,12 +19,14 @@ use serde::Deserialize;
 
 use super::{
     AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArrayPatch, BuildCommandSpec,
-    BuildProgramSpec, BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, CompilerCachePolicySpec,
-    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec,
-    EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec,
-    MoldPolicySpec, PgoFinishSpec, PgoStagePolicySpec, PlatformPolicySpec, SourcePreparationPolicySpec,
-    TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec,
-    ToolchainsSpec, ValuePatch,
+    BuildProgramSpec, BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec,
+    CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue,
+    Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec,
+    InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec,
+    NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
+    SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec,
+    TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec,
+    TuningOptionSpec, TuningPolicySpec, ValuePatch,
 };
 
 /// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
@@ -597,6 +599,147 @@ impl From<LuaPgoStagePolicySpec> for PgoStagePolicySpec {
     }
 }
 
+/// The Lua encoding of a [`TuningGroupSpec`]. `base` and `choices` are pure and
+/// decode directly; `default` uses the tagged option encoding.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaTuningGroupSpec {
+    pub base: TuningOptionSpec,
+    pub default: LuaOption<String>,
+    pub choices: Vec<NamedTuningChoiceSpec>,
+}
+
+impl From<LuaTuningGroupSpec> for TuningGroupSpec {
+    fn from(group: LuaTuningGroupSpec) -> Self {
+        Self {
+            base: group.base,
+            default: Option::<String>::from(group.default),
+            choices: group.choices,
+        }
+    }
+}
+
+/// The Lua encoding of a [`NamedTuningGroupSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaNamedTuningGroupSpec {
+    pub name: String,
+    pub value: LuaTuningGroupSpec,
+}
+
+impl From<LuaNamedTuningGroupSpec> for NamedTuningGroupSpec {
+    fn from(group: LuaNamedTuningGroupSpec) -> Self {
+        Self {
+            name: group.name,
+            value: group.value.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`NamedTuningFlagSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaNamedTuningFlagSpec {
+    pub name: String,
+    pub value: LuaToolchainFlagsSpec,
+}
+
+impl From<LuaNamedTuningFlagSpec> for NamedTuningFlagSpec {
+    fn from(flag: LuaNamedTuningFlagSpec) -> Self {
+        Self {
+            name: flag.name,
+            value: flag.value.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`TuningPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaTuningPolicySpec {
+    pub flags: Vec<LuaNamedTuningFlagSpec>,
+    pub groups: Vec<LuaNamedTuningGroupSpec>,
+    pub default_groups: Vec<String>,
+}
+
+impl From<LuaTuningPolicySpec> for TuningPolicySpec {
+    fn from(tuning: LuaTuningPolicySpec) -> Self {
+        Self {
+            flags: tuning.flags.into_iter().map(Into::into).collect(),
+            groups: tuning.groups.into_iter().map(Into::into).collect(),
+            default_groups: tuning.default_groups,
+        }
+    }
+}
+
+/// The Lua encoding of a [`StandardBuilderPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaStandardBuilderPolicySpec {
+    pub environment: Vec<LuaEnvironmentBindingSpec>,
+    pub setup: LuaBuilderCommandSpec,
+    pub build: LuaBuilderCommandSpec,
+    pub install: LuaBuilderCommandSpec,
+    pub check: LuaBuilderCommandSpec,
+}
+
+impl From<LuaStandardBuilderPolicySpec> for StandardBuilderPolicySpec {
+    fn from(builder: LuaStandardBuilderPolicySpec) -> Self {
+        Self {
+            environment: builder.environment.into_iter().map(Into::into).collect(),
+            setup: builder.setup.into(),
+            build: builder.build.into(),
+            install: builder.install.into(),
+            check: builder.check.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`BuildersPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaBuildersPolicySpec {
+    pub cmake: LuaStandardBuilderPolicySpec,
+    pub meson: LuaStandardBuilderPolicySpec,
+    pub cargo: LuaStandardBuilderPolicySpec,
+    pub autotools: LuaStandardBuilderPolicySpec,
+}
+
+impl From<LuaBuildersPolicySpec> for BuildersPolicySpec {
+    fn from(builders: LuaBuildersPolicySpec) -> Self {
+        Self {
+            cmake: builders.cmake.into(),
+            meson: builders.meson.into(),
+            cargo: builders.cargo.into(),
+            autotools: builders.autotools.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`PgoPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaPgoPolicySpec {
+    pub shell_interpreter: LuaBuildProgramSpec,
+    pub merge_program: LuaBuildProgramSpec,
+    pub merge_args: Vec<LuaTextSpec>,
+    pub copy_program: LuaBuildProgramSpec,
+    pub remove_program: LuaBuildProgramSpec,
+    pub sample: LuaToolchainFlagsSpec,
+    pub stage_one: LuaPgoStagePolicySpec,
+    pub stage_two: LuaPgoStagePolicySpec,
+    pub use_profile: LuaPgoStagePolicySpec,
+}
+
+impl From<LuaPgoPolicySpec> for PgoPolicySpec {
+    fn from(pgo: LuaPgoPolicySpec) -> Self {
+        Self {
+            shell_interpreter: pgo.shell_interpreter.into(),
+            merge_program: pgo.merge_program.into(),
+            merge_args: text_vec(pgo.merge_args),
+            copy_program: pgo.copy_program.into(),
+            remove_program: pgo.remove_program.into(),
+            sample: pgo.sample.into(),
+            stage_one: pgo.stage_one.into(),
+            stage_two: pgo.stage_two.into(),
+            use_profile: pgo.use_profile.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::Source;
@@ -833,6 +976,30 @@ return {
         let tools: AnalyzerToolsPolicySpec = decode::<LuaAnalyzerToolsPolicySpec>(source).into();
         assert_eq!(tools.python, BuildToolSpec::Package("python".to_owned()));
         assert_eq!(tools.llvm.objcopy, BuildToolSpec::Binary("llvm-objcopy".to_owned()));
+    }
+
+    #[test]
+    fn a_tuning_group_decodes_pure_choices_and_a_tagged_default() {
+        let source = r#"
+return {
+    base = { enabled = { "lto" }, disabled = {} },
+    default = { kind = "some", value = "balanced" },
+    choices = {
+        { name = "balanced", value = { enabled = { "o2" }, disabled = { "o3" } } },
+    },
+}
+"#;
+        let group: TuningGroupSpec = decode::<LuaTuningGroupSpec>(source).into();
+        assert_eq!(group.base.enabled, vec!["lto".to_owned()]);
+        assert_eq!(group.default, Some("balanced".to_owned()));
+        assert_eq!(group.choices.len(), 1);
+        assert_eq!(group.choices[0].name, "balanced");
+    }
+
+    #[test]
+    fn an_analyzer_kind_decodes_from_its_snake_case_name() {
+        let kind: super::super::AnalyzerKind = decode(r#"return "pkg_config""#);
+        assert_eq!(kind, super::super::AnalyzerKind::PkgConfig);
     }
 
     fn literal_layout_field(name: &str) -> String {
