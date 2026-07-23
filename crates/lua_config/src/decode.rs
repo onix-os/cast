@@ -106,6 +106,39 @@ mod tests {
     }
 
     #[test]
+    fn empty_sequences_decode_including_inside_a_tagged_variant() {
+        let engine = LuaEngine::default();
+        let evaluated = engine
+            .evaluate_as::<Fixture>(&Source::new(
+                "root.lua",
+                r#"
+                    return {
+                        name = "noop",
+                        priority = 0,
+                        after = { kind = "none" },
+                        handler = { kind = "run", command = "/bin/true", args = {} },
+                        tags = {},
+                    }
+                "#,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            evaluated.value,
+            Fixture {
+                name: "noop".to_owned(),
+                priority: 0,
+                after: LuaOption::None,
+                handler: Handler::Run {
+                    command: "/bin/true".to_owned(),
+                    args: Vec::new(),
+                },
+                tags: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
     fn the_none_option_encoding_decodes_to_none() {
         let engine = LuaEngine::default();
         let evaluated = engine

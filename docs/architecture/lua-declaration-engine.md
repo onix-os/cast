@@ -71,22 +71,22 @@ through production parity. If dual support is chosen instead (Endpoint B), both
 dependency trees, threat surfaces, ABI implementations, and test matrices become
 permanent.
 
-## Encoding constraint: empty sequences under tagged variants
+## Encoding decision: empty sequences
 
 Lua cannot distinguish an empty array from an empty map — both are written `{}`
-— and mlua's serializer resolves an empty table to a map. When such a table is
-buffered through `serde`'s internally-tagged enum machinery (which reads the
-whole value via `deserialize_any` before dispatching on the tag), a field typed
-`Vec<_>` then sees a map and fails with `invalid type: map, expected a
-sequence`. This only bites *empty* sequences that sit inside a `#[serde(tag =
-"kind")]` variant (for example a trigger handler with no arguments); non-empty
-sequences and top-level `Vec` fields decode normally.
+— and mlua resolves a bare empty table to a map. Read through `serde`'s
+internally-tagged enum machinery (which buffers the whole value via
+`deserialize_any` before dispatching on the tag), an empty `Vec<_>` field then
+saw a map and failed with `invalid type: map, expected a sequence` — for example
+a trigger handler with no arguments.
 
-Authored fragments therefore currently avoid empty sequences inside tagged
-variants. Lifting this before the Phase L7 corpus import — by giving the tagged
-domain DTOs an explicit empty-list encoding, or by switching those variants to a
-form that decodes the content type directly rather than through `deserialize_any`
-— is tracked as adapter follow-up work.
+Because this encoding represents every domain map as a `Vec<{key, value}>` and
+every struct/variant with explicitly named fields, a table with no entries is
+unambiguously an empty *sequence*. The adapter therefore walks the validated
+value tree and stamps mlua's array metatable onto every empty table, so
+mlua's deserializer (`t.raw_len() > 0 || t.is_array()`) routes it to a sequence.
+Authored fragments may use empty lists freely, including inside tagged variants.
+This runs after the cycle check, so the walk terminates.
 
 ## Implemented so far
 

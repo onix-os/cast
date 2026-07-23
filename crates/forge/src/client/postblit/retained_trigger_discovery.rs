@@ -189,7 +189,7 @@ mod tests {
         let candidate_usr_path = temporary.path().join("staging").join("usr");
         let fragment = candidate_usr_path.join("share/cast/triggers/sys.d/system.lua");
         fs_err::create_dir_all(fragment.parent().unwrap()).unwrap();
-        fs_err::write(&fragment, lua_trigger_source("lua-system", "/bin/true", "--quiet")).unwrap();
+        fs_err::write(&fragment, lua_trigger_source("lua-system", "/bin/true")).unwrap();
         let candidate_usr = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
@@ -205,11 +205,11 @@ mod tests {
         assert!(matches!(
             loaded[0].handlers.get("lua-system"),
             Some(triggers::format::Handler::Run { run, args })
-                if run == "/bin/true" && args == &["--quiet"]
+                if run == "/bin/true" && args.is_empty()
         ));
     }
 
-    fn lua_trigger_source(name: &str, command: &str, arg: &str) -> String {
+    fn lua_trigger_source(name: &str, command: &str) -> String {
         format!(
             r#"
 return {{
@@ -227,7 +227,7 @@ return {{
     handlers = {{
         {{
             key = "{name}",
-            value = {{ kind = "run", command = "{command}", args = {{ "{arg}" }} }},
+            value = {{ kind = "run", command = "{command}", args = {{}} }},
         }},
     }},
 }}

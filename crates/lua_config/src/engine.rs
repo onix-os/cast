@@ -307,7 +307,37 @@ pub(crate) fn evaluate_root_value(
         source.logical_name(),
         &crate::value::ValueLimits::default(),
     )?;
+    mark_empty_tables_as_arrays(&runtime.lua, &value)?;
     Ok(value)
+}
+
+/// Give every empty table the array metatable so mlua's deserializer reads a
+/// bare `{}` as an empty sequence rather than an empty map.
+///
+/// This encoding represents every domain map as a `Vec<{key, value}>` and every
+/// struct/variant with explicitly named fields, so a table with no entries is
+/// unambiguously an empty sequence. Without the marker an empty list nested in a
+/// `#[serde(tag = "kind")]` variant is buffered through serde's `deserialize_any`,
+/// where mlua resolves an empty table to a map and the `Vec` field then fails
+/// with "invalid type: map, expected a sequence". The value tree was already
+/// cycle-checked above, so this walk terminates.
+fn mark_empty_tables_as_arrays(lua: &Lua, value: &Value) -> Result<(), Diagnostic> {
+    use mlua::LuaSerdeExt as _;
+
+    let Value::Table(table) = value else {
+        return Ok(());
+    };
+    let mut empty = true;
+    for pair in table.pairs::<Value, Value>() {
+        let (_, child) =
+            pair.map_err(|error| Diagnostic::internal(format!("lua value walk failed: {error}")))?;
+        empty = false;
+        mark_empty_tables_as_arrays(lua, &child)?;
+    }
+    if empty {
+        table.set_metatable(Some(lua.array_metatable()));
+    }
+    Ok(())
 }
 
 /// Evaluate one chunk in a fresh controlled environment whose only visible
