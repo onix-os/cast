@@ -895,7 +895,7 @@ forge-repository-manager-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^repository::manager::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 19; \
+	timeout 10s test "$$count" = 20; \
 	timeout 900s $(CARGO) test -p forge --lib "repository::manager::tests::" -- --test-threads=1
 
 forge-security-fixture-test:
