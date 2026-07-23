@@ -1,0 +1,21 @@
+let b = import! cast.package.v3
+
+let base = {
+    shell = b.dep.package "bash",
+    core = b.dep.package "coreutils",
+}
+
+// Extension is explicit, non-recursive, and receives the complete base set.
+// There is no global package universe or reflection-based callPackage layer.
+let with_observability = \packages ->
+    {
+        shell = packages.shell,
+        core = packages.core,
+        metrics = b.dep.package "prometheus-node-exporter",
+        logs = b.dep.package "vector",
+    }
+
+{
+    base,
+    with_observability,
+}

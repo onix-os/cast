@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
-use std::{fmt, io};
+use std::{fmt, io, time::Duration};
 
 /// The error type for operations using the `git` executable.
 #[derive(Debug, thiserror::Error)]
@@ -28,6 +27,32 @@ impl Error {
         matches!(self.0, InnerError::Run { .. })
     }
 
+    /// Returns whether the Git process exceeded its total wall-clock budget.
+    pub fn timed_out(&self) -> bool {
+        matches!(self.0, InnerError::Timeout { .. })
+    }
+
+    /// Returns whether Git exceeded an output, repository-size, or repository-
+    /// entry budget.
+    pub fn limit_exceeded(&self) -> bool {
+        matches!(
+            self.0,
+            InnerError::OutputLimit { .. }
+                | InnerError::ProgressSegmentLimit { .. }
+                | InnerError::RepositoryBytes { .. }
+                | InnerError::RepositoryEntries { .. }
+                | InnerError::RepositoryDepth { .. }
+                | InnerError::RepositorySnapshotMemory { .. }
+                | InnerError::RepositoryChangedDuringScan
+        )
+    }
+
+    /// Returns whether a cache-owned mirror's direct origin differed from the
+    /// exact origin supplied by its owner.
+    pub fn mirror_origin_mismatch(&self) -> bool {
+        matches!(self.0, InnerError::MirrorOriginMismatch)
+    }
+
     /// Returns the kind of violated [Constraint] if such error happened.
     /// Otherwise, it returns [None].
     pub fn constraint(&self) -> Option<&Constraint> {
@@ -51,10 +76,104 @@ pub(crate) enum InnerError {
     #[error(transparent)]
     Io(#[from] io::Error),
 
-    /// The `git` executable returned with an error.
-    /// A dump of the stderr may be provided.
-    #[error("{}", display_run(code, stderr))]
-    Run { code: Option<i32>, stderr: Option<String> },
+    /// The `git` executable returned with an error. Git's stderr is
+    /// deliberately not included: transports may repeat credential-bearing
+    /// source URLs in diagnostics.
+    #[error("{}", display_run(code))]
+    Run { code: Option<i32> },
+
+    /// The complete subprocess boundary did not finish before its deadline.
+    #[error("`git` exceeded its total wall-clock limit of {timeout:?}")]
+    Timeout { timeout: Duration },
+
+    /// A captured process stream crossed its byte ceiling.
+    #[error("`git` {stream} exceeded its {limit}-byte output limit")]
+    OutputLimit { stream: &'static str, limit: usize },
+
+    /// One carriage-return-delimited progress record crossed its byte ceiling.
+    #[error("`git` progress record exceeded its {limit}-byte limit")]
+    ProgressSegmentLimit { limit: usize },
+
+    /// A repository crossed its combined logical/allocated byte ceiling.
+    #[error("Git repository uses {observed} bytes, exceeding the {limit}-byte limit")]
+    RepositoryBytes { observed: u64, limit: u64 },
+
+    /// A repository crossed its filesystem-entry ceiling.
+    #[error("Git repository contains more than the allowed {limit} filesystem entries")]
+    RepositoryEntries { limit: u64 },
+
+    /// Descriptor-rooted traversal crossed its safe nesting ceiling.
+    #[error("Git repository nesting exceeds the scanner's {limit}-directory descriptor budget")]
+    RepositoryDepth { limit: usize },
+
+    /// An exact strict inventory crossed its parent-side memory budget.
+    #[error("Git repository strict inventory exceeds its {limit}-byte memory budget")]
+    RepositorySnapshotMemory { limit: u64 },
+
+    /// A mandatory scan observed disappearance, replacement, or unequal
+    /// descriptor-rooted inventories.
+    #[error("Git repository changed during strict quota verification")]
+    RepositoryChangedDuringScan,
+
+    /// A clone destination already exists and therefore cannot be installed
+    /// using no-replace semantics.
+    #[error("refusing to replace existing Git clone destination")]
+    DestinationExists,
+
+    /// A repository root is not an ordinary directory.
+    #[error("Git repository root is not an ordinary directory")]
+    InvalidRepositoryRoot,
+
+    /// The public path was replaced after its repository inode was opened.
+    #[error("Git repository path no longer names the opened repository")]
+    RepositoryRootChanged,
+
+    /// A limit set cannot provide a finite live quota/termination boundary.
+    #[error("Git quota polling and termination intervals must be non-zero and representable")]
+    InvalidLimits,
+
+    /// Only built-in transports with an explicit policy are accepted. Unknown
+    /// schemes could dispatch arbitrary `git-remote-*` programs from PATH.
+    #[error("Git transport scheme {scheme:?} is not allowed")]
+    UnsupportedTransportScheme { scheme: String },
+
+    /// A repository remote did not contain a syntactically valid absolute URL.
+    #[error("Git remote URL is not a valid absolute URL")]
+    InvalidRemoteUrl,
+
+    /// Fixture bundle mirrors are always rebound to an exact production-like
+    /// HTTPS identity before they leave private staging.
+    #[cfg(any(test, feature = "fixture-test-support"))]
+    #[error("Git fixture mirror origin must use HTTPS")]
+    InvalidFixtureOrigin,
+
+    /// A fixture bundle was not a small, non-empty, singly-linked regular file.
+    #[cfg(any(test, feature = "fixture-test-support"))]
+    #[error("Git fixture bundle is not an admissible private regular file")]
+    InvalidFixtureBundle,
+
+    /// A cache-owned mirror did not have the exact, finite configuration
+    /// required at the network boundary.
+    #[error("Git mirror configuration is not canonical or does not match the expected origin")]
+    InvalidMirrorConfiguration,
+
+    /// The direct local mirror origin did not equal the caller-owned URL.
+    /// Neither URL is included because either may contain credentials.
+    #[error("Git mirror origin does not match the expected origin")]
+    MirrorOriginMismatch,
+
+    /// A public string argument could be parsed as an option or exceeded the
+    /// finite argument boundary.
+    #[error("Git {argument} argument is empty, option-like, or too long")]
+    InvalidArgument { argument: &'static str },
+
+    /// The private process group could not be proven empty after termination.
+    #[error("Git subprocess boundary did not terminate within {timeout:?}")]
+    BoundaryTermination { timeout: Duration },
+
+    /// Private clone/fetch state could not be removed after failure.
+    #[error("clean up failed Git state: {0}")]
+    Cleanup(io::Error),
 
     #[error(transparent)]
     Constraint(#[from] Constraint),
@@ -68,17 +187,13 @@ impl fmt::Display for Constraint {
     }
 }
 
-fn display_run(code: &Option<i32>, stderr: &Option<String>) -> String {
+fn display_run(code: &Option<i32>) -> String {
     let mut string = String::from("`git` exited ");
 
     if let Some(code) = code {
         string.push_str(&format!("with code {code}"));
     } else {
         string.push_str("unexpectedly");
-    }
-
-    if let Some(msg) = stderr {
-        string.push_str(&format!(". Diagnostic output below:\n{msg}"));
     }
 
     string

@@ -1,0 +1,34 @@
+
+// Pure ordered composition manifest imported as
+// `cast.build_policy.layers.v1`.
+
+type Operation =
+    | Add
+    | Replace
+    | Modify
+
+type Entry = {
+    operation : Operation,
+    origin : String,
+}
+
+type Layer = {
+    name : String,
+    entries : Array Entry,
+}
+
+type Root = {
+    name : String,
+    layers : Array Layer,
+}
+
+let entry = \operation origin -> { operation, origin }
+
+{
+    abi_version = 1,
+    policy = \name layers -> { name, layers },
+    layer = \name entries -> { name, entries },
+    add = entry Add,
+    replace = entry Replace,
+    modify = entry Modify,
+}

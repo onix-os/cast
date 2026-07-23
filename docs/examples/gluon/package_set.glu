@@ -1,0 +1,7 @@
+
+let b = import! cast.package.v3
+
+{
+    zlib = b.dep.package "zlib",
+    tls = b.dep.pkgconfig "openssl",
+}

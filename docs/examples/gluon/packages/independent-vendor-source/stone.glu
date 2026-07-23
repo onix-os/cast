@@ -1,0 +1,6 @@
+let make_package = import! "./package.glu"
+let sources = import! "./sources.glu"
+
+// The root composes two independent source-lock records with one pure package
+// factory; neither application nor vendor identity is inferred from the other.
+make_package sources

@@ -1,0 +1,49 @@
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-multiple-sources-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-multiple-sources-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = meson.default,
+    hooks = b.hooks {
+        pre_setup = [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [b.program.binary "cp"],
+                script = r#"test ! -e src/protocol-schema.h && cp --preserve=mode,timestamps -- "${CAST_SOURCE_DIR}/protocol-schema.h" src/protocol-schema.h"#,
+            },
+        ],
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [b.dep.binary "cp"],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-multiple-sources-fixture-1.0.0.tar.xz",
+            hash = "35c3c296ce08dd0ae1ebf27c782acf77f0f577f080b5ebe467c6c646f9ec7324",
+            rename = b.optional.set "application.tar.xz",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "application",
+        },
+        b.source.git_with {
+            url = "https://fixtures.invalid/sources/cast-multiple-sources-protocol.git",
+            git_ref = "4f124a6f438b061a836e332d67e803a69a7bf2d3",
+            clone_dir = b.optional.set "vendor-protocol",
+        },
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-multiple-sources-schema-1.0.0.h",
+            hash = "6c4caab665188429a1f0eda479c4aa11d1f61240f09ac0d201cf80d20fa5e330",
+            rename = b.optional.set "protocol-schema.h",
+            strip_dirs = b.optional.unset,
+            unpack = b.boolean.false,
+            unpack_dir = b.optional.unset,
+        },
+    ],
+    .. base
+}

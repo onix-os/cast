@@ -1,0 +1,39 @@
+
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let base = b.mk_package (b.meta {
+    pname = "multi-source-app",
+    version = "6.0.1",
+    release = 1,
+    homepage = "https://example.invalid/multi-source-app",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = meson.default,
+    sources = [
+        b.source.archive_with {
+            url = "https://example.invalid/multi-source-app-6.0.1.tar.xz",
+            hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            rename = b.optional.set "application.tar.xz",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "application",
+        },
+        b.source.git_with {
+            url = "https://example.invalid/vendor-protocol.git",
+            git_ref = "0123456789abcdef0123456789abcdef01234567",
+            clone_dir = b.optional.set "vendor-protocol",
+        },
+        b.source.archive_with {
+            url = "https://example.invalid/generated-schema.dat",
+            hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            rename = b.optional.set "schema.dat",
+            strip_dirs = b.optional.unset,
+            unpack = b.boolean.false,
+            unpack_dir = b.optional.unset,
+        },
+    ],
+    .. base
+}

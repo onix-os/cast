@@ -1,0 +1,21 @@
+
+[package]
+name = "cast-cargo-features-fixture"
+version = "1.0.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[features]
+default = []
+fixture-protocol = []
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cast-feature-client"
+path = "src/bin/client.rs"
+
+[[bin]]
+name = "cast-feature-daemon"
+path = "src/bin/daemon.rs"

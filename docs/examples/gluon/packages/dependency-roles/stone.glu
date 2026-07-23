@@ -1,0 +1,38 @@
+
+let b = import! cast.package.v3
+
+let base = b.mk_package (b.meta {
+    pname = "dependency-roles",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid/dependency-roles",
+    license = ["CC0-1.0"],
+})
+
+{
+    // Package references are typed by the capability they must provide. These
+    // roles remain data all the way into dependency resolution.
+    native_build_inputs = [
+        b.dep.binary "pkgconf",
+        b.dep.system_binary "ldconfig",
+        b.dep.cmake "ZLIB",
+    ],
+    build_inputs = [
+        b.dep.package "base-devel",
+        b.dep.output (b.package_ref "libwidget") "devel",
+        b.dep.pkgconfig "zlib",
+        b.dep.pkgconfig32 "zlib",
+        b.dep.soname "libz.so.1",
+        b.dep.python "setuptools",
+        b.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)",
+    ],
+    check_inputs = [b.dep.binary "bats"],
+    outputs = b.outputs.with_root base.meta.pname {
+        runtime_inputs = [
+            b.dep.soname "libc.so.6",
+            b.dep.binary "sh",
+        ],
+        .. b.output "out"
+    },
+    .. base
+}

@@ -1,0 +1,31 @@
+
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-meson-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-meson-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = meson.default,
+    // The installed program must compile and link through Meson's pkg-config
+    // dependency path. A separate, non-installed test helper invokes `file`
+    // only while `meson test` runs, making the check-only role observable.
+    build_inputs = [b.dep.pkgconfig "zlib"],
+    check_inputs = [b.dep.binary "file"],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-meson-fixture-1.0.0.tar",
+            hash = "3119d25a8f56dc208c5dcc907b6c5a4203c87c7ad28897b85e2c0eeed28ab995",
+            rename = b.optional.set "cast-meson-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-meson-fixture",
+        },
+    ],
+    .. base
+}

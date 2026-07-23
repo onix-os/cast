@@ -1,0 +1,27 @@
+
+let b = import! cast.package.v3
+let make_package = import! "./package.glu"
+let inputs = import! "./inputs.glu"
+
+// This is analogous to overriding a Nix function argument before evaluating
+// the package: the factory receives an alternate TLS capability.
+let package = make_package {
+    tls = b.dep.pkgconfig "libressl",
+    .. inputs
+}
+
+let tools = b.output_with {
+    summary = b.optional.set "Optional diagnostics",
+    runtime_inputs = [b.dep.output (b.package_ref package.meta.pname) "out"],
+    paths = [b.path.exe "/usr/bin/override-client-diagnose"],
+    .. b.output "tools"
+}
+
+let patch = b.package_patch {
+    outputs = b.patch.array.append [tools],
+    architectures = b.patch.array.replace ["x86_64"],
+    .. b.defaults.package_patch
+}
+
+// Attribute patches make keep/replace/append semantics explicit.
+b.override_attrs patch package

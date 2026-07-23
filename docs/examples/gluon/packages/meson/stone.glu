@@ -1,0 +1,31 @@
+
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let base = b.mk_package (b.meta {
+    pname = "meson-hello",
+    version = "1.8.0",
+    release = 1,
+    homepage = "https://example.invalid/meson-hello",
+    license = ["MIT"],
+})
+
+{
+    builder = meson.builder {
+        flags = [
+            "-Ddefault_library=shared",
+            "-Ddocumentation=disabled",
+        ],
+        run_tests = b.boolean.true,
+    },
+    build_inputs = [
+        b.dep.pkgconfig "glib-2.0",
+        b.dep.pkgconfig "libffi",
+    ],
+    sources = [
+        b.source.archive
+            "https://example.invalid/meson-hello-1.8.0.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}

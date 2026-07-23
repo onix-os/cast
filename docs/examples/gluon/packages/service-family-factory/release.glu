@@ -1,0 +1,6 @@
+{
+    version = "5.3.1",
+    package_release = 2,
+    source_url = "https://example.invalid/relay-family-5.3.1.tar.xz",
+    source_sha256 = "0f123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde",
+}

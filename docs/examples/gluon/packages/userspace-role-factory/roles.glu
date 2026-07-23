@@ -1,0 +1,45 @@
+let b = import! cast.package.v3
+
+type Role =
+    | Workstation
+    | Server
+    | Builder
+
+// Roles are closed values, not ambient modules. Selecting one role therefore
+// selects one complete userspace closure without merging hidden defaults.
+let select = \role ->
+    match role with
+    | Workstation -> {
+        pname = "userspace-workstation",
+        summary = "Declarative graphical workstation role",
+        packages = [
+            b.dep.package "foot",
+            b.dep.package "helix",
+            b.dep.package "wayland",
+        ],
+    }
+    | Server -> {
+        pname = "userspace-server",
+        summary = "Declarative service host role",
+        packages = [
+            b.dep.package "openssh",
+            b.dep.package "podman",
+            b.dep.package "systemd",
+        ],
+    }
+    | Builder -> {
+        pname = "userspace-builder",
+        summary = "Declarative package builder role",
+        packages = [
+            b.dep.package "clang",
+            b.dep.package "cmake",
+            b.dep.package "ninja",
+        ],
+    }
+
+{
+    workstation = Workstation,
+    server = Server,
+    builder = Builder,
+    select,
+}

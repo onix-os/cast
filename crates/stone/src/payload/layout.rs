@@ -1,11 +1,8 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::io::{Read, Write};
 
 use astr::AStr;
 
-use super::{Record, StonePayloadDecodeError, StonePayloadEncodeError};
+use super::{Record, RecordReader, StonePayloadDecodeError, StonePayloadEncodeError};
 use crate::ext::{ReadExt, WriteExt};
 
 /// Layout entries record their target file type so they can be rebuilt on
@@ -104,7 +101,7 @@ pub struct StonePayloadLayoutRecord {
 }
 
 impl Record for StonePayloadLayoutRecord {
-    fn decode<R: Read>(mut reader: R) -> Result<Self, StonePayloadDecodeError> {
+    fn decode<R: Read>(reader: &mut RecordReader<R>) -> Result<Self, StonePayloadDecodeError> {
         let uid = reader.read_u32()?;
         let gid = reader.read_u32()?;
         let mode = reader.read_u32()?;
@@ -129,35 +126,76 @@ impl Record for StonePayloadLayoutRecord {
 
         let _padding = reader.read_array_::<11>()?;
 
+        let variable_length = u64::from(source_length).checked_add(u64::from(target_length)).ok_or(
+            StonePayloadDecodeError::LengthOverflow {
+                field: "layout source and target",
+            },
+        )?;
+        reader.ensure_additional("layout source and target", variable_length)?;
+
         // Make the layout entry *usable*
         let entry = match file_type {
             StonePayloadLayoutFileType::Regular => {
-                let source = reader.read_vec(source_length as usize)?;
-                let hash = u128::from_be_bytes(source.try_into().unwrap());
-                StonePayloadLayoutFile::Regular(hash, sanitize(&reader.read_string(target_length as u64)?).into())
+                if source_length != 16 {
+                    return Err(StonePayloadDecodeError::InvalidLength {
+                        field: "regular layout digest",
+                        expected: 16,
+                        actual: u64::from(source_length),
+                    });
+                }
+
+                let source = reader.read_sized_vec("regular layout digest", u64::from(source_length))?;
+                let source: [u8; 16] =
+                    source
+                        .try_into()
+                        .map_err(|source: Vec<u8>| StonePayloadDecodeError::InvalidLength {
+                            field: "regular layout digest",
+                            expected: 16,
+                            actual: source.len() as u64,
+                        })?;
+                let hash = u128::from_be_bytes(source);
+                StonePayloadLayoutFile::Regular(
+                    hash,
+                    sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
+                )
             }
             StonePayloadLayoutFileType::Symlink => StonePayloadLayoutFile::Symlink(
-                sanitize(&reader.read_string(source_length as u64)?).into(),
-                sanitize(&reader.read_string(target_length as u64)?).into(),
+                sanitize(&reader.read_sized_string("symlink source", u64::from(source_length))?).into(),
+                sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
             ),
             StonePayloadLayoutFileType::Directory => {
-                StonePayloadLayoutFile::Directory(sanitize(&reader.read_string(target_length as u64)?).into())
+                require_empty_source(source_length, file_type)?;
+                StonePayloadLayoutFile::Directory(
+                    sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
+                )
             }
             StonePayloadLayoutFileType::CharacterDevice => {
-                StonePayloadLayoutFile::CharacterDevice(sanitize(&reader.read_string(target_length as u64)?).into())
+                require_empty_source(source_length, file_type)?;
+                StonePayloadLayoutFile::CharacterDevice(
+                    sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
+                )
             }
             StonePayloadLayoutFileType::BlockDevice => {
-                StonePayloadLayoutFile::BlockDevice(sanitize(&reader.read_string(target_length as u64)?).into())
+                require_empty_source(source_length, file_type)?;
+                StonePayloadLayoutFile::BlockDevice(
+                    sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
+                )
             }
             StonePayloadLayoutFileType::Fifo => {
-                StonePayloadLayoutFile::Fifo(sanitize(&reader.read_string(target_length as u64)?).into())
+                require_empty_source(source_length, file_type)?;
+                StonePayloadLayoutFile::Fifo(
+                    sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
+                )
             }
             StonePayloadLayoutFileType::Socket => {
-                StonePayloadLayoutFile::Socket(sanitize(&reader.read_string(target_length as u64)?).into())
+                require_empty_source(source_length, file_type)?;
+                StonePayloadLayoutFile::Socket(
+                    sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
+                )
             }
             StonePayloadLayoutFileType::Unknown => StonePayloadLayoutFile::Unknown(
-                sanitize(&reader.read_string(source_length as u64)?).into(),
-                sanitize(&reader.read_string(target_length as u64)?).into(),
+                sanitize(&reader.read_sized_string("unknown layout source", u64::from(source_length))?).into(),
+                sanitize(&reader.read_sized_string("layout target", u64::from(target_length))?).into(),
             ),
         };
 
@@ -191,5 +229,27 @@ impl Record for StonePayloadLayoutRecord {
 
     fn size(&self) -> usize {
         4 + 4 + 4 + 4 + 2 + 2 + 1 + 11 + self.file.source().len() + self.file.target().len()
+    }
+}
+
+fn require_empty_source(
+    source_length: u16,
+    file_type: StonePayloadLayoutFileType,
+) -> Result<(), StonePayloadDecodeError> {
+    if source_length == 0 {
+        Ok(())
+    } else {
+        Err(StonePayloadDecodeError::InvalidLength {
+            field: match file_type {
+                StonePayloadLayoutFileType::Directory => "directory layout source",
+                StonePayloadLayoutFileType::CharacterDevice => "character-device layout source",
+                StonePayloadLayoutFileType::BlockDevice => "block-device layout source",
+                StonePayloadLayoutFileType::Fifo => "FIFO layout source",
+                StonePayloadLayoutFileType::Socket => "socket layout source",
+                _ => "layout source",
+            },
+            expected: 0,
+            actual: u64::from(source_length),
+        })
     }
 }

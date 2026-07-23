@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::{
     error::Error,
     fmt,
@@ -8,11 +5,13 @@ use std::{
 };
 
 mod gluon;
+mod rooted_gluon;
 
 pub use self::gluon::{
     DecodedGluon, DeleteGluonError, GENERATED_GLUON_MARKER, GluonCodec, GluonCodecError, GluonConversionError,
     LoadGluonError, LoadedGluonConfig, SaveGluonError,
 };
+pub use self::rooted_gluon::load_gluon_rooted;
 
 pub trait Config {
     fn domain() -> String;

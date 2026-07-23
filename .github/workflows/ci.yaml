@@ -5,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "develop", "main" ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ "develop", "main" ]
   schedule:
     - cron: '30 2 * * *'
 
@@ -15,54 +15,146 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  meta:
-    runs-on: ubuntu-latest
-    name: Non-code Checks
+  validation:
+    runs-on: ubuntu-24.04
+    name: Validate project
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v6
 
-      - name: Check for typos
-        uses: crate-ci/typos@v1.43.5
-
-  build:
-    runs-on: ubuntu-latest
-    name: Build & Test Project
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v6
-
-      - name: Install LLVM and Clang
+      - name: Select the runner's Clang 18 toolchain
         run: |
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
-          echo "/usr/lib/llvm-18/bin" >> $GITHUB_PATH
-          echo "CC=/usr/lib/llvm-18/bin/clang" >> $GITHUB_ENV
+          test -x /usr/bin/clang-18
+          test -x /usr/bin/clang++-18
+          echo "CC=/usr/bin/clang-18" >> "$GITHUB_ENV"
+          echo "CXX=/usr/bin/clang++-18" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
 
-      - name: Check Formatting
-        run: cargo fmt --all -- --check
-
       - name: Cargo Cache
         uses: Swatinem/rust-cache@v2
 
-      - name: Build project
-        run: cargo build
+      - name: Install typo checker
+        run: cargo install typos-cli --locked --version '=1.43.5'
 
-      - name: Test project
-        run: cargo test --all --features moss/testing
+      - name: Check all workspace targets
+        run: make check
 
-      - name: Run clippy
-        uses: giraffate/clippy-action@v1
+      - name: Run canonical validation
+        run: make test
+
+  execution-fixtures:
+    runs-on: ubuntu-24.04
+    needs: validation
+    name: Build frozen execution fixtures
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Select the runner's Clang 18 toolchain
+        run: |
+          test -x /usr/bin/clang-18
+          test -x /usr/bin/clang++-18
+          echo "CC=/usr/bin/clang-18" >> "$GITHUB_ENV"
+          echo "CXX=/usr/bin/clang++-18" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install and verify fixture host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes gettext jq libxml2-utils locales uidmap util-linux
+          sudo locale-gen fr_FR.UTF-8 de_DE.UTF-8
+          for tool in \
+            dash git id jq make mkfifo mktemp msgfmt newgidmap setsid stat \
+            systemctl systemd-analyze systemd-run systemd-sysusers \
+            systemd-tmpfiles tail tee timeout udevadm unshare xmllint; do
+            tool_path="/usr/bin/$tool"
+            test -x "$tool_path"
+            test "$(command -v "$tool")" = "$tool_path"
+          done
+          test -x /bin/bash
+          test -x /bin/sh
+          user_name="$(id -un)"
+          user_id="$(id -u)"
+          if ! awk -F: -v name="$user_name" -v uid="$user_id" \
+            '($1 == name || $1 == uid) && $3 >= 1 { found = 1 } END { exit !found }' \
+            /etc/subgid; then
+            sudo usermod --add-subgids 524288-589823 "$user_name"
+          fi
+          awk -F: -v name="$user_name" -v uid="$user_id" \
+            '($1 == name || $1 == uid) && $3 >= 1 { found = 1 } END { exit !found }' \
+            /etc/subgid
+
+      - name: Require unprivileged user and mount namespaces
+        run: |
+          if [[ -e /proc/sys/kernel/unprivileged_userns_clone ]]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          unshare --user --map-root-user --mount true
+
+      - name: Establish the required systemd user manager
+        run: |
+          user_id="$(id -u)"
+          user_name="$(id -un)"
+          runtime_dir="/run/user/$user_id"
+          sudo loginctl enable-linger "$user_name"
+          sudo systemctl start "user@$user_id.service"
+          for _ in {1..100}; do
+            [[ -S "$runtime_dir/bus" ]] && break
+            sleep 0.1
+          done
+          test -S "$runtime_dir/bus"
+          export XDG_RUNTIME_DIR="$runtime_dir"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime_dir/bus"
+          systemctl --user show-environment >/dev/null
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+
+      - name: Preflight the exact delegated execution boundary
+        run: timeout --signal=TERM --kill-after=30s 900s make delegated-execution-preflight
+
+      - name: Restore the verified Stone bootstrap closure
+        uses: actions/cache@v5
         with:
-          reporter: 'github-pr-check'
-          clippy_flags: --workspace --no-deps
-          filter_mode: nofilter
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          path: target/bootstrap-fixtures/packages
+          key: stone-bootstrap-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/fixtures/gluon/execution/bootstrap/closure.glu', 'tests/fixtures/gluon/execution/bootstrap/stone.index') }}
+
+      - name: Check and freeze the documented Gluon examples
+        run: make examples
+
+      - name: Build and reproduce all frozen fixtures
+        id: fixture_execution
+        run: misc/scripts/run-fixtures-ci-with-evidence.sh
+
+      - name: Upload successful fixture execution evidence
+        if: ${{ always() && steps.fixture_execution.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-execution-proof-${{ github.sha }}
+          path: |
+            target/fixture-evidence/fixtures-ci-proof.json
+            target/fixture-evidence/fixtures-ci.log
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload bounded failed fixture log
+        if: ${{ always() && steps.fixture_execution.outcome != 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-execution-failure-${{ github.sha }}
+          path: target/fixture-evidence/fixtures-ci.log
+          if-no-files-found: warn
+          retention-days: 14

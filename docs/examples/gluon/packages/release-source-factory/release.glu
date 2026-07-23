@@ -1,0 +1,8 @@
+// Updating this one record changes package metadata and the complete source
+// request together. The factory never has to repeat the version in a URL or
+// materialization name.
+{
+    version = "2.7.4",
+    package_release = 3,
+    sha256 = "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+}

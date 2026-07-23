@@ -19,19 +19,74 @@ Below is a walkthrough to build and enter a container. The logic is simple but d
 
   1. `clone` a child process. This is like a `fork` on steroids: We can pass it flags to avoid sharing certain resources with the parent, e.g. PIDs, network access, or even user/group IDs, which is the foundation of a rootless container. Let's call the child process "Bill".
   1. Bill has no idea who are the users and groups! It lives within a new user namespace. We must make it wait to build/test a package until we assigned some. To pause the execution, we use a pipe: the parent on one end, Bill on the other. A `read` blocks until there's data coming out of the pipe.
-  1. Parent-side, we call `/usr/bin/newuidmap`, `/usr/bin/newgidmap` against Bill's PID to fix the point above. We can't do what those utilities do alone: setting UIDs and GIDs requires the `CAP_SETUID` capability which we don't have, unless we are root (remember: we want a root**less** container). `newuidmap`, `newuidmap` have that capability already set.
-     - What IDs are we assigning to Bill? There's a Linux feature called "ID mapping": our user ID outside the container, say 100, can be 0 inside the container. What and how many sub-IDs are available are regulated by `/etc/sub{u,g}id` files. You guessed it right: we can pretend to be root inside a container! Everytime we write a file inside the container as root, will be actually written outside the container as user 100, that is us.
+  1. Parent-side, namespace user and group 0 are mapped to the caller. Linux does not let an unprivileged mapper both deny `setgroups` and then clear the supplementary groups inherited by Bill. For an unprivileged caller we therefore use the fixed `/usr/bin/newgidmap` helper plus one delegated `/etc/subgid` entry. That host ID is mapped only to a fixed, setup-only namespace slot.
+  1. Once the maps exist, Bill reads its supplementary-group list. It performs
+     the raw `setgroups(0, NULL)` mutation unless that list is already exactly
+     empty, then sets all real, effective, and saved GID slots followed by all
+     real, effective, and saved UID slots to namespace root. Before mounting or
+     running anything it verifies those six slots, both filesystem credential
+     slots, and a still-empty supplementary-group list. Rootful and rootless
+     payloads consequently receive the same build-visible starting credentials;
+     the caller's host groups are never inherited by build commands.
   1. With Bill's identity crisis over, the parent writes a sentinel value into the pipe that makes the `read` function unblock.
   1. Bills has an isolated user and group, but not an isolated filesystem. Since we are now privileged inside it, we're able to choose a directory as the root directory, and bind-mount important filesystems like tmpfs, procfs and sysfs. We also bind-mount devices like `/dev/zero` and `/dev/urandom`. Finally, we perform a `pivot_root` to hide the host filesystem for good.
      - `pivot_root` is more secure than the well-known `chroot`, in that it's not possible to escape it.
+  1. Setup-only descriptors are closed, standard I/O is rejected if it hides a
+     directory capability, the scheduler is normalized, and every Linux
+     capability is removed from the live, ambient, and bounding sets.
+  1. A mandatory seccomp filter denies namespace re-entry, mount and root
+     replacement, device creation, file-handle opens, x32 calls, and unknown
+     future syscalls before Bill builds/tests the package.
   1. Bill finally builds/tests the package as the parent waits for it to finish.
+
+## Pseudo-filesystem policy
+
+`Container::pseudo_filesystems` controls the container's `proc`, `tmp`, `sys`,
+and `dev` mounts. The default keeps the historical behavior: writable proc,
+an empty tmpfs at `/tmp`, and writable recursive host views of `/sys` and
+`/dev`.
+
+Callers can disable individual mounts, make proc or the host trees read-only,
+or select a finite `/tmp` with
+`TmpPolicy::Bounded(TmpfsLimits::new(size_bytes, inodes)?)`. Both ceilings
+must be non-zero. Container setup passes the exact values as the tmpfs `size`
+and `nr_inodes` options on both pathname and descriptor-anchored activation,
+then reads them back from the mounted filesystem. A rejected or normalized
+limit aborts activation; bounded policy never retries with an unbounded tmpfs.
+Pseudo-filesystem mountpoints are prepared before a pathname root is made
+read-only.
+
+`DevPolicy::Minimal` creates a fresh tmpfs at `/dev` and exposes exactly the
+read-only `null`, `zero`, and `full` nodes. Once those authenticated binds are
+attached, the complete `/dev` mount tree is made recursively read-only, so the
+payload cannot add, remove, or rename entries. The policy does not
+conditionally add devices from host state and never exposes the full host
+`/dev` tree.
+
+`Container::loopback` separately controls loopback setup. Its compatibility
+default invokes `/usr/sbin/ip` when that host utility exists. Deterministic
+callers select `LoopbackPolicy::KernelDefault`, which leaves the interface in
+the state supplied by the selected network namespace and performs no host
+filesystem probe or setup command. The parent/child synchronization pipe is
+created close-on-exec, so it is never inherited by commands run in a payload.
+
+`Container::root_filesystem` defaults to the historical writable root.
+`RootFilesystemPolicy::ReadOnly` recursively makes the root and all of its
+existing submounts read-only, then reopens only explicit `bind_rw` mounts. For
+that policy, each exception applies only to the exact bind mount: nested mounts
+remain read-only unless they are separately declared with `bind_rw`. Payload
+privilege confinement does not depend on this choice: writable and read-only
+containers both close inherited setup descriptors, remove every capability,
+and install the same seccomp topology boundary. Separately selected
+pseudo-filesystems retain the access declared by their own policy, but payload
+code cannot create new mounts or device nodes.
 
 #### References
 
-[`clone` syscall](https://linux.die.net/man/2/clone). [Linux namespaces](https://man7.org/linux/man-pages/man7/namespaces.7.html). [Linux user namespaces](https://man7.org/linux/man-pages/man7/user_namespaces.7.html) (a particular case of namespace). [`pipe`](https://linux.die.net/man/2/pipe). [newuidmap](https://man7.org/linux/man-pages/man1/newuidmap.1.html). [newgidmap](https://man7.org/linux/man-pages/man1/newgidmap.1.html). [`pivot_root`](https://linux.die.net/man/8/pivot_root).
+[`clone` syscall](https://linux.die.net/man/2/clone). [Linux namespaces](https://man7.org/linux/man-pages/man7/namespaces.7.html). [Linux user namespaces](https://man7.org/linux/man-pages/man7/user_namespaces.7.html) (a particular case of namespace). [`pipe`](https://linux.die.net/man/2/pipe). [`newgidmap`](https://man7.org/linux/man-pages/man1/newgidmap.1.html). [`pivot_root`](https://linux.die.net/man/8/pivot_root).
 
 ## FAQ
 
 #### Why don't you just use Docker, or Podman, or... ?
 
-Those are full-fledged containerization solutions. They offer many features we don't need, and they have to be set up, or installed at best. Our logic is so simple we don't need to install anything except `newuidmap` and `newgidmap`, that is, it's built-in in our builder. We aim for an immediate packaging/testing experience.
+Those are full-fledged containerization solutions. They offer many features we don't need, and they have to be set up or installed first. Mason owns the namespace and isolated-root setup directly; rootless execution uses only the standard, fixed-path `newgidmap` privilege boundary needed to clear inherited groups safely.

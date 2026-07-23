@@ -1,0 +1,53 @@
+
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+install -d "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/firmware/atlas"
+install -m644 firmware/atlas-radio.bin firmware/atlas-dsp.bin "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/firmware/atlas/"
+install -Dm644 firmware/atlas-radio.json "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/firmware/atlas/atlas-radio.json"
+install -Dm644 LICENSE.firmware "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/atlas-firmware/LICENSE.firmware"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Firmware and device metadata for Atlas radios",
+    description = b.optional.set "Architecture-independent radio and DSP firmware with its machine-readable device manifest.",
+    paths = [
+        b.path.any "/usr/lib/firmware/atlas",
+        b.path.any "/usr/share/licenses/atlas-firmware",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "atlas-firmware",
+    version = "2026.06",
+    release = 1,
+    homepage = "https://example.invalid/atlas-firmware",
+    license = ["LicenseRef-Atlas-Firmware"],
+})
+
+{
+    builder = b.builder.custom phases [b.dep.binary "install"],
+    outputs = [root],
+    sources = [
+        b.source.archive_with {
+            url = "https://example.invalid/atlas-firmware-2026.06.tar.xz",
+            hash = "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
+            rename = b.optional.unset,
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "atlas-firmware",
+        },
+    ],
+    architectures = ["native"],
+    .. base
+}

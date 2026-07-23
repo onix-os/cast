@@ -1,0 +1,41 @@
+let b = import! cast.package.v3
+
+let release_options = b.options {
+    toolchain = b.toolchain.llvm,
+    cspgo = b.boolean.false,
+    samplepgo = b.boolean.false,
+    debug = b.boolean.false,
+    strip = b.boolean.true,
+    networking = b.boolean.false,
+    compressman = b.boolean.true,
+    lastrip = b.boolean.true,
+}
+
+// Each layer is a total PackageSpec -> PackageSpec transformation. Applying
+// them in stone.glu makes precedence visible instead of relying on an implicit
+// repository overlay or order-dependent attribute merge.
+let security = \package ->
+    b.override_attrs (b.package_patch {
+        options = b.patch.set release_options,
+        native_build_inputs = b.patch.array.prepend [b.dep.binary "hardening-check"],
+        tuning = b.patch.array.prepend [b.named "harden" b.tuning.enable],
+        .. b.defaults.package_patch
+    }) package
+
+let distribution = \package ->
+    let diagnostics = b.output_with {
+        summary = b.optional.set "Layered proxy diagnostics",
+        runtime_inputs = [b.dep.output (b.package_ref package.meta.pname) "out"],
+        paths = [b.path.exe "/usr/bin/layered-proxy-inspect"],
+        .. b.output "tools"
+    }
+    b.override_attrs (b.package_patch {
+        build_inputs = b.patch.array.append [b.dep.pkgconfig "libarchive"],
+        outputs = b.patch.array.append [diagnostics],
+        .. b.defaults.package_patch
+    }) package
+
+{
+    security,
+    distribution,
+}

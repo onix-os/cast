@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::io::Read;
 
 use xxhash_rust::xxh3::Xxh3;
@@ -18,6 +15,10 @@ where
 {
     pub fn new(reader: R, hasher: &'a mut Hasher) -> Self {
         Self { inner: reader, hasher }
+    }
+
+    pub fn into_inner(self) -> R {
+        self.inner
     }
 }
 

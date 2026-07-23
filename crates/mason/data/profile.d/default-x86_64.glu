@@ -1,0 +1,19 @@
+// SPDX-FileCopyrightText: 2024 AerynOS Developers
+// SPDX-License-Identifier: MPL-2.0
+
+let cast = import! cast.profile.v1
+
+cast.profiles [
+    cast.profile "default-x86_64" [
+        cast.repository.root_index_with {
+            id = "volatile",
+            description = cast.optional.some "AerynOS volatile stream (CDN)",
+            base_uri = "https://cdn.aerynos.dev/",
+            channel = cast.optional.some "main",
+            version = "stream/volatile",
+            arch = cast.optional.some "x86_64",
+            priority = cast.optional.some 0,
+            enabled = cast.optional.some cast.boolean.true,
+        },
+    ],
+]

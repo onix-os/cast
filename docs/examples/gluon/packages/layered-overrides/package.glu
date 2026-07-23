@@ -1,0 +1,26 @@
+let b = import! cast.package.v3
+let meson = import! cast.builders.meson.v2
+
+let base = b.mk_package (b.meta {
+    pname = "layered-proxy",
+    version = "3.6.0",
+    release = 2,
+    homepage = "https://example.invalid/layered-proxy",
+    license = ["BSD-2-Clause"],
+})
+
+{
+    builder = meson.builder {
+        flags = ["-Dtests=enabled"],
+        run_tests = b.boolean.true,
+    },
+    build_inputs = [b.dep.pkgconfig "zlib"],
+    tuning = [b.named "optimize" (b.tuning.config "speed")],
+    sources = [
+        b.source.archive
+            "https://example.invalid/layered-proxy-3.6.0.tar.xz"
+            "789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456",
+    ],
+    architectures = ["x86_64", "aarch64"],
+    .. base
+}

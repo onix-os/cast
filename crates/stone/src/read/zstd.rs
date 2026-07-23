@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::io::{BufReader, Read, Result};
 
 use zstd::stream::read::Decoder;
@@ -10,15 +7,19 @@ pub struct Zstd<R: Read> {
 }
 
 impl<R: Read> Zstd<R> {
-    pub fn new(reader: R) -> Result<Self> {
+    pub fn new(reader: R, max_window_log: u32) -> Result<Self> {
         let mut decoder = Decoder::new(reader)?;
-        decoder.window_log_max(31)?;
+        decoder.window_log_max(max_window_log)?;
 
         Ok(Self { decoder })
     }
 
     pub fn get_mut(&mut self) -> &mut R {
         self.decoder.get_mut().get_mut()
+    }
+
+    pub fn finish(self) -> BufReader<R> {
+        self.decoder.finish()
     }
 
     pub fn capacity(&self) -> usize {

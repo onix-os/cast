@@ -1,10 +1,8 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 pub(crate) mod ext;
 mod header;
 mod payload;
 mod read;
+pub mod relation;
 mod write;
 
 pub use self::header::{
@@ -19,7 +17,10 @@ pub use self::payload::{
 };
 #[cfg(feature = "ffi")]
 pub use self::read::StonePayloadContentReader;
-pub use self::read::{StoneDecodedPayload, StoneReadError, StoneReader, read, read_bytes};
+pub use self::read::{
+    StoneDecodeLimits, StoneDecodedPayload, StoneReadError, StoneReader, read, read_bytes, read_bytes_with_limits,
+    read_with_limits,
+};
 pub use self::write::{
     StoneContentWriter, StoneDigestWriter, StoneDigestWriterHasher, StoneWriteError, StoneWritePayload, StoneWriter,
 };
@@ -81,7 +82,7 @@ mod test {
         let rt_indices = rt_payloads.iter().find_map(StoneDecodedPayload::index).unwrap();
         let rt_content = rt_payloads.iter().find_map(StoneDecodedPayload::content).unwrap();
 
-        // Stored size / digest will be different since compression from boulder
+        // Stored size / digest will be different since compression from Cast
         // isn't identical & we don't add null terminated strings
         assert_eq!(rt_indices.header.plain_size, indices.header.plain_size);
         assert_eq!(rt_content.header.plain_size, content.header.plain_size);
@@ -99,7 +100,7 @@ mod test {
         assert_eq!(rt_content_buffer, content_buffer);
 
         println!(
-            "Boulder-D stone size => {}, stone-rs stone size => {}",
+            "reference stone size => {}, stone-rs stone size => {}",
             in_stone.len(),
             out_stone.len()
         );

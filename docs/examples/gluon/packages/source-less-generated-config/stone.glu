@@ -1,0 +1,45 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+printf '%s\n' \
+    'mode = "declarative"' \
+    'generation = 1' \
+    > userspace-defaults.conf
+install -Dm644 userspace-defaults.conf \
+    "${CAST_INSTALL_ROOT}${CAST_DATADIR}/userspace/defaults.conf"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let base = b.mk_package (b.meta {
+    pname = "userspace-defaults",
+    version = "1",
+    release = 1,
+    homepage = "https://example.invalid/userspace-defaults",
+    license = ["CC0-1.0"],
+})
+
+{
+    // The complete artifact is authored data. No source fetch or mutable
+    // package-directory input participates in its derivation.
+    builder = b.builder.custom phases [
+        b.dep.binary "bash",
+        b.dep.binary "install",
+    ],
+    outputs = [
+        b.output_with {
+            summary = b.optional.set "Declarative userspace defaults",
+            paths = [b.path.any "/usr/share/userspace/defaults.conf"],
+            .. b.output "out"
+        },
+    ],
+    architectures = ["native"],
+    .. base
+}

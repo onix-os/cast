@@ -1,0 +1,31 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cmake-hello",
+    version = "3.2.0",
+    release = 2,
+    homepage = "https://example.invalid/cmake-hello",
+    license = ["BSD-2-Clause"],
+})
+
+{
+    builder = cmake.builder {
+        flags = [
+            "-DBUILD_SHARED_LIBS=ON",
+            "-DBUILD_DOCUMENTATION=OFF",
+        ],
+        run_tests = b.boolean.true,
+    },
+    build_inputs = [
+        b.dep.pkgconfig "zlib",
+        b.dep.cmake "Threads",
+    ],
+    sources = [
+        b.source.archive
+            "https://example.invalid/cmake-hello-3.2.0.tar.gz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}

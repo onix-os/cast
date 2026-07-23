@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 
 #ifndef STONE_H
@@ -276,6 +275,10 @@ typedef struct StonePayloadHeader {
   StonePayloadKind kind;
   StonePayloadCompression compression;
 } StonePayloadHeader;
+/**
+ * Size of a payload header in the version-1 wire format.
+ */
+#define StonePayloadHeader_SIZE 32
 
 typedef struct StoneString {
   const uint8_t *buf;

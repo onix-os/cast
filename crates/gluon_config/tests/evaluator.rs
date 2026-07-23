@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::{env, path::Path, time::Duration};
 
 use fs_err as fs;
@@ -25,7 +22,25 @@ fn evaluates_a_typed_record_literal() {
         }
     );
     assert_eq!(evaluation.fingerprint.gluon_version, "0.18.3");
+    assert_eq!(evaluation.fingerprint.root_logical_name, "literal.glu");
     assert!(evaluation.fingerprint.imported_modules.is_empty());
+    assert_eq!(evaluation.fingerprint.validate(), Ok(()));
+}
+
+#[test]
+fn root_logical_name_participates_in_the_evaluation_identity() {
+    let evaluator = Evaluator::default();
+    let first = evaluator.evaluate::<i64>(&Source::new("first.glu", "42")).unwrap();
+    let renamed = evaluator.evaluate::<i64>(&Source::new("renamed.glu", "42")).unwrap();
+
+    assert_eq!(first.value, renamed.value);
+    assert_eq!(first.fingerprint.root_logical_name, "first.glu");
+    assert_eq!(renamed.fingerprint.root_logical_name, "renamed.glu");
+    assert_eq!(
+        first.fingerprint.root_source_sha256,
+        renamed.fingerprint.root_source_sha256
+    );
+    assert_ne!(first.fingerprint.sha256, renamed.fingerprint.sha256);
 }
 
 #[test]
@@ -65,6 +80,23 @@ fn fingerprints_source_and_explicit_inputs() {
 
     assert_eq!(first.fingerprint, repeated.fingerprint);
     assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
+}
+
+#[test]
+fn explicit_evaluation_inputs_are_bounded_before_fingerprinting() {
+    let limits = Limits {
+        max_explicit_input_bytes: 2,
+        ..Limits::default()
+    };
+    let evaluator = Evaluator::new(limits);
+    let source = Source::new("explicit-inputs.glu", "42");
+
+    assert_eq!(evaluator.evaluate_with_inputs::<i64>(&source, b"12").unwrap().value, 42);
+    let error = evaluator.evaluate_with_inputs::<i64>(&source, b"123").unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ExplicitInputSize));
+    assert_eq!(error.source_name.as_deref(), Some("explicit-inputs.glu"));
 }
 
 #[test]
@@ -116,6 +148,40 @@ fn recursive_evaluation_is_interrupted_by_the_watchdog() {
 
     assert_eq!(error.category, DiagnosticCategory::Limit);
     assert_eq!(error.limit, Some(LimitKind::Time));
+}
+
+#[test]
+fn zero_timeout_wins_before_import_discovery_and_parsing() {
+    let limits = Limits {
+        timeout: Duration::ZERO,
+        ..Limits::default()
+    };
+    // Without the total deadline this would be reported as a parse error
+    // before the old run_expr-only watchdog was even started.
+    let source = Source::new("malformed.glu", "let x = in import! \"missing.glu\"");
+
+    let error = Evaluator::new(limits).evaluate::<i64>(&source).unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::Time));
+    assert_eq!(error.source_name.as_deref(), Some("malformed.glu"));
+}
+
+#[test]
+fn evaluate_file_uses_one_deadline_for_loading_and_evaluation() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("config.glu"), "42").unwrap();
+    let limits = Limits {
+        timeout: Duration::ZERO,
+        ..Limits::default()
+    };
+    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+
+    let error = evaluator.evaluate_file::<i64>("config.glu").unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::Time));
+    assert_eq!(error.source_name.as_deref(), Some("config.glu"));
 }
 
 #[test]
@@ -206,10 +272,8 @@ fn nested_relative_imports_resolve_from_the_importing_module() {
 
 #[test]
 fn evaluates_an_explicit_embedded_module() {
-    let policy = ImportPolicy::new()
-        .with_embedded_module("boulder.answer", "42")
-        .unwrap();
-    let source = Source::new("root.glu", "let answer = import! boulder.answer\nanswer");
+    let policy = ImportPolicy::new().with_embedded_module("cast.answer", "42").unwrap();
+    let source = Source::new("root.glu", "let answer = import! cast.answer\nanswer");
 
     let evaluation = Evaluator::default()
         .with_import_policy(policy)
@@ -218,20 +282,45 @@ fn evaluates_an_explicit_embedded_module() {
 
     assert_eq!(evaluation.value, 42);
     assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
+    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "cast.answer");
+}
+
+#[test]
+fn embedded_module_size_is_bounded_before_evaluation() {
+    let limits = Limits {
+        max_imported_file_bytes: 2,
+        ..Limits::default()
+    };
+    let source = Source::new("root.glu", "import! cast.answer");
+
+    let exact = ImportPolicy::new().with_embedded_module("cast.answer", "42").unwrap();
     assert_eq!(
-        evaluation.fingerprint.imported_modules[0].logical_name,
-        "boulder.answer"
+        Evaluator::new(limits)
+            .with_import_policy(exact)
+            .evaluate::<i64>(&source)
+            .unwrap()
+            .value,
+        42
     );
+
+    let oversized = ImportPolicy::new().with_embedded_module("cast.answer", "420").unwrap();
+    let error = Evaluator::new(limits)
+        .with_import_policy(oversized)
+        .evaluate::<i64>(&source)
+        .unwrap_err();
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::ImportedFileSize));
+    assert_eq!(error.source_name.as_deref(), Some("cast.answer"));
 }
 
 #[test]
 fn duplicate_embedded_module_is_rejected_without_replacing_the_first() {
     let mut policy = ImportPolicy::new();
-    policy.insert_embedded_module("moss.value", "41").unwrap();
-    let error = policy.insert_embedded_module("moss.value", "42").unwrap_err();
+    policy.insert_embedded_module("cast.value", "41").unwrap();
+    let error = policy.insert_embedded_module("cast.value", "42").unwrap_err();
     let evaluation = Evaluator::default()
         .with_import_policy(policy)
-        .evaluate::<i64>(&Source::new("root.glu", "import! moss.value"))
+        .evaluate::<i64>(&Source::new("root.glu", "import! cast.value"))
         .unwrap();
 
     assert_eq!(error.category, DiagnosticCategory::Import);
@@ -265,7 +354,7 @@ fn parent_traversal_and_absolute_imports_are_rejected() {
 
 #[cfg(unix)]
 #[test]
-fn symlink_escape_is_rejected() {
+fn symlink_escape_is_rejected_without_following_the_target() {
     use std::os::unix::fs::symlink;
 
     let directory = tempfile::tempdir().unwrap();
@@ -279,7 +368,8 @@ fn symlink_escape_is_rejected() {
         .unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Import);
-    assert!(error.message.contains("escapes"));
+    assert_eq!(error.source_name.as_deref(), Some("escape.glu"));
+    assert!(error.message.contains("cannot be loaded"));
 }
 
 #[test]
@@ -420,23 +510,20 @@ fn import_aliases_share_a_stable_logical_identity() {
 
 #[cfg(unix)]
 #[test]
-fn symlink_aliases_share_the_canonical_logical_identity() {
+fn symlink_imports_are_rejected_instead_of_becoming_aliases() {
     use std::os::unix::fs::symlink;
 
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("answer.glu"), "42").unwrap();
     symlink("answer.glu", directory.path().join("alias.glu")).unwrap();
     let evaluator = rooted_evaluator(directory.path());
-    let source = Source::new(
-        "root.glu",
-        "let direct = import! \"answer.glu\"\nlet alias = import! \"alias.glu\"\nalias",
-    );
+    let source = Source::new("root.glu", "import! \"alias.glu\"");
 
-    let evaluation = evaluator.evaluate::<i64>(&source).unwrap();
+    let error = evaluator.evaluate::<i64>(&source).unwrap_err();
 
-    assert_eq!(evaluation.value, 42);
-    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
-    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "answer.glu");
+    assert_eq!(error.category, DiagnosticCategory::Import);
+    assert_eq!(error.source_name.as_deref(), Some("alias.glu"));
+    assert!(error.message.contains("cannot be loaded"));
 }
 
 fn rooted_evaluator(path: &Path) -> Evaluator {

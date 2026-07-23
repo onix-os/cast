@@ -1,0 +1,153 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let pname = "northstar-agent"
+
+let root_output = b.output_with {
+    summary = b.optional.set "Northstar system telemetry agent",
+    description = b.optional.set "Daemon, command-line client, service unit, and default configuration.",
+    runtime_inputs = [
+        b.dep.system_binary "useradd",
+        b.dep.soname "libssl.so.3",
+    ],
+    paths = [
+        b.path.exe "/usr/bin/northstarctl",
+        b.path.exe "/usr/sbin/northstar-agent",
+        b.path.any "/usr/lib/systemd/system/northstar-agent.service",
+        b.path.any "/usr/share/defaults/northstar-agent",
+    ],
+    conflicts = [b.dep.package "northstar-agent-legacy"],
+    .. b.output "out"
+}
+
+let library_output = b.output_with {
+    summary = b.optional.set "Northstar client runtime library",
+    paths = [b.path.any "/usr/lib/libnorthstar.so.*"],
+    .. b.output "libs"
+}
+
+let development_output = b.output_with {
+    summary = b.optional.set "Northstar client development files",
+    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
+    paths = [
+        b.path.any "/usr/include/northstar",
+        b.path.any "/usr/lib/libnorthstar.so",
+        b.path.any "/usr/lib/cmake/Northstar",
+        b.path.any "/usr/lib/pkgconfig/northstar.pc",
+    ],
+    .. b.output "devel"
+}
+
+let documentation_output = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Northstar operator documentation",
+    paths = [
+        b.path.any "/usr/share/doc/northstar-agent",
+        b.path.any "/usr/share/man/man5/northstar-agent.conf.5",
+        b.path.any "/usr/share/man/man8/northstar-agent.8",
+    ],
+    .. b.output "docs"
+}
+
+let base = b.mk_package (b.meta {
+    pname,
+    version = "12.4.0",
+    release = 4,
+    homepage = "https://example.invalid/northstar-agent",
+    license = ["Apache-2.0"],
+})
+
+{
+    builder = cmake.builder {
+        flags = [
+            "-DBUILD_SHARED_LIBS=ON",
+            "-DENABLE_CLIENT=ON",
+            "-DENABLE_DAEMON=ON",
+            "-DENABLE_SYSTEMD=ON",
+            "-DUSE_BUNDLED_PROTOBUF=OFF",
+        ],
+        run_tests = b.boolean.true,
+    },
+    hooks = b.hooks {
+        pre_setup = [
+            b.step.run (b.program.binary "patch") ["-p1", "-i", "packaging/reproducible-build.patch"],
+        ],
+        pre_check = [
+            b.step.shell r#"test -d "${CAST_BUILDER_DIR}"
+test -f "${CAST_BUILDER_DIR}/CMakeCache.txt""#,
+        ],
+        post_install = [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [
+                    b.program.binary "install",
+                    b.program.binary "ln",
+                ],
+                script = r#"
+install -Dm644 packaging/northstar-agent.service "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/systemd/system/northstar-agent.service"
+install -Dm644 packaging/northstar-agent.conf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/defaults/northstar-agent/northstar-agent.conf"
+ln -s northstarctl "${CAST_INSTALL_ROOT}${CAST_BINDIR}/northstar"
+"#,
+            },
+        ],
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [
+        b.dep.binary "patch",
+        b.dep.binary "pkgconf",
+        b.dep.binary "protoc",
+    ],
+    build_inputs = [
+        b.dep.cmake "Protobuf",
+        b.dep.pkgconfig "libsystemd",
+        b.dep.pkgconfig "openssl",
+        b.dep.pkgconfig "zlib",
+    ],
+    check_inputs = [
+        b.dep.binary "dbus-run-session",
+        b.dep.binary "jq",
+    ],
+    outputs = [
+        root_output,
+        library_output,
+        development_output,
+        documentation_output,
+    ],
+    options = b.options {
+        toolchain = b.toolchain.llvm,
+        cspgo = b.boolean.false,
+        samplepgo = b.boolean.false,
+        debug = b.boolean.false,
+        strip = b.boolean.true,
+        networking = b.boolean.false,
+        compressman = b.boolean.true,
+        lastrip = b.boolean.true,
+    },
+    tuning = [
+        b.named "harden" b.tuning.enable,
+        b.named "lto" (b.tuning.config "thin"),
+        b.named "optimize" (b.tuning.config "speed"),
+    ],
+    sources = [
+        b.source.archive_with {
+            url = "https://example.invalid/northstar-agent-12.4.0.tar.xz",
+            hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            rename = b.optional.unset,
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "northstar-agent",
+        },
+        b.source.archive_with {
+            url = "https://example.invalid/northstar-protocol-2026-04.dat",
+            hash = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            rename = b.optional.set "northstar-protocol.dat",
+            strip_dirs = b.optional.unset,
+            unpack = b.boolean.false,
+            unpack_dir = b.optional.unset,
+        },
+    ],
+    architectures = ["x86_64", "aarch64"],
+    mold = b.boolean.true,
+    .. base
+}

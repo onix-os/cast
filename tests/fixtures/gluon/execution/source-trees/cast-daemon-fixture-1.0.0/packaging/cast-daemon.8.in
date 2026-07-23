@@ -1,0 +1,12 @@
+.TH CAST-DAEMON-FIXTURE 8 "2023-11-14" "cast-daemon-fixture @PROJECT_VERSION@"
+.SH NAME
+cast-daemon-fixture \- validate the generated daemon fixture configuration
+.SH SYNOPSIS
+.B cast-daemon-fixture
+.BR --self-test
+.br
+.B cast-daemon-fixture
+.BR --check-config " PATH"
+.SH DESCRIPTION
+Exercises a compiled daemon-like executable together with a generated default
+configuration, systemd service unit, and administrator manual page.

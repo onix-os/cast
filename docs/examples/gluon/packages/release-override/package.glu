@@ -1,0 +1,26 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "override-release",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://example.invalid/override-release",
+    license = ["MIT"],
+})
+
+{
+    builder = cmake.default,
+    sources = [
+        b.source.archive_with {
+            url = "https://example.invalid/override-release-1.0.0.tar.xz",
+            hash = "3333333333333333333333333333333333333333333333333333333333333333",
+            rename = b.optional.set "override-release-1.0.0.tar.xz",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "override-release-1.0.0",
+        },
+    ],
+    architectures = ["native"],
+    .. base
+}

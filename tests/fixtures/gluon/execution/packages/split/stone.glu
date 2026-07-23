@@ -1,0 +1,72 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let pname = "cast-split-fixture"
+
+let root = b.output_with {
+    summary = b.optional.set "Split fixture executable and manual page",
+    paths = [
+        b.path.exe "/usr/bin/cast-split-fixture",
+        b.path.any "/usr/share/man/man1",
+    ],
+    .. b.output "out"
+}
+
+let libraries = b.output_with {
+    summary = b.optional.set "Split fixture runtime library",
+    paths = [b.path.any "/usr/lib/libcast-split.so.*"],
+    .. b.output "libs"
+}
+
+let development = b.output_with {
+    summary = b.optional.set "Split fixture development files",
+    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
+    paths = [
+        b.path.any "/usr/include/cast-split",
+        b.path.any "/usr/lib/libcast-split.so",
+        b.path.any "/usr/lib/pkgconfig/cast-split.pc",
+    ],
+    .. b.output "devel"
+}
+
+let documentation = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Split fixture documentation",
+    paths = [b.path.any "/usr/share/doc/cast-split-fixture"],
+    .. b.output "docs"
+}
+
+let debugging = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Split fixture debugging symbols",
+    paths = [b.path.any "/usr/lib/debug"],
+    .. b.output "dbginfo"
+}
+
+let base = b.mk_package (b.meta {
+    pname,
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-split-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = cmake.builder {
+        flags = ["-DCMAKE_INSTALL_DOCDIR=/usr/share/doc/cast-split-fixture"],
+        run_tests = b.boolean.true,
+    },
+    outputs = [root, libraries, development, documentation, debugging],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-split-fixture-1.0.0.tar",
+            hash = "bd78efc34e46566f967ae963c895c1e7d9de45da7d7022c5c4f6683425ae567d",
+            rename = b.optional.set "cast-split-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-split-fixture",
+        },
+    ],
+    .. base
+}

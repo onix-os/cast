@@ -1,0 +1,51 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "vector-search",
+    version = "5.0.0",
+    release = 1,
+    homepage = "https://example.invalid/vector-search",
+    license = ["Apache-2.0"],
+})
+
+{
+    builder = cmake.builder {
+        flags = [
+            "-DBUILD_BENCHMARKS=ON",
+            "-DBUILD_TESTING=ON",
+        ],
+        run_tests = b.boolean.true,
+    },
+    // A non-empty workload makes profile generation part of the structural
+    // phase graph. The local just-built executable trains against checked-in
+    // corpus data without gaining network access.
+    hooks = b.hooks {
+        pre_workload = [
+            b.step.run_built
+                (b.program.built "aerynos-builddir/vector-search")
+                ["--train", "training/corpus.txt"],
+        ],
+        .. b.defaults.hooks
+    },
+    options = b.options {
+        cspgo = b.boolean.true,
+        samplepgo = b.boolean.true,
+        debug = b.boolean.false,
+        .. b.defaults.options
+    },
+    tuning = [
+        b.named "harden" b.tuning.enable,
+        b.named "lto" (b.tuning.config "thin"),
+        b.named "optimize" (b.tuning.config "speed"),
+    ],
+    sources = [
+        b.source.archive
+            "https://example.invalid/vector-search-5.0.0.tar.xz"
+            "56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
+    ],
+    architectures = ["x86_64", "aarch64"],
+    mold = b.boolean.true,
+    .. base
+}

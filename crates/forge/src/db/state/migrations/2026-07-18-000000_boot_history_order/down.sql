@@ -1,0 +1,1 @@
+DROP INDEX state_boot_history_created_id;

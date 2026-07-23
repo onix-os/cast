@@ -1,0 +1,6 @@
+let runtime = import! "./runtime.glu"
+let make_package = import! "./package.glu"
+
+// The root chooses one complete runtime environment. Changing a provider or
+// path changes the evaluated package and frozen derivation together.
+make_package runtime

@@ -1,5 +1,0 @@
-# SPDX-FileCopyrightText: 2025 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
-
-edition = "2024"
-max_width = 120

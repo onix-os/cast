@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Format-neutral trigger data transfer objects and domain conversion.
 
 // `fnmatch::Pattern` contains a regex cache with interior mutability, but its

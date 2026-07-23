@@ -1,0 +1,6 @@
+let roles = import! "./roles.glu"
+let make_role = import! "./package.glu"
+
+// NixOS-style system roles are the inspiration, but selection is an ordinary
+// typed function call rather than implicit module merging.
+make_role roles.server

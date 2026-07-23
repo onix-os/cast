@@ -1,0 +1,30 @@
+
+let b = import! cast.package.v3
+let cargo = import! cast.builders.cargo.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-cargo-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-cargo-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = cargo.builder {
+        features = [],
+        binaries = ["cast-cargo-fixture"],
+        run_tests = b.boolean.true,
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-cargo-fixture-1.0.0.tar",
+            hash = "a6ced421d2b8a8d319abc46c6c6d34e65bcf4fdf87a26778e3a450f4ed23a5a0",
+            rename = b.optional.set "cast-cargo-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-cargo-fixture",
+        },
+    ],
+    .. base
+}

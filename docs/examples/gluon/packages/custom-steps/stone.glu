@@ -1,0 +1,59 @@
+
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+    ],
+    build = b.phase [
+        b.step.run
+            (b.program.package (b.package_ref "schema-compiler") "/opt/schema-compiler/bin/schema-compile")
+            ["--input", "schema", "--output", "build/generated.c"],
+        b.step.run (b.program.binary "cc") ["build/generated.c", "-o", "build/custom-tool"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [
+                b.program.binary "install",
+                b.program.binary "ln",
+            ],
+            script = r#"
+install -Dm755 build/custom-tool "${CAST_INSTALL_ROOT}${CAST_BINDIR}/custom-tool"
+ln -s custom-tool "${CAST_INSTALL_ROOT}${CAST_BINDIR}/custom-tool-compat"
+"#,
+        },
+    ],
+    check = b.phase [
+        b.step.run_built
+            (b.program.built "build/custom-tool")
+            [],
+    ],
+    .. b.defaults.scripts
+}
+
+let base = b.mk_package (b.meta {
+    pname = "custom-steps",
+    version = "1.1.0",
+    release = 1,
+    homepage = "https://example.invalid/custom-steps",
+    license = ["ISC"],
+})
+
+{
+    // External executables are typed provider capabilities; the generated ELF
+    // is a distinct native build-tree executable. Scripts use Shell explicitly.
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.package "schema-compiler",
+        b.dep.binary "cc",
+        b.dep.binary "install",
+        b.dep.binary "ln",
+    ],
+    sources = [
+        b.source.archive
+            "https://example.invalid/custom-steps-1.1.0.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}

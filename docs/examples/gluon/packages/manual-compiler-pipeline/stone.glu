@@ -1,0 +1,109 @@
+
+let b = import! cast.package.v3
+
+let pname = "vector-math"
+
+// This builder spells out preprocessing, compilation, linking, validation,
+// and installation. No implicit build-system probe decides which tools run.
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+    ],
+    build = b.phase [
+        b.step.run
+            (b.program.binary "cc")
+            ["-E", "-I", "include", "src/vector.c", "-o", "build/vector.i"],
+        b.step.run
+            (b.program.binary "cc")
+            ["-fPIC", "-O2", "-c", "build/vector.i", "-o", "build/vector.o"],
+        b.step.run
+            (b.program.binary "cc")
+            [
+                "-shared",
+                "-Wl,-soname,libvector-math.so.1",
+                "build/vector.o",
+                "-o",
+                "build/libvector-math.so.1.0.0",
+            ],
+        b.step.run
+            (b.program.binary "cc")
+            [
+                "-I",
+                "include",
+                "tools/vector-calc.c",
+                "build/libvector-math.so.1.0.0",
+                "-o",
+                "build/vector-calc",
+            ],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [
+                b.program.binary "install",
+                b.program.binary "ln",
+            ],
+            script = r#"
+install -Dm755 build/vector-calc "${CAST_INSTALL_ROOT}${CAST_BINDIR}/vector-calc"
+install -Dm755 build/libvector-math.so.1.0.0 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so.1.0.0"
+ln -s libvector-math.so.1.0.0 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so.1"
+ln -s libvector-math.so.1 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libvector-math.so"
+install -Dm644 include/vector-math.h "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-math/vector-math.h"
+"#,
+        },
+    ],
+    check = b.phase [
+        b.step.run (b.program.binary "test") ["-s", "build/libvector-math.so.1.0.0"],
+        b.step.run (b.program.binary "test") ["-x", "build/vector-calc"],
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Vector calculation command-line tool",
+    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
+    paths = [b.path.exe "/usr/bin/vector-calc"],
+    .. b.output "out"
+}
+
+let libraries = b.output_with {
+    summary = b.optional.set "Vector math runtime library",
+    paths = [b.path.any "/usr/lib/libvector-math.so.*"],
+    .. b.output "libs"
+}
+
+let development = b.output_with {
+    summary = b.optional.set "Vector math headers and link-time library",
+    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
+    paths = [
+        b.path.any "/usr/include/vector-math",
+        b.path.symlink "/usr/lib/libvector-math.so",
+    ],
+    .. b.output "devel"
+}
+
+let base = b.mk_package (b.meta {
+    pname,
+    version = "3.2.0",
+    release = 1,
+    homepage = "https://example.invalid/vector-math",
+    license = ["BSD-2-Clause"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.binary "cc",
+        b.dep.binary "install",
+        b.dep.binary "ln",
+        b.dep.binary "test",
+    ],
+    outputs = [root, libraries, development],
+    sources = [
+        b.source.archive
+            "https://example.invalid/vector-math-3.2.0.tar.xz"
+            "6789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345",
+    ],
+    architectures = ["x86_64", "aarch64"],
+    .. base
+}

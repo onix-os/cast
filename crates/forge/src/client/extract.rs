@@ -1,0 +1,199 @@
+// SPDX-FileCopyrightText: 2026 AerynOS Developers
+
+use std::{
+    io::{self, Read, Seek, SeekFrom},
+    os::unix::fs::PermissionsExt as _,
+    path::{Path, PathBuf},
+};
+
+use fs_err::{self as fs, File};
+use stone::{StoneDecodedPayload, StoneReadError};
+use thiserror::Error;
+use tui::{ProgressBar, ProgressStyle};
+
+use crate::{
+    Installation,
+    client::{self, cache::asset_path, external_materialization::ExternalMaterializationAdmission},
+    installation,
+    linux_fs::{normalize_new_directory, require_named_directory},
+    package::{self, MissingMetaFieldError},
+    util,
+};
+
+pub fn extract(stones: Vec<&PathBuf>, output_dir: &Path) -> Result<(), Error> {
+    util::ensure_dir_exists(output_dir)?;
+    let output_dir = output_dir.canonicalize()?;
+
+    // Extraction needs Forge's asset materializer, not an installation rooted
+    // in the caller's working tree. Independent-copy materialization has no
+    // same-filesystem requirement, so keep transient cache authority in the
+    // default private tempfile namespace rather than touching output before
+    // its per-package destination has been admitted.
+    let temporary = tempfile::Builder::new()
+        .prefix(".cast-extract-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let temporary_anchor = normalize_new_directory(temporary.path(), 0o700)?;
+    let installation = Installation::open_frozen(temporary.path(), None)?;
+    require_named_directory(temporary.path(), &temporary_anchor, 0o700)?;
+
+    for path in stones {
+        let rdr = File::open(path).map_err(Error::IO)?;
+        let mut reader = stone::read(rdr).map_err(Error::Format)?;
+
+        let payloads = reader.payloads()?.collect::<Result<Vec<_>, _>>()?;
+        let content = payloads.iter().find_map(StoneDecodedPayload::content);
+        let layouts = payloads.iter().find_map(StoneDecodedPayload::layout);
+        let meta = payloads
+            .iter()
+            .find_map(StoneDecodedPayload::meta)
+            .ok_or(Error::MissingMeta)?;
+
+        let Some(layouts) = layouts else {
+            println!("{path:?}: No layout records found, skipping.");
+            continue;
+        };
+
+        let pkg = package::Meta::from_stone_payload(&meta.body).map_err(Error::MalformedMeta)?;
+        let pkg_id = package::Id::from(pkg.id());
+        let extraction_root = output_dir.join(pkg_id.to_string());
+
+        println!("Extract: {path:?} -> {extraction_root:?}");
+
+        // Admit the exact external destination before any recursive cleanup.
+        // Extraction never owns a nonempty tree or another Cast topology.
+        let extraction_target = ExternalMaterializationAdmission::admit(&installation, &extraction_root)?;
+
+        fs::create_dir_all(installation.assets_path("v2"))?;
+
+        let content_dir = installation.cache_path("content");
+        let content_path = content_dir.join(pkg_id.to_string());
+
+        fs::create_dir_all(&content_dir)?;
+
+        if let Some(content) = content {
+            let mut content_file = File::options()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(&content_path)?;
+
+            let _progress = ProgressBar::new(content.header.plain_size).with_style(
+                ProgressStyle::with_template("|{bar:20.cyan/bue}| {percent}%")
+                    .unwrap()
+                    .progress_chars("■≡=- "),
+            );
+            reader.unpack_content(content, &mut content_file)?;
+
+            // Extract all indices from the `.stoneContent` into hash-indexed unique files
+            payloads
+                .iter()
+                .filter_map(StoneDecodedPayload::index)
+                .flat_map(|p| &p.body)
+                .map(|idx| {
+                    let path = asset_path(&installation, &format!("{:02x}", idx.digest));
+
+                    // This asset already exists
+                    if path.exists() {
+                        return Ok(());
+                    }
+                    // Create parent dir
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+
+                    // Split file reader over index range
+                    let mut file = &content_file;
+                    file.seek(SeekFrom::Start(idx.start))?;
+                    let mut split_file = (&mut file).take(idx.end - idx.start);
+
+                    let mut output = File::create(&path)?;
+
+                    io::copy(&mut split_file, &mut output)?;
+
+                    Ok(())
+                })
+                .collect::<Result<Vec<_>, Error>>()?;
+
+            fs::remove_file(&content_path)?;
+        }
+
+        let records = layouts
+            .body
+            .clone()
+            .into_iter()
+            .map(|layout| (pkg_id.clone(), layout))
+            .collect::<Vec<_>>();
+        let vfs = client::vfs(records)?;
+
+        client::blit_root_from_admission(&installation, &vfs, &extraction_target)?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("client")]
+    Client(#[from] client::Error),
+
+    #[error("Missing metadata")]
+    MissingMeta,
+
+    #[error("malformed meta")]
+    MalformedMeta(#[from] MissingMetaFieldError),
+
+    #[error("io")]
+    IO(#[from] io::Error),
+
+    #[error("stone format")]
+    Format(#[from] StoneReadError),
+
+    #[error("installation")]
+    Installation(#[from] installation::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{os::unix::fs::PermissionsExt as _, process::Command};
+
+    use super::*;
+
+    #[test]
+    fn extraction_uses_an_output_local_private_installation() {
+        const CHILD: &str = "CAST_EXTRACT_PRIVATE_INSTALLATION_CHILD";
+        const TEST: &str = "client::extract::tests::extraction_uses_an_output_local_private_installation";
+
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = PathBuf::from(root);
+            let work = root.join("group-writable-worktree");
+            let output = root.join("output");
+            fs::create_dir(&work).unwrap();
+            fs::set_permissions(&work, std::fs::Permissions::from_mode(0o775)).unwrap();
+            fs::create_dir(&output).unwrap();
+            std::env::set_current_dir(&work).unwrap();
+
+            extract(Vec::new(), &output).unwrap();
+
+            assert!(!work.join(".cast").exists());
+            assert!(fs::read_dir(&output).unwrap().next().is_none());
+            return;
+        }
+
+        let temporary = tempfile::tempdir().unwrap();
+        let output = Command::new(std::env::current_exe().unwrap())
+            .arg(TEST)
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(CHILD, temporary.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "private extraction child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

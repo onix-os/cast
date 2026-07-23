@@ -1,0 +1,16 @@
+let b = import! cast.package.v3
+
+let generator_package = b.package_ref "packet-schema-tools"
+let generator_output = b.output_ref generator_package "compiler"
+
+// Build-platform programs and target-platform libraries are different typed
+// capabilities. The package factory does not discover either through PATH or
+// the host filesystem.
+{
+    generator_dependency = b.dep.output generator_package "compiler",
+    generator_program = b.program.output
+        generator_output
+        "/usr/libexec/packet-schema/packet-codegen",
+    target_library = b.dep.pkgconfig "packet-runtime",
+    target_runtime = b.dep.soname "libpacket-runtime.so.1",
+}

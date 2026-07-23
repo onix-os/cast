@@ -1,0 +1,30 @@
+
+let b = import! cast.package.v3
+
+let defaults = {
+    flags = [],
+    run_tests = b.boolean.true,
+}
+
+let builder = \config -> b.builder.structured {
+    // CMake and CTest are bound by the selected policy commands. Ninja is an
+    // indirect generator dependency, and its hardcoded /bin/sh interface must
+    // be resolved explicitly in the hermetic root.
+    required_tools = [b.dep.binary "sh", b.dep.binary "ninja"],
+    environment = [b.environment.cmake],
+    phases = b.scripts {
+        setup = b.phase [b.step.cmake_configure config.flags],
+        build = b.phase [b.step.cmake_build],
+        install = b.phase [b.step.cmake_install],
+        check = b.phase (b.boolean.when config.run_tests [b.step.cmake_test]),
+        .. b.defaults.scripts
+    },
+    supported_hooks = b.hook_support.all,
+}
+
+{
+    abi_version = 2,
+    defaults,
+    builder,
+    default = builder defaults,
+}

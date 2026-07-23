@@ -1,0 +1,35 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+// Platform policy and concrete dependency capabilities are ordinary inputs to
+// a pure factory. A repository can reuse this function with another explicit
+// platform record without changing the package ABI.
+\inputs ->
+    let base = b.mk_package (b.meta {
+        pname = "relay-engine",
+        version = "6.1.0",
+        release = 1,
+        homepage = "https://example.invalid/relay-engine",
+        license = ["Apache-2.0"],
+    })
+    {
+        builder = cmake.builder {
+            flags = inputs.platform.cmake_flags,
+            run_tests = b.boolean.true,
+        },
+        native_build_inputs = [inputs.dependencies.code_generator],
+        build_inputs = [
+            inputs.dependencies.compression,
+            inputs.dependencies.crypto,
+            inputs.platform.event_backend,
+        ],
+        sources = [
+            b.source.archive
+                "https://example.invalid/relay-engine-6.1.0.tar.xz"
+                "bcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789a",
+        ],
+        architectures = inputs.platform.architectures,
+        tuning = inputs.platform.tuning,
+        .. base
+    }

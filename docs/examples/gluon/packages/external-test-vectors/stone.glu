@@ -1,0 +1,4 @@
+let package = import! "./package.glu"
+let sources = import! "./sources.glu"
+
+package sources

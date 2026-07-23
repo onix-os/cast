@@ -1,0 +1,28 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+// Feature switches are typed values consumed by an ordinary pure function.
+// They can select complete list fields without stringly conditional syntax.
+\features ->
+    let base = b.mk_package (b.meta {
+        pname = "conditional-viewer",
+        version = "1.5.0",
+        release = 1,
+        homepage = "https://example.invalid/conditional-viewer",
+        license = ["MIT"],
+    })
+    {
+        builder = cmake.builder {
+            flags = b.boolean.when features.documentation ["-DBUILD_DOCUMENTATION=ON"],
+            run_tests = features.tests,
+        },
+        build_inputs = b.boolean.when features.tls [b.dep.pkgconfig "openssl"],
+        check_inputs = b.boolean.when features.tests [b.dep.binary "xvfb-run"],
+        sources = [
+            b.source.archive
+                "https://example.invalid/conditional-viewer-1.5.0.tar.xz"
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ],
+        .. base
+    }

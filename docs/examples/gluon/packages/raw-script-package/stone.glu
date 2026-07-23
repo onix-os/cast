@@ -1,0 +1,57 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "sh",
+            declared_programs = [b.program.binary "bash"],
+            script = r#"bash -n "${CAST_SOURCE_DIR}/net-audit""#,
+        },
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm755 "${CAST_SOURCE_DIR}/net-audit" "${CAST_INSTALL_ROOT}${CAST_BINDIR}/net-audit""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Small network-audit command",
+    runtime_inputs = [b.dep.binary "bash"],
+    paths = [b.path.exe "/usr/bin/net-audit"],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "net-audit",
+    version = "3.1.0",
+    release = 1,
+    homepage = "https://example.invalid/net-audit",
+    license = ["ISC"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "sh",
+        b.dep.binary "bash",
+        b.dep.binary "install",
+    ],
+    outputs = [root],
+    sources = [
+        // A single fetched file is locked and renamed but never interpreted as
+        // an archive. Frozen preparation therefore has no extraction step.
+        b.source.archive_with {
+            url = "https://example.invalid/releases/net-audit-3.1.0",
+            hash = "789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456",
+            rename = b.optional.set "net-audit",
+            strip_dirs = b.optional.unset,
+            unpack = b.boolean.false,
+            unpack_dir = b.optional.unset,
+        },
+    ],
+    architectures = ["native"],
+    .. base
+}

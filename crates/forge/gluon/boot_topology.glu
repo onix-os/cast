@@ -1,0 +1,33 @@
+// Pure, embedded API for machine-local boot-topology intent.
+
+type PartitionSelector = {
+    partuuid: String,
+    mount_point: String,
+}
+
+type BootTarget =
+    | AliasEsp
+    | DistinctXbootldr PartitionSelector
+
+type BootTopologyIntent = {
+    esp: PartitionSelector,
+    boot: BootTarget,
+}
+
+let aliases_esp: PartitionSelector -> BootTopologyIntent = \esp -> {
+    esp,
+    boot = AliasEsp,
+}
+
+let distinct: PartitionSelector -> PartitionSelector -> BootTopologyIntent = \esp xbootldr -> {
+    esp,
+    boot = DistinctXbootldr xbootldr,
+}
+
+{
+    abi_version = 2,
+    boot_topology = {
+        aliases_esp,
+        distinct,
+    },
+}

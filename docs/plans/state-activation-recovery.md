@@ -1,0 +1,1000 @@
+# Crash-Recoverable State Activation
+
+[Back to the canonical package-function plan](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
+
+This hub and its linked continuations own the detailed Phase 11 recovery
+contract and its accumulated implementation evidence. Phase order, global
+constraints, validation gates, completion, and repository closure remain
+authoritative in `PLAN.md`.
+
+Detailed evidence is divided by authority boundary:
+
+- this hub retains the journal, client-opening, namespace, tree-identity, and
+  pre-journal foundations;
+- the [durable coordinator plan](state-activation-coordinator.md) owns forward
+  transition sequencing and one-shot effects; and
+- the [startup-reconciliation plan](state-activation-startup-reconciliation.md)
+  owns recovery admission, rollback execution, and interruption evidence.
+
+## Phase 11: Make state activation crash-recoverable
+
+An atomic `/usr` exchange prevents a partially visible switch, but it does not
+by itself explain an interrupted transaction after reboot. Stateful activation
+must therefore persist intent before every irreversible effect, authenticate
+the exact filesystem trees involved, and recover from durable evidence rather
+than from in-memory flags or mutable pathnames. This work preserves the
+existing Stone state model, merged-/usr layout, container-trigger boundary,
+and instant rollback mechanism; it hardens their failure semantics.
+
+### Journal and client-opening foundations
+
+- [x] Give each fresh-state database row a unique, canonical transition ID and
+  provide exact `(state ID, transition ID)` lookup, clear, and removal
+  operations. Allocation and its package selections commit in one SQLite
+  transaction.
+- [x] Publish the five merged-/usr root links without replacing foreign names.
+  Anchor inspection to the opened root, accept only the exact raw-byte symlink
+  targets, retain inode witnesses through the directory fsync, and reject
+  final-name, staging-name, and root-replacement races.
+- [x] Land a versioned, bounded, checksummed transition-journal codec and an
+  owner-private descriptor-relative store. Canonical creation, advancement,
+  and deletion must be conditional, process- and thread-serialized, atomic,
+  fsync-ordered, crash-reopenable, and locked by an exact full-frame v1 golden
+  fixture. The payload binds permanent per-tree tokens to a creation boot and
+  mount-namespace epoch plus boot-scoped device, inode, and mount witnesses;
+  those runtime witnesses are historical evidence after an epoch change, not
+  durable identity. These journal and state operations retain Linux 5.6 as
+  their descriptor-safe baseline; full frozen execution separately requires
+  Linux x86_64 5.14 or newer. Restrictive-umask repair may use only an
+  authenticated procfs alias to the retained descriptor.
+- [x] Add the exact record-bound terminal-delete and writer-reopen foundations. Accepted
+  commit `8f391985` consumes one same-store non-`Clone` record-inode binding
+  under the retained operation and journal locks, authenticates the retained
+  Cast/journal/lock/inventory/record, and uses `RENAME_NOREPLACE` to detach the
+  public winner to one fresh collision-detecting private name. Only the exact
+  retained inode and framed record may reach the sole private unlink; the
+  successful path performs one journal-directory sync. Detach, unlink-report,
+  and sync ambiguity reconcile only authenticated exact source or absence,
+  without retrying detach or unlink, while same-byte foreign winners remain
+  untouched. The name is not secret: after final private validation there is no
+  optional hook or work before unlink, but an uncooperative same-credential
+  writer in that syscall window is outside this cooperative boundary. Accepted
+  commit `0a91c2ed` handles the exact interrupted-detach state on writer reopen.
+  After exact public journal-directory and lock authentication, it recognizes
+  only one canonical-form `.state-transition.delete-*` regular file that is
+  owner-private, single-link, mode `0600`, bounded, decodable, and terminal. It
+  retains the complete frame and inode, double-observes the exact lock-plus-
+  record inventory, restores that inode once to the canonical name with
+  `RENAME_NOREPLACE`, and performs one directory sync. Restore-report and sync
+  ambiguity reconcile the exact residue or canonical state without retry.
+  Foreign, malformed, unsafe, corrupt, nonterminal, multiple, or canonical-
+  coexisting evidence fails closed and remains untouched; read-only inspection
+  still rejects residue. The final compare/rename window retains the cooperative
+  same-credential limitation. The gates pass 13/13 focused recovery, 10/10
+  bound-delete, and 110/110 direct-journal tests. By itself this was fresh-
+  writer-reopen and fault-race store evidence, not an operation-finalizer or
+  process-death proof; accepted commit `39456719` later exercises the path under
+  same-boot `SIGKILL`, without claiming reboot or power-loss durability.
+- [ ] Open mutable system clients in recovery order: installation lock,
+  databases, journal lock, journal reconciliation, orphan-token audit, strict
+  live-state discovery, then repositories and the active registry. Frozen
+  clients skip system recovery. Read-only clients must take a shared,
+  non-mutating snapshot lock and fail closed on any unresolved journal.
+  As of 2026-07-15, mutable construction takes the cooperating-writer guard
+  before the journal to preserve the transition lock order, but defers strict
+  live-state discovery until after database opening, retained fail-closed
+  journal inspection, and the bounded orphan-token audit. The journal guard
+  remains held through repository and active-registry construction. The strict
+  result is checked against the preliminary Installation observation, which
+  remains only a stale-clone witness; a mismatch is rejected rather than
+  refreshed. Mutable startup now also has one narrow phase-authorized recovery
+  effect before diagnostic inspection: direct ActiveReblit
+  `CandidatePrepared`, or rollback whose recorded source is
+  `CandidatePrepared`, may normalize one exact same-owner restrictive
+  replacement wrapper to mode `0700`. The sealed authority retains the exact
+  installation, journal, database, active-state reservation, record, and
+  initial in-flight evidence; it requires stable database ownership, immutable
+  metadata provenance, and live active selection before and around the
+  descriptor-bound chmod. Absent, canonical, inapplicable, ambiguous, foreign,
+  or changing evidence is not mutated, and this effect never advances the
+  journal. The focused `make forge-client-startup-gate-test` lane lists 21
+  contracts, including 5 which prove compatible repair and zero chmod for
+  incompatible database, active-selection, record, or installation authority.
+  Beyond this chmod, the bounded rollback ladder documented in the
+  [startup-reconciliation plan](state-activation-startup-reconciliation.md)
+  now covers the shared `/usr` reversal prefix and exact RootLinks
+  `RollbackComplete` for NewState, ActivateArchived, and ActiveReblit. Exact
+  RootLinks NewState generation 18, ActivateArchived generation 12, and
+  ActiveReblit generation 14 now reach authenticated terminal journal absence
+  through one record-bound deletion and retained same-store clean handoff. The
+  earlier 20-case same-boot NewState death matrix remains confined to fresh-row
+  invalidation; accepted commit `39456719` separately proves terminal deletion
+  and residue recovery for all three exact RootLinks finalizers. The complete pre-existing
+  NewState suffix and the ActiveReblit no-boot-repair suffix reach the same
+  clean-startup handoff. An ActiveReblit v3 rollback sourced from
+  `BootSyncStarted` routes to `BootRepairRequired` only when its compact journal
+  pair matches the durable singleton head. A complete bounded canonical body
+  separately binds transition/predecessor hashes, desired inventory, exact
+  destinations, and every ordered output with a keyed inert claim. One exclusive
+  SQLite transaction inserts that immutable body and stages its pending head.
+  Commit `5acba0ba` makes startup retain the strict full receipt state and require exact v3 compact-pair correlation. Accepted commit `9f57157a` adds the independently reviewed, effect-free production staging boundary.
+  It derives the receipt internally from a plan bound to the Client's exact same `Installation`, its exact retained predecessor, and the database-owned committed head; atomically stages the immutable body and pending head; then rederives the exact bytes immediately before one bound journal advance to `BootSyncStarted`.
+  All injected fault seams either classify the durable exact predecessor or successor where possible, or fail stop. The boundary remains intentionally unwired. Existing v1/v2 records retain their conservative journal-only route.
+  A separately observed `BootRepairStarted` becomes terminal `BootRepairUnverified` without invoking boot; durable `BootRepairComplete` still routes to `RollbackComplete`. No production path repairs boot or emits success.
+  Caller-supplied provenance claims are not authenticated effect authority. Accepted commits `4d1f8ceb`, `12f888e1`, `323f776e`, `fffb79f7`, and `58235570` supply the receipt-bound aggregate, VM remount evidence, promotion, terminal consumption, and exact `BootSyncComplete` foundation described below. Accepted commits `591e8fd7` and `facd9729` authenticate that promoted completion and advance it once to bound `CommitDecided`, returning `RecoveryPending`; legacy v2 receipt-less, unpromoted, and stable-mismatched evidence remains exactly pending. Accepted commits `c0aae8bc`, `eed3d733`, and `1167383e` then authenticate exact `CommitDecided`, perform at most one cleanup exchange or zero-exchange Finish, complete one shared durability suffix, and advance once to bound `CommitCleanupComplete` with same-store, canonical-reopen old-binding, repeated old-binding, and fresh-binding proof before immediate `RecoveryPending`. The cleanup gates pass 6 authority/classifier + 3 effect + 4 persistence/dispatch tests, including all five journal faults, six same-byte/new-inode windows, and focused database/namespace races; `make check` and source-LOC pass. Commits `84f16fd7` and `68aebceb` first closed completion and terminal deletion with receipt retirement. Corrective commit `686106ff` supersedes that model: both edges read-only authenticate and retain the promoted receipt as the durable installed-publication pointer and next-update predecessor, while preserving the one bound `Complete` advance and one record-bound terminal deletion. Exact installed-head and A-to-B chaining tests pass 2/2; corrected completion and finalization pass 5/5 each with `make check` and source-LOC. Forward cleanup/finalization process death, reboot, and power-loss proof remain open, as do boot replacement/deletion and selected-payload bootability; long-term immutable-body GC is deferred to `FUTURE_PLAN.md`.
+  The pre-existing ActivateArchived rollback source set still reaches that same
+  handoff. Exact private-detach residue can now be restored on writer reopen.
+  The RootLinks campaign remains separate from the unchanged legacy 12-case
+  terminal matrices and proves same-boot `SIGKILL`, not reboot or power loss.
+  Exact startup roll-forward is production-wired through `BootSyncComplete` -> `CommitDecided` -> `CommitCleanupComplete` -> `Complete` -> authenticated clean startup, with cleanup and record-bound terminal deletion attempted at most once in their separate entries, installed-receipt authentication remaining read-only, and every handled edge returning immediately;
+  forward cleanup/finalization process-death, reboot, and power-loss proof remain open, as do boot replacement/deletion and selected-payload bootability.
+  The public `ReadOnlyClient` path is now real: construction requires the explicit
+  snapshot authority, proves a clean journal before imaging the state database,
+  rejects orphan transitions and prune residue before strict live selection,
+  then images metadata and layouts. It exposes only bounded state-ID, exact
+  state, active-state, exact metadata, and selected-layout queries; repository,
+  registry, search, network, configuration, cache, and mutation surfaces are
+  deliberately absent. Every query revalidates the retained installation,
+  journal, database namespace anchors, and live-state proof before and after
+  reading its immutable private database image. The installation-level snapshot
+  authority opens only an existing root,
+  `.cast`, default or custom cache, and their lockfiles; retains and revalidates
+  their exact directory and lock identities; holds shared global and custom-cache
+  locks through every clone; and bounds contended shared-lock acquisition to 30
+  seconds without entering a blocking kernel lock call. Mutable `ClientBuilder`
+  construction rejects explicit snapshots and naturally read-only installations
+  before the coordinator or any SQLite handle is opened. Default authored intent
+  is no longer evaluated by
+  `Installation::open`: the mutable client retains the exact `etc/cast`
+  directory, loads `system.glu` and its imports through the descriptor-rooted
+  Gluon source authority only after the clean startup gate and strict active
+  state discovery, and revalidates that active proof around evaluation. The
+  journal and active-state guards remain live through repository and registry
+  construction. Explicit imports retain their user-selected path semantics but
+  also run after the gate, and repository CLI construction can no longer bypass
+  this ordering. Focused tests cover journal/orphan precedence, frozen-client
+  separation, CLI notice timing, unsafe source metadata, and root, directory,
+  and source substitution. As of 2026-07-16, every mutable Installation clone
+  also retains the exact `.cast`, database directory, and global-lock
+  authority. Install, state, and layout SQLite handles open only through
+  authenticated `/proc/thread-self/fd` locations whose exact directory aliases
+  are proved before and after SQLite opens them and whose anchors outlive the
+  connections; the complete root/cast/lock/database chain is revalidated around
+  each open, including SQLite error paths. Startup opens the journal beneath
+  that retained `.cast` descriptor rather than resolving the public name again.
+  Five focused tests replace each authority boundary, prove detached anchored
+  operation, reject the substitution, and verify that every foreign replacement
+  remains untouched. This proof currently gates construction; post-build
+  lifecycle operations still require the coordinator-wide capability
+  preflight in the [coordinator plan](state-activation-coordinator.md), while
+  the [startup-reconciliation plan](state-activation-startup-reconciliation.md)
+  owns recovery execution. Both keep this item open.
+
+### Retained activation namespace
+
+- [ ] Replace path-based activation, archive, restore, quarantine, and cleanup
+  with one retained capability namespace. Resolve beneath authenticated
+  directory descriptors without symlink, magic-link, or mount traversal. Give
+  every `/usr` tree one reserved, permanent random token which follows that
+  logical tree through staging, exchange, archive, and quarantine; treat
+  device, inode, and mount ID only as boot- and mount-namespace-scoped runtime
+  witnesses. Require candidate and previous to have distinct tokens and
+  filesystem objects on the same exchange-capable mount, keep all descriptors
+  close-on-exec, and fsync every changed parent before recording completion.
+  As of 2026-07-15, fresh-state creation, active-state reblit, and inactive
+  archived repair share one descriptor-bound candidate-metadata primitive.
+  It retains the authenticated candidate `/usr` and `lib`, bounds and pins
+  `os-info.json`, prepares both generated files as sealed `O_TMPFILE` inodes,
+  publishes their names no-replace, and retains exact file/content witnesses
+  through transaction triggers, the final exchange validator, system triggers,
+  previous-tree archive, and boot synchronization. Strict activation proofs
+  include the exact `.stateID`; recovery remains marker-only. Package layouts
+  now reserve `lib/os-release` and `lib/system-model.glu` while keeping
+  `lib/os-info.json` package-owned. Applied-but-reported-error `lib` publication
+  completes the same `/usr` fsync suffix as ordinary success. Focused tests cover
+  symlink escapes, existing regular and hardlinked outputs, final-name races,
+  candidate substitution, trigger-time deletion/rewrite/replacement/hardlink,
+  sealed success, compensating recovery, and atomic rollback. External
+  ephemeral application now retains the exact target, `/usr`, and separately
+  published `/etc`; publishes the root ABI through the retained target
+  descriptor; and keeps the metadata, root-ABI, isolation-root, and active-state
+  proofs live across both trigger phases. Transaction and system trigger
+  discovery is rooted beneath the retained `/usr`, while execution pins exact
+  `/usr` and `/etc` descriptors into an anchored container. The system phase is
+  structurally unable to enter the live-root direct-execution branch. Focused
+  production-path tests cover metadata mutation, target and `/usr` substitution,
+  `/etc` publication and replacement races, pinned bind substitution, invalid
+  and destructive replacement triggers, and retained root-ABI publication.
+  Commit `b7135946` makes stateful system-trigger execution consume retained
+  isolation-root, local-`/etc`, and live-`/usr` capabilities for both live and
+  alternate installation roots; the pathname-authorized live-root fallback no
+  longer exists. The anchored scratch root is read-only, exposes only writable
+  `/etc` and `/usr`, read-only `/proc`, bounded `/tmp`, and a minimal `/dev`, and
+  does not expose `/sys`. Construction, activation, and the post-payload
+  boundary revalidate all three public identities; a payload failure and a
+  simultaneous revalidation failure are both retained in the returned error.
+  The focused root Make lane covers twelve policy, substitution, activation,
+  and post-payload contracts. Other path-based activation, archive, restore,
+  quarantine, and cleanup paths remain, so this item is intentionally still
+  open.
+
+### Durable tree identity
+
+- [x] Land the descriptor-relative `/usr/.cast-tree-id` primitive independently
+  of coordinator integration. Its fixed v1 frame is bounded, checksummed, and
+  locked by an exact golden; pre-journal publication uses an anonymous
+  same-filesystem `O_TMPFILE`, full file syncs, identity-bound no-replace
+  linking through authenticated procfs, directory sync, and retained inode
+  revalidation. Canonical markers are exact owner-owned 0444 files and use one
+  link by default; the narrowly authorized state-slot transition may retain
+  the sole second link described below. Package ownership of both durable and
+  temporary names is forbidden, and filesystems without linkable `O_TMPFILE`
+  support fail closed without a named pathname fallback. The recovery API is
+  structurally read-only: a missing, malformed, mismatched, replaced, or
+  temporary marker fails without minting or repair.
+- [x] Consume that primitive at the real in-process activation boundary without
+  claiming crash-reopen coordination. After candidate materialization (and,
+  for the legacy fresh-state path, database allocation), the stateful client
+  takes the canonical journal lock, rejects any journal or transition-bearing
+  database row, then creates or adopts distinct markers for candidate and
+  previous before transaction/system triggers or `/usr` exchange. When live
+  `/usr` is genuinely absent, it is created as an exact empty same-mount child
+  beneath the retained installation-root descriptor, checked for ACLs and
+  racing occupants, fully synced with its parent, name-revalidated, and marked
+  before exchange. The guard retains both inode proofs and the journal lock
+  across exchange, archive, quarantine, and compensating recovery; every
+  forward and compensating live/staging `/usr` exchange now resolves both
+  parents beneath the authenticated installation-root descriptor, binds both
+  children to those retained proofs, performs exactly one descriptor-relative
+  `RENAME_EXCHANGE`, and reconciles both names after every syscall result. An
+  error reported after the move is adopted rather than blindly exchanged
+  back; both changed parents are synced and revalidated before success, while
+  a forward post-move durability fault is routed through the swapped recovery
+  path. If the compensating reverse exchange has already moved both trees,
+  recovery retries only its idempotent sync-and-revalidation suffix before
+  preserving the staged candidate; it never exchanges the trees a second
+  time.
+  Every other post-preparation pathname check uses the exact-token recovery
+  reader and binds both the currently named directory and marker inode to the
+  retained proofs, so a copied token cannot authenticate a substituted tree.
+  Failed candidates enter a deterministic token-named quarantine through
+  retained parent descriptors and a no-replace move. Only an empty slot
+  created and inode-retained by the live guard is eligible for one bounded production
+  retry after an in-process fault; pre-existing empty or populated collisions
+  fail closed. A `syncfs` barrier flushes dirty candidate data and metadata on
+  its root filesystem before the changed parents are synced, and the complete
+  retained name/inode proof is repeated before a fresh database row may be
+  invalidated. Nested-mount rejection and any other-filesystem descendants
+  remain part of the pending descriptor-recursive coordinator. The primary
+  previous-tree archive and compensating restore now retain the roots,
+  staging, and state-slot parents beneath the authenticated installation root.
+  A missing slot is first created as an exact owner-private, ACL-free directory
+  at one of 256 bounded non-state parking names, then published to the canonical
+  positive-decimal state name with one descriptor-relative no-replace rename;
+  partial preparation can therefore leave only inert hidden residue, and
+  ambient empty state slots are never adopted. Each archive/restore direction
+  pre-syncs and revalidates the exact previous tree, makes one descriptor-relative
+  `RENAME_NOREPLACE` attempt, reconciles both names by permanent token and
+  directory inode after every syscall result, fsyncs every changed parent, and
+  performs a final namespace proof. Exact pre-syscall `after` layouts are
+  adopted as applied; an unprovable layout is ambiguous rather than mislabeled
+  not-applied. After an aborted archive or compensating restore, the exact empty
+  wrapper is non-destructively renamed back to its private parking name and the
+  canonical absence is synced. It is never unlinked by a mutable final name, so
+  a racing replacement is preserved; post-retirement durability faults resume
+  only the idempotent sync/revalidation suffix, with one bounded production
+  retry before recovery reverses `/usr`. Proven post-move durability failures
+  likewise resume only their idempotent suffix and never rename the tree a
+  second time. The bounded scan deliberately fails closed after all 256 names
+  are occupied, preserving both canonical and staged namespaces. A later
+  previous-tree archive may reuse one uniquely authenticated marker-only
+  wrapper left by archived-candidate activation instead of consuming another
+  bounded name; every foreign file type or wrapper layout is preserved and
+  skipped, multiple structurally valid reusable wrappers fail closed, and
+  reclaiming any other inert parked wrapper across process restarts belongs to
+  the later durable coordinator.
+  Initial staging and compensating rearchive of an archived candidate now
+  retain the roots, canonical state wrapper, and fixed staging wrapper, make
+  exactly one descriptor-relative `RENAME_EXCHANGE`, and reconcile both exact
+  wrapper inodes after every syscall result. Once the exchange has applied,
+  retries finish only the sync-and-revalidation suffix and never exchange the
+  wrappers a second time. The displaced staging wrapper is tracked by the sole
+  authorized extra hardlink to the archived candidate tree's permanent
+  `/usr/.cast-tree-id` inode, not by a separately forgeable token file. The
+  in-process path publishes that link no-replace from the retained canonical
+  marker after strict revalidation. On restart, an already two-link marker is
+  authorized only after a bounded scan proves exactly one state-slot link with
+  the same inode: parked wrappers must be exactly marker-only, while the
+  canonical wrapper may be marker-only or contain that marker plus the exact
+  retained `usr` tree. That retained link moves no-replace between the
+  exchanged wrappers, and the displaced wrapper is restored, parked, or
+  retired without unlinking a mutable final name. Applied restore or
+  marker-transfer preparation receives one bounded client retry; foreign
+  regular files, symlinks, FIFOs, and unsafe directories are preserved, while
+  unexpected I/O and duplicate authenticated layouts fail closed. Repeated
+  archived activations therefore reuse the same exact wrapper past the
+  256-name scan bound during normal operation.
+  Active-state verification reblits now reserve an exact empty 0700 replacement
+  wrapper before the live `/usr` exchange. The bounded 256-name scan skips every
+  occupied final-component type without adoption, and exhaustion is discovered
+  while the old live tree is untouched. Once that replacement is retained and
+  durable, but still before triggers or the live exchange, an authorized
+  marker-only wrapper at the old active state's canonical decimal name is
+  retained and moved with one descriptor-relative no-replace rename into the
+  bounded `archived-candidate-slot` namespace already recognized by slot-link
+  recovery. Exact canonical/parking reconciliation makes the outcome sticky;
+  an applied move resumes only marker, wrapper, and roots sync plus final proof.
+  Foreign occupants and exhaustion are preserved unchanged. Every later active
+  snapshot requires the exact old wrapper to remain marker-only and parked with
+  the canonical name absent, so a trigger cannot silently re-poison the next
+  ordinary archive. The old quarantined tree and parked wrapper retain their
+  exact two-link marker pair, while the repaired live tree's new token can be
+  archived into a fresh canonical wrapper on the following transition. The
+  candidate's `.stateID` is retained
+  as one exact owner-owned 0644, single-link inode beside its retained tree
+  marker; bounded full reads, metadata witnesses, final-name reopen, and marker
+  sandwiches reject same-inode rewrites and same-content inode replacement after
+  transaction triggers, inside the exchange preflight, after system triggers,
+  before and after boot synchronization, and at final proof. Recovery movement
+  remains marker-only so a trigger-corrupted candidate can still be reversed and
+  preserved. On success, one whole-wrapper `RENAME_EXCHANGE` moves the displaced
+  old wrapper intact to the private `active-reblit-wrapper` slot and leaves the
+  exact empty replacement at fixed staging. Entry into active-state verification
+  requires a strict retained proof of the live `.stateID`; a missing, malformed,
+  unsafe, or conflicting live selection fails closed before candidate staging is
+  mutated. After exchange, the displaced old payload remains opaque and is never
+  repaired in place. Restart-safe recovery from damaged live selection metadata
+  remains dependent on the durable baseline later in this hub and the
+  [startup-reconciliation work](state-activation-startup-reconciliation.md).
+  Once the replacement reservation is retained, a pre-commit failure,
+  or a failure after a compensating `/usr` reverse, uses that same pre-reserved
+  exchange to preserve the entire failed candidate wrapper and consumes no
+  second quarantine name. If bounded-name exhaustion or a create/reopen failure
+  occurs before any reservation is retained, recovery instead uses the existing
+  marker-authenticated `/usr` quarantine while leaving the live tree and every
+  foreign wrapper-name occupant unchanged. Applied suffix failures resume
+  without a second wrapper exchange, NotApplied final cleanup returns through
+  swapped recovery, and ambiguous substitution is never retried or guessed
+  through.
+  `make forge-active-reblit-wrapper-test` covers every preparation/rotation
+  fault, queued NotApplied and Applied faults, strict state-ID races, whole-wrapper
+  sentinels, foreign-name collisions and exhaustion fallback, repeated same-client
+  reblits, authorized two-link slot parking faults/races/exhaustion, and a
+  subsequent ordinary archive after repair.
+  Failed preparation never promotes the candidate, keeps its database row, and
+  leaves or preserves the exact candidate in staging or its retained quarantine
+  slot. Any preservation durability fault retains that database correlation and
+  exact candidate. This remains an in-process, cooperating-lock boundary: it
+  cannot make a filesystem rename and SQLite deletion atomic against an
+  uncooperative same-UID writer. It does not create a journal record, reconcile
+  a reboot, durably fence an ambiguous post-exchange namespace, perform the
+  bounded descriptor-recursive stable-inventory proof, authenticate the entire
+  activation namespace, or finish the pre-journal baseline below and the
+  [coordinator work](state-activation-coordinator.md). Repaired-archive
+  publication is descriptor-relative, and
+  production stateful materialization already uses the retained fixed-staging
+  capability; `blit_root_with_materialization` is test-only. Archived-state
+  pruning now authenticates an exact journal-locked batch of at most 64 retained
+  wrappers, detaches each into a fresh private no-replace quarantine, applies
+  boot exclusions before rollback selection, removes the exact database rows in
+  one reconciled SQLite transaction, and deletes only beneath the private
+  retained descriptors with aggregate entry, depth, byte, operation, and time
+  bounds. Startup scans twice for every raw-byte `state-prune-*` residue before
+  live-state or authored-intent discovery, so interrupted pruning blocks normal
+  reopening without deleting evidence. `make forge-state-prune-test` covers 34
+  exact production, compensation, restart-residue, race, bound, deletion, and
+  database cases; the startup-gate lane covers the residue precedence. This is
+  still not durable automatic recovery: there is no prune intent to adopt after
+  process death, the pinned boot manager does not propagate every stale-entry
+  deletion failure, syscall deadlines are cooperative, and package/CAS orphan
+  cleanup remains path-based. Other legacy garbage-collection paths also remain,
+  so this item does not claim complete lifecycle safety.
+
+### Pre-journal baseline
+
+- [ ] Establish a durable pre-journal baseline. With no journal and no orphan
+  transition row, clean only bounded authenticated scratch, materialize and
+  recursively sync the candidate, create or adopt its strictly validated tree
+  marker and fsync both marker and `/usr` before journal creation, synthesize
+  and sync an empty live `/usr` only when genuinely absent, classify managed,
+  corrupt, empty, and unmanaged previous trees from strict evidence, reject
+  missing, malformed, or duplicate tokens where recovery requires identity,
+  reserve the marker path from package and trigger output, and preflight every
+  root ABI name.
+  As of 2026-07-15, the root-ABI portion uses a retained two-stage capability:
+  all five final names and all five legacy `.next` names are inspected without
+  mutation before candidate identity preparation, so a static foreign occupant
+  leaves live `/usr`, the already-materialized fixed-staging candidate, tree
+  markers, triggers, and the already-allocated database row unchanged. The same
+  root descriptor and per-link absence/inode witnesses are
+  revalidated before transaction triggers, at ordinary exchange preflight, and
+  inside the final exchange validator. Only after the forward `/usr` exchange,
+  while the already-clean journal guard remains retained, are missing canonical
+  links published no-replace and fsynced through that descriptor; the completed
+  capability is revalidated before and after system triggers. Focused coverage
+  exercises every final and `.next` conflict, archived-candidate ordering,
+  retained absence and inode replacement at the exchange boundary, and
+  compensating recovery when a foreign name wins after `/usr` exchange but
+  before root-link publication. As of 2026-07-16, the candidate portion also
+  retains the exact candidate `/usr` and performs an iterative, raw-byte,
+  descriptor-rooted inventory without following symlinks or crossing mounts.
+  Entry, depth, raw-name, regular-byte, operation, and cooperative deadline
+  bounds fail closed, while attacker-scaled collections, paths, names, and
+  buffers use fallible reservations. Regular contents are SHA-256 hashed inside
+  full metadata sandwiches; symlink targets remain opaque bytes; special
+  inodes, duplicate or non-marker hardlinks, foreign owners, POSIX ACLs,
+  extended attributes on regular files and directories, external-write mode
+  bits, and the special mode bits already forbidden by Stone materialization
+  are rejected. Canonical symlinks cannot carry user or file-capability xattrs;
+  security-label symlink attributes are outside the supported package model
+  rather than inspected through an unsafe pathname fallback. This canonical
+  boundary therefore deliberately excludes SELinux-, IMA-, or EVM-labeled
+  candidate filesystems until those attributes gain a typed declarative model.
+  Every exact file and directory is synced
+  bottom-up, symlink namespace durability receives a filesystem barrier, and a
+  complete second inventory must match. Marker publication then admits only a
+  sole new canonical one-link marker or exact adoption of a previously strict
+  marker, followed by marker, root, inventory, `.stateID`, candidate-name,
+  live-`/usr`-name, and mutable-namespace revalidation. Reopened authorized
+  two-link marker recovery repeats marker and containing-wrapper durability
+  before accepting that link.
+
+  This is deliberately a cooperating-writer proof for a private staging
+  wrapper, not a kernel freeze against same-UID inode-reuse or create/delete
+  ABA. An archive produced by the former CAS-hardlink materializer whose
+  ordinary payload still has `nlink != 1` fails closed; aliases already removed
+  down to one link remain admissible. Current `state verify` does not discover a
+  byte-correct surviving alias, so backward activation requires an explicit
+  independent-copy repair or migration surface rather than silent adoption.
+  The authenticated canonical marker's sole authorized second link remains the
+  only exception. This boundary still creates no live journal and cannot
+  reconcile a reboot. Authenticated scratch cleanup, complete
+  previous-tree classification, trigger-proof marker reservation, and
+  coordinator integration remain open, so this item is not complete.
+
+### ActiveReblit boot-repair input and topology foundations
+
+The boot-repair effect remains unwired, but its fail-closed input and recovery
+boundaries are no longer absent. Commit `92fa7aa0` production-routes only an
+exact ActiveReblit `CandidatePreserved` rollback sourced from
+`BootSyncStarted` to `BootRepairRequired`. Commit `b5928340` independently
+admits an exact `BootRepairStarted` record on a later startup entry and advances
+it to terminal `BootRepairUnverified` while invoking boot zero times. There is
+still no production `BootRepairRequired` -> `BootRepairStarted` attempt,
+durable publisher, successful completion dispatch, or terminal deletion for
+that branch. Journal payload v3 carries its compact immutable receipt pair only
+through the typed `BootSyncStarted` edge. A separate bounded canonical body now
+binds its transition, optional committed predecessor, canonical predecessor
+record and desired-inventory hashes, exact destinations, and every ordered
+output with a keyed inert provenance claim. One exclusive SQLite transaction
+inserts that immutable body and stages its pending singleton head with strict
+body/head validation. Commit `5acba0ba` makes startup retain the strict full receipt state and require exact v3 compact-pair correlation; at that checkpoint, the production forward-staging boundary was still absent. Byte-canonical v1/v2 remains readable; records already at `BootSyncStarted` retain a conservative journal-only route, while older records cannot acquire v3 receipt authority.
+Commit `406cabe5`'s typed Required -> Started, Started -> Complete/Unverified, and Complete -> `RollbackComplete` vocabulary remains intact. Accepted commit `9f57157a` adds an independently reviewed effect-free production staging boundary, but deliberately does not wire it into the coordinator.
+It rejects a bound render/topology plan unless it belongs to the Client's exact same `Installation`, derives the receipt internally from the exact retained predecessor and database-owned committed head, atomically stages the immutable body and pending singleton head, then strictly reloads and rederives the exact receipt immediately before one bound journal advance to `BootSyncStarted`.
+The proof covers exact and pre-staged success, rejected unbound and cross-installation inputs, all five journal-update fault seams, late plan drift, and post-advance successor substitution.
+Durable classification is limited to the exact predecessor or `BootSyncStarted`; unresolved uncertainty fails stop. Caller-supplied keyed provenance claims remain inert rather than authenticated effect authority.
+Accepted commits `4d1f8ceb`, `12f888e1`, `323f776e`, `fffb79f7`, and `58235570` close the aggregate, VM remount, promotion, terminal-consumption, and exact `BootSyncComplete` foundation. Accepted commits `591e8fd7` and `facd9729` authenticate exact promoted-receipt-backed startup completion and advance it once to bound `CommitDecided`, with same-store and canonical-reopen binding proof before immediate `RecoveryPending`. Accepted commits `c0aae8bc`, `eed3d733`, and `1167383e` carry that exact record through read-only cleanup authority, one Apply exchange or zero-exchange Finish, the shared durability suffix, and one bound `CommitCleanupComplete` advance with old/fresh binding and complete retained-evidence proof. Cleanup gates pass 6 + 3 + 4 tests; `make check` and source-LOC pass. Commits `84f16fd7` and `68aebceb` first closed the next two edges with receipt retirement. Corrective commit `686106ff` supersedes that model before merge: `CommitCleanupComplete` and `Complete` now read-only authenticate and preserve the promoted installed receipt, while retaining the bound advance and record-bound terminal deletion. Exact installed-head/A-to-B tests pass 2/2 and the corrected edge suites pass 5/5 each with `make check` and source-LOC. Forward cleanup/finalization process death, reboot, and power-loss proof remain open, as do boot replacement/deletion and selected-payload bootability; immutable-body GC stays in `FUTURE_PLAN.md`.
+
+The implemented preparation stack now carries one caller-owned absolute
+deadline, without resetting it, through the exact state/layout database and
+Stone projection -> bounded boot-asset plan -> sealed CAS snapshot -> Stone
+binding chain. Exact live and archived state-root authority, state schemas, and
+the retained local `/etc/kernel/cmdline.d` append/mask policy expose the same
+deadline-preserving preparation and revalidation boundary, including terminal
+checks after completed materialization. Commit `66d7f6d1` separately binds
+package-owned command-line files to the exact non-`Clone` Stone owner and
+exposes only normalized semantic text after bounded explicit-offset reads and
+exact coordinate revalidation.
+
+Machine-local Gluon intent declares explicit ESP and optional XBOOTLDR
+PARTUUIDs and mount points, while `/etc/cast/root-filesystem.glu` authenticates
+one closed root-filesystem intent and can produce exactly one injection-safe
+`root=...` token after terminal revalidation. Bounded current-thread mountinfo,
+current-task-root, attachment-chain, and sysfs observations produce retained
+mounted-topology evidence without mounting, discovering an alternative, or
+granting mutation authority. The pure publication plan uses that topology to
+share one collision domain for aliased ESP/Boot or separate XBOOTLDR when it is
+distinct, and performs a terminal deadline check after materialization.
+
+Commit `d3151b53` closes the lifetime-bound semantic render-input aggregate.
+It retains the exact Stone and state-root owners, internally constructs schema
+and package-command-line children, joins only eligible nonempty kernel inputs,
+and rebinds the exact systemd-boot, kernel, and ordered initrd coordinates.
+Every package and local append is grammar-audited before scope or masking;
+`root` and `cast.fstx` are reserved globally; canonical per-kernel command
+lines are admitted against byte, token, and aggregate bounds before output
+allocation. The final database revalidation closes the sandwich after semantic
+materialization, and the returned view retains the caller's absolute deadline.
+Commit `3f752e32` makes the revalidated mounted-topology view retain that same
+deadline for the renderer to compare rather than silently minting a new budget.
+
+Commit `aa341706` adds the pure deterministic BLS renderer. Its non-`Clone`
+result retains the exact revalidated semantic inputs, topology, absolute
+deadline, topology-scoped publication plan, and sealed asset views without
+exposing detachable source or mutation authority. It pins loader and Type 1
+entry bytes, canonical payload order, case-insensitive collision handling,
+FAT-safe relative paths, pre-materialization generated-byte limits, finite
+request/path/work limits, and terminal deadline checks. Synthetic topology
+fixtures exercise the production planning path without touching host storage.
+
+Commit `dfa247d5` adds a distinct exact-byte SHA-256 identity. Sealed assets
+compute it during the existing bounded copy pass, generated publications derive
+it from their owned bytes, and renderer deduplication, publication planning,
+and final source binding all retain and recheck it. XXH3 remains the path and
+namespace-protocol checksum; this does not authenticate a publisher, establish
+ownership provenance, or add cryptographic destination verification.
+
+Commit `738ebd06` projects that bound plan into pure owned canonical desired
+state. Its domain-separated SHA-256 binds the destination layout and every
+output's root, phase, role, path, mode, XXH3, length, and exact content SHA while
+excluding Stone binding indices, source kind and bytes, descriptors, runtime
+mount identity, and the fingerprint itself. The inventory is descriptive only:
+it supplies no persistence, ownership, deletion, or mutation authority.
+
+Commit `9ac34286` adds a pure bounded destination-namespace assessment for the
+rendered requests. It preserves request order, admits only stable `Absent`,
+`Exact`, or `Different` states, and rejects raw/kernel-name disagreement, FAT
+aliases, cross mounts, wrong node kinds, inventory and lookup races, content
+drift, deadline expiry, and resource overruns. Commit `2eeaa22c` adds a
+syscall-free bounded parser for complete raw `getdents64` chunks, with strict
+record/name validation and a separately charged terminal EOF probe. It
+produces only a closed raw-name inventory. Commit `f8a5da34` adds the one-shot
+`getdents64` source, and commit `71ee5e95` reserves descriptor capacity before
+ownership transfers and unwinds retained nodes in bounded LIFO order. Commit
+`365e0ae5` completes the bounded production observer: it acquires fresh
+directory descriptions and positional content readers below one private
+retained destination and returns scalar states only. Commit `8620986a` retains
+the exact observed-root device, inode, and mount ID. Commit `3f8309b1` then
+sandwiches assessment through that same private destination `File` between
+opening and closing boot-filesystem authentication and requires the root triple
+to match. Commit `97fb33b3` closes the bounded expected-source bridge by
+streaming generated slices and sealed asset descriptors without materializing
+the roughly 10-GiB publication ceiling. The complete authority-free receipt
+body and mapper now bind those exact outputs, transition/predecessor hashes,
+desired inventory, destination identities, and keyed inert claims. One exclusive
+database transaction persists the immutable body and pending singleton head.
+Startup now retains that strict full receipt state. Accepted commit `9f57157a` adds the independently reviewed, effect-free production boundary that internally derives this receipt from the same-`Installation` bound plan and exact retained predecessor, atomically stages the database body and pending head, and advances the bound journal exactly to `BootSyncStarted` after strict rederivation.
+Its fault seams classify the exact predecessor or successor when durable evidence permits and otherwise fail stop. It remains intentionally unwired, and caller provenance claims remain inert rather than authenticated authority.
+Accepted commits `4d1f8ceb`, `12f888e1`, `323f776e`, `fffb79f7`, and `58235570` provide the aggregate, VM remount evidence, promotion, terminal consumption, and exact `BootSyncComplete` foundation. Accepted commits `591e8fd7` and `facd9729` authenticate and dispatch its one-shot bound advance to `CommitDecided`; accepted commits `c0aae8bc`, `eed3d733`, and `1167383e` then authenticate exact cleanup, perform at most one Apply exchange or zero-exchange Finish, complete the fixed durability suffix, and publish one bound `CommitCleanupComplete` successor before immediate `RecoveryPending`. Both advances retain same-store, canonical-reopen old-binding, repeated old-binding, and fresh-binding proof. Cleanup gates pass 6 authority/classifier + 3 effect + 4 persistence/dispatch tests; `make check` and source-LOC pass. Commits `84f16fd7` and `68aebceb` first closed the next two edges with receipt retirement. Corrective commit `686106ff` supersedes that model: both edges read-only authenticate and retain the promoted installed receipt, preserving it for sequential update replacement while keeping one bound advance and one record-bound terminal deletion. Exact installed-head/A-to-B tests pass 2/2 and the corrected edge suites pass 5/5 each with `make check` and source-LOC. Forward cleanup/finalization process death, reboot, and power-loss proof remain open, as do boot replacement/deletion and selected-payload bootability; immutable-body GC stays in `FUTURE_PLAN.md`.
+
+Commit `b8acd3d4` adds bounded scalar-only destination-descriptor evidence for
+stable directory identity and the Linux MSDOS magic family; commit `029f0590`
+keeps its final descriptor inside retained attachment authority, and commit
+`a93efe70` composes it with exact mountinfo `vfat` evidence in every topology
+pass. Commits `9c688dc6` through `28c4735b` retain bounded kernel device names
+and fixed-512-sector partition geometry; commit `24d82abf` seals the parent-disk
+expectation to one freshly revalidated sysfs view. Commit `78b87df9` admits only
+an exact `/dev` root attachment reported by mountinfo as `devtmpfs`, without
+claiming that policy is descriptor authority. Commit `5ed70923` authenticates
+strict caller-owned GPT images and exact ESP/XBOOTLDR roles without opening a
+device. Commit `c2539d7f` strengthens that parser to require two complete,
+exactly matching table passes under one cumulative ledger and deadline and
+returns a role-independent table fingerprint without raw bytes or reusable read
+authority. Commit `215b9032` retains the partition number, logical-block size,
+and complete image length and introduces one private same-deadline inter-pass
+hook before any second-pass source observation. Commit `2eeaa22c` then provides
+bounded pure reconciliation of exact opening and closing injected block-node
+observations with those GPT scalars and the sealed sysfs expectation. That
+result is deliberately non-authoritative: it owns no descriptor and cannot
+prove GPT read provenance. Commit `f8a5da34` adds read-only retained block
+observations and bounded positional reads. Commit `1f9d578a` composes them into
+an opening sysfs-parent preflight, two GPT passes separated by a caller-owned
+name rebind and exact descriptor re-observation, a closing observation, and
+reconciliation, returning distinct closed live read-provenance evidence.
+Commit `dceab6cc` independently binds stable directory identity, authenticated
+mount ID, and shared `TMPFS_MAGIC` to the exact devtmpfs mountinfo policy; it
+proves same-mount descriptor evidence, not exact `/dev` authority by itself.
+Commit `bfa3a0c2` now composes the exact retained `/dev` attachment with that
+devtmpfs evidence, opens the sealed parent `DEVNAME` beneath the same private
+destination, and owns the opening-preflight, GPT-pass-one, private name-rebind,
+inter-pass observation, GPT-pass-two, closing-observation, and reconciliation
+schedule. The closed result does not prove whole-root non-bind provenance or
+ongoing currentness; same-thread `setns` still requires outer aggregate
+revalidation. Linux MSDOS magic likewise remains distinct from exact `vfat`.
+Boot replacement/deletion, selected-payload bootability, and forward cleanup/finalization process-death, reboot, and power-loss reconciliation remain open. Every `58235570` failure description remains conditional: authority is consumed, fresh reconciliation may expose only exact `BootSyncStarted` or `BootSyncComplete`, and otherwise fails stop; `591e8fd7`/`facd9729` admit only the exact promoted completion authority, `c0aae8bc`/`eed3d733`/`1167383e` separately admit, execute, durably finish, and persist only the exact cleanup edge, `84f16fd7` retires only its exact current head before the bound `Complete` edge, and `68aebceb` finalizes only that exact `Complete` record through one bound deletion and same-store clean admission.
+At exact commit `58c87a5db50bec7a5ac00978455841c7d2402689`, disposable UEFI guest `test` was observed with `/` on `/dev/vda2`, its live ESP on `/dev/vda1`, and a separate untouched `/dev/vdb` of exactly 34359738368 bytes.
+Its operation-specific atomic suffix passed ActivateArchived complete 17/17 and finalization 24/24, plus ActiveReblit dispatch 62/62, complete 11/11, and finalization 24/24.
+Shared RootLinks terminal-process 3/3 and delete-residue recovery 13/13 passed; synthetic boot namespace passed 40/40; the receipt and startup boot-repair Make lanes all exited zero.
+At exact commit `9f57157a01874120a1bb74ea5cf85164b46f20cf`, the same guest also passed the focused receipt/staging Make lane, including its declared dependencies, all 12 receipt-database tests, and all 9 production staging tests. Neither campaign mutated a disk, ESP, mount, live `/usr`, or rebooted the guest. This is same-boot synthetic/component evidence only, not publisher, ESP-publication, reboot, or power-loss proof.
+At exact commit `07b917a73189563f02104455c937613ffe6b2e72`, guest `test` (machine ID `556a65c27e9b4150a9fb2b68f8693cdb`, boot ID `e875fab7-b970-4881-89d1-e87aa70acffb`) passed the guarded challenge, dry admission, and destructive whole-disk VFAT campaign after fresh snapshot `os-tools-vdb-retry-20260721-07b917a7`: stable path `/dev/disk/by-path/virtio-pci-0000:07:00.0` resolved to `/dev/vdb`, diskseq `10`, exactly `34359738368` bytes; FAT32 `CASTTEST` and `EFI/Linux` persisted through sync/unmount/remount; the target ended unmounted; the runtime authorization root ended empty with no marker or lock; and read-only `fsck.fat -n` reported 3 files using 3/2096126 clusters. Root `/dev/vda2` and live ESP `/dev/vda1` at `/boot/efi` remained untouched. The first `a6a834df` attempt had failed closed immediately after `mkfs.fat` introduced fake-MBR child `/dev/vdb1`; the sentinel was preserved, exact state inspected, signatures explicitly recovered, and no mount or reboot occurred. Commit `07b917a7` adds `--mbr=n` and effective mounted-root ownership validation. This is boot-storage substrate evidence only: no payload was published, no GPT ESP role or live ESP was changed, and no reboot or power-loss behavior was proved.
+At exact commit `bc8d8b2682e865117ae6a59fb14eb186ad7e4e8b`, after atomic external snapshot `os-tools-vdb-publisher-manifest-20260721-bc8d8b26`, the guarded campaign advanced beyond substrate proof on only the same admitted `/dev/vdb`: it built, SHA-256-manifested, and revalidated one fixed Forge libtest runner before disk effects, formatted FAT32 `CASTTEST`, published the exact 45-byte mode-`0644` `EFI/Linux/cast-vm-publisher-test.efi` through the production retained-descriptor primitive, observed `Published` followed by same-inode `AlreadyExact`, then proved `AlreadyExact` again after sync/unmount/remount. Independent post-run inspection found VFAT UUID `7DC7-7B1E`, no partition children, mount, swap, marker, lock, or build root, and a clean bounded read-only `fsck.fat -n` result of 4 files using 4/2096126 clusters; root `/dev/vda2` and live ESP `/dev/vda1` remained unchanged, and no reboot occurred. This is one-leaf production publisher evidence, not aggregate ordering/deletion, receipt promotion or production wiring, GPT ESP/XBOOTLDR-role, reboot, interruption, or power-loss proof.
+At exact commit `aae26376f0e6ee9823a0cd5005516186c46c0faf`, after atomic external snapshot `os-tools-gpt-topology-retry-20260721-aae26376`, the same UEFI guest completed the guarded GPT challenge, admission, and destructive campaign against only `/dev/disk/by-path/virtio-pci-0000:07:00.0` -> `/dev/vdb`, diskseq `10`, exactly `34359738368` bytes. Two prior snapshot-backed attempts failed closed before leaf publication and were explicitly recovered: `18b9c314` exposed a test that incorrectly used Rust `Path::starts_with` as a filename byte-prefix check, fixed by the exact build-root binding in `c8b43221`; that retry exposed valid nsfs mountinfo root `mnt:[4026532758]`, fixed by `aae26376` while authority-bearing selection still requires root `/`. The successful run exercised a 256-MiB GPT ESP as ESP-and-BOOT, then a distinct 256-MiB ESP plus 512-MiB XBOOTLDR, through production topology capture and retained-descriptor leaf publication; each leaf returned `Published`, immediate same-inode `AlreadyExact`, and post-sync/unmount/read-only-fsck/remount `AlreadyExact` before final unmount. The alias payload was the 47-byte mode-`0644` `EFI/Linux/cast-vm-gpt-alias.efi` with SHA-256 `0f6965388e00f6deeb67e769a6c81abde7c31666541bc2458bb1cd74cb6224ef`; the final distinct payloads were the 44-byte mode-`0644` `EFI/Linux/cast-vm-gpt-distinct-esp.efi` with SHA-256 `a4e064e802a47610f3155407e2fe445f4968b84d2b45e1d3ffeb32a600f557de` and the 49-byte mode-`0644` `loader/entries/cast-vm-gpt-distinct-xbootldr.conf` with SHA-256 `492878b78af9460fa68196c6005e1fe916ac8e337c16c6b58343d4aa5cf94c5d`. A separately reviewed root-privileged read-only audit with SHA-256 `11ca3712f84996c90a52bf1a82911f4f4ac784187554008aa895c180b82f4b8a` authenticated exact GPT geometry, role GUIDs, names, sysfs/blkid/by-partuuid agreement, unique PARTUUIDs, and the final trees and payloads through read-only private-namespace mounts; `fsck.fat -n` reported `/dev/vdb1: 4 files, 4/516188 clusters` and `/dev/vdb2: 4 files, 4/130811 clusters`, then `GPT_SUCCESS_AUDIT_OK exact distinct ESP/XBOOTLDR publications verified` and, after exact temporary cleanup, `GPT_SUCCESS_VM_ROOT_AUDIT_OK`. Both partitions ended unmounted without swap, holders, slaves, runtime/build/audit residue, or leaked mounts; root `/dev/vda2`, live ESP `/dev/vda1`, and target identity remained unchanged, and no reboot occurred. This closes the fixed-path real GPT ESP/XBOOTLDR-role and remount-persistence evidence gap; aggregate publication ordering/replacement/deletion, receipt promotion, journal-coupled forward coordination and startup BOOT repair, selected-payload bootability, device-flush survival, interruption/reboot recovery, and power-loss-equivalent durability remain open.
+At exact commit `12f888e11e95b640da75c745841d0aa118f471a4`, after external snapshot `os-tools-gpt-aggregate-20260721-12f888e1`, KVM UEFI guest `test` (machine ID `556a65c27e9b4150a9fb2b68f8693cdb`, boot ID `e875fab7-b970-4881-89d1-e87aa70acffb`) retained `/` on `/dev/vda2` and its live ESP on `/dev/vda1` while the guarded receipt-bound aggregate campaign repartitioned only `/dev/disk/by-path/virtio-pci-0000:07:00.0` -> `/dev/vdb`, diskseq `10`, exactly `34359738368` bytes. The real 256-MiB ESP-as-BOOT pass and the real distinct 256-MiB ESP plus 512-MiB XBOOTLDR pass each entered through exactly one production `stage_active_reblit_boot_sync` -> consuming `attempt_immutable_boot_publication` composition, with a fresh exact pending `BootSyncStarted` fixture receipt and the canonical five-output schedule. Alias publication returned `Published` for all five outputs on the ESP; distinct publication returned `Published` for three BOOT-root outputs on XBOOTLDR and two ESP-root bootloader outputs on the ESP. Each pass then crossed sync, unmount, clean read-only `fsck.fat -n`, and remount before a fresh deterministic journal/receipt invocation returned `AlreadyExact` for all five outputs. That second invocation conservatively used first-adoption provenance and proves persisted bytes and routing, not cross-process or same-receipt continuity. The final root-privileged read-only audit authenticated exactly two mode-`0644` files on the ESP (`EFI/Boot/BOOTX64.EFI` and `EFI/systemd/systemd-bootx64.efi`) and exactly three on XBOOTLDR (the checksum-addressed kernel, `loader/entries/head-6.12-1.conf`, and `loader/loader.conf`), with exact content, no opposite-root aliases, and no `.cast-payload-*` residue. The campaign log SHA-256 is `a35862ee20c3b4c5907980c90b3a2e8e1d9c3287a5502c7b78b5f172420a504f`; the audit log SHA-256 is `097a4144f2552b07941ec8458f99407a099e2917a43be531564dc9741586fc69`. Final cleanup left `/dev/vdb1` and `/dev/vdb2` unmounted with no swap, holders, slaves, or leaked mounts; the runtime root was empty, and no authorization marker, lock, build root, or audit residue remained. Root `/dev/vda2`, live ESP `/dev/vda1`, and target identity were unchanged, and no reboot occurred. This closes the real receipt-bound ordered immutable aggregate and post-remount `AlreadyExact` evidence gap only. Accepted commit `323f776e1121a0173338a312d67d371e2cd33439` closes exact database promotion, and accepted commit `fffb79f70f9c0b1cb380f3e8df64a015ad241816` consumes the exact terminal aggregate to invoke it after repeated namespace/topology, journal, plan, and database proof. Its inherited deadline reaches the exclusive mutation boundary; exact promoted retry is read-only; ambiguous commit classification and every later drift return no success authority. Accepted commit `58235570a8022e3bb2a307fbb4b6968628d37435` then consumes the promoted terminal authority into the exact `BootSyncComplete` successor under that inherited deadline. Its success path canonically reopens the journal store, proves the successor inode, recaptures a binding from the reopened store, and revalidates the completed receipt; every fault and later drift consumes authority and classifies only exact durable `BootSyncStarted` or `BootSyncComplete`. Focused gates pass 9/9 completion tests covering 19 scenarios, 20/20 bridge, 18/18 database, 24/24 aggregate, and 132/132 journal tests. This completion proof is same-process component evidence, not same-receipt startup recovery. Replacement/deletion and cleanup authority, forward coordinator and startup BOOT-repair wiring, selected-payload bootability, device-flush ordering, interruption recovery, reboot recovery, and power-loss durability remain open.
+Accepted commits `591e8fd7` and `facd9729` supersede the startup-adoption limitation by advancing exact promoted-receipt-backed ActiveReblit `BootSyncComplete` once to bound `CommitDecided`; accepted commits `c0aae8bc`, `eed3d733`, and `1167383e` continue that production ladder through exact one-shot cleanup and a bound `CommitCleanupComplete` successor. Commits `84f16fd7` and `68aebceb` first closed the next two edges with receipt retirement. Corrective commit `686106ff` supersedes that model before merge: completion and finalization now read-only authenticate and retain the promoted installed receipt, while keeping the one bound `Complete` advance and one record-bound terminal deletion. Exact installed-head/A-to-B tests pass 2/2; the corrected completion and finalization gates pass 5/5 each with `make check` and source-LOC. Forward cleanup/finalization process death, reboot, and power-loss proof remain open, as do boot replacement/deletion and selected-payload bootability; immutable-body GC stays in `FUTURE_PLAN.md`.
+Default and focused tests still do not inspect or mutate host ESP/BOOT storage; real publication and destructive durability tests remain confined to the user-supplied disposable VM.
+### Durable transition coordination
+The open coordinator work item, its implemented durable prefix, and its exact
+validation evidence continue in the
+[durable state-activation coordinator plan](state-activation-coordinator.md).
+That document owns the operation state machines, metadata and provenance
+authority, trigger sequencing, and one-shot forward exchange contract.
+
+Commit `035d0843` closes the startup normalization prefix after an exact
+forward `UsrExchanged` record without claiming the next durable phase. Across
+NewState, ActiveReblit, and ActivateArchived, every one of the 32 subsets of
+the five canonical merged-/usr links converges through at most one retained
+publisher invocation per startup entry. An incomplete set remains at the exact
+source record and returns `RecoveryPending`; publisher errors are possibly
+applied and must be classified by a fresh entry. A set complete at entry always
+syncs the retained installation root before rollback-decision authority is
+captured again from fresh evidence. The authority authenticates the exact
+public `.cast`, journal directory, lock, and record identities throughout and
+retains the admitted record inode as an `Arc<File>`. Its bounded inventory of
+all noncanonical installation-root entries detects file, symlink, and root
+replacement races which would be invisible if only the five link names were
+tracked.
+
+The normalizer cannot advance the journal to `RootLinksComplete`, and the
+canonical links deliberately stay complete through the existing rollback
+suffix. Commit `04911701` proves the integration model: an intent source needs
+one startup entry to reach the pending reverse decision, while an initially
+incomplete exchanged source needs one normalization entry and a second decision
+entry; complete-at-entry exchanged evidence reaches the decision in one.
+Commit `03c5fd13` adds the independently reviewed production in-process
+`UsrExchanged` -> `RootLinksComplete` transition. It binds the exact predecessor
+after full preflight, publishes and synchronizes the retained no-replace root
+ABI once, repeats operation-specific evidence, conditionally advances only to
+the exact successor, and retains that successor inode with every earlier
+authority. Commit `a4f16351` then admits exact durable `RootLinksComplete` +
+`POST` during startup for all three operations only when the complete root ABI
+is already present. It consumes the exact non-Clone predecessor-record binding
+to persist one `RollbackDecided` with source `RootLinksComplete` and pending
+`/usr`, invokes neither root-ABI publication nor complete-set synchronization,
+verifies the exact successor binding, drops the old store, and independently
+reopens the canonical journal. Same-byte predecessor or successor replacement
+and uncertain storage outcomes never authorize success or retry. Commit
+`2201a24b` admits only that exact decision through the journal-only resume
+route. It captures exact record identity before namespace or database evidence,
+consumes the non-Clone binding through one advance to `ReverseExchangeIntent`,
+authenticates the returned successor binding, and canonically reopens after
+every mutation uncertainty. Its 20 focused tests cover all three operations,
+current and historical epochs, exact and conflicting plans, same-byte
+predecessor and successor replacement, and all five journal fault points. The
+route changes no namespace or database state and invokes no reverse exchange or
+root-ABI effect. Commit `66e3cf6b` closes the residual reopen identity window
+in both the decision and route boundaries. After same-store successor
+validation, each keeps the non-Clone binding alive across destruction of the
+old lock-bearing store; the independently reopened canonical store must then
+match that exact successor inode and record inside an installation-
+revalidation sandwich. Same-byte replacement between binding validation and
+reopen cannot become success.
+
+Commit `1b34d718` extends that exact binding discipline through reverse
+admission, the physical effect, parent durability, and journal persistence,
+and admits the RootLinks source across all three operations and both current
+and historical record epochs. `Applied` is sealed inside the durable authority
+only after one reconciled reverse exchange; exact `PRE` evidence instead seals
+`AlreadySatisfied`, and the persistence caller cannot supply either outcome.
+The bound `UsrRestored` publication checks its successor binding in the same
+store, retains it across destruction of that store, and checks the exact inode
+and record again after canonical reopen. Focused matrices cover both outcomes,
+all five bound-update faults, predecessor and successor replacement seams, and
+fresh restart convergence without a second effect.
+
+Fresh RootLinks entries now progress exactly from `RootLinksComplete` to
+`RollbackDecided`, then `ReverseExchangeIntent`, then `UsrRestored`; the reverse
+entry performs exactly one exchange and the five canonical root links retain
+their targets and identities. A following entry leaves that exact
+`UsrRestored` record byte-identical.
+
+Commit `7b3770b1` hardens the common candidate-preservation passage. At that
+checkpoint it did not widen the RootLinks gate. It captures one exact non-Clone
+`TransitionJournalRecordBinding` inside an installation-revalidation sandwich
+before namespace or database inspection, then moves it through NewState target
+creation, target normalization, and candidate movement; ActivateArchived and
+ActiveReblit effects; their durability and persistence-facing authorities; and
+production dispatch. The slice eliminates all six coarse semantic journal
+loads from that chain. A safe creation or normalization crash prefix now
+returns an opaque, one-use `RestartRequired` source authority rather than
+discarding the binding and loading the source record again.
+
+At that checkpoint, the identical-bytes/different-inode proof had 44 pre-effect
+cases, 44 post-effect cases, and 16 preparation-restart cases across current
+and historical epochs, both recorded `/usr` outcomes, and both common candidate
+sources, with `BootSyncStarted` admitted only for ActiveReblit. The pre-effect
+matrix authorizes no operation; the post-effect matrix never converts an inode
+substitution into success; and the restart matrix rejects the same bytes at a
+successor inode.
+
+Commits `fec890ad`, `c9140a88`, and `043a3c24` complete exact candidate-writer
+persistence for NewState, ActivateArchived, and ActiveReblit respectively.
+Each operation consumes its exact predecessor binding, derives the sole
+`CandidatePreserved` successor from its private effect origin, validates that
+successor in the same store, destroys the old lock-bearing store, and requires
+an independently reopened canonical store to match the exact successor inode
+and record inside an installation-revalidation sandwich. The operation-specific
+success, storage-fault, same-byte/different-inode, and fresh-restart matrices
+remain fail closed without changing established database or non-journal
+namespace effects and without redispatching a new checkpoint.
+
+Commit `67ad3de0` widens only the exact passage through `CandidatePreserved`.
+For current and historical record epochs, all three operations, and both
+recorded `/usr` outcomes, RootLinks-sourced `UsrRestored` now routes to
+`CandidatePreserveIntent`, then the matching operation writer persists its sole
+exact `CandidatePreserved` successor. The production endpoint performs exactly
+one reverse `/usr` exchange across the full route, preserves all five canonical
+root-link targets and identities.
+
+The route proof rejects 360 root-link mutation races, 180 at each of its two
+revalidation seams. Candidate admission separately rejects 360 mutations
+spanning every one of the five canonical links. The common same-byte binding
+proof is now 64 pre-effect, 64 post-effect, and 24 preparation-restart cases.
+NewState and ActivateArchived each cover 24 success, 120 storage-fault, 96
+predecessor/successor binding-substitution, and 48 fresh-restart writer
+executions. ActiveReblit covers 32, 160, 128, and 64 respectively.
+
+Accepted commit `e35a2183` admits only exact RootLinks-sourced NewState
+`CandidatePreserved` generation 15 into the journal-only route and carries the
+non-Clone record-inode binding through a bound advance to
+`FreshDbInvalidationIntent` generation 16, same-store validation, old-store
+destruction, and independent canonical reopen.
+
+Accepted commit `7457b259` admits that exact generation-16 source into the
+production invalidation boundary. One record-inode binding crosses capture,
+Apply-or-Finish effect reconciliation, the bound advance to
+`FreshDbInvalidated` generation 17, same-store successor validation, old-store
+destruction, and independent canonical reopen. A present exact fresh transition
+is removed at most once; proved joint absence performs zero removals. The
+success, storage-fault, predecessor-or-successor binding-substitution, and
+fresh-handle matrices cover 48, 240, 192, and 96 executions respectively.
+Fresh-handle reopen is explicitly not process-death evidence.
+
+Accepted commit `68759ba3` adds genuine same-boot `SIGKILL` proof only for this
+RootLinks NewState generation-16 -> generation-17 boundary. Its exact 20 cases
+are two record epochs x (five SQLite application-transaction seams + five
+journal-update durability seams). The parent releases every installation,
+journal, and database handle before separate crash and recovery children
+re-execute production `CleanSystemStartup`; a 15-second deadline kills and
+reaps a hung child, and the recovery child is the first SQLite opener.
+
+The selected fresh row has a nonempty selection. SQLite rolls back deaths at
+the first four database seams, so recovery observes the complete preimage and
+performs one exact `Applied` removal. The post-commit database seam and all
+journal seams perform zero removals: they reconcile joint absence as exact
+`AlreadySatisfied`, or consume the exact already-published successor according
+to raw source-versus-successor evidence. Post-crash raw temporary-file inventory
+is taken before any recovery journal-store or SQLite open. All five root-link
+targets and identities remain exact and namespace, exchange, and boot effects stay
+zero.
+
+Five all-link mutation seams fail closed: 240 capture, 240 pre-effect, 120
+Applied post-attempt, 240 initial-persistence, and 240 final-revalidation
+executions. The endpoint performs exactly one reverse `/usr` exchange and
+  leaves all five canonical root-link targets and identities unchanged. At
+  that checkpoint, a later NewState entry left generation 17 byte-identical
+  because its RootLinks completion and terminal-finalization gates remained
+  closed.
+
+Accepted commit `a3fb25d3` independently admits exact RootLinks-sourced
+ActivateArchived `CandidatePreserved` generation 11 and carries the exact
+non-Clone record-inode binding from capture through one bound advance to
+`RollbackComplete` generation 12, same-store successor validation, and an
+independent canonical reopen. Its proof covers 24 successes, 120 storage
+faults, 96 binding substitutions, 48 fresh-handle reopens, and 360 all-five-
+root-ABI mutation cases across capture, fresh-namespace, and final-revalidation
+seams. Database state, archived-wrapper and state-slot identities, and all five
+canonical root-link identities remain unchanged. The journal-only entry invokes
+no database or non-journal effect, cleanup, finalization, or boot action.
+Accepted commit `a0966008` admits only this exact `RootLinksComplete`
+generation-12 terminal source in addition to the retained legacy Intent and
+Exchanged sources. It captures the exact non-`Clone` record binding before the
+database/namespace sandwich, consumes it once through bound deletion in the
+same continuously locked store, and requires post-delete database -> namespace
+-> database proof, including exact archived topology, all five root links, and
+repeated public absence, before the same-store clean handoff.
+
+Accepted commit `a05997d8`, with acceptance-gate follow-up `cfb5a70d`, admits
+only exact RootLinks-sourced ActiveReblit `CandidatePreserved` generation 13.
+It carries the exact record-inode binding from capture through one bound advance
+to `RollbackComplete` generation 14, validates the successor in the same store,
+destroys the old lock-bearing store, and requires an independent canonical
+reopen. Its proof covers 24 successes, 120 storage faults, 96 predecessor or
+successor binding substitutions, and 48 fresh-handle reopens. Another 240 cases
+mutate all five root-ABI links: exactly 120 at `CaptureSandwich` and 120 at
+`FinalRevalidation`; the legacy fresh-namespace-capture race remains a separate
+focused contract. The full RootLinks endpoint performs exactly one reverse
+`/usr` exchange and one ActiveReblit wrapper exchange. This entry performs no
+boot, database, non-journal namespace, finalization, or cleanup effect. Exact
+`BootSyncStarted` remains disjoint and routes to `BootRepairRequired`.
+Accepted commit `f2b305d4` now admits only exact RootLinks NewState generation-17
+`FreshDbInvalidated`. It captures the non-Clone predecessor record-inode
+binding, consumes it through one bound advance to generation-18
+`RollbackComplete`, validates the successor in the same store, drops the old
+lock-bearing store, and independently reopens the canonical journal to match
+the same successor inode and record. Its base-success, storage-fault,
+binding-substitution, and fresh-handle matrices cover 48, 240, 192, and 96
+executions. The fresh-handle lane is not process-death evidence. Another 480
+cases retain all five root-ABI identities across 240 capture and 240 final-
+revalidation races.
+
+That completion entry is journal-only: database, non-journal namespace,
+reverse-exchange, candidate, boot, cleanup, terminal-deletion, and finalization
+effects all remain zero. At that checkpoint NewState stayed byte-stable at
+generation 18 and ActiveReblit at generation 14. Commit `68759ba3` still proves
+only the 20-case NewState generation-16 -> generation-17 invalidation boundary.
+When its crash already made the generation-17 successor canonical, recovery may
+naturally take the ordinary generation-17 -> 18 route; that does not create a
+completion-boundary `SIGKILL` claim.
+
+Accepted commit `8f391985` closes the shared bound-delete store blocker.
+Accepted commit `0a91c2ed` adds exact interrupted-detach writer reopen: it
+authenticates the public journal and lock, retains one valid owner-private
+single-link mode-`0600` terminal residue's bounded frame and inode, double-
+observes the exact inventory, restores it once with `RENAME_NOREPLACE`, and
+syncs the directory once. Ambiguous restore or sync reports reconcile without
+retry; unsafe, foreign, malformed, corrupt, nonterminal, multiple, and
+canonical-coexisting states fail closed, while read-only inspection rejects
+residue. Its accepted lanes pass 13/13 focused recovery, 10/10 bound deletion,
+and 110/110 direct journal tests. Accepted commit `a0966008` consumes the bound-
+delete primitive for exact RootLinks ActivateArchived generation 12. Accepted
+commit `b0af65d6` applies the same exact one-shot architecture only to RootLinks
+NewState generation 18 while preserving legacy Intent/Exchanged admission.
+Binding-first authority captures the exact non-`Clone` record binding before
+database or namespace evidence, revalidates it, and consumes it once through
+`delete_record_binding`; the same locked store then proves exact joint database
+absence, the preserved-candidate namespace and all five root links, repeated
+public absence, and clean handoff. Every delete error, including storage-
+classified absence, fails the current entry. Coverage is 7 authority, 14
+executor, 5 handoff, 2 fresh-handle, and 2 endpoint tests, including 48 success,
+  15 link-race, and 6 storage cases. Accepted commit `806003ac` applies the same
+  one-shot architecture only to exact RootLinks ActiveReblit generation 14 while
+  retaining legacy Intent/Exchanged admission. It captures mandatory non-`Clone`
+  record binding before database or namespace evidence, consumes it in exactly
+  one bound delete, and retains the same locked store through exact
+  `ExistingCandidate`/`Cleared` ownership and provenance, whole-wrapper topology
+  and index, all five links, two public-absence observations, and clean handoff.
+  Every delete error, including authenticated `Absent`, fails. Its 24 focused
+  tests and full 24-case success matrix, 15 all-five-link races, fresh-handle
+  coverage, and clean-then-clean endpoint pass. The unchanged legacy 12-case
+  terminal `SIGKILL` matrices remain Intent/Exchanged-only and exclude
+  RootLinks.
+
+  Accepted commit `39456719` adds a separate exact RootLinks terminal campaign:
+  3 operations x 2 current/historical epochs x 6 scenarios = 36 cases, 84 child
+  executions, 48 genuine same-boot `SIGKILL` deaths, and 36 successful final
+  recoveries. The seams are final PRE retention, exact private detach before
+  private unlink, post-private-unlink absence, post-delete-directory-sync
+  absence, recovery death after canonical restore, and recovery death after
+  the restore directory sync. Before any child opens a writer, journal store,
+  or database, raw inventory authenticates the exact public Cast/journal/lock
+  anchors and exact absence or, when present, the canonical/private record
+  name, inode, complete frame, mode, and link count. Every death callback first asserts zero operation-specific
+  effect attempts. Every child enters only through production
+  `CleanSystemStartup`, with internal 15-second deadlines restricted to those
+  spawned children. Final recovery proves all five root links, the exact
+  operation-specific database and topology, public journal absence, clean
+  admission, and a second clean entry. The cooperative same-credential
+  limitation remains explicit. This proves neither reboot nor power-loss
+  durability and adds no cleanup or boot claim.
+
+### Startup reconciliation and interruption campaign
+
+The open startup-reconciliation and interruption work items, including the
+completed database-ownership probes, every operation's no-boot rollback
+suffix, and the ActiveReblit boot-required journal routes, continue in the
+[startup-reconciliation plan](state-activation-startup-reconciliation.md).
+Production startup handles exactly one entry checkpoint at a time. NewState
+preparation-only target creation or normalization retains its phase; movement,
+routing, exact fresh-row invalidation, completion persistence, and terminal
+deletion each stop after their own boundary. ActiveReblit preserves its whole
+replacement wrapper. When boot repair is not required, a later entry advances
+only the journal from `CandidatePreserved` to `RollbackComplete`; that
+successor is never finalized in the same entry. A further entry admits the
+RootLinks terminal record only at generation 14, while retaining the legacy
+Intent/Exchanged sources, and only with the exact `ExistingCandidate` row under `Cleared`
+ownership, present immutable provenance, `previous: None`, `candidate ==
+previous`, and the unchanged preserved-wrapper topology and wrapper index. Its
+operation-specific finalizer captures the exact non-`Clone` binding before
+database or namespace evidence, retains the same continuously locked journal
+store, consumes exactly one bound deletion, and requires post-delete database
+-> namespace -> database, all-five-link, and two-public-absence proof before
+transferring that store directly into the shared clean-startup audit. It performs
+no database, non-journal namespace, trigger, cleanup, or wrapper effect. An
+exact `BootSyncStarted` source instead routes the preserved candidate to
+`BootRepairRequired`; independently observed `BootRepairStarted` evidence
+becomes terminal `BootRepairUnverified` without another boot invocation.
+Compiler-local seals prevent sibling authority construction,
+and operation-specific real-gate contracts cover the complete deterministic
+matrices, journal-update and terminal-delete faults, evidence races, and
+fresh-handle restart.
+
+The separate legacy ActiveReblit terminal process lane runs an exact 2 x 2 x 3
+matrix: current and historical record epochs, both legacy rollback sources, and three
+genuine same-boot `SIGKILL` boundaries. Final-PRE death retains the exact
+canonical source; death immediately after unlink exposes kernel-observed
+absence before the journal-directory barrier; and death after that directory
+sync exposes post-barrier absence. Fresh recovery processes enter production
+startup and preserve the exact cleared existing-candidate row, provenance,
+wrapper topology, and wrapper index while converging through the appropriate
+source-or-absence path to clean admission. RootLinks is excluded from this
+unchanged 12-case matrix.
+
+Commit `8c22ec67` establishes two independently sealed ActivateArchived
+foundations without making either production-reachable. Candidate preservation
+authenticates the staged archived tree and its exact canonical state-slot hard
+link, orders candidate, source-parent, destination-parent, and roots-parent
+durability, and permits at most one descriptor-relative no-replace move of
+only `staging/usr` into that canonical wrapper. Fresh namespace evidence,
+rather than the raw syscall report, classifies the result. A closing retained-
+snapshot revalidation rejects both PRE-to-POST and POST-to-PRE races after
+classification without leaking retry or effect authority.
+
+The second seal admits only exact ActivateArchived `CandidatePreserved`
+evidence with distinct cleared candidate and previous-state rows plus immutable
+candidate provenance. It derives the sole `RollbackComplete` successor,
+performs one conditional journal advance, drops the old authority and store,
+and then classifies only the exact source or successor after canonical reopen.
+The child-move and completion-route lanes each pass 12 focused tests across
+current and historical epochs, rollback sources, recorded outcomes, durability
+faults, evidence races, and restart sides. Independent review is clean and all
+1258 tracked text files remain within the 1000-line limit.
+
+Commit `cbe3679a` makes only the candidate-preservation half production
+reachable. One exact ActivateArchived `CandidatePreserveIntent` startup entry
+selects Apply or Finish, crosses the operation-specific durability boundary,
+and performs one conditional advance to `CandidatePreserved`. Canonical reopen
+accepts only the exact source or successor after the old authority and journal
+handle are destroyed. Source-durable restart observes the already-preserved
+namespace and finishes without another move; successor-durable restart skips
+preservation entirely. A handled entry immediately returns
+`RecoveryPending`, so the separately sealed completion authority cannot run in
+that same entry.
+
+The production gate passes 11 persistence/shared-leaf tests and 11
+candidate-filter tests. It covers both epochs, rollback sources, recorded
+`/usr` outcomes, Apply and Finish, all five journal faults, all six final
+evidence races, exact Pending inspection, cross-operation authority rejection,
+and fresh-handle source/successor restart. Adjacent NewState, ActiveReblit,
+reverse, target-preparation, shared-effect, completion-foundation, workspace
+check, and 1321-file line-limit gates pass; independent production review is
+clean.
+
+Commit `f44c2be9` adds an exact 2 x 2 real-process matrix at the first
+ActivateArchived candidate-preservation interruption boundary: current and
+historical record epochs, both rollback sources, and death after the real
+no-replace child move returns but before semantic recapture, POST durability,
+or journal advancement. Each crash child reaches that seam through production
+`CleanSystemStartup`, performs exactly one real move, and leaves the exact
+`CandidatePreserveIntent` source journal canonical while the candidate is
+already preserved. A fresh recovery process opens new handles, selects Finish,
+makes zero second moves, completes POST durability, and persists
+`CandidatePreserved(AlreadySatisfied)`. The entry returns only
+`RecoveryPending`; completion and finalization remain later checkpoints.
+
+Commit `bc6d6792` expands that production path to an exact 2 x 2 x 7 matrix.
+In addition to the original post-move/pre-recapture seam, a real crash process
+now dies before candidate-tree sync, each of the three retained parent
+barriers, final POST capture, and the pre-persistence durable POST
+revalidation. Every callback first requires exactly one move attempt. The parent
+then proves the candidate is preserved with exact source journal, database,
+bytes, and inode identities; a fresh recovery process takes Finish, performs zero second moves,
+replays the idempotent durability suffix, and persists the exact
+`CandidatePreserved(AlreadySatisfied)` successor.
+
+The historical epoch dimension is an out-of-current-epoch journal witness in
+the same boot, not a reboot simulation. Neither the terminal post-sync kills
+nor any candidate-preservation kill is a power-loss oracle, so reboot and
+power-loss durability remain unproved. Phase 11 and the broad interruption
+campaign stay open. ActivateArchived completion is production-wired by
+`c8c5ea41`; accepted commit `a3fb25d3` extends only that entry to RootLinks and
+reaches generation-12 `RollbackComplete`. Commit `32bf8589` adds the separately
+authorized terminal checkpoint and same-lock clean handoff for legacy Intent
+and Exchanged sources. Commit `c6362aae` adds their exact 12-case same-boot
+`SIGKILL` matrix. Accepted commit `a0966008` adds exact RootLinks generation-12
+finalization through the non-`Clone` record binding, one bound deletion, and
+post-delete database/topology/five-link/public-absence proof in the same locked
+store. Accepted commit `b0af65d6` adds the matching exact RootLinks NewState
+generation-18 bound deletion and clean handoff; its full deterministic coverage
+is recorded above. Accepted commit `806003ac` adds matching exact RootLinks
+ActiveReblit generation-14 bound deletion and clean handoff while preserving
+its legacy terminal source axis. Commit `0a91c2ed` restores the single exact recoverable
+terminal residue during writer reopen. Accepted commit `39456719` exercises
+all three RootLinks finalizers and that residue recovery through a separate
+genuine same-boot `SIGKILL` campaign, leaving the unchanged legacy 12-case
+source matrices intact and making no reboot or power-loss claim.
+Later rollback, roll-forward, durable boot publication, production boot-repair
+wiring, cleanup, other earlier interruption boundaries, reboot, and
+power-loss-equivalent durability work remain.
+
+The [canonical Phase 11 exit gate](../../PLAN.md#phase-11-make-state-activation-crash-recoverable)
+remains authoritative in `PLAN.md`.

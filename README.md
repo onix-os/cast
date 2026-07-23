@@ -3,84 +3,194 @@
 # SPDX-License-Identifier: MPL-2.0
 -->
 
-# OS Tools
+# Cast
 
-OS Tools is the package-building and system-state toolkit used by Onix OS. The
-workspace contains Moss, Boulder, the `.stone` libraries, and the restricted
-Gluon evaluator shared by their declarative interfaces.
+Cast is the declarative package-building and system-state toolkit used by
+Onix OS. It ships one command: `cast`.
 
-This repository is an intentional hard fork of
-[AerynOS OS Tools](https://github.com/AerynOS/os-tools). It keeps the original
-Git history and a great deal of the original architecture, but it is no longer
-a drop-in configuration-compatible AerynOS client.
+Cast is backed by two internal Rust libraries:
 
-## Why this is a hard fork
+- `mason` evaluates package declarations, freezes build plans, builds, and
+  emits Stone packages;
+- `forge` manages repositories, package transactions, and system state.
 
-Onix is being built as a declarative Linux userspace. Package recipes, Boulder
-policy and profiles, Moss repositories, transaction triggers, and desired
-system state are all authored in one language: Gluon.
+Mason and Forge are implementation boundaries, not commands or public
+configuration namespaces. See the [Cast architecture](docs/architecture/cast.md).
 
-This is a breaking architecture decision, not a file-extension change. YAML
-and KDL loaders, fallbacks, dual writes, and intermediate representations have
-been removed. Gluon programs cross a typed and versioned ABI, run inside a
-restricted evaluator, and produce fingerprints used for provenance. Authored
-programs remain separate from generated source locks and normalized state
-snapshots.
+## Atomic by design
 
-Keeping the old configuration paths would leave two sources of truth and two
-different composition models. It would also make compatibility promises
-unclear for both projects. The hard fork makes ownership explicit: AerynOS can
-develop OS Tools for its own system and release cycle, while Onix can accept
-the breakage required by its Gluon-only model.
+Cast's core promise is that changing the system is a transaction: it either
+happens completely or it did not happen at all, and either way the system can
+prove which.
 
-This is not a claim that the inherited work has been replaced. Moss, Boulder,
-the `.stone` format, and most of the package and state-management foundation
-came from the Serpent OS and AerynOS contributors. Please read
-[ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for the full credit.
+- **Immutable states.** Every install, removal, or sync produces a new
+  numbered state — an immutable snapshot of the selected package set. States
+  are never mutated, only created and pruned.
+- **One kernel-atomic switch.** A new state's `/usr` is fully staged and
+  fsynced first, then activated with a single `renameat2(RENAME_EXCHANGE)`
+  of the real `/usr` directory. There is no symlink indirection, no script
+  window where the system is half-old and half-new: the visible tree changes
+  in one atomic kernel operation.
+- **A crash journal, not hope.** Activation runs under a phase-ladder
+  transition journal with named fsync barriers, boot-epoch and
+  mount-namespace evidence, and a single-in-flight invariant. If power dies
+  mid-transition, startup reconciliation rolls the journal forward or back
+  deterministically.
+- **Content-addressed storage by construction.** Every unique file is stored
+  once in a content-addressed asset store and hardlinked into each state's
+  tree. Deduplication is the storage model, not an optimisation pass.
+- **Bootable rollback.** Retained states get their own boot-loader entries;
+  rolling back is selecting an older state at boot or re-activating it live
+  through the same atomic exchange.
+- **Hermetic, locked builds.** Package builds run in namespaced,
+  seccomp-filtered sandboxes with **no network access at all** — every input
+  enters through hash-pinned source locks and a frozen dependency closure.
+  Each build is identified by a SHA-256 derivation identity that covers the
+  recipe, locks, policies, environment, and content-hashed toolchain
+  binaries.
+- **A real, standard filesystem.** All of this happens on an ordinary merged
+  `/usr` FHS tree. Unmodified third-party binaries, proprietary software, and
+  language package managers work as-is.
+- **Typed, bounded configuration.** All configuration is Gluon: statically
+  typed, evaluated once under strict resource limits in a capability-
+  restricted sandbox, and committed to a SHA-256 evaluation fingerprint.
+  No configuration language runs in the install path — resolution reads
+  binary indexes.
+
+## How Cast compares to Nix
+
+Cast and Nix answer the same question — how to make a system safe to change
+and possible to roll back — with the purity boundary in opposite layers. Nix
+moves correctness to *evaluation time*: the system is a value computed by a
+lazy functional language, outputs are addressed by their inputs, and
+activation is a profile flip plus activation scripts. Cast moves correctness
+to *transition time*: packages are resolved from binary indexes, files are
+content-addressed, and the moment of change is one journaled, kernel-atomic
+exchange of the real `/usr`.
+
+| | Cast | Nix / NixOS |
+|---|---|---|
+| Activation | Single atomic `RENAME_EXCHANGE` under a crash journal | Symlink flip + activation scripts |
+| File dedup | Content-addressed store, dedup by construction | Opt-in `nix store optimise` |
+| Build network access | Unsupported in the current model; hash-pinned source locks only | Allowed in fixed-output derivations |
+| Config language | Typed, resource-bounded, fingerprinted; not in the install path | Untyped, lazy, evaluated on every rebuild |
+| Filesystem | Real FHS `/usr`; foreign binaries work unmodified | `/nix/store` paths; patchelf/FHS shims needed |
+| Declarative scope | Package set + repositories | Entire system (services, users, kernel) |
+| Multi-version / dev shells | One live tree; no shell story (yet) | Native store-path coexistence, `nix develop` |
+| Ecosystem | One implementation, young repository | ~140k packages, multiple implementations |
+
+The current boundary is deliberate. Cast does not yet offer per-machine
+composed closures, side-by-side package versions, or a whole-system module
+language; those directions remain in the [future backlog](FUTURE_PLAN.md)
+rather than being rejected permanently. The present work first secures a
+compatible filesystem, solver-free installs, and an activation step strong
+enough to carry a crash journal. In exchange, Cast keeps most of
+the operational value people run NixOS for — atomic updates, bootable
+rollback, reproducible locked builds — while looking and behaving like a
+normal package manager on a normal Linux tree.
 
 ## Components
 
-- **Moss** manages packages and system states. It builds content-addressed
-  states and activates them atomically.
-- **Boulder** builds `.stone` packages in an isolated build environment from
-  `stone.glu` recipes.
-- **stone** and **libstone** provide Rust and C interfaces for the `.stone`
-  package format.
-- **gluon_config** is the common evaluator boundary. It controls imports,
-  capabilities, resource limits, diagnostics, and evaluation fingerprints.
-
-The workspace is organized by role:
+- **cast** is the sole CLI and public product identity.
+- **mason** is the internal build library.
+- **forge** is the internal package and system-state library.
+- **stone** and **libstone** provide Rust and C interfaces for `.stone`
+  packages.
+- **gluon_config** provides restricted evaluation, import policy, resource
+  limits, diagnostics, and fingerprints.
 
 ```text
-bin/       Moss and Boulder
-crates/    shared Rust libraries
-docs/      contracts, examples, and design notes
-tests/     repository-wide fixtures
-misc/      boot integration, MIME data, scripts, and notices
+bin/cast/       external CLI
+crates/mason/   internal build library
+crates/forge/   internal package/system library
+crates/         shared libraries
+docs/           contracts, examples, and architecture
+tests/          repository-wide fixtures
+misc/           boot integration, MIME data, scripts, and notices
 ```
 
 ## Declarative configuration
 
-Gluon is the only OS Tools configuration language. The main authored entry
+Gluon is the only Cast configuration language. The main authored entry
 points are:
 
-- `stone.glu` for Boulder recipes;
-- `profile.glu` and `profile.d/*.glu` for Boulder profiles;
-- `repo.glu` and `repo.d/*.glu` for Moss repositories;
-- `*.glu` modules for packaged transaction triggers;
-- `/etc/moss/system.glu` for desired system state.
+- `stone.glu` for packages;
+- `profile.glu` and `profile.d/*.glu` for build profiles;
+- `repo.glu` and `repo.d/*.glu` for repositories;
+- `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` for packaged triggers;
+- `/etc/cast/system.glu` for desired system state.
 
-OS Tools does not fall back to YAML or KDL. YAML files under `.github/` belong
-to GitHub's own interfaces and are not OS Tools configuration.
+Public modules use only the `cast.*` namespace, including
+`cast.package.v3`, `cast.builders.*.v2`, `cast.profile.v1`,
+`cast.repository.v1`, `cast.trigger.v1`, and `cast.system.v1`.
 
-Read the [Gluon configuration contract](docs/gluon-configuration.md) for the
-typed ABI, evaluator restrictions, generated-state rules, and CLI workflow.
-Runnable source examples live in [docs/examples/gluon](docs/examples/gluon).
+Cast does not fall back to YAML or KDL. The only YAML allowlist belongs to
+external GitHub interfaces under `.github/`. `make test` runs the
+`config-formats` gate so owned YAML or KDL paths fail validation.
+
+Read the [Gluon configuration contract](docs/gluon-configuration.md) and the
+[package-authoring guide](docs/package-authoring.md). Runnable examples live in
+[docs/examples/gluon](docs/examples/gluon).
+
+The checked package corpus includes standard builders and deliberately more
+Nix-inspired composition patterns: an explicit
+[kernel-package specialization](docs/examples/gluon/packages/kernel-module-factory),
+[ordered package layers](docs/examples/gluon/packages/layered-overrides), and
+fully admitted offline dependency closures for
+[Node.js](docs/examples/gluon/packages/nodejs-vendored-application) and
+[Maven](docs/examples/gluon/packages/maven-application). `make examples` checks
+and evaluates every package root through the public Cast CLI, then freezes each
+one twice to prove deterministic lock reuse without network access.
+
+### Package locks and plans
+
+Cast never rewrites authored `stone.glu` modules. Adjacent generated files
+freeze I/O-backed resolution:
+
+- `sources.lock.glu` schema v2 records archive hashes and binds each Git
+  request to a commit and canonical normalized-checkout digest;
+- `build.lock.glu` schema v6 records the exact reachable package/output
+  closure, repository snapshots, platforms, policy identities, and typed input
+  provenance.
+
+The derivation-plan schema is v16. It binds the Cast implementation identity,
+recipe and policy provenance, locks, resolved commands, built-in archive
+extraction, environment, outputs, and reproducibility inputs into one SHA-256
+derivation identity.
+
+Unpacked sources are limited to tar streams which are plain, gzip-compressed,
+xz-compressed, or zstd-compressed with standard frame magic. Cast extracts them
+itself through the frozen plan; unsupported compression and container formats
+fail closed without an external unpacker fallback. The complete archive
+contract is documented in the
+[package-authoring guide](docs/package-authoring.md#archive-extraction-contract).
+
+```sh
+cast recipe update ./stone.glu
+cast recipe plan ./stone.glu \
+  --profile default-x86_64 \
+  --target x86_64 \
+  --source-date-epoch 1700000000 \
+  --jobs 8 \
+  --update-lock
+
+cast recipe explain ./stone.glu \
+  --profile default-x86_64 \
+  --target x86_64 \
+  --source-date-epoch 1700000000 \
+  --jobs 8
+
+cast build ./stone.glu \
+  --profile default-x86_64 \
+  --target x86_64 \
+  --source-date-epoch 1700000000 \
+  --jobs 8
+```
+
+Run planning without `--update-lock` to require the current lock.
+`--refresh-repositories` is accepted only with `--update-lock`.
 
 ## Development
-
-The tracked Nix shell contains Rust, Clang, CMake, Diesel, Valgrind, and the
-tools used by the Makefile.
 
 ```sh
 git clone https://github.com/onix-os/os-tools.git
@@ -91,16 +201,8 @@ make check
 make test
 ```
 
-Without direnv:
-
-```sh
-nix develop
-make check
-make test
-```
-
-`make test` runs Clippy, the formatting check, typos, and all Cargo tests.
-Use `make help` to list the other supported targets.
+Without direnv, enter `nix develop` first. Use `make help` for the supported
+targets.
 
 ## Local installation
 
@@ -108,29 +210,47 @@ Use `make help` to list the other supported targets.
 make get-started
 ```
 
-This builds Moss and Boulder, fetches the SPDX license list used by Boulder,
-and installs the binaries and shared data below `$HOME/.local`. Override the
-prefix when needed:
+This installs the Cast executable and its shared data below `$HOME/.local`,
+with profiles under `$HOME/.config/cast`. Override `PREFIX` when needed:
 
 ```sh
 PREFIX=/opt/onix-tools make get-started
 ```
 
-Make sure the selected `bin` directory is in `PATH`.
-
 ## Safety
 
-Moss uses `/` when no alternate root is provided. Do not experiment against
-your host system. Create a disposable root and pass it explicitly:
+System commands use `/` when no alternate root is provided. Test package and
+state operations against a disposable root:
 
 ```sh
 mkdir -p aosroot
-moss -D "$PWD/aosroot" list installed
+cast -D "$PWD/aosroot" list installed
 ```
 
-Full Boulder builds also depend on Linux user namespaces and configured
-`subuid`/`subgid` ranges.
+Full builds require Linux user namespaces. Unprivileged callers also need
+`/usr/bin/newgidmap` and a delegated `/etc/subgid` entry.
+
+Frozen builds must additionally run as the sole process in a systemd cgroup-v2
+delegation with this unit policy:
+
+```ini
+[Service]
+Delegate=cpu memory pids
+DelegateSubgroup=cast-supervisor
+```
+
+Cast accepts exactly one unified `/proc/self/cgroup` entry ending in
+`/cast-supervisor`, authenticates its parent below `/sys/fs/cgroup`, and fails
+before cloning a build process if that contract is absent. Each derivation is
+then placed atomically in its own leaf with executor-owned ceilings of 4096
+PIDs, 32 GiB memory, no swap, and CPU bandwidth equal to the frozen
+`execution.jobs` value. These are operational safety limits, not recipe inputs.
+
+## Acknowledgments
+
+Cast builds on prior open-source work; the people and projects it grew
+from are credited in [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md).
 
 ## License
 
-OS Tools is available under the [Mozilla Public License 2.0](LICENSE).
+Cast is available under the [Mozilla Public License 2.0](LICENSE).

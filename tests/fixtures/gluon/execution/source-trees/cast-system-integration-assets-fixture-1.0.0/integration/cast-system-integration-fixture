@@ -1,0 +1,18 @@
+#!/usr/bin/dash
+
+set -eu
+
+case "${1-}" in
+    '')
+        test "$#" -eq 0
+        ;;
+    --self-test)
+        test "$#" -eq 1
+        ;;
+    *)
+        printf '%s\n' 'usage: cast-system-integration-fixture [--self-test]' >&2
+        exit 64
+        ;;
+esac
+
+printf '%s\n' 'cast system integration assets fixture: helper executed'

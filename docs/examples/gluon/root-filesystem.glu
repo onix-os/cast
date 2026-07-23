@@ -1,0 +1,5 @@
+let cast = import! cast.root_filesystem.v1
+
+cast.root_filesystem {
+    root = "PARTUUID=11111111-2222-3333-4444-555555555555",
+}

@@ -1,0 +1,7 @@
+let family = import! "./family.glu"
+let make_member = import! "./package.glu"
+let release = import! "./release.glu"
+
+// One release record feeds every member, while this declaration selects only
+// the daemon closure and its service/configuration output contract.
+make_member release family.daemon

@@ -1,0 +1,70 @@
+// @generated automatically by Diesel CLI.
+
+diesel::table! {
+    active_repository_snapshot (singleton) {
+        singleton -> Integer,
+        index_uri -> Text,
+        sha256 -> Text,
+        byte_size -> BigInt,
+    }
+}
+
+diesel::table! {
+    meta (package) {
+        package -> Text,
+        name -> Text,
+        version_identifier -> Text,
+        source_release -> Integer,
+        build_release -> Integer,
+        architecture -> Text,
+        summary -> Text,
+        description -> Text,
+        source_id -> Text,
+        homepage -> Text,
+        uri -> Nullable<Text>,
+        hash -> Nullable<Text>,
+        download_size -> Nullable<BigInt>,
+    }
+}
+
+diesel::table! {
+    meta_conflicts (package, conflict) {
+        package -> Text,
+        conflict -> Text,
+    }
+}
+
+diesel::table! {
+    meta_dependencies (package, dependency) {
+        package -> Text,
+        dependency -> Text,
+    }
+}
+
+diesel::table! {
+    meta_licenses (package, license) {
+        package -> Text,
+        license -> Text,
+    }
+}
+
+diesel::table! {
+    meta_providers (package, provider) {
+        package -> Text,
+        provider -> Text,
+    }
+}
+
+diesel::joinable!(meta_conflicts -> meta (package));
+diesel::joinable!(meta_dependencies -> meta (package));
+diesel::joinable!(meta_licenses -> meta (package));
+diesel::joinable!(meta_providers -> meta (package));
+
+diesel::allow_tables_to_appear_in_same_query!(
+    active_repository_snapshot,
+    meta,
+    meta_conflicts,
+    meta_dependencies,
+    meta_licenses,
+    meta_providers,
+);

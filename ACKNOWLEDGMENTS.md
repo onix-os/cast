@@ -1,7 +1,3 @@
-<!--
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
--->
 
 # Acknowledgments
 
@@ -35,11 +31,13 @@ and patient explanations to new contributors all became part of the project,
 even when they did not appear as commits.
 
 Hard-forking changes the direction of this repository; it does not erase its
-origin. Onix is taking responsibility for an incompatible Gluon-only
-configuration model. We are not claiming to have replaced the original work,
-and we do not want the fork to hide who made it possible. We will preserve the
-original authorship, license notices, and Git history, and we will keep
-crediting upstream wherever this project is described.
+origin. Onix is taking responsibility for replacing the inherited YAML/KDL
+configuration paths with a Gluon-only authoring model. This does not reject a
+future Nix compatibility or interoperability layer; that simply is not a goal
+of the current Gluon foundation work. We are not claiming to have replaced the
+original work, and we do not want the fork to hide who made it possible. We
+will preserve the original authorship, license notices, and Git history, and
+we will keep crediting upstream wherever this project is described.
 
 The complete record belongs to the
 [Git history](https://github.com/AerynOS/os-tools/commits/main) and

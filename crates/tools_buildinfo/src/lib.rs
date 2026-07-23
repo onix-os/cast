@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: 2025 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 use chrono::DateTime;
 
@@ -10,6 +9,20 @@ mod values;
 /// This will look like "0.1.0"
 pub const fn get_version() -> &'static str {
     values::VERSION
+}
+
+/// Returns the content-strong identity of the OS Tools implementation and its
+/// build context.
+///
+/// The value is a `sha256:` fingerprint computed at build time from all
+/// production Rust and Gluon sources, embedded policy/data, Cargo manifests
+/// and lockfile, repository toolchain configuration, active Cargo features,
+/// target cfgs, profile, Rust and native compiler/linker/archiver identities,
+/// compiler and linker flags, and native dependency selection.  Git metadata
+/// and build timestamps are deliberately not inputs, so the same inputs have
+/// the same value in a worktree or source archive.
+pub const fn get_semantic_fingerprint() -> &'static str {
+    values::SEMANTIC_FINGERPRINT
 }
 
 /// Returns the build time of the project, printed in UTC time format

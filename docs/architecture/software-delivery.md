@@ -3,11 +3,21 @@
 # SPDX-License-Identifier: MPL-2.0
 -->
 
-# How AerynOS delivers software to OS installs
+# Software delivery architecture
+
+This is inherited Serpent OS/AerynOS architecture retained by the Onix hard
+fork. The quotations document the origins of the Stone and state design; current
+Onix-specific package authoring and derivation contracts are documented in
+[`../package-authoring.md`](../package-authoring.md) and
+[`declarative-stone-contracts.md`](declarative-stone-contracts.md).
 
 ## Software package metadata: manifest.*.bin
 
-The `manifest.${ARCH}.bin` files contain all the metadata needed by the AerynOS tooling. For context, the `manifest.${ARCH}.jsonc` files are only there for git diff purposes and human-readable insight. They are completely ignored by the tooling.
+The `manifest.${ARCH}.bin` files contain the metadata consumed by the tooling.
+The `manifest.${ARCH}.jsonc` files are for review and human-readable insight;
+the tooling ignores them. Current Cast metadata includes the evaluated
+recipe fingerprint and the canonical derivation ID so package provenance can
+be related to its frozen plan.
 
     **Ikey Doherty**
     > our manifest.*.bin format is just a .stone in disguise
@@ -21,7 +31,10 @@ The `manifest.${ARCH}.bin` files contain all the metadata needed by the AerynOS 
 
 ## Software distribution via *.stone packages
 
-AerynOS distributes software via its custom `stone` format. This format was explicitly built to enable fast, deduplicated transmission and installation of software artefacts on target OS installs.
+Onix retains the custom `stone` format for fast, deduplicated transmission and
+installation. A Stone package ID or payload hash proves artifact identity and
+integrity. It is distinct from the derivation ID, which hashes the canonical
+inputs and requested build semantics before execution.
 
     > **Ikey Doherty**
     > Context: we dont mix layout + metadata (unlike in alpine, where tar records are used for metadata)
@@ -37,27 +50,11 @@ AerynOS distributes software via its custom `stone` format. This format was expl
     > so when we "cache" / install a package, in reality we're ripping the content payload out, then using the index payload to shard it into the unique assets in the store to build up the content addressable storage
     > we then merge the entries from metapayload + layoutpayload into the DBs
     > and we use the unique package "id" to key it, ie the hash for the `.stone`
-    > internally moss has a notion of "State" whereby it maps your explicitly / transitive selections for a transaction into those pkgids
-    > and during composition ("blit") we load all the required ids/etc/ and produce an in memory VFS structure using those "LayoutEntry"
-    > and then blit in optimal order into a tree using linkat, mkdirat, etc.
-    > we also do some graph ordering and reparenting to detect filesystem conflicts ahead of time
-    > and to solve symlinked directories chicken/egg ordering
-    > and detect those conflicts too..
-    > anyway, the main sauce is then linkat for all the $hash -> $root/$path
-    > and is delta-friendly (in future) by not locking paths to contents
     > In summary: "A lot more than a single tar file can do."
-    > the vfs crate is actually borderline devil magic
-    > https://github.com/AerynOS/os-tools/blob/main/crates/vfs/src/tree/mod.rs
-    > https://github.com/AerynOS/os-tools/blob/main/crates/vfs/src/tree/builder.rs
-    > but it does mean we can bake the view of the applied/installed OS ahead of time in memory and organise/optimise it
-    > and we use that to make "new" installs each time under /.moss/root/staging
-    > we then do some magic shit with linux containers (kernel namespaces) to enter the new system and run some triggers in an ephemeral copy
-    > and eventually we swap that staging system with /usr using renameat2 / atomic exchange / rename
-    > and ofc swap the one now at staging into an archived ID
-    > as well as handling the boot management via blsforme..
-    > i mean its basically systemd of package managers.
-    > on crack
-    > so when folks say "hey apk is super fast" im like "is it any fucking wonder"
-    > it does nothing
-    > look at us
-    > only thing moss isnt doing is delivering pizzas on the side
+
+Forge retains the corresponding state model internally. It maps explicit and
+transitive selections to package IDs, builds an in-memory VFS, detects
+filesystem and symlink conflicts before mutation, stages a complete system,
+runs transaction triggers in an isolated environment, and activates the new
+tree atomically. Cast is the only public command and product name for these
+operations.

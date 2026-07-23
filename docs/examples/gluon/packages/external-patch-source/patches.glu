@@ -1,0 +1,11 @@
+let b = import! cast.package.v3
+
+// Only the primary archive is extracted. The raw patch keeps its exact locked
+// destination and is consumed by a declared executable in setup order.
+[
+    b.step.shell_with {
+        interpreter = b.program.binary "bash",
+        declared_programs = [b.program.binary "patch"],
+        script = r#"patch -d . -p1 -i "${CAST_SOURCE_DIR}/portability.patch""#,
+    },
+]

@@ -1,0 +1,930 @@
+use std::{
+    ffi::{CStr, CString},
+    io::{self, Write as _},
+    os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, MutexGuard},
+};
+
+use super::{
+    CANONICAL_NAME, DirectoryPolicy, InodeIdentity, JOURNAL_DIRECTORY, JOURNAL_FILE_MODE, LOCK_NAME, Phase,
+    StorageError, TransitionRecord, controlled_resolution, decode, directory_entries, encode, ensure_journal_directory,
+    inode_identity, open_and_lock, open_directory_path, open_existing_directory, openat2_file, read_bounded, renameat2,
+    require_safe_regular_file, require_same_inode, temporary_name, try_open_and_lock, unlinkat,
+    validation::validate_advance,
+};
+
+mod record_binding;
+mod delete_residue_recovery;
+mod stale_temporary_cleanup;
+#[cfg(test)]
+pub(crate) use record_binding::{
+    ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
+    arm_bound_advance_before_final_deadline_callback, arm_bound_delete_private_name_callback,
+    assert_bound_advance_before_expired_cleanup_callback_consumed,
+    assert_bound_advance_before_final_deadline_callback_consumed, assert_bound_delete_private_name_callback_consumed,
+};
+#[cfg(test)]
+pub(crate) use delete_residue_recovery::{
+    DeleteResidueRecoveryDurabilityBoundary, DeleteResidueRecoveryRevalidationBoundary,
+    arm_delete_residue_recovery_durability_callback, arm_delete_residue_recovery_revalidation_callback,
+    assert_delete_residue_recovery_durability_callback_consumed,
+    assert_delete_residue_recovery_revalidation_callback_consumed,
+};
+pub(crate) use record_binding::{
+    TransitionJournalRecordBinding, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DurabilityCheckpoint {
+    TemporaryFullySynced,
+    CanonicalPublished,
+    CanonicalExchanged,
+    CanonicalDetached,
+    CanonicalUnlinked,
+    DisplacedUnlinked,
+    JournalDirectorySynced,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum StorageFaultPoint {
+    TemporarySync,
+    InitialRename,
+    InitialDirectorySync,
+    UpdateExchange,
+    UpdateFirstDirectorySync,
+    DisplacedUnlink,
+    UpdateFinalDirectorySync,
+    BoundAdvanceDeadlineCleanupUnlink,
+    BoundAdvanceDeadlineCleanupDirectorySync,
+    BoundDeleteDetach,
+    BoundDeleteDetachReport,
+    CanonicalUnlink,
+    BoundDeleteUnlinkReport,
+    DeleteDirectorySync,
+    DeleteResidueRestore,
+    DeleteResidueRestoreReport,
+    DeleteResidueDirectorySync,
+    DeleteResidueDirectorySyncReport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PublicBindingRevalidationBoundary {
+    BeforeLoadFinalBinding,
+    BeforeBoundAdvancePublish,
+    BeforeBoundAdvanceFinalBinding,
+    BeforeBoundDeleteAdmission,
+    BeforeBoundDeleteDetach,
+    BeforeBoundDeletePrivateUnlink,
+    AfterBoundDeleteUnlink,
+    BeforeBoundDeleteFailureReconciliation,
+    BeforeBoundDeletePublication,
+    BeforeBoundDeletePublicationFinalBinding,
+    BeforeDeleteUnlinkBinding,
+    BeforeDeleteFalseFinalBinding,
+    BeforeDeleteFinalBinding,
+}
+
+/// A completed filesystem operation in the durable journal-update protocol.
+///
+/// Test-only process-kill contracts arm one exact boundary. The production
+/// journal has no callback storage, dispatch, or additional control flow.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JournalUpdateDurabilityBoundary {
+    TemporaryFullySynced,
+    CanonicalExchanged,
+    UpdateFirstDirectorySynced,
+    DisplacedUnlinked,
+    UpdateFinalDirectorySynced,
+}
+
+/// A completed filesystem operation in the durable journal-delete protocol.
+///
+/// Test-only process-kill contracts arm one exact boundary. The production
+/// journal has no callback storage, dispatch, or additional control flow.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum JournalDeleteDurabilityBoundary {
+    CanonicalUnlinked,
+    DeleteDirectorySynced,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static DURABILITY_CHECKPOINTS: std::cell::RefCell<Vec<DurabilityCheckpoint>> = const { std::cell::RefCell::new(Vec::new()) };
+    static STORAGE_FAULT: std::cell::Cell<Option<StorageFaultPoint>> = const { std::cell::Cell::new(None) };
+    static JOURNAL_UPDATE_DURABILITY_CALLBACK: std::cell::RefCell<Option<(
+        JournalUpdateDurabilityBoundary,
+        Box<dyn FnOnce()>,
+    )>> = const { std::cell::RefCell::new(None) };
+    static JOURNAL_DELETE_DURABILITY_CALLBACK: std::cell::RefCell<Option<(
+        JournalDeleteDurabilityBoundary,
+        Box<dyn FnOnce()>,
+    )>> = const { std::cell::RefCell::new(None) };
+    static PUBLIC_BINDING_REVALIDATION_CALLBACK: std::cell::RefCell<Option<(
+        PublicBindingRevalidationBoundary,
+        Box<dyn FnOnce()>,
+    )>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Arm one callback after one exact successful journal-update filesystem
+/// operation. A different boundary does not consume the callback.
+#[cfg(test)]
+pub(crate) fn arm_journal_update_durability_callback(
+    boundary: JournalUpdateDurabilityBoundary,
+    callback: impl FnOnce() + 'static,
+) {
+    JOURNAL_UPDATE_DURABILITY_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow_mut().replace((boundary, Box::new(callback))).is_none(),
+            "a journal-update durability callback is already armed"
+        );
+    });
+}
+
+/// Arm one callback after one exact successful journal-delete filesystem
+/// operation. A different boundary does not consume the callback.
+#[cfg(test)]
+pub(crate) fn arm_journal_delete_durability_callback(
+    boundary: JournalDeleteDurabilityBoundary,
+    callback: impl FnOnce() + 'static,
+) {
+    JOURNAL_DELETE_DURABILITY_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow_mut().replace((boundary, Box::new(callback))).is_none(),
+            "a journal-delete durability callback is already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+fn journal_update_durability_boundary(boundary: JournalUpdateDurabilityBoundary) {
+    // Take the one-shot callback while borrowed, but invoke it only after the
+    // RefCell borrow ends. This lets a callback arm the next process-kill seam
+    // without a nested-borrow panic.
+    let callback = JOURNAL_UPDATE_DURABILITY_CALLBACK.with(|armed| {
+        let mut armed = armed.borrow_mut();
+        if armed.as_ref().is_some_and(|(target, _)| *target == boundary) {
+            armed.take().map(|(_, callback)| callback)
+        } else {
+            None
+        }
+    });
+    if let Some(callback) = callback {
+        callback();
+    }
+}
+
+#[cfg(test)]
+fn journal_delete_durability_boundary(boundary: JournalDeleteDurabilityBoundary) {
+    // End the RefCell borrow before invoking the callback so the canonical-
+    // unlink callback can arm the following directory-sync boundary.
+    let callback = JOURNAL_DELETE_DURABILITY_CALLBACK.with(|armed| {
+        let mut armed = armed.borrow_mut();
+        if armed.as_ref().is_some_and(|(target, _)| *target == boundary) {
+            armed.take().map(|(_, callback)| callback)
+        } else {
+            None
+        }
+    });
+    if let Some(callback) = callback {
+        callback();
+    }
+}
+
+#[cfg(test)]
+fn durability_checkpoint(checkpoint: DurabilityCheckpoint) {
+    DURABILITY_CHECKPOINTS.with(|checkpoints| checkpoints.borrow_mut().push(checkpoint));
+}
+
+#[cfg(not(test))]
+fn durability_checkpoint(_checkpoint: DurabilityCheckpoint) {}
+
+#[cfg(test)]
+pub(super) fn take_durability_checkpoints() -> Vec<DurabilityCheckpoint> {
+    DURABILITY_CHECKPOINTS.with(|checkpoints| std::mem::take(&mut *checkpoints.borrow_mut()))
+}
+
+#[cfg(test)]
+pub(super) fn arm_storage_fault(point: StorageFaultPoint) {
+    STORAGE_FAULT.with(|fault| {
+        assert!(fault.replace(Some(point)).is_none(), "a storage fault is already armed");
+    });
+}
+
+#[cfg(test)]
+pub(super) fn assert_storage_fault_consumed() {
+    STORAGE_FAULT.with(|fault| assert!(fault.get().is_none(), "armed storage fault was not reached"));
+}
+
+#[cfg(test)]
+pub(crate) fn arm_public_binding_revalidation_callback(
+    boundary: PublicBindingRevalidationBoundary,
+    callback: impl FnOnce() + 'static,
+) {
+    PUBLIC_BINDING_REVALIDATION_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow_mut().replace((boundary, Box::new(callback))).is_none(),
+            "a public-binding revalidation callback is already armed"
+        );
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn assert_public_binding_revalidation_callback_consumed() {
+    PUBLIC_BINDING_REVALIDATION_CALLBACK.with(|armed| {
+        assert!(
+            armed.borrow().is_none(),
+            "armed public-binding revalidation callback was not reached"
+        );
+    });
+}
+
+fn public_binding_revalidation_boundary(boundary: PublicBindingRevalidationBoundary) {
+    #[cfg(test)]
+    {
+        let callback = PUBLIC_BINDING_REVALIDATION_CALLBACK.with(|armed| {
+            let mut armed = armed.borrow_mut();
+            if armed.as_ref().is_some_and(|(target, _)| *target == boundary) {
+                armed.take().map(|(_, callback)| callback)
+            } else {
+                None
+            }
+        });
+        if let Some(callback) = callback {
+            callback();
+        }
+    }
+    let _ = boundary;
+}
+
+fn storage_fault(point: StorageFaultPoint) -> io::Result<()> {
+    #[cfg(test)]
+    {
+        let injected = STORAGE_FAULT.with(|fault| fault.get() == Some(point));
+        if injected {
+            STORAGE_FAULT.with(|fault| fault.set(None));
+            return Err(io::Error::other(format!(
+                "injected transition-journal fault at {point:?}"
+            )));
+        }
+    }
+    let _ = point;
+    Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) struct TransitionJournalStore {
+    pub(super) directory: std::fs::File,
+    _lock: std::fs::File,
+    pub(super) operation_lock: Mutex<()>,
+    path: PathBuf,
+    binding: Arc<()>,
+}
+
+/// Opaque identity of one exact open lock-bearing journal store.
+///
+/// Clones preserve pointer identity but expose no filesystem path, record, or
+/// forgeable scalar which could be confused across equal-looking journals.
+#[derive(Clone, Debug)]
+pub(crate) struct TransitionJournalBinding(Arc<()>);
+
+#[derive(Debug)]
+struct LoadedRecord {
+    record: TransitionRecord,
+    framed: Vec<u8>,
+    _file: std::fs::File,
+    identity: InodeIdentity,
+}
+
+#[derive(Debug)]
+pub(super) struct TemporaryRecord {
+    pub(super) name: CString,
+    pub(super) file: std::fs::File,
+    identity: InodeIdentity,
+}
+
+impl TransitionJournalStore {
+    /// Open the owner-controlled `.cast/journal` directory, creating only its
+    /// final fixed component when absent.
+    pub(crate) fn open(root: &Path) -> Result<Self, StorageError> {
+        let root_directory = open_directory_path(root).map_err(|source| StorageError::OpenRoot {
+            path: root.to_owned(),
+            source,
+        })?;
+        Self::open_from_root(&root_directory, root)
+    }
+
+    /// Open below an installation-root capability retained before the caller
+    /// acquired its installation lock. No absolute pathname is reopened as
+    /// authority for journal creation or locking.
+    pub(crate) fn open_retained(root_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
+        let root_directory =
+            open_existing_directory(root_directory, c".", root, DirectoryPolicy::Controlled).map_err(|source| {
+                StorageError::OpenRoot {
+                    path: root.to_owned(),
+                    source,
+                }
+            })?;
+        Self::open_from_root(&root_directory, root)
+    }
+
+    /// Open below the exact `.cast` descriptor retained by a writable
+    /// Installation. This constructor never resolves the public `.cast` name;
+    /// the surrounding startup stage separately proves that the descriptor is
+    /// still named before and after journal work.
+    pub(crate) fn open_in_retained_cast(cast_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
+        let cast_path = root.join(".cast");
+        let cast = open_existing_directory(cast_directory, c".", &cast_path, DirectoryPolicy::Controlled).map_err(
+            |source| StorageError::OpenCastDirectory {
+                path: cast_path.clone(),
+                source,
+            },
+        )?;
+        Self::open_from_cast(&cast, cast_path, true)
+    }
+
+    /// Nonblocking pre-journal inspection under the canonical writer-first
+    /// lock order.  A held journal lock is returned as `AcquireLock` rather
+    /// than waiting behind an owner which may itself need the writer lease.
+    pub(crate) fn try_open_in_retained_cast(cast_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
+        let cast_path = root.join(".cast");
+        let cast = open_existing_directory(cast_directory, c".", &cast_path, DirectoryPolicy::Controlled).map_err(
+            |source| StorageError::OpenCastDirectory {
+                path: cast_path.clone(),
+                source,
+            },
+        )?;
+        Self::open_from_cast(&cast, cast_path, false)
+    }
+
+    fn open_from_root(root_directory: &std::fs::File, root: &Path) -> Result<Self, StorageError> {
+        let cast_path = root.join(".cast");
+        let cast = open_existing_directory(root_directory, c".cast", &cast_path, DirectoryPolicy::Controlled).map_err(
+            |source| StorageError::OpenCastDirectory {
+                path: cast_path.clone(),
+                source,
+            },
+        )?;
+        Self::open_from_cast(&cast, cast_path, true)
+    }
+
+    fn open_from_cast(cast: &std::fs::File, cast_path: PathBuf, wait: bool) -> Result<Self, StorageError> {
+        let path = cast_path.join("journal");
+        let directory = ensure_journal_directory(cast, &path).map_err(|source| StorageError::OpenJournalDirectory {
+            path: path.clone(),
+            source,
+        })?;
+        let lock = if wait {
+            open_and_lock(&directory, &path)?
+        } else {
+            try_open_and_lock(&directory, &path)?
+        };
+        let store = Self {
+            directory,
+            _lock: lock,
+            operation_lock: Mutex::new(()),
+            path,
+            binding: Arc::new(()),
+        };
+        store.recover_interrupted_bound_delete(cast)?;
+        store.cleanup_stale_temporaries()?;
+        Ok(store)
+    }
+
+    /// Read only the canonical record. Temporary files are never recovery
+    /// candidates, including when the canonical file is corrupt or absent.
+    pub(crate) fn load(&self) -> Result<Option<TransitionRecord>, StorageError> {
+        let _operation = self.lock_operation()?;
+        Ok(self.load_pinned()?.map(|loaded| loaded.record))
+    }
+
+    /// Load the canonical record while holding one operation lock across
+    /// public directory and lock binding checks before and after the read.
+    pub(crate) fn load_revalidated_retained_cast(
+        &self,
+        cast_directory: &std::fs::File,
+    ) -> Result<Option<TransitionRecord>, StorageError> {
+        let _operation = self.lock_operation()?;
+        Ok(self
+            .load_pinned_revalidated_retained_cast_locked(cast_directory)?
+            .map(|loaded| loaded.record))
+    }
+
+    fn load_pinned_revalidated_retained_cast_locked(
+        &self,
+        cast_directory: &std::fs::File,
+    ) -> Result<Option<LoadedRecord>, StorageError> {
+        let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+        let canonical_present = self.inspect_exact_public_entry_set(&journal, None)?;
+        let loaded = self.load_pinned()?;
+        if canonical_present != loaded.is_some() {
+            return Err(StorageError::CanonicalChanged);
+        }
+        self.revalidate_exact_public_state(&journal, loaded.as_ref())?;
+        public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeLoadFinalBinding);
+        let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+        self.revalidate_exact_public_state(&journal, loaded.as_ref())?;
+        Ok(loaded)
+    }
+
+    /// Capture an unforgeable token for this exact open store. A separately
+    /// opened journal receives a different token even when its canonical
+    /// record and display path are byte-for-byte equal.
+    pub(crate) fn binding(&self) -> TransitionJournalBinding {
+        TransitionJournalBinding(Arc::clone(&self.binding))
+    }
+
+    /// Compare only per-open pointer identity; record/path equality is never a
+    /// substitute for the store captured by mutation authority.
+    pub(crate) fn has_binding(&self, expected: &TransitionJournalBinding) -> bool {
+        Arc::ptr_eq(&self.binding, &expected.0)
+    }
+
+    /// Revalidate that this retained store is still publicly bound below the
+    /// supplied retained `.cast` descriptor.
+    ///
+    /// This inspection only opens and authenticates existing names. It never
+    /// creates, normalizes, synchronizes, enumerates, or cleans journal state.
+    pub(crate) fn revalidate_retained_cast_binding(&self, cast_directory: &std::fs::File) -> Result<(), StorageError> {
+        let _operation = self.lock_operation()?;
+        self.revalidate_retained_cast_binding_locked(cast_directory)?;
+        Ok(())
+    }
+
+    fn revalidate_retained_cast_binding_locked(
+        &self,
+        cast_directory: &std::fs::File,
+    ) -> Result<std::fs::File, StorageError> {
+        // Capture twice around lock authentication so neither an exchanged
+        // public directory nor an exchanged public lock can be paired with a
+        // retained descriptor from a different namespace moment.
+        let journal = self.open_exact_public_journal(cast_directory)?;
+        self.revalidate_exact_public_lock(&journal)?;
+        let journal = self.open_exact_public_journal(cast_directory)?;
+        self.revalidate_exact_public_lock(&journal)?;
+        Ok(journal)
+    }
+
+    fn open_exact_public_journal(&self, cast_directory: &std::fs::File) -> Result<std::fs::File, StorageError> {
+        let journal = open_existing_directory(
+            cast_directory,
+            JOURNAL_DIRECTORY,
+            &self.path,
+            DirectoryPolicy::ExactPrivate,
+        )
+        .map_err(|source| StorageError::RevalidateJournalDirectory { source })?;
+        let retained =
+            inode_identity(&self.directory).map_err(|source| StorageError::RevalidateJournalDirectory { source })?;
+        let public = inode_identity(&journal).map_err(|source| StorageError::RevalidateJournalDirectory { source })?;
+        if retained != public {
+            return Err(StorageError::JournalDirectoryBindingChanged);
+        }
+        Ok(journal)
+    }
+
+    fn revalidate_exact_public_lock(&self, journal: &std::fs::File) -> Result<(), StorageError> {
+        let path = self.path.join("state-transition.lock");
+        require_safe_regular_file(&self._lock, &path)
+            .map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        let public = openat2_file(
+            journal.as_raw_fd(),
+            LOCK_NAME,
+            nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+            0,
+            controlled_resolution(),
+        )
+        .map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        require_safe_regular_file(&public, &path).map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        let retained = inode_identity(&self._lock).map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        let public = inode_identity(&public).map_err(|source| StorageError::RevalidateJournalLock { source })?;
+        if retained != public {
+            return Err(StorageError::JournalLockBindingChanged);
+        }
+        Ok(())
+    }
+
+    fn inspect_exact_public_entry_set(
+        &self,
+        journal: &std::fs::File,
+        expected_canonical: Option<bool>,
+    ) -> Result<bool, StorageError> {
+        // `fdopendir` consumes the shared directory offset of its descriptor.
+        // Open `.` as a fresh file description for every bounded scan so
+        // repeated PRE/POST checks never mistake an exhausted offset for an
+        // empty journal.
+        let scan = open_existing_directory(journal, c".", &self.path, DirectoryPolicy::ExactPrivate)
+            .map_err(|source| StorageError::RevalidateJournalEntrySet { source })?;
+        let names = directory_entries(&scan).map_err(|source| StorageError::RevalidateJournalEntrySet { source })?;
+        let lock_count = names
+            .iter()
+            .filter(|name| name.as_bytes() == LOCK_NAME.to_bytes())
+            .count();
+        let canonical_count = names
+            .iter()
+            .filter(|name| name.as_bytes() == CANONICAL_NAME.to_bytes())
+            .count();
+        let canonical_present = canonical_count == 1;
+        let exact = lock_count == 1
+            && canonical_count <= 1
+            && names.len() == 1 + usize::from(canonical_present)
+            && expected_canonical.is_none_or(|expected| expected == canonical_present);
+        if !exact {
+            let mut entries = names
+                .into_iter()
+                .map(|name| name.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+            entries.sort();
+            return Err(StorageError::JournalEntrySetMismatch {
+                expected_canonical,
+                entries,
+            });
+        }
+        Ok(canonical_present)
+    }
+
+    fn revalidate_exact_public_state(
+        &self,
+        journal: &std::fs::File,
+        loaded: Option<&LoadedRecord>,
+    ) -> Result<(), StorageError> {
+        self.inspect_exact_public_entry_set(journal, Some(loaded.is_some()))?;
+        let Some(loaded) = loaded else {
+            return Ok(());
+        };
+        let mut public = openat2_file(
+            journal.as_raw_fd(),
+            CANONICAL_NAME,
+            nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+            0,
+            controlled_resolution(),
+        )
+        .map_err(|source| StorageError::OpenCanonical { source })?;
+        require_safe_regular_file(&public, &self.path.join("state-transition"))
+            .map_err(|source| StorageError::ValidateCanonical { source })?;
+        require_same_inode(
+            loaded.identity,
+            inode_identity(&public).map_err(|source| StorageError::ValidateCanonical { source })?,
+        )?;
+        let framed = read_bounded(&mut public).map_err(|source| StorageError::ReadCanonical { source })?;
+        if framed != loaded.framed {
+            return Err(StorageError::CanonicalChanged);
+        }
+        Ok(())
+    }
+
+    /// Durably create the first `preparing` record for one transaction.
+    pub(crate) fn create(&self, record: &TransitionRecord) -> Result<(), StorageError> {
+        let _operation = self.lock_operation()?;
+        let framed = encode(record).map_err(StorageError::Encode)?;
+        if record.generation != 1 || record.phase != Phase::Preparing || record.rollback.is_some() {
+            return Err(StorageError::InvalidCreationRecord);
+        }
+        if self.load_pinned()?.is_some() {
+            return Err(StorageError::CanonicalAlreadyExists);
+        }
+        self.publish_record(&framed, None)
+    }
+
+    /// Conditionally advance the exact current record by one legal phase and
+    /// one generation. A stale caller can never overwrite newer evidence.
+    pub(crate) fn advance(&self, expected: &TransitionRecord, next: &TransitionRecord) -> Result<(), StorageError> {
+        let _operation = self.lock_operation()?;
+        validate_advance(expected, next).map_err(StorageError::InvalidAdvance)?;
+        let framed = encode(next).map_err(StorageError::Encode)?;
+        let Some(existing) = self.load_pinned()? else {
+            return Err(StorageError::CanonicalMissing);
+        };
+        if existing.record != *expected {
+            return Err(StorageError::ExpectedRecordMismatch);
+        }
+        self.publish_record(&framed, Some(existing))
+    }
+
+    fn publish_record(&self, framed: &[u8], existing: Option<LoadedRecord>) -> Result<(), StorageError> {
+        self.publish_record_inode(framed, existing).map(drop)
+    }
+
+    fn publish_record_retained(
+        &self,
+        framed: &[u8],
+        record: &TransitionRecord,
+        existing: Option<LoadedRecord>,
+    ) -> Result<LoadedRecord, StorageError> {
+        let temporary = self.publish_record_inode(framed, existing)?;
+        Ok(LoadedRecord {
+            record: record.clone(),
+            framed: framed.to_vec(),
+            _file: temporary.file,
+            identity: temporary.identity,
+        })
+    }
+
+    fn publish_record_inode(
+        &self,
+        framed: &[u8],
+        existing: Option<LoadedRecord>,
+    ) -> Result<TemporaryRecord, StorageError> {
+        let mut temporary = self.create_temporary()?;
+        if let Err(source) = temporary.file.write_all(&framed) {
+            self.cleanup_temporary(&temporary)?;
+            return Err(StorageError::WriteTemporary { source });
+        }
+        // Full fsync persists both record contents and the exact 0600 mode set
+        // after exclusive creation.
+        if let Err(source) = storage_fault(StorageFaultPoint::TemporarySync).and_then(|()| temporary.file.sync_all()) {
+            self.cleanup_temporary(&temporary)?;
+            return Err(StorageError::SyncTemporary { source });
+        }
+        #[cfg(test)]
+        if existing.is_some() {
+            journal_update_durability_boundary(JournalUpdateDurabilityBoundary::TemporaryFullySynced);
+        }
+        durability_checkpoint(DurabilityCheckpoint::TemporaryFullySynced);
+        if let Err(source) = require_safe_regular_file(
+            &temporary.file,
+            &self.path.join(temporary.name.to_string_lossy().as_ref()),
+        ) {
+            self.cleanup_temporary(&temporary)?;
+            return Err(StorageError::ValidateTemporary { source });
+        }
+        temporary.identity = match inode_identity(&temporary.file) {
+            Ok(identity) => identity,
+            Err(source) => {
+                self.cleanup_temporary(&temporary)?;
+                return Err(StorageError::ValidateTemporary { source });
+            }
+        };
+
+        match existing {
+            None => self.publish_initial(&temporary),
+            Some(existing) => self.publish_update(&temporary, &existing),
+        }?;
+        Ok(temporary)
+    }
+
+    /// Remove the canonical record after validating both its storage metadata
+    /// and payload. Returns false only when the canonical name is absent.
+    pub(crate) fn delete(&self, expected: &TransitionRecord) -> Result<bool, StorageError> {
+        let _operation = self.lock_operation()?;
+        self.delete_locked(None, expected)
+    }
+
+    /// Conditionally delete one exact terminal record while holding one
+    /// operation lock across public binding checks and the complete durable
+    /// unlink protocol.
+    pub(crate) fn delete_revalidated_retained_cast(
+        &self,
+        cast_directory: &std::fs::File,
+        expected: &TransitionRecord,
+    ) -> Result<bool, StorageError> {
+        let _operation = self.lock_operation()?;
+        self.delete_locked(Some(cast_directory), expected)
+    }
+
+    fn delete_locked(
+        &self,
+        cast_directory: Option<&std::fs::File>,
+        expected: &TransitionRecord,
+    ) -> Result<bool, StorageError> {
+        let initial_public = if let Some(cast_directory) = cast_directory {
+            let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+            let canonical_present = self.inspect_exact_public_entry_set(&journal, None)?;
+            Some((journal, canonical_present))
+        } else {
+            None
+        };
+        expected.validate().map_err(StorageError::Decode)?;
+        if !expected.phase.deletable() {
+            return Err(StorageError::DeleteNonterminal);
+        }
+        let existing = self.load_pinned()?;
+        if let Some((journal, canonical_present)) = initial_public.as_ref() {
+            if *canonical_present != existing.is_some() {
+                return Err(StorageError::CanonicalChanged);
+            }
+            self.revalidate_exact_public_state(journal, existing.as_ref())?;
+        }
+        let Some(existing) = existing else {
+            if let Some(cast_directory) = cast_directory {
+                public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeDeleteFalseFinalBinding);
+                let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+                self.revalidate_exact_public_state(&journal, None)?;
+            }
+            return Ok(false);
+        };
+        if existing.record != *expected {
+            return Err(StorageError::ExpectedRecordMismatch);
+        }
+        if let Some(cast_directory) = cast_directory {
+            public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeDeleteUnlinkBinding);
+            let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+            self.revalidate_exact_public_state(&journal, Some(&existing))?;
+        }
+        let named = self.open_named(CANONICAL_NAME)?.ok_or(StorageError::CanonicalChanged)?;
+        require_same_inode(
+            existing.identity,
+            inode_identity(&named).map_err(|source| StorageError::ValidateCanonical { source })?,
+        )?;
+        storage_fault(StorageFaultPoint::CanonicalUnlink)
+            .and_then(|()| unlinkat(self.directory.as_raw_fd(), CANONICAL_NAME))
+            .map_err(|source| StorageError::DeleteCanonical { source })?;
+        #[cfg(test)]
+        journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::CanonicalUnlinked);
+        durability_checkpoint(DurabilityCheckpoint::CanonicalUnlinked);
+        storage_fault(StorageFaultPoint::DeleteDirectorySync)
+            .and_then(|()| self.directory.sync_all())
+            .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+        #[cfg(test)]
+        journal_delete_durability_boundary(JournalDeleteDurabilityBoundary::DeleteDirectorySynced);
+        durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
+        if let Some(cast_directory) = cast_directory {
+            public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeDeleteFinalBinding);
+            let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
+            self.revalidate_exact_public_state(&journal, None)?;
+        }
+        Ok(true)
+    }
+
+    fn lock_operation(&self) -> Result<MutexGuard<'_, ()>, StorageError> {
+        self.operation_lock
+            .lock()
+            .map_err(|_| StorageError::OperationLockPoisoned)
+    }
+
+    fn load_pinned(&self) -> Result<Option<LoadedRecord>, StorageError> {
+        let Some(mut file) = self.open_named(CANONICAL_NAME)? else {
+            return Ok(None);
+        };
+        let identity = inode_identity(&file).map_err(|source| StorageError::ValidateCanonical { source })?;
+        let framed = read_bounded(&mut file).map_err(|source| StorageError::ReadCanonical { source })?;
+        require_safe_regular_file(&file, &self.path.join("state-transition"))
+            .map_err(|source| StorageError::ValidateCanonical { source })?;
+        let record = decode(&framed).map_err(StorageError::Decode)?;
+        Ok(Some(LoadedRecord {
+            record,
+            framed,
+            _file: file,
+            identity,
+        }))
+    }
+
+    fn open_named(&self, name: &CStr) -> Result<Option<std::fs::File>, StorageError> {
+        match openat2_file(
+            self.directory.as_raw_fd(),
+            name,
+            nix::libc::O_RDONLY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK,
+            0,
+            controlled_resolution(),
+        ) {
+            Ok(file) => {
+                require_safe_regular_file(&file, &self.path.join(name.to_string_lossy().as_ref()))
+                    .map_err(|source| StorageError::ValidateCanonical { source })?;
+                Ok(Some(file))
+            }
+            Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(source) => Err(StorageError::OpenCanonical { source }),
+        }
+    }
+
+    pub(super) fn create_temporary(&self) -> Result<TemporaryRecord, StorageError> {
+        const MAX_ATTEMPTS: usize = 128;
+        for _ in 0..MAX_ATTEMPTS {
+            let name = temporary_name();
+            match openat2_file(
+                self.directory.as_raw_fd(),
+                &name,
+                nix::libc::O_WRONLY
+                    | nix::libc::O_CLOEXEC
+                    | nix::libc::O_NOFOLLOW
+                    | nix::libc::O_NONBLOCK
+                    | nix::libc::O_CREAT
+                    | nix::libc::O_EXCL,
+                JOURNAL_FILE_MODE,
+                controlled_resolution(),
+            ) {
+                Ok(file) => {
+                    let identity = match inode_identity(&file) {
+                        Ok(identity) => identity,
+                        Err(source) => {
+                            unlinkat(self.directory.as_raw_fd(), &name).map_err(|cleanup| {
+                                StorageError::CleanupTemporary {
+                                    name: name.to_string_lossy().into_owned(),
+                                    source: cleanup,
+                                }
+                            })?;
+                            self.directory
+                                .sync_all()
+                                .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+                            return Err(StorageError::ValidateTemporary { source });
+                        }
+                    };
+                    if let Err(source) = file.set_permissions(std::fs::Permissions::from_mode(JOURNAL_FILE_MODE)) {
+                        self.cleanup_temporary_identity(&name, identity)?;
+                        return Err(StorageError::CreateTemporary { source });
+                    }
+                    if let Err(source) =
+                        require_safe_regular_file(&file, &self.path.join(name.to_string_lossy().as_ref()))
+                    {
+                        self.cleanup_temporary_identity(&name, identity)?;
+                        return Err(StorageError::ValidateTemporary { source });
+                    }
+                    return Ok(TemporaryRecord { name, file, identity });
+                }
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(source) => return Err(StorageError::CreateTemporary { source }),
+            }
+        }
+        Err(StorageError::TemporaryNamesExhausted)
+    }
+
+    fn publish_initial(&self, temporary: &TemporaryRecord) -> Result<(), StorageError> {
+        if let Err(source) = storage_fault(StorageFaultPoint::InitialRename).and_then(|()| {
+            renameat2(
+                self.directory.as_raw_fd(),
+                &temporary.name,
+                self.directory.as_raw_fd(),
+                CANONICAL_NAME,
+                nix::libc::RENAME_NOREPLACE,
+            )
+        }) {
+            self.cleanup_temporary(temporary)?;
+            return Err(StorageError::PublishCanonical { source });
+        }
+        durability_checkpoint(DurabilityCheckpoint::CanonicalPublished);
+        let canonical = self.open_named(CANONICAL_NAME)?.ok_or(StorageError::CanonicalChanged)?;
+        require_same_inode(
+            temporary.identity,
+            inode_identity(&canonical).map_err(|source| StorageError::ValidateCanonical { source })?,
+        )?;
+        storage_fault(StorageFaultPoint::InitialDirectorySync)
+            .and_then(|()| self.directory.sync_all())
+            .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+        durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
+        Ok(())
+    }
+
+    fn publish_update(&self, temporary: &TemporaryRecord, existing: &LoadedRecord) -> Result<(), StorageError> {
+        // Reauthenticate the fixed canonical name immediately before the
+        // exchange. The retained descriptor keeps the decoded inode pinned.
+        let named = self.open_named(CANONICAL_NAME)?.ok_or(StorageError::CanonicalChanged)?;
+        require_same_inode(
+            existing.identity,
+            inode_identity(&named).map_err(|source| StorageError::ValidateCanonical { source })?,
+        )?;
+
+        if let Err(source) = storage_fault(StorageFaultPoint::UpdateExchange).and_then(|()| {
+            renameat2(
+                self.directory.as_raw_fd(),
+                &temporary.name,
+                self.directory.as_raw_fd(),
+                CANONICAL_NAME,
+                nix::libc::RENAME_EXCHANGE,
+            )
+        }) {
+            self.cleanup_temporary(temporary)?;
+            return Err(StorageError::PublishCanonical { source });
+        }
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::CanonicalExchanged);
+        durability_checkpoint(DurabilityCheckpoint::CanonicalExchanged);
+
+        // After exchange, the canonical name must identify the fdatasynced
+        // inode and the temporary name must identify the old decoded inode.
+        // If either proof fails, preserve both names for diagnosis.
+        let canonical = self.open_named(CANONICAL_NAME)?.ok_or(StorageError::CanonicalChanged)?;
+        require_same_inode(
+            temporary.identity,
+            inode_identity(&canonical).map_err(|source| StorageError::ValidateCanonical { source })?,
+        )?;
+        let displaced = self
+            .open_named(&temporary.name)?
+            .ok_or(StorageError::CanonicalChanged)?;
+        require_same_inode(
+            existing.identity,
+            inode_identity(&displaced).map_err(|source| StorageError::ValidateCanonical { source })?,
+        )?;
+
+        storage_fault(StorageFaultPoint::UpdateFirstDirectorySync)
+            .and_then(|()| self.directory.sync_all())
+            .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::UpdateFirstDirectorySynced);
+        durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
+        storage_fault(StorageFaultPoint::DisplacedUnlink)
+            .and_then(|()| unlinkat(self.directory.as_raw_fd(), &temporary.name))
+            .map_err(|source| StorageError::DeleteDisplaced { source })?;
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::DisplacedUnlinked);
+        durability_checkpoint(DurabilityCheckpoint::DisplacedUnlinked);
+        storage_fault(StorageFaultPoint::UpdateFinalDirectorySync)
+            .and_then(|()| self.directory.sync_all())
+            .map_err(|source| StorageError::SyncJournalDirectory { source })?;
+        #[cfg(test)]
+        journal_update_durability_boundary(JournalUpdateDurabilityBoundary::UpdateFinalDirectorySynced);
+        durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
+        Ok(())
+    }
+
+}

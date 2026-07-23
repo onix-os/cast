@@ -1,0 +1,6 @@
+let make_package = import! "./package.glu"
+let inputs = import! "./inputs.glu"
+
+// The build-platform generator and target-platform library remain separate
+// inputs all the way from authored policy to the frozen dependency closure.
+make_package inputs

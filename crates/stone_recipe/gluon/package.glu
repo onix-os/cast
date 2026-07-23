@@ -1,0 +1,725 @@
+
+// Embedded, pure module imported by package factories as `cast.package.v3`.
+
+let _ = import! std.types
+let arrays = import! std.array.prim
+let strings = import! std.string.prim
+
+type Optional a =
+    | Unset
+    | Set a
+
+type Boolean =
+    | False
+    | True
+
+type MetaSpec = {
+    pname: String,
+    version: String,
+    release: Int,
+    homepage: String,
+    license: Array String,
+}
+
+type PackageRef = { name: String }
+
+type OutputRef = {
+    package: PackageRef,
+    output: String,
+}
+
+type DependencySpec =
+    | Package { value: PackageRef }
+    | Output { value: OutputRef }
+    | Binary { target: String }
+    | SystemBinary { target: String }
+    | PkgConfig { target: String }
+    | PkgConfig32 { target: String }
+    | Soname { target: String }
+    | CMake { target: String }
+    | Python { target: String }
+    | Interpreter { target: String }
+
+type ProgramSpec = {
+    path: String,
+    requirement: DependencySpec,
+}
+
+// A relative build-tree path to one native Linux ELF executable. Scripts use
+// Shell explicitly; a descriptor-executed shebang fails without path fallback.
+type BuiltProgramSpec = { path: String }
+
+type StepSpec =
+    | Run { program: ProgramSpec, args: Array String }
+    | RunBuilt { program: BuiltProgramSpec, args: Array String }
+    | Shell {
+        interpreter: ProgramSpec,
+        declared_programs: Array ProgramSpec,
+        script: String,
+    }
+    | CMakeConfigure { flags: Array String }
+    | CMakeBuild
+    | CMakeInstall
+    | CMakeTest
+    | MesonSetup { flags: Array String }
+    | MesonBuild
+    | MesonInstall
+    | MesonTest
+    | CargoBuild { features: Array String }
+    | CargoInstall { binaries: Array String }
+    | CargoTest { features: Array String }
+    | AutotoolsConfigure { flags: Array String }
+    | AutotoolsBuild
+    | AutotoolsInstall
+    | AutotoolsTest
+
+type PhaseSpec = {
+    steps: Array StepSpec,
+}
+
+type ScriptsSpec = {
+    setup: PhaseSpec,
+    build: PhaseSpec,
+    install: PhaseSpec,
+    check: PhaseSpec,
+    workload: PhaseSpec,
+}
+
+type HooksSpec = {
+    pre_setup: Array StepSpec,
+    post_setup: Array StepSpec,
+    pre_build: Array StepSpec,
+    post_build: Array StepSpec,
+    pre_check: Array StepSpec,
+    post_check: Array StepSpec,
+    pre_install: Array StepSpec,
+    post_install: Array StepSpec,
+    pre_workload: Array StepSpec,
+    post_workload: Array StepSpec,
+}
+
+type BuilderEnvironmentSpec =
+    | CMakeEnvironment
+    | MesonEnvironment
+    | CargoEnvironment
+    | AutotoolsEnvironment
+
+type SupportedHooksSpec = {
+    setup: Boolean,
+    build: Boolean,
+    check: Boolean,
+    install: Boolean,
+    workload: Boolean,
+}
+
+type BuilderSpec = {
+    required_tools: Array DependencySpec,
+    environment: Array BuilderEnvironmentSpec,
+    phases: ScriptsSpec,
+    supported_hooks: SupportedHooksSpec,
+}
+
+type PathSpec =
+    | Any { path: String }
+    | Exe { path: String }
+    | Symlink { path: String }
+    | Special { path: String }
+
+type OutputSpec = {
+    name: String,
+    include_in_manifest: Boolean,
+    summary: Optional String,
+    description: Optional String,
+    provides_exclude: Array String,
+    runtime_inputs: Array DependencySpec,
+    runtime_exclude: Array String,
+    paths: Array PathSpec,
+    conflicts: Array DependencySpec,
+}
+
+type ToolchainSpec =
+    | LlvmToolchain
+    | GnuToolchain
+
+type OptionsSpec = {
+    toolchain: ToolchainSpec,
+    cspgo: Boolean,
+    samplepgo: Boolean,
+    debug: Boolean,
+    strip: Boolean,
+    networking: Boolean,
+    compressman: Boolean,
+    lastrip: Boolean,
+}
+
+type ProfileSpec = {
+    name: String,
+    builder: BuilderSpec,
+    hooks: HooksSpec,
+    native_build_inputs: Array DependencySpec,
+    build_inputs: Array DependencySpec,
+    check_inputs: Array DependencySpec,
+}
+
+type UpstreamSpec =
+    | ArchiveSource {
+        url: String,
+        hash: String,
+        rename: Optional String,
+        strip_dirs: Optional Int,
+        unpack: Boolean,
+        unpack_dir: Optional String,
+    }
+    | GitSource {
+        url: String,
+        git_ref: String,
+        clone_dir: Optional String,
+    }
+
+type TuningSpec =
+    | Enable
+    | Disable
+    | Config { value: String }
+
+type NamedTuningSpec = {
+    key: String,
+    value: TuningSpec,
+}
+
+type PackageSpec = {
+    meta: MetaSpec,
+    builder: BuilderSpec,
+    hooks: HooksSpec,
+    native_build_inputs: Array DependencySpec,
+    build_inputs: Array DependencySpec,
+    check_inputs: Array DependencySpec,
+    outputs: Array OutputSpec,
+    options: OptionsSpec,
+    profiles: Array ProfileSpec,
+    sources: Array UpstreamSpec,
+    architectures: Array String,
+    tuning: Array NamedTuningSpec,
+    emul32: Boolean,
+    mold: Boolean,
+}
+
+// Scalar/record changes and arrays intentionally use different variants so
+// keeping a field is distinct from replacing an array with `[]`.
+type ValuePatch a =
+    | KeepValue
+    | SetValue a
+
+type ArrayPatch a =
+    | KeepArray
+    | ReplaceArray (Array a)
+    | PrependArray (Array a)
+    | AppendArray (Array a)
+
+type PackagePatch = {
+    meta: ValuePatch MetaSpec,
+    builder: ValuePatch BuilderSpec,
+    hooks: ValuePatch HooksSpec,
+    native_build_inputs: ArrayPatch DependencySpec,
+    build_inputs: ArrayPatch DependencySpec,
+    check_inputs: ArrayPatch DependencySpec,
+    outputs: ArrayPatch OutputSpec,
+    options: ValuePatch OptionsSpec,
+    profiles: ArrayPatch ProfileSpec,
+    sources: ArrayPatch UpstreamSpec,
+    architectures: ArrayPatch String,
+    tuning: ArrayPatch NamedTuningSpec,
+    emul32: ValuePatch Boolean,
+    mold: ValuePatch Boolean,
+}
+
+let empty_phase: PhaseSpec = { steps = [] }
+
+let empty_scripts: ScriptsSpec = {
+    setup = empty_phase,
+    build = empty_phase,
+    install = empty_phase,
+    check = empty_phase,
+    workload = empty_phase,
+}
+
+let empty_hooks: HooksSpec = {
+    pre_setup = [],
+    post_setup = [],
+    pre_build = [],
+    post_build = [],
+    pre_check = [],
+    post_check = [],
+    pre_install = [],
+    post_install = [],
+    pre_workload = [],
+    post_workload = [],
+}
+
+let all_hooks_supported: SupportedHooksSpec = {
+    setup = True,
+    build = True,
+    check = True,
+    install = True,
+    workload = True,
+}
+
+let empty_custom_builder: BuilderSpec = {
+    required_tools = [],
+    environment = [],
+    phases = empty_scripts,
+    supported_hooks = all_hooks_supported,
+}
+
+let when = \condition values ->
+    match condition with
+    | False -> []
+    | True -> values
+
+let default_options: OptionsSpec = {
+    toolchain = LlvmToolchain,
+    cspgo = False,
+    samplepgo = False,
+    debug = True,
+    strip = True,
+    networking = False,
+    compressman = False,
+    lastrip = True,
+}
+
+let output: String -> OutputSpec = \name -> {
+    name,
+    include_in_manifest = True,
+    summary = Unset,
+    description = Unset,
+    provides_exclude = [],
+    runtime_inputs = [],
+    runtime_exclude = [],
+    paths = [],
+    conflicts = [],
+}
+let output_with: OutputSpec -> OutputSpec = \value -> value
+
+let local_output = \pname output -> Output {
+    value = {
+        package = { name = pname },
+        output,
+    },
+}
+
+// Versioned cast.package.v3 output defaults are part of the pure package
+// factory ABI, not a filesystem-discovered or layered repository policy.
+// Changing their semantics requires a new package ABI. Output relations remain
+// symbolic here and are validated before Mason sees the concrete PackageSpec.
+let default_output_set = \pname -> {
+    root = output_with {
+        paths = [Any { path = "*" }],
+        .. output "out"
+    },
+    docs = output_with {
+        summary = Set (strings.append "Documentation for " pname),
+        description = Set (strings.append (strings.append "Documentation files for the " pname) " package"),
+        paths = [Any { path = "/usr/share/gtk-doc" }],
+        .. output "docs"
+    },
+    devel = output_with {
+        summary = Set (strings.append "Development files for " pname),
+        description = Set (strings.append
+            (strings.append "Install this package if you intend to build software against\nthe " pname)
+            " package."),
+        runtime_inputs = [local_output pname "out"],
+        paths = [
+            Any { path = "/usr/include" },
+            Any { path = "/usr/lib/*.a" },
+            Any { path = "/usr/lib/cmake" },
+            Any { path = "/usr/lib/lib*.so" },
+            Any { path = "/usr/lib/pkgconfig" },
+            Any { path = "/usr/share/aclocal" },
+            Any { path = "/usr/share/cmake" },
+            Any { path = "/usr/share/man/man2" },
+            Any { path = "/usr/share/man/man3" },
+            Any { path = "/usr/share/man/man9" },
+            Any { path = "/usr/share/pkgconfig" },
+            Any { path = "/usr/share/gir-1.0/*.gir" },
+            Any { path = "/usr/share/vala/vapi/*.deps" },
+            Any { path = "/usr/share/vala/vapi/*.vapi" },
+            Any { path = "/usr/lib/*.prl" },
+            Any { path = "/usr/lib/metatypes" },
+            Any { path = "/usr/lib/qt*/metatypes/qt*.json" },
+            Any { path = "/usr/lib/qt*/mkspecs" },
+            Any { path = "/usr/lib/qt*/modules/*.json" },
+            Any { path = "/usr/lib/qt*/sbom" },
+            Any { path = "/usr/lib/qt*/plugins/designer/*.so" },
+            Any { path = "/usr/share/doc/qt5/*.qch" },
+            Any { path = "/usr/share/doc/qt5/*.tags" },
+            Any { path = "/usr/share/doc/qt6/*.qch" },
+            Any { path = "/usr/share/doc/qt6/*.tags" },
+        ],
+        .. output "devel"
+    },
+    dbginfo = output_with {
+        include_in_manifest = False,
+        summary = Set (strings.append "Debugging symbols for " pname),
+        description = Set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            " package."),
+        paths = [Any { path = "/usr/lib/debug" }],
+        .. output "dbginfo"
+    },
+    libs = output_with {
+        summary = Set (strings.append "Library files for " pname),
+        description = Set (strings.append
+            (strings.append "Library files for " pname)
+            ", typically pulled in as a dependency of another package."),
+        .. output "libs"
+    },
+    bit32 = output_with {
+        summary = Set (strings.append "Provides 32-bit runtime libraries for " pname),
+        description = Set (strings.append
+            (strings.append "Install this package if you need the 32-bit versions of the\n" pname)
+            " package libraries."),
+        runtime_inputs = [local_output pname "out"],
+        paths = [
+            Any { path = "/usr/lib32" },
+            Any { path = "/usr/lib32/lib*.so.*" },
+        ],
+        .. output "32bit"
+    },
+    bit32_devel = output_with {
+        summary = Set (strings.append "Provides development files for " (strings.append pname "-32bit")),
+        description = Set (strings.append
+            (strings.append
+                (strings.append "Install this package if you need to build software against\nthe 32-bit version of " pname)
+                ", ")
+            (strings.append pname "-32bit.")),
+        runtime_inputs = [
+            local_output pname "32bit",
+            local_output pname "devel",
+        ],
+        paths = [
+            Any { path = "/usr/lib32/*.a" },
+            Any { path = "/usr/lib32/cmake" },
+            Any { path = "/usr/lib32/lib*.so" },
+            Any { path = "/usr/lib32/pkgconfig" },
+        ],
+        .. output "32bit-devel"
+    },
+    bit32_dbginfo = output_with {
+        include_in_manifest = False,
+        summary = Set (strings.append "Debugging symbols for " (strings.append pname "-32bit")),
+        description = Set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            "-32bit package."),
+        paths = [Any { path = "/usr/lib32/debug" }],
+        .. output "32bit-dbginfo"
+    },
+    demos = output_with {
+        summary = Set (strings.append "Example files for " pname),
+        description = Set (strings.append (strings.append "Example files for the " pname) " package"),
+        paths = [Any { path = "/usr/lib/qt*/examples" }],
+        .. output "demos"
+    },
+}
+
+let default_outputs = \pname ->
+    let defaults = default_output_set pname
+    [
+        defaults.root,
+        defaults.docs,
+        defaults.devel,
+        defaults.dbginfo,
+        defaults.libs,
+        defaults.bit32,
+        defaults.bit32_devel,
+        defaults.bit32_dbginfo,
+        defaults.demos,
+    ]
+
+let choose_optional = \authored default ->
+    match authored with
+    | Unset -> default
+    | Set value -> Set value
+
+// Overlay one authored output on its factory default. Lists which accumulated
+// through the legacy package-template merge remain cumulative.
+let overlay_output = \authored default -> {
+    name = authored.name,
+    include_in_manifest = authored.include_in_manifest,
+    summary = choose_optional authored.summary default.summary,
+    description = choose_optional authored.description default.description,
+    provides_exclude = authored.provides_exclude,
+    runtime_inputs = arrays.append authored.runtime_inputs default.runtime_inputs,
+    runtime_exclude = arrays.append authored.runtime_exclude default.runtime_exclude,
+    paths = arrays.append authored.paths default.paths,
+    conflicts = authored.conflicts,
+}
+
+let outputs_with_root = \pname root ->
+    let defaults = default_output_set pname
+    [
+        overlay_output root defaults.root,
+        defaults.docs,
+        defaults.devel,
+        defaults.dbginfo,
+        defaults.libs,
+        defaults.bit32,
+        defaults.bit32_devel,
+        defaults.bit32_dbginfo,
+        defaults.demos,
+    ]
+
+let profile = \name -> {
+    name,
+    builder = empty_custom_builder,
+    hooks = empty_hooks,
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+}
+
+let mk_package: MetaSpec -> PackageSpec = \meta -> {
+    meta,
+    builder = empty_custom_builder,
+    hooks = empty_hooks,
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = default_outputs meta.pname,
+    options = default_options,
+    profiles = [],
+    sources = [],
+    architectures = [],
+    tuning = [],
+    emul32 = False,
+    mold = False,
+}
+
+let apply_value = \patch current ->
+    match patch with
+    | KeepValue -> current
+    | SetValue value -> value
+
+let apply_array = \patch current ->
+    match patch with
+    | KeepArray -> current
+    | ReplaceArray values -> values
+    | PrependArray values -> arrays.append values current
+    | AppendArray values -> arrays.append current values
+
+let apply_package_patch: PackagePatch -> PackageSpec -> PackageSpec = \patch current -> {
+    meta = apply_value patch.meta current.meta,
+    builder = apply_value patch.builder current.builder,
+    hooks = apply_value patch.hooks current.hooks,
+    native_build_inputs = apply_array patch.native_build_inputs current.native_build_inputs,
+    build_inputs = apply_array patch.build_inputs current.build_inputs,
+    check_inputs = apply_array patch.check_inputs current.check_inputs,
+    outputs = apply_array patch.outputs current.outputs,
+    options = apply_value patch.options current.options,
+    profiles = apply_array patch.profiles current.profiles,
+    sources = apply_array patch.sources current.sources,
+    architectures = apply_array patch.architectures current.architectures,
+    tuning = apply_array patch.tuning current.tuning,
+    emul32 = apply_value patch.emul32 current.emul32,
+    mold = apply_value patch.mold current.mold,
+}
+
+let empty_package_patch: PackagePatch = {
+    meta = KeepValue,
+    builder = KeepValue,
+    hooks = KeepValue,
+    native_build_inputs = KeepArray,
+    build_inputs = KeepArray,
+    check_inputs = KeepArray,
+    outputs = KeepArray,
+    options = KeepValue,
+    profiles = KeepArray,
+    sources = KeepArray,
+    architectures = KeepArray,
+    tuning = KeepArray,
+    emul32 = KeepValue,
+    mold = KeepValue,
+}
+
+let package_ref = \name -> { name }
+let output_ref = \package output -> { package, output }
+let named = \key value -> { key, value }
+
+let binary_program: String -> ProgramSpec = \target -> {
+    path = strings.append "/usr/bin/" target,
+    requirement = Binary { target },
+}
+
+let system_binary_program: String -> ProgramSpec = \target -> {
+    path = strings.append "/usr/sbin/" target,
+    requirement = SystemBinary { target },
+}
+
+let package_program: PackageRef -> String -> ProgramSpec = \package path -> {
+    path,
+    requirement = Package { value = package },
+}
+
+let output_program: OutputRef -> String -> ProgramSpec = \output path -> {
+    path,
+    requirement = Output { value = output },
+}
+
+let built_program: String -> BuiltProgramSpec = \path -> { path }
+
+let bash_program = binary_program "bash"
+
+let archive = \url hash -> ArchiveSource {
+    url,
+    hash,
+    rename = Unset,
+    strip_dirs = Unset,
+    unpack = True,
+    unpack_dir = Unset,
+}
+
+let git = \url git_ref -> GitSource {
+    url,
+    git_ref,
+    clone_dir = Unset,
+}
+
+{
+    abi_version = 3,
+    mk_package,
+    meta = \value -> value,
+    scripts = \value -> value,
+    phase = \steps -> { steps },
+    step = {
+        run = \program args -> Run { program, args },
+        run_built = \program args -> RunBuilt { program, args },
+        shell = \script -> Shell {
+            interpreter = bash_program,
+            declared_programs = [],
+            script,
+        },
+        shell_with = \value -> Shell value,
+        cmake_configure = \flags -> CMakeConfigure { flags },
+        cmake_build = CMakeBuild,
+        cmake_install = CMakeInstall,
+        cmake_test = CMakeTest,
+        meson_setup = \flags -> MesonSetup { flags },
+        meson_build = MesonBuild,
+        meson_install = MesonInstall,
+        meson_test = MesonTest,
+        cargo_build = \features -> CargoBuild { features },
+        cargo_install = \binaries -> CargoInstall { binaries },
+        cargo_test = \features -> CargoTest { features },
+        autotools_configure = \flags -> AutotoolsConfigure { flags },
+        autotools_build = AutotoolsBuild,
+        autotools_install = AutotoolsInstall,
+        autotools_test = AutotoolsTest,
+    },
+    hooks = \value -> value,
+    output,
+    output_with,
+    outputs = {
+        defaults = default_outputs,
+        named = default_output_set,
+        overlay = overlay_output,
+        with_root = outputs_with_root,
+    },
+    profile,
+    profile_with = \value -> value,
+    options = \value -> value,
+    package_patch = \value -> value,
+    override_attrs = apply_package_patch,
+    defaults = {
+        scripts = empty_scripts,
+        hooks = empty_hooks,
+        builder = empty_custom_builder,
+        options = default_options,
+        package_patch = empty_package_patch,
+    },
+    optional = {
+        unset = Unset,
+        set = \value -> Set value,
+    },
+    boolean = {
+        false = False,
+        true = True,
+        when,
+    },
+    patch = {
+        keep = KeepValue,
+        set = \value -> SetValue value,
+        array = {
+            keep = KeepArray,
+            replace = \values -> ReplaceArray values,
+            prepend = \values -> PrependArray values,
+            append = \values -> AppendArray values,
+        },
+    },
+    package_ref,
+    output_ref,
+    program = {
+        binary = binary_program,
+        system_binary = system_binary_program,
+        package = package_program,
+        output = output_program,
+        built = built_program,
+    },
+    dep = {
+        package = \name -> Package { value = package_ref name },
+        output = \package output -> Output { value = output_ref package output },
+        binary = \target -> Binary { target },
+        system_binary = \target -> SystemBinary { target },
+        pkgconfig = \target -> PkgConfig { target },
+        pkgconfig32 = \target -> PkgConfig32 { target },
+        soname = \target -> Soname { target },
+        cmake = \target -> CMake { target },
+        python = \target -> Python { target },
+        interpreter = \target -> Interpreter { target },
+    },
+    builder = {
+        structured = \value -> value,
+        custom = \phases required_tools -> {
+            required_tools,
+            environment = [],
+            phases,
+            supported_hooks = all_hooks_supported,
+        },
+        shell = \phases required_tools -> {
+            required_tools,
+            environment = [],
+            phases,
+            supported_hooks = all_hooks_supported,
+        },
+    },
+    environment = {
+        cmake = CMakeEnvironment,
+        meson = MesonEnvironment,
+        cargo = CargoEnvironment,
+        autotools = AutotoolsEnvironment,
+    },
+    hook_support = {
+        all = all_hooks_supported,
+    },
+    source = {
+        archive,
+        archive_with = \value -> ArchiveSource value,
+        git,
+        git_with = \value -> GitSource value,
+    },
+    path = {
+        any = \path -> Any { path },
+        exe = \path -> Exe { path },
+        symlink = \path -> Symlink { path },
+        // Reserved for package-v3 ABI stability. Concrete package validation
+        // rejects special inodes from immutable package layouts.
+        special = \path -> Special { path },
+    },
+    tuning = {
+        enable = Enable,
+        disable = Disable,
+        config = \value -> Config { value },
+    },
+    toolchain = {
+        llvm = LlvmToolchain,
+        gnu = GnuToolchain,
+    },
+    named,
+}

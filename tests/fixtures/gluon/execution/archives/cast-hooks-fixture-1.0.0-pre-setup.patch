@@ -1,0 +1,7 @@
+--- a/hello.c
++++ b/hello.c
+@@ -6,3 +6,3 @@
+ int main(void) {
+-    return puts("pre_setup hook missing") == EOF;
++    return puts("pre_setup hook applied") == EOF;
+ }

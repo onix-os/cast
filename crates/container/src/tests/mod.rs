@@ -1,0 +1,632 @@
+use std::io::{self, Read as _, Write as _};
+use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::unix::fs::{FileTypeExt as _, MetadataExt as _};
+use std::os::unix::process::ExitStatusExt as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::Duration;
+
+use fs_err as fs;
+use nix::errno::Errno;
+use nix::fcntl::{FcntlArg, FdFlag, OFlag, fcntl, open};
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, Signal, sigaction};
+use nix::sys::signalfd::SigSet;
+use nix::sys::stat::Mode;
+use nix::unistd::{mkfifo, read};
+
+use super::{
+    AnchoredLocator, AnchoredLocatorComponent, AnchoredLocatorError, AnchoredMountTargetKind, Bind, BindSource,
+    BlockedSignalMask, CapabilityData, ChildLifecycle, ChildPidfdQuarantine, Container, ContainerError, DevPolicy,
+    Error as ContainerRunError, LoopbackPolicy, MAX_CHILD_ERROR_BYTES, MAX_LINUX_CAPABILITY_NUMBER,
+    MINIMAL_DEV_NODES, Message, PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, PR_CAPBSET_READ,
+    PreparedAnchoredMount, ProcPolicy, PseudoFilesystemPolicy, PseudoMountDecision, RootFilesystemPolicy,
+    RootMountDecision, SignalOverride, SyncSocket, SysPolicy, TMPFS_MAGIC, TmpPolicy, TmpfsLimitReadback, TmpfsLimits,
+    TmpfsLimitsError, authenticate_anchored_inputs, capability_is_set, checked_prctl_value, cleanup_pidfd_child,
+    close_sync_endpoint, contain_raw_clone_child_panic, descriptor_stat, duplicate_cloexec, namespace_flags,
+    normalized_anchored_mount_target, open_anchored_mount_target, open_anchored_resolver_target, prctl,
+    prepare_bind_target, prepare_pseudo_mount_targets, pseudo_mount_decisions, read_capabilities, read_child_error,
+    require_atomic_cgroup_bind_policy, require_atomic_cgroup_policy, resolver_stat_stable, root_mount_decisions,
+    sealed_resolver_file, send_packet_no_signal, send_pidfd_signal, set_mount_access, standard_descriptor_is_unsafe,
+    supported_capability_numbers, validate_anchored_bind_inputs, validate_anchored_mount_topology,
+    validate_resolver_target, validate_tmpfs_limit_readback, verify_tmpfs_limits, wait_for_pidfd, wait_for_pidfd_reap,
+};
+
+fn open_path_directory(path: &Path) -> OwnedFd {
+    let descriptor = open(
+        path,
+        OFlag::O_PATH | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+        Mode::empty(),
+    )
+    .unwrap();
+    // SAFETY: successful open returned a fresh owned descriptor.
+    unsafe { OwnedFd::from_raw_fd(descriptor) }
+}
+
+fn open_path_file(path: &Path) -> OwnedFd {
+    let descriptor = open(path, OFlag::O_PATH | OFlag::O_CLOEXEC, Mode::empty()).unwrap();
+    // SAFETY: successful open returned a fresh owned descriptor.
+    unsafe { OwnedFd::from_raw_fd(descriptor) }
+}
+
+fn exact_locator(path: &Path, witness: &impl std::os::fd::AsRawFd) -> AnchoredLocator {
+    AnchoredLocator::exact(path, witness).unwrap()
+}
+
+fn anchored_container(path: &Path, witness: &impl std::os::fd::AsRawFd) -> Container {
+    Container::new_anchored(exact_locator(path, witness)).unwrap()
+}
+
+fn open_test_pidfd(pid: nix::unistd::Pid) -> OwnedFd {
+    // SAFETY: pidfd_open receives one live child PID and zero reserved
+    // flags. This test helper does not participate in production clone3,
+    // which receives its pidfd atomically from CLONE_PIDFD.
+    let descriptor = unsafe { nix::libc::syscall(nix::libc::SYS_pidfd_open, pid.as_raw(), 0_u32) };
+    assert!(descriptor >= 0, "pidfd_open test child: {}", io::Error::last_os_error());
+    let descriptor = i32::try_from(descriptor).expect("pidfd fits RawFd");
+    // SAFETY: successful pidfd_open returned one fresh descriptor.
+    unsafe { OwnedFd::from_raw_fd(descriptor) }
+}
+
+fn skip_activation_capability_denial(test: &str, classification: Option<&str>, error: &ContainerRunError) -> bool {
+    let Some(classification) = classification else {
+        return false;
+    };
+    if !activation_capability_skip_allowed(std::env::var_os("CONTAINER_REQUIRE_ANCHORED_ACTIVATION").as_deref()) {
+        return false;
+    }
+    eprintln!("SKIP {test}: required host capability unavailable: {classification}: {error}");
+    true
+}
+
+fn activation_capability_skip_allowed(required: Option<&std::ffi::OsStr>) -> bool {
+    required != Some(std::ffi::OsStr::new("1"))
+}
+
+fn assert_live_tmpfs_normalization_rejected(
+    result: Result<(), ContainerRunError>,
+    root: &Path,
+    requested_size: u64,
+    normalized_size: u64,
+    inode_limit: u64,
+    anchored: bool,
+    test: &str,
+) {
+    let expected = format!(
+        "tmpfs at tmp normalized declared limits: size {requested_size} -> {normalized_size} bytes, inodes {inode_limit} -> {inode_limit}"
+    );
+    match result {
+        Err(ContainerRunError::Failure { message }) if message == expected => {}
+        Err(error) => {
+            let classification = if anchored {
+                classify_anchored_activation_unavailable(&error, root)
+            } else {
+                None
+            }
+            .or_else(|| classify_bounded_tmpfs_activation_unavailable(&error, root));
+            if skip_activation_capability_denial(test, classification, &error) {
+                return;
+            }
+            panic!("{test} failed: {error}");
+        }
+        Ok(()) => panic!("{test} accepted a tmpfs limit the kernel must normalize"),
+    }
+}
+
+fn classify_anchored_activation_unavailable(error: &ContainerRunError, label: &Path) -> Option<&'static str> {
+    if host_denied_user_namespace_setup(error) {
+        return Some("user-namespace setup denied");
+    }
+    let ContainerRunError::Failure { message } = error else {
+        return None;
+    };
+    let unavailable = [
+        "EPERM: Operation not permitted",
+        "EACCES: Permission denied",
+        "ENOSYS: Function not implemented",
+    ];
+    if unavailable
+        .iter()
+        .any(|denied| message == &format!("mount /: {denied}"))
+    {
+        return Some("private mount namespace unavailable");
+    }
+    let capability_denial = unavailable.iter().any(|denied| message.contains(denied));
+    if message.starts_with("clone sealed resolver mount through anchored root descriptor:") && capability_denial {
+        return Some("detached resolver mounts unavailable");
+    }
+    if message.starts_with("make sealed resolver mount read-only through anchored root descriptor:")
+        && capability_denial
+    {
+        return Some("resolver mount attributes unavailable");
+    }
+    if message.starts_with("attach sealed resolver mount through anchored root descriptor:") && capability_denial {
+        return Some("resolver mount attachment unavailable");
+    }
+    if message.starts_with("clone descriptor-backed bind mount for anchored source ")
+        && unavailable.iter().any(|denied| message.ends_with(denied))
+    {
+        return Some("open_tree unavailable");
+    }
+    for denied in unavailable {
+        if message
+            == &format!(
+                "clone descriptor-backed root mount for anchored root {}: {denied}",
+                label.display()
+            )
+        {
+            return Some("open_tree unavailable");
+        }
+        if message
+            == &format!(
+                "attach descriptor-backed root mount for anchored root {}: {denied}",
+                label.display()
+            )
+        {
+            return Some("move_mount unavailable");
+        }
+    }
+    None
+}
+
+fn classify_bounded_tmpfs_activation_unavailable(error: &ContainerRunError, root: &Path) -> Option<&'static str> {
+    if host_denied_user_namespace_setup(error) {
+        return Some("user-namespace setup denied");
+    }
+    let ContainerRunError::Failure { message } = error else {
+        return None;
+    };
+    for denied in [
+        "EPERM: Operation not permitted",
+        "EACCES: Permission denied",
+        "ENOSYS: Function not implemented",
+    ] {
+        if message == &format!("mount /: {denied}") {
+            return Some("private mount namespace unavailable");
+        }
+        if message == &format!("mount {}: {denied}", root.display()) {
+            return Some("recursive read-only mount attributes unavailable");
+        }
+        if message == &format!("mount tmp: {denied}") {
+            return Some("bounded tmpfs mount unavailable");
+        }
+    }
+    None
+}
+
+fn classify_minimal_dev_activation_unavailable(error: &ContainerRunError, root: &Path) -> Option<&'static str> {
+    if matches!(error, ContainerRunError::PrivateDeviceProviderUnavailable { .. }) {
+        return Some("private minimal-device provider unavailable");
+    }
+    if let Some(classification) = classify_bounded_tmpfs_activation_unavailable(error, root) {
+        return Some(classification);
+    }
+    let ContainerRunError::Failure { message } = error else {
+        return None;
+    };
+    for denied in [
+        "EPERM: Operation not permitted",
+        "EACCES: Permission denied",
+        "ENOSYS: Function not implemented",
+    ] {
+        if message == &format!("mount dev: {denied}") {
+            return Some("minimal device tmpfs or mount attributes unavailable");
+        }
+        if message.starts_with("filesystem: ")
+            && message.contains("private minimal-device assembly target")
+            && message.ends_with(denied)
+        {
+            return Some("private minimal-device child assembly unavailable");
+        }
+    }
+    None
+}
+
+fn require_errno<T>(result: io::Result<T>, expected: Errno, operation: &str) -> io::Result<()> {
+    match result {
+        Err(error) if io_error_matches_errno(&error, expected) => Ok(()),
+        Err(error) => Err(io::Error::other(format!(
+            "{operation} failed with {error}, expected {expected}"
+        ))),
+        Ok(_) => Err(io::Error::other(format!(
+            "{operation} unexpectedly succeeded, expected {expected}"
+        ))),
+    }
+}
+
+fn io_error_matches_errno(error: &io::Error, expected: Errno) -> bool {
+    if error.raw_os_error() == Some(expected as i32) {
+        return true;
+    }
+
+    // fs_err preserves ErrorKind while wrapping the original OS error with
+    // path context, so raw_os_error() is deliberately unavailable. EROFS has
+    // its own exact ErrorKind and is the only contextualized error admitted by
+    // this helper's callers; do not soften EPERM/EACCES or other errno pairs.
+    expected == Errno::EROFS && error.kind() == io::ErrorKind::ReadOnlyFilesystem
+}
+
+fn exercise_bounded_tmpfs(size_bytes: u64, inode_limit: u64) -> io::Result<()> {
+    let tmp = std::fs::File::open("/tmp")?;
+    let mut stat: nix::libc::statfs = unsafe { std::mem::zeroed() };
+    if unsafe { nix::libc::fstatfs(tmp.as_raw_fd(), &mut stat) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let observed_size = u64::try_from(stat.f_bsize)
+        .ok()
+        .and_then(|block_size| block_size.checked_mul(stat.f_blocks))
+        .ok_or_else(|| io::Error::other("tmpfs byte readback overflow"))?;
+    if observed_size != size_bytes || stat.f_files != inode_limit {
+        return Err(io::Error::other(format!(
+            "tmpfs readback mismatch: size={observed_size}, inodes={}",
+            stat.f_files
+        )));
+    }
+
+    let available_inodes = stat.f_ffree;
+    if available_inodes == 0 || available_inodes >= inode_limit {
+        return Err(io::Error::other(format!(
+            "unexpected available tmpfs inode count {available_inodes} of {inode_limit}"
+        )));
+    }
+    for index in 0..available_inodes {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(format!("/tmp/inode-{index}"))?;
+    }
+    require_errno(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open("/tmp/inode-over-limit"),
+        Errno::ENOSPC,
+        "allocate tmpfs inode N+1",
+    )?;
+    for index in 0..available_inodes {
+        std::fs::remove_file(format!("/tmp/inode-{index}"))?;
+    }
+
+    let mut bytes = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open("/tmp/byte-limit")?;
+    bytes.write_all(&vec![0_u8; usize::try_from(size_bytes).unwrap()])?;
+    if bytes.metadata()?.len() != size_bytes {
+        return Err(io::Error::other("tmpfs accepted fewer than N declared bytes"));
+    }
+    require_errno(bytes.write_all(&[1]), Errno::ENOSPC, "allocate tmpfs byte N+1")
+}
+
+fn exercise_private_minimal_dev() -> io::Result<()> {
+    let parent = private_dev_operation("inspect /dev parent", std::fs::symlink_metadata("/dev"))?;
+    if !parent.file_type().is_dir()
+        || parent.mode() & 0o7777 != 0o755
+        || parent.uid() != 0
+        || parent.gid() != 0
+    {
+        return Err(io::Error::other(format!(
+            "minimal /dev parent is not an exact child-root-owned 0755 directory: mode={:o} uid={} gid={}",
+            parent.mode(),
+            parent.uid(),
+            parent.gid()
+        )));
+    }
+    let parent_flags = private_dev_mount_flags(Path::new("/dev"))?;
+    if parent_flags & nix::libc::ST_RDONLY == 0 {
+        return Err(io::Error::other(format!(
+            "minimal /dev parent is not read-only: mount_flags={parent_flags:#x}"
+        )));
+    }
+
+    let mut actual = private_dev_operation("read /dev directory", std::fs::read_dir("/dev"))?
+        .map(|entry| entry.map(|entry| entry.file_name()))
+        .collect::<io::Result<Vec<_>>>()
+        .map_err(|error| private_dev_error("read /dev directory entry", error))?;
+    actual.sort();
+    let mut expected = MINIMAL_DEV_NODES
+        .iter()
+        .map(|name| std::ffi::OsString::from(*name))
+        .collect::<Vec<_>>();
+    expected.sort();
+    if actual != expected {
+        return Err(io::Error::other(format!(
+            "minimal /dev entries differ: expected {expected:?}, found {actual:?}"
+        )));
+    }
+
+    for (name, expected_major, expected_minor) in [("null", 1, 3), ("zero", 1, 5), ("full", 1, 7)] {
+        let path = format!("/dev/{name}");
+        let metadata = private_dev_operation("inspect private device", std::fs::symlink_metadata(&path))?;
+        let actual_major = nix::libc::major(metadata.rdev());
+        let actual_minor = nix::libc::minor(metadata.rdev());
+        if !metadata.file_type().is_char_device()
+            || metadata.mode() & 0o7777 != 0o666
+            || metadata.nlink() != 1
+            || (actual_major, actual_minor) != (expected_major, expected_minor)
+        {
+            return Err(io::Error::other(format!(
+                "private {name} contract differs: mode={:o} links={} device={actual_major}:{actual_minor}",
+                metadata.mode(),
+                metadata.nlink()
+            )));
+        }
+        let flags = private_dev_mount_flags(Path::new(&path))?;
+        if flags & (nix::libc::ST_RDONLY | nix::libc::ST_NODEV) != 0 {
+            return Err(io::Error::other(format!(
+                "private {name} mount is read-only or nodev: mount_flags={flags:#x}"
+            )));
+        }
+    }
+
+    require_errno(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open("/dev/extra"),
+        Errno::EROFS,
+        "create undeclared minimal /dev entry",
+    )?;
+
+    require_errno(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open("/dev/null"),
+        Errno::EEXIST,
+        "exclusively create existing /dev/null",
+    )?;
+
+    // Match Python's `Path(os.devnull).open("wb")`: its create-and-truncate
+    // flags and every strict subset must retain ordinary character-device
+    // data semantics while the parent stays sealed against metadata changes.
+    for (create, truncate, operation) in [
+        (false, false, "open /dev/null for writing"),
+        (false, true, "open /dev/null with truncate"),
+        (true, false, "open /dev/null with create"),
+        (true, true, "open /dev/null with create and truncate"),
+    ] {
+        write_private_null(create, truncate, operation)?;
+    }
+
+    let mut null = private_dev_operation("open /dev/null for reading", std::fs::File::open("/dev/null"))?;
+    let mut byte = [0_u8; 1];
+    if null
+        .read(&mut byte)
+        .map_err(|error| private_dev_error("read /dev/null", error))?
+        != 0
+    {
+        return Err(io::Error::other("/dev/null did not return EOF"));
+    }
+
+    let mut zero = private_dev_operation("open /dev/zero", std::fs::File::open("/dev/zero"))?;
+    let mut zeros = [1_u8; 16];
+    zero.read_exact(&mut zeros)
+        .map_err(|error| private_dev_error("read /dev/zero", error))?;
+    if zeros != [0_u8; 16] {
+        return Err(io::Error::other("/dev/zero returned non-zero bytes"));
+    }
+
+    let mut full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .map_err(|error| private_dev_error("open /dev/full", error))?;
+    require_errno(full.write_all(&[1]), Errno::ENOSPC, "write /dev/full")
+}
+
+fn write_private_null(create: bool, truncate: bool, operation: &str) -> io::Result<()> {
+    let mut null = std::fs::OpenOptions::new()
+        .write(true)
+        .create(create)
+        .truncate(truncate)
+        .open("/dev/null")
+        .map_err(|error| private_dev_path_error(operation, Path::new("/dev/null"), error))?;
+    null.write_all(b"discarded")
+        .map_err(|error| private_dev_error("write /dev/null", error))
+}
+
+fn private_dev_operation<T>(operation: &str, result: io::Result<T>) -> io::Result<T> {
+    result.map_err(|error| private_dev_error(operation, error))
+}
+
+fn private_dev_error(operation: &str, error: io::Error) -> io::Error {
+    io::Error::new(error.kind(), format!("{operation}: {error}"))
+}
+
+fn private_dev_path_error(operation: &str, path: &Path, error: io::Error) -> io::Error {
+    let metadata = std::fs::symlink_metadata(path)
+        .map(|metadata| {
+            format!(
+                "mode={:o} uid={} gid={} device={}:{}",
+                metadata.mode(),
+                metadata.uid(),
+                metadata.gid(),
+                nix::libc::major(metadata.rdev()),
+                nix::libc::minor(metadata.rdev())
+            )
+        })
+        .unwrap_or_else(|metadata_error| format!("metadata unavailable: {metadata_error}"));
+    let flags = private_dev_mount_flags(path)
+        .map(|flags| format!("mount_flags={flags:#x}"))
+        .unwrap_or_else(|mount_error| format!("mount flags unavailable: {mount_error}"));
+    let plain_read = std::fs::File::open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    let plain_write = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    let create_write = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    let truncate_write = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open("/dev/null")
+        .map(|_| "ok".to_owned())
+        .unwrap_or_else(|plain_error| plain_error.to_string());
+    io::Error::new(
+        error.kind(),
+        format!(
+            "{operation}: {error}; {metadata}; {flags}; plain_read={plain_read}; plain_write={plain_write}; create_write={create_write}; truncate_write={truncate_write}"
+        ),
+    )
+}
+
+fn private_dev_mount_flags(path: &Path) -> io::Result<nix::libc::c_ulong> {
+    let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "private device path contains NUL"))?;
+    let mut mount: nix::libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: path is NUL-terminated and mount is valid writable output.
+    if unsafe { nix::libc::statvfs(path.as_ptr(), &mut mount) } == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(mount.f_flag)
+    }
+}
+
+fn require_payload_security_boundary() -> io::Result<()> {
+    let capabilities = read_capabilities().map_err(errno_to_io)?;
+    for capability in supported_capability_numbers().map_err(errno_to_io)? {
+        if capability_is_set(&capabilities, capability) {
+            return Err(io::Error::other(format!(
+                "capability {capability} remains in a live payload set"
+            )));
+        }
+        let bounding =
+            unsafe { checked_prctl_value(prctl(PR_CAPBSET_READ, capability, 0, 0, 0)).map_err(errno_to_io)? };
+        let ambient = unsafe {
+            checked_prctl_value(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, capability, 0, 0)).map_err(errno_to_io)?
+        };
+        if bounding != 0 || ambient != 0 {
+            return Err(io::Error::other(format!(
+                "capability {capability} remains recoverable: bounding={bounding}, ambient={ambient}"
+            )));
+        }
+    }
+
+    let policy = unsafe { nix::libc::sched_getscheduler(0) };
+    if policy != nix::libc::SCHED_OTHER {
+        return Err(io::Error::other(format!(
+            "payload scheduler policy is {policy}, not SCHED_OTHER"
+        )));
+    }
+    let mut limit = nix::libc::rlimit {
+        rlim_cur: nix::libc::RLIM_INFINITY,
+        rlim_max: nix::libc::RLIM_INFINITY,
+    };
+    if unsafe { nix::libc::getrlimit(nix::libc::RLIMIT_RTPRIO, &mut limit) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    if limit.rlim_cur != 0 || limit.rlim_max != 0 {
+        return Err(io::Error::other(format!(
+            "payload RLIMIT_RTPRIO remains {}/{}",
+            limit.rlim_cur, limit.rlim_max
+        )));
+    }
+
+    let no_new_privileges = unsafe { prctl(nix::libc::PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) };
+    if no_new_privileges != 1 {
+        return Err(if no_new_privileges == -1 {
+            io::Error::last_os_error()
+        } else {
+            io::Error::other(format!(
+                "payload PR_GET_NO_NEW_PRIVS returned {no_new_privileges}, expected 1"
+            ))
+        });
+    }
+    let seccomp_mode = unsafe { prctl(nix::libc::PR_GET_SECCOMP, 0, 0, 0, 0) };
+    if seccomp_mode != 2 {
+        return Err(if seccomp_mode == -1 {
+            io::Error::last_os_error()
+        } else {
+            io::Error::other(format!(
+                "payload PR_GET_SECCOMP returned {seccomp_mode}, expected filter mode 2"
+            ))
+        });
+    }
+
+    require_raw_syscall_errno(
+        unsafe { nix::libc::syscall(nix::libc::SYS_clone3, std::ptr::null::<nix::libc::c_void>(), 0_usize) },
+        Errno::ENOSYS,
+        "clone3 under payload filter",
+    )?;
+    require_raw_syscall_errno(
+        unsafe { nix::libc::syscall(nix::libc::SYS_unshare, 0_u64) },
+        Errno::EPERM,
+        "unshare under payload filter",
+    )?;
+    require_raw_syscall_errno(
+        unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_mount,
+                std::ptr::null::<nix::libc::c_void>(),
+                std::ptr::null::<nix::libc::c_void>(),
+                std::ptr::null::<nix::libc::c_void>(),
+                0_u64,
+                std::ptr::null::<nix::libc::c_void>(),
+            )
+        },
+        Errno::EPERM,
+        "mount under payload filter",
+    )?;
+
+    let thread = std::thread::Builder::new()
+        .name("seccomp-clone-fallback".to_owned())
+        .spawn(|| 0x5ec_c0de_u32)?;
+    if thread
+        .join()
+        .map_err(|_| io::Error::other("payload pthread probe panicked"))?
+        != 0x5ec_c0de
+    {
+        return Err(io::Error::other("payload pthread probe returned the wrong value"));
+    }
+    Ok(())
+}
+
+fn require_raw_syscall_errno(result: nix::libc::c_long, expected: Errno, operation: &str) -> io::Result<()> {
+    if result != -1 {
+        return Err(io::Error::other(format!(
+            "{operation} unexpectedly returned {result}, expected {expected}"
+        )));
+    }
+    let found = Errno::last();
+    if found != expected {
+        return Err(io::Error::other(format!(
+            "{operation} failed with {found}, expected {expected}"
+        )));
+    }
+    Ok(())
+}
+
+fn errno_to_io(error: Errno) -> io::Error {
+    io::Error::from_raw_os_error(error as i32)
+}
+
+fn host_denied_user_namespace_setup(error: &ContainerRunError) -> bool {
+    match error {
+        ContainerRunError::CloneNamespaces {
+            source: Errno::EPERM | Errno::EACCES | Errno::ENOSYS,
+        } => true,
+        ContainerRunError::Failure { message }
+            if message.starts_with("clear inherited supplementary groups:")
+                && message.contains("EPERM: Operation not permitted") =>
+        {
+            true
+        }
+        ContainerRunError::Idmap {
+            source: super::idmap::Error::WriteUidMap { source } | super::idmap::Error::WriteGidMap { source },
+        } => source.kind() == io::ErrorKind::PermissionDenied || source.raw_os_error() == Some(Errno::EPERM as i32),
+        _ => false,
+    }
+}
+
+include!("anchored_identity.rs");
+include!("anchored_inputs.rs");
+include!("policy_and_mounts.rs");
+include!("live_activation.rs");
+include!("security_contract.rs");
+include!("process_supervision.rs");

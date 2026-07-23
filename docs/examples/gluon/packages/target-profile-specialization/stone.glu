@@ -1,0 +1,67 @@
+let b = import! cast.package.v3
+
+let base_phases = b.scripts {
+    build = b.phase [
+        b.step.run (b.program.binary "base-phase-runner") ["--generic"],
+    ],
+    .. b.defaults.scripts
+}
+
+let base_hooks = b.hooks {
+    pre_build = [
+        b.step.run (b.program.binary "base-hook-runner") ["--generic"],
+    ],
+    .. b.defaults.hooks
+}
+
+let x86_64_phases = b.scripts {
+    build = b.phase [
+        b.step.run (b.program.binary "profile-phase-runner") ["--target", "x86_64"],
+    ],
+    .. b.defaults.scripts
+}
+
+let x86_64_hooks = b.hooks {
+    pre_build = [
+        b.step.run (b.program.binary "profile-hook-runner") ["--target", "x86_64"],
+    ],
+    .. b.defaults.hooks
+}
+
+let x86_64_profile = b.profile_with {
+    builder = b.builder.custom x86_64_phases [
+        b.dep.binary "profile-builder-tool",
+    ],
+    hooks = x86_64_hooks,
+    native_build_inputs = [b.dep.binary "profile-native-tool"],
+    build_inputs = [b.dep.pkgconfig "profile-target-library"],
+    check_inputs = [b.dep.binary "profile-check-tool"],
+    .. b.profile "x86_64"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "target-profile-specialization",
+    version = "2.0.0",
+    release = 1,
+    homepage = "https://example.invalid/target-profile-specialization",
+    license = ["Apache-2.0"],
+})
+
+{
+    // These generic values remain visible in the declaration, but the exact
+    // x86_64 profile replaces the complete builder, hook, and input sets.
+    builder = b.builder.custom base_phases [b.dep.binary "base-builder-tool"],
+    hooks = base_hooks,
+    native_build_inputs = [b.dep.binary "base-native-tool"],
+    build_inputs = [b.dep.pkgconfig "base-target-library"],
+    check_inputs = [b.dep.binary "base-check-tool"],
+    profiles = [x86_64_profile],
+    outputs = [
+        b.output_with {
+            paths = [b.path.any "*"],
+            .. b.output "out"
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

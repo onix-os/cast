@@ -1,0 +1,33 @@
+
+let b = import! cast.package.v3
+let cargo = import! cast.builders.cargo.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-cargo-features-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-cargo-features-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    // The library emits a compile_error without this feature, and both named
+    // binaries are required in the decoded output. Planning-only coverage
+    // cannot make either condition pass.
+    builder = cargo.builder {
+        features = ["fixture-protocol"],
+        binaries = ["cast-feature-client", "cast-feature-daemon"],
+        run_tests = b.boolean.true,
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-cargo-features-fixture-1.0.0.tar",
+            hash = "325eb5329547c77250f5d642bfcb3a3ff3b61eecdf20b0791a411a10db38bab6",
+            rename = b.optional.set "cast-cargo-features-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-cargo-features-fixture",
+        },
+    ],
+    .. base
+}

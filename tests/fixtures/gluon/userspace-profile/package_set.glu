@@ -1,0 +1,11 @@
+let b = import! cast.package.v3
+
+// One explicit package set is the only input to the role functions. Nothing
+// is discovered from the host or an ambient global package namespace.
+{
+    shell = b.dep.package "bash",
+    core_commands = b.dep.package "uutils-coreutils",
+    file_discovery = b.dep.package "findutils",
+    trust_store = b.dep.package "ca-certificates",
+    archive_tools = b.dep.package "xz",
+}

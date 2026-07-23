@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Restricted Gluon evaluation for repository-owned declarative configuration.
 //!
 //! This crate intentionally constructs an empty [`gluon::RootedThread`]. It
 //! avoids convenience VM builders and ambient importers because those expose
 //! host I/O primitives and process-wide import paths.
 
+mod deadline;
 mod diagnostic;
 mod evaluator;
 mod fingerprint;
@@ -16,7 +14,7 @@ mod source;
 
 pub use diagnostic::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
 pub use evaluator::{Evaluation, Evaluator};
-pub use fingerprint::{EvaluationFingerprint, ModuleFingerprint};
+pub use fingerprint::{EvaluationFingerprint, EvaluationFingerprintValidationError, ModuleFingerprint};
 pub use import::ImportPolicy;
 pub use limits::Limits;
 pub use source::{Source, SourceRoot};

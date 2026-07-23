@@ -1,489 +1,157 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
-// Canonical standalone Boulder recipe.
+let b = import! cast.package.v3
+let output_defaults = b.outputs.named "llvm"
 
-type Optional a =
-    | Unset
-    | Set a
-
-type Boolean =
-    | False
-    | True
-
-type SourceSpec = {
-    name: String,
-    version: String,
-    release: Int,
-    homepage: String,
-    license: Array String,
+let scripts = b.scripts {
+    setup = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "cmake"],
+            script = r#"cmake -G Ninja \
+    -B "$CAST_BUILDER_DIR" \
+    -DCMAKE_VERBOSE_MAKEFILE=ON \
+    -DCMAKE_C_FLAGS_RELEASE=-DNDEBUG \
+    -DCMAKE_CXX_FLAGS_RELEASE=-DNDEBUG \
+    -DCMAKE_Fortran_FLAGS_RELEASE=-DNDEBUG \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_DO_STRIP=OFF \
+    -DCMAKE_INSTALL_LIBDIR="${CAST_LIBDIR#${CAST_PREFIX}/}" \
+    -DCMAKE_INSTALL_LIBEXECDIR="$CAST_LIBEXECDIR" \
+    -DCMAKE_INSTALL_PREFIX="$CAST_PREFIX" \
+    -DCMAKE_LIB_SUFFIX="${CAST_LIBDIR#${CAST_PREFIX}/lib}" \
+    -S llvm \
+    -DLLVM_BUILD_LLVM_DYLIB=ON \
+    -DLLVM_ENABLE_PROJECTS=clang\;lld"#,
+        },
+    ],
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "cmake"],
+            script = r#"LD_LIBRARY_PATH="${CAST_WORK_DIR}/${CAST_BUILDER_DIR}/lib" cmake --build "$CAST_BUILDER_DIR" --verbose --parallel "$CAST_JOBS""#,
+        },
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "cmake"],
+            script = r#"LD_LIBRARY_PATH="${CAST_WORK_DIR}/${CAST_BUILDER_DIR}/lib" DESTDIR="$CAST_INSTALL_ROOT" cmake --install "$CAST_BUILDER_DIR" --verbose"#,
+        },
+    ],
+    .. b.defaults.scripts
 }
 
-type BuildSpec = {
-    setup: Optional String,
-    build: Optional String,
-    install: Optional String,
-    check: Optional String,
-    workload: Optional String,
-    environment: Optional String,
-    build_deps: Array String,
-    check_deps: Array String,
+let root = {
+    summary = b.optional.set "Low Level Virtual Machine",
+    description = b.optional.set "Low Level Virtual Machine",
+    .. b.output "out"
 }
-
-type PathSpec =
-    | Any { path: String }
-    | Exe { path: String }
-    | Symlink { path: String }
-    | Special { path: String }
-
-type PackageSpec = {
-    summary: Optional String,
-    description: Optional String,
-    provides_exclude: Array String,
-    run_deps: Array String,
-    run_deps_exclude: Array String,
-    paths: Array PathSpec,
-    conflicts: Array String,
+let development = {
+    paths = [
+        b.path.any "/usr/bin/FileCheck",
+        b.path.any "/usr/bin/obj2yaml",
+        b.path.any "/usr/bin/yaml2obj",
+    ],
+    .. b.output "devel"
 }
-
-type ToolchainSpec =
-    | Llvm
-    | Gnu
-
-type OptionsSpec = {
-    toolchain: ToolchainSpec,
-    cspgo: Boolean,
-    samplepgo: Boolean,
-    debug: Boolean,
-    strip: Boolean,
-    networking: Boolean,
-    compressman: Boolean,
-    lastrip: Boolean,
+let libraries = {
+    summary = b.optional.set "Library files for llvm",
+    paths = [b.path.any "/usr/lib/libLLVM-*.so"],
+    .. b.output "libs"
 }
-
-type UpstreamSpec =
-    | Archive {
-        url: String,
-        hash: String,
-        rename: Optional String,
-        strip_dirs: Optional Int,
-        unpack: Boolean,
-        unpack_dir: Optional String,
-    }
-    | Git {
-        url: String,
-        git_ref: String,
-        clone_dir: Optional String,
-    }
-
-type TuningSpec =
-    | Enable
-    | Disable
-    | Config { value: String }
-
-type KeyValueSpec a = {
-    key: String,
-    value: a,
+let clang = {
+    summary = b.optional.set "Clang compiler front-end (LLVM)",
+    runtime_inputs = [
+        b.dep.package "libcxx-devel",
+        b.dep.output (b.package_ref "llvm") "lld",
+        b.dep.output (b.package_ref "llvm") "out",
+    ],
+    paths = [
+        b.path.any "/usr/bin/*clang*",
+        b.path.any "/usr/lib/clang",
+        b.path.any "/usr/share/clang",
+    ],
+    .. b.output "clang"
 }
-
-type RecipeSpec = {
-    source: SourceSpec,
-    build: BuildSpec,
-    package: PackageSpec,
-    options: OptionsSpec,
-    profiles: Array (KeyValueSpec BuildSpec),
-    sub_packages: Array (KeyValueSpec PackageSpec),
-    upstreams: Array UpstreamSpec,
-    architectures: Array String,
-    tuning: Array (KeyValueSpec TuningSpec),
-    emul32: Boolean,
-    mold: Boolean,
+let clang_development = {
+    summary = b.optional.set "Development files for clang",
+    runtime_inputs = [b.dep.output (b.package_ref "llvm") "clang"],
+    paths = [
+        b.path.any "/usr/lib/cmake/clang",
+        b.path.any "/usr/lib/libclang*.a",
+        b.path.any "/usr/include/clang*",
+    ],
+    .. b.output "clang-devel"
+}
+let lld = {
+    summary = b.optional.set "LLVM linker",
+    paths = [b.path.any "/usr/bin/*lld*", b.path.any "/usr/bin/wasm-ld"],
+    .. b.output "lld"
+}
+let lld_development = {
+    summary = b.optional.set "Development files for lld",
+    runtime_inputs = [b.dep.output (b.package_ref "llvm") "lld"],
+    paths = [b.path.any "/usr/lib/cmake/lld", b.path.any "/usr/lib/liblld*.a"],
+    .. b.output "lld-devel"
 }
 
 {
-    source = {
-        name = "llvm",
+    builder = b.builder.shell scripts [
+        b.dep.binary "cmake",
+        // The selected Ninja generator spawns hardcoded /bin/sh.
+        b.dep.binary "sh",
+        b.dep.binary "ninja",
+        b.dep.binary "perl",
+        b.dep.binary "python3",
+    ],
+    build_inputs = [
+        b.dep.pkgconfig "libffi",
+        b.dep.pkgconfig "libxcrypt",
+        b.dep.pkgconfig "libxml-2.0",
+        b.dep.pkgconfig "ncursesw",
+        b.dep.pkgconfig "zlib",
+        b.dep.package "binutils-devel",
+        b.dep.package "gcc-32bit-devel",
+        b.dep.package "glibc-32bit-devel",
+        b.dep.package "libcxx-32bit-devel",
+        b.dep.package "clang-32bit",
+    ],
+    outputs = [
+        b.outputs.overlay root output_defaults.root,
+        output_defaults.docs,
+        b.outputs.overlay development output_defaults.devel,
+        output_defaults.dbginfo,
+        b.outputs.overlay libraries output_defaults.libs,
+        output_defaults.bit32,
+        output_defaults.bit32_devel,
+        output_defaults.bit32_dbginfo,
+        output_defaults.demos,
+        clang,
+        clang_development,
+        lld,
+        lld_development,
+    ],
+    sources = [
+        b.source.archive
+            "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.4/llvm-project-16.0.4.src.tar.xz"
+            "cf3c2a1152ed7a99866bd7f12c24528ada6d9f6336afb7a08416938762004c9f",
+    ],
+    tuning = [
+        b.named "bolt" b.tuning.enable,
+        b.named "fortify" b.tuning.disable,
+        b.named "harden" b.tuning.disable,
+        b.named "icf" (b.tuning.config "all"),
+        b.named "lto" b.tuning.disable,
+        b.named "nosemantic" b.tuning.enable,
+        b.named "optimize" (b.tuning.config "speed"),
+        b.named "polly" b.tuning.enable,
+        b.named "symbolic" b.tuning.enable,
+    ],
+    .. b.mk_package (b.meta {
+        pname = "llvm",
         version = "16.0.4",
         release = 8,
         homepage = "https://www.llvm.org",
-        license = [
-            "Apache-2.0 WITH LLVM-exception",
-            "NCSA",
-        ],
-    },
-    build = {
-        setup = Set r"unset LD_PRELOAD
-%patch %(pkgdir)/serpent/0001-Support-serpent-as-a-distro.patch
-%patch %(pkgdir)/perf/0001-Reduce-GCC-startup-searches.patch
-%patch %(pkgdir)/serpent/0001-Use-correct-Serpent-OS-multilib-paths-for-ld.patch
-%patch %(pkgdir)/serpent/0001-Make-gnu-hash-the-default-for-lld-and-clang.patch
-%patch %(pkgdir)/serpent/0001-Update-binutils-version-to-match-Serpent-OS.patch
-%patch %(pkgdir)/serpent/0001-Make-external-visibility-default.patch
-
-%cmake ${llvmopts} -S llvm \
-    -DLLVM_BUILD_LLVM_DYLIB=ON \
-    -DLLVM_LINK_LLVM_DYLIB=ON
-",
-        build = Set r"unset LD_PRELOAD
-%cmake_build
-",
-        install = Set r#"%cmake_install
-unset LD_PRELOAD
-
-%cmake ${llvmopts} -S llvm \
-    -DLLVM_BUILD_LLVM_DYLIB=OFF \
-    -DLLVM_LINK_LLVM_DYLIB=OFF \
-    -DCLANG_LINK_CLANG_DYLIB=OFF
-
-# Relink clang and lld statically
-%cmake_build clang lld
-
-# Major clang version
-major_version=$(echo %(version) | cut -d. -f1)
-export PATH="%(workdir)/%(builddir)/bin:${PATH}"
-export LD_LIBRARY_PATH="%(workdir)/%(builddir)/lib:${LD_LIBRARY_PATH}"
-%bolt_instr %(workdir)/%(builddir)/bin/clang-${major_version}
-
-%cmake -G Ninja ${llvmopts} -B bolt-clang -S runtimes \
-    -DCMAKE_C_COMPILER="%(workdir)/%(builddir)/bin/clang" \
-    -DCMAKE_CXX_COMPILER="%(workdir)/%(builddir)/bin/clang++" \
-    -DLLVM_ENABLE_RUNTIMES='libcxx;libcxxabi' \
-    -DLLVM_USE_LINKER="%(workdir)/%(builddir)/bin/ld.lld" \
-    -DLLVM_ENABLE_LTO=Full
-
-%cmake_build -C bolt-clang
-
-%bolt_merge %(workdir)/%(builddir)/bin/clang-${major_version}
-%bolt_opt %(workdir)/%(builddir)/bin/clang-${major_version}
-
-%install_bin %(workdir)/%(builddir)/bin/clang-${major_version} %(workdir)/%(builddir)/bin/lld
-"#,
-        check = Unset,
-        workload = Unset,
-        environment = Set r#"export llvmopts="
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_SKIP_RPATH=ON \
-    -DCLANG_DEFAULT_CXX_STDLIB=libc++ \
-    -DCLANG_DEFAULT_LINKER=lld \
-    -DCLANG_DEFAULT_OBJCOPY=llvm-objcopy \
-    -DCLANG_DEFAULT_PIE_ON_LINUX=OFF \
-    -DCLANG_DEFAULT_RTLIB=compiler-rt \
-    -DCLANG_DEFAULT_UNWINDLIB=libunwind \
-    -DCOMPILER_RT_USE_BUILTINS_LIBRARY=ON \
-    -DCOMPILER_RT_USE_LIBCXX=ON \
-    -DENABLE_LINKER_BUILD_ID=ON \
-    -DLLVM_BINUTILS_INCDIR=/usr/include \
-    -DLLVM_BUILD_TOOLS=ON \
-    -DLLVM_DEFAULT_TARGET_TRIPLE=%(build_platform) \
-    -DLLVM_ENABLE_FFI=ON \
-    -DLLVM_ENABLE_LIBCXX=ON \
-    -DLLVM_ENABLE_LIBXML2=ON \
-    -DLLVM_ENABLE_LTO=Thin \
-    -DLLVM_ENABLE_MODULES=OFF \
-    -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
-    -DLLVM_ENABLE_PROJECTS='clang;compiler-rt;lld;llvm;polly' \
-    -DLLVM_INCLUDE_BENCHMARKS=OFF \
-    -DLLVM_INCLUDE_TESTS=ON \
-    -DLLVM_INCLUDE_UTILS=ON \
-    -DLLVM_INSTALL_UTILS=ON \
-    -DLLVM_LIBDIR_SUFFIX=%(libsuffix) \
-    -DLLVM_TARGET_ARCH=X86_64 \
-    -DLLVM_TARGETS_TO_BUILD='X86;AMDGPU' \
-    -DLLVM_USE_SANITIZER=OFF \
-    -DLLVM_ENABLE_RTTI=ON
-    "
-
-# Without RPATH, we need help finding the right libraries to use
-export LD_LIBRARY_PATH="%(workdir)/%(builddir)/lib"
-"#,
-        build_deps = [
-            "binary(perl)",
-            "binary(python3)",
-            "pkgconfig(libffi)",
-            "pkgconfig(libxcrypt)",
-            "pkgconfig(libxml-2.0)",
-            "pkgconfig(ncursesw)",
-            "pkgconfig(zlib)",
-            "binutils-devel",
-            "gcc-32bit-devel",
-            "glibc-32bit-devel",
-            "libcxx-32bit-devel",
-            "clang-32bit",
-        ],
-        check_deps = [
-        ],
-    },
-    package = {
-        summary = Set "Low Level Virtual Machine",
-        description = Set r"Low Level Virtual Machine
-",
-        provides_exclude = [
-        ],
-        run_deps = [
-        ],
-        run_deps_exclude = [
-        ],
-        paths = [
-        ],
-        conflicts = [
-        ],
-    },
-    options = {
-        toolchain = Llvm,
-        cspgo = False,
-        samplepgo = False,
-        debug = True,
-        strip = True,
-        networking = False,
-        compressman = False,
-        lastrip = True,
-    },
-    profiles = [
-    ],
-    sub_packages = [
-        {
-            key = "%(name)-devel",
-            value = {
-                summary = Unset,
-                description = Unset,
-                provides_exclude = [
-                ],
-                run_deps = [
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/bin/FileCheck" },
-                    Any { path = "/usr/bin/UnicodeNameMappingGenerator" },
-                    Any { path = "/usr/bin/count" },
-                    Any { path = "/usr/bin/lli-child-target" },
-                    Any { path = "/usr/bin/llvm-PerfectShuffle" },
-                    Any { path = "/usr/bin/llvm-jitlink-executor" },
-                    Any { path = "/usr/bin/not" },
-                    Any { path = "/usr/bin/obj2yaml" },
-                    Any { path = "/usr/bin/yaml-bench" },
-                    Any { path = "/usr/bin/yaml2obj" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-        {
-            key = "%(name)-libs",
-            value = {
-                summary = Set "Library files for %(name)",
-                description = Set r"Library files for %(name), typically pulled in as a dependency of another package.
-",
-                provides_exclude = [
-                ],
-                run_deps = [
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/lib/libLLVM-*.so" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-        {
-            key = "clang",
-            value = {
-                summary = Set "Clang compiler front-end (LLVM)",
-                description = Set r"Clang compiler front-end built as part of the LLVM compiler infrastructure project.
-",
-                provides_exclude = [
-                ],
-                run_deps = [
-                    "libcxx-devel",
-                    "lld",
-                    "llvm",
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/bin/analyze-build" },
-                    Any { path = "/usr/bin/c-index-test" },
-                    Any { path = "/usr/bin/*clang*" },
-                    Any { path = "/usr/bin/diagtool" },
-                    Any { path = "/usr/bin/hmaptool" },
-                    Any { path = "/usr/bin/intercept-build" },
-                    Any { path = "/usr/bin/scan-*" },
-                    Any { path = "/usr/lib/clang/*/bin" },
-                    Any { path = "/usr/lib/clang/*/include" },
-                    Any { path = "/usr/lib/clang/*/lib/linux/*x86_64*" },
-                    Any { path = "/usr/lib/clang/*/share" },
-                    Any { path = "/usr/lib/libear" },
-                    Any { path = "/usr/libexec" },
-                    Any { path = "/usr/share/clang" },
-                    Any { path = "/usr/share/man" },
-                    Any { path = "/usr/share/scan-*" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-        {
-            key = "clang-32bit",
-            value = {
-                summary = Set "Provides 32-bit runtime libraries for clang",
-                description = Set r"Install this package if you need the 32-bit versions of the
-clang package libraries.
-",
-                provides_exclude = [
-                ],
-                run_deps = [
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/lib/clang/*/lib/linux/*i386*" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-        {
-            key = "clang-devel",
-            value = {
-                summary = Set "Development files for clang",
-                description = Set r"Install this package if you intend to build software against
-the clang package.
-",
-                provides_exclude = [
-                ],
-                run_deps = [
-                    "clang",
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/lib/cmake/clang" },
-                    Any { path = "/usr/lib/libclang*.so" },
-                    Any { path = "/usr/lib/libclang*.a" },
-                    Any { path = "/usr/include/clang*" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-        {
-            key = "clang-libs",
-            value = {
-                summary = Set "Library files for clang",
-                description = Set r"Library files for clang, typically pulled in as a dependency of another package.
-",
-                provides_exclude = [
-                ],
-                run_deps = [
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/lib/libclang*.so.*" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-        {
-            key = "lld",
-            value = {
-                summary = Set "Clang compiler front-end (LLVM)",
-                description = Set r"Clang compiler front-end built as part of the LLVM compiler infrastructure project.
-",
-                provides_exclude = [
-                ],
-                run_deps = [
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/bin/*lld*" },
-                    Any { path = "/usr/bin/wasm-ld" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-        {
-            key = "lld-devel",
-            value = {
-                summary = Set "Development files for lld",
-                description = Set r"Install this package if you intend to build software against
-the lld package.
-",
-                provides_exclude = [
-                ],
-                run_deps = [
-                    "lld",
-                ],
-                run_deps_exclude = [
-                ],
-                paths = [
-                    Any { path = "/usr/lib/cmake/lld" },
-                    Any { path = "/usr/lib/liblld*.a" },
-                ],
-                conflicts = [
-                ],
-            },
-        },
-    ],
-    upstreams = [
-        Archive {
-            url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.4/llvm-project-16.0.4.src.tar.xz",
-            hash = "cf3c2a1152ed7a99866bd7f12c24528ada6d9f6336afb7a08416938762004c9f",
-            rename = Unset,
-            strip_dirs = Unset,
-            unpack = True,
-            unpack_dir = Unset,
-        },
-    ],
-    architectures = [
-    ],
-    tuning = [
-        {
-            key = "bolt",
-            value = Enable,
-        },
-        {
-            key = "fortify",
-            value = Disable,
-        },
-        {
-            key = "harden",
-            value = Disable,
-        },
-        {
-            key = "icf",
-            value = Config {
-                value = "all",
-            },
-        },
-        {
-            key = "lto",
-            value = Disable,
-        },
-        {
-            key = "nosemantic",
-            value = Enable,
-        },
-        {
-            key = "optimize",
-            value = Config {
-                value = "speed",
-            },
-        },
-        {
-            key = "polly",
-            value = Enable,
-        },
-        {
-            key = "symbolic",
-            value = Enable,
-        },
-    ],
-    emul32 = False,
-    mold = False,
+        license = ["Apache-2.0 WITH LLVM-exception", "NCSA"],
+    })
 }

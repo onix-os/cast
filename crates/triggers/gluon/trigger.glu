@@ -1,7 +1,5 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
-// Embedded pure module imported by authored triggers as `moss.trigger.v1`.
+// Embedded pure module imported by authored triggers as `cast.trigger.v1`.
 
 type Optional a =
     | Unset

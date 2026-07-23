@@ -1,85 +1,9 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
-//! Format-neutral recipe input types.
-//!
-//! These types deliberately contain only primitive values, options, vectors,
-//! key-value arrays, and explicit variants. Parsers and embedded languages can
-//! target this boundary without taking a dependency on serialization shapes or domain
-//! parser types such as [`url::Url`] and [`std::path::PathBuf`].
-
-use std::path::PathBuf;
+//! Primitive, format-neutral values shared by the package and policy ABIs.
 
 use thiserror::Error;
 use url::Url;
 
-use crate::{
-    Build, KeyValue, Options, Package, Path, PathKind, Recipe, Source, Tuning, ValidationError,
-    tuning::Toolchain,
-    upstream::{Props, Upstream},
-};
-
-/// A format-neutral package recipe.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecipeSpec {
-    pub source: SourceSpec,
-    pub build: BuildSpec,
-    pub package: PackageSpec,
-    pub options: OptionsSpec,
-    pub profiles: Vec<KeyValueSpec<BuildSpec>>,
-    pub sub_packages: Vec<KeyValueSpec<PackageSpec>>,
-    pub upstreams: Vec<UpstreamSpec>,
-    pub architectures: Vec<String>,
-    pub tuning: Vec<KeyValueSpec<TuningSpec>>,
-    pub emul32: bool,
-    pub mold: bool,
-}
-
-impl RecipeSpec {
-    /// Construct a minimal recipe with the canonical declarative defaults.
-    pub fn new(source: SourceSpec) -> Self {
-        Self {
-            source,
-            build: BuildSpec::default(),
-            package: PackageSpec::default(),
-            options: OptionsSpec::default(),
-            profiles: Vec::new(),
-            sub_packages: Vec::new(),
-            upstreams: Vec::new(),
-            architectures: Vec::new(),
-            tuning: Vec::new(),
-            emul32: false,
-            mold: false,
-        }
-    }
-}
-
-/// Source metadata required for every recipe.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceSpec {
-    pub name: String,
-    pub version: String,
-    /// Signed at the input boundary so negative authored values can be
-    /// rejected before conversion to the domain model's unsigned field.
-    pub release: i64,
-    pub homepage: String,
-    pub license: Vec<String>,
-}
-
-/// Build phases and their dependencies.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct BuildSpec {
-    pub setup: Option<String>,
-    pub build: Option<String>,
-    pub install: Option<String>,
-    pub check: Option<String>,
-    pub workload: Option<String>,
-    pub environment: Option<String>,
-    pub build_deps: Vec<String>,
-    pub check_deps: Vec<String>,
-}
-
-/// Recipe-wide build options.
+/// Recipe-wide build options selected by a concrete package declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OptionsSpec {
     pub toolchain: ToolchainSpec,
@@ -107,33 +31,20 @@ impl Default for OptionsSpec {
     }
 }
 
-/// Package metadata shared by the root package and subpackages.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PackageSpec {
-    pub summary: Option<String>,
-    pub description: Option<String>,
-    pub provides_exclude: Vec<String>,
-    pub run_deps: Vec<String>,
-    pub run_deps_exclude: Vec<String>,
-    pub paths: Vec<PathSpec>,
-    pub conflicts: Vec<String>,
-}
-
-/// A dynamically named value represented without dynamic record fields.
+/// One explicitly named package tuning selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyValueSpec<T> {
+pub struct NamedTuningSpec {
     pub key: String,
-    pub value: T,
+    pub value: TuningSpec,
 }
 
-/// An upstream with its source kind encoded explicitly.
+/// An authored source request with its kind encoded explicitly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpstreamSpec {
     Archive {
         url: String,
         hash: String,
         rename: Option<String>,
-        /// Range-checked before conversion to the domain model's byte field.
         strip_dirs: Option<i64>,
         unpack: bool,
         unpack_dir: Option<String>,
@@ -145,16 +56,266 @@ pub enum UpstreamSpec {
     },
 }
 
-/// A package path with its matching behavior encoded explicitly.
+/// Network transport policy for one declared source URL.
+///
+/// This distinction is intentionally smaller than the set of schemes the URL
+/// parser and source backends happen to understand. Archive downloads are
+/// HTTPS-only. Git repositories may use HTTPS or SSH, but never an implicit
+/// local-file transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceUrlKind {
+    Archive,
+    Git,
+}
+
+/// Parse and enforce the production transport policy for a source URL.
+///
+/// Every authored source, generated source lock, and frozen source must pass
+/// through this function. It deliberately validates only the declared URL.
+/// Redirect targets and resolved network addresses require separate checks in
+/// the fetching backend; this function is not an SSRF or redirect-isolation
+/// boundary.
+pub fn validate_source_url(kind: SourceUrlKind, value: &str) -> Result<Url, SourceUrlValidationError> {
+    let url = Url::parse(value).map_err(SourceUrlValidationError::InvalidSyntax)?;
+
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(SourceUrlValidationError::EmbeddedCredentials);
+    }
+    if url.fragment().is_some() {
+        return Err(SourceUrlValidationError::Fragment);
+    }
+
+    let scheme_allowed = match kind {
+        SourceUrlKind::Archive => url.scheme() == "https",
+        SourceUrlKind::Git => matches!(url.scheme(), "https" | "ssh"),
+    };
+    if !scheme_allowed {
+        return Err(SourceUrlValidationError::UnsupportedScheme {
+            scheme: url.scheme().to_owned(),
+            expected: match kind {
+                SourceUrlKind::Archive => "https",
+                SourceUrlKind::Git => "https or ssh",
+            },
+        });
+    }
+    if url.host_str().is_none() {
+        return Err(SourceUrlValidationError::MissingHost);
+    }
+
+    Ok(url)
+}
+
+/// Failure to parse or admit one production source URL.
+///
+/// Errors never retain or render the full input because URLs commonly contain
+/// credentials or other secret-bearing data.
+#[derive(Debug, Error)]
+pub enum SourceUrlValidationError {
+    #[error("URL syntax is invalid")]
+    InvalidSyntax(#[source] url::ParseError),
+    #[error("URL must not contain embedded credentials")]
+    EmbeddedCredentials,
+    #[error("URL fragments are not supported")]
+    Fragment,
+    #[error("URL scheme `{scheme}` is not supported; expected {expected}")]
+    UnsupportedScheme { scheme: String, expected: &'static str },
+    #[error("URL must include a remote host")]
+    MissingHost,
+}
+
+impl UpstreamSpec {
+    /// Validate one authored source request at the typed package boundary.
+    ///
+    /// This is the canonical source-field validator shared by package
+    /// evaluation and any caller which constructs an [`UpstreamSpec`]
+    /// directly. I/O-backed resolution may prove that a URL or Git reference
+    /// exists, but it must never be the first place malformed authored data is
+    /// rejected.
+    pub fn validate(&self) -> Result<(), UpstreamValidationError> {
+        self.validated_materialization_name().map(drop)
+    }
+
+    /// Return the exact build-visible filename or directory after validating
+    /// the complete source request.
+    pub fn materialization_name(&self) -> Result<String, UpstreamValidationError> {
+        self.validated_materialization_name()
+    }
+
+    /// Authored field which owns the effective materialization destination.
+    pub const fn materialization_field(&self) -> &'static str {
+        match self {
+            Self::Archive { rename: Some(_), .. } => "rename",
+            Self::Git { clone_dir: Some(_), .. } => "clone_dir",
+            Self::Archive { rename: None, .. } | Self::Git { clone_dir: None, .. } => "url",
+        }
+    }
+
+    fn validated_materialization_name(&self) -> Result<String, UpstreamValidationError> {
+        let url = self.validated_url()?;
+
+        let materialization_name = match self {
+            Self::Archive {
+                hash,
+                rename,
+                strip_dirs,
+                unpack,
+                unpack_dir,
+                ..
+            } => {
+                if !is_canonical_sha256(hash) {
+                    return Err(UpstreamValidationError::InvalidArchiveSha256 { value: hash.clone() });
+                }
+
+                let materialization_name = validate_materialization_name(&url, rename.as_deref(), "rename")?;
+
+                if let Some(value) = strip_dirs {
+                    u8::try_from(*value).map_err(|_| UpstreamValidationError::InvalidStripDirs { value: *value })?;
+                    if !unpack {
+                        return Err(UpstreamValidationError::OptionRequiresUnpack { field: "strip_dirs" });
+                    }
+                }
+
+                if let Some(value) = unpack_dir {
+                    if !unpack {
+                        return Err(UpstreamValidationError::OptionRequiresUnpack { field: "unpack_dir" });
+                    }
+                    if !is_normalized_relative_path(value) {
+                        return Err(UpstreamValidationError::InvalidUnpackDir { value: value.clone() });
+                    }
+                }
+
+                materialization_name
+            }
+            Self::Git { git_ref, clone_dir, .. } => {
+                if git_ref.is_empty() || git_ref.chars().any(char::is_control) {
+                    return Err(UpstreamValidationError::InvalidGitRef { value: git_ref.clone() });
+                }
+                validate_materialization_name(&url, clone_dir.as_deref(), "clone_dir")?
+            }
+        };
+
+        Ok(materialization_name)
+    }
+
+    pub fn validated_url(&self) -> Result<Url, UpstreamValidationError> {
+        let (kind, value) = match self {
+            Self::Archive { url, .. } => (SourceUrlKind::Archive, url),
+            Self::Git { url, .. } => (SourceUrlKind::Git, url),
+        };
+        validate_source_url(kind, value).map_err(|source| UpstreamValidationError::InvalidUrl { source })
+    }
+}
+
+/// Failure to validate one authored source request.
+#[derive(Debug, Error)]
+pub enum UpstreamValidationError {
+    #[error("invalid source URL: {source}")]
+    InvalidUrl {
+        #[source]
+        source: SourceUrlValidationError,
+    },
+    #[error("expected exactly 64 lowercase ASCII hexadecimal characters, found `{value}`")]
+    InvalidArchiveSha256 { value: String },
+    #[error("`{value}` must be one normalized filename component")]
+    InvalidMaterializationComponent { field: &'static str, value: String },
+    #[error("URL does not end in a safe filename component; set `{override_field}` explicitly")]
+    InvalidDefaultMaterializationName { override_field: &'static str },
+    #[error("`{value}` is outside the valid 0..=255 integer range")]
+    InvalidStripDirs { value: i64 },
+    #[error("option has no effect unless `unpack` is true")]
+    OptionRequiresUnpack { field: &'static str },
+    #[error("`{value}` must be a normalized, non-empty relative path without `.` or `..` components")]
+    InvalidUnpackDir { value: String },
+    #[error("Git reference `{value}` must be non-empty and contain no control characters")]
+    InvalidGitRef { value: String },
+}
+
+impl UpstreamValidationError {
+    /// Field relative to one `UpstreamSpec` which caused this error.
+    pub const fn field(&self) -> &'static str {
+        match self {
+            Self::InvalidUrl { .. } | Self::InvalidDefaultMaterializationName { .. } => "url",
+            Self::InvalidArchiveSha256 { .. } => "hash",
+            Self::InvalidMaterializationComponent { field, .. } | Self::OptionRequiresUnpack { field } => field,
+            Self::InvalidStripDirs { .. } => "strip_dirs",
+            Self::InvalidUnpackDir { .. } => "unpack_dir",
+            Self::InvalidGitRef { .. } => "git_ref",
+        }
+    }
+}
+
+fn validate_materialization_name(
+    url: &Url,
+    explicit: Option<&str>,
+    override_field: &'static str,
+) -> Result<String, UpstreamValidationError> {
+    if let Some(value) = explicit {
+        if !is_safe_artifact_component(value) {
+            return Err(UpstreamValidationError::InvalidMaterializationComponent {
+                field: override_field,
+                value: value.to_owned(),
+            });
+        }
+        return Ok(value.to_owned());
+    }
+
+    let value = url_file_name(url);
+    if !is_safe_artifact_component(value) {
+        return Err(UpstreamValidationError::InvalidDefaultMaterializationName { override_field });
+    }
+    Ok(value.to_owned())
+}
+
+fn url_file_name(url: &Url) -> &str {
+    url.path().rsplit('/').next().unwrap_or_default()
+}
+
+/// Whether `value` is the canonical textual encoding of one SHA-256 digest.
+pub fn is_canonical_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+/// Whether `value` is the canonical textual encoding of a full Git object ID.
+pub fn is_canonical_git_commit(value: &str) -> bool {
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+pub(crate) fn is_safe_artifact_component(value: &str) -> bool {
+    !value.is_empty()
+        && value != "."
+        && value != ".."
+        && !value.contains(['/', '\\'])
+        && !value.chars().any(char::is_control)
+}
+
+pub(crate) fn is_normalized_relative_path(value: &str) -> bool {
+    !value.is_empty()
+        && !value.starts_with('/')
+        && !value.contains('\\')
+        && !value.chars().any(char::is_control)
+        && value
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
+}
+
+/// A package output path with its matching behavior encoded explicitly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PathSpec {
     Any { path: String },
     Exe { path: String },
     Symlink { path: String },
+    /// Reserved by package-v3 for ABI stability; concrete package validation
+    /// rejects special inodes from immutable package layouts.
     Special { path: String },
 }
 
-/// A tuning setting with no scalar-or-map coercion.
+/// One explicit package tuning selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TuningSpec {
     Enable,
@@ -170,629 +331,78 @@ pub enum ToolchainSpec {
     Gnu,
 }
 
-/// Failure to convert a format-neutral recipe into the domain model.
-#[derive(Debug, Error)]
-pub enum RecipeConversionError {
-    /// A URL field could not be parsed.
-    #[error("{field}: invalid URL `{value}`")]
-    InvalidUrl {
-        field: String,
-        value: String,
-        #[source]
-        source: url::ParseError,
-    },
-    /// A signed input integer did not fit the domain field.
-    #[error("{field}: `{value}` is outside the valid {expected} range")]
-    IntegerOutOfRange {
-        field: String,
-        value: i64,
-        expected: &'static str,
-    },
-    /// An unsigned domain integer could not be represented by the declarative
-    /// input ABI.
-    #[error("{field}: `{value}` is outside the valid {expected} range")]
-    UnsignedIntegerOutOfRange {
-        field: String,
-        value: u64,
-        expected: &'static str,
-    },
-    /// A domain path could not be represented by Gluon's UTF-8 string type.
-    #[error("{field}: path is not valid UTF-8: `{}`", value.display())]
-    NonUtf8Path { field: String, value: PathBuf },
-    /// The converted recipe violated a format-independent invariant.
-    #[error(transparent)]
-    Validation(#[from] ValidationError),
-}
-
-impl RecipeConversionError {
-    /// Return the stable field path associated with this error.
-    pub fn field(&self) -> &str {
-        match self {
-            Self::InvalidUrl { field, .. } => field,
-            Self::IntegerOutOfRange { field, .. }
-            | Self::UnsignedIntegerOutOfRange { field, .. }
-            | Self::NonUtf8Path { field, .. } => field,
-            Self::Validation(error) => error.field(),
-        }
-    }
-}
-
-impl TryFrom<RecipeSpec> for Recipe {
-    type Error = RecipeConversionError;
-
-    fn try_from(spec: RecipeSpec) -> Result<Self, Self::Error> {
-        let RecipeSpec {
-            source,
-            build,
-            package,
-            options,
-            profiles,
-            sub_packages,
-            upstreams,
-            architectures,
-            tuning,
-            emul32,
-            mold,
-        } = spec;
-
-        let upstreams = upstreams
-            .into_iter()
-            .enumerate()
-            .map(|(index, upstream)| upstream.try_into_domain(index))
-            .collect::<Result<_, _>>()?;
-
-        let recipe = Self {
-            source: source.try_into_domain()?,
-            build: build.into(),
-            package: package.into(),
-            options: options.into(),
-            profiles: profiles.into_iter().map(Into::into).collect(),
-            sub_packages: sub_packages.into_iter().map(Into::into).collect(),
-            upstreams,
-            architectures,
-            tuning: tuning.into_iter().map(Into::into).collect(),
-            emul32,
-            mold,
-        };
-
-        recipe.validate()?;
-        Ok(recipe)
-    }
-}
-
-impl TryFrom<&Recipe> for RecipeSpec {
-    type Error = RecipeConversionError;
-
-    fn try_from(recipe: &Recipe) -> Result<Self, Self::Error> {
-        // Keep the reverse conversion on the same semantic boundary as every
-        // authored input. This prevents the canonical encoder from emitting a
-        // domain value that the recipe evaluator would reject on the way back.
-        recipe.validate()?;
-
-        let release =
-            i64::try_from(recipe.source.release).map_err(|_| RecipeConversionError::UnsignedIntegerOutOfRange {
-                field: "source.release".to_owned(),
-                value: recipe.source.release,
-                expected: "signed 64-bit integer",
-            })?;
-
-        let upstreams = recipe
-            .upstreams
-            .iter()
-            .enumerate()
-            .map(|(index, upstream)| upstream_to_spec(upstream, index))
-            .collect::<Result<_, _>>()?;
-
-        Ok(Self {
-            source: SourceSpec {
-                name: recipe.source.name.clone(),
-                version: recipe.source.version.clone(),
-                release,
-                homepage: recipe.source.homepage.clone(),
-                license: recipe.source.license.clone(),
-            },
-            build: (&recipe.build).into(),
-            package: (&recipe.package).into(),
-            options: (&recipe.options).into(),
-            profiles: recipe.profiles.iter().map(Into::into).collect(),
-            sub_packages: recipe.sub_packages.iter().map(Into::into).collect(),
-            upstreams,
-            architectures: recipe.architectures.clone(),
-            tuning: recipe.tuning.iter().map(Into::into).collect(),
-            emul32: recipe.emul32,
-            mold: recipe.mold,
-        })
-    }
-}
-
-impl From<&Build> for BuildSpec {
-    fn from(build: &Build) -> Self {
-        Self {
-            setup: build.setup.clone(),
-            build: build.build.clone(),
-            install: build.install.clone(),
-            check: build.check.clone(),
-            workload: build.workload.clone(),
-            environment: build.environment.clone(),
-            build_deps: build.build_deps.clone(),
-            check_deps: build.check_deps.clone(),
-        }
-    }
-}
-
-impl From<&Options> for OptionsSpec {
-    fn from(options: &Options) -> Self {
-        Self {
-            toolchain: options.toolchain.into(),
-            cspgo: options.cspgo,
-            samplepgo: options.samplepgo,
-            debug: options.debug,
-            strip: options.strip,
-            networking: options.networking,
-            compressman: options.compressman,
-            lastrip: options.lastrip,
-        }
-    }
-}
-
-impl From<&Package> for PackageSpec {
-    fn from(package: &Package) -> Self {
-        Self {
-            summary: package.summary.clone(),
-            description: package.description.clone(),
-            provides_exclude: package.provides_exclude.clone(),
-            run_deps: package.run_deps.clone(),
-            run_deps_exclude: package.run_deps_exclude.clone(),
-            paths: package.paths.iter().map(Into::into).collect(),
-            conflicts: package.conflicts.clone(),
-        }
-    }
-}
-
-impl<'a, T, U> From<&'a KeyValue<T>> for KeyValueSpec<U>
-where
-    U: From<&'a T>,
-{
-    fn from(value: &'a KeyValue<T>) -> Self {
-        Self {
-            key: value.key.clone(),
-            value: (&value.value).into(),
-        }
-    }
-}
-
-fn upstream_to_spec(upstream: &Upstream, index: usize) -> Result<UpstreamSpec, RecipeConversionError> {
-    let path_to_string = |path: &PathBuf, field: &'static str| {
-        path.to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| RecipeConversionError::NonUtf8Path {
-                field: format!("upstreams[{index}].{field}"),
-                value: path.clone(),
-            })
-    };
-
-    Ok(match &upstream.props {
-        Props::Plain {
-            hash,
-            rename,
-            strip_dirs,
-            unpack,
-            unpack_dir,
-        } => UpstreamSpec::Archive {
-            url: upstream.url.as_str().to_owned(),
-            hash: hash.clone(),
-            rename: rename.clone(),
-            strip_dirs: strip_dirs.map(i64::from),
-            unpack: *unpack,
-            unpack_dir: unpack_dir
-                .as_ref()
-                .map(|path| path_to_string(path, "unpack_dir"))
-                .transpose()?,
-        },
-        Props::Git { git_ref, clone_dir } => UpstreamSpec::Git {
-            url: upstream.url.as_str().to_owned(),
-            git_ref: git_ref.clone(),
-            clone_dir: clone_dir
-                .as_ref()
-                .map(|path| path_to_string(path, "clone_dir"))
-                .transpose()?,
-        },
-    })
-}
-
-impl From<&Path> for PathSpec {
-    fn from(value: &Path) -> Self {
-        match value.kind {
-            PathKind::Any => Self::Any {
-                path: value.path.clone(),
-            },
-            PathKind::Exe => Self::Exe {
-                path: value.path.clone(),
-            },
-            PathKind::Symlink => Self::Symlink {
-                path: value.path.clone(),
-            },
-            PathKind::Special => Self::Special {
-                path: value.path.clone(),
-            },
-        }
-    }
-}
-
-impl From<&Tuning> for TuningSpec {
-    fn from(value: &Tuning) -> Self {
-        match value {
-            Tuning::Enable => Self::Enable,
-            Tuning::Disable => Self::Disable,
-            Tuning::Config(value) => Self::Config { value: value.clone() },
-        }
-    }
-}
-
-impl From<Toolchain> for ToolchainSpec {
-    fn from(value: Toolchain) -> Self {
-        match value {
-            Toolchain::Llvm => Self::Llvm,
-            Toolchain::Gnu => Self::Gnu,
-        }
-    }
-}
-
-impl SourceSpec {
-    fn try_into_domain(self) -> Result<Source, RecipeConversionError> {
-        let release = u64::try_from(self.release).map_err(|_| RecipeConversionError::IntegerOutOfRange {
-            field: "source.release".to_owned(),
-            value: self.release,
-            expected: "non-negative integer",
-        })?;
-
-        Ok(Source {
-            name: self.name,
-            version: self.version,
-            release,
-            homepage: self.homepage,
-            license: self.license,
-        })
-    }
-}
-
-impl From<BuildSpec> for Build {
-    fn from(spec: BuildSpec) -> Self {
-        Self {
-            setup: spec.setup,
-            build: spec.build,
-            install: spec.install,
-            check: spec.check,
-            workload: spec.workload,
-            environment: spec.environment,
-            build_deps: spec.build_deps,
-            check_deps: spec.check_deps,
-        }
-    }
-}
-
-impl From<OptionsSpec> for Options {
-    fn from(spec: OptionsSpec) -> Self {
-        Self {
-            toolchain: spec.toolchain.into(),
-            cspgo: spec.cspgo,
-            samplepgo: spec.samplepgo,
-            debug: spec.debug,
-            strip: spec.strip,
-            networking: spec.networking,
-            compressman: spec.compressman,
-            lastrip: spec.lastrip,
-        }
-    }
-}
-
-impl From<PackageSpec> for Package {
-    fn from(spec: PackageSpec) -> Self {
-        Self {
-            summary: spec.summary,
-            description: spec.description,
-            provides_exclude: spec.provides_exclude,
-            run_deps: spec.run_deps,
-            run_deps_exclude: spec.run_deps_exclude,
-            paths: spec.paths.into_iter().map(Into::into).collect(),
-            conflicts: spec.conflicts,
-        }
-    }
-}
-
-impl<T, U> From<KeyValueSpec<T>> for KeyValue<U>
-where
-    U: From<T>,
-{
-    fn from(spec: KeyValueSpec<T>) -> Self {
-        Self {
-            key: spec.key,
-            value: spec.value.into(),
-        }
-    }
-}
-
-impl UpstreamSpec {
-    fn try_into_domain(self, index: usize) -> Result<Upstream, RecipeConversionError> {
-        let parse_url = |value: String| {
-            Url::parse(&value).map_err(|source| RecipeConversionError::InvalidUrl {
-                field: format!("upstreams[{index}].url"),
-                value,
-                source,
-            })
-        };
-
-        match self {
-            Self::Archive {
-                url,
-                hash,
-                rename,
-                strip_dirs,
-                unpack,
-                unpack_dir,
-            } => {
-                let strip_dirs = strip_dirs
-                    .map(|value| {
-                        u8::try_from(value).map_err(|_| RecipeConversionError::IntegerOutOfRange {
-                            field: format!("upstreams[{index}].strip_dirs"),
-                            value,
-                            expected: "0..=255 integer",
-                        })
-                    })
-                    .transpose()?;
-
-                Ok(Upstream {
-                    url: parse_url(url)?,
-                    props: Props::Plain {
-                        hash,
-                        rename,
-                        strip_dirs,
-                        unpack,
-                        unpack_dir: unpack_dir.map(PathBuf::from),
-                    },
-                })
-            }
-            Self::Git {
-                url,
-                git_ref,
-                clone_dir,
-            } => Ok(Upstream {
-                url: parse_url(url)?,
-                props: Props::Git {
-                    git_ref,
-                    clone_dir: clone_dir.map(PathBuf::from),
-                },
-            }),
-        }
-    }
-}
-
-impl From<PathSpec> for Path {
-    fn from(spec: PathSpec) -> Self {
-        let (path, kind) = match spec {
-            PathSpec::Any { path } => (path, PathKind::Any),
-            PathSpec::Exe { path } => (path, PathKind::Exe),
-            PathSpec::Symlink { path } => (path, PathKind::Symlink),
-            PathSpec::Special { path } => (path, PathKind::Special),
-        };
-
-        Self { path, kind }
-    }
-}
-
-impl From<TuningSpec> for Tuning {
-    fn from(spec: TuningSpec) -> Self {
-        match spec {
-            TuningSpec::Enable => Self::Enable,
-            TuningSpec::Disable => Self::Disable,
-            TuningSpec::Config { value } => Self::Config(value),
-        }
-    }
-}
-
-impl From<ToolchainSpec> for Toolchain {
-    fn from(spec: ToolchainSpec) -> Self {
-        match spec {
-            ToolchainSpec::Llvm => Self::Llvm,
-            ToolchainSpec::Gnu => Self::Gnu,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn source() -> SourceSpec {
-        SourceSpec {
-            name: "example".to_owned(),
-            version: "1.2.3".to_owned(),
-            release: 1,
-            homepage: "https://example.com".to_owned(),
-            license: vec!["MPL-2.0".to_owned()],
+    #[test]
+    fn options_defaults_are_explicit_and_stable() {
+        let options = OptionsSpec::default();
+        assert_eq!(options.toolchain, ToolchainSpec::Llvm);
+        assert!(options.debug);
+        assert!(options.strip);
+        assert!(options.lastrip);
+        assert!(!options.networking);
+    }
+
+    #[test]
+    fn git_commits_have_one_canonical_textual_encoding() {
+        assert!(is_canonical_git_commit("0123456789abcdef0123456789abcdef01234567"));
+        assert!(!is_canonical_git_commit("0123456789ABCDEF0123456789ABCDEF01234567"));
+        assert!(!is_canonical_git_commit("01234567"));
+    }
+
+    #[test]
+    fn source_url_policy_admits_only_explicit_secure_remote_transports() {
+        assert!(validate_source_url(SourceUrlKind::Archive, "https://example.invalid/source.tar.zst").is_ok());
+        assert!(validate_source_url(SourceUrlKind::Git, "https://example.invalid/project.git").is_ok());
+        assert!(validate_source_url(SourceUrlKind::Git, "ssh://example.invalid/project.git").is_ok());
+
+        for value in [
+            "http://example.invalid/source.tar.zst",
+            "ssh://example.invalid/source.tar.zst",
+            "file:///tmp/source.tar.zst",
+            "ftp://example.invalid/source.tar.zst",
+        ] {
+            assert!(matches!(
+                validate_source_url(SourceUrlKind::Archive, value),
+                Err(SourceUrlValidationError::UnsupportedScheme { .. })
+            ));
+        }
+
+        for value in [
+            "http://example.invalid/project.git",
+            "git://example.invalid/project.git",
+            "file:///tmp/project.git",
+            "ftp://example.invalid/project.git",
+        ] {
+            assert!(matches!(
+                validate_source_url(SourceUrlKind::Git, value),
+                Err(SourceUrlValidationError::UnsupportedScheme { .. })
+            ));
         }
     }
 
     #[test]
-    fn minimal_recipe_uses_canonical_defaults() {
-        let recipe = Recipe::try_from(RecipeSpec::new(source())).unwrap();
+    fn source_url_policy_rejects_secret_bearing_and_ambiguous_components_without_echoing_them() {
+        let credential_url = "https://user:do-not-print@example.invalid/source.tar.zst";
+        let error = validate_source_url(SourceUrlKind::Archive, credential_url).unwrap_err();
+        assert!(matches!(error, SourceUrlValidationError::EmbeddedCredentials));
+        assert!(!error.to_string().contains("user"));
+        assert!(!error.to_string().contains("do-not-print"));
 
-        assert!(recipe.build.setup.is_none());
-        assert!(recipe.build.build_deps.is_empty());
-        assert!(recipe.package.paths.is_empty());
-        assert!(matches!(recipe.options.toolchain, Toolchain::Llvm));
-        assert!(recipe.options.debug);
-        assert!(recipe.options.strip);
-        assert!(recipe.options.lastrip);
-        assert!(!recipe.options.cspgo);
-        assert!(!recipe.options.samplepgo);
-        assert!(!recipe.options.networking);
-        assert!(!recipe.options.compressman);
-        assert!(recipe.profiles.is_empty());
-        assert!(recipe.sub_packages.is_empty());
-        assert!(recipe.upstreams.is_empty());
-        assert!(recipe.architectures.is_empty());
-        assert!(recipe.tuning.is_empty());
-        assert!(!recipe.emul32);
-        assert!(!recipe.mold);
-    }
+        let fragment_url = "https://example.invalid/source.tar.zst#secret-fragment";
+        let error = validate_source_url(SourceUrlKind::Archive, fragment_url).unwrap_err();
+        assert!(matches!(error, SourceUrlValidationError::Fragment));
+        assert!(!error.to_string().contains("secret-fragment"));
 
-    #[test]
-    fn all_fields_and_explicit_variants_convert() {
-        let mut spec = RecipeSpec::new(source());
-        spec.build = BuildSpec {
-            setup: Some("setup".to_owned()),
-            build: Some("build".to_owned()),
-            install: Some("install".to_owned()),
-            check: Some("check".to_owned()),
-            workload: Some("workload".to_owned()),
-            environment: Some("environment".to_owned()),
-            build_deps: vec!["build-dependency".to_owned()],
-            check_deps: vec!["check-dependency".to_owned()],
-        };
-        spec.package = PackageSpec {
-            summary: Some("summary".to_owned()),
-            description: Some("description".to_owned()),
-            provides_exclude: vec!["provided(*)".to_owned()],
-            run_deps: vec!["runtime-dependency".to_owned()],
-            run_deps_exclude: vec!["excluded-runtime(*)".to_owned()],
-            paths: vec![
-                PathSpec::Any {
-                    path: "/usr/share/example".to_owned(),
-                },
-                PathSpec::Exe {
-                    path: "/usr/bin/example".to_owned(),
-                },
-                PathSpec::Symlink {
-                    path: "/usr/bin/example-link".to_owned(),
-                },
-                PathSpec::Special {
-                    path: "/usr/lib/example.special".to_owned(),
-                },
-            ],
-            conflicts: vec!["other-package".to_owned()],
-        };
-        spec.options = OptionsSpec {
-            toolchain: ToolchainSpec::Gnu,
-            cspgo: true,
-            samplepgo: true,
-            debug: false,
-            strip: false,
-            networking: true,
-            compressman: true,
-            lastrip: false,
-        };
-        spec.profiles = vec![KeyValueSpec {
-            key: "x86_64".to_owned(),
-            value: BuildSpec {
-                build: Some("profile build".to_owned()),
-                ..BuildSpec::default()
-            },
-        }];
-        spec.sub_packages = vec![KeyValueSpec {
-            key: "example-devel".to_owned(),
-            value: PackageSpec {
-                summary: Some("development files".to_owned()),
-                ..PackageSpec::default()
-            },
-        }];
-        spec.upstreams = vec![
-            UpstreamSpec::Archive {
-                url: "https://example.com/source.tar.xz".to_owned(),
-                hash: "archive-hash".to_owned(),
-                rename: Some("source.tar.xz".to_owned()),
-                strip_dirs: Some(1),
-                unpack: false,
-                unpack_dir: Some("archive".to_owned()),
-            },
-            UpstreamSpec::Git {
-                url: "https://example.com/source.git".to_owned(),
-                git_ref: "v1.2.3".to_owned(),
-                clone_dir: Some("git".to_owned()),
-            },
-        ];
-        spec.architectures = vec!["x86_64".to_owned()];
-        spec.tuning = vec![
-            KeyValueSpec {
-                key: "harden".to_owned(),
-                value: TuningSpec::Enable,
-            },
-            KeyValueSpec {
-                key: "lto".to_owned(),
-                value: TuningSpec::Disable,
-            },
-            KeyValueSpec {
-                key: "optimize".to_owned(),
-                value: TuningSpec::Config {
-                    value: "speed".to_owned(),
-                },
-            },
-        ];
-        spec.emul32 = true;
-        spec.mold = true;
-
-        let recipe = Recipe::try_from(spec).unwrap();
-
-        assert_eq!(recipe.build.setup.as_deref(), Some("setup"));
-        assert_eq!(recipe.build.check_deps, ["check-dependency"]);
-        assert_eq!(recipe.package.provides_exclude, ["provided(*)"]);
-        assert_eq!(recipe.package.paths[0].kind, PathKind::Any);
-        assert_eq!(recipe.package.paths[1].kind, PathKind::Exe);
-        assert_eq!(recipe.package.paths[2].kind, PathKind::Symlink);
-        assert_eq!(recipe.package.paths[3].kind, PathKind::Special);
-        assert!(matches!(recipe.options.toolchain, Toolchain::Gnu));
-        assert_eq!(recipe.profiles[0].key, "x86_64");
-        assert_eq!(recipe.sub_packages[0].key, "example-devel");
-        assert!(matches!(recipe.upstreams[0].props, Props::Plain { .. }));
-        assert!(matches!(recipe.upstreams[1].props, Props::Git { .. }));
-        assert_eq!(recipe.architectures, ["x86_64"]);
-        assert!(matches!(recipe.tuning[0].value, Tuning::Enable));
-        assert!(matches!(recipe.tuning[1].value, Tuning::Disable));
-        assert!(matches!(recipe.tuning[2].value, Tuning::Config(ref value) if value == "speed"));
-        assert!(recipe.emul32);
-        assert!(recipe.mold);
-    }
-
-    #[test]
-    fn invalid_upstream_url_reports_indexed_field_path() {
-        let mut spec = RecipeSpec::new(source());
-        spec.upstreams.push(UpstreamSpec::Git {
-            url: "not a URL".to_owned(),
-            git_ref: "main".to_owned(),
-            clone_dir: None,
-        });
-
-        let error = Recipe::try_from(spec).unwrap_err();
-
-        assert_eq!(error.field(), "upstreams[0].url");
-        assert!(error.to_string().starts_with("upstreams[0].url: invalid URL"));
-    }
-
-    #[test]
-    fn version_invariant_is_reusable_and_has_a_field_path() {
-        let mut spec = RecipeSpec::new(source());
-        spec.source.version = "v1.2.3".to_owned();
-
-        let error = Recipe::try_from(spec).unwrap_err();
-
-        assert_eq!(error.field(), "source.version");
         assert!(matches!(
-            error,
-            RecipeConversionError::Validation(ValidationError::VersionMustStartWithDigit { .. })
+            validate_source_url(SourceUrlKind::Git, "ssh:/project.git"),
+            Err(SourceUrlValidationError::MissingHost)
         ));
-    }
-
-    #[test]
-    fn release_invariant_is_reusable_and_has_a_field_path() {
-        let mut spec = RecipeSpec::new(source());
-        spec.source.release = 0;
-
-        let error = Recipe::try_from(spec).unwrap_err();
-
-        assert_eq!(error.field(), "source.release");
         assert!(matches!(
-            error,
-            RecipeConversionError::Validation(ValidationError::ReleaseMustBePositive { release: 0 })
+            validate_source_url(SourceUrlKind::Git, "not a URL"),
+            Err(SourceUrlValidationError::InvalidSyntax(_))
         ));
     }
 }

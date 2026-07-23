@@ -1,0 +1,23 @@
+let b = import! cast.package.v3
+
+// The program and its conformance corpus have independent upstream identities.
+// Only the primary archive is extracted; the raw vectors remain one exact,
+// separately locked file until the check hook admits them to the build tree.
+{
+    primary = b.source.archive_with {
+        url = "https://example.invalid/frame-codec-2.6.1.tar.xz",
+        hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        rename = b.optional.set "frame-codec.tar.xz",
+        strip_dirs = b.optional.set 1,
+        unpack = b.boolean.true,
+        unpack_dir = b.optional.set "frame-codec",
+    },
+    test_vectors = b.source.archive_with {
+        url = "https://example.invalid/frame-codec-conformance-2026-07.json",
+        hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        rename = b.optional.set "frame-codec-conformance.json",
+        strip_dirs = b.optional.unset,
+        unpack = b.boolean.false,
+        unpack_dir = b.optional.unset,
+    },
+}

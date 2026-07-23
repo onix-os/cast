@@ -1,0 +1,28 @@
+
+let b = import! cast.package.v3
+
+let defaults = {
+    features = [],
+    binaries = [],
+    run_tests = b.boolean.true,
+}
+
+let builder = \config -> b.builder.structured {
+    // Cargo itself is bound by each selected policy command.
+    required_tools = [],
+    environment = [b.environment.cargo],
+    phases = b.scripts {
+        build = b.phase [b.step.cargo_build config.features],
+        install = b.phase [b.step.cargo_install config.binaries],
+        check = b.phase (b.boolean.when config.run_tests [b.step.cargo_test config.features]),
+        .. b.defaults.scripts
+    },
+    supported_hooks = b.hook_support.all,
+}
+
+{
+    abi_version = 2,
+    defaults,
+    builder,
+    default = builder defaults,
+}

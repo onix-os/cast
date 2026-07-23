@@ -1,0 +1,69 @@
+
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+    ],
+    build = b.phase [
+        b.step.run
+            (b.program.binary "cc")
+            [
+                "-O2",
+                "-g",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-fstack-protector-strong",
+                "-D_FORTIFY_SOURCE=3",
+                "-fPIE",
+                "main.c",
+                "-Wl,-pie",
+                "-Wl,-z,relro,-z,now",
+                "-Wl,--as-needed",
+                "-o",
+                "build/cast-custom-fixture",
+            ],
+    ],
+    check = b.phase [
+        b.step.run_built
+            (b.program.built "build/cast-custom-fixture")
+            ["--self-test"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm755 build/cast-custom-fixture "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-custom-fixture""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-custom-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-custom-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.binary "cc",
+        b.dep.binary "install",
+        b.dep.binary "dash",
+    ],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-custom-fixture-1.0.0.tar",
+            hash = "76cf98a8eef6104059a60cd78e839f94c279ee2a415c36bc98bc3793b416838c",
+            rename = b.optional.set "cast-custom-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-custom-fixture",
+        },
+    ],
+    .. base
+}

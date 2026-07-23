@@ -1,0 +1,66 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm644 include/vector.h "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/cast-header-only/vector.h"
+install -Dm644 cast-header-only.pc "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/pkgconfig/cast-header-only.pc"
+install -Dm644 LICENSE "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-header-only-library-fixture/LICENSE""#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "cc"],
+            script = r#"test ! -e include/cast-header-only/vector.h
+test -f "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/cast-header-only/vector.h"
+cc -std=c11 -Wall -Wextra -Werror -pedantic-errors -nostdinc -I"${CAST_INSTALL_ROOT}${CAST_PREFIX}/include" -fsyntax-only tests/consumer.c"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Header-only fixture license metadata",
+    paths = [b.path.any "/usr/share/licenses/cast-header-only-library-fixture"],
+    .. b.output "out"
+}
+
+let development = b.output_with {
+    summary = b.optional.set "Staged header-only development interface",
+    paths = [
+        b.path.any "/usr/include/cast-header-only",
+        b.path.any "/usr/lib/pkgconfig/cast-header-only.pc",
+    ],
+    .. b.output "devel"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-header-only-library-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-header-only-library-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "cc",
+        b.dep.binary "install",
+        b.dep.binary "dash",
+    ],
+    outputs = [root, development],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-header-only-library-fixture-1.0.0.tar",
+            hash = "ab0bc1ad844befe29383465ad24872f6314ae01fa3c7456679a41372d37a492e",
+            rename = b.optional.set "cast-header-only-library-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-header-only-library-fixture",
+        },
+    ],
+    .. base
+}

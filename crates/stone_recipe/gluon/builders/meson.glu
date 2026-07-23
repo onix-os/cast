@@ -1,0 +1,34 @@
+
+let b = import! cast.package.v3
+
+let defaults = {
+    flags = [],
+    run_tests = b.boolean.true,
+}
+
+let builder = \config -> b.builder.structured {
+    // Meson delegates builds to Ninja. Resolve Ninja's hardcoded /bin/sh
+    // interface explicitly instead of relying on an ambient root shell.
+    required_tools = [
+        b.dep.binary "cmake",
+        b.dep.binary "sh",
+        b.dep.binary "ninja",
+        b.dep.binary "pkgconf",
+    ],
+    environment = [b.environment.meson],
+    phases = b.scripts {
+        setup = b.phase [b.step.meson_setup config.flags],
+        build = b.phase [b.step.meson_build],
+        install = b.phase [b.step.meson_install],
+        check = b.phase (b.boolean.when config.run_tests [b.step.meson_test]),
+        .. b.defaults.scripts
+    },
+    supported_hooks = b.hook_support.all,
+}
+
+{
+    abi_version = 2,
+    defaults,
+    builder,
+    default = builder defaults,
+}

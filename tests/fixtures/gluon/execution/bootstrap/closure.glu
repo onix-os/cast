@@ -1,0 +1,86 @@
+// Exact contentful bootstrap closure for the offline execution fixtures.
+// Package names, versions, sizes, URLs, outputs, and dependency edges are
+// derived from the pinned immutable Stone index. Only content identities are
+// repeated here, so the index remains the single metadata authority.
+
+let package_sets = import! "./package_sets.glu"
+
+type IndexPin = {
+    sha256 : String,
+    size : Int,
+}
+
+type RepositoryPin = {
+    base_uri : String,
+    channel : String,
+    version : String,
+    architecture : String,
+    index : IndexPin,
+}
+
+type PackageSet = {
+    total_download_bytes : Int,
+    sha256 : Array String,
+}
+
+type FixtureClosure = {
+    name : String,
+    package_ids : Array String,
+}
+
+type BootstrapClosure = {
+    schema_version : Int,
+    repository : RepositoryPin,
+    fixtures : Array FixtureClosure,
+    packages : PackageSet,
+}
+
+let repository = {
+    base_uri = "https://cdn.aerynos.dev",
+    channel = "main",
+    version = "history/1783706384",
+    architecture = "x86_64",
+    index = {
+        sha256 = "0f986f19f4e88f74ed5ae3452fbd9cc34ab53915f391555952d68ac90b202efc",
+        size = 2432187,
+    },
+}
+
+{
+    schema_version = 2,
+    repository,
+    fixtures = [
+        { name = "autotools", package_ids = package_sets.autotools },
+        { name = "autotools-options", package_ids = package_sets.autotools },
+        { name = "cargo", package_ids = package_sets.cargo },
+        { name = "cargo-features", package_ids = package_sets.cargo },
+        { name = "cargo-vendored", package_ids = package_sets.cargo },
+        { name = "cmake", package_ids = package_sets.cmake_zlib },
+        { name = "custom", package_ids = package_sets.custom },
+        { name = "daemon-generated", package_ids = package_sets.cmake },
+        { name = "desktop-integration", package_ids = package_sets.desktop_integration },
+        { name = "external-test-vectors", package_ids = package_sets.cmake },
+        { name = "factory-override", package_ids = package_sets.cmake },
+        { name = "font-family", package_ids = package_sets.font_family },
+        { name = "generated-config", package_ids = package_sets.generated_config },
+        { name = "generated-shell", package_ids = package_sets.generated_config },
+        { name = "gettext-localization", package_ids = package_sets.gettext_localization },
+        { name = "go-module", package_ids = package_sets.go_module },
+        { name = "header-only-library", package_ids = package_sets.custom },
+        { name = "hooks-patch", package_ids = package_sets.hooks_patch },
+        { name = "meson", package_ids = package_sets.meson },
+        { name = "multiple-sources", package_ids = package_sets.multiple_sources },
+        { name = "pgo-workload", package_ids = package_sets.pgo_workload },
+        { name = "plugin-output", package_ids = package_sets.custom },
+        { name = "post-install-smoke-test", package_ids = package_sets.cmake },
+        { name = "python-module", package_ids = package_sets.python_module },
+        { name = "relation-policy", package_ids = package_sets.relation_policy },
+        { name = "split", package_ids = package_sets.cmake },
+        { name = "system-integration-assets", package_ids = package_sets.system_integration_assets },
+        { name = "userspace-profile", package_ids = package_sets.userspace_profile },
+    ],
+    packages = {
+        total_download_bytes = 388713448,
+        sha256 = package_sets.all,
+    },
+}

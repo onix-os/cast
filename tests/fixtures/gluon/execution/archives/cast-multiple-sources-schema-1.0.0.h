@@ -1,0 +1,6 @@
+#ifndef CAST_MULTIPLE_SOURCES_RAW_SCHEMA_H
+#define CAST_MULTIPLE_SOURCES_RAW_SCHEMA_H
+
+#define CAST_RAW_SCHEMA_ID "raw-schema-v3"
+
+#endif

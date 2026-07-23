@@ -1,0 +1,11 @@
+
+let b = import! cast.package.v3
+
+// Capability values are passed to the factory instead of being looked up by
+// name inside it. Another caller can supply a different implementation while
+// retaining the same package and output-policy functions.
+{
+    compression = b.dep.pkgconfig "zlib",
+    crypto = b.dep.pkgconfig "libressl",
+    documentation_generator = b.dep.binary "doxygen",
+}

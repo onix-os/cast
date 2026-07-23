@@ -1,0 +1,11 @@
+
+let dependencies = import! "./dependencies.glu"
+let make_outputs = import! "./outputs.glu"
+let make_package = import! "./package.glu"
+let policies = import! "./policies.glu"
+
+make_package {
+    dependencies,
+    output_policy = make_outputs,
+    policy = policies.edge_tools,
+}

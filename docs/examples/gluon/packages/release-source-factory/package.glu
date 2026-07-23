@@ -1,0 +1,38 @@
+let b = import! cast.package.v3
+let strings = import! std.string.prim
+let cmake = import! cast.builders.cmake.v2
+
+// Release data is an explicit factory argument. The archive URL, local name,
+// unpack destination, and package version therefore cannot silently drift
+// apart during an update.
+\release ->
+    let pname = "release-probe"
+    let archive_name = strings.append (strings.append pname (strings.append "-" release.version)) ".tar.xz"
+    let source_url = strings.append "https://example.invalid/releases/" archive_name
+    let source_dir = strings.append pname (strings.append "-" release.version)
+    let base = b.mk_package (b.meta {
+        pname,
+        version = release.version,
+        release = release.package_release,
+        homepage = "https://example.invalid/release-probe",
+        license = ["BSD-2-Clause"],
+    })
+
+    {
+        builder = cmake.builder {
+            flags = ["-DBUILD_TESTING=ON"],
+            run_tests = b.boolean.true,
+        },
+        sources = [
+            b.source.archive_with {
+                url = source_url,
+                hash = release.sha256,
+                rename = b.optional.set archive_name,
+                strip_dirs = b.optional.set 1,
+                unpack = b.boolean.true,
+                unpack_dir = b.optional.set source_dir,
+            },
+        ],
+        architectures = ["x86_64", "aarch64"],
+        .. base
+    }

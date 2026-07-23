@@ -1,0 +1,6 @@
+let make_package = import! "./package.glu"
+let features = import! "./features.glu"
+
+// One typed choice changes the source, tool, setup, and output graphs as one
+// coherent value instead of leaving independently editable switches.
+make_package features

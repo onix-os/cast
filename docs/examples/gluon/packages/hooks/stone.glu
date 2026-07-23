@@ -1,0 +1,54 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "hooked-library",
+    version = "5.3.0",
+    release = 1,
+    homepage = "https://example.invalid/hooked-library",
+    license = ["Apache-2.0"],
+})
+
+{
+    builder = cmake.builder {
+        flags = ["-DBUILD_TESTING=ON"],
+        .. cmake.defaults
+    },
+    hooks = b.hooks {
+        pre_setup = [
+            b.step.run (b.program.binary "patch") ["-p1", "-i", "compat.patch"],
+        ],
+        post_build = [
+            b.step.run (b.program.binary "strip-nondeterminism") ["build/generated.dat"],
+        ],
+        pre_check = [
+            b.step.shell r#"test -d "${CAST_BUILDER_DIR}"
+test -f "${CAST_BUILDER_DIR}/CMakeCache.txt""#,
+        ],
+        post_install = [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [
+                    b.program.binary "install",
+                    b.program.binary "ln",
+                ],
+                script = r#"
+install -Dm644 packaging/hooked.conf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/hooked/hooked.conf"
+ln -s hooked "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hooked-compat"
+"#,
+            },
+        ],
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [
+        b.dep.binary "patch",
+        b.dep.binary "strip-nondeterminism",
+    ],
+    sources = [
+        b.source.archive
+            "https://example.invalid/hooked-library-5.3.0.tar.gz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}

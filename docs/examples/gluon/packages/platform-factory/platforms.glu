@@ -1,0 +1,19 @@
+
+let b = import! cast.package.v3
+
+{
+    edge_x86_64 = {
+        architectures = ["x86_64"],
+        cmake_flags = [
+            "-DENABLE_PORTABLE_DISPATCH=ON",
+            "-DENABLE_SERVER=OFF",
+            "-DUSE_IO_URING=ON",
+        ],
+        event_backend = b.dep.pkgconfig "liburing",
+        tuning = [
+            b.named "harden" b.tuning.enable,
+            b.named "lto" (b.tuning.config "thin"),
+            b.named "optimize" (b.tuning.config "speed"),
+        ],
+    },
+}

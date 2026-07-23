@@ -1,8 +1,6 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use petgraph::{
     Direction,
+    algo::astar,
     prelude::DiGraph,
     visit::{Dfs, Topo, Walker},
 };
@@ -11,8 +9,14 @@ use self::subgraph::subgraph;
 
 mod subgraph;
 
-/// NodeIndex as employed in moss-rs usage
+/// NodeIndex as employed by Cast's Forge engine
 pub type NodeIndex = petgraph::prelude::NodeIndex<u32>;
+
+/// The concrete node path which would become cyclic after adding an edge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cycle<N> {
+    pub path: Vec<N>,
+}
 
 /// Simplistic encapsulation of petgraph APIs to provide
 /// suitable mechanisms to empower transaction code
@@ -67,26 +71,41 @@ where
 
     /// Add an edge from a to b
     pub fn add_edge(&mut self, a: NodeIndex, b: NodeIndex) -> bool {
-        let a_node = &self.0[a];
+        self.try_add_edge(a, b).unwrap_or(false)
+    }
 
-        // prevent cycle (b connects to a)
-        if self.dfs(b).any(|n| n == a_node) {
-            return false;
-        }
-
-        // don't add edge if it already exists
+    /// Add an edge from `a` to `b`, retaining a concrete cycle path when the
+    /// edge would make the graph cyclic.
+    ///
+    /// `Ok(false)` means the edge already exists. This keeps duplicate edges
+    /// distinct from cycles for callers which need actionable diagnostics.
+    pub fn try_add_edge(&mut self, a: NodeIndex, b: NodeIndex) -> Result<bool, Cycle<N>> {
         if self.0.contains_edge(a, b) {
-            return false;
+            return Ok(false);
         }
 
-        // We're good, add it
-        self.0.add_edge(a, b, ());
+        // Adding a -> b creates a cycle exactly when b can already reach a.
+        if let Some((_, path)) = astar(&self.0, b, |node| node == a, |_| 1_usize, |_| 0) {
+            let mut cycle = Vec::with_capacity(path.len() + 1);
+            cycle.push(self.0[a].clone());
+            cycle.extend(path.into_iter().map(|node| self.0[node].clone()));
+            return Err(Cycle { path: cycle });
+        }
 
-        true
+        self.0.add_edge(a, b, ());
+        Ok(true)
     }
 
     pub fn iter_nodes(&self) -> impl Iterator<Item = &'_ N> {
         self.0.node_weights()
+    }
+
+    /// Return the direct outgoing dependencies of `node`.
+    pub fn successors<'a>(&'a self, node: &N) -> impl Iterator<Item = &'a N> + 'a {
+        self.get_index(node)
+            .into_iter()
+            .flat_map(|index| self.0.neighbors_directed(index, Direction::Outgoing))
+            .map(|index| &self.0[index])
     }
 
     /// Perform a depth-first search, given the start index
@@ -237,5 +256,36 @@ mod tests {
         let graph: Dag<i32> = Dag::new();
         let batches = graph.batched_topo();
         assert_eq!(batches.len(), 0);
+    }
+
+    #[test]
+    fn successors_returns_only_direct_outgoing_nodes() {
+        let mut graph = Dag::new();
+        let root = graph.add_node_or_get_index(&"root");
+        let direct = graph.add_node_or_get_index(&"direct");
+        let transitive = graph.add_node_or_get_index(&"transitive");
+        graph.add_edge(root, direct);
+        graph.add_edge(direct, transitive);
+
+        assert_eq!(graph.successors(&"root").copied().collect::<Vec<_>>(), ["direct"]);
+    }
+
+    #[test]
+    fn try_add_edge_distinguishes_duplicates_from_actionable_cycles() {
+        let mut graph = Dag::new();
+        let a = graph.add_node_or_get_index(&"a");
+        let b = graph.add_node_or_get_index(&"b");
+        let c = graph.add_node_or_get_index(&"c");
+
+        assert_eq!(graph.try_add_edge(a, b), Ok(true));
+        assert_eq!(graph.try_add_edge(a, b), Ok(false));
+        assert_eq!(graph.try_add_edge(b, c), Ok(true));
+        assert_eq!(
+            graph.try_add_edge(c, a),
+            Err(Cycle {
+                path: vec!["c", "a", "b", "c"]
+            })
+        );
+        assert!(!graph.add_edge(c, a));
     }
 }

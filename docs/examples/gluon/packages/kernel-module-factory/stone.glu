@@ -1,0 +1,4 @@
+let kernel = import! "./kernel.glu"
+let make_module = import! "./package.glu"
+
+make_module kernel

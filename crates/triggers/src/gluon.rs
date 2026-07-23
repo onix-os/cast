@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Versioned restricted Gluon boundary for triggers.
 
 use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
@@ -26,7 +23,7 @@ pub enum TriggerEvaluationError {
     Evaluation(#[from] Diagnostic),
     #[error(transparent)]
     Conversion(#[from] TriggerConversionError),
-    #[error("trigger source must explicitly import `moss.trigger.v1`")]
+    #[error("trigger source must explicitly import `cast.trigger.v1`")]
     MissingAbiImport,
 }
 
@@ -162,14 +159,14 @@ pub fn evaluate_gluon_with_inputs(
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedTrigger, TriggerEvaluationError> {
     let mut import_policy = evaluator.import_policy().clone();
-    import_policy.insert_embedded_module("moss.trigger.v1", GLUON_TRIGGER_ABI)?;
+    import_policy.insert_embedded_module("cast.trigger.v1", GLUON_TRIGGER_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonTriggerSpec>(source, explicit_inputs)?;
     if !evaluation
         .fingerprint
         .imported_modules
         .iter()
-        .any(|module| module.logical_name == "moss.trigger.v1")
+        .any(|module| module.logical_name == "cast.trigger.v1")
     {
         return Err(TriggerEvaluationError::MissingAbiImport);
     }

@@ -1,0 +1,397 @@
+//! Proof-bearing candidate preparation under durable journal authority.
+//!
+//! Only a coordinator at `CandidatePrepareStarted` can begin the neutral
+//! metadata publication. The caller is allowed to interpret the exact
+//! descriptor-read `os-info.json` bytes, but never receives the publication
+//! capability and therefore cannot manufacture or substitute the proof which
+//! authorizes `CandidatePrepared`.
+
+#[cfg(test)]
+use crate::transition_journal::TransitionRecord;
+use crate::{
+    db, state,
+    transition_journal::{Operation, Phase},
+};
+
+use super::{
+    FINISH_CANDIDATE_PREPARE, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
+    before_finish_candidate_runtime_proof,
+};
+use crate::transition_identity::candidate_state_authority::RetainedCandidateStateId;
+use crate::transition_identity::state_tree_metadata::RetainedTreeStateId;
+use crate::transition_identity::{
+    CandidateMetadataError, CandidateMetadataOutputs, CandidateMetadataProof, CandidateMetadataPublication,
+    CandidateMetadataVerification,
+};
+
+/// Operation dispatch after the exact candidate metadata proof has become
+/// durable journal evidence.
+///
+/// The variants contain unforgeable wrappers with private fields. Archived
+/// activation deliberately has no transaction-trigger runner.
+#[derive(Debug)]
+pub(crate) enum PreparedStatefulTransitionCoordinator {
+    NewStateIsolation(PreparedTransactionIsolationCoordinator),
+    ActiveReblitReservation(PreparedActiveReblitReservationCoordinator),
+    Archived(PreparedArchivedTransitionCoordinator),
+}
+
+/// Proof-bearing `ActiveReblit` authority which is deliberately not trigger
+/// ready. It must consume the sealed reservation boundary first.
+#[derive(Debug)]
+pub(crate) struct PreparedActiveReblitReservationCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
+}
+
+/// Proof-bearing `NewState` or reserved `ActiveReblit` authority which still
+/// must publish and retain the exact transaction isolation ABI. There is no
+/// trigger runner on this typestate.
+#[derive(Debug)]
+pub(crate) struct PreparedTransactionIsolationCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) operation: TransactionTriggerOperationReadiness,
+}
+
+/// Proof-bearing `NewState` or `ActiveReblit` authority whose exact isolation
+/// ABI is retained and mandatory.
+#[derive(Debug)]
+pub(crate) struct PreparedTransactionTriggerCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) readiness: TransactionTriggerReadiness,
+}
+
+/// Mandatory operation-specific proof established before isolation-ABI
+/// publication. There is intentionally no archived variant.
+#[derive(Debug)]
+pub(super) enum TransactionTriggerOperationReadiness {
+    NewState,
+    ActiveReblit(super::super::staging_wrapper_rotation::RetainedActiveReblitReservation),
+}
+
+/// Aggregate trigger-readiness proof retained through every post-trigger
+/// forward boundary. Neither component is optional or caller-constructible.
+#[derive(Debug)]
+pub(super) struct TransactionTriggerReadiness {
+    pub(super) operation: TransactionTriggerOperationReadiness,
+    pub(super) isolation: super::transaction_isolation::RetainedTransactionIsolationAbi,
+}
+
+/// Proof-bearing archived-activation authority. This type intentionally has
+/// no method capable of running stateful transaction triggers.
+#[derive(Debug)]
+pub(crate) struct PreparedArchivedTransitionCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
+}
+
+/// Proof-bearing authority after transaction triggers are durably complete.
+#[derive(Debug)]
+pub(crate) struct TransactionTriggersCompleteCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) readiness: TransactionTriggerReadiness,
+}
+
+impl StatefulTransitionCoordinator {
+    /// Publish fresh metadata or verify archived metadata, publish the exact
+    /// absent `.stateID` for a newly decorated candidate, then durably advance
+    /// to `CandidatePrepared` while retaining the sole metadata proof.
+    ///
+    /// `derive_metadata` sees only the optional bytes read through the exact
+    /// retained `usr/lib` descriptor and must return both labeled, bounded
+    /// policy outputs together. The coordinator owns those buffers, binds
+    /// their immutable digest pair to the retained state database, and only
+    /// then consumes the filesystem publication or verification capability.
+    pub(crate) fn finish_candidate_prepare<F>(
+        mut self,
+        derive_metadata: F,
+    ) -> Result<PreparedStatefulTransitionCoordinator, StatefulTransitionCoordinatorError>
+    where
+        F: FnOnce(Option<&[u8]>) -> Result<CandidateMetadataOutputs, CandidateMetadataError>,
+    {
+        self.require_phase(Phase::CandidatePrepareStarted, FINISH_CANDIDATE_PREPARE)?;
+        let candidate = self.candidate_state()?;
+        before_finish_candidate_runtime_proof();
+        self.require_candidate_prepare_started_evidence(candidate)?;
+
+        let candidate_usr = self.identity.candidate.store.retained_directory();
+        let candidate_path = self.identity.candidate.store.display_path();
+        // Dispatch is fixed by the durable operation: callers cannot select a
+        // mutating publication for archived activation or substitute read-only
+        // verification for a candidate that still requires publication.
+        let (metadata, provenance) = match self.record.operation {
+            Operation::ActivateArchived => {
+                // Load independent durable expectation before opening either
+                // policy input or canonical archived output.
+                let provenance = self.identity.state_database.required_metadata_provenance(candidate)?;
+                let verification = CandidateMetadataVerification::begin(candidate_usr, candidate_path)?;
+                let os_info = verification.read_optional_os_info()?;
+                let outputs = derive_metadata(os_info.as_deref())?;
+                provenance.require_outputs(candidate, outputs.os_release(), outputs.system_model())?;
+                let metadata = verification.prove(outputs)?;
+                self.identity
+                    .state_database
+                    .require_exact_metadata_provenance(candidate, &provenance)?;
+                (metadata, provenance)
+            }
+            Operation::NewState => {
+                let publication = CandidateMetadataPublication::begin(candidate_usr, candidate_path)?;
+                let os_info = publication.read_optional_os_info()?;
+                let outputs = derive_metadata(os_info.as_deref())?;
+                let provenance =
+                    db::state::MetadataProvenance::from_outputs(outputs.os_release(), outputs.system_model());
+                // This SQLite commit is deliberately before either canonical
+                // output publication. A crash or uncertain commit therefore
+                // leaves recoverable CandidatePrepareStarted evidence rather
+                // than archived bytes masquerading as their own expectation.
+                self.identity
+                    .state_database
+                    .insert_fresh_metadata_provenance_if_transition_matches(
+                        candidate,
+                        &self.record.transition_id,
+                        &provenance,
+                    )?;
+                let metadata = publication.publish(outputs)?;
+                self.identity
+                    .state_database
+                    .require_exact_metadata_provenance(candidate, &provenance)?;
+                (metadata, provenance)
+            }
+            Operation::ActiveReblit => {
+                // A legacy or missing pair fails before `begin` can create
+                // even an otherwise harmless candidate `usr/lib` directory.
+                let provenance = self.identity.state_database.required_metadata_provenance(candidate)?;
+                let publication = CandidateMetadataPublication::begin(candidate_usr, candidate_path)?;
+                let os_info = publication.read_optional_os_info()?;
+                let outputs = derive_metadata(os_info.as_deref())?;
+                provenance.require_outputs(candidate, outputs.os_release(), outputs.system_model())?;
+                let metadata = publication.publish(outputs)?;
+                self.identity
+                    .state_database
+                    .require_exact_metadata_provenance(candidate, &provenance)?;
+                (metadata, provenance)
+            }
+        };
+
+        // Metadata proof must bind to the coordinator's exact candidate before
+        // NewState or ActiveReblit may publish even the state ID.
+        metadata.require_same_candidate(candidate_usr, candidate_path)?;
+        self.require_candidate_prepare_started_evidence(candidate)?;
+        metadata.require_same_candidate(candidate_usr, candidate_path)?;
+
+        match self.record.operation {
+            Operation::NewState | Operation::ActiveReblit => {
+                let state_id = RetainedTreeStateId::publish_absent(&self.identity.candidate.store, candidate)?;
+                self.identity.candidate_state_id = RetainedCandidateStateId::ExistingId(state_id);
+            }
+            Operation::ActivateArchived => {}
+        }
+
+        // Sandwich the owned proof between complete journal, runtime, public
+        // name, database, and state-ID evidence. The final proof check is the
+        // last observation before the conditional durable journal advance.
+        self.require_prepared_metadata_sandwich(candidate, &metadata, &provenance)?;
+        self.advance(None)?;
+
+        match self.record.operation {
+            Operation::NewState => Ok(PreparedStatefulTransitionCoordinator::NewStateIsolation(
+                PreparedTransactionIsolationCoordinator {
+                    coordinator: self,
+                    metadata,
+                    provenance,
+                    operation: TransactionTriggerOperationReadiness::NewState,
+                },
+            )),
+            Operation::ActiveReblit => Ok(PreparedStatefulTransitionCoordinator::ActiveReblitReservation(
+                PreparedActiveReblitReservationCoordinator {
+                    coordinator: self,
+                    metadata,
+                    provenance,
+                },
+            )),
+            Operation::ActivateArchived => Ok(PreparedStatefulTransitionCoordinator::Archived(
+                PreparedArchivedTransitionCoordinator {
+                    coordinator: self,
+                    metadata,
+                    provenance,
+                },
+            )),
+        }
+    }
+
+    pub(super) fn candidate_state(&self) -> Result<state::Id, StatefulTransitionCoordinatorError> {
+        self.record
+            .candidate
+            .id
+            .map(state::Id::from)
+            .ok_or(StatefulTransitionCoordinatorError::CandidateStateMissing {
+                phase: self.record.phase,
+            })
+    }
+
+    fn require_candidate_prepare_started_evidence(
+        &self,
+        candidate: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        self.require_canonical_record()?;
+        self.require_record_runtime_evidence()?;
+        self.require_candidate_tree_names(candidate, false)?;
+        self.require_candidate_database_evidence(candidate)?;
+        self.require_record_runtime_evidence()?;
+        self.require_candidate_tree_names(candidate, false)?;
+        self.require_candidate_database_evidence(candidate)?;
+        self.require_canonical_record()
+    }
+
+    pub(super) fn require_prepared_candidate_evidence(
+        &self,
+        candidate: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        self.require_canonical_record()?;
+        self.require_record_runtime_evidence()?;
+        self.require_candidate_tree_names(candidate, true)?;
+        self.require_candidate_database_evidence(candidate)?;
+        self.require_record_runtime_evidence()?;
+        self.require_candidate_tree_names(candidate, true)?;
+        self.require_candidate_database_evidence(candidate)?;
+        self.require_canonical_record()
+    }
+
+    pub(super) fn require_canonical_record(&self) -> Result<(), StatefulTransitionCoordinatorError> {
+        let actual = self.identity.journal.load()?;
+        if actual.as_ref() == Some(&self.record) {
+            Ok(())
+        } else {
+            Err(StatefulTransitionCoordinatorError::CanonicalRecordChanged {
+                transition_id: self.record.transition_id.clone(),
+                expected_phase: self.record.phase,
+                actual,
+            })
+        }
+    }
+
+    fn require_candidate_tree_names(
+        &self,
+        candidate: state::Id,
+        state_id_published: bool,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        let candidate_path = self.identity.candidate.store.display_path();
+        let previous_path = self.identity.previous.store.display_path();
+        if state_id_published || self.record.operation == Operation::ActivateArchived {
+            self.identity
+                .require_existing_candidate_id(self.record.operation, candidate)?;
+            self.identity
+                .verify_candidate_named_with_state_id(candidate_path)
+                .map_err(StatefulTransitionCoordinatorError::Identity)?;
+        } else {
+            self.identity
+                .require_known_id_absent(self.record.operation, candidate)?;
+            self.identity
+                .candidate
+                .verify_named_read_only(candidate_path)
+                .map_err(StatefulTransitionCoordinatorError::Identity)?;
+            RetainedTreeStateId::require_absent(&self.identity.candidate.store)
+                .map_err(StatefulTransitionCoordinatorError::Identity)?;
+        }
+        self.identity
+            .previous
+            .verify_named_read_only(previous_path)
+            .map_err(StatefulTransitionCoordinatorError::Identity)?;
+        if state_id_published || self.record.operation == Operation::ActivateArchived {
+            self.identity
+                .verify_candidate_named_with_state_id(candidate_path)
+                .map_err(StatefulTransitionCoordinatorError::Identity)
+        } else {
+            self.identity
+                .candidate
+                .verify_named_read_only(candidate_path)
+                .map_err(StatefulTransitionCoordinatorError::Identity)
+        }
+    }
+
+    pub(super) fn require_candidate_database_evidence(
+        &self,
+        candidate: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        match self.record.operation {
+            Operation::NewState => self.require_fresh_allocation_ownership(candidate),
+            Operation::ActivateArchived | Operation::ActiveReblit => {
+                self.identity.require_existing_candidate_database_ownership(
+                    self.record.operation,
+                    candidate,
+                    &self.record.transition_id,
+                )
+            }
+        }?;
+        self.identity.require_previous_state_database_ownership(
+            self.record.operation,
+            self.record.previous.id.map(state::Id::from),
+            Some(candidate),
+            &self.record.transition_id,
+        )?;
+        let expected = match self.record.operation {
+            Operation::NewState => Some((candidate, &self.record.transition_id)),
+            Operation::ActivateArchived | Operation::ActiveReblit => None,
+        };
+        self.identity
+            .require_global_transition_audit(self.record.operation, expected)
+    }
+}
+
+impl PreparedStatefulTransitionCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        match self {
+            Self::NewStateIsolation(prepared) => prepared.record(),
+            Self::ActiveReblitReservation(prepared) => prepared.record(),
+            Self::Archived(prepared) => prepared.record(),
+        }
+    }
+}
+
+impl PreparedTransactionTriggerCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        &self.coordinator.record
+    }
+}
+
+impl PreparedTransactionIsolationCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        &self.coordinator.record
+    }
+}
+
+impl PreparedActiveReblitReservationCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        &self.coordinator.record
+    }
+}
+
+impl PreparedArchivedTransitionCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        // Keeping the proof borrowed here ensures the archived typestate
+        // cannot accidentally become a proof-free coordinator accessor.
+        let _metadata = &self.metadata;
+        &self.coordinator.record
+    }
+}
+
+impl TransactionTriggersCompleteCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        let _metadata = &self.metadata;
+        &self.coordinator.record
+    }
+}

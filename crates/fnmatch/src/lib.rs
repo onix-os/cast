@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 //! Use fnmatch to generate regex matchers from glob-style strings.
 //!
 //! This crate extends the conventional `glob` style strings to add matching groups

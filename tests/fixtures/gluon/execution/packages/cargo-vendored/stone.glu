@@ -1,0 +1,33 @@
+
+let b = import! cast.package.v3
+let cargo = import! cast.builders.cargo.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-cargo-vendored-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-cargo-vendored-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    // `.cargo/config.toml`, Cargo.lock, and the complete directory source are
+    // part of the source archive. The structural builder adds `--frozen` and
+    // has no fetch phase, so the declared dependency must resolve offline.
+    builder = cargo.builder {
+        features = [],
+        binaries = ["cast-cargo-vendored-fixture"],
+        run_tests = b.boolean.true,
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-cargo-vendored-fixture-1.0.0.tar.gz",
+            hash = "f4e4c01bcd965a8843ec3d93f8d72e3c85d8dbf3e7b9625e17a5bffe9d255c22",
+            rename = b.optional.set "cast-cargo-vendored-fixture.tar.gz",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-cargo-vendored-fixture",
+        },
+    ],
+    .. base
+}

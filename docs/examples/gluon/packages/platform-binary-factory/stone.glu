@@ -1,0 +1,6 @@
+let make_package = import! "./package.glu"
+let platforms = import! "./platforms.glu"
+
+// This checked root selects x86_64 explicitly. A target-specific repository
+// can call the same factory with `platforms.aarch64`.
+make_package platforms.x86_64

@@ -1,0 +1,47 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm755 bin/orbit-monitor "${CAST_INSTALL_ROOT}${CAST_BINDIR}/orbit-monitor""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+// The selected record fixes the target, source bytes, and runtime loader as
+// one pure input. Both platform records have the same type and can be chosen by
+// another root without changing this factory.
+\platform ->
+    let root = b.output_with {
+        summary = b.optional.set "Prebuilt Orbit system monitor",
+        runtime_inputs = [b.dep.interpreter platform.interpreter_path],
+        paths = [b.path.exe "/usr/bin/orbit-monitor"],
+        .. b.output "out"
+    }
+    let base = b.mk_package (b.meta {
+        pname = "orbit-monitor-bin",
+        version = "5.1.0",
+        release = 1,
+        homepage = "https://example.invalid/orbit-monitor",
+        license = ["Apache-2.0"],
+    })
+
+    {
+        builder = b.builder.custom phases [b.dep.binary "install"],
+        outputs = [root],
+        sources = [
+            b.source.archive_with {
+                url = platform.url,
+                hash = platform.sha256,
+                rename = b.optional.set platform.archive,
+                strip_dirs = b.optional.set 1,
+                unpack = b.boolean.true,
+                unpack_dir = b.optional.set "orbit-monitor",
+            },
+        ],
+        architectures = [platform.architecture],
+        .. base
+    }

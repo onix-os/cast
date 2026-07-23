@@ -1,0 +1,5 @@
+let b = import! cast.package.v3
+
+{
+    component = b.boolean.true,
+}

@@ -1,0 +1,32 @@
+
+let b = import! cast.package.v3
+let autotools = import! cast.builders.autotools.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-autotools-options-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-autotools-options-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    // The source rejects an omitted flag, while its deliberately failing
+    // `check` target proves that disabling checks changes the executed phase
+    // graph rather than merely changing descriptive metadata.
+    builder = autotools.builder {
+        flags = ["--enable-stone-message"],
+        run_tests = b.boolean.false,
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-autotools-options-fixture-1.0.0.tar",
+            hash = "70de3434e0e33ec6439389a45cfb6013e57fc3c58848449a6aba4c0d4f8d72db",
+            rename = b.optional.set "cast-autotools-options-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-autotools-options-fixture",
+        },
+    ],
+    .. base
+}

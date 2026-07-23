@@ -1,0 +1,45 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+\repositories ->
+    let base = b.mk_package (b.meta {
+        pname = "orbit-console",
+        version = "2.4.0",
+        release = 1,
+        homepage = "https://example.invalid/orbit-console",
+        license = ["BSD-2-Clause"],
+    })
+
+    let hooks = b.hooks {
+        pre_setup = [
+            b.step.run
+                (b.program.binary "mkdir")
+                ["-p", "application/subprojects"],
+            b.step.run
+                (b.program.binary "ln")
+                ["-s", "../../syntax-engine", "application/subprojects/syntax-engine"],
+            b.step.run
+                (b.program.binary "ln")
+                ["-s", "../../wire-format", "application/subprojects/wire-format"],
+        ],
+        .. b.defaults.hooks
+    }
+
+    {
+        builder = cmake.builder {
+            flags = [
+                "-Sapplication",
+                "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
+                "-DUSE_BUNDLED_SUBPROJECTS=ON",
+            ],
+            run_tests = b.boolean.true,
+        },
+        hooks,
+        sources = [
+            repositories.application,
+            repositories.syntax,
+            repositories.protocol,
+        ],
+        architectures = ["native"],
+        .. base
+    }

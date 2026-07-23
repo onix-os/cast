@@ -1,0 +1,45 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-hooks-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-hooks-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = cmake.default,
+    hooks = b.hooks {
+        pre_setup = [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [b.program.binary "patch"],
+                script = r#"patch -d . -p1 -i "${CAST_SOURCE_DIR}/pre-setup.patch""#,
+            },
+        ],
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [b.dep.binary "patch"],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-hooks-fixture-1.0.0.tar.xz",
+            hash = "238b6e91994ceecd1bc0d8365cc77f4166d5db22d1faa1f5eab80a0389c1210c",
+            rename = b.optional.set "cast-hooks-fixture.tar.xz",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-hooks-fixture",
+        },
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-hooks-fixture-1.0.0-pre-setup.patch",
+            hash = "1766d7a2e9ae6316169aa88a452b134eed19151f9dc15e81a57c93a2ff7dc986",
+            rename = b.optional.set "pre-setup.patch",
+            strip_dirs = b.optional.unset,
+            unpack = b.boolean.false,
+            unpack_dir = b.optional.unset,
+        },
+    ],
+    .. base
+}

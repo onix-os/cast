@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2023 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::io::{self, Result, Write};
 
 use zstd::zstd_safe::zstd_sys::ZSTD_EndDirective;
@@ -10,7 +7,7 @@ use zstd::zstd_safe::{CParameter, ResetDirective};
 type Context = zstd_safe::CCtx<'static>;
 
 /// Transparent encapsulation of zstd compression with the purpose
-/// of encoding moss (.stone) payloads to a stream
+/// of encoding Cast (.stone) payloads to a stream
 pub struct Writer<'a, W: Write> {
     writer: W,
     encoder: &'a mut Encoder,
@@ -80,7 +77,10 @@ impl Encoder {
             .set_parameter(CParameter::CompressionLevel(18))
             .map_err(map_error_code)?;
         context
-            .set_parameter(CParameter::WindowLog(31))
+            // Keep newly emitted archives readable under StoneDecodeLimits'
+            // bounded default. Older archives which genuinely require a
+            // 2-GiB window remain available through read_with_limits.
+            .set_parameter(CParameter::WindowLog(30))
             .map_err(map_error_code)?;
         Ok(Self {
             context,

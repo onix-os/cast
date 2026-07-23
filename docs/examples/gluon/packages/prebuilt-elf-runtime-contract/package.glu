@@ -1,0 +1,62 @@
+let b = import! cast.package.v3
+
+\artifact ->
+    let phases = b.scripts {
+        // Run the supplied ELF directly from the exact extracted archive. It
+        // is not rebuilt, wrapped, patched, or discovered through PATH.
+        check = b.phase [
+            b.step.run_built
+                (b.program.built artifact.executable)
+                ["--self-test"],
+        ],
+        // Dash interprets one install-only script. The interpreter and the
+        // sole external program are typed executable capabilities.
+        install = b.phase [
+            b.step.shell_with {
+                interpreter = b.program.binary "dash",
+                declared_programs = [b.program.binary "install"],
+                script = artifact.install_script,
+            },
+        ],
+        .. b.defaults.scripts
+    }
+
+    let root = b.output_with {
+        summary = b.optional.set "Prebuilt Quartz artifact inspector",
+        runtime_inputs = artifact.runtime_inputs,
+        paths = [b.path.exe artifact.installed_path],
+        .. b.output "out"
+    }
+
+    let debugging = b.output_with {
+        include_in_manifest = b.boolean.false,
+        summary = b.optional.set "Quartz inspector debugging symbols",
+        paths = [b.path.any "/usr/lib/debug"],
+        .. b.output "dbginfo"
+    }
+
+    let base = b.mk_package (b.meta {
+        pname = "quartz-inspector-bin",
+        version = "3.4.1",
+        release = 1,
+        homepage = "https://example.invalid/quartz-inspector",
+        license = ["Apache-2.0"],
+    })
+
+    {
+        // Dash is retained by the Shell executable edge; install is the only
+        // authored builder tool. This package declares no compile/link step or
+        // compiler dependency. Repository policy still supplies its selected
+        // frozen toolchain independently of this artifact contract.
+        builder = b.builder.custom phases [b.dep.binary "install"],
+        outputs = [root, debugging],
+        options = b.options {
+            debug = b.boolean.true,
+            strip = b.boolean.true,
+            networking = b.boolean.false,
+            .. b.defaults.options
+        },
+        sources = [artifact.source],
+        architectures = [artifact.architecture],
+        .. base
+    }

@@ -1,0 +1,34 @@
+#!/usr/bin/dash
+
+set -eu
+
+stone_message=false
+for argument do
+    case "$argument" in
+        --enable-stone-message) stone_message=true ;;
+        --*=*|--disable-*|--enable-*) ;;
+        *) printf 'unsupported configure argument: %s\n' "$argument" >&2; exit 2 ;;
+    esac
+done
+
+if [ "$stone_message" != true ]; then
+    printf '%s\n' 'the required --enable-stone-message configure flag was omitted' >&2
+    exit 2
+fi
+
+cat > config.h <<'EOF'
+#define CAST_AUTOTOOLS_OPTIONS_MESSAGE "cast autotools options fixture: enabled"
+EOF
+
+cat > Makefile <<'EOF'
+CC ?= cc
+CFLAGS ?=
+all: cast-autotools-options-fixture
+cast-autotools-options-fixture: hello.c config.h
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ hello.c
+check: cast-autotools-options-fixture
+	@printf '%s\n' 'the disabled Autotools check phase was executed' >&2
+	@false
+install: cast-autotools-options-fixture
+	install -Dm755 cast-autotools-options-fixture "$(DESTDIR)/usr/bin/cast-autotools-options-fixture"
+EOF

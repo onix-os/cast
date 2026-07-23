@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-
 use std::{error::Error, fmt, io, sync::Arc};
 
 use gluon::base::error::InFile;
@@ -19,6 +16,7 @@ pub enum DiagnosticCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LimitKind {
     SourceSize,
+    ExplicitInputSize,
     ImportedFileSize,
     ImportCount,
     ImportGraphSize,

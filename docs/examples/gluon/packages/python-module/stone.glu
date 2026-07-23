@@ -1,0 +1,68 @@
+
+let b = import! cast.package.v3
+
+let python = b.program.binary "python3"
+
+let phases = b.scripts {
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [python],
+            script = r#"python3 -m build --wheel --no-isolation"#,
+        },
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [python],
+            script = r#"python3 -m installer --destdir "${CAST_INSTALL_ROOT}" --validate-record all dist/*.whl"#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [python],
+            script = r#"python3 -m pytest -q"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Typed event-codec module for Python",
+    runtime_inputs = [
+        b.dep.binary "python3",
+        b.dep.python "typing-extensions",
+    ],
+    paths = [
+        b.path.any "/usr/lib/python*/site-packages/eventcodec",
+        b.path.any "/usr/lib/python*/site-packages/eventcodec-*.dist-info",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "python-eventcodec",
+    version = "0.9.3",
+    release = 1,
+    homepage = "https://example.invalid/python-eventcodec",
+    license = ["MIT"],
+})
+
+{
+    builder = b.builder.custom phases [b.dep.binary "python3"],
+    native_build_inputs = [
+        b.dep.python "build",
+        b.dep.python "installer",
+        b.dep.python "setuptools",
+    ],
+    check_inputs = [b.dep.python "pytest"],
+    outputs = [root],
+    sources = [
+        b.source.archive
+            "https://example.invalid/python-eventcodec-0.9.3.tar.gz"
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    ],
+    architectures = ["native"],
+    .. base
+}

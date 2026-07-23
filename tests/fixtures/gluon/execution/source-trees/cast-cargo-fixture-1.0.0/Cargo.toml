@@ -1,0 +1,10 @@
+
+[package]
+name = "cast-cargo-fixture"
+version = "1.0.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[[bin]]
+name = "cast-cargo-fixture"
+path = "src/main.rs"

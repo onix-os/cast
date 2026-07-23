@@ -1,0 +1,23 @@
+let b = import! cast.package.v3
+
+// The package factory receives the complete output graph. Dependency scope is
+// therefore fixed by the output factory instead of inferred from a global
+// package input list.
+\inputs ->
+    let base = b.mk_package (b.meta {
+        pname = "development-interface-closure",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/development-interface-closure",
+        license = ["MIT"],
+    })
+
+    {
+        builder = b.builder.custom b.defaults.scripts [],
+        outputs = inputs.output_factory {
+            pname = base.meta.pname,
+            dependencies = inputs.dependencies,
+        },
+        architectures = ["native"],
+        .. base
+    }

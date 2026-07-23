@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2025 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+
+[Unit]
+Description=Cast state rollback
+DefaultDependencies=no
+ConditionKernelCommandLine=cast.fstx
+ConditionPathExists=/etc/initrd-release
+After=sysroot.mount
+Requires=sysroot.mount
+Before=initrd-root-fs.target
+OnFailure=emergency.target
+OnFailureJobMode=isolate
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/cast/cast-fstx.sh /sysroot
+StandardInput=null
+StandardOutput=journal
+StandardError=journal+console
+RemainAfterExit=yes
+
+[Install]
+WantedBy=initrd-root-fs.target

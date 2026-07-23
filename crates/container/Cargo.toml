@@ -14,7 +14,14 @@ fs-err.workspace = true
 nc.workspace = true
 nix.workspace = true
 snafu.workspace = true
-strum.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[test]]
+name = "legacy_single_task"
+path = "tests/legacy_single_task.rs"
+harness = false
 
 [lints]
 workspace = true

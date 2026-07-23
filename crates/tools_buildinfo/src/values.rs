@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: 2025 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
 pub(crate) const VERSION: &str = env!("BUILDINFO_VERSION");
 
 pub(crate) const BUILD_TIME: &str = env!("BUILDINFO_BUILD_TIME");
+
+pub(crate) const SEMANTIC_FINGERPRINT: &str = env!("BUILDINFO_SEMANTIC_FINGERPRINT");
 
 #[cfg(BUILDINFO_IS_GIT_BUILD)]
 pub(crate) const GIT_FULL_HASH: &str = env!("BUILDINFO_GIT_FULL_HASH");

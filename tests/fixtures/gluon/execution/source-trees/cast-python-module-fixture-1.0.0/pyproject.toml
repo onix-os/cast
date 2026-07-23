@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=82", "wheel>=0.47"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cast-python-module-fixture"
+version = "1.0.0"
+description = "Deterministic event codec used by the Cast Python fixture"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["typing-extensions>=4.15"]
+
+[project.scripts]
+cast-python-module-fixture = "cast_python_module_fixture.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+pythonpath = ["src"]
+testpaths = ["tests"]

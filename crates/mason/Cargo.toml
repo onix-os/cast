@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: 2023 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "mason"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+autobins = false
+
+[features]
+# This feature exposes only the harness-free cache-clean proof entry point.
+# Production consumers and the Cast binary never enable it.
+cache-clean-test-support = []
+# This feature exists only so Cargo can link the harness-free delegated
+# execution fixture below against Mason's existing contentful test machinery.
+# Production consumers and the Cast binary never enable it.
+delegated-fixture-test-support = ["gitwrap/fixture-test-support"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+config = { path = "../../crates/config" }
+container = { path = "../../crates/container" }
+gitwrap = { path = "../../crates/gitwrap" }
+gluon_config = { path = "../../crates/gluon_config" }
+forge = { path = "../forge" }
+tools_buildinfo = { path = "../../crates/tools_buildinfo" }
+stone = { path = "../../crates/stone" }
+stone_recipe = { path = "../../crates/stone_recipe" }
+tui = { path = "../../crates/tui" }
+version_parse = { path = "../../crates/version_parse" }
+
+chrono.workspace = true
+clap.workspace = true
+derive_more.workspace = true
+dirs.workspace = true
+elf.workspace = true
+filetime.workspace = true
+flate2.workspace = true
+glob.workspace = true
+fs-err.workspace = true
+futures-util.workspace = true
+gluon.workspace = true
+gluon_codegen.workspace = true
+hex.workspace = true
+humansize.workspace = true
+itertools.workspace = true
+nix.workspace = true
+path-clean.workspace = true
+rapidfuzz = "0.5.0"
+rayon.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+url.workspace = true
+mailparse.workspace = true
+walkdir = "2.5.0"
+zstd.workspace = true
+astr.workspace = true
+tempfile.workspace = true
+tar.workspace = true
+xz2.workspace = true
+
+[dev-dependencies]
+gitwrap = { path = "../../crates/gitwrap", features = ["fixture-test-support"] }
+tempfile.workspace = true
+
+[[test]]
+name = "cache_clean"
+path = "tests/cache_clean.rs"
+harness = false
+required-features = ["cache-clean-test-support"]
+
+[[test]]
+name = "delegated_execution_fixture"
+path = "tests/delegated_execution_fixture.rs"
+harness = false
+required-features = ["delegated-fixture-test-support"]
+
+[lints]
+workspace = true

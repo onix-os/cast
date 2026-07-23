@@ -1,0 +1,40 @@
+
+let b = import! cast.package.v3
+
+let defaults = {
+    flags = [],
+    run_tests = b.boolean.true,
+}
+
+let builder = \config -> b.builder.structured {
+    required_tools = [
+        b.dep.binary "autoconf",
+        b.dep.binary "automake",
+        // Autoconf, generated configure scripts, and config.status invoke
+        // these programs directly. Keep the standard builder independent of
+        // ambient PATH contents and incomplete transitive package metadata.
+        b.dep.binary "awk",
+        b.dep.binary "grep",
+        // Generated Makefiles commonly invoke `install` as a child of make.
+        // Keep that program in the declared closure rather than depending on
+        // an accidental transitive provider.
+        b.dep.binary "install",
+        b.dep.binary "sed",
+    ],
+    environment = [b.environment.autotools],
+    phases = b.scripts {
+        setup = b.phase [b.step.autotools_configure config.flags],
+        build = b.phase [b.step.autotools_build],
+        install = b.phase [b.step.autotools_install],
+        check = b.phase (b.boolean.when config.run_tests [b.step.autotools_test]),
+        .. b.defaults.scripts
+    },
+    supported_hooks = b.hook_support.all,
+}
+
+{
+    abi_version = 2,
+    defaults,
+    builder,
+    default = builder defaults,
+}

@@ -1,0 +1,53 @@
+
+let b = import! cast.package.v3
+
+// A prebuilt upstream archive still has a fully declared install phase. The
+// target restriction, archive layout, installed paths, and required installer
+// are data in the package rather than assumptions made by a build script.
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+install -Dm755 bin/orbit "${CAST_INSTALL_ROOT}${CAST_BINDIR}/orbit"
+install -Dm644 share/man/man1/orbit.1 "${CAST_INSTALL_ROOT}${CAST_DATADIR}/man/man1/orbit.1"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Orbit artifact inspector",
+    paths = [
+        b.path.exe "/usr/bin/orbit",
+        b.path.any "/usr/share/man/man1/orbit.1",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "orbit-bin",
+    version = "4.6.2",
+    release = 1,
+    homepage = "https://example.invalid/orbit",
+    license = ["Apache-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [b.dep.binary "install"],
+    outputs = [root],
+    sources = [
+        b.source.archive_with {
+            url = "https://example.invalid/orbit-4.6.2-x86_64.tar.xz",
+            hash = "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+            rename = b.optional.unset,
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "prebuilt",
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

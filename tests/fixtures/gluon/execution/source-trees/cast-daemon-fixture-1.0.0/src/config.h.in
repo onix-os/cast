@@ -1,0 +1,3 @@
+
+#define CAST_DAEMON_VERSION "@PROJECT_VERSION@"
+#define CAST_DAEMON_DEFAULT_CONFIG "@CMAKE_INSTALL_FULL_DATADIR@/defaults/cast-daemon-fixture/cast-daemon.conf"

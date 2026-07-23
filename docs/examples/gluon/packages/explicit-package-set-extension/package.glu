@@ -1,0 +1,26 @@
+let b = import! cast.package.v3
+
+\packages ->
+    let base = b.mk_package (b.meta {
+        pname = "observability-workstation",
+        version = "1",
+        release = 1,
+        homepage = "https://example.invalid/observability-workstation",
+        license = ["CC0-1.0"],
+    })
+    {
+        outputs = [
+            b.output_with {
+                summary = b.optional.set "Explicitly extended userspace package set",
+                runtime_inputs = [
+                    packages.shell,
+                    packages.core,
+                    packages.metrics,
+                    packages.logs,
+                ],
+                .. b.output "out"
+            },
+        ],
+        architectures = ["native"],
+        .. base
+    }

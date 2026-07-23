@@ -1,0 +1,97 @@
+let b = import! cast.package.v3
+
+let cargo = b.program.binary "cargo"
+
+let setup_script = r#"test -f "${CAST_SOURCE_DIR}/application/Cargo.toml"
+test -f "${CAST_SOURCE_DIR}/application/Cargo.lock"
+test -d "${CAST_SOURCE_DIR}/vendor"
+test ! -e "${CAST_SOURCE_DIR}/application/vendor""#
+
+let build_script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export CARGO_HOME="${CAST_BUILD_ROOT}/cargo-home"
+export CARGO_NET_OFFLINE=true
+export CARGO_INCREMENTAL=0
+cargo build \
+    --manifest-path "${CAST_SOURCE_DIR}/application/Cargo.toml" \
+    --target-dir "${CAST_BUILDER_DIR}/target" \
+    --release --frozen --offline \
+    --config 'net.offline=true' \
+    --config 'source.crates-io.replace-with="declared-vendor"' \
+    --config "source.declared-vendor.directory='${CAST_SOURCE_DIR}/vendor'""#
+
+let check_script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export CARGO_HOME="${CAST_BUILD_ROOT}/cargo-home"
+export CARGO_NET_OFFLINE=true
+export CARGO_INCREMENTAL=0
+cargo test \
+    --manifest-path "${CAST_SOURCE_DIR}/application/Cargo.toml" \
+    --target-dir "${CAST_BUILDER_DIR}/target" \
+    --frozen --offline \
+    --config 'net.offline=true' \
+    --config 'source.crates-io.replace-with="declared-vendor"' \
+    --config "source.declared-vendor.directory='${CAST_SOURCE_DIR}/vendor'""#
+
+let install_script = r#"install -Dm755 "${CAST_BUILDER_DIR}/target/release/vendor-note" "${CAST_INSTALL_ROOT}${CAST_BINDIR}/vendor-note"
+install -Dm644 "${CAST_SOURCE_DIR}/application/README.md" "${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/vendor-note/README.md""#
+
+// This factory consumes only the two explicit source locks. Cargo receives an
+// empty private home, a disabled network policy, and one source replacement
+// pointing at the separately extracted vendor tree.
+\sources ->
+    let phases = b.scripts {
+        setup = b.phase [b.step.shell setup_script],
+        build = b.phase [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [cargo],
+                script = build_script,
+            },
+        ],
+        check = b.phase [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [cargo],
+                script = check_script,
+            },
+        ],
+        install = b.phase [
+            b.step.shell_with {
+                interpreter = b.program.binary "bash",
+                declared_programs = [b.program.binary "install"],
+                script = install_script,
+            },
+        ],
+        .. b.defaults.scripts
+    }
+
+    let root = b.output_with {
+        summary = b.optional.set "Offline-built application with an independent vendor closure",
+        paths = [
+            b.path.exe "/usr/bin/vendor-note",
+            b.path.any "/usr/share/doc/vendor-note/README.md",
+        ],
+        .. b.output "out"
+    }
+
+    let base = b.mk_package (b.meta {
+        pname = "vendor-note",
+        version = "3.2.1",
+        release = 1,
+        homepage = "https://example.invalid/vendor-note",
+        license = ["MIT"],
+    })
+
+    {
+        builder = b.builder.custom phases [
+            b.dep.binary "cargo",
+            b.dep.binary "install",
+        ],
+        outputs = [root],
+        options = b.options {
+            networking = b.boolean.false,
+            .. b.defaults.options
+        },
+        sources = [sources.application.lock, sources.vendor.lock],
+        architectures = ["native"],
+        .. base
+    }

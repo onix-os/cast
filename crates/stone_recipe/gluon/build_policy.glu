@@ -1,0 +1,654 @@
+
+// Embedded, pure API imported by repository build policy as
+// `cast.build_policy.v5`.
+
+let _ = import! std.types
+let arrays = import! std.array.prim
+let strings = import! std.string.prim
+
+type Boolean =
+    | False
+    | True
+
+type ContextValue =
+    | PackageName
+    | PackageVersion
+    | PackageRelease
+    | SourceDir
+    | InstallRoot
+    | BuildRoot
+    | WorkDir
+    | BuilderDir
+    | PgoDir
+    | Jobs
+    | SourceDateEpoch
+    | PgoStage
+    | TargetTriple
+    | BuildPlatform
+    | HostPlatform
+    | LibSuffix
+    | Prefix
+    | BinDir
+    | SbinDir
+    | IncludeDir
+    | LibDir
+    | LibexecDir
+    | DataDir
+    | VendorDir
+    | DocDir
+    | InfoDir
+    | LocaleDir
+    | ManDir
+    | SysconfDir
+    | LocalStateDir
+    | SharedStateDir
+    | RunStateDir
+    | CFlags
+    | CxxFlags
+    | FFlags
+    | DFlags
+    | RustFlags
+    | ValaFlags
+    | GoFlags
+    | LdFlags
+    | Cc
+    | Cxx
+    | Objc
+    | Objcxx
+    | Cpp
+    | Objcpp
+    | Objcxxcpp
+    | Ar
+    | Ld
+    | Objcopy
+    | Nm
+    | Ranlib
+    | Strip
+    | CcacheDir
+    | SccacheDir
+    | GoCacheDir
+    | GoModCacheDir
+    | CargoCacheDir
+    | ZigCacheDir
+    | RustcWrapper
+    | SourcePath
+    | SourceDestination
+
+type TextPartSpec =
+    | LiteralPart { value : String }
+    | ContextPart { value : ContextValue }
+
+type TextSpec = {
+    parts : Array TextPartSpec,
+}
+
+type InstallLayoutSpec = {
+    prefix : TextSpec,
+    bindir : TextSpec,
+    sbindir : TextSpec,
+    includedir : TextSpec,
+    libdir : TextSpec,
+    libexecdir : TextSpec,
+    datadir : TextSpec,
+    vendordir : TextSpec,
+    docdir : TextSpec,
+    infodir : TextSpec,
+    localedir : TextSpec,
+    mandir : TextSpec,
+    sysconfdir : TextSpec,
+    localstatedir : TextSpec,
+    sharedstatedir : TextSpec,
+    runstatedir : TextSpec,
+    sysusersdir : TextSpec,
+    tmpfilesdir : TextSpec,
+    udevrulesdir : TextSpec,
+    bash_completions_dir : TextSpec,
+    fish_completions_dir : TextSpec,
+    elvish_completions_dir : TextSpec,
+    zsh_completions_dir : TextSpec,
+}
+
+type BuildToolSpec =
+    | Package { target : String }
+    | Binary { target : String }
+    | SystemBinary { target : String }
+
+type BuildProgramSpec = {
+    path : String,
+    requirement : BuildToolSpec,
+}
+
+type BuildCommandSpec = {
+    program : BuildProgramSpec,
+    args : Array String,
+}
+
+type CompilerToolsSpec = {
+    cc : BuildCommandSpec,
+    cxx : BuildCommandSpec,
+    objc : BuildCommandSpec,
+    objcxx : BuildCommandSpec,
+    cpp : BuildCommandSpec,
+    objcpp : BuildCommandSpec,
+    objcxxcpp : BuildCommandSpec,
+    ar : BuildCommandSpec,
+    ld : BuildCommandSpec,
+    objcopy : BuildCommandSpec,
+    nm : BuildCommandSpec,
+    ranlib : BuildCommandSpec,
+    strip : BuildCommandSpec,
+}
+
+type ToolchainsSpec = {
+    llvm : CompilerToolsSpec,
+    gnu : CompilerToolsSpec,
+}
+
+type CompilerFlagsSpec = {
+    c : Array TextSpec,
+    cxx : Array TextSpec,
+    f : Array TextSpec,
+    d : Array TextSpec,
+    rust : Array TextSpec,
+    vala : Array TextSpec,
+    go : Array TextSpec,
+    ld : Array TextSpec,
+}
+
+type ToolchainFlagsSpec = {
+    common : CompilerFlagsSpec,
+    gnu : CompilerFlagsSpec,
+    llvm : CompilerFlagsSpec,
+}
+
+type PlatformPolicySpec = {
+    architecture : String,
+    vendor : String,
+    operating_system : String,
+    abi : String,
+}
+
+type TargetEmulationSpec =
+    | Native
+    | Emul32 { host_architecture : String }
+
+type EnvironmentCondition =
+    | Always
+    | CompilerCacheEnabled
+    | CompilerCacheDisabled
+
+type EnvironmentBindingSpec = {
+    name : String,
+    value : TextSpec,
+    condition : EnvironmentCondition,
+}
+
+type TargetPolicySpec = {
+    name : String,
+    target_triple : String,
+    build_triple : String,
+    host_triple : String,
+    lib_suffix : String,
+    artifact_architecture : String,
+    emulation : TargetEmulationSpec,
+    build_platform : PlatformPolicySpec,
+    host_platform : PlatformPolicySpec,
+    target_platform : PlatformPolicySpec,
+    architecture_flags : ToolchainFlagsSpec,
+    environment : Array EnvironmentBindingSpec,
+}
+
+type RetiredTargetPolicySpec = {
+    name : String,
+    reason : String,
+}
+
+type ToolchainInputPolicySpec = {
+    llvm : Array BuildToolSpec,
+    gnu : Array BuildToolSpec,
+}
+
+type Emul32InputPolicySpec = {
+    base : Array BuildToolSpec,
+    toolchains : ToolchainInputPolicySpec,
+}
+
+// Analyzer subprocesses are executable capabilities rather than ambient
+// members of the build root. Package-valued tools are rejected during policy
+// validation because they do not identify one executable guest path.
+type AnalyzerToolchainPolicySpec = {
+    objcopy : BuildToolSpec,
+    strip : BuildToolSpec,
+}
+
+type AnalyzerToolsPolicySpec = {
+    pkg_config : BuildToolSpec,
+    python : BuildToolSpec,
+    llvm : AnalyzerToolchainPolicySpec,
+    gnu : AnalyzerToolchainPolicySpec,
+}
+
+type CompilerCachePolicySpec = {
+    ccache : BuildProgramSpec,
+    sccache : BuildProgramSpec,
+    ccache_dir : String,
+    sccache_dir : String,
+    go_cache_dir : String,
+    go_mod_cache_dir : String,
+    cargo_cache_dir : String,
+    zig_cache_dir : String,
+}
+
+type MoldPolicySpec = {
+    linker : BuildCommandSpec,
+    flags : CompilerFlagsSpec,
+}
+
+type BuildRootPolicySpec = {
+    base : Array BuildToolSpec,
+    toolchains : ToolchainInputPolicySpec,
+    emul32 : Emul32InputPolicySpec,
+    analyzer_tools : AnalyzerToolsPolicySpec,
+    compiler_cache : CompilerCachePolicySpec,
+    mold : MoldPolicySpec,
+}
+
+type SandboxTmpPolicySpec =
+    | EmptyTmp
+
+type SandboxSysPolicySpec =
+    | NoSys
+
+type SandboxDevPolicySpec =
+    | NoDev
+    | MinimalDev
+
+type SandboxCredentialPolicySpec =
+    | IsolatedRootCredentials
+
+type SandboxFilesystemPolicySpec = {
+    tmp : SandboxTmpPolicySpec,
+    sys : SandboxSysPolicySpec,
+    dev : SandboxDevPolicySpec,
+}
+
+type SandboxPolicySpec = {
+    hostname : String,
+    credentials : SandboxCredentialPolicySpec,
+    filesystems : SandboxFilesystemPolicySpec,
+    guest_root : String,
+    artifacts_dir : String,
+    build_dir : String,
+    source_dir : String,
+    recipe_dir : String,
+    package_dir : String,
+    install_dir : String,
+}
+
+type BuilderCommandSpec = {
+    program : BuildProgramSpec,
+    args : Array TextSpec,
+    environment : Array EnvironmentBindingSpec,
+    working_dir : TextSpec,
+}
+
+type GitPreparationPolicySpec = {
+    create_directory : BuilderCommandSpec,
+    copy : BuilderCommandSpec,
+}
+
+type SourcePreparationPolicySpec = {
+    git : GitPreparationPolicySpec,
+}
+
+type StandardBuilderPolicySpec = {
+    environment : Array EnvironmentBindingSpec,
+    setup : BuilderCommandSpec,
+    build : BuilderCommandSpec,
+    install : BuilderCommandSpec,
+    check : BuilderCommandSpec,
+}
+
+type BuildersPolicySpec = {
+    cmake : StandardBuilderPolicySpec,
+    meson : StandardBuilderPolicySpec,
+    cargo : StandardBuilderPolicySpec,
+    autotools : StandardBuilderPolicySpec,
+}
+
+type NamedTuningFlagSpec = {
+    name : String,
+    value : ToolchainFlagsSpec,
+}
+
+type TuningOptionSpec = {
+    enabled : Array String,
+    disabled : Array String,
+}
+
+type NamedTuningChoiceSpec = {
+    name : String,
+    value : TuningOptionSpec,
+}
+
+type OptionalChoiceName =
+    | NoChoice
+    | SomeChoice String
+
+type TuningGroupSpec = {
+    base : TuningOptionSpec,
+    default : OptionalChoiceName,
+    choices : Array NamedTuningChoiceSpec,
+}
+
+type NamedTuningGroupSpec = {
+    name : String,
+    value : TuningGroupSpec,
+}
+
+type TuningPolicySpec = {
+    flags : Array NamedTuningFlagSpec,
+    groups : Array NamedTuningGroupSpec,
+    default_groups : Array String,
+}
+
+type OptionalTextSpec =
+    | NoText
+    | SomeText TextSpec
+
+type PgoFinishSpec = {
+    output : TextSpec,
+    inputs : Array TextSpec,
+    copy_to : OptionalTextSpec,
+    remove_output_first : Boolean,
+}
+
+type OptionalPgoFinishSpec =
+    | NoPgoFinish
+    | SomePgoFinish PgoFinishSpec
+
+type PgoStagePolicySpec = {
+    flags : ToolchainFlagsSpec,
+    finish : OptionalPgoFinishSpec,
+}
+
+type PgoPolicySpec = {
+    shell_interpreter : BuildProgramSpec,
+    merge_program : BuildProgramSpec,
+    merge_args : Array TextSpec,
+    copy_program : BuildProgramSpec,
+    remove_program : BuildProgramSpec,
+    sample : ToolchainFlagsSpec,
+    stage_one : PgoStagePolicySpec,
+    stage_two : PgoStagePolicySpec,
+    use_profile : PgoStagePolicySpec,
+}
+
+type AnalyzerKind =
+    | AnalyzerIgnoreBlocked
+    | AnalyzerBinary
+    | AnalyzerElf
+    | AnalyzerPkgConfig
+    | AnalyzerPython
+    | AnalyzerCMake
+    | AnalyzerCompressMan
+    | AnalyzerIncludeAny
+
+type BuildPolicySpec = {
+    build_subdir : String,
+    layout : InstallLayoutSpec,
+    toolchains : ToolchainsSpec,
+    targets : Array TargetPolicySpec,
+    retired_targets : Array RetiredTargetPolicySpec,
+    sandbox : SandboxPolicySpec,
+    build_root : BuildRootPolicySpec,
+    sources : SourcePreparationPolicySpec,
+    tuning : TuningPolicySpec,
+    environment : Array EnvironmentBindingSpec,
+    builders : BuildersPolicySpec,
+    analyzers : Array AnalyzerKind,
+    pgo : PgoPolicySpec,
+}
+
+// Scalar/record changes and arrays intentionally use different variants so
+// keeping an array is distinct from replacing it with an explicitly empty one.
+type ValuePatch a =
+    | KeepValue
+    | SetValue a
+
+type ArrayPatch a =
+    | KeepArray
+    | ReplaceArray (Array a)
+    | PrependArray (Array a)
+    | AppendArray (Array a)
+
+// This record mirrors every top-level BuildPolicySpec field. Composition is
+// performed by the Rust policy state machine so each intermediate result can
+// be validated and fingerprinted.
+type BuildPolicyPatchSpec = {
+    build_subdir : ValuePatch String,
+    layout : ValuePatch InstallLayoutSpec,
+    toolchains : ValuePatch ToolchainsSpec,
+    targets : ArrayPatch TargetPolicySpec,
+    retired_targets : ArrayPatch RetiredTargetPolicySpec,
+    sandbox : ValuePatch SandboxPolicySpec,
+    build_root : ValuePatch BuildRootPolicySpec,
+    sources : ValuePatch SourcePreparationPolicySpec,
+    tuning : ValuePatch TuningPolicySpec,
+    environment : ArrayPatch EnvironmentBindingSpec,
+    builders : ValuePatch BuildersPolicySpec,
+    analyzers : ArrayPatch AnalyzerKind,
+    pgo : ValuePatch PgoPolicySpec,
+}
+
+let literal = \value -> { parts = [LiteralPart { value }] }
+let context = \value -> { parts = [ContextPart { value }] }
+let concat: Array TextSpec -> TextSpec = \values ->
+    rec let flatten remaining parts =
+        match arrays.len remaining with
+        | 0 -> { parts }
+        | _ ->
+            let value = arrays.index remaining 0
+            flatten
+                (arrays.slice remaining 1 (arrays.len remaining))
+                (arrays.append parts value.parts)
+    flatten values []
+let binding = \condition name value -> { name, value, condition }
+let policy: BuildPolicySpec -> BuildPolicySpec = \value -> value
+let flags: CompilerFlagsSpec -> CompilerFlagsSpec = \value -> value
+let target: TargetPolicySpec -> TargetPolicySpec = \value -> value
+let retired_target: RetiredTargetPolicySpec -> RetiredTargetPolicySpec = \value -> value
+let command: BuilderCommandSpec -> BuilderCommandSpec = \value -> value
+let binary_program = \target -> {
+    path = strings.append "/usr/bin/" target,
+    requirement = Binary { target },
+}
+let system_binary_program = \target -> {
+    path = strings.append "/usr/sbin/" target,
+    requirement = SystemBinary { target },
+}
+let package_program = \target path -> {
+    path,
+    requirement = Package { target },
+}
+let builder: StandardBuilderPolicySpec -> StandardBuilderPolicySpec = \value -> value
+let pgo_finish: PgoFinishSpec -> PgoFinishSpec = \value -> value
+let pgo_stage: PgoStagePolicySpec -> PgoStagePolicySpec = \value -> value
+let tuning_flag: NamedTuningFlagSpec -> NamedTuningFlagSpec = \value -> value
+let tuning_option: TuningOptionSpec -> TuningOptionSpec = \value -> value
+let tuning_choice: NamedTuningChoiceSpec -> NamedTuningChoiceSpec = \value -> value
+let tuning_group: NamedTuningGroupSpec -> NamedTuningGroupSpec = \value -> value
+let policy_patch: BuildPolicyPatchSpec -> BuildPolicyPatchSpec = \value -> value
+
+let empty_policy_patch: BuildPolicyPatchSpec = {
+    build_subdir = KeepValue,
+    layout = KeepValue,
+    toolchains = KeepValue,
+    targets = KeepArray,
+    retired_targets = KeepArray,
+    sandbox = KeepValue,
+    build_root = KeepValue,
+    sources = KeepValue,
+    tuning = KeepValue,
+    environment = KeepArray,
+    builders = KeepValue,
+    analyzers = KeepArray,
+    pgo = KeepValue,
+}
+
+{
+    abi_version = 5,
+    policy,
+    policy_patch,
+    text = {
+        literal,
+        context,
+        concat,
+    },
+    context = {
+        package_name = PackageName,
+        package_version = PackageVersion,
+        package_release = PackageRelease,
+        source_dir = SourceDir,
+        install_root = InstallRoot,
+        build_root = BuildRoot,
+        work_dir = WorkDir,
+        builder_dir = BuilderDir,
+        pgo_dir = PgoDir,
+        jobs = Jobs,
+        source_date_epoch = SourceDateEpoch,
+        pgo_stage = PgoStage,
+        target_triple = TargetTriple,
+        build_platform = BuildPlatform,
+        host_platform = HostPlatform,
+        lib_suffix = LibSuffix,
+        prefix = Prefix,
+        bindir = BinDir,
+        sbindir = SbinDir,
+        includedir = IncludeDir,
+        libdir = LibDir,
+        libexecdir = LibexecDir,
+        datadir = DataDir,
+        vendordir = VendorDir,
+        docdir = DocDir,
+        infodir = InfoDir,
+        localedir = LocaleDir,
+        mandir = ManDir,
+        sysconfdir = SysconfDir,
+        localstatedir = LocalStateDir,
+        sharedstatedir = SharedStateDir,
+        runstatedir = RunStateDir,
+        cflags = CFlags,
+        cxxflags = CxxFlags,
+        fflags = FFlags,
+        dflags = DFlags,
+        rustflags = RustFlags,
+        valaflags = ValaFlags,
+        goflags = GoFlags,
+        ldflags = LdFlags,
+        cc = Cc,
+        cxx = Cxx,
+        objc = Objc,
+        objcxx = Objcxx,
+        cpp = Cpp,
+        objcpp = Objcpp,
+        objcxxcpp = Objcxxcpp,
+        ar = Ar,
+        ld = Ld,
+        objcopy = Objcopy,
+        nm = Nm,
+        ranlib = Ranlib,
+        strip = Strip,
+        ccache_dir = CcacheDir,
+        sccache_dir = SccacheDir,
+        go_cache_dir = GoCacheDir,
+        go_mod_cache_dir = GoModCacheDir,
+        cargo_cache_dir = CargoCacheDir,
+        zig_cache_dir = ZigCacheDir,
+        rustc_wrapper = RustcWrapper,
+        source_path = SourcePath,
+        source_destination = SourceDestination,
+    },
+    optional = {
+        no_text = NoText,
+        text = \value -> SomeText value,
+        no_pgo_finish = NoPgoFinish,
+        pgo_finish = \value -> SomePgoFinish value,
+    },
+    tuning = {
+        flag = tuning_flag,
+        option = tuning_option,
+        choice = tuning_choice,
+        group = tuning_group,
+        no_choice = NoChoice,
+        default_choice = \value -> SomeChoice value,
+    },
+    boolean = {
+        false = False,
+        true = True,
+    },
+    sandbox_filesystems = {
+        tmp = {
+            empty = EmptyTmp,
+        },
+        sys = {
+            none = NoSys,
+        },
+        dev = {
+            none = NoDev,
+            minimal = MinimalDev,
+        },
+    },
+    sandbox_credentials = {
+        isolated_root = IsolatedRootCredentials,
+    },
+    env = {
+        always = binding Always,
+        with_compiler_cache = binding CompilerCacheEnabled,
+        without_compiler_cache = binding CompilerCacheDisabled,
+    },
+    tool = {
+        package = \target -> Package { target },
+        binary = \target -> Binary { target },
+        system_binary = \target -> SystemBinary { target },
+    },
+    program = {
+        binary = binary_program,
+        system_binary = system_binary_program,
+        package = package_program,
+    },
+    target_emulation = {
+        native = Native,
+        emul32 = \host_architecture -> Emul32 { host_architecture },
+    },
+    analyzer = {
+        ignore_blocked = AnalyzerIgnoreBlocked,
+        binary = AnalyzerBinary,
+        elf = AnalyzerElf,
+        pkg_config = AnalyzerPkgConfig,
+        python = AnalyzerPython,
+        cmake = AnalyzerCMake,
+        compress_man = AnalyzerCompressMan,
+        include_any = AnalyzerIncludeAny,
+    },
+    defaults = {
+        policy_patch = empty_policy_patch,
+    },
+    patch = {
+        keep = KeepValue,
+        set = \value -> SetValue value,
+        array = {
+            keep = KeepArray,
+            replace = \values -> ReplaceArray values,
+            prepend = \values -> PrependArray values,
+            append = \values -> AppendArray values,
+        },
+    },
+    flags,
+    target,
+    retired_target,
+    command,
+    builder,
+    pgo_finish,
+    pgo_stage,
+}

@@ -1,0 +1,44 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+// Package factories are ordinary pure Gluon functions. The root module calls
+// the function, so Rust receives a concrete PackageSpec rather than a closure.
+\deps ->
+    let base = b.mk_package (b.meta {
+        pname = "factory-hello",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/factory-hello",
+        license = ["MPL-2.0"],
+    })
+    let root = {
+        summary = b.optional.set "Package produced by a Gluon factory",
+        runtime_inputs = [b.dep.soname "libtls.so.28"],
+        paths = [b.path.exe "/usr/bin/factory-hello"],
+        .. b.output "out"
+    }
+    {
+        builder = cmake.builder {
+            flags = ["-DBUILD_DOCUMENTATION=OFF"],
+            .. cmake.defaults
+        },
+        hooks = {
+            post_install = [
+                b.step.shell_with {
+                    interpreter = b.program.binary "bash",
+                    declared_programs = [b.program.binary "ln"],
+                    script = r#"ln -s factory-hello "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hello""#,
+                },
+            ],
+            .. b.defaults.hooks
+        },
+        build_inputs = [deps.zlib, deps.tls],
+        outputs = b.outputs.with_root base.meta.pname root,
+        sources = [
+            b.source.archive
+                "https://example.invalid/factory-hello-1.0.0.tar.xz"
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ],
+        .. base
+    }

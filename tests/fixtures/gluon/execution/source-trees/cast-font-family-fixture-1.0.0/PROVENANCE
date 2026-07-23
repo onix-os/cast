@@ -1,0 +1,15 @@
+Cast Aster Fixture is a deliberately small, self-authored test font family.
+It is not copied from or derived from an external font.
+
+The canonical source is source/generate_cast_aster_fixture.rs. The generator
+writes the complete TrueType table directory, metadata, cmap, metrics, and
+simple glyph outlines without consulting the clock, locale, network, host
+font database, or random state. Both head timestamps are fixed to Unix epoch
+1700000000 converted to the TrueType 1904 epoch.
+
+Run misc/scripts/build-font-family-fixture-fonts.sh to regenerate the tracked
+Regular and Bold files. The --check mode regenerates both files privately and
+requires byte-for-byte equality with the tracked payloads.
+
+The font family is licensed under the SIL Open Font License, Version 1.1,
+without a Reserved Font Name. The generator remains project source code.

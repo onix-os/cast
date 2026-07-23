@@ -1,138 +1,84 @@
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
+PROJECT_NAME := $(shell awk -F'"' '/^\[package\]/{package=1; next} package && /^name = /{print $$2; exit}' bin/cast/Cargo.toml)
+PROJECT_CAP  := $(shell echo $(PROJECT_NAME) | tr '[:lower:]' '[:upper:]')
+CURRENT_VERSION := $(shell awk -F'"' '/^\[workspace.package\]/{package=1; next} package && /^version = /{print $$2; exit}' Cargo.toml)
+LATEST_TAG   ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
+TOP_DIR      := $(CURDIR)
+BUILD_DIR    := $(TOP_DIR)/target
+
+ifeq ($(PROJECT_NAME),)
+$(error Error: project name not found in bin/cast/Cargo.toml)
+endif
+
+$(info ------------------------------------------)
+$(info Project: $(PROJECT_NAME))
+$(info Version: $(CURRENT_VERSION))
+$(info ------------------------------------------)
+
+.PHONY: build b compile c run r test t verify help h clean release
 
 SHELL := /bin/bash
 
-TOP_DIR := $(CURDIR)
-CARGO ?= cargo
-MODE ?= onboarding
-PREFIX ?= $(HOME)/.local
-BIN_DIR ?= $(PREFIX)/bin
-DATA_DIR ?= $(PREFIX)/share
-CONFIG_DIR ?= $(HOME)/.config
-LICENSE_DIR ?= $(TOP_DIR)/target/license-list-data
-EXAMPLE ?= read
-STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
-
-.DEFAULT_GOAL := moss
-
-.PHONY: build boulder moss get-started licenses fix lint test check fmt clean \
-	migrate migrate-redo libstone help
 
 build:
-	@$(CARGO) build --workspace
+	@cargo build --release
 
-boulder:
-	@$(CARGO) build --profile $(MODE) -p boulder
+b: build
 
-moss:
-	@$(CARGO) build --profile $(MODE) -p moss
+compile:
+	@cargo clean
+	@make build
 
-get-started: boulder moss licenses
-	@set -eu; \
-	echo; \
-	echo "Installing boulder and moss to $(BIN_DIR)..."; \
-	install -d "$(BIN_DIR)"; \
-	install -m 755 "$(TOP_DIR)/target/$(MODE)/boulder" "$(BIN_DIR)/boulder"; \
-	install -m 755 "$(TOP_DIR)/target/$(MODE)/moss" "$(BIN_DIR)/moss"; \
-	rm -rf "$(DATA_DIR)/boulder"; \
-	install -d "$(DATA_DIR)/boulder/licenses" "$(CONFIG_DIR)/boulder"; \
-	cp -R "$(TOP_DIR)/bin/boulder/data/macros" "$(DATA_DIR)/boulder/"; \
-	cp "$(LICENSE_DIR)/text/"* "$(DATA_DIR)/boulder/licenses/"; \
-	cp -R "$(TOP_DIR)/bin/boulder/data/profile.d" "$(CONFIG_DIR)/boulder/"; \
-	echo; \
-	echo "Installed files:"; \
-	ls -hlF "$(BIN_DIR)/boulder" "$(BIN_DIR)/moss" \
-		"$(DATA_DIR)/boulder" "$(CONFIG_DIR)/boulder"; \
-	echo; \
-	case ":$$PATH:" in \
-		*:"$(BIN_DIR)":*) echo "$(BIN_DIR) is already in PATH." ;; \
-		*) echo "$(BIN_DIR) is not in PATH yet; add it before running the tools." ;; \
-	esac; \
-	echo; \
-	echo "The AerynOS documentation lives at https://aerynos.dev"
+c: compile
 
-licenses:
-	@"$(TOP_DIR)/misc/scripts/fetch-licenses.sh" "$(LICENSE_DIR)"
+ARGS ?=
+DIR ?= $(TOP_DIR)
 
-fix:
-	@echo "Applying clippy fixes..."
-	@$(CARGO) clippy --fix --allow-dirty --allow-staged --workspace -- --no-deps
-	@echo "Applying cargo fmt..."
-	@$(CARGO) fmt --all
-	@echo "Fixing typos..."
-	@typos -w --exclude target/license-list-data/
+run:
+	@cd $(DIR) && cargo run --manifest-path $(TOP_DIR)/Cargo.toml -p cast -- $(ARGS)
 
-lint:
-	@echo "Running clippy..."
-	@$(CARGO) clippy --workspace -- --no-deps
-	@echo "Running cargo fmt..."
-	@$(CARGO) fmt --all -- --check
-	@echo "Checking for typos..."
-	@typos --exclude target/license-list-data/
+r: run
 
-test: lint
-	@echo "Running tests in all packages..."
-	@$(CARGO) test --all
+TEST_ARGS ?=
 
-check:
-	@$(CARGO) check --workspace --all-targets
+test:
+	@cargo test --workspace $(TEST_ARGS) -- --test-threads=1
 
-fmt:
-	@$(CARGO) fmt --all
+t: test
 
-clean:
-	@$(CARGO) clean
-
-migrate:
-	@set -eu; \
-	for db in meta layout state; do \
-		diesel \
-			--config-file "$(TOP_DIR)/bin/moss/src/db/$$db/diesel.toml" \
-			--database-url "sqlite://$(TOP_DIR)/bin/moss/src/db/$$db/test.db" \
-			migration run; \
-	done
-
-migrate-redo:
-	@set -eu; \
-	for db in meta layout state; do \
-		diesel \
-			--config-file "$(TOP_DIR)/bin/moss/src/db/$$db/diesel.toml" \
-			--database-url "sqlite://$(TOP_DIR)/bin/moss/src/db/$$db/test.db" \
-			migration redo; \
-	done
-
-libstone:
-	@set -eu; \
-	output="$$(mktemp)"; \
-	trap 'rm -f "$$output"' EXIT; \
-	$(CARGO) build -p libstone --release; \
-	clang "$(TOP_DIR)/crates/libstone/examples/$(EXAMPLE).c" \
-		-o "$$output" \
-		-I"$(TOP_DIR)/crates/libstone/src" \
-		-lstone -L"$(TOP_DIR)/target/release" \
-		-Wl,-rpath,"$(TOP_DIR)/target/release"; \
-	if [[ "$${USE_VALGRIND:-0}" == 1 ]]; then \
-		time valgrind --track-origins=yes "$$output" "$(STONE)"; \
-	else \
-		time "$$output" "$(STONE)"; \
-	fi
+verify: build test
 
 help:
 	@echo
 	@echo "Usage: make [target]"
 	@echo
 	@echo "Available targets:"
-	@echo "  build         Build the complete workspace"
-	@echo "  boulder       Build Boulder with MODE=$(MODE)"
-	@echo "  moss          Build Moss with MODE=$(MODE) (default)"
-	@echo "  get-started   Build and install Boulder, Moss, and their data"
-	@echo "  test          Run lints and all workspace tests"
-	@echo "  check         Check all workspace targets"
-	@echo "  fix           Apply clippy, formatting, and typo fixes"
-	@echo "  fmt           Format the workspace"
-	@echo "  migrate       Apply all Moss database migrations"
-	@echo "  migrate-redo  Reapply all Moss database migrations"
-	@echo "  libstone      Build and run the C libstone example"
-	@echo "  clean         Remove Cargo build artifacts"
+	@echo "  build        Build project"
+	@echo "  compile      Configure and generate build files"
+	@echo "  run          Run the main executable"
+	@echo "  test         Run tests"
+	@echo "  verify       Build and test the complete workspace"
+	@echo "  release      Create a new release (TYPE=patch|minor|major)"
 	@echo
+
+h : help
+
+clean:
+	@echo "Cleaning build directory..."
+	@rm -rf $(BUILD_DIR)
+	@echo "Build directory cleaned."
+
+TYPE ?= patch
+HAS_REL := $(shell command -v git-rel 2>/dev/null)
+
+release:
+	@if [ -z "$(HAS_REL)" ]; then \
+		echo "git-rel is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	@if [ -z "$(TYPE)" ]; then \
+		echo "Release type not specified. Use 'make release TYPE=[patch|minor|major|m.m.p]'"; \
+		exit 1; \
+	fi
+	@git rel $(TYPE)
+
+include misc/make/project.mk

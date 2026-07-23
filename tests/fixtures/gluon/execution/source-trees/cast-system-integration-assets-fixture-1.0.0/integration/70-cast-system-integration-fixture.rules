@@ -1,0 +1,1 @@
+SUBSYSTEM=="misc", KERNEL=="cast-system-integration*", GROUP="cast-system-integration", MODE="0660", TAG+="systemd", ENV{SYSTEMD_WANTS}+="cast-system-integration-fixture.service"

@@ -1,0 +1,19 @@
+[Unit]
+Description=Cast private-device broker socket
+
+[Socket]
+ListenSequentialPacket=/run/cast/private-devices.socket
+Accept=yes
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+Backlog=32
+MaxConnections=32
+MaxConnectionsPerSource=4
+TriggerLimitIntervalSec=1s
+TriggerLimitBurst=32
+PollLimitIntervalSec=1s
+PollLimitBurst=16
+
+[Install]
+WantedBy=sockets.target

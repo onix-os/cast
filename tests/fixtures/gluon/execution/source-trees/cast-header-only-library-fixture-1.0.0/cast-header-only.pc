@@ -1,0 +1,7 @@
+prefix=/usr
+includedir=${prefix}/include
+
+Name: cast-header-only
+Description: Deterministic header-only execution fixture
+Version: 1.0.0
+Cflags: -I${includedir}

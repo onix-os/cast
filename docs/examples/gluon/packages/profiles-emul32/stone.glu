@@ -1,0 +1,48 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let emul32_profile = b.profile_with {
+    builder = cmake.builder {
+        flags = [
+            "-DCMAKE_INSTALL_LIBDIR=lib32",
+            "-DENABLE_TOOLS=OFF",
+        ],
+        .. cmake.defaults
+    },
+    native_build_inputs = [b.dep.binary "nasm"],
+    build_inputs = [b.dep.pkgconfig32 "zlib"],
+    check_inputs = [b.dep.binary "file"],
+    .. b.profile "emul32"
+}
+
+let v3_profile = b.profile_with {
+    builder = cmake.builder {
+        flags = ["-DENABLE_DISPATCH=ON"],
+        .. cmake.defaults
+    },
+    build_inputs = [b.dep.pkgconfig "zlib"],
+    .. b.profile "x86_64-v3x"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "profiled-codec",
+    version = "7.1.4",
+    release = 3,
+    homepage = "https://example.invalid/profiled-codec",
+    license = ["BSD-3-Clause"],
+})
+
+{
+    builder = cmake.default,
+    build_inputs = [b.dep.pkgconfig "zlib"],
+    profiles = [emul32_profile, v3_profile],
+    architectures = ["native", "emul32"],
+    emul32 = b.boolean.true,
+    sources = [
+        b.source.archive
+            "https://example.invalid/profiled-codec-7.1.4.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    .. base
+}

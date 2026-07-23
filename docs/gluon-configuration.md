@@ -1,12 +1,8 @@
-<!--
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
--->
 
 # Gluon configuration
 
 OS Tools uses [Gluon](https://gluon-lang.org/) as its only declarative
-configuration language. Boulder recipes, macro policy, profiles, Moss
+configuration language. Cast packages, typed build policy, profiles,
 repositories, triggers, and system intent all cross a typed Gluon-to-Rust
 boundary. YAML and KDL are not compatibility formats and are not used as
 intermediate representations.
@@ -21,15 +17,17 @@ constructed only during that conversion.
 
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
-| Boulder recipe | `stone.glu` | `boulder.recipe.v1` |
-| Boulder macro policy | `bin/boulder/data/macros/**/*.glu` | `boulder.macros.v1` |
-| Boulder profile | `profile.glu` or `profile.d/*.glu` | `boulder.profile.v1` |
-| Moss repository | `repo.glu` or `repo.d/*.glu` | `moss.repository.v1` |
-| Packaged Moss trigger | `/usr/share/moss/triggers/{tx.d,sys.d}/*.glu` | `moss.trigger.v1` |
-| Moss system intent | `/etc/moss/system.glu` | `moss.system.v1` |
+| Cast package | `stone.glu` | `cast.package.v3` and `cast.builders.*.v2` |
+| Cast build policy | `crates/mason/data/policy/policy.glu` | `cast.build_policy.layers.v1` and `cast.build_policy.v5` |
+| Cast profile | `profile.glu` or `profile.d/*.glu` | `cast.profile.v1` |
+| Cast repository | `repo.glu` or `repo.d/*.glu` | `cast.repository.v1` |
+| Packaged Cast trigger | `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` | `cast.trigger.v1` |
+| Cast system intent | `/etc/cast/system.glu` | `cast.system.v1` |
+| Machine-local boot topology | `/etc/cast/boot-topology.glu` | `cast.boot_topology.v2` |
+| Machine-local root filesystem | `/etc/cast/root-filesystem.glu` | `cast.root_filesystem.v1` |
 
 System and user fragment loading is deterministic. Vendor files under
-`/usr/share/<program>` load before administrator files under `/etc/<program>`;
+`/usr/share/cast` load before administrator files under `/etc/cast`;
 the user layer loads last where it applies. Files within a fragment directory
 are ordered by logical name. Invalid files are errors rather than silently
 ignored.
@@ -39,10 +37,136 @@ Runnable examples live in [`docs/examples/gluon`](examples/gluon):
 - [`stone.glu`](examples/gluon/stone.glu) is a minimal recipe;
 - [`composed-stone.glu`](examples/gluon/composed-stone.glu) applies a function
   from [`package_policy.glu`](examples/gluon/package_policy.glu);
-- [`repositories.glu`](examples/gluon/repositories.glu) defines Moss
+- [`repositories.glu`](examples/gluon/repositories.glu) defines Cast
   repositories;
 - [`trigger.glu`](examples/gluon/trigger.glu) defines a packaged trigger;
-- [`system.glu`](examples/gluon/system.glu) defines desired system state.
+- [`system.glu`](examples/gluon/system.glu) defines desired system state;
+- [`boot-topology-aliases-esp.glu`](examples/gluon/boot-topology-aliases-esp.glu)
+  declares one ESP selector for both destinations; and
+- [`boot-topology-distinct-xbootldr.glu`](examples/gluon/boot-topology-distinct-xbootldr.glu)
+  declares separate ESP and XBOOTLDR selectors; and
+- [`root-filesystem.glu`](examples/gluon/root-filesystem.glu) declares one
+  explicit root locator.
+
+### Machine-local boot topology
+
+Boot partition identities are deliberately not fields of `SystemModel`.
+System intent is stateless OS configuration stored with a state under `/usr`;
+ESP and XBOOTLDR PARTUUIDs belong to one physical machine and must not be
+archived, exported, or rolled back with that state.
+
+The ActiveReblit UEFI boot-publication and repair path requires
+`/etc/cast/boot-topology.glu`, which imports exactly `cast.boot_topology.v2`.
+Its closed constructors accept explicit `PartitionSelector` records. Each
+record has a canonical lowercase non-nil PARTUUID and a bounded absolute
+lexical `mount_point` selector whose exact authored bytes are retained without
+canonicalization. `aliases_esp` uses one selector for both ESP and BOOT;
+`distinct` requires separate ESP and XBOOTLDR selectors with different
+PARTUUIDs and mount points.
+
+A mount point is a mandatory untrusted lexical lookup hint. It is not storage
+authority, has no default, and never enables `canonicalize`, mount discovery,
+device discovery, a pathname fallback, or a mount operation. Before boot files
+can be changed, separate descriptor-retained evidence must prove the exact
+current task root and mount-namespace attachment, exactly one mountinfo entry
+with the selector's decoded bytes, the matching descriptor mount ID and
+major:minor device, and a matching sysfs PARTUUID. The selected mountinfo entry
+must report exactly `vfat`, include one unopposed `rw` and exactly one each of
+`nosuid`, `nodev`, `noexec`, and `nosymfollow` in its per-mount options, and
+include one unopposed `rw` in its superblock options. Duplicates of required
+tokens and their positive inverse flags are rejected. These admitted facts are
+retained as a closed policy and rechecked across every topology observation.
+
+A distinct XBOOTLDR must also prove different attachments, mounts, devices,
+and PARTUUIDs. Its paired retained sysfs snapshots must report the same
+block-parent witness across both complete topology passes and the terminal
+revalidation. Those snapshots are bounded observations, not continuously live
+or simultaneous-residency claims. The selected mountinfo policy is likewise
+exact mountinfo evidence. Every topology pass now composes it with a retained-
+descriptor `fstat`/`fstatfs` sandwich proving stable directory identity and the
+Linux MSDOS magic family. Retained sysfs evidence also includes bounded
+partition and parent `DEVNAME` values plus canonical partition geometry in
+fixed 512-byte sectors. A strict pure GPT parser can authenticate caller-owned
+images through two complete, exactly matching table passes and return exact
+ESP/XBOOTLDR geometry plus a role-independent table fingerprint. Its closed role
+also retains the partition number, logical-block size, and complete image
+length, and one private same-deadline inter-pass hook runs before the second
+source observation. A sealed
+expectation binds the parent device name, identity, partition number, PARTUUID,
+geometry, and optional disk sequence to one freshly revalidated sysfs view.
+Exact `/dev` `devtmpfs` mountinfo policy is validated separately. A borrowed
+directory can now be authenticated through stable `fstat`, mount-ID, and
+`fstatfs` observations which agree with that policy. Commit `bfa3a0c2` now
+binds that evidence to the exact retained `/dev` attachment, opens the sealed
+parent `DEVNAME` beneath the same private destination, and owns the complete
+opening-preflight, GPT-pass-one, private name rebind, inter-pass observation,
+GPT-pass-two, closing-observation, and reconciliation schedule. Shared
+`TMPFS_MAGIC` still does not prove whole-root non-bind provenance, and the
+closed result is not an ongoing-currentness lease; same-thread `setns` requires
+outer aggregate revalidation. Linux MSDOS magic likewise is not exact `vfat`.
+
+Commit `365e0ae5` completes the bounded retained destination observer, commit
+`8620986a` retains its exact observed-root device, inode, and mount ID, and
+commit `3f8309b1` sandwiches assessment through the same private destination
+`File` between opening and closing boot-filesystem authentication before
+requiring that root triple to match. Commit `97fb33b3` closes the bounded
+expected-source bridge with positional streaming for generated slices and
+sealed asset descriptors rather than materializing the roughly 10-GiB
+publication ceiling. Journal payload v3 carries the compact immutable receipt
+pair. A complete bounded canonical authority-free body separately binds the
+transition/predecessor hashes, desired inventory, exact destinations, and every
+ordered output with a keyed inert claim. One exclusive SQLite transaction
+persists that body and its pending singleton head. Startup now retains that
+strict full receipt state and requires exact v3 compact-pair correlation. Production staging, authenticated claim derivation,
+publisher authority, durability, restart reconciliation, and VM proof are open.
+Because
+`nosymfollow` was added in
+Linux 5.10, the future boot publisher has an effective Linux 5.10-or-newer
+admission boundary. Generic `linux_fs` facilities remain compatible with the
+project's Linux 5.6 baseline.
+
+`cast.boot_topology.v1` is rejected rather than upgraded automatically because
+it contains no mount-point selectors. Administrators must supply those paths
+in a manual v2 rewrite; deriving them from the running host or a default would
+violate the declarative boundary. This rule neither promises nor rejects a
+future Nix compatibility layer.
+
+The source loader walks only the fixed `etc`, `cast`, and
+`boot-topology.glu` components beneath the retained installation descriptor.
+It uses `RESOLVE_NO_XDEV`, so a separately mounted `/etc` or `/etc/cast` is an
+explicitly unsupported configuration and fails closed. No pathname fallback
+or mount operation is attempted.
+
+The implemented mounted-topology and pure-renderer boundary, plus the future
+one-attempt publisher and disposable-VM test contract, are documented in
+[`ActiveReblit mounted boot topology`](architecture/active-reblit-mounted-boot-topology.md).
+
+### Machine-local root filesystem
+
+The mandatory `/etc/cast/root-filesystem.glu` source imports exactly
+`cast.root_filesystem.v1`. Its intentionally narrow closed value is
+`{ root: String }`. Rust validates one nonempty bounded whitespace-free
+printable-ASCII locator, rejects an authored `root=` prefix, and materializes
+exactly one `root=<value>` kernel token. Additional local kernel arguments
+remain owned by the separate local command-line policy; they are not fields of
+this ABI.
+
+Like boot topology, the root locator belongs to the physical machine rather
+than `SystemModel`. It is never archived, exported, or rolled back with the
+stored OS state. Acceptance proves the exact authenticated authored bytes,
+closed typed value, and evaluation fingerprint. It does not prove that a
+device, partition, or filesystem exists and does not inspect the running
+kernel, fstab, udev, package command lines, boot topology, or legacy disk
+probes. The fixed source is retained and repeatedly rebound beneath the
+installation descriptor under one caller-owned deadline. This producer is
+now wired into the lifetime-bound semantic aggregate and pure BLS renderer,
+but not the durable publisher. The aggregate reserves the `root` key, rejects
+package or local command-line duplicates, and emits the token exactly once per
+kernel before rendering.
+
+The [package-authoring guide](package-authoring.md) documents factories,
+explicit dependency scopes, standard and custom builders, typed phases,
+outputs, patches, and lock/plan workflows.
 
 ## Restricted evaluator
 
@@ -64,14 +188,16 @@ effect, thread, channel, and reference modules are explicitly denied.
 There are two import classes:
 
 1. Versioned in-memory modules supplied by OS Tools, such as
-   `boulder.recipe.v1` and `moss.system.v1`.
+   `cast.package.v3` and `cast.system.v1`.
 2. Quoted relative modules beneath the explicit source root, for example
    `import! "./package-policy.glu"`.
 
-Relative paths are canonicalized. Parent traversal, absolute paths, symlink
-escapes, implicit current-directory lookup, and collisions with embedded module
-names are rejected. `GLUON_PATH` is ignored. Embedded modules cannot use a
-recipe's source root to import host files.
+Relative paths are opened beneath an already trusted source-root descriptor.
+Parent traversal, absolute paths, symlink components, root replacement,
+implicit current-directory lookup, and collisions with embedded module names
+are rejected. Matching FIFOs and devices are never opened as source text.
+`GLUON_PATH` is ignored. Embedded modules cannot use a recipe's source root to
+import host files.
 
 ### Default resource limits
 
@@ -96,7 +222,10 @@ or terminating the process.
 
 ## Typed and versioned ABIs
 
-The current configuration ABI version and each consumer ABI are version `1`.
+The shared configuration boundary is version `1`. The canonical Cast
+package ABI is version `3`; the standard-builder modules are version `2`; the
+build-policy manifest remains version `1` and the build-policy value is version
+`3`.
 The embedded modules expose constructors, defaults, explicit option/boolean
 variants, and immutable records. Gluon-facing DTOs use only stable language
 shapes such as strings, integers, arrays, records, and explicit variants.
@@ -105,26 +234,119 @@ Record update syntax makes policy composition ordinary Gluon rather than a
 sidecar overlay format:
 
 ```gluon
-let boulder = import! boulder.recipe.v1
+let cast = import! cast.package.v3
 let add_runtime = import! "./package_policy.glu"
 
-let source = boulder.source {
-    name = "hello",
+let meta = cast.meta {
+    pname = "hello",
     version = "1.0.0",
     release = 1,
     homepage = "https://example.invalid/hello",
     license = ["MPL-2.0"],
 }
 
-add_runtime (boulder.recipe source)
+{
+    outputs = [add_runtime (cast.output "out")],
+    .. cast.mk_package meta
+}
 ```
 
-`boulder.compose` provides typed append, prepend, and override operations for
-build phases, dependency arrays, packages, profiles, and subpackages. Patch
-records distinguish an omitted change from overriding an array with `[]`.
+Package factories are ordinary functions from an explicit dependency record to
+a concrete package value. `cast.override_attrs` applies a total typed patch;
+patch records distinguish keeping an array from replacing it with `[]`.
+Standard CMake, Meson, Cargo, and Autotools modules return complete structural
+builder records: symbolic required capabilities, an environment marker,
+ordered `StepSpec` phases, and supported hooks. Repository policy separately
+owns the typed command templates and environment bindings selected by those
+values. Rust performs typed lowering only; it neither synthesizes a standard
+phase graph nor supplies a second builder-tool list. Builders do not lower
+through `%action` strings. Direct `Run` steps bind an absolute guest program to
+its dependency capability. `Shell` binds its interpreter and every declared
+program the same way; `b.step.shell` remains ergonomic shorthand for a
+Gluon-constructed `/usr/bin/bash` capability and an empty declared-program
+list. Shell text stays literal and cannot invoke `%action` or `%(definition)`
+syntax. The executor receives only the resulting frozen `StepPlan` and
+environment values.
+
+The retired recipe and macro-policy embedded modules, evaluators, and
+standalone encoders have been removed. `cast.package.v3` is the only recipe
+ABI, repository build policy evaluates directly as `BuildPolicySpec`, and Cast
+plans and packages the concrete
+values without a second recipe or macro domain.
 
 Changing an ABI requires a new embedded module namespace or an explicit schema
 version change; Rust struct layout is not the public configuration contract.
+
+### Ordered build-policy composition
+
+`crates/mason/data/policy/policy.glu` is the single repository policy entry
+point. It imports `cast.build_policy.layers.v1` and names every participating
+module in semantic order:
+
+```gluon
+let layers = import! cast.build_policy.layers.v1
+
+layers.policy "aerynos" [
+    layers.layer "foundation" [
+        layers.add "default.glu",
+    ],
+    layers.layer "site" [
+        layers.modify "site.glu",
+    ],
+]
+```
+
+Only modules named by this manifest participate; Cast does not enumerate a
+policy directory or apply neighboring files implicitly. Layer names are
+unique, module origins are normalized relative paths beneath the policy source
+root, and the array order is preserved exactly.
+
+Composition is a strict state machine. `add` requires no current policy, while
+`replace` and `modify` require one. An `add` or `replace` module returns a
+complete `BuildPolicySpec`. A `modify` module returns a total
+`BuildPolicyPatchSpec`: every top-level policy field is present, scalar and
+structured fields use `Keep` or `Set`, and arrays use `Keep`, `Replace`,
+`Prepend`, or `Append`. Replacing an array with `[]` is therefore distinct from
+keeping it. Every complete value and every patched intermediate value is
+semantically validated before the next operation runs.
+
+`BuildPolicySpec.analyzers` is the repository-authoritative analyzer pipeline,
+not an implementation-defined registry order. The default policy declares
+`IgnoreBlocked`, `Binary`, `Elf`, `PkgConfig`, `Python`, `CMake`,
+`CompressMan`, then `IncludeAny`. The list must be non-empty and unique, and
+the `IncludeAny` fallback must appear exactly once at the end. Analyzer patches
+use the same order-preserving array operations, so reordering analyzers is a
+semantic policy and fingerprint change.
+
+`BuildPolicySpec.build_root.analyzer_tools` names the executable capabilities
+for pkg-config, Python, and the LLVM/GNU objcopy and strip variants. Planning
+selects only tools reachable from the ordered handlers and package switches,
+adds those exact capability requests to `build.lock.glu`, and freezes each
+canonical guest program together with its typed requirement. Package analysis
+uses those frozen paths; it does not rediscover a tool from `PATH` or infer one
+from the selected compiler after the freeze boundary.
+
+`BuildPolicySpec.sandbox.filesystems` is explicit repository data. Its finite
+contract omits proc unconditionally, requires a fresh empty tmpfs for `/tmp`,
+requires `/sys` to be absent, and permits `/dev` as `none` or `minimal`. The
+default selects empty `/tmp`, no `/sys`, and minimal `/dev`. Minimal `/dev`
+exposes exactly read-only binds for `null`, `zero`, and `full`; it has no
+host-dependent optional nodes and a full host `/dev` view is not representable.
+These choices are frozen into the execution policy and participate in the
+derivation identity.
+
+`BuildPolicySpec.sandbox.credentials` is likewise explicit. The default policy
+selects `isolated_root`; the planner freezes that selection into execution
+policy, and frozen container entry rejects an unspecified or mismatched value.
+
+Each successful operation records the policy and layer names, layer and entry
+positions, global operation order, operation kind, module origin, and the
+module's complete evaluation fingerprint. The final policy fingerprint binds
+that ordered stream, including imports of every operation module. It feeds the
+build-lock request, selected policy identity, and canonical derivation plan.
+`cast recipe explain` prints both `policy_source` provenance and the ordered
+`policy_operation` records; transition, evaluation, and patch failures retain
+the same policy/layer/operation/origin context.
 
 ## Authored source and generated state
 
@@ -132,28 +354,98 @@ Authored programs and generated values have different roles:
 
 | Artifact | Owner | Rule |
 |---|---|---|
-| `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Boulder |
-| Macro, profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
-| `sources.lock.glu` | Boulder | Canonical standalone source resolution data, written atomically |
-| Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Boulder/Moss CLI | Canonical standalone literals marked `@generated`; authored files are protected |
-| `/etc/moss/system.glu` | System administrator | Desired state; evaluated but never normalized in place |
-| `/usr/lib/system-model.glu` | Moss state transaction | Canonical standalone snapshot stored with the state |
+| `stone.glu` and relative modules | User/package author | May contain functions and imports; never rewritten by Cast |
+| Cast build-policy root | OS Tools/vendor | `policy.glu` explicitly orders named layers and operations; unlisted files are ignored and invalid manifests, modules, transitions, or intermediate values are visible errors |
+| Profile, repository, and trigger modules | Vendor/admin/user | Evaluated as authored source; invalid fragments are visible errors |
+| `sources.lock.glu` | Cast | Canonical schema-v2 source resolution data, written atomically |
+| `build.lock.glu` | Cast planner | Canonical exact package/output closure, repository snapshots, platforms, and selected policy identities; written atomically |
+| Generated `profile.d/*.glu` and `repo.d/*.glu` fragments | Cast CLI | Canonical standalone literals marked `@generated`; authored files are protected |
+| `/etc/cast/system.glu` | System administrator | Desired state; evaluated but never normalized in place |
+| `/etc/cast/root-filesystem.glu` | System administrator | Mandatory machine-local root locator; authenticated in place and never inferred or stored with OS state |
+| `/usr/lib/system-model.glu` | Cast state transaction | Canonical standalone snapshot stored with the state |
 
 `sources.lock.glu` is adjacent to `stone.glu`. It binds archive hashes and Git
-requests to resolved data; Git entries contain a complete commit ID. If source
-resolution creates or changes the lock, Boulder stops and asks for a rerun so
+requests to resolved data; schema-v2 Git entries contain a complete commit ID
+and required lowercase `materialization_sha256` of the normalized exported
+tree. Schema v1 is rejected without a compatibility decoder or runtime
+fallback. If source resolution creates or changes the lock, Cast stops and
+asks for a rerun so
 the new bytes become part of provenance. An unchanged lock is not rewritten,
 and a lock which no longer matches the authored upstream list is a visible
-error. Running `boulder recipe update ./stone.glu` without `--ver` or
+error. Running `cast recipe update ./stone.glu` without `--ver` or
 `--upstream` evaluates only the authored expression, fetches moving Git
 references, and atomically refreshes the generated lock. Resolution failure
 leaves the previous lock intact. Supplying update values prints structured
 authored-change suggestions instead; neither update mode rewrites arbitrary
-Gluon expressions. `boulder recipe bump` likewise prints an authored release
+Gluon expressions. `cast recipe bump` likewise prints an authored release
 suggestion.
 
-Moss similarly keeps desired intent separate from normalized state. `moss sync
---import path/to/system.glu` evaluates an alternate intent, while `moss state
+Git lock refresh and frozen setup use the same export-normalize-hash path.
+The digest commits to raw relative path bytes, entry kinds, canonical modes,
+regular-file contents, and raw symlink targets after Git administration data
+is removed. Hard links, special inodes, Gitlinks, and a frozen digest mismatch
+fail closed before execution. Authored `clone_dir` is a validated single
+component and is preserved as the frozen materialization destination; the
+outer destination name is separately part of derivation identity.
+
+Archive bytes are likewise bound by their source-lock SHA-256. For an unpacked
+source, derivation schema v16 freezes a built-in `ExtractArchive` step in the
+prepare-phase body which identifies the locked source, normalized relative
+destination, and `strip_components` value. Cast accepts plain, gzip, xz, and
+standard-frame zstd tar streams. Other compression or container formats have
+no external-tool fallback. It
+preflights a bounded canonical manifest, extracts into a private
+descriptor-rooted stage, and publishes only if a second scan and repeated
+archive digests agree. See the
+[archive extraction contract](package-authoring.md#archive-extraction-contract)
+for the accepted entry types and rejection rules.
+
+`build.lock.glu` is adjacent to `stone.glu` and is generated only by explicit
+planning, including `cast build --update-lock`. Its request fingerprint
+binds the evaluated recipe and source lock, selected target and policy,
+profile, toolchain, builder, job count, and the typed provenance of every
+requested provider. Schema v6 contains the exact resolved package/output
+closure, only the repository snapshots used by that closure, build/host/target
+platforms, and independent policy-root, target, profile, toolchain, and builder
+identities. Every request
+stores a canonical sorted set of origins: builder/native/build/check position,
+output runtime position, policy source/field/index, job executable coordinate,
+or analyzer role. It rejects disconnected packages, unused snapshots, requests
+without origins, and any reusable lock whose selected context or complete
+request-to-origin map differs even when its header fingerprint was retained.
+Planning without `--update-lock` requires a current lock; missing and stale
+locks are errors with an explicit refresh command. `--refresh-repositories` is
+valid only while updating the lock.
+
+The builder identity names the selected structural family for explanation and
+fingerprints the complete target-selected `BuilderSpec`, `HooksSpec`, and
+package-profile key. It is not the Cast executable identity. The derivation
+schema freezes the executor ABI and implementation fingerprint separately inside
+`ExecutionPolicy`, so changing execution compatibility cannot be
+mistaken for changing authored builder structure. It also freezes the selected
+credential contract and every reachable analyzer program and provider request.
+The current derivation schema is v16; build-lock origins and typed built-in
+archive extraction participate in the canonical derivation identity.
+
+The Cast implementation fingerprint is produced at compile time from the
+production source tree and effective build context. In addition to the Rust
+target, profile, features, compiler, and flags, it binds selected native C and
+C++ compilers, linkers, assemblers, archivers, ranlib and symbol tools, their
+stable version output, compiler/linker search paths, and curated
+native-dependency controls. Native build lanes whose executable inputs cannot
+be represented are rejected. Build
+timestamps, Git metadata, checkout location, and shadowed tool aliases are not
+semantic inputs.
+
+The lock is an explicit resolution input, not an authenticated statement from
+a remote service. Cast validates its graph and selected planner context,
+and frozen setup verifies the recorded repository snapshots and exact package
+metadata. Any other valid lock content changes the lock digest and derivation
+identity; cryptographic publisher trust remains the repository/index layer's
+responsibility.
+
+Cast similarly keeps desired intent separate from normalized state. `cast sync
+--import path/to/system.glu` evaluates an alternate intent, while `cast state
 export` emits a standalone generated snapshot. Export, verification,
 activation, and archival operate on the normalized snapshot without rewriting
 the administrator's program. Snapshots derived from authored intent retain its
@@ -184,68 +476,158 @@ Stable logical names are used instead of host paths. Identical source and
 inputs therefore produce an identical fingerprint, while a changed import,
 lock, ABI, runtime version, or evaluator policy changes it.
 
-Boulder records the aggregate recipe fingerprint in package and binary-manifest
-`SourceRef` metadata and in the JSONC build manifest. Moss records the authored
-system-intent fingerprint with each normalized state snapshot.
+For repository build policy, the finalized manifest evaluation also receives a
+canonical explicit input containing the policy name, ordered layer and entry
+positions, operation kinds, module origins, and complete per-operation
+fingerprints. Reordering a layer or operation, changing an operation kind or
+origin, or changing an operation module or one of its imports therefore changes
+the final policy fingerprint even when the resulting `BuildPolicySpec` happens
+to compare equal. An undeclared neighboring file contributes nothing.
+
+Cast freezes a canonical target-specific `DerivationPlan` and hashes it as
+the derivation ID. The canonical data includes the recipe/source identities,
+build lock, ordered jobs/phases/steps, environment, builder layout, execution
+policy (including every pseudo-filesystem selection), tuning, analyzers,
+outputs, and explicit source timestamp. Mutation
+tests cover each semantic category. Package and binary-manifest `SourceRef`
+metadata carry both `recipe-sha256:` and `derivation-sha256:` values, and the
+JSONC build manifest has `recipe-fingerprint` and `derivation-id` fields. The
+frozen executor and packager carry that validated ID through artifact emission.
+Cast records the authored system-intent fingerprint with each normalized state
+snapshot.
 
 ## CLI workflow
 
 Typecheck and semantically validate a recipe without starting a build:
 
 ```sh
-boulder recipe check ./stone.glu
+cast recipe check ./stone.glu
 ```
 
 The command prints the evaluation fingerprint on success. Parse and type errors
 identify the `.glu` source and span; semantic conversion errors identify a
-field path such as `source.release` or `upstreams[0].url`.
+field path such as `meta.release` or `sources[0].url`.
+
+Print the concrete normalized package declaration produced by the factory:
+
+```sh
+cast recipe eval ./stone.glu
+```
+
+Cast build, check, update, and evaluation all use `cast.package.v3`.
+There is no automatic legacy-recipe fallback or dual-source precedence.
+
+Freeze a target-specific derivation and create or refresh its generated build
+lock:
+
+```sh
+cast recipe plan ./stone.glu \
+    --profile default-x86_64 \
+    --target x86_64 \
+    --source-date-epoch 1700000000 \
+    --jobs 8 \
+    --update-lock
+```
+
+The target, timestamp, and job count are explicit semantic inputs. Repeat the
+command without `--update-lock` to require and consume the current lock. The
+command prints the derivation ID, request fingerprint, target, plan counts,
+and canonical plan bytes.
+
+Explain the same locked derivation and its provenance:
+
+```sh
+cast recipe explain ./stone.glu \
+    --profile default-x86_64 \
+    --target x86_64 \
+    --source-date-epoch 1700000000 \
+    --jobs 8
+```
+
+The explanation includes every policy source and every configured policy
+operation with its policy, layer, order, operation kind, module origin, and
+fingerprint. This is the same ordered composition identity used by planning;
+the command does not rediscover policy state after the plan is frozen.
+
+Normal builds use the same frozen plan:
+
+```sh
+cast build ./stone.glu \
+    --profile default-x86_64 \
+    --target x86_64 \
+    --source-date-epoch 1700000000 \
+    --jobs 8
+```
+
+The build requires a current `build.lock.glu`. `--update-lock` refreshes it;
+`--refresh-repositories` requires `--update-lock`. Runtime setup verifies the
+repository snapshots and exact-installs locked package IDs, materializes only
+locked sources, and enters the plan-defined container. The executor runs only
+frozen steps, `FrozenPackager` consumes plan-owned analysis and collection
+rules, binary-manifest verification stays on the host, and cleanup is limited
+to plan-owned paths.
+
+Mutable local recipe-directory inputs are rejected before freeze. Supporting
+them requires a local-source ABI that hashes their bytes and destination into
+the derivation.
 
 Create a skeletal recipe from one or more source archives:
 
 ```sh
-boulder recipe new --output ./package https://example.invalid/source-1.0.tar.xz
+cast recipe new --output ./package https://example.invalid/source-1.0.tar.xz
 ```
 
 The output is `./package/stone.glu`. Edit authored values directly or compose
-them through imported functions. Boulder deliberately has no general-purpose
+them through imported functions. Cast deliberately has no general-purpose
 Gluon source rewriter.
 
 Refresh source resolution after editing upstream declarations:
 
 ```sh
-boulder recipe update ./stone.glu
+cast recipe update ./stone.glu
 ```
 
 The command writes only `sources.lock.glu`; `stone.glu` and its imported
 modules remain byte-for-byte unchanged.
 
+## Checked package corpus
+
+[`docs/examples/gluon`](examples/gluon/README.md) contains
+small Nix-inspired recipes for standard builders, pure feature functions,
+dependency and attribute overrides, typed dependency roles, hooks, custom
+steps, multiple sources, split outputs, profiles, tuning, conflicts, a
+source-less userspace meta-package, and a larger daemon.
+
+Run every checked-in package proof with:
+
+```sh
+make examples
+```
+
+The target checks and evaluates each recipe through the public Cast CLI,
+freezes each one hermetically with exact generated locks, and repeats every
+result to prove deterministic output and plan identity. Its synthetic
+metadata-only providers are required to fail before frozen execution or Stone
+publication. Fictional remote example URLs are replaced with local
+content-addressed fixtures during the planner proof; real compilation and
+packaging use the separate contentful execution-fixture lane documented in the
+example corpus.
+
 ## Compatibility policy
 
 OS Tools configuration has no YAML or KDL compatibility loader, fallback, or
-dual-write path. The old YAML updater crate, KDL control-file overlay, and Moss
-KDL system-model round trip were removed. A file using an old configuration
+dual-write path. The YAML updater, KDL control-file overlay, and KDL
+system-model round trip were removed. A file using a non-Gluon configuration
 extension is ignored where fragment discovery applies; it is never preferred
 over Gluon.
 
-YAML required by external services, notably files under `.github`, is outside
-this configuration contract and remains in the repository.
-
-## Linkage measurement
-
-Measurements use fresh temporary Cargo target directories and debug binaries;
-temporary build output is not committed.
-
-| Measurement | Before Gluon linkage | After migration and dependency cleanup |
-|---|---:|---:|
-| Boulder binary | 122,949,288 bytes | 146,606,848 bytes |
-| Moss binary | 111,252,744 bytes | 136,772,392 bytes |
-| Combined build wall time | 22.28 s | 27.86 s |
-
-The final debug measurement increases Boulder by 23,657,560 bytes (19.2%),
-Moss by 25,519,648 bytes (22.9%), and the clean combined build by 5.58 seconds
-(25.0%). This is the cost of linking the restricted Gluon runtime into both
-tools; YAML/KDL and their compatibility dependencies are absent from the final
-graph.
+The exact external-service YAML allowlist is `.github/dependabot.yml`,
+`.github/workflows/ci.yaml`, and `.github/workflows/release.yaml`. No KDL files
+are tracked. Negative no-fallback tests, package names containing “yaml”, and
+the completed historical migration plan are textual audit exceptions rather
+than configuration paths. The Makefile `config-formats` target compares tracked
+YAML/KDL paths with this exact allowlist, and `make test` runs the target before
+Clippy and the test suite.
 
 ## Toolchain compatibility
 
@@ -256,7 +638,7 @@ target, not only the developer toolchain:
 |---|---|
 | Rust 1.91.0, `x86_64-unknown-linux-gnu` | `cargo check --workspace` |
 | Rust 1.93.0, `x86_64-unknown-linux-gnu` | full formatting, Clippy, and workspace tests |
-| Rust 1.93.0, `x86_64-unknown-linux-musl` | linked Boulder and Moss debug binaries |
+| Rust 1.93.0, `x86_64-unknown-linux-musl` | linked Cast debug binary |
 
 Gluon is pinned to `0.18.3` for all three lanes. Its default feature set is
 disabled; OS Tools does not enable Gluon's async, regex, or random runtime

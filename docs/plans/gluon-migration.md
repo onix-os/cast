@@ -1,29 +1,14 @@
-<!--
-# SPDX-FileCopyrightText: 2026 AerynOS Developers
-# SPDX-License-Identifier: MPL-2.0
--->
 
-# Plan: Establish Gluon as the Declarative Language for OS Tools
+# Historical plan: Establish Gluon as the Declarative Language for OS Tools
 
-> **Executor instructions**: Follow this plan in order. Run every verification
-> command and confirm the expected result before proceeding. This is an
-> `os-tools`-only migration. Never edit, generate files in, or otherwise modify
-> `../bedrock`; Bedrock will migrate separately after the Gluon foundation is
-> proven here. Do not use Python to edit files. Use patch/edit tools and the
-> repository's `make` targets for final validation.
->
-> **Drift check (run first)**:
->
-> ```sh
-> git diff --stat 80d7ac5..HEAD -- \
->   Cargo.toml Cargo.lock Makefile README.md \
->   crates/config crates/stone_recipe crates/triggers crates/yaml \
->   bin/boulder bin/moss tests
-> ```
->
-> If the relevant code has changed, compare it against the current-state notes
-> below. Stop and report if the format boundaries or system-model semantics have
-> materially changed; do not mechanically apply this plan to a different design.
+> **ARCHIVED — DO NOT EXECUTE.** This migration is complete. Everything below
+> records the pre-Cast repository at commit `80d7ac5`: split-product names,
+> paths, package targets, commands, and validation snippets are historical
+> evidence, not current usage or compatibility guidance. Do not copy or run
+> any shell fragment from this file. Current behavior is documented in
+> [`../../README.md`](../../README.md),
+> [`../gluon-configuration.md`](../gluon-configuration.md), and
+> [`../architecture/cast.md`](../architecture/cast.md).
 
 ## Status
 
@@ -35,9 +20,10 @@
 - **Planned at**: commit `80d7ac5`, 2026-07-12
 - **Implementation**: complete, 2026-07-13
 
-## Goal
+## Historical goal
 
-Make Gluon the single canonical human-authored declarative language for Boulder
+At the time of this plan, the goal was to make Gluon the single canonical
+human-authored declarative language for Boulder
 and Moss configuration in this repository. The end state removes YAML and KDL
 from package recipes, Boulder macro/profile configuration, recipe overlays, Moss
 repository and trigger configuration, and Moss system-model intent.
@@ -48,7 +34,7 @@ foundation before converting individual formats. It must not merely rename
 Gluon wrapper, or expose Gluon's host I/O facilities during configuration
 evaluation.
 
-## Non-goals
+## Historical non-goals
 
 - Migrating or editing `../bedrock`; its recipes, scripts, documentation and
   generated artifacts are explicitly owned by the user and out of scope.
@@ -74,7 +60,7 @@ Building those boundaries once in a small shared crate avoids independent,
 inconsistent Gluon VMs in Boulder and Moss. It also permits YAML and KDL to be
 removed rather than retained as internal intermediate formats.
 
-## Current state
+## Baseline state at `80d7ac5`
 
 ### Repository and validation conventions
 
@@ -737,7 +723,8 @@ All items must hold before declaring the migration complete:
 - [x] Gluon-facing DTOs are versioned and separated from domain structs.
 - [x] `stone.glu` is the canonical Boulder recipe.
 - [x] Resolved sources live in a generated lock; authored recipes are not edited.
-- [x] YAML macros and KDL control files are replaced by Gluon modules/functions.
+- [x] YAML macro configuration and KDL control files are gone; repository build
+  policy is a typed Gluon value.
 - [x] Profiles, repositories and triggers load through Gluon with visible errors.
 - [x] Moss separates `/etc` system intent from generated per-state snapshots.
 - [x] State sync/export/verify/activation behavior is covered without KDL.
@@ -750,7 +737,7 @@ All items must hold before declaring the migration complete:
 - [x] `make test` passes in an environment with Rust >=1.91 and `typos`.
 - [x] No file under `../bedrock` was modified.
 
-## STOP conditions
+## Historical stop conditions
 
 Stop and report rather than improvising if any of these occur:
 
@@ -770,7 +757,7 @@ Stop and report rather than improvising if any of these occur:
 - Scope expands into `.stone` format, transaction, VFS, database or unrelated
   package work.
 
-## Maintenance and review notes
+## Historical maintenance and review notes
 
 - Treat the embedded Gluon modules and DTO field shapes as a public versioned
   API. Review them like a file format, not ordinary internal helpers.
@@ -779,7 +766,7 @@ Stop and report rather than improvising if any of these occur:
   changes require explicit migration tests.
 - Do not retain deprecated readers indefinitely. Once external consumers have
   migrated, delete the old paths rather than keeping silent compatibility.
-- Measure Moss and Boulder binary/build impact after major Gluon dependency
-  changes, especially for static musl builds.
+- The plan called for measuring Moss and Boulder binary/build impact after
+  major Gluon dependency changes, especially for static musl builds.
 - Bedrock migration is intentionally deferred. This plan only makes `os-tools`
   strong and stable enough for the user to migrate Bedrock afterward.

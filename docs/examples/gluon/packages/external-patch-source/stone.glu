@@ -1,0 +1,27 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+let patch_series = import! "./patches.glu"
+let sources = import! "./sources.glu"
+
+let base = b.mk_package (b.meta {
+    pname = "portable-check",
+    version = "4.0.0",
+    release = 2,
+    homepage = "https://example.invalid/portable-check",
+    license = ["MIT"],
+})
+
+{
+    builder = cmake.builder {
+        flags = ["-DUSE_SYSTEM_LIBRARIES=ON"],
+        run_tests = b.boolean.true,
+    },
+    hooks = b.hooks {
+        pre_setup = patch_series,
+        .. b.defaults.hooks
+    },
+    native_build_inputs = [b.dep.binary "patch"],
+    sources,
+    architectures = ["x86_64", "aarch64"],
+    .. base
+}

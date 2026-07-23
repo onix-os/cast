@@ -1,0 +1,14 @@
+let b = import! cast.package.v3
+
+// This record plays the same role as one member of a Nixpkgs linuxPackages
+// set: the module factory receives one exact kernel package, build tree, ABI,
+// and target set instead of discovering the running host kernel.
+let package = b.package_ref "linux-lts"
+
+{
+    package,
+    headers = b.dep.output package "devel",
+    release = "6.12.28-onix1",
+    build_tree = "/usr/lib/modules/6.12.28-onix1/build",
+    architectures = ["x86_64", "aarch64"],
+}

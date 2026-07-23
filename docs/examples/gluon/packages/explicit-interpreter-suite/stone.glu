@@ -1,0 +1,7 @@
+let interpreters = import! "./interpreters.glu"
+let make_package = import! "./package.glu"
+
+// The root selects an explicit interpreter set. Changing either target
+// changes its build/check programs, installed shebang, runtime closure, and
+// frozen derivation instead of consulting ambient interpreter discovery.
+make_package interpreters

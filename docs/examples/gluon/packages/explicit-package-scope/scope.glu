@@ -1,0 +1,10 @@
+let b = import! cast.package.v3
+
+// The scope is ordinary authored data. Factories receive capabilities
+// explicitly; field names are not inferred from function arguments.
+{
+    compression = b.dep.pkgconfig "zlib",
+    crypto = b.dep.pkgconfig "libressl",
+    database = b.dep.pkgconfig "sqlite3",
+    documentation = b.dep.binary "doxygen",
+}

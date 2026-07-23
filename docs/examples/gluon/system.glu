@@ -1,12 +1,10 @@
-// SPDX-FileCopyrightText: 2026 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
 
-let moss = import! moss.system.v1
+let cast = import! cast.system.v1
 
 {
     repositories = [
-        moss.repository.direct "local" "file:///var/cache/moss/local.index",
+        cast.repository.direct "local" "file:///var/cache/cast/local.index",
     ],
     packages = ["system-base", "editor"],
-    .. moss.system
+    .. cast.system
 }

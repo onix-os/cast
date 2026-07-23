@@ -1,0 +1,12 @@
+#!/usr/bin/dash
+set -eu
+
+if [ "${1-}" = "--self-test" ]; then
+    [ "$#" -eq 1 ]
+    printf '%s\n' 'cast-desktop-integration-fixture: self-test passed'
+    exit 0
+fi
+
+[ "$#" -eq 1 ]
+[ -f "$1" ]
+printf 'cast-desktop-integration-fixture: opened %s\n' "$1"

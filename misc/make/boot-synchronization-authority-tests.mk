@@ -1,0 +1,227 @@
+.PHONY: forge-clean-boot-synchronization-test \
+	forge-legacy-boot-repair-test \
+	forge-active-reblit-boot-publication-plan-test \
+	forge-active-reblit-boot-projection-database-test \
+	forge-active-reblit-boot-asset-plan-test \
+	forge-active-reblit-stone-boot-input-test \
+	forge-boot-asset-snapshot-test
+
+forge-active-reblit-boot-publication-plan-test: host-storage-safety-test
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::active_reblit_publication_plan::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 27; \
+	for test in \
+		client::active_reblit_publication_plan::tests::canonical_order_is_typed_phase_then_root_then_precomputed_folded_path \
+		client::active_reblit_publication_plan::tests::both_bootloader_roles_bind_exact_esp_paths_and_carry_one_binding_coordinate \
+		client::active_reblit_publication_plan::tests::generated_checksum_and_sha256_are_derived_from_owned_bytes \
+		client::active_reblit_publication_plan::tests::raw_role_root_phase_source_and_path_mismatches_are_rejected \
+		client::active_reblit_publication_plan::tests::only_identical_typed_requests_including_binding_are_deduplicated \
+		client::active_reblit_publication_plan::tests::same_destination_with_different_content_or_invalid_role_is_rejected \
+		client::active_reblit_publication_plan::tests::raw_cross_root_request_is_rejected_before_collision_planning \
+		client::active_reblit_publication_plan::tests::case_folded_hierarchy_helpers_detect_ancestors_and_descendants_in_both_orders \
+		client::active_reblit_publication_plan::tests::alias_and_distinct_layouts_route_roots_to_expected_collision_domains \
+		client::active_reblit_publication_plan::tests::plan_retains_the_topology_collision_layout_for_later_revalidation \
+		client::active_reblit_publication_plan::tests::unsafe_relative_paths_are_rejected_instead_of_normalized \
+		client::active_reblit_publication_plan::tests::canonical_plan_rejects_cross_request_private_stage_aliases_case_insensitively \
+		client::active_reblit_publication_plan::tests::non_utf8_and_non_ascii_paths_fail_closed \
+		client::active_reblit_publication_plan::tests::fat_forbidden_trailing_reserved_and_short_name_components_are_rejected \
+		client::active_reblit_publication_plan::tests::fat_component_byte_bound_admits_n_and_rejects_n_plus_one \
+		client::active_reblit_publication_plan::tests::role_specific_payload_and_entry_path_shapes_are_enforced \
+		client::active_reblit_publication_plan::tests::checksum_payload_token_grammar_and_source_binding_are_exact \
+		client::active_reblit_publication_plan::tests::publication_and_aggregate_path_bounds_admit_n_and_reject_n_plus_one \
+		client::active_reblit_publication_plan::tests::single_path_and_component_count_bounds_admit_n_and_reject_n_plus_one \
+		client::active_reblit_publication_plan::tests::logical_byte_limit_counts_each_canonical_output_including_generated_bytes \
+		client::active_reblit_publication_plan::tests::generated_per_file_and_total_bounds_admit_n_and_reject_n_plus_one \
+		client::active_reblit_publication_plan::tests::sealed_snapshot_file_bound_admits_n_and_rejects_n_plus_one \
+		client::active_reblit_publication_plan::tests::work_sort_reservation_and_deadline_failures_are_typed \
+		client::active_reblit_publication_plan::tests::caller_owned_deadline_is_checked_before_even_an_empty_plan \
+		client::active_reblit_publication_plan::tests::deadline_is_checked_again_after_sorting \
+		client::active_reblit_publication_plan::tests::deadline_is_checked_after_complete_plan_materialization \
+		client::active_reblit_publication_plan::tests::production_contract_constants_match_the_publication_limits; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	plan="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan.rs"; \
+	path_policy="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan/path_policy.rs"; \
+	role_binding="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_publication_plan/role_binding.rs"; \
+	content_identity="$(TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
+	timeout 10s grep -Fq 'role_binding::require_role_binding(&request, &relative_path)?;' "$$plan"; \
+	timeout 10s grep -Fq 'const CHECKSUM_PREFIX: &str = "xxh3-";' "$$role_binding"; \
+	timeout 10s grep -Fq 'const LENGTH_SEPARATOR: &str = "-l";' "$$role_binding"; \
+	timeout 10s grep -Fq '(Some("EFI"), Some(namespace), Some(identity), Some(leaf), None)' "$$role_binding"; \
+	timeout 10s grep -Fq 'const DIGEST_HEX_WIDTH: usize = 32;' "$$role_binding"; \
+	timeout 10s grep -Fq 'const LENGTH_HEX_WIDTH: usize = 16;' "$$role_binding"; \
+	timeout 10s grep -Fq 'digest.bytes().all(is_lower_hex)' "$$role_binding"; \
+	timeout 10s grep -Fq 'length.bytes().all(is_lower_hex)' "$$role_binding"; \
+	timeout 10s grep -Fq 'u128::from_str_radix(digest, 16) == Ok(expected_digest)' "$$role_binding"; \
+	timeout 10s grep -Fq 'u64::from_str_radix(length, 16) == Ok(expected_length)' "$$role_binding"; \
+	timeout 10s grep -Fq 'content_identity: BootContentIdentity,' "$$plan"; \
+	timeout 10s grep -Fq 'let content_identity = BootContentIdentity::hash(&bytes);' "$$plan"; \
+	timeout 10s grep -Fq '&& &existing.source == source' "$$plan"; \
+	grep -Fq 'is_retained_boot_file_private_component(component)' "$$path_policy"; \
+	grep -Fq 'ReservedPrivatePublicationComponent' "$$path_policy"; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$plan" )" -le 1000; \
+	test "$$( wc -l < "$$path_policy" )" -le 1000; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$role_binding" )" -le 1000; \
+	timeout 10s test "$$( timeout 10s wc -l < "$$content_identity" )" -le 1000; \
+	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_publication_plan::tests::" -- --test-threads=1
+
+forge-active-reblit-stone-boot-input-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::active_reblit_boot_inputs::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 12; \
+	for test in \
+		client::active_reblit_boot_inputs::tests::ready_binds_each_plan_reference_by_digest_when_plan_and_snapshot_orders_differ \
+		client::active_reblit_boot_inputs::tests::duplicate_plan_references_share_one_sealed_snapshot \
+		client::active_reblit_boot_inputs::tests::explicit_offset_reads_ignore_a_shared_snapshot_cursor_mutation \
+		client::active_reblit_boot_inputs::tests::optional_empty_digest_references_share_one_zero_length_binding \
+		client::active_reblit_boot_inputs::tests::expected_head_mismatch_fails_before_returning_prepared_inputs \
+		client::active_reblit_boot_inputs::tests::every_role_byte_policy_admits_exact_n_and_rejects_n_plus_one \
+		client::active_reblit_boot_inputs::tests::combined_control_byte_policy_admits_exact_n_and_rejects_n_plus_one \
+		client::active_reblit_boot_inputs::tests::referenced_byte_policy_counts_every_reference_to_one_shared_snapshot \
+		client::active_reblit_boot_inputs::tests::binding_work_policy_admits_exact_n_and_rejects_n_plus_one \
+		client::active_reblit_boot_inputs::tests::final_revalidation_rejects_state_mutation_after_snapshot_binding \
+		client::active_reblit_boot_inputs::tests::failed_final_revalidation_drops_every_prepared_snapshot_descriptor \
+		client::active_reblit_boot_inputs::tests::final_revalidation_rejects_layout_mutation_after_snapshot_binding; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	root="$(TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_inputs.rs"; \
+	snapshot="$(TOP_DIR)/crates/forge/src/client/boot/asset_snapshots.rs"; \
+	content_identity="$(TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
+	timeout 10s grep -Fq 'pub(in crate::client) fn content_identity(&self) -> BootContentIdentity' "$$root"; \
+	timeout 10s grep -Fq 'self.snapshot.content_identity()' "$$root"; \
+	timeout 10s grep -Fq 'content_identity: BootContentIdentity,' "$$snapshot"; \
+	for file in "$$root" "$$snapshot" "$$content_identity"; do timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_boot_inputs::tests::" -- --test-threads=1
+
+forge-active-reblit-boot-asset-plan-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::active_reblit_boot_projection::asset_plan::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 21; \
+	for test in \
+		client::active_reblit_boot_projection::asset_plan::tests::complete_plan_is_state_scoped_deterministic_and_role_complete \
+		client::active_reblit_boot_projection::asset_plan::tests::canonical_empty_digest_is_rejected_for_every_critical_boot_role \
+		client::active_reblit_boot_projection::asset_plan::tests::optional_empty_assets_share_one_sorted_snapshot_digest \
+		client::active_reblit_boot_projection::asset_plan::tests::role_references_above_snapshot_limit_share_a_bounded_digest_inventory \
+		client::active_reblit_boot_projection::asset_plan::tests::no_head_systemd_boot_asset_is_not_applicable \
+		client::active_reblit_boot_projection::asset_plan::tests::systemd_boot_without_any_kernel_is_not_applicable \
+		client::active_reblit_boot_projection::asset_plan::tests::kernel_less_history_does_not_contribute_unused_schema_or_cmdline_assets \
+		client::active_reblit_boot_projection::asset_plan::tests::historical_systemd_boot_assets_are_not_bootloader_authority \
+		client::active_reblit_boot_projection::asset_plan::tests::two_head_systemd_boot_assets_are_rejected \
+		client::active_reblit_boot_projection::asset_plan::tests::unselected_layouts_cannot_enter_or_poison_a_state_plan \
+		client::active_reblit_boot_projection::asset_plan::tests::identical_multi_package_owners_collapse_but_conflicts_fail \
+		client::active_reblit_boot_projection::asset_plan::tests::the_same_logical_path_may_resolve_differently_in_distinct_states \
+		client::active_reblit_boot_projection::asset_plan::tests::final_boot_asset_symlinks_resolve_to_regular_cas_bytes \
+		client::active_reblit_boot_projection::asset_plan::tests::symlink_cycles_and_missing_targets_fail_closed \
+		client::active_reblit_boot_projection::asset_plan::tests::invalid_symlink_targets_and_file_modes_fail_closed \
+		client::active_reblit_boot_projection::asset_plan::tests::ownership_and_unsupported_mode_bits_fail_before_planning \
+		client::active_reblit_boot_projection::asset_plan::tests::symlink_hop_byte_and_depth_limits_are_exact \
+		client::active_reblit_boot_projection::asset_plan::tests::descendants_beneath_symlink_or_regular_ancestors_fail_closed \
+		client::active_reblit_boot_projection::asset_plan::tests::selected_invalid_stone_target_is_rejected_before_classification \
+		client::active_reblit_boot_projection::asset_plan::tests::asset_path_kernel_snapshot_and_work_bounds_fail_with_typed_errors \
+		client::active_reblit_boot_projection::asset_plan::tests::expired_planning_deadline_fails_before_asset_admission; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_boot_projection::asset_plan::tests::" -- --test-threads=1
+
+forge-boot-asset-snapshot-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::boot_asset_snapshots::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 16; \
+	for test in \
+		client::boot_asset_snapshots::tests::sealed_snapshot_has_exact_bytes_digest_length_metadata_and_seals \
+		client::boot_asset_snapshots::tests::sealed_snapshot_rejects_write_shrink_grow_and_additional_seals \
+		client::boot_asset_snapshots::tests::wrong_digest_fails_without_publishing_a_snapshot \
+		client::boot_asset_snapshots::tests::count_and_aggregate_byte_limits_admit_n_and_reject_n_plus_one \
+		client::boot_asset_snapshots::tests::per_asset_and_descriptor_budgets_fail_before_memfd_allocation \
+		client::boot_asset_snapshots::tests::expired_deadline_fails_before_opening_the_asset_pool \
+		client::boot_asset_snapshots::tests::canonical_empty_asset_is_sealed_without_an_asset_pool \
+		client::boot_asset_snapshots::tests::short_digest_uses_the_descriptor_rooted_flat_asset_path \
+		client::boot_asset_snapshots::tests::fifo_and_symlink_sources_fail_closed_without_blocking \
+		client::boot_asset_snapshots::tests::source_replacement_after_open_fails_closed \
+		client::boot_asset_snapshots::tests::source_mutation_after_copy_fails_closed \
+		client::boot_asset_snapshots::tests::failed_batch_drops_prior_snapshots_and_leaves_policy_reusable \
+		client::boot_asset_snapshots::tests::duplicate_digest_is_canonicalized_without_a_duplicate_snapshot \
+		client::boot_asset_snapshots::tests::digest_lookup_is_sorted_deduplicated_and_independent_of_descriptor_offsets \
+		client::boot_asset_snapshots::tests::source_growth_after_length_preflight_fails_before_snapshot_publication \
+		client::boot_asset_snapshots::tests::materialization_timeout_maps_to_the_boot_snapshot_deadline; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 10s grep -Fqx 'client::tests::exact_copy_accepts_n_and_rejects_n_minus_or_plus_one: test' <<<"$$listed"; \
+	snapshot="$(TOP_DIR)/crates/forge/src/client/boot/asset_snapshots.rs"; \
+	copy="$(TOP_DIR)/crates/forge/src/client/materialization/assets.rs"; \
+	content_identity="$(TOP_DIR)/crates/forge/src/client/boot/boot_content_identity.rs"; \
+	timeout 10s grep -Fq 'let content_identity = copy_fd_exact(' "$$snapshot"; \
+	timeout 10s grep -Fq 'BootContentIdentity::EMPTY' "$$snapshot"; \
+	timeout 10s grep -Fq 'sha2::Digest::update(&mut content_hasher, &buffer[..read_count]);' "$$copy"; \
+	timeout 10s grep -Fq 'Result<boot_content_identity::BootContentIdentity, Error>' "$$copy"; \
+	for file in "$$snapshot" "$$copy" "$$content_identity"; do timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::boot_asset_snapshots::tests::" -- --test-threads=1; \
+	timeout 900s $(CARGO) test -p forge --lib 'client::tests::exact_copy_accepts_n_and_rejects_n_minus_or_plus_one' -- --exact --test-threads=1
+
+forge-active-reblit-boot-projection-database-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::active_reblit_boot_projection::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 18; \
+	for test in \
+		client::active_reblit_boot_projection::tests::preparation_canonicalizes_and_deduplicates_the_selected_package_union \
+		client::active_reblit_boot_projection::tests::reverse_id_head_and_timestamp_ties_have_deterministic_history_order \
+		client::active_reblit_boot_projection::tests::one_capture_performs_exactly_two_bounded_layout_queries \
+		client::active_reblit_boot_projection::tests::layout_sandwich_rejects_a_mutation_between_bounded_queries \
+		client::active_reblit_boot_projection::tests::state_layout_layout_state_sandwich_rejects_a_mid_query_state_mutation \
+		client::active_reblit_boot_projection::tests::package_count_policy_admits_n_and_rejects_n_plus_one_before_layout_query \
+		client::active_reblit_boot_projection::tests::package_id_byte_policy_accounts_only_the_canonical_unique_union \
+		client::active_reblit_boot_projection::tests::layout_row_policy_rejects_n_plus_one_rows \
+		client::active_reblit_boot_projection::tests::layout_string_byte_policy_admits_n_and_rejects_n_plus_one \
+		client::active_reblit_boot_projection::tests::expired_deadline_stops_before_any_layout_query \
+		client::active_reblit_boot_projection::tests::cancelled_bounded_query_has_a_typed_failure \
+		client::active_reblit_boot_projection::tests::revalidation_accepts_unchanged_state_and_layout_evidence \
+		client::active_reblit_boot_projection::tests::revalidation_rejects_an_added_history_state \
+		client::active_reblit_boot_projection::tests::revalidation_rejects_a_removed_history_state \
+		client::active_reblit_boot_projection::tests::revalidation_rejects_an_exact_state_field_mutation \
+		client::active_reblit_boot_projection::tests::revalidation_rejects_an_added_selected_package_layout \
+		client::active_reblit_boot_projection::tests::revalidation_rejects_a_removed_selected_package_layout \
+		client::active_reblit_boot_projection::tests::revalidation_rejects_reordered_layout_records; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::active_reblit_boot_projection::tests::" -- --test-threads=1
+
+forge-clean-boot-synchronization-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::clean_boot_synchronization::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 5; \
+	for test in \
+		client::clean_boot_synchronization::tests::clean_standalone_boot_synchronization_retains_authority_through_one_worker_attempt \
+		client::clean_boot_synchronization::tests::final_public_journal_binding_rejects_replacement_after_the_leading_check \
+		client::clean_boot_synchronization::tests::unresolved_journal_blocks_standalone_boot_before_the_worker \
+		client::clean_boot_synchronization::tests::orphan_transition_row_blocks_standalone_boot_before_the_worker \
+		client::clean_boot_synchronization::tests::post_authority_failure_supersedes_the_boot_backend_error; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::clean_boot_synchronization::tests::" -- --test-threads=1
+
+forge-legacy-boot-repair-test:
+	@set -euo pipefail; \
+	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
+	timeout 10s grep -q . <<<"$$listed"; \
+	count="$$( timeout 10s grep -Ec '^client::legacy_boot_repair::tests::[^:]+: test$$' <<<"$$listed" )"; \
+	timeout 10s test "$$count" = 4; \
+	for test in \
+		client::legacy_boot_repair::tests::legacy_worker_rejects_a_client_with_a_different_state_database_capability \
+		client::legacy_boot_repair::tests::legacy_worker_rejects_public_journal_replacement_during_boot \
+		client::legacy_boot_repair::tests::legacy_worker_retains_the_exact_journal_lock_through_boot \
+		client::legacy_boot_repair::tests::legacy_authorization_rechecks_orphan_transition_ownership; do \
+		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
+	done; \
+	timeout 900s $(CARGO) test -p forge --lib "client::legacy_boot_repair::tests::" -- --test-threads=1

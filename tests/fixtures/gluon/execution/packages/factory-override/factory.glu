@@ -1,0 +1,12 @@
+
+let b = import! cast.package.v3
+
+// A Stone-native package factory: callers inject typed package values, then
+// may apply an explicit PackagePatch to the returned immutable package.
+\inputs ->
+    {
+        builder = inputs.builder,
+        sources = inputs.sources,
+        architectures = inputs.architectures,
+        .. b.mk_package inputs.meta
+    }

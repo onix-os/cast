@@ -1,0 +1,43 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+let make_package = import! "./factory.glu"
+
+let package = make_package {
+    meta = b.meta {
+        pname = "cast-factory-override-fixture",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://fixtures.invalid/cast-factory-override-fixture",
+        license = ["MPL-2.0"],
+    },
+    builder = cmake.builder {
+        flags = ["-DCAST_FACTORY_VARIANT=factory-default"],
+        run_tests = b.boolean.true,
+    },
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-factory-override-fixture-1.0.0.tar",
+            hash = "cc10c246cfaeeb644e2a458794262fd68ade2c0d76c0874a932a787ad088e001",
+            rename = b.optional.set "cast-factory-override-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-factory-override-fixture",
+        },
+    ],
+    architectures = [],
+}
+
+// This replacement is deliberately observable in the compiled payload. The
+// source tree rejects the factory default at configure time, so planning alone
+// cannot make this execution fixture pass.
+let patch = b.package_patch {
+    builder = b.patch.set (cmake.builder {
+        flags = ["-DCAST_FACTORY_VARIANT=stone-override"],
+        run_tests = b.boolean.true,
+    }),
+    architectures = b.patch.array.replace ["x86_64"],
+    .. b.defaults.package_patch
+}
+
+b.override_attrs patch package

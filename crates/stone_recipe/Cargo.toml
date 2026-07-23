@@ -10,12 +10,13 @@ rust-version.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+glob.workspace = true
 gluon.workspace = true
 gluon_codegen.workspace = true
 gluon_config.path = "../gluon_config"
-nom.workspace = true
-snafu.workspace = true
-strum.workspace = true
+regex.workspace = true
+sha2.workspace = true
+stone.path = "../stone"
 thiserror.workspace = true
 url.workspace = true
 

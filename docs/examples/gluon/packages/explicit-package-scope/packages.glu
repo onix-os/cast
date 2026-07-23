@@ -1,0 +1,54 @@
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let client = \scope ->
+    let base = b.mk_package (b.meta {
+        pname = "scoped-client",
+        version = "1.2.0",
+        release = 1,
+        homepage = "https://example.invalid/scoped-client",
+        license = ["BSD-2-Clause"],
+    })
+    {
+        builder = cmake.builder {
+            flags = ["-DBUILD_SERVER=OFF"],
+            .. cmake.defaults
+        },
+        build_inputs = [scope.compression, scope.crypto],
+        sources = [
+            b.source.archive
+                "https://example.invalid/scoped-client-1.2.0.tar.xz"
+                "5555555555555555555555555555555555555555555555555555555555555555",
+        ],
+        architectures = ["native"],
+        .. base
+    }
+
+let server = \scope ->
+    let base = b.mk_package (b.meta {
+        pname = "scoped-server",
+        version = "1.2.0",
+        release = 1,
+        homepage = "https://example.invalid/scoped-server",
+        license = ["BSD-2-Clause"],
+    })
+    {
+        builder = cmake.builder {
+            flags = ["-DBUILD_SERVER=ON"],
+            .. cmake.defaults
+        },
+        native_build_inputs = [scope.documentation],
+        build_inputs = [scope.database],
+        sources = [
+            b.source.archive
+                "https://example.invalid/scoped-server-1.2.0.tar.xz"
+                "6666666666666666666666666666666666666666666666666666666666666666",
+        ],
+        architectures = ["native"],
+        .. base
+    }
+
+{
+    client,
+    server,
+}

@@ -1,0 +1,23 @@
+
+let b = import! cast.package.v3
+
+// This policy is ordinary typed Gluon data. The package factory uses it for
+// the build while the output factory uses the same value for the published
+// package graph, so those two declarations cannot silently choose different
+// feature sets.
+{
+    edge_tools = {
+        architectures = ["x86_64"],
+        cmake_flags = [
+            "-DBUILD_COMMAND_LINE_TOOLS=ON",
+            "-DBUILD_DOCUMENTATION=OFF",
+        ],
+        documentation = b.boolean.false,
+        tools = b.boolean.true,
+        tools_runtime_inputs = [b.dep.package "ca-certificates"],
+        tuning = [
+            b.named "harden" b.tuning.enable,
+            b.named "optimize" (b.tuning.config "size"),
+        ],
+    },
+}

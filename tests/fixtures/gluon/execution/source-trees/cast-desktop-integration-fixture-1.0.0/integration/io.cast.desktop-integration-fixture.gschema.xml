@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.cast.desktop-integration-fixture" path="/io/cast/desktop-integration-fixture/">
+    <key name="show-open-confirmation" type="b">
+      <default>true</default>
+      <summary>Show an open confirmation</summary>
+      <description>Whether the fixture helper confirms that a document was opened.</description>
+    </key>
+  </schema>
+</schemalist>

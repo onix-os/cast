@@ -1,0 +1,19 @@
+[Unit]
+Description=Cast system integration assets fixture
+Documentation=https://fixtures.invalid/cast-system-integration-assets-fixture
+After=systemd-sysusers.service
+Wants=systemd-tmpfiles-setup.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/cast-system-integration-fixture
+User=cast-system-integration
+Group=cast-system-integration
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

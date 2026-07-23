@@ -1,0 +1,13 @@
+
+[Unit]
+Description=Cast daemon execution fixture @PROJECT_VERSION@
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=@CMAKE_INSTALL_FULL_SBINDIR@/cast-daemon-fixture --check-config @CMAKE_INSTALL_FULL_DATADIR@/defaults/cast-daemon-fixture/cast-daemon.conf
+DynamicUser=yes
+StateDirectory=cast-daemon-fixture
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,53 @@
+let arrays = import! std.array.prim
+let b = import! cast.package.v3
+
+type Storage =
+    | Sqlite
+    | PostgreSql
+
+type Telemetry =
+    | TelemetryOff
+    | OpenTelemetry
+
+let select_storage = \storage ->
+    match storage with
+    | Sqlite -> {
+        flag = "-DSTORAGE=sqlite",
+        build_inputs = [b.dep.pkgconfig "sqlite3"],
+        runtime_inputs = [b.dep.soname "libsqlite3.so.0"],
+    }
+    | PostgreSql -> {
+        flag = "-DSTORAGE=postgresql",
+        build_inputs = [b.dep.pkgconfig "libpq"],
+        runtime_inputs = [b.dep.soname "libpq.so.5"],
+    }
+
+let select_telemetry = \telemetry ->
+    match telemetry with
+    | TelemetryOff -> {
+        flag = "-DTELEMETRY=off",
+        build_inputs = b.boolean.when b.boolean.false [b.dep.pkgconfig "opentelemetry-c"],
+        runtime_inputs = b.boolean.when b.boolean.false [b.dep.soname "libopentelemetry.so.1"],
+    }
+    | OpenTelemetry -> {
+        flag = "-DTELEMETRY=opentelemetry",
+        build_inputs = [b.dep.pkgconfig "opentelemetry-c"],
+        runtime_inputs = [b.dep.soname "libopentelemetry.so.1"],
+    }
+
+let select = \storage telemetry ->
+    let selected_storage = select_storage storage
+    let selected_telemetry = select_telemetry telemetry
+    {
+        flags = [selected_storage.flag, selected_telemetry.flag],
+        build_inputs = arrays.append selected_storage.build_inputs selected_telemetry.build_inputs,
+        runtime_inputs = arrays.append selected_storage.runtime_inputs selected_telemetry.runtime_inputs,
+    }
+
+{
+    sqlite = Sqlite,
+    postgresql = PostgreSql,
+    telemetry_off = TelemetryOff,
+    opentelemetry = OpenTelemetry,
+    select,
+}

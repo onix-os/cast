@@ -1,0 +1,8 @@
+// Template values are explicit package inputs. Updating any value changes the
+// evaluated PackageSpec and therefore the frozen derivation identity.
+{
+    service_name = "session-index",
+    socket_path = "/run/session-index/control.sock",
+    worker_count = "4",
+    access_mode = "read-only",
+}

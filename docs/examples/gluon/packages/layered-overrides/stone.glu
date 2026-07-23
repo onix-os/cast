@@ -1,0 +1,5 @@
+let base = import! "./package.glu"
+let layers = import! "./layers.glu"
+
+let secured = layers.security base
+layers.distribution secured

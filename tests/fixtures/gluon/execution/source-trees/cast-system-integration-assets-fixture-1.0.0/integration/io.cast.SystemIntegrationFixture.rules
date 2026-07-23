@@ -1,0 +1,8 @@
+polkit.addRule(function(action, subject) {
+    if (action.id == "io.cast.SystemIntegrationFixture.manage" &&
+        subject.active == true &&
+        subject.local == true &&
+        subject.isInGroup("cast-system-integration")) {
+        return polkit.Result.AUTH_ADMIN;
+    }
+});

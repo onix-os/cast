@@ -1,0 +1,28 @@
+
+let b = import! cast.package.v3
+let make = import! "./package_v3.glu"
+let packages = import! "./package_set.glu"
+
+// This record update is the package-argument override operation. It changes
+// the TLS provider before the package factory constructs its result.
+let package = make {
+    tls = b.dep.pkgconfig "libressl",
+    .. packages
+}
+
+let development_output = {
+    summary = b.optional.set "Development files",
+    runtime_inputs = [b.dep.output (b.package_ref "factory-hello") "out"],
+    paths = [b.path.any "/usr/include"],
+    .. b.output "dev"
+}
+
+// Typed attribute overrides happen after the factory returns. Keep and append
+// are distinct from replacing an array with an explicitly empty one.
+let patch = b.package_patch {
+    outputs = b.patch.array.append [development_output],
+    architectures = b.patch.array.replace ["x86_64"],
+    .. b.defaults.package_patch
+}
+
+b.override_attrs patch package

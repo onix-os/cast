@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: 2026 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "cast"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+autobins = false
+
+[[bin]]
+name = "cast"
+path = "src/main.rs"
+
+[dependencies]
+container = { path = "../../crates/container" }
+forge = { path = "../../crates/forge" }
+mason = { path = "../../crates/mason" }
+tools_buildinfo = { path = "../../crates/tools_buildinfo" }
+tracing_common = { path = "../../crates/tracing_common" }
+tui = { path = "../../crates/tui" }
+
+clap.workspace = true
+clap_complete.workspace = true
+clap_mangen.workspace = true
+fs-err.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+libc.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

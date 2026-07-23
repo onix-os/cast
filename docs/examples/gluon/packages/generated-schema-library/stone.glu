@@ -1,0 +1,109 @@
+
+let b = import! cast.package.v3
+
+let pname = "wire-schema-runtime"
+let schema_tools = b.output_ref (b.package_ref "wire-schema") "compiler"
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+    ],
+    build = b.phase [
+        // The code generator is tied to one named output rather than found
+        // through an ambient PATH or an arbitrary provider.
+        b.step.run
+            (b.program.output schema_tools "/usr/libexec/wire-schema/wire-codegen")
+            [
+                "--language",
+                "c",
+                "--input",
+                "protocol/wire.schema",
+                "--header",
+                "build/wire-schema.h",
+                "--source",
+                "build/wire-schema.c",
+            ],
+        b.step.run
+            (b.program.binary "cc")
+            ["-fPIC", "-O2", "-c", "build/wire-schema.c", "-o", "build/wire-schema.o"],
+        b.step.run
+            (b.program.binary "cc")
+            [
+                "-shared",
+                "-Wl,-soname,libwire-schema.so.2",
+                "build/wire-schema.o",
+                "-o",
+                "build/libwire-schema.so.2.0.0",
+            ],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [
+                b.program.binary "install",
+                b.program.binary "ln",
+            ],
+            script = r#"
+install -Dm644 protocol/wire.schema "${CAST_INSTALL_ROOT}${CAST_DATADIR}/wire-schema/wire.schema"
+install -Dm755 build/libwire-schema.so.2.0.0 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so.2.0.0"
+ln -s libwire-schema.so.2.0.0 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so.2"
+ln -s libwire-schema.so.2 "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/libwire-schema.so"
+install -Dm644 build/wire-schema.h "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/wire-schema/wire-schema.h"
+"#,
+        },
+    ],
+    check = b.phase [
+        b.step.run (b.program.binary "test") ["-s", "build/wire-schema.c"],
+        b.step.run (b.program.binary "test") ["-s", "build/wire-schema.h"],
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Wire protocol schema data",
+    paths = [b.path.any "/usr/share/wire-schema"],
+    .. b.output "out"
+}
+
+let libraries = b.output_with {
+    summary = b.optional.set "Generated wire schema runtime library",
+    paths = [b.path.any "/usr/lib/libwire-schema.so.*"],
+    .. b.output "libs"
+}
+
+let development = b.output_with {
+    summary = b.optional.set "Generated wire schema C interface",
+    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
+    paths = [
+        b.path.any "/usr/include/wire-schema",
+        b.path.symlink "/usr/lib/libwire-schema.so",
+    ],
+    .. b.output "devel"
+}
+
+let base = b.mk_package (b.meta {
+    pname,
+    version = "2.0.0",
+    release = 1,
+    homepage = "https://example.invalid/wire-schema",
+    license = ["Apache-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.output (b.package_ref "wire-schema") "compiler",
+        b.dep.binary "cc",
+        b.dep.binary "install",
+        b.dep.binary "ln",
+        b.dep.binary "test",
+    ],
+    outputs = [root, libraries, development],
+    sources = [
+        b.source.archive
+            "https://example.invalid/wire-schema-runtime-2.0.0.tar.xz"
+            "789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456",
+    ],
+    architectures = ["x86_64", "aarch64"],
+    .. base
+}

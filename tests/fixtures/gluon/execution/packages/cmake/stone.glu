@@ -1,0 +1,27 @@
+
+let b = import! cast.package.v3
+let cmake = import! cast.builders.cmake.v2
+
+let base = b.mk_package (b.meta {
+    pname = "cast-cmake-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-cmake-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = cmake.default,
+    build_inputs = [b.dep.cmake "zlib"],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-cmake-fixture-1.0.0.tar",
+            hash = "84cfe6d4d77f84dcd0b111c00b20ae840ec623443d7577a6659238c770fcb585",
+            rename = b.optional.set "cast-cmake-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-cmake-fixture",
+        },
+    ],
+    .. base
+}

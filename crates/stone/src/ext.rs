@@ -1,6 +1,5 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
-// SPDX-License-Identifier: MPL-2.0
-use std::io::{Read, Result, Write};
+use std::io::{self, Read, Result, Write};
 
 pub trait ReadExt: Read {
     fn read_u8(&mut self) -> Result<u8> {
@@ -36,15 +35,20 @@ pub trait ReadExt: Read {
     }
 
     fn read_vec(&mut self, length: usize) -> Result<Vec<u8>> {
-        let mut bytes = vec![0u8; length];
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(length)
+            .map_err(|error| io::Error::other(format!("failed to allocate {length} bytes: {error}")))?;
+        bytes.resize(length, 0);
         self.read_exact(&mut bytes)?;
         Ok(bytes)
     }
 
     fn read_string(&mut self, length: u64) -> Result<String> {
-        let mut string = String::with_capacity(length as usize);
-        self.take(length).read_to_string(&mut string)?;
-        Ok(string)
+        let length = usize::try_from(length)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "string length does not fit in memory"))?;
+        let bytes = self.read_vec(length)?;
+        String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 }
 

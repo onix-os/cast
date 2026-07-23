@@ -1,0 +1,97 @@
+//! Zero-effect exclusions for phases outside the exact NewState suffix.
+
+use std::os::unix::fs::PermissionsExt as _;
+
+use crate::{
+    client::active_state_snapshot::ActiveStateReservation,
+    transition_journal::{Phase, RollbackActionOutcome},
+};
+
+use super::{
+    super::{Dispatch, candidate_test_support::CandidateSource, dispatch, test_fixture::OperationKind},
+    support::{
+        CandidateOutcome, Epoch, FreshOutcome, assert_pending_phase, build_fresh_invalidation, build_non_new_state,
+        effect_counts, enter_invalidation, invalidation_target_path, persist_fresh_invalidated,
+        persist_rollback_complete, reset_namespace_effect_counts,
+    },
+};
+
+#[test]
+fn startup_new_state_suffix_leaves_archived_candidate_preservation_zero_effect() {
+    let kind = OperationKind::Archived;
+    let fixture = build_non_new_state(kind);
+    let journal_before = fixture.fixture.canonical_bytes();
+    let database_before = fixture.fixture.database_snapshot();
+    let namespace_before = fixture.fixture.namespace_snapshot();
+    reset_namespace_effect_counts();
+    let removal_before = effect_counts().fresh_removal;
+    let journal = fixture.open_journal();
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    let in_flight = fixture.fixture.database.audit_in_flight_transition().unwrap();
+
+    let result = dispatch(
+        &fixture.fixture.installation,
+        &fixture.fixture.database,
+        &reservation,
+        journal,
+        fixture.candidate_intent.clone(),
+        in_flight,
+    )
+    .unwrap();
+
+    let Dispatch::Unhandled { journal, record } = result else {
+        panic!("NewState child claimed an ActivateArchived candidate checkpoint")
+    };
+    assert_eq!(record, fixture.candidate_intent);
+    drop(journal);
+    assert_eq!(fixture.fixture.canonical_bytes(), journal_before);
+    assert_eq!(fixture.fixture.database_snapshot(), database_before);
+    assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
+    assert_eq!(effect_counts().create, 0);
+    assert_eq!(effect_counts().normalize, 0);
+    assert_eq!(effect_counts().candidate_move, 0);
+    assert_eq!(effect_counts().fresh_removal, removal_before);
+}
+
+#[test]
+fn startup_new_state_suffix_defers_inexact_rollback_complete_with_zero_suffix_effects() {
+    for epoch in Epoch::ALL {
+        for source in CandidateSource::ALL {
+            for candidate_outcome in CandidateOutcome::ALL {
+                for fresh_outcome in FreshOutcome::ALL {
+                    let fixture = build_fresh_invalidation(
+                        epoch,
+                        source,
+                        RollbackActionOutcome::AlreadySatisfied,
+                        candidate_outcome,
+                        FreshOutcome::AlreadySatisfied,
+                    );
+                    let invalidated = persist_fresh_invalidated(&fixture, fresh_outcome);
+                    let complete = persist_rollback_complete(&fixture, &invalidated);
+                    std::fs::set_permissions(
+                        invalidation_target_path(&fixture, &complete),
+                        std::fs::Permissions::from_mode(0o500),
+                    )
+                    .unwrap();
+                    let journal_before = fixture.canonical_bytes();
+                    let database_before = fixture.fixture.fixture.database_snapshot();
+                    let namespace_before = fixture.namespace_snapshot();
+                    reset_namespace_effect_counts();
+                    let removal_before = effect_counts().fresh_removal;
+
+                    let error = enter_invalidation(&fixture);
+
+                    assert_pending_phase(&error, Phase::RollbackComplete);
+                    assert_eq!(fixture.canonical_record(), complete);
+                    assert_eq!(fixture.canonical_bytes(), journal_before);
+                    assert_eq!(fixture.fixture.fixture.database_snapshot(), database_before);
+                    assert_eq!(fixture.namespace_snapshot(), namespace_before);
+                    assert_eq!(effect_counts().create, 0);
+                    assert_eq!(effect_counts().normalize, 0);
+                    assert_eq!(effect_counts().candidate_move, 0);
+                    assert_eq!(effect_counts().fresh_removal, removal_before);
+                }
+            }
+        }
+    }
+}

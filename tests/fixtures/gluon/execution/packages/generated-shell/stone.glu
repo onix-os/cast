@@ -1,0 +1,80 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    build = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [],
+            script = r#"
+printf '%s\n' \
+    '#!/usr/bin/bash' \
+    'set -euo pipefail' \
+    '' \
+    'if [[ "$#" -eq 0 ]]; then' \
+    "    printf '%s\\n' 'cast-generated-shell'" \
+    'elif [[ "$#" -eq 1 && "$1" == --self-test ]]; then' \
+    "    printf '%s\\n' 'cast-generated-shell: self-test passed'" \
+    'else' \
+    "    printf '%s\\n' 'usage: cast-generated-shell [--self-test]' >&2" \
+    '    exit 64' \
+    'fi' \
+    > cast-generated-shell
+"#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [],
+            script = r#"
+actual="$(source ./cast-generated-shell --self-test)"
+if [[ "${actual}" != 'cast-generated-shell: self-test passed' ]]; then
+    printf '%s\n' 'generated shell self-test output differed' >&2
+    exit 1
+fi
+
+set +e
+(source ./cast-generated-shell --unexpected >/dev/null 2>&1)
+status="$?"
+set -e
+if [[ "${status}" -ne 64 ]]; then
+    printf 'unexpected-argument status was %s, expected 64\n' "${status}" >&2
+    exit 1
+fi
+"#,
+        },
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm755 cast-generated-shell "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-generated-shell""#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Gluon-authored shell application fixture",
+    runtime_inputs = [b.dep.binary "bash"],
+    paths = [b.path.exe "/usr/bin/cast-generated-shell"],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-generated-shell-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-generated-shell-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "bash",
+        b.dep.binary "install",
+    ],
+    outputs = [root],
+    architectures = ["x86_64"],
+    .. base
+}

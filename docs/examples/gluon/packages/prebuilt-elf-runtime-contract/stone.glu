@@ -1,0 +1,5 @@
+let artifact = import! "./artifact.glu"
+let package = import! "./package.glu"
+
+// The root makes one target-specific artifact choice explicitly.
+package artifact

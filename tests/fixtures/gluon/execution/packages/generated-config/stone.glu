@@ -1,0 +1,44 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "bash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+printf '%s\n' \
+    'format = 1' \
+    'profile = "stone-native"' \
+    'source = "gluon"' \
+    > generated-config.conf
+install -Dm644 generated-config.conf \
+    "${CAST_INSTALL_ROOT}${CAST_DATADIR}/cast/generated-config.conf"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-generated-config-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-generated-config-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "bash",
+        b.dep.binary "install",
+    ],
+    outputs = [
+        b.output_with {
+            summary = b.optional.set "Stone-native generated configuration fixture",
+            paths = [b.path.any "/usr/share/cast/generated-config.conf"],
+            .. b.output "out"
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

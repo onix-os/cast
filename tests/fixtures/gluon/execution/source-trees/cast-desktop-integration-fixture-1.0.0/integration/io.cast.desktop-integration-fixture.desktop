@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cast Desktop Integration Fixture
+Comment=Open Cast desktop fixture documents
+Exec=/usr/libexec/cast-desktop-integration-fixture %f
+TryExec=/usr/libexec/cast-desktop-integration-fixture
+Icon=io.cast.desktop-integration-fixture
+Terminal=false
+Categories=Utility;
+MimeType=application/x-cast-desktop-integration-fixture;
+StartupNotify=false

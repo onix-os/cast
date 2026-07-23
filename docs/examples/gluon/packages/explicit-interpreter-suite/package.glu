@@ -1,0 +1,100 @@
+let b = import! cast.package.v3
+let strings = import! std.string.prim
+
+let shebang_substitution = \interpreter ->
+    strings.append
+        "s|^#!"
+        (strings.append
+            interpreter.token
+            (strings.append "$|#!" (strings.append interpreter.shebang "|")))
+
+\interpreters ->
+    let shell_script = "cast-interpreter-shell"
+    let python_script = "cast-interpreter-python"
+
+    let phases = b.scripts {
+        setup = b.phase [
+            // These complete source-less payloads start with inert authored
+            // tokens. No host file, recipe-directory input, interpreter
+            // discovery, or recursive shebang scan participates.
+            b.step.shell_with {
+                interpreter = interpreters.bash.program,
+                declared_programs = [],
+                script = r#"printf '%s\n' \
+    '#!@BASH@' \
+    'set -eu' \
+    'test "${1-}" = "--self-test"' \
+    'printf "%s\n" "explicit interpreter suite: bash"' \
+    > cast-interpreter-shell
+printf '%s\n' \
+    '#!@PYTHON@' \
+    'import sys' \
+    'if sys.argv[1:] != ["--self-test"]:' \
+    '    raise SystemExit(2)' \
+    'print("explicit interpreter suite: python")' \
+    > cast-interpreter-python"#,
+            },
+            b.step.run
+                (b.program.binary "sed")
+                ["-i", "-e", shebang_substitution interpreters.bash, shell_script],
+            b.step.run
+                (b.program.binary "sed")
+                ["-i", "-e", shebang_substitution interpreters.python, python_script],
+        ],
+        check = b.phase [
+            b.step.run
+                (b.program.binary "grep")
+                ["-Fqx", strings.append "#!" interpreters.bash.shebang, shell_script],
+            b.step.run
+                (b.program.binary "grep")
+                ["-Fqx", strings.append "#!" interpreters.python.shebang, python_script],
+            // A source-tree script is never passed to RunBuilt. Each check
+            // invokes it through the exact typed interpreter capability.
+            b.step.run interpreters.bash.program [shell_script, "--self-test"],
+            b.step.run interpreters.python.program [python_script, "--self-test"],
+        ],
+        install = b.phase [
+            b.step.shell_with {
+                interpreter = interpreters.bash.program,
+                declared_programs = [b.program.binary "install"],
+                script = r#"install -Dm755 cast-interpreter-shell "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-shell"
+install -Dm755 cast-interpreter-python "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-python""#,
+            },
+        ],
+        .. b.defaults.scripts
+    }
+
+    let root = b.output_with {
+        summary = b.optional.set "Explicitly bound Bash and Python commands",
+        description = b.optional.set "Two source-less scripts whose exact interpreters are authored, checked, and retained as runtime relations.",
+        runtime_inputs = [
+            interpreters.bash.runtime,
+            interpreters.python.runtime,
+        ],
+        paths = [
+            b.path.exe "/usr/bin/cast-interpreter-shell",
+            b.path.exe "/usr/bin/cast-interpreter-python",
+        ],
+        .. b.output "out"
+    }
+
+    let base = b.mk_package (b.meta {
+        pname = "explicit-interpreter-suite",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/explicit-interpreter-suite",
+        license = ["MPL-2.0"],
+    })
+
+    {
+        builder = b.builder.custom phases [
+            interpreters.bash.runtime,
+            interpreters.python.runtime,
+            b.dep.binary "sed",
+            b.dep.binary "grep",
+            b.dep.binary "install",
+        ],
+        outputs = [root],
+        architectures = ["native"],
+        .. base
+    }

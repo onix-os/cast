@@ -1,0 +1,125 @@
+let b = import! cast.package.v3
+
+let pname = "cast-plugin-output-fixture"
+
+let phases = b.scripts {
+    setup = b.phase [
+        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+    ],
+    build = b.phase [
+        b.step.run
+            (b.program.binary "cc")
+            [
+                "-std=c11",
+                "-O2",
+                "-g",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-fstack-protector-strong",
+                "-D_FORTIFY_SOURCE=3",
+                "-fPIC",
+                "-shared",
+                "plugin.c",
+                "-Wl,-soname,cast-plugin-output.so",
+                "-Wl,--build-id=sha1",
+                "-Wl,-z,relro,-z,now",
+                "-Wl,-z,noexecstack",
+                "-Wl,-z,separate-code",
+                "-Wl,--no-undefined",
+                "-o",
+                "build/cast-plugin-output.so",
+            ],
+        b.step.run
+            (b.program.binary "cc")
+            [
+                "-std=c11",
+                "-O2",
+                "-g",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-fstack-protector-strong",
+                "-D_FORTIFY_SOURCE=3",
+                "-fPIE",
+                "host.c",
+                "-Wl,-pie",
+                "-Wl,--build-id=sha1",
+                "-Wl,-z,relro,-z,now",
+                "-Wl,-z,noexecstack",
+                "-Wl,-z,separate-code",
+                "-Wl,--as-needed",
+                "-ldl",
+                "-o",
+                "build/cast-plugin-host",
+            ],
+    ],
+    check = b.phase [
+        b.step.run_built
+            (b.program.built "build/cast-plugin-host")
+            ["--plugin", "build/cast-plugin-output.so"],
+    ],
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"
+install -Dm755 build/cast-plugin-host \
+    "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-plugin-host"
+install -Dm644 build/cast-plugin-output.so \
+    "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/cast/plugins/cast-plugin-output.so"
+"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Explicit runtime-loaded plugin host",
+    runtime_inputs = [b.dep.output (b.package_ref pname) "plugins"],
+    paths = [b.path.exe "/usr/bin/cast-plugin-host"],
+    .. b.output "out"
+}
+
+let plugins = b.output_with {
+    summary = b.optional.set "Explicit runtime-loaded plugin",
+    paths = [b.path.any "/usr/lib/cast/plugins/cast-plugin-output.so"],
+    .. b.output "plugins"
+}
+
+let debugging = b.output_with {
+    include_in_manifest = b.boolean.false,
+    summary = b.optional.set "Plugin host and module debugging symbols",
+    paths = [b.path.any "/usr/lib/debug"],
+    .. b.output "dbginfo"
+}
+
+let base = b.mk_package (b.meta {
+    pname,
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-plugin-output-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "mkdir",
+        b.dep.binary "cc",
+        b.dep.binary "dash",
+        b.dep.binary "install",
+    ],
+    outputs = [root, plugins, debugging],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-plugin-output-fixture-1.0.0.tar",
+            hash = "467879af548882eb7c2a2197d475b54ec8cc5106c82631b7bd8204b13d8c5319",
+            rename = b.optional.set "cast-plugin-output-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-plugin-output-fixture",
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}

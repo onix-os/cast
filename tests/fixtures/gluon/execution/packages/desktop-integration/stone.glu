@@ -1,0 +1,94 @@
+let b = import! cast.package.v3
+
+let phases = b.scripts {
+    install = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [b.program.binary "install"],
+            script = r#"install -Dm755 integration/cast-desktop-integration-fixture "${CAST_INSTALL_ROOT}/usr/libexec/cast-desktop-integration-fixture"
+install -Dm644 integration/io.cast.desktop-integration-fixture.desktop "${CAST_INSTALL_ROOT}${CAST_DATADIR}/applications/io.cast.desktop-integration-fixture.desktop"
+install -Dm644 integration/io.cast.desktop-integration-fixture.metainfo.xml "${CAST_INSTALL_ROOT}${CAST_DATADIR}/metainfo/io.cast.desktop-integration-fixture.metainfo.xml"
+install -Dm644 integration/io.cast.desktop-integration-fixture.gschema.xml "${CAST_INSTALL_ROOT}${CAST_DATADIR}/glib-2.0/schemas/io.cast.desktop-integration-fixture.gschema.xml"
+install -Dm644 integration/application-x-cast-desktop-integration-fixture.xml "${CAST_INSTALL_ROOT}${CAST_DATADIR}/mime/packages/application-x-cast-desktop-integration-fixture.xml"
+install -Dm644 integration/io.cast.desktop-integration-fixture.svg "${CAST_INSTALL_ROOT}${CAST_DATADIR}/icons/hicolor/scalable/apps/io.cast.desktop-integration-fixture.svg"
+install -Dm644 COPYING "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-desktop-integration-fixture/COPYING""#,
+        },
+    ],
+    check = b.phase [
+        b.step.shell_with {
+            interpreter = b.program.binary "dash",
+            declared_programs = [
+                b.program.binary "desktop-file-validate",
+                b.program.binary "glib-compile-schemas",
+                b.program.binary "appstreamcli",
+                b.program.binary "update-mime-database",
+                b.program.binary "xmllint",
+                b.program.binary "install",
+            ],
+            script = r#""${CAST_INSTALL_ROOT}/usr/libexec/cast-desktop-integration-fixture" --self-test
+desktop-file-validate "${CAST_INSTALL_ROOT}/usr/share/applications/io.cast.desktop-integration-fixture.desktop"
+glib-compile-schemas --strict --dry-run "${CAST_INSTALL_ROOT}/usr/share/glib-2.0/schemas"
+appstreamcli validate --no-net --strict --pedantic "${CAST_INSTALL_ROOT}/usr/share/metainfo/io.cast.desktop-integration-fixture.metainfo.xml"
+xmllint --nonet --noout "${CAST_INSTALL_ROOT}/usr/share/mime/packages/application-x-cast-desktop-integration-fixture.xml" "${CAST_INSTALL_ROOT}/usr/share/icons/hicolor/scalable/apps/io.cast.desktop-integration-fixture.svg"
+install -Dm644 "${CAST_INSTALL_ROOT}/usr/share/mime/packages/application-x-cast-desktop-integration-fixture.xml" build/mime-validation/packages/application-x-cast-desktop-integration-fixture.xml
+XDG_DATA_HOME="$PWD/build" XDG_DATA_DIRS="$PWD/build" update-mime-database build/mime-validation"#,
+        },
+    ],
+    .. b.defaults.scripts
+}
+
+let root = b.output_with {
+    summary = b.optional.set "Declarative desktop integration assets fixture",
+    description = b.optional.set "A staged helper with validated desktop entry, AppStream, GSettings, MIME, and scalable icon declarations.",
+    runtime_inputs = [
+        b.dep.binary "dash",
+        b.dep.package "glib2",
+        b.dep.package "shared-mime-info",
+        b.dep.package "hicolor-icon-theme",
+    ],
+    paths = [
+        b.path.exe "/usr/libexec/cast-desktop-integration-fixture",
+        b.path.any "/usr/share/applications/io.cast.desktop-integration-fixture.desktop",
+        b.path.any "/usr/share/metainfo/io.cast.desktop-integration-fixture.metainfo.xml",
+        b.path.any "/usr/share/glib-2.0/schemas/io.cast.desktop-integration-fixture.gschema.xml",
+        b.path.any "/usr/share/mime/packages/application-x-cast-desktop-integration-fixture.xml",
+        b.path.any "/usr/share/icons/hicolor/scalable/apps/io.cast.desktop-integration-fixture.svg",
+        b.path.any "/usr/share/licenses/cast-desktop-integration-fixture/COPYING",
+    ],
+    .. b.output "out"
+}
+
+let base = b.mk_package (b.meta {
+    pname = "cast-desktop-integration-fixture",
+    version = "1.0.0",
+    release = 1,
+    homepage = "https://fixtures.invalid/cast-desktop-integration-fixture",
+    license = ["MPL-2.0"],
+})
+
+{
+    builder = b.builder.custom phases [
+        b.dep.binary "dash",
+        b.dep.binary "install",
+    ],
+    check_inputs = [
+        b.dep.binary "desktop-file-validate",
+        b.dep.binary "glib-compile-schemas",
+        b.dep.binary "appstreamcli",
+        b.dep.binary "update-mime-database",
+        b.dep.binary "xmllint",
+    ],
+    outputs = [root],
+    sources = [
+        b.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-desktop-integration-fixture-1.0.0.tar",
+            hash = "0f39867b15a8ae8f5386fdc768fd83e2874ac41f6e5c8c8711b5ce9a67887169",
+            rename = b.optional.set "cast-desktop-integration-fixture.tar",
+            strip_dirs = b.optional.set 1,
+            unpack = b.boolean.true,
+            unpack_dir = b.optional.set "cast-desktop-integration-fixture",
+        },
+    ],
+    architectures = ["x86_64"],
+    .. base
+}
