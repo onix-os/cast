@@ -29,6 +29,22 @@ fn missing_machine_local_intent_is_a_hard_error_without_fallback() {
 }
 
 #[test]
+fn only_the_registered_gluon_extension_occupies_the_fixed_slot() {
+    let fixture = Fixture::new();
+    let unknown = fixture.root.join("etc/cast/boot-topology.lua");
+    fs::write(&unknown, authored_alias(ESP_PARTUUID)).unwrap();
+    fs::set_permissions(&unknown, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(matches!(
+        fixture.prepare(),
+        Err(ActiveReblitBootTopologyIntentError::Missing { path }) if path == fixture.source_path()
+    ));
+
+    fixture.write_alias();
+    fixture.prepare().unwrap();
+}
+
+#[test]
 fn symlink_fifo_socket_and_hardlink_sources_are_rejected_without_blocking() {
     let symlink_fixture = Fixture::new();
     let target = symlink_fixture.root.join("topology-target");

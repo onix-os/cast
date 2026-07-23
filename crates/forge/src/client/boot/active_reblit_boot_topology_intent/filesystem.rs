@@ -1,13 +1,22 @@
 //! Descriptor-relative retention for the fixed machine-local topology source.
 
 use std::{
-    ffi::CStr,
+    ffi::{CStr, CString},
     os::{
         fd::AsRawFd as _,
-        unix::fs::{MetadataExt as _, PermissionsExt as _},
+        unix::{
+            ffi::OsStrExt as _,
+            fs::{MetadataExt as _, PermissionsExt as _},
+        },
     },
     path::{Path, PathBuf},
 };
+
+use config::declaration::{
+    DiscoveredRootDeclaration, RegisteredLanguages,
+    RootDeclarationDiscoveryError, RootDeclarationSlot,
+};
+use declarative_config::LanguageSpec;
 
 use crate::{
     Installation,
@@ -20,13 +29,12 @@ use crate::{
 use super::{ActiveReblitBootTopologyIntentError, BootTopologyIntentBudget, boot_topology_intent_path};
 
 const DIRECTORY_COMPONENTS: [(&CStr, &str); 2] = [(c"etc", "etc"), (c"cast", "etc/cast")];
-const SOURCE_NAME: &CStr = c"boot-topology.glu";
 
 pub(super) struct RetainedBootTopologySource {
     components: Vec<RetainedDirectoryComponent>,
     source: std::fs::File,
     source_witness: SourceWitness,
-    path: PathBuf,
+    declaration: DiscoveredRootDeclaration,
 }
 
 struct RetainedDirectoryComponent {
@@ -68,12 +76,21 @@ struct SourceWitness {
 
 impl RetainedBootTopologySource {
     pub(super) fn path(&self) -> &Path {
-        &self.path
+        self.declaration.path()
+    }
+
+    pub(super) fn language(&self) -> &LanguageSpec {
+        self.declaration.language()
+    }
+
+    pub(super) fn logical_name(&self) -> &str {
+        self.declaration.logical_name()
     }
 }
 
 pub(super) fn capture_source(
     installation: &Installation,
+    languages: &RegisteredLanguages,
     budget: &mut BootTopologyIntentBudget,
 ) -> Result<(RetainedBootTopologySource, Box<[u8]>), ActiveReblitBootTopologyIntentError> {
     let root_path = installation.root.clone();
@@ -120,11 +137,33 @@ pub(super) fn capture_source(
         .last()
         .expect("boot-topology component chain always retains etc/cast")
         .directory;
-    let source = open_source(parent, &path, budget)?;
-    let source_witness = source_witness(&source, &path, budget)?;
-    require_source_policy(&source, source_witness, &path, budget)?;
-    let bytes = read_source_bytes(&source, source_witness, &path, budget)?;
-    require_named_source(parent, source_witness, &path, budget)?;
+    let declaration = discover_source(parent, &path, languages, budget)?;
+    let source = open_source(
+        parent,
+        declaration.relative_path(),
+        declaration.path(),
+        budget,
+    )?;
+    let source_witness = source_witness(&source, declaration.path(), budget)?;
+    require_source_policy(
+        &source,
+        source_witness,
+        declaration.path(),
+        budget,
+    )?;
+    let bytes = read_source_bytes(
+        &source,
+        source_witness,
+        declaration.path(),
+        budget,
+    )?;
+    require_named_source(
+        parent,
+        &declaration,
+        languages,
+        source_witness,
+        budget,
+    )?;
     require_component_chain(&components, installation, budget)?;
 
     Ok((
@@ -132,7 +171,7 @@ pub(super) fn capture_source(
             components,
             source,
             source_witness,
-            path,
+            declaration,
         },
         bytes,
     ))
@@ -141,24 +180,48 @@ pub(super) fn capture_source(
 pub(super) fn revalidate_source(
     installation: &Installation,
     retained: &RetainedBootTopologySource,
+    languages: &RegisteredLanguages,
     budget: &mut BootTopologyIntentBudget,
 ) -> Result<Box<[u8]>, ActiveReblitBootTopologyIntentError> {
     require_component_chain(&retained.components, installation, budget)?;
-    require_source_policy(&retained.source, retained.source_witness, &retained.path, budget)?;
-    require_source_witness(&retained.source, retained.source_witness, &retained.path, budget)?;
-    let retained_bytes = read_source_bytes(&retained.source, retained.source_witness, &retained.path, budget)?;
+    require_source_policy(
+        &retained.source,
+        retained.source_witness,
+        retained.path(),
+        budget,
+    )?;
+    require_source_witness(
+        &retained.source,
+        retained.source_witness,
+        retained.path(),
+        budget,
+    )?;
+    let retained_bytes = read_source_bytes(
+        &retained.source,
+        retained.source_witness,
+        retained.path(),
+        budget,
+    )?;
     let parent = &retained
         .components
         .last()
         .expect("retained boot-topology chain contains etc/cast")
         .directory;
-    require_named_source(parent, retained.source_witness, &retained.path, budget)?;
+    require_named_source(
+        parent,
+        &retained.declaration,
+        languages,
+        retained.source_witness,
+        budget,
+    )?;
 
-    let (actual, actual_bytes) = capture_source(installation, budget)?;
+    let (actual, actual_bytes) = capture_source(installation, languages, budget)?;
     require_same_component_chains(&retained.components, &actual.components, installation, budget)?;
-    if actual.source_witness != retained.source_witness {
+    if actual.declaration != retained.declaration
+        || actual.source_witness != retained.source_witness
+    {
         return Err(ActiveReblitBootTopologyIntentError::Changed {
-            path: retained.path.clone(),
+            path: retained.path().to_owned(),
             reason: "fixed boot-topology source name no longer selects the retained inode",
         });
     }
@@ -166,16 +229,21 @@ pub(super) fn revalidate_source(
         &retained.source,
         &actual.source,
         retained.source_witness,
-        &retained.path,
+        retained.path(),
         budget,
     )?;
     if retained_bytes != actual_bytes {
         return Err(ActiveReblitBootTopologyIntentError::Changed {
-            path: retained.path.clone(),
+            path: retained.path().to_owned(),
             reason: "retained and rebound boot-topology source bytes differ",
         });
     }
-    require_source_witness(&retained.source, retained.source_witness, &retained.path, budget)?;
+    require_source_witness(
+        &retained.source,
+        retained.source_witness,
+        retained.path(),
+        budget,
+    )?;
     Ok(actual_bytes)
 }
 
@@ -235,13 +303,16 @@ fn open_directory(
 
 fn open_source(
     directory: &std::fs::File,
+    relative_path: &Path,
     path: &Path,
     budget: &mut BootTopologyIntentBudget,
 ) -> Result<std::fs::File, ActiveReblitBootTopologyIntentError> {
     budget.step(path)?;
+    let source_name = CString::new(relative_path.as_os_str().as_bytes())
+        .expect("validated declaration names contain no NUL byte");
     match openat2_file_until(
         directory.as_raw_fd(),
-        SOURCE_NAME,
+        &source_name,
         nix::libc::O_PATH | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         controlled_resolution(),
@@ -257,11 +328,30 @@ fn open_source(
 
 fn require_named_source(
     directory: &std::fs::File,
+    expected_declaration: &DiscoveredRootDeclaration,
+    languages: &RegisteredLanguages,
     expected: SourceWitness,
-    path: &Path,
     budget: &mut BootTopologyIntentBudget,
 ) -> Result<(), ActiveReblitBootTopologyIntentError> {
-    let actual = open_source(directory, path, budget)?;
+    let path = expected_declaration.path();
+    let actual_declaration = discover_source(
+        directory,
+        path,
+        languages,
+        budget,
+    )?;
+    if &actual_declaration != expected_declaration {
+        return Err(ActiveReblitBootTopologyIntentError::Changed {
+            path: path.to_owned(),
+            reason: "fixed boot-topology source language changed",
+        });
+    }
+    let actual = open_source(
+        directory,
+        actual_declaration.relative_path(),
+        actual_declaration.path(),
+        budget,
+    )?;
     if source_witness(&actual, path, budget)? == expected {
         Ok(())
     } else {
@@ -269,6 +359,51 @@ fn require_named_source(
             path: path.to_owned(),
             reason: "fixed boot-topology source name changed",
         })
+    }
+}
+
+fn discover_source(
+    directory: &std::fs::File,
+    path: &Path,
+    languages: &RegisteredLanguages,
+    budget: &mut BootTopologyIntentBudget,
+) -> Result<DiscoveredRootDeclaration, ActiveReblitBootTopologyIntentError> {
+    budget.step(path)?;
+    let directory_path = path
+        .parent()
+        .expect("the fixed boot-topology source has a parent directory");
+    let discovered = declaration_slot()
+        .discover_at(directory_path, directory, languages)
+        .map_err(discovery_error)?;
+    budget.require_deadline_at(path)?;
+    discovered.ok_or_else(|| ActiveReblitBootTopologyIntentError::Missing {
+        path: path.to_owned(),
+    })
+}
+
+fn declaration_slot() -> RootDeclarationSlot {
+    RootDeclarationSlot::new("boot-topology", super::gluon::SOURCE_LOGICAL_NAME)
+        .expect("the fixed boot-topology declaration slot is canonical")
+}
+
+fn discovery_error(
+    error: RootDeclarationDiscoveryError,
+) -> ActiveReblitBootTopologyIntentError {
+    match error {
+        RootDeclarationDiscoveryError::Inspect { path, source } => {
+            io_error("discover fixed boot-topology source", &path, source)
+        }
+        RootDeclarationDiscoveryError::NotRegular { path } => {
+            ActiveReblitBootTopologyIntentError::UnsafeInode {
+                path,
+                reason: "boot-topology source is not a regular file",
+            }
+        }
+        RootDeclarationDiscoveryError::Collision { .. } => {
+            ActiveReblitBootTopologyIntentError::EvaluationContract {
+                reason: "boot-topology declaration registry selected multiple languages",
+            }
+        }
     }
 }
 

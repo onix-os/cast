@@ -27,6 +27,10 @@ const MAX_MOUNT_POINT_COMPONENTS: usize = 128;
 const MAX_MOUNT_POINT_COMPONENT_BYTES: usize = 255;
 const MAX_MOUNT_POINT_DIAGNOSTIC_BYTES: usize = 256;
 
+pub(super) fn language_spec() -> LanguageSpec {
+    GluonEngine::default().language_spec().clone()
+}
+
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonBootTopologyIntent {
     esp: GluonPartitionSelector,

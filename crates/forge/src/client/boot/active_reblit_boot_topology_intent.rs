@@ -28,9 +28,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use config::declaration::{
+    RegisteredLanguages, TypedDeclarationEvaluatorSet,
+};
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, Source,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Source,
 };
 use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
 use thiserror::Error;
@@ -222,18 +225,34 @@ impl PreparedActiveReblitBootTopologyIntent {
     where
         F: FnOnce(),
     {
-        let bytes = revalidate_source(installation, &self.source, budget)?;
+        let languages = registered_declaration_languages();
+        let bytes = revalidate_source(
+            installation,
+            &self.source,
+            &languages,
+            budget,
+        )?;
         self.require_exact_source(&bytes)?;
         let source_text =
             std::str::from_utf8(&bytes).map_err(|source| ActiveReblitBootTopologyIntentError::InvalidUtf8 {
                 path: budget.source_path.clone(),
                 source,
             })?;
-        let evaluated = evaluate_declaration(source_text, budget)?;
+        let evaluated = evaluate_declaration(
+            source_text,
+            self.source.language(),
+            self.source.logical_name(),
+            budget,
+        )?;
         self.require_exact_evaluation(&evaluated)?;
 
         before_terminal_rebind();
-        let terminal = revalidate_source(installation, &self.source, budget)?;
+        let terminal = revalidate_source(
+            installation,
+            &self.source,
+            &languages,
+            budget,
+        )?;
         self.require_exact_source(&terminal)
     }
 
@@ -459,7 +478,12 @@ where
     G: FnOnce(),
 {
     revalidate_installation_root(installation, budget)?;
-    let (source, bytes) = capture_source(installation, budget)?;
+    let languages = registered_declaration_languages();
+    let (source, bytes) = capture_source(
+        installation,
+        &languages,
+        budget,
+    )?;
     let source_text = std::str::from_utf8(&bytes)
         .map_err(|source| ActiveReblitBootTopologyIntentError::InvalidUtf8 {
             path: boot_topology_intent_path(installation),
@@ -467,7 +491,12 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = evaluate_declaration(&source_text, budget)?;
+    let evaluated = evaluate_declaration(
+        &source_text,
+        source.language(),
+        source.logical_name(),
+        budget,
+    )?;
     let prepared = PreparedActiveReblitBootTopologyIntent {
         source,
         source_text,
@@ -488,6 +517,8 @@ where
 
 fn evaluate_declaration(
     source_text: &str,
+    language: &LanguageSpec,
+    logical_name: &str,
     budget: &BootTopologyIntentBudget,
 ) -> Result<
     DeclarationEvaluation<
@@ -497,13 +528,25 @@ fn evaluate_declaration(
     ActiveReblitBootTopologyIntentError,
 > {
     let evaluator = GluonBootTopologyIntentEvaluator::new(budget)?;
-    let source = Source::new(gluon::SOURCE_LOGICAL_NAME, source_text);
+    let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
+        .expect("one validated boot-topology adapter has no extension collision");
+    let evaluator = evaluators.get(language).ok_or(
+        ActiveReblitBootTopologyIntentError::EvaluationContract {
+            reason: "boot-topology source language has no registered evaluator",
+        },
+    )?;
+    let source = Source::new(logical_name, source_text);
     evaluator.evaluate(&source).map_err(|error| match error {
         DeclarationEvaluationError::Evaluation(source) => {
             ActiveReblitBootTopologyIntentError::Evaluation(source)
         }
         DeclarationEvaluationError::Conversion(source) => source,
     })
+}
+
+fn registered_declaration_languages() -> RegisteredLanguages {
+    RegisteredLanguages::new([gluon::language_spec()])
+        .expect("the one production boot-topology language is unique")
 }
 
 fn revalidate_installation_root(

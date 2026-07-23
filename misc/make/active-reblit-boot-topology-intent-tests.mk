@@ -8,7 +8,7 @@ forge-active-reblit-boot-topology-intent-test: host-storage-safety-test
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::active_reblit_boot_topology_intent::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 27; \
+	timeout 10s test "$$( timeout 10s grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 28; \
 	for name in \
 		evaluation::alias_intent_exposes_only_revalidated_typed_identity_and_exact_provenance \
 		evaluation::distinct_xbootldr_is_typed_declarative_intent_not_runtime_role_proof \
@@ -23,6 +23,7 @@ forge-active-reblit-boot-topology-intent-test: host-storage-safety-test
 		evaluation::exact_source_and_embedded_abi_participate_in_deterministic_fingerprint \
 		evaluation::checked_documentation_examples_use_the_exact_restricted_topology_loader \
 		filesystem_security::missing_machine_local_intent_is_a_hard_error_without_fallback \
+		filesystem_security::only_the_registered_gluon_extension_occupies_the_fixed_slot \
 		filesystem_security::symlink_fifo_socket_and_hardlink_sources_are_rejected_without_blocking \
 		filesystem_security::unsafe_source_and_ancestor_modes_fail_closed \
 		filesystem_security::source_and_ancestor_acls_or_xattrs_are_rejected_when_supported \
@@ -70,10 +71,15 @@ forge-active-reblit-boot-topology-intent-test: host-storage-safety-test
 	timeout 10s grep -Fq 'limits.max_explicit_input_bytes = 0' "$$gluon"; \
 	timeout 10s grep -Fq 'GluonBootTopologyIntentEvaluator' "$$gluon"; \
 	timeout 10s grep -Fq 'impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>' "$$gluon"; \
+	timeout 10s grep -Fq 'TypedDeclarationEvaluatorSet' "$$module"; \
+	timeout 10s grep -Fq 'RegisteredLanguages' "$$module"; \
+	timeout 10s grep -Fq 'RootDeclarationSlot' "$$filesystem"; \
+	timeout 10s grep -Fq '.discover_at(directory_path, directory, languages)' "$$filesystem"; \
 	timeout 10s grep -Fq 'controlled_resolution()' "$$filesystem"; \
 	timeout 10s grep -Fq 'descriptor_mount_id' "$$filesystem"; \
+	if timeout 10s rg -n 'SOURCE_NAME|c"boot-topology\.glu"' "$$filesystem"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -n 'cast\.boot_topology\.v1|BOOT_TOPOLOGY_ABI_VERSION: u32 = 1|esp_partuuid|xbootldr_partuuid' "$$module" "$$gluon" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -q 'blsforme|(^|[^[:alnum:]_])config::|system_model|read_dir\(|\.exists\(|canonicalize\(|create_dir|create_dir_all|mount\(|umount\(|std::fs::write|fs::write' "$$module" "$$filesystem" "$$gluon" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -q 'blsforme|system_model|read_dir\(|\.exists\(|canonicalize\(|create_dir|create_dir_all|mount\(|umount\(|std::fs::write|fs::write' "$$module" "$$filesystem" "$$gluon" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s rg -q 'SourceRoot' "$$module" "$$filesystem" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	tests=crates/forge/src/client/boot/active_reblit_boot_topology_intent_tests; \
 	if timeout 10s rg -n 'File::open\("/(?:proc|sys|dev)|read_to_string\("/(?:proc|sys|dev)|std::process|process::Command|Command::new|nix::mount|libc::mount|/dev/disk|/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)|"/(?:boot|efi|esp)(?:/|")' "$$tests.rs" "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
