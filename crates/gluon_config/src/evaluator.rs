@@ -17,10 +17,10 @@ use gluon::{
         thread::ThreadInternal,
     },
 };
+use declarative_config::EvaluationDeadline;
 
 use crate::{
     Diagnostic, EvaluationFingerprint, ImportPolicy, LimitKind, Limits, Source, SourceRoot,
-    deadline::EvaluationDeadline,
     diagnostic::from_gluon,
     import::{PreparedImports, RestrictedImporter, prepare_imports},
 };

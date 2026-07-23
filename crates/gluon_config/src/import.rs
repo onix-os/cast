@@ -5,6 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use declarative_config::EvaluationDeadline;
 use gluon::{
     Error, ModuleCompiler, RootedThread, Thread, ThreadExt,
     base::{
@@ -19,7 +20,6 @@ use gluon::{
 
 use crate::{
     Diagnostic, LimitKind, Limits, ModuleFingerprint, Source, SourceRoot,
-    deadline::EvaluationDeadline,
     diagnostic::from_gluon,
 };
 

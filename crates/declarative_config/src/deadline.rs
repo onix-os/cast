@@ -8,36 +8,36 @@ use crate::{Diagnostic, LimitKind};
 /// `start + timeout`: arbitrarily large configured durations must not overflow
 /// an [`Instant`].
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct EvaluationDeadline {
+pub struct EvaluationDeadline {
     started_at: Instant,
     timeout: Duration,
 }
 
 impl EvaluationDeadline {
-    pub(crate) fn start(timeout: Duration) -> Self {
+    pub fn start(timeout: Duration) -> Self {
         Self {
             started_at: Instant::now(),
             timeout,
         }
     }
 
-    pub(crate) fn check(self, source_name: &str) -> Result<(), Diagnostic> {
+    pub fn check(self, source_name: &str) -> Result<(), Diagnostic> {
         self.remaining(source_name).map(|_| ())
     }
 
-    pub(crate) fn remaining(self, source_name: &str) -> Result<Duration, Diagnostic> {
+    pub fn remaining(self, source_name: &str) -> Result<Duration, Diagnostic> {
         self.remaining_duration().ok_or_else(|| self.exceeded(source_name))
     }
 
-    pub(crate) fn expired(self) -> bool {
+    pub fn expired(self) -> bool {
         self.remaining_duration().is_none()
     }
 
-    pub(crate) fn remaining_duration(self) -> Option<Duration> {
+    pub fn remaining_duration(self) -> Option<Duration> {
         self.remaining_at(Instant::now())
     }
 
-    pub(crate) fn exceeded(self, source_name: &str) -> Diagnostic {
+    pub fn exceeded(self, source_name: &str) -> Diagnostic {
         Diagnostic::limit(
             LimitKind::Time,
             Some(source_name.to_owned()),
