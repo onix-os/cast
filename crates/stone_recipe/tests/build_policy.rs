@@ -1,24 +1,16 @@
-use gluon_config::{GluonEngine, Source, SourceRoot};
+#[path = "build_policy/adapter.rs"]
+mod adapter;
+
+use adapter::{
+    evaluate_default_policy, evaluate_policy, evaluate_policy_with_inputs,
+    repository_policy, repository_policy_value,
+};
+use declarative_config::Source;
 use stone_recipe::build_policy::{
     AnalyzerKind, BUILD_POLICY_ABI_VERSION, BuildPolicyConversionError, BuildPolicySpec, BuildToolSpec, ContextValue,
     EnvironmentBindingSpec, EnvironmentCondition, GLUON_BUILD_POLICY_ABI, SandboxCredentialPolicySpec,
-    SandboxDevPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec, TextSpec, evaluate_gluon,
-    evaluate_gluon_with, evaluate_gluon_with_inputs,
+    SandboxDevPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, TargetEmulationSpec, TextSpec,
 };
-
-fn repository_policy() -> (GluonEngine, Source) {
-    let source_root = SourceRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mason/data/policy")).unwrap();
-    let evaluator = GluonEngine::default().with_source_root(source_root.clone());
-    let source = source_root
-        .load("default.glu", evaluator.limits().max_source_bytes)
-        .unwrap();
-    (evaluator, source)
-}
-
-fn repository_policy_value() -> BuildPolicySpec {
-    let (evaluator, source) = repository_policy();
-    evaluate_gluon_with(&evaluator, &source).unwrap().policy
-}
 
 fn environment_binding<'a>(bindings: &'a [EnvironmentBindingSpec], name: &str) -> &'a EnvironmentBindingSpec {
     bindings.iter().find(|binding| binding.name == name).unwrap()
@@ -27,8 +19,8 @@ fn environment_binding<'a>(bindings: &'a [EnvironmentBindingSpec], name: &str) -
 #[test]
 fn evaluates_repository_build_policy_as_typed_data() {
     let (evaluator, source) = repository_policy();
-    let evaluated = evaluate_gluon_with(&evaluator, &source).unwrap();
-    let policy = evaluated.policy;
+    let evaluated = evaluate_policy(&evaluator, &source).unwrap();
+    let policy = evaluated.value;
 
     assert_eq!(policy.build_subdir, "aerynos-builddir");
     assert_eq!(policy.targets.len(), 6);
@@ -80,7 +72,7 @@ fn evaluates_repository_build_policy_as_typed_data() {
     for expected in ["cast.build_policy.v5", "tuning/flags.glu", "tuning/groups.glu"] {
         assert!(
             evaluated
-                .fingerprint
+                .identity
                 .imported_modules
                 .iter()
                 .any(|module| module.logical_name == expected),
@@ -91,7 +83,7 @@ fn evaluates_repository_build_policy_as_typed_data() {
 
 #[test]
 fn repository_policy_relative_modules_require_an_explicit_source_root() {
-    let error = evaluate_gluon(&Source::new(
+    let error = evaluate_default_policy(&Source::new(
         "default.glu",
         include_str!("../../mason/data/policy/default.glu"),
     ))
@@ -123,7 +115,7 @@ fn build_policy_v5_is_a_hard_abi_boundary_and_v4_is_retired() {
         "cast.build_policy.v3",
         "cast.build_policy.v2",
     ] {
-        let error = evaluate_gluon(&Source::new("retired-policy.glu", format!("import! {retired}"))).unwrap_err();
+        let error = evaluate_default_policy(&Source::new("retired-policy.glu", format!("import! {retired}"))).unwrap_err();
         assert!(error.to_string().contains(retired));
     }
 }
@@ -131,18 +123,18 @@ fn build_policy_v5_is_a_hard_abi_boundary_and_v4_is_retired() {
 #[test]
 fn restricted_dev_alternative_is_valid_and_changes_policy_identity() {
     let (evaluator, source) = repository_policy();
-    let original = evaluate_gluon_with(&evaluator, &source).unwrap();
+    let original = evaluate_policy(&evaluator, &source).unwrap();
     let alternative_source = source.text().replace(
         "dev = p.sandbox_filesystems.dev.minimal",
         "dev = p.sandbox_filesystems.dev.none",
     );
-    let alternative = evaluate_gluon_with(&evaluator, &Source::new("default.glu", alternative_source)).unwrap();
+    let alternative = evaluate_policy(&evaluator, &Source::new("default.glu", alternative_source)).unwrap();
 
-    assert_eq!(alternative.policy.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
-    assert_eq!(alternative.policy.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
-    assert_eq!(alternative.policy.sandbox.filesystems.dev, SandboxDevPolicySpec::None);
-    alternative.policy.validate().unwrap();
-    assert_ne!(original.fingerprint.sha256, alternative.fingerprint.sha256);
+    assert_eq!(alternative.value.sandbox.filesystems.tmp, SandboxTmpPolicySpec::Empty);
+    assert_eq!(alternative.value.sandbox.filesystems.sys, SandboxSysPolicySpec::None);
+    assert_eq!(alternative.value.sandbox.filesystems.dev, SandboxDevPolicySpec::None);
+    alternative.value.validate().unwrap();
+    assert_ne!(original.identity.sha256, alternative.identity.sha256);
 }
 
 #[test]
@@ -153,7 +145,7 @@ fn legacy_read_only_proc_selector_is_not_available() {
         "proc = p.sandbox_filesystems.proc.read_only,\n        tmp = p.sandbox_filesystems.tmp.empty",
     );
 
-    let error = evaluate_gluon_with(&evaluator, &Source::new("default.glu", legacy_source)).unwrap_err();
+    let error = evaluate_policy(&evaluator, &Source::new("default.glu", legacy_source)).unwrap_err();
 
     assert!(error.to_string().contains("proc"));
 }
@@ -161,10 +153,10 @@ fn legacy_read_only_proc_selector_is_not_available() {
 #[test]
 fn explicit_inputs_participate_in_policy_identity() {
     let (evaluator, source) = repository_policy();
-    let first = evaluate_gluon_with_inputs(&evaluator, &source, b"first").unwrap();
-    let second = evaluate_gluon_with_inputs(&evaluator, &source, b"second").unwrap();
+    let first = evaluate_policy_with_inputs(&evaluator, &source, b"first").unwrap();
+    let second = evaluate_policy_with_inputs(&evaluator, &source, b"second").unwrap();
 
-    assert_ne!(first.fingerprint.sha256, second.fingerprint.sha256);
+    assert_ne!(first.identity.sha256, second.identity.sha256);
 }
 
 #[test]

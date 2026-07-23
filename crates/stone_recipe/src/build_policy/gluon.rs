@@ -1,7 +1,11 @@
 //! Restricted Gluon evaluation boundary for typed build policy.
 
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    LanguageSpec, Limits, SourceRoot,
+};
 use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
-use thiserror::Error;
 
 use super::{
     AnalyzerKind, AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArrayPatch, BuildCommandSpec,
@@ -42,28 +46,81 @@ type Ordering =
 { Bool, Option, Result, Ordering }
 "#;
 
-/// A normalized policy and the provenance of every evaluated input.
+/// Stateful Gluon adapter for total build policies and total policy patches.
+///
+/// The complete v5 ABI and pure primitive catalog are fixed when the adapter
+/// is constructed. Callers select the owned Rust declaration type through the
+/// typed evaluator role rather than through a Gluon-named entry point.
 #[derive(Debug, Clone)]
-pub struct EvaluatedBuildPolicy {
-    pub policy: BuildPolicySpec,
-    pub fingerprint: EvaluationFingerprint,
+pub struct GluonBuildPolicyEvaluator {
+    engine: GluonEngine,
 }
 
-/// A normalized total policy patch and the provenance of every evaluated
-/// input. Applying and validating it requires an explicit base policy.
-#[derive(Debug, Clone)]
-pub struct EvaluatedBuildPolicyPatch {
-    pub patch: BuildPolicyPatchSpec,
-    pub fingerprint: EvaluationFingerprint,
+impl Default for GluonBuildPolicyEvaluator {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
 }
 
-/// Failure to evaluate a typed build policy.
-#[derive(Debug, Error)]
-pub enum BuildPolicyEvaluationError {
-    #[error(transparent)]
-    Evaluation(#[from] Diagnostic),
-    #[error(transparent)]
-    Conversion(#[from] BuildPolicyConversionError),
+impl GluonBuildPolicyEvaluator {
+    pub fn new(limits: Limits) -> Self {
+        Self::from_engine(GluonEngine::new(limits))
+            .expect("the embedded build-policy ABI is valid and unique")
+    }
+
+    pub fn from_engine(engine: GluonEngine) -> Result<Self, Diagnostic> {
+        let mut import_policy = engine.import_policy().clone();
+        import_policy.enable_array_primitives();
+        import_policy.enable_string_primitives();
+        import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
+        import_policy.insert_embedded_module(
+            "cast.build_policy.v5",
+            GLUON_BUILD_POLICY_ABI,
+        )?;
+        Ok(Self {
+            engine: engine.with_import_policy(import_policy),
+        })
+    }
+
+    fn evaluate_policy(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicySpec, EvaluationFingerprint>,
+        DeclarationEvaluationError<BuildPolicyConversionError>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs::<GluonBuildPolicySpec>(source, explicit_inputs)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let policy: BuildPolicySpec = evaluation.value.into();
+        policy
+            .validate()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value: policy,
+            identity: evaluation.fingerprint,
+        })
+    }
+
+    fn evaluate_patch(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyPatchSpec, EvaluationFingerprint>,
+        DeclarationEvaluationError<BuildPolicyConversionError>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        Ok(DeclarationEvaluation {
+            value: evaluation.value.into(),
+            identity: evaluation.fingerprint,
+        })
+    }
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -566,76 +623,88 @@ struct GluonBuildPolicyPatchSpec {
 
 include!("gluon/conversions.rs");
 
-/// Evaluate a typed policy with the restricted default evaluator.
-pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedBuildPolicy, BuildPolicyEvaluationError> {
-    evaluate_gluon_with(&GluonEngine::default(), source)
+impl DeclarationEvaluator<BuildPolicySpec> for GluonBuildPolicyEvaluator {
+    type Identity = EvaluationFingerprint;
+    type Error = BuildPolicyConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicySpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_policy(source, &[])
+    }
 }
 
-/// Evaluate a typed policy with caller-selected limits and imports.
-pub fn evaluate_gluon_with(
-    evaluator: &GluonEngine,
-    source: &Source,
-) -> Result<EvaluatedBuildPolicy, BuildPolicyEvaluationError> {
-    evaluate_gluon_with_inputs(evaluator, source, &[])
+impl DeclarationInputEvaluator<BuildPolicySpec> for GluonBuildPolicyEvaluator {
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicySpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_policy(source, explicit_inputs)
+    }
 }
 
-/// Evaluate policy and bind host-resolved inputs into its fingerprint.
-pub fn evaluate_gluon_with_inputs(
-    evaluator: &GluonEngine,
-    source: &Source,
-    explicit_inputs: &[u8],
-) -> Result<EvaluatedBuildPolicy, BuildPolicyEvaluationError> {
-    let mut import_policy = evaluator.import_policy().clone();
-    import_policy.enable_array_primitives();
-    import_policy.enable_string_primitives();
-    import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("cast.build_policy.v5", GLUON_BUILD_POLICY_ABI)?;
-    let evaluator = evaluator.clone().with_import_policy(import_policy);
-    let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicySpec>(source, explicit_inputs)?;
+impl DeclarationEvaluator<BuildPolicyPatchSpec> for GluonBuildPolicyEvaluator {
+    type Identity = EvaluationFingerprint;
+    type Error = BuildPolicyConversionError;
 
-    let policy: BuildPolicySpec = evaluation.value.into();
-    policy.validate()?;
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
 
-    Ok(EvaluatedBuildPolicy {
-        policy,
-        fingerprint: evaluation.fingerprint,
-    })
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyPatchSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_patch(source, &[])
+    }
 }
 
-/// Evaluate a total typed policy patch with the restricted default evaluator.
-pub fn evaluate_patch_gluon(source: &Source) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
-    evaluate_patch_gluon_with(&GluonEngine::default(), source)
-}
-
-/// Evaluate a total typed policy patch with caller-selected limits and
-/// imports.
-pub fn evaluate_patch_gluon_with(
-    evaluator: &GluonEngine,
-    source: &Source,
-) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
-    evaluate_patch_gluon_with_inputs(evaluator, source, &[])
-}
-
-/// Evaluate a policy patch and bind host-resolved inputs into its fingerprint.
-///
-/// A patch is intentionally not validated in isolation: `Keep` operations
-/// need a concrete base. Call [`BuildPolicyPatchSpec::apply_validated`] before
-/// accepting a composed policy.
-pub fn evaluate_patch_gluon_with_inputs(
-    evaluator: &GluonEngine,
-    source: &Source,
-    explicit_inputs: &[u8],
-) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
-    let mut import_policy = evaluator.import_policy().clone();
-    import_policy.enable_array_primitives();
-    import_policy.enable_string_primitives();
-    import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("cast.build_policy.v5", GLUON_BUILD_POLICY_ABI)?;
-    let evaluator = evaluator.clone().with_import_policy(import_policy);
-    let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)?;
-
-    Ok(EvaluatedBuildPolicyPatch {
-        patch: evaluation.value.into(),
-        fingerprint: evaluation.fingerprint,
-    })
+impl DeclarationInputEvaluator<BuildPolicyPatchSpec>
+    for GluonBuildPolicyEvaluator
+{
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyPatchSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_patch(source, explicit_inputs)
+    }
 }

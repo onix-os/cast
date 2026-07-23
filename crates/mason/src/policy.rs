@@ -6,10 +6,18 @@
 
 use std::path::{Path, PathBuf};
 
-use gluon_config::{Diagnostic, GluonEngine, SourceRoot};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, SourceRoot,
+};
+use gluon_config::Diagnostic;
 use stone_recipe::build_policy::{
-    BuildPolicyConversionError, BuildPolicyEvaluationError, BuildPolicySpec, TargetPolicySpec,
-    layers::{BuildPolicyOperation, BuildPolicyRootEvaluationError},
+    BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
+    GluonBuildPolicyEvaluator, TargetPolicySpec,
+    layers::{
+        BuildPolicyOperation, BuildPolicyRootConversionError,
+        BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
+    },
 };
 use stone_recipe::derivation::{
     PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, policy_composition_identity,
@@ -36,21 +44,40 @@ impl BuildPolicy {
             path: policy_dir.to_path_buf(),
             source: Box::new(source),
         })?;
-        let evaluator = GluonEngine::default().with_source_root(source_root.clone());
+        let root_evaluator =
+            <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::with_source_root(
+                &GluonBuildPolicyRootEvaluator::default(),
+                source_root.clone(),
+            );
+        let policy_evaluator =
+            <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
+                &GluonBuildPolicyEvaluator::default(),
+                source_root.clone(),
+            );
         let root_path = policy_dir.join(Self::ROOT);
         let root_source = source_root
-            .load(Self::ROOT, evaluator.limits().max_source_bytes)
+            .load(
+                Self::ROOT,
+                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::limits(
+                    &root_evaluator,
+                )
+                .max_source_bytes,
+            )
             .map_err(|source| Error::LoadRoot {
                 path: root_path.clone(),
                 source: Box::new(source),
             })?;
-        let evaluated_root = stone_recipe::build_policy::layers::evaluate_gluon_with(&evaluator, &root_source)
+        let evaluated_root =
+            <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::evaluate(
+                &root_evaluator,
+                &root_source,
+            )
             .map_err(|source| Error::EvaluateRoot {
                 path: root_path.clone(),
                 source: Box::new(source),
             })?;
 
-        let manifest = evaluated_root.root;
+        let manifest = evaluated_root.value;
         let mut layers = Vec::with_capacity(manifest.layers.len());
         let mut state = None;
         let mut operation_order = 0;
@@ -60,7 +87,7 @@ impl BuildPolicy {
             for (entry_index, entry) in layer.entries.iter().enumerate() {
                 transitions.push(apply_entry(
                     &source_root,
-                    &evaluator,
+                    &policy_evaluator,
                     &manifest.name,
                     &layer.name,
                     layer_index,
@@ -83,12 +110,16 @@ impl BuildPolicy {
         })?;
         let identity_inputs = policy_composition_identity(&manifest.name, &layers);
         let finalized_root =
-            stone_recipe::build_policy::layers::evaluate_gluon_with_inputs(&evaluator, &root_source, &identity_inputs)
+            <GluonBuildPolicyRootEvaluator as DeclarationInputEvaluator<BuildPolicyRootSpec>>::evaluate_with_inputs(
+                &root_evaluator,
+                &root_source,
+                &identity_inputs,
+            )
                 .map_err(|source| Error::FinalizeRoot {
                     path: root_path,
                     source: Box::new(source),
                 })?;
-        if finalized_root.root != manifest {
+        if finalized_root.value != manifest {
             return Err(Error::ManifestChanged { policy: manifest.name });
         }
 
@@ -96,7 +127,7 @@ impl BuildPolicy {
             spec,
             provenance: PolicyProvenance {
                 name: manifest.name,
-                root: finalized_root.fingerprint,
+                root: finalized_root.identity,
                 layers,
             },
         })
@@ -130,7 +161,7 @@ impl BuildPolicy {
 
 fn apply_entry(
     source_root: &SourceRoot,
-    evaluator: &GluonEngine,
+    evaluator: &GluonBuildPolicyEvaluator,
     policy: &str,
     layer: &str,
     layer_index: usize,
@@ -170,7 +201,13 @@ fn apply_entry(
 
     let path = source_root.path().join(origin);
     let source = source_root
-        .load(origin, evaluator.limits().max_source_bytes)
+        .load(
+            origin,
+            <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(
+                evaluator,
+            )
+            .max_source_bytes,
+        )
         .map_err(|source| Error::LoadEntry {
             policy: policy.to_owned(),
             layer: layer.to_owned(),
@@ -185,8 +222,12 @@ fn apply_entry(
 
     let fingerprint = match operation {
         BuildPolicyOperation::Add | BuildPolicyOperation::Replace => {
-            let evaluated = stone_recipe::build_policy::evaluate_gluon_with(evaluator, &source).map_err(|source| {
-                Error::EvaluateEntry {
+            let evaluated =
+                <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate(
+                    evaluator,
+                    &source,
+                )
+                .map_err(|source| Error::EvaluateEntry {
                     policy: policy.to_owned(),
                     layer: layer.to_owned(),
                     layer_index,
@@ -195,15 +236,17 @@ fn apply_entry(
                     operation,
                     origin: origin.to_owned(),
                     source: Box::new(source),
-                }
-            })?;
-            *state = Some(evaluated.policy);
-            evaluated.fingerprint
+                })?;
+            *state = Some(evaluated.value);
+            evaluated.identity
         }
         BuildPolicyOperation::Modify => {
             let evaluated =
-                stone_recipe::build_policy::evaluate_patch_gluon_with(evaluator, &source).map_err(|source| {
-                    Error::EvaluateEntry {
+                <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::evaluate(
+                    evaluator,
+                    &source,
+                )
+                .map_err(|source| Error::EvaluateEntry {
                         policy: policy.to_owned(),
                         layer: layer.to_owned(),
                         layer_index,
@@ -212,11 +255,10 @@ fn apply_entry(
                         operation,
                         origin: origin.to_owned(),
                         source: Box::new(source),
-                    }
-                })?;
+                    })?;
             let current = state.take().expect("modify precondition checked");
             let next = evaluated
-                .patch
+                .value
                 .apply_validated(current)
                 .map_err(|source| Error::ApplyPatch {
                     policy: policy.to_owned(),
@@ -229,7 +271,7 @@ fn apply_entry(
                     source: Box::new(source),
                 })?;
             *state = Some(next);
-            evaluated.fingerprint
+            evaluated.identity
         }
     };
 
@@ -258,13 +300,13 @@ pub enum Error {
     EvaluateRoot {
         path: PathBuf,
         #[source]
-        source: Box<BuildPolicyRootEvaluationError>,
+        source: Box<DeclarationEvaluationError<BuildPolicyRootConversionError>>,
     },
     #[error("finalize build-policy manifest identity {path:?}")]
     FinalizeRoot {
         path: PathBuf,
         #[source]
-        source: Box<BuildPolicyRootEvaluationError>,
+        source: Box<DeclarationEvaluationError<BuildPolicyRootConversionError>>,
     },
     #[error(
         "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) from `{origin}` is invalid: {reason}"
@@ -306,7 +348,7 @@ pub enum Error {
         operation: BuildPolicyOperation,
         origin: String,
         #[source]
-        source: Box<BuildPolicyEvaluationError>,
+        source: Box<DeclarationEvaluationError<BuildPolicyConversionError>>,
     },
     #[error(
         "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) cannot apply `{origin}`"

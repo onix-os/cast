@@ -1,8 +1,34 @@
-use gluon_config::Source;
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, Evaluation, Source,
+};
+use gluon_config::EvaluationFingerprint;
 use stone_recipe::build_policy::layers::{
     BuildPolicyLayerEntrySpec, BuildPolicyLayerSpec, BuildPolicyOperation, BuildPolicyRootConversionError,
-    BuildPolicyRootEvaluationError, BuildPolicyRootSpec, evaluate_gluon, evaluate_gluon_with_inputs,
+    BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
 };
+
+type RootEvaluation = Evaluation<BuildPolicyRootSpec, EvaluationFingerprint>;
+type RootEvaluationError =
+    DeclarationEvaluationError<BuildPolicyRootConversionError>;
+
+fn evaluate(source: &Source) -> Result<RootEvaluation, RootEvaluationError> {
+    DeclarationEvaluator::<BuildPolicyRootSpec>::evaluate(
+        &GluonBuildPolicyRootEvaluator::default(),
+        source,
+    )
+}
+
+fn evaluate_with_inputs(
+    source: &Source,
+    explicit_inputs: &[u8],
+) -> Result<RootEvaluation, RootEvaluationError> {
+    DeclarationInputEvaluator::<BuildPolicyRootSpec>::evaluate_with_inputs(
+        &GluonBuildPolicyRootEvaluator::default(),
+        source,
+        explicit_inputs,
+    )
+}
 
 fn authored(body: &str) -> Source {
     Source::new(
@@ -13,7 +39,7 @@ fn authored(body: &str) -> Source {
 
 #[test]
 fn retired_boulder_layer_abi_is_not_a_compatibility_alias() {
-    let error = evaluate_gluon(&Source::new(
+    let error = evaluate(&Source::new(
         "retired-policy-layers.glu",
         "import! boulder.build_policy.layers.v1",
     ))
@@ -24,7 +50,7 @@ fn retired_boulder_layer_abi_is_not_a_compatibility_alias() {
 
 #[test]
 fn ordered_layer_manifest_preserves_every_authored_operation() {
-    let evaluated = evaluate_gluon(&authored(
+    let evaluated = evaluate(&authored(
         r#"layers.policy "repository" [
     layers.layer "foundation" [
         layers.add "default.glu",
@@ -38,7 +64,7 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
     .unwrap();
 
     assert_eq!(
-        evaluated.root,
+        evaluated.value,
         BuildPolicyRootSpec {
             name: "repository".to_owned(),
             layers: vec![
@@ -67,7 +93,7 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
     );
     assert!(
         evaluated
-            .fingerprint
+            .identity
             .imported_modules
             .iter()
             .any(|module| module.logical_name == "cast.build_policy.layers.v1")
@@ -76,7 +102,7 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
 
 #[test]
 fn manifest_validation_rejects_ambiguous_layers_and_origins() {
-    let duplicate = evaluate_gluon(&authored(
+    let duplicate = evaluate(&authored(
         r#"layers.policy "repository" [
     layers.layer "same" [],
     layers.layer "same" [],
@@ -85,18 +111,18 @@ fn manifest_validation_rejects_ambiguous_layers_and_origins() {
     .unwrap_err();
     assert!(matches!(
         duplicate,
-        BuildPolicyRootEvaluationError::Conversion(BuildPolicyRootConversionError::DuplicateLayer { name })
+        DeclarationEvaluationError::Conversion(BuildPolicyRootConversionError::DuplicateLayer { name })
             if name == "same"
     ));
 
     for origin in ["", "/absolute.glu", "../escape.glu", "nested//module.glu"] {
-        let error = evaluate_gluon(&authored(&format!(
+        let error = evaluate(&authored(&format!(
             "layers.policy \"repository\" [layers.layer \"one\" [layers.add {origin:?}]]"
         )))
         .unwrap_err();
         assert!(matches!(
             error,
-            BuildPolicyRootEvaluationError::Conversion(
+            DeclarationEvaluationError::Conversion(
                 BuildPolicyRootConversionError::Empty { .. } | BuildPolicyRootConversionError::InvalidOrigin { .. }
             )
         ));
@@ -110,11 +136,10 @@ fn composed_module_input_changes_the_manifest_fingerprint() {
     layers.layer "foundation" [layers.add "default.glu"],
 ]"#,
     );
-    let first = evaluate_gluon_with_inputs(&gluon_config::GluonEngine::default(), &source, b"module-a").unwrap();
-    let repeated =
-        evaluate_gluon_with_inputs(&gluon_config::GluonEngine::default(), &source, b"module-a").unwrap();
-    let changed = evaluate_gluon_with_inputs(&gluon_config::GluonEngine::default(), &source, b"module-b").unwrap();
+    let first = evaluate_with_inputs(&source, b"module-a").unwrap();
+    let repeated = evaluate_with_inputs(&source, b"module-a").unwrap();
+    let changed = evaluate_with_inputs(&source, b"module-b").unwrap();
 
-    assert_eq!(first.fingerprint, repeated.fingerprint);
-    assert_ne!(first.fingerprint, changed.fingerprint);
+    assert_eq!(first.identity, repeated.identity);
+    assert_ne!(first.identity, changed.identity);
 }

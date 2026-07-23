@@ -6,6 +6,11 @@
 
 use std::collections::BTreeSet;
 
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    LanguageSpec, Limits, SourceRoot,
+};
 use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
 use thiserror::Error;
 
@@ -98,20 +103,56 @@ pub enum BuildPolicyRootConversionError {
     InvalidOrigin { field: String, value: String },
 }
 
-/// A validated manifest and the complete provenance of its evaluation.
+/// Stateful Gluon adapter for the ordered build-policy root manifest.
 #[derive(Debug, Clone)]
-pub struct EvaluatedBuildPolicyRoot {
-    pub root: BuildPolicyRootSpec,
-    pub fingerprint: EvaluationFingerprint,
+pub struct GluonBuildPolicyRootEvaluator {
+    engine: GluonEngine,
 }
 
-/// Failure to evaluate or validate an ordered policy manifest.
-#[derive(Debug, Error)]
-pub enum BuildPolicyRootEvaluationError {
-    #[error(transparent)]
-    Evaluation(#[from] Diagnostic),
-    #[error(transparent)]
-    Conversion(#[from] BuildPolicyRootConversionError),
+impl Default for GluonBuildPolicyRootEvaluator {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
+}
+
+impl GluonBuildPolicyRootEvaluator {
+    pub fn new(limits: Limits) -> Self {
+        Self::from_engine(GluonEngine::new(limits))
+            .expect("the embedded build-policy layer ABI is valid and unique")
+    }
+
+    pub fn from_engine(engine: GluonEngine) -> Result<Self, Diagnostic> {
+        let mut import_policy = engine.import_policy().clone();
+        import_policy.enable_array_primitives();
+        import_policy.insert_embedded_module(
+            "cast.build_policy.layers.v1",
+            GLUON_BUILD_POLICY_LAYERS_ABI,
+        )?;
+        Ok(Self {
+            engine: engine.with_import_policy(import_policy),
+        })
+    }
+
+    fn evaluate_root(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyRootSpec, EvaluationFingerprint>,
+        DeclarationEvaluationError<BuildPolicyRootConversionError>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs::<GluonBuildPolicyRootSpec>(source, explicit_inputs)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let root: BuildPolicyRootSpec = evaluation.value.into();
+        root.validate()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value: root,
+            identity: evaluation.fingerprint,
+        })
+    }
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -176,36 +217,48 @@ impl From<GluonBuildPolicyRootSpec> for BuildPolicyRootSpec {
     }
 }
 
-/// Evaluate a manifest with the restricted default evaluator.
-pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedBuildPolicyRoot, BuildPolicyRootEvaluationError> {
-    evaluate_gluon_with(&GluonEngine::default(), source)
+impl DeclarationEvaluator<BuildPolicyRootSpec>
+    for GluonBuildPolicyRootEvaluator
+{
+    type Identity = EvaluationFingerprint;
+    type Error = BuildPolicyRootConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyRootSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_root(source, &[])
+    }
 }
 
-/// Evaluate a manifest with caller-selected limits and source containment.
-pub fn evaluate_gluon_with(
-    evaluator: &GluonEngine,
-    source: &Source,
-) -> Result<EvaluatedBuildPolicyRoot, BuildPolicyRootEvaluationError> {
-    evaluate_gluon_with_inputs(evaluator, source, &[])
-}
-
-/// Evaluate a manifest while binding host-composed module identities into its
-/// otherwise pure fingerprint.
-pub fn evaluate_gluon_with_inputs(
-    evaluator: &GluonEngine,
-    source: &Source,
-    explicit_inputs: &[u8],
-) -> Result<EvaluatedBuildPolicyRoot, BuildPolicyRootEvaluationError> {
-    let mut import_policy = evaluator.import_policy().clone();
-    import_policy.enable_array_primitives();
-    import_policy.insert_embedded_module("cast.build_policy.layers.v1", GLUON_BUILD_POLICY_LAYERS_ABI)?;
-    let evaluator = evaluator.clone().with_import_policy(import_policy);
-    let evaluation = evaluator.evaluate_with_inputs::<GluonBuildPolicyRootSpec>(source, explicit_inputs)?;
-    let root: BuildPolicyRootSpec = evaluation.value.into();
-    root.validate()?;
-
-    Ok(EvaluatedBuildPolicyRoot {
-        root,
-        fingerprint: evaluation.fingerprint,
-    })
+impl DeclarationInputEvaluator<BuildPolicyRootSpec>
+    for GluonBuildPolicyRootEvaluator
+{
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyRootSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_root(source, explicit_inputs)
+    }
 }

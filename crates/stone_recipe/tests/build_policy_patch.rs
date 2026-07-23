@@ -1,17 +1,51 @@
-use gluon_config::{GluonEngine, Source, SourceRoot};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, Evaluation, Source, SourceRoot,
+};
+use gluon_config::EvaluationFingerprint;
 use stone_recipe::build_policy::{
-    AnalyzerKind, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, EnvironmentBindingSpec,
-    EnvironmentCondition, RetiredTargetPolicySpec, TextSpec, ValuePatch, evaluate_gluon_with, evaluate_patch_gluon,
-    evaluate_patch_gluon_with, evaluate_patch_gluon_with_inputs,
+    AnalyzerKind, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
+    EnvironmentBindingSpec, EnvironmentCondition, GluonBuildPolicyEvaluator, RetiredTargetPolicySpec, TextSpec,
+    ValuePatch,
 };
 
-fn repository_policy() -> stone_recipe::build_policy::BuildPolicySpec {
+type PatchEvaluation = Evaluation<BuildPolicyPatchSpec, EvaluationFingerprint>;
+type PolicyEvaluationError = DeclarationEvaluationError<BuildPolicyConversionError>;
+
+fn repository_policy() -> BuildPolicySpec {
     let source_root = SourceRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mason/data/policy")).unwrap();
-    let evaluator = GluonEngine::default().with_source_root(source_root.clone());
+    let evaluator = DeclarationEvaluator::<BuildPolicySpec>::with_source_root(
+        &GluonBuildPolicyEvaluator::default(),
+        source_root.clone(),
+    );
     let source = source_root
-        .load("default.glu", evaluator.limits().max_source_bytes)
+        .load(
+            "default.glu",
+            DeclarationEvaluator::<BuildPolicySpec>::limits(&evaluator).max_source_bytes,
+        )
         .unwrap();
-    evaluate_gluon_with(&evaluator, &source).unwrap().policy
+    DeclarationEvaluator::<BuildPolicySpec>::evaluate(&evaluator, &source)
+        .unwrap()
+        .value
+}
+
+fn evaluate_patch(
+    evaluator: &GluonBuildPolicyEvaluator,
+    source: &Source,
+) -> Result<PatchEvaluation, PolicyEvaluationError> {
+    DeclarationEvaluator::<BuildPolicyPatchSpec>::evaluate(evaluator, source)
+}
+
+fn evaluate_default_patch(source: &Source) -> Result<PatchEvaluation, PolicyEvaluationError> {
+    evaluate_patch(&GluonBuildPolicyEvaluator::default(), source)
+}
+
+fn evaluate_patch_with_inputs(
+    evaluator: &GluonBuildPolicyEvaluator,
+    source: &Source,
+    explicit_inputs: &[u8],
+) -> Result<PatchEvaluation, PolicyEvaluationError> {
+    DeclarationInputEvaluator::<BuildPolicyPatchSpec>::evaluate_with_inputs(evaluator, source, explicit_inputs)
 }
 
 fn authored_patch(body: &str) -> Source {
@@ -118,12 +152,12 @@ b.policy_patch {
 }
 "#,
     );
-    let evaluated = evaluate_patch_gluon(&source).unwrap();
+    let evaluated = evaluate_default_patch(&source).unwrap();
 
-    assert!(matches!(evaluated.patch.build_subdir, ValuePatch::Set(ref value) if value == "layered-builddir"));
-    assert!(matches!(evaluated.patch.targets, ArrayPatch::Replace(ref values) if values.is_empty()));
+    assert!(matches!(evaluated.value.build_subdir, ValuePatch::Set(ref value) if value == "layered-builddir"));
+    assert!(matches!(evaluated.value.targets, ArrayPatch::Replace(ref values) if values.is_empty()));
     assert!(matches!(
-        evaluated.patch.retired_targets,
+        evaluated.value.retired_targets,
         ArrayPatch::Prepend(ref values)
             if values == &[RetiredTargetPolicySpec {
                 name: "removed-test".to_owned(),
@@ -131,7 +165,7 @@ b.policy_patch {
             }]
     ));
     assert!(matches!(
-        evaluated.patch.environment,
+        evaluated.value.environment,
         ArrayPatch::Append(ref values)
             if values == &[EnvironmentBindingSpec {
                 name: "PATCHED".to_owned(),
@@ -139,16 +173,16 @@ b.policy_patch {
                 condition: EnvironmentCondition::Always,
             }]
     ));
-    assert!(matches!(evaluated.patch.layout, ValuePatch::Keep));
-    assert!(matches!(evaluated.patch.build_root, ValuePatch::Keep));
+    assert!(matches!(evaluated.value.layout, ValuePatch::Keep));
+    assert!(matches!(evaluated.value.build_root, ValuePatch::Keep));
     assert!(matches!(
-        evaluated.patch.analyzers,
+        evaluated.value.analyzers,
         ArrayPatch::Replace(ref values)
             if values == &[AnalyzerKind::Binary, AnalyzerKind::IncludeAny]
     ));
 
     assert!(matches!(
-        evaluated.patch.apply_validated(repository_policy()),
+        evaluated.value.apply_validated(repository_policy()),
         Err(BuildPolicyConversionError::Empty { field }) if field == "targets"
     ));
 }
@@ -156,18 +190,18 @@ b.policy_patch {
 #[test]
 fn patch_bridge_honors_custom_evaluator_and_explicit_identity_inputs() {
     let source = authored_patch("b.defaults.policy_patch");
-    let evaluator = GluonEngine::default();
-    let plain = evaluate_patch_gluon_with(&evaluator, &source).unwrap();
-    let first = evaluate_patch_gluon_with_inputs(&evaluator, &source, b"first").unwrap();
-    let second = evaluate_patch_gluon_with_inputs(&evaluator, &source, b"second").unwrap();
+    let evaluator = GluonBuildPolicyEvaluator::default();
+    let plain = evaluate_patch(&evaluator, &source).unwrap();
+    let first = evaluate_patch_with_inputs(&evaluator, &source, b"first").unwrap();
+    let second = evaluate_patch_with_inputs(&evaluator, &source, b"second").unwrap();
 
-    assert_eq!(plain.patch, BuildPolicyPatchSpec::default());
-    assert_ne!(first.fingerprint.sha256, second.fingerprint.sha256);
+    assert_eq!(plain.value, BuildPolicyPatchSpec::default());
+    assert_ne!(first.identity.sha256, second.identity.sha256);
 }
 
 #[test]
 fn normalized_build_policy_patch_root_matches_the_complete_owned_value() {
-    let evaluated = evaluate_patch_gluon(&authored_patch("b.defaults.policy_patch")).unwrap();
+    let evaluated = evaluate_default_patch(&authored_patch("b.defaults.policy_patch")).unwrap();
     let expected = BuildPolicyPatchSpec {
         build_subdir: ValuePatch::Keep,
         layout: ValuePatch::Keep,
@@ -184,27 +218,27 @@ fn normalized_build_policy_patch_root_matches_the_complete_owned_value() {
         pgo: ValuePatch::Keep,
     };
 
-    assert_eq!(evaluated.patch, expected);
+    assert_eq!(evaluated.value, expected);
 }
 
 #[test]
 fn analyzer_order_is_preserved_and_participates_in_patch_identity() {
-    let first = evaluate_patch_gluon(&authored_patch(
+    let first = evaluate_default_patch(&authored_patch(
         "b.policy_patch { analyzers = b.patch.array.replace [b.analyzer.binary, b.analyzer.elf, b.analyzer.include_any], .. b.defaults.policy_patch }",
     ))
     .unwrap();
-    let second = evaluate_patch_gluon(&authored_patch(
+    let second = evaluate_default_patch(&authored_patch(
         "b.policy_patch { analyzers = b.patch.array.replace [b.analyzer.elf, b.analyzer.binary, b.analyzer.include_any], .. b.defaults.policy_patch }",
     ))
     .unwrap();
 
-    assert_ne!(first.fingerprint.sha256, second.fingerprint.sha256);
+    assert_ne!(first.identity.sha256, second.identity.sha256);
     assert_eq!(
-        first.patch.apply_validated(repository_policy()).unwrap().analyzers,
+        first.value.apply_validated(repository_policy()).unwrap().analyzers,
         [AnalyzerKind::Binary, AnalyzerKind::Elf, AnalyzerKind::IncludeAny]
     );
     assert_eq!(
-        second.patch.apply_validated(repository_policy()).unwrap().analyzers,
+        second.value.apply_validated(repository_policy()).unwrap().analyzers,
         [AnalyzerKind::Elf, AnalyzerKind::Binary, AnalyzerKind::IncludeAny]
     );
 }

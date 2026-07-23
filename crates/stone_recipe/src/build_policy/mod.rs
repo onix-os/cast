@@ -7,9 +7,8 @@
 use stone::relation::{Dependency, Kind as RelationKind, ParseError};
 
 pub use self::gluon::{
-    BUILD_POLICY_ABI_VERSION, BuildPolicyEvaluationError, EvaluatedBuildPolicy, EvaluatedBuildPolicyPatch,
-    GLUON_BUILD_POLICY_ABI, evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs, evaluate_patch_gluon,
-    evaluate_patch_gluon_with, evaluate_patch_gluon_with_inputs,
+    BUILD_POLICY_ABI_VERSION, GLUON_BUILD_POLICY_ABI,
+    GluonBuildPolicyEvaluator,
 };
 
 mod gluon;
