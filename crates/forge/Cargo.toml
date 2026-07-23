@@ -49,6 +49,7 @@ nix.workspace = true
 os-info.workspace = true
 rayon.workspace = true
 reqwest.workspace = true
+lua_config = { path = "../../crates/lua_config" }
 serde.workspace = true
 serde_json.workspace = true
 similar.workspace = true

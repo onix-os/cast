@@ -20,6 +20,7 @@ pub use self::manager::Manager;
 
 pub mod format;
 pub mod gluon;
+pub mod lua;
 pub mod handle_outdated;
 pub mod manager;
 

@@ -1324,6 +1324,7 @@ dependencies = [
  "itertools 0.14.0",
  "libsqlite3-sys",
  "log",
+ "lua_config",
  "nix 0.27.1",
  "os-info",
  "rayon",

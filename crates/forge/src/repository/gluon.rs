@@ -281,7 +281,7 @@ impl DeclarationCodec<Map> for RepositoryCodec {
     }
 }
 
-fn decode_specs(specs: Vec<RepositorySpec>) -> Result<Map, RepositoryConversionError> {
+pub(super) fn decode_specs(specs: Vec<RepositorySpec>) -> Result<Map, RepositoryConversionError> {
     let mut repositories = Map::default();
     for (index, spec) in specs.into_iter().enumerate() {
         let (id, repository) = <(repository::Id, Repository)>::try_from(spec)
