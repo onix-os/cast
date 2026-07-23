@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use gluon_config::{DiagnosticCategory, LimitKind, SourceRoot};
+use declarative_config::{DiagnosticCategory, LimitKind, SourceRoot};
 
 #[test]
 fn accepts_n_bytes_and_rejects_n_plus_one() {

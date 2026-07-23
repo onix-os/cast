@@ -286,7 +286,11 @@ impl ImportGraph<'_> {
             .parent()
             .unwrap_or_else(|| Path::new(""));
         let relative_path = base.join(requested_path);
-        let source = source_root.load_import(&relative_path, self.limits.max_imported_file_bytes);
+        let source = declarative_config::source_access::load_import(
+            source_root,
+            &relative_path,
+            self.limits.max_imported_file_bytes,
+        );
         self.checkpoint()?;
         let source = source?;
         let identity = format!("relative:{}", source.logical_name());

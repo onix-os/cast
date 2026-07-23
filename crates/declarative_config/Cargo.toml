@@ -4,5 +4,12 @@ edition.workspace = true
 version.workspace = true
 rust-version.workspace = true
 
+[dependencies]
+fs-err = { version = "3.3.0", default-features = false }
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

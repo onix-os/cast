@@ -10,14 +10,12 @@ mod evaluator;
 mod fingerprint;
 mod import;
 mod limits;
-mod source;
 
-pub use declarative_config::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
+pub use declarative_config::{Diagnostic, DiagnosticCategory, LimitKind, Source, SourceRoot, SourceSpan};
 pub use evaluator::{Evaluation, Evaluator};
 pub use fingerprint::{EvaluationFingerprint, EvaluationFingerprintValidationError, ModuleFingerprint};
 pub use import::ImportPolicy;
 pub use limits::Limits;
-pub use source::{Source, SourceRoot};
 
 /// The exact Gluon release which defines this evaluator's language behavior.
 pub const GLUON_VERSION: &str = "0.18.3";
