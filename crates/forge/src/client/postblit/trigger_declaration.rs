@@ -5,13 +5,14 @@ use config::declaration::{
 };
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
-    Evaluation,
+    Evaluation, EvaluationIdentity,
     LanguageSpec, Limits, Source, SourceRoot,
 };
-use gluon_config::EvaluationIdentity;
 use triggers::{
-    GluonTriggerConversionError, GluonTriggerEvaluator,
+    GluonTriggerEvaluator,
     format::Trigger,
+    lua::LuaTriggerEvaluator,
+    registry::{TriggerAdapterError, TriggerEvaluator},
 };
 
 /// Transaction triggers loaded from `tx.glu` and `tx.d/*.glu`.
@@ -46,41 +47,51 @@ impl From<Trigger> for SystemTrigger {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+/// One registered transaction-trigger language (`.glu` or `.lua`), selected by
+/// file extension. Both engines reach the same [`Trigger`] value.
+#[derive(Debug, Clone)]
 pub(super) struct TransactionTriggerEvaluator {
-    trigger: GluonTriggerEvaluator,
+    trigger: TriggerEvaluator,
 }
 
-#[derive(Debug, Clone, Default)]
+/// One registered system-trigger language (`.glu` or `.lua`), selected by file
+/// extension. Both engines reach the same [`Trigger`] value.
+#[derive(Debug, Clone)]
 pub(super) struct SystemTriggerEvaluator {
-    trigger: GluonTriggerEvaluator,
+    trigger: TriggerEvaluator,
 }
 
 macro_rules! trigger_evaluator {
     ($evaluator:ty, $config:ty) => {
+        impl $evaluator {
+            fn wrap(trigger: TriggerEvaluator) -> Self {
+                Self { trigger }
+            }
+        }
+
         impl DeclarationEvaluator<$config> for $evaluator {
             type Identity = EvaluationIdentity;
-            type Error = GluonTriggerConversionError;
+            type Error = TriggerAdapterError;
 
             fn language_spec(&self) -> &LanguageSpec {
-                <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::language_spec(
+                <TriggerEvaluator as DeclarationEvaluator<Trigger>>::language_spec(
                     &self.trigger,
                 )
             }
 
             fn limits(&self) -> Limits {
-                <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::limits(
+                <TriggerEvaluator as DeclarationEvaluator<Trigger>>::limits(
                     &self.trigger,
                 )
             }
 
             fn with_source_root(&self, source_root: SourceRoot) -> Self {
-                Self {
-                    trigger: <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::with_source_root(
+                Self::wrap(
+                    <TriggerEvaluator as DeclarationEvaluator<Trigger>>::with_source_root(
                         &self.trigger,
                         source_root,
                     ),
-                }
+                )
             }
 
             fn evaluate_within(
@@ -92,7 +103,7 @@ macro_rules! trigger_evaluator {
                 DeclarationEvaluationError<Self::Error>,
             > {
                 let evaluation =
-                    <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate_within(
+                    <TriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate_within(
                         &self.trigger,
                         source,
                         deadline,
@@ -113,14 +124,25 @@ macro_rules! trigger_evaluator {
 trigger_evaluator!(TransactionTriggerEvaluator, TransactionTrigger);
 trigger_evaluator!(SystemTriggerEvaluator, SystemTrigger);
 
+fn registered_engines() -> [TriggerEvaluator; 2] {
+    [
+        TriggerEvaluator::Gluon(GluonTriggerEvaluator::default()),
+        TriggerEvaluator::Lua(LuaTriggerEvaluator::default()),
+    ]
+}
+
 pub(super) fn transaction_evaluators(
 ) -> DeclarationEvaluatorSet<TransactionTriggerEvaluator> {
-    DeclarationEvaluatorSet::new([TransactionTriggerEvaluator::default()])
-        .expect("one canonical transaction-trigger language is registered")
+    DeclarationEvaluatorSet::new(
+        registered_engines().map(TransactionTriggerEvaluator::wrap),
+    )
+    .expect("the transaction-trigger languages register distinct extensions")
 }
 
 pub(super) fn system_evaluators(
 ) -> DeclarationEvaluatorSet<SystemTriggerEvaluator> {
-    DeclarationEvaluatorSet::new([SystemTriggerEvaluator::default()])
-        .expect("one canonical system-trigger language is registered")
+    DeclarationEvaluatorSet::new(
+        registered_engines().map(SystemTriggerEvaluator::wrap),
+    )
+    .expect("the system-trigger languages register distinct extensions")
 }
