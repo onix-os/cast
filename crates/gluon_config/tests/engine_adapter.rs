@@ -1,5 +1,12 @@
+use std::convert::Infallible;
+
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationInputEvaluator,
+    Evaluation as DeclarationEvaluation,
+};
 use gluon_config::{
-    Diagnostic, Evaluator, GluonEngine, ImportPolicy, Limits, Source,
+    Diagnostic, EvaluationFingerprint, Evaluator, GluonEngine, ImportPolicy,
+    Limits, Source,
 };
 
 fn assert_same_diagnostic(left: &Diagnostic, right: &Diagnostic) {
@@ -29,6 +36,43 @@ fn gluon_engine_and_compatibility_facade_return_the_same_v1_result() {
     assert_eq!(direct, compatible);
     assert_eq!(direct.value, 41);
     assert_eq!(direct.fingerprint.validate(), Ok(()));
+}
+
+#[test]
+fn typed_input_role_matches_the_inherent_gluon_v1_pipeline() {
+    let policy = ImportPolicy::new()
+        .with_embedded_module("fixture.answer", "41")
+        .unwrap();
+    let source = Source::new("root.glu", "import! fixture.answer");
+    let engine = GluonEngine::default().with_import_policy(policy);
+    let explicit_inputs = b"adapter-input-v1";
+
+    let inherent = engine
+        .evaluate_with_inputs::<i64>(&source, explicit_inputs)
+        .unwrap();
+    let typed: Result<
+        DeclarationEvaluation<i64, EvaluationFingerprint>,
+        DeclarationEvaluationError<Infallible>,
+    > = <GluonEngine as DeclarationInputEvaluator<i64>>::evaluate_with_inputs(
+        &engine,
+        &source,
+        explicit_inputs,
+    );
+    let typed = typed.unwrap();
+
+    assert_eq!(typed.value, inherent.value);
+    assert_eq!(typed.identity, inherent.fingerprint);
+    assert_eq!(typed.identity.configuration_abi_version, 1);
+    assert_eq!(typed.identity.evaluator_policy_version, 1);
+    assert_eq!(typed.identity.validate(), Ok(()));
+
+    let changed = <GluonEngine as DeclarationInputEvaluator<i64>>::evaluate_with_inputs(
+        &engine,
+        &source,
+        b"adapter-input-v2",
+    )
+    .unwrap();
+    assert_ne!(typed.identity.sha256, changed.identity.sha256);
 }
 
 #[test]

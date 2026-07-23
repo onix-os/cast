@@ -2,10 +2,10 @@ use std::{convert::Infallible, path::Path};
 
 use declarative_config::{
     AbiCatalog, DeclarationEvaluationError, DeclarationEvaluator,
-    EngineAdapter, EngineId, Evaluation as CoreEvaluation,
-    EvaluationDeadline, IdentityInputs, ImportRequest, LanguageId,
-    LanguageSpec, Limits, ModuleView, NormalizedRelative, PreparedGraph,
-    Source, SourceRoot, TypedDecoder,
+    DeclarationInputEvaluator, EngineAdapter, EngineId,
+    Evaluation as CoreEvaluation, EvaluationDeadline, IdentityInputs,
+    ImportRequest, LanguageId, LanguageSpec, Limits, ModuleView,
+    NormalizedRelative, PreparedGraph, Source, SourceRoot, TypedDecoder,
     evaluate as evaluate_declaration, evaluate_file as evaluate_declaration_file,
     evaluate_with_inputs as evaluate_declaration_with_inputs,
 };
@@ -284,5 +284,31 @@ where
     > {
         evaluate_declaration(self, source, GluonGetable::new())
             .map_err(DeclarationEvaluationError::Evaluation)
+    }
+}
+
+impl<T> DeclarationInputEvaluator<T> for GluonEngine
+where
+    T: VmType + Send,
+    for<'vm, 'value> T: Getable<'vm, 'value>,
+{
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        CoreEvaluation<T, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = GluonEngine::evaluate_with_inputs::<T>(
+            self,
+            source,
+            explicit_inputs,
+        )
+        .map_err(DeclarationEvaluationError::Evaluation)?;
+        Ok(CoreEvaluation {
+            value: evaluation.value,
+            identity: evaluation.fingerprint,
+        })
     }
 }

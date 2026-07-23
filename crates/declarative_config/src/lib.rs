@@ -14,8 +14,9 @@ pub use deadline::EvaluationDeadline;
 pub use declaration_error::DeclarationEvaluationError;
 pub use diagnostic::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
 pub use evaluation::{
-    DeclarationCodec, DeclarationEvaluator, EngineAdapter, Evaluation, IdentityInputs,
-    TypedDecoder, evaluate, evaluate_file, evaluate_with_inputs,
+    DeclarationCodec, DeclarationEvaluator, DeclarationInputEvaluator,
+    EngineAdapter, Evaluation, IdentityInputs, TypedDecoder, evaluate,
+    evaluate_file, evaluate_with_inputs,
 };
 pub use language::{
     AbiId, DescriptorError, EngineId, EvaluatorPolicyId, LanguageId, LanguageSpec,

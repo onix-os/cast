@@ -38,6 +38,23 @@ pub trait DeclarationEvaluator<T> {
     >;
 }
 
+/// A typed declaration boundary whose identity explicitly commits to
+/// caller-supplied input bytes.
+///
+/// This is a separate role so domains without external identity material use
+/// only [`DeclarationEvaluator`] and cannot accidentally acquire an ignored
+/// input parameter.
+pub trait DeclarationInputEvaluator<T>: DeclarationEvaluator<T> {
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        Evaluation<T, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    >;
+}
+
 /// A writable declaration boundary adds canonical encoding without forcing
 /// read-only domains to implement a fake serializer.
 pub trait DeclarationCodec<T>: DeclarationEvaluator<T> {

@@ -5,7 +5,8 @@ use std::{error::Error, fmt};
 use config::GENERATED_GLUON_MARKER;
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    EngineId, Evaluation, LanguageId, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationInputEvaluator, EngineId, Evaluation, LanguageId, LanguageSpec,
+    Limits, Source, SourceRoot,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +27,18 @@ struct TriggerDeclaration {
 struct ProfileFragment {
     name: String,
     packages: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputSensitiveDeclaration {
+    source: String,
+    explicit_inputs: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputSensitiveIdentity {
+    source: EvaluationIdentity,
+    explicit_inputs: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +160,73 @@ impl DeclarationCodec<ProfileFragment> for ProfileCodec {
     }
 }
 
+struct InputSensitiveEvaluator {
+    language: LanguageSpec,
+}
+
+impl InputSensitiveEvaluator {
+    fn new() -> Self {
+        Self {
+            language: gluon_language(),
+        }
+    }
+}
+
+impl DeclarationEvaluator<InputSensitiveDeclaration> for InputSensitiveEvaluator {
+    type Identity = InputSensitiveIdentity;
+    type Error = FixtureError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        &self.language
+    }
+
+    fn limits(&self) -> Limits {
+        Limits::default()
+    }
+
+    fn with_source_root(&self, _source_root: SourceRoot) -> Self {
+        Self::new()
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        Evaluation<InputSensitiveDeclaration, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        <Self as DeclarationInputEvaluator<InputSensitiveDeclaration>>::evaluate_with_inputs(
+            self,
+            source,
+            &[],
+        )
+    }
+}
+
+impl DeclarationInputEvaluator<InputSensitiveDeclaration>
+    for InputSensitiveEvaluator
+{
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        Evaluation<InputSensitiveDeclaration, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        Ok(Evaluation {
+            value: InputSensitiveDeclaration {
+                source: source.text().to_owned(),
+                explicit_inputs: explicit_inputs.to_vec(),
+            },
+            identity: InputSensitiveIdentity {
+                source: fixture_identity(self.language_spec(), source),
+                explicit_inputs: explicit_inputs.to_vec(),
+            },
+        })
+    }
+}
+
 fn gluon_language() -> LanguageSpec {
     LanguageSpec::new(
         LanguageId::new("gluon").expect("fixture language is canonical"),
@@ -182,6 +262,20 @@ where
     E: DeclarationEvaluator<T>,
 {
     evaluator.evaluate(source)
+}
+
+fn evaluate_with_identity_inputs<T, E>(
+    evaluator: &E,
+    source: &Source,
+    explicit_inputs: &[u8],
+) -> Result<
+    Evaluation<T, E::Identity>,
+    DeclarationEvaluationError<E::Error>,
+>
+where
+    E: DeclarationInputEvaluator<T>,
+{
+    evaluator.evaluate_with_inputs(source, explicit_inputs)
 }
 
 fn round_trip_writable<T, C>(
@@ -271,6 +365,26 @@ fn writable_fragment_adds_a_codec_without_changing_evaluation() {
     assert_eq!(evaluation.value.name, "workstation");
     assert_eq!(evaluation.value.packages, ["base", "desktop"]);
     assert_eq!(codec.encode(&evaluation.value).unwrap(), source.text());
+}
+
+#[test]
+fn explicit_identity_inputs_are_an_opt_in_typed_role() {
+    let evaluator = InputSensitiveEvaluator::new();
+    let source = Source::new("lock.d/source.glu", "source-lock");
+    let plain = evaluate_read_only(&evaluator, &source).unwrap();
+    let supplied = evaluate_with_identity_inputs(
+        &evaluator,
+        &source,
+        b"resolved-source:v1",
+    )
+    .unwrap();
+
+    assert!(plain.value.explicit_inputs.is_empty());
+    assert!(plain.identity.explicit_inputs.is_empty());
+    assert_eq!(supplied.value.source, "source-lock");
+    assert_eq!(supplied.value.explicit_inputs, b"resolved-source:v1");
+    assert_eq!(supplied.identity.explicit_inputs, b"resolved-source:v1");
+    assert_ne!(plain.identity, supplied.identity);
 }
 
 #[test]
