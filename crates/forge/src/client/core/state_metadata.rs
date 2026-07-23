@@ -693,7 +693,9 @@ fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(
     let dir = path.parent().expect("system snapshot path has a parent");
     fs::create_dir_all(dir)?;
     fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755))?;
-    fs::write(&path, system_snapshot.encoded())?;
+    let encoded = system_model::encode_snapshot(&system_snapshot)
+        .expect("an owned system model always has a canonical snapshot encoding");
+    fs::write(&path, encoded)?;
     fs::set_permissions(path, std::fs::Permissions::from_mode(0o644))?;
 
     Ok(())

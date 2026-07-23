@@ -2,11 +2,18 @@
 
 use std::{
     collections::BTreeSet,
+    ffi::OsStr,
     io,
     path::{Path, PathBuf},
 };
 
-use gluon_config::{EvaluationFingerprint, GluonEngine, Source, SourceRoot};
+use config::declaration::{
+    LoadFixedRootDeclarationError, RootDeclarationDiscoveryError,
+    RootDeclarationSlot, TypedDeclarationEvaluatorSet,
+    load_fixed_root_declaration,
+};
+use declarative_config::{DeclarationCodec, DeclarationEvaluator, Source};
+use gluon_config::EvaluationFingerprint;
 use thiserror::Error;
 
 use crate::{Package, dependency, repository};
@@ -162,29 +169,54 @@ impl TryFrom<LoadedSystemModel> for SystemModel {
 
 /// Load and evaluate authored intent or a generated Gluon snapshot.
 pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
+        .and_then(OsStr::to_str)
         .ok_or_else(|| LoadError::InvalidPath(path.to_owned()))?;
-    let source_root = SourceRoot::new(parent).map_err(gluon::EvaluationError::from)?;
-    let evaluator = GluonEngine::default().with_source_root(source_root.clone());
-    let source = source_root
-        .load(Path::new(file_name), evaluator.limits().max_source_bytes)
-        .map_err(gluon::EvaluationError::from)?;
-    Ok(Some(load_source(path, source, &evaluator)?))
+    let basename = path
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| LoadError::InvalidPath(path.to_owned()))?;
+    let evaluator = gluon::SystemIntentEvaluator::default();
+    if path.extension().and_then(OsStr::to_str)
+        != Some(evaluator.language_spec().extension())
+    {
+        return Err(LoadError::InvalidPath(path.to_owned()));
+    }
+    let slot = RootDeclarationSlot::new(basename, file_name)
+        .map_err(|_| LoadError::InvalidPath(path.to_owned()))?;
+    let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
+        .expect("one validated system-intent adapter has no extension collision");
+    let loaded = load_fixed_root_declaration(parent, &slot, &evaluators)?;
+
+    Ok(loaded.map(|loaded| {
+        loaded_from_declaration(path, loaded.value, loaded.identity)
+    }))
 }
 
-fn load_source(path: &Path, source: Source, evaluator: &GluonEngine) -> Result<LoadedSystemModel, LoadError> {
-    let authored_source = source.text().to_owned();
-    let evaluated = gluon::evaluate_with(evaluator, &source)?;
-    let authored_fingerprint = evaluated.fingerprint;
+fn load_source(
+    path: &Path,
+    source: Source,
+    evaluator: &gluon::SystemIntentEvaluator,
+) -> Result<LoadedSystemModel, LoadError> {
+    let evaluated = evaluator.evaluate(&source).map_err(gluon::EvaluationError::from)?;
+    Ok(loaded_from_declaration(
+        path,
+        evaluated.value,
+        evaluated.identity,
+    ))
+}
+
+fn loaded_from_declaration(
+    path: &Path,
+    declaration: gluon::SystemIntentDeclaration,
+    authored_fingerprint: EvaluationFingerprint,
+) -> LoadedSystemModel {
+    let authored_source = declaration.authored_source;
     let SystemModel {
         disable_warning,
         repositories,
@@ -192,14 +224,14 @@ fn load_source(path: &Path, source: Source, evaluator: &GluonEngine) -> Result<L
         generated_snapshot,
         fingerprint: generated_fingerprint,
         ..
-    } = evaluated.model;
+    } = declaration.model;
     let source_fingerprint = if authored_source.starts_with(spec::GENERATED_GLUON_MARKER) {
         embedded_source_fingerprint(&authored_source)
     } else {
         Some(authored_fingerprint.sha256.clone())
     };
 
-    Ok(LoadedSystemModel {
+    LoadedSystemModel {
         disable_warning,
         repositories,
         packages,
@@ -211,7 +243,16 @@ fn load_source(path: &Path, source: Source, evaluator: &GluonEngine) -> Result<L
             source_fingerprint,
         }),
         path: path.to_owned(),
-    })
+    }
+}
+
+pub(crate) fn encode_snapshot(
+    model: &SystemModel,
+) -> Result<String, spec::ConversionError> {
+    <gluon::SystemSnapshotCodec as DeclarationCodec<SystemModel>>::encode(
+        &gluon::SystemSnapshotCodec::default(),
+        model,
+    )
 }
 
 /// Create a canonical generated system model.
@@ -323,6 +364,15 @@ pub enum LoadError {
     InvalidPath(PathBuf),
     #[error("evaluate system model")]
     Evaluation(#[from] gluon::EvaluationError),
+    #[error("load fixed system declaration")]
+    FixedDeclaration(
+        #[from]
+        LoadFixedRootDeclarationError<spec::ConversionError>,
+    ),
+    #[error("discover descriptor-rooted system declaration")]
+    RootedDiscovery(#[source] RootDeclarationDiscoveryError),
+    #[error("descriptor-rooted system declaration slot changed beneath {0}")]
+    RootedSlotChanged(PathBuf),
     #[error("retain descriptor-rooted system model source {path}")]
     RetainRootedSource {
         path: PathBuf,
@@ -341,6 +391,8 @@ pub enum UpdateError {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::PermissionsExt as _;
+
     use fs_err as fs;
 
     use super::*;
@@ -405,6 +457,46 @@ let cast = import! cast.system.v1
     }
 
     #[test]
+    fn rooted_load_uses_retained_directory_during_public_ancestor_absence() {
+        let temporary = tempfile::tempdir().unwrap();
+        let public_root = temporary.path().join("public");
+        let public_etc = public_root.join("etc");
+        let directory = public_etc.join("cast");
+        fs::create_dir_all(&directory).unwrap();
+        let source_path = directory.join("system.glu");
+        fs::write(&source_path, authored_source()).unwrap();
+        fs::set_permissions(
+            &source_path,
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let retained_directory = std::fs::File::open(&directory).unwrap();
+
+        let detached_etc = temporary.path().join("detached-etc");
+        let replacement_etc = temporary.path().join("replacement-etc");
+        let evacuated_etc = temporary.path().join("evacuated-etc");
+        fs::create_dir_all(replacement_etc.join("cast")).unwrap();
+        fs::rename(&public_etc, &detached_etc).unwrap();
+        fs::rename(&replacement_etc, &public_etc).unwrap();
+
+        let hook_public_etc = public_etc.clone();
+        let hook_detached_etc = detached_etc.clone();
+        let hook_evacuated_etc = evacuated_etc.clone();
+        arm_after_rooted_system_source_retained(move || {
+            fs::rename(&hook_public_etc, &hook_evacuated_etc).unwrap();
+            fs::rename(&hook_detached_etc, &hook_public_etc).unwrap();
+        });
+
+        let loaded = load_rooted(&directory, &retained_directory)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(loaded.path(), source_path);
+        assert!(loaded.packages.contains(&Provider::package_name("alpha")));
+        assert!(!evacuated_etc.join("cast/system.glu").exists());
+    }
+
+    #[test]
     fn load_retains_authored_source_and_records_both_fingerprints() {
         let temporary = tempfile::tempdir().unwrap();
         let path = temporary.path().join("system.glu");
@@ -449,6 +541,95 @@ let cast = import! cast.system.v1
         assert_eq!(round_trip.encoded(), model.encoded());
         assert_eq!(round_trip.fingerprint(), model.fingerprint());
         assert!(round_trip.packages.contains(&Provider::package_name("alpha")));
+    }
+
+    #[test]
+    fn fixed_loader_keeps_engine_and_conversion_errors_typed_with_exact_paths() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("system.glu");
+        fs::write(
+            &path,
+            "let cast = import! cast.system.v1\n{ packages = [1], .. cast.system }",
+        )
+        .unwrap();
+
+        let engine_error = load(&path).unwrap_err();
+        assert!(matches!(
+            engine_error,
+            LoadError::FixedDeclaration(
+                LoadFixedRootDeclarationError::Evaluation {
+                    path: ref error_path,
+                    ..
+                }
+            ) if error_path == &path
+        ));
+
+        fs::write(
+            &path,
+            r#"let cast = import! cast.system.v1
+{
+    repositories = [cast.repository.direct_with {
+        id = "bad",
+        description = cast.optional.none,
+        uri = "https://example.test/index.stone",
+        priority = cast.optional.some (-1),
+        enabled = cast.optional.none,
+    }],
+    .. cast.system
+}
+"#,
+        )
+        .unwrap();
+
+        let conversion_error = load(&path).unwrap_err();
+        assert!(matches!(
+            conversion_error,
+            LoadError::FixedDeclaration(
+                LoadFixedRootDeclarationError::Conversion {
+                    path: ref error_path,
+                    source: ref error,
+                }
+            ) if error_path == &path && error.path() == "repositories[0].priority"
+        ));
+    }
+
+    #[test]
+    fn fixed_loader_accepts_only_the_registered_gluon_extension() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("system.lua");
+        fs::write(&path, authored_source()).unwrap();
+
+        assert!(matches!(load(&path), Err(LoadError::InvalidPath(found)) if found == path));
+    }
+
+    #[test]
+    fn fixed_loader_keeps_relative_imports_beneath_its_retained_root() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("system.glu");
+        fs::write(&path, "import! \"./selection.glu\"").unwrap();
+        fs::write(
+            temporary.path().join("selection.glu"),
+            r#"let cast = import! cast.system.v1
+{
+    packages = ["alpha"],
+    .. cast.system
+}
+"#,
+        )
+        .unwrap();
+
+        let loaded = load(&path).unwrap().unwrap();
+
+        assert!(loaded.packages.contains(&Provider::package_name("alpha")));
+        assert_eq!(
+            loaded
+                .fingerprint()
+                .imported_modules
+                .iter()
+                .map(|module| module.logical_name.as_str())
+                .collect::<Vec<_>>(),
+            ["cast.system.v1", "selection.glu"]
+        );
     }
 
     #[test]

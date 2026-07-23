@@ -1,13 +1,24 @@
 use std::{
     collections::BTreeMap,
     error::Error,
-    ffi::OsStr,
+    ffi::{CString, OsStr},
     fmt, io,
+    mem::{size_of, zeroed},
+    os::{
+        fd::{AsRawFd, FromRawFd as _, OwnedFd, RawFd},
+        unix::ffi::OsStrExt as _,
+    },
     path::{Component, Path, PathBuf},
 };
 
 use declarative_config::LanguageSpec;
 use fs_err as fs;
+
+const MAX_INTERRUPTED_OPEN_RETRIES: usize = 1_024;
+const ROOTED_RESOLUTION: u64 = libc::RESOLVE_BENEATH
+    | libc::RESOLVE_NO_MAGICLINKS
+    | libc::RESOLVE_NO_SYMLINKS
+    | libc::RESOLVE_NO_XDEV;
 
 /// Immutable set of declaration languages available to discovery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,10 +129,12 @@ impl RootDeclarationSlot {
         &self.logical_name
     }
 
-    /// Discover the exact registered-language file occupying this slot.
+    /// Inspect the exact registered-language file occupying this pathname.
     ///
     /// Discovery performs metadata checks only. It does not enumerate the
-    /// directory, inspect file contents, or select an evaluator.
+    /// directory, inspect file contents, or select an evaluator. This method
+    /// does not establish filesystem authority; retained loaders must use
+    /// [`Self::discover_at`] instead.
     pub fn discover(
         &self,
         directory: &Path,
@@ -145,6 +158,71 @@ impl RootDeclarationSlot {
                     });
                 }
             };
+            if !metadata.file_type().is_file() {
+                return Err(RootDeclarationDiscoveryError::NotRegular { path });
+            }
+            candidates.push(DiscoveredRootDeclaration {
+                path,
+                relative_path,
+                language: language.clone(),
+                logical_name: self.logical_name.clone(),
+            });
+        }
+
+        match candidates.len() {
+            0 => Ok(None),
+            1 => Ok(candidates.pop()),
+            _ => Err(RootDeclarationDiscoveryError::Collision {
+                logical_name: self.logical_name.clone(),
+                paths: candidates
+                    .into_iter()
+                    .map(|candidate| candidate.path)
+                    .collect(),
+            }),
+        }
+    }
+
+    /// Discover this slot relative to one already-retained directory.
+    ///
+    /// Every registered candidate is opened with `openat2` beneath the exact
+    /// retained descriptor. Links, escapes, and mount crossings are rejected.
+    /// `directory_path` supplies diagnostics only and never selects the
+    /// candidate set.
+    pub fn discover_at(
+        &self,
+        directory_path: &Path,
+        directory: &impl AsRawFd,
+        languages: &RegisteredLanguages,
+    ) -> Result<Option<DiscoveredRootDeclaration>, RootDeclarationDiscoveryError> {
+        let mut candidates = Vec::new();
+        for language in languages.iter() {
+            let relative_path = PathBuf::from(format!(
+                "{}.{}",
+                self.basename,
+                language.extension()
+            ));
+            let path = directory_path.join(&relative_path);
+            let descriptor = match open_beneath(
+                directory.as_raw_fd(),
+                &relative_path,
+                libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            ) {
+                Ok(descriptor) => descriptor,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(source) => {
+                    return Err(RootDeclarationDiscoveryError::Inspect {
+                        path,
+                        source,
+                    });
+                }
+            };
+            let file = std::fs::File::from(descriptor);
+            let metadata = file.metadata().map_err(|source| {
+                RootDeclarationDiscoveryError::Inspect {
+                    path: path.clone(),
+                    source,
+                }
+            })?;
             if !metadata.file_type().is_file() {
                 return Err(RootDeclarationDiscoveryError::NotRegular { path });
             }
@@ -280,6 +358,52 @@ fn is_safe_basename(basename: &str) -> bool {
     )
 }
 
+pub(super) fn open_beneath(
+    directory: RawFd,
+    relative_path: &Path,
+    flags: i32,
+) -> io::Result<OwnedFd> {
+    let relative_path = CString::new(relative_path.as_os_str().as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "root declaration name contains a NUL byte",
+        )
+    })?;
+    // SAFETY: every open_how field accepts zero before explicit assignment.
+    let mut how: libc::open_how = unsafe { zeroed() };
+    how.flags = u64::from(flags as u32);
+    how.resolve = ROOTED_RESOLUTION;
+    let mut interruptions = 0usize;
+    loop {
+        // SAFETY: the path is NUL-terminated, `directory` remains borrowed,
+        // and `how` is fully initialized. Success returns one fresh FD.
+        let descriptor = unsafe {
+            libc::syscall(
+                libc::SYS_openat2,
+                directory,
+                relative_path.as_ptr(),
+                &how,
+                size_of::<libc::open_how>(),
+            )
+        };
+        if descriptor != -1 {
+            // SAFETY: openat2 returned one fresh descriptor owned here.
+            return Ok(unsafe { OwnedFd::from_raw_fd(descriptor as i32) });
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+        if interruptions == MAX_INTERRUPTED_OPEN_RETRIES {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "root declaration open exceeded interrupted retries",
+            ));
+        }
+        interruptions += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::{EngineId, LanguageId};
@@ -361,6 +485,59 @@ mod tests {
             &[
                 directory.path().join("system.alt"),
                 directory.path().join("system.decl"),
+            ]
+        );
+    }
+
+    #[test]
+    fn retained_discovery_survives_public_ancestor_substitution() {
+        let temporary = tempdir().unwrap();
+        let public_parent = temporary.path().join("public");
+        let directory = public_parent.join("declarations");
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("system.decl"), "retained fixture").unwrap();
+        let retained = fs::File::open(&directory).unwrap();
+        let detached_parent = temporary.path().join("detached-public");
+        fs::rename(&public_parent, &detached_parent).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        let slot = RootDeclarationSlot::new("system", "system").unwrap();
+
+        assert_eq!(slot.discover(&directory, &languages()).unwrap(), None);
+        let found = slot
+            .discover_at(&directory, &retained, &languages())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(found.path(), directory.join("system.decl"));
+        assert_eq!(found.relative_path(), Path::new("system.decl"));
+        assert_eq!(found.language().extension(), "decl");
+    }
+
+    #[test]
+    fn retained_discovery_reports_collision_hidden_by_public_substitution() {
+        let temporary = tempdir().unwrap();
+        let directory = temporary.path().join("declarations");
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("system.decl"), "fixture").unwrap();
+        fs::write(directory.join("system.alt"), "alternate").unwrap();
+        let retained = fs::File::open(&directory).unwrap();
+        let detached = temporary.path().join("detached-declarations");
+        fs::rename(&directory, &detached).unwrap();
+        fs::create_dir(&directory).unwrap();
+        fs::write(directory.join("system.decl"), "public fixture").unwrap();
+        let slot = RootDeclarationSlot::new("system", "system").unwrap();
+
+        let public = slot.discover(&directory, &languages()).unwrap().unwrap();
+        assert_eq!(public.language().extension(), "decl");
+        let error = slot
+            .discover_at(&directory, &retained, &languages())
+            .unwrap_err();
+
+        assert_eq!(
+            error.collision_paths().unwrap(),
+            &[
+                directory.join("system.alt"),
+                directory.join("system.decl"),
             ]
         );
     }

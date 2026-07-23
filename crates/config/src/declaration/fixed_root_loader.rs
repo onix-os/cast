@@ -67,7 +67,11 @@ where
         })?;
 
     let discovered = slot
-        .discover(&directory, evaluators.languages())
+        .discover_at(
+            &directory,
+            &retained_directory,
+            evaluators.languages(),
+        )
         .map_err(|source| LoadFixedRootDeclarationError::Discovery {
             directory: directory.clone(),
             source,
@@ -215,7 +219,11 @@ impl FixedRootAuthority<'_> {
 
         let actual = self
             .slot
-            .discover(&self.directory, self.languages)
+            .discover_at(
+                &self.directory,
+                &self.retained_directory,
+                self.languages,
+            )
             .map_err(|source| FixedRootAuthorityError::DiscoverSlot {
                 source,
             })?;
@@ -405,23 +413,11 @@ fn open_at(
     relative_path: &Path,
     diagnostic_path: &Path,
 ) -> io::Result<fs::File> {
-    let relative_path = CString::new(relative_path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "declaration name contains a NUL byte"))?;
-    // SAFETY: the name is NUL-terminated, the directory descriptor remains
-    // live, and a successful openat returns one newly owned descriptor.
-    let descriptor = unsafe {
-        libc::openat(
-            directory.as_raw_fd(),
-            relative_path.as_ptr(),
-            libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-            0,
-        )
-    };
-    if descriptor == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: openat returned a fresh descriptor owned by this function.
-    let descriptor = unsafe { OwnedFd::from_raw_fd(descriptor) };
+    let descriptor = super::root_slot::open_beneath(
+        directory.as_raw_fd(),
+        relative_path,
+        libc::O_PATH | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+    )?;
     Ok(fs::File::from_parts(
         descriptor.into(),
         diagnostic_path.to_owned(),

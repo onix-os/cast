@@ -10,6 +10,7 @@ use std::{fs::File, path::Path};
 use super::Error;
 use crate::{
     SystemModel,
+    system_model,
     transition_identity::{
         ArchivedStateRepairIdentity, CandidateMetadataError, CandidateMetadataOutputs,
         CandidateMetadataProof as CoreCandidateMetadataProof, CandidateMetadataPublication, RetainedCandidateUsr,
@@ -143,7 +144,12 @@ pub(super) fn derive_outputs(
     snapshot: &SystemModel,
 ) -> Result<CandidateMetadataOutputs, CandidateMetadataError> {
     let os_release = render_os_release(os_info);
-    CandidateMetadataOutputs::from_policy(os_release.into_bytes(), snapshot.encoded().as_bytes().to_vec())
+    let encoded = system_model::encode_snapshot(snapshot)
+        .expect("an owned system model always has a canonical snapshot encoding");
+    CandidateMetadataOutputs::from_policy(
+        os_release.into_bytes(),
+        encoded.into_bytes(),
+    )
 }
 
 fn render_os_release(os_info: Option<&[u8]>) -> String {
