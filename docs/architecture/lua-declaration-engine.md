@@ -118,9 +118,32 @@ Two shapes appear in the recipe domains:
 
 - Domains whose *validation* still lives inside a `TryFrom<GluonX>` (Gluon-typed
   input, no neutral method) genuinely need that logic extracted into an
-  engine-neutral function or a domain method first. Confirm which shape the
-  package recipe and full build policy have before adapting them; the build lock
-  shows the neutral-method shape can be adapted with only serde derives.
+  engine-neutral function or a domain method first.
+
+### Package recipe and full build policy
+
+Both reach their domain values through an infallible `From<GluonX>` (the package
+does `PackageSpec::from(evaluation.value)`, the policy `evaluation.value.into()`),
+so they are the *neutral* shape like the build lock — no validation extraction is
+required. Two things still make them large, multi-day slices rather than quick
+serde-derive additions:
+
+1. **Scale.** `build_policy/mod.rs` alone defines ~44 spec types; the package
+   recipe is comparable. Every transitively referenced type must derive
+   `Deserialize` with a matching tagged encoding.
+2. **Tuple-variant patches.** The build-policy patch uses `ValuePatch<T>` =
+   `Keep | Set(T)` and `ArrayPatch<T>` = `Keep | Replace(Vec<T>) | …` — tuple
+   variants. Serde's internally-tagged `#[serde(tag = "kind")]` encoding (used by
+   every other Lua enum here) does **not** support tuple variants, so these
+   cannot gain the uniform tagged encoding by a derive alone. They need either a
+   dedicated `lua_config::LuaPatch`-style DTO with `From` conversions, or the
+   domain enums reshaped to struct variants (`Set { value: T }`).
+
+The verification cost is also real: an all-`Keep` patch decodes without
+exercising any nested type's encoding, so a meaningful parity test must author
+substantial populated values (the authored policies are ~600 lines of `.glu`).
+These are the reasons the recipe domains are estimated in engineer-weeks, not the
+hours the config-style domains took.
 
 ## Still open
 
