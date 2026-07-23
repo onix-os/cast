@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 
 use mlua::{FromLuaMulti, HookTriggers, Lua, LuaOptions, StdLib, VmState};
 
+pub mod imports;
+
 /// Construct the minimal Lua 5.4 runtime with no standard library loaded.
 pub fn empty_runtime() -> mlua::Result<Lua> {
     Lua::new_with(StdLib::NONE, LuaOptions::default())
