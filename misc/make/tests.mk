@@ -1,6 +1,7 @@
 .PHONY: config-rooted-gluon-test forge-client-startup-gate-test forge-active-state-snapshot-test forge-transition-identity-test forge-state-prune-test forge-active-reblit-wrapper-test forge-archived-repair-test forge-stateful-candidate-metadata-test forge-ephemeral-candidate-metadata-test forge-fixed-staging-test forge-previous-tree-move-test forge-archived-candidate-move-test forge-frozen-normalization-test forge-frozen-publication-test forge-frozen-discard-test cache-clean-test cast-example-process-supervision-test examples examples-gate-test execution-fixtures execution-capability-preflight-test delegated-execution-preflight delegated-execution-fixtures delegated-fixture-runner-test bootstrap-fixtures bootstrap-fixtures-prepare bootstrap-fixtures-offline bootstrap-fixtures-tmp bootstrap-fixture-selection bootstrap-execution-requirement fixtures-ci fixture-sources fixture-sources-check
 
 include misc/make/hardening-tests.mk
+include misc/make/declaration-tests.mk
 include misc/make/boot-publication-receipt-head-tests.mk
 include misc/make/boot-publication-receipt-state-tests.mk misc/make/boot-publication-receipt-promotion-tests.mk misc/make/boot-publication-installed-receipt-tests.mk misc/make/boot-publication-promoted-receipt-chain-tests.mk
 include misc/make/transition-journal-bound-delete-tests.mk
