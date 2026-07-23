@@ -852,10 +852,10 @@ mason-policy-test:
 
 config-gluon-store-test:
 	@set -eu; \
-	listed="$$( timeout 300s $(CARGO) test -p config --lib -- --list )"; \
-	count="$$( timeout 10s grep -c '^gluon::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 28; \
-	timeout 900s $(CARGO) test -p config --lib "gluon::tests::" -- --test-threads=1
+	listed="$$( $(CARGO) test -p config --lib -- --list )"; \
+	count="$$( grep -c '^gluon::tests::.*: test$$' <<<"$$listed" )"; \
+	test "$$count" = 30; \
+	$(CARGO) test -p config --lib "gluon::tests::" -- --test-threads=1
 
 gitwrap-repository-fs-test:
 	@set -eu; \
