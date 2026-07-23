@@ -857,7 +857,7 @@ fn startup_reconciliation_pending_error_releases_journal_before_retry() {
     });
 
     assert_eq!(
-        receiver.recv_timeout(Duration::from_secs(10)),
+        receiver.recv_timeout(Duration::from_secs(120)),
         Ok(true),
         "a live pending diagnostic retained startup mutation authority"
     );

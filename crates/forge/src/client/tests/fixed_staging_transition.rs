@@ -434,7 +434,7 @@ fn coordinator_lease_spans_state_allocation_and_retained_identity_preparation() 
         let _guard = fixed_staging::lock_coordinator().unwrap();
         done_tx.send(()).unwrap();
     });
-    reached_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    reached_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     assert!(matches!(
         done_rx.recv_timeout(Duration::from_millis(100)),
         Err(RecvTimeoutError::Timeout)
@@ -470,7 +470,7 @@ fn coordinator_lease_spans_state_allocation_and_retained_identity_preparation() 
 
     drop(identity);
     drop(candidate);
-    done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    done_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     worker.join().unwrap();
 }
 

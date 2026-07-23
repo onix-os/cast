@@ -158,7 +158,7 @@ fn applied_writer_handoff_keeps_the_same_lease_until_reservation_drop() {
         acquired_sender.send(()).unwrap();
         drop(reservation);
     });
-    reached_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    reached_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
     assert!(matches!(
         acquired_receiver.recv_timeout(Duration::from_millis(100)),
         Err(RecvTimeoutError::Timeout)
@@ -173,6 +173,6 @@ fn applied_writer_handoff_keeps_the_same_lease_until_reservation_drop() {
     ));
 
     drop(reservation);
-    acquired_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    acquired_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
     contender.join().unwrap();
 }

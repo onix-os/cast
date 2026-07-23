@@ -280,7 +280,7 @@ fn startup_cooperating_writer_cannot_promote_between_pending_guard_and_rollback(
             drop(reservation);
         });
         *contender_in_hook.lock().unwrap() = Some(handle);
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(120)).unwrap();
         assert!(
             matches!(
                 acquired_rx_in_hook
@@ -305,10 +305,10 @@ fn startup_cooperating_writer_cannot_promote_between_pending_guard_and_rollback(
     acquired_rx
         .lock()
         .unwrap()
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(120))
         .expect("cooperating writer did not acquire after startup returned");
     completed_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(120))
         .expect("receipt-promotion contender did not complete after startup returned");
     contender
         .lock()

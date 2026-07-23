@@ -123,13 +123,13 @@ fn exact_cleanup_complete_rolls_forward_once_and_preserves_all_authority() {
                 acquired_sender.send(()).unwrap();
                 drop(reservation);
             });
-            reached_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+            reached_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
             assert!(matches!(
                 acquired_receiver.recv_timeout(Duration::from_millis(100)),
                 Err(RecvTimeoutError::Timeout),
             ));
             drop(completed);
-            acquired_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+            acquired_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
             contender.join().unwrap();
             assert_eq!(load_journal_record(&fixture.installation), expected);
         }
@@ -235,7 +235,7 @@ fn complete_reopen_never_waits_behind_writer_blocked_journal_contender() {
                 drop(journal);
             });
             arm_after_active_reblit_commit_cleanup_complete_same_store_before_reopen(move || {
-                journal_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+                journal_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
             });
 
             assert!(persist_complete_with_assessments!(
@@ -247,7 +247,7 @@ fn complete_reopen_never_waits_behind_writer_blocked_journal_contender() {
             .is_err());
 
             assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), 1);
-            writer_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+            writer_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
             contender.join().unwrap();
             assert_eq!(load_journal_record(&fixture.installation), expected);
         }

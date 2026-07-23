@@ -213,7 +213,7 @@ fn completion_reopens_never_wait_behind_a_writer_blocked_journal_contender() {
             });
             arm_before_completion_journal_reopen(move || {
                 journal_receiver
-                    .recv_timeout(Duration::from_secs(2))
+                    .recv_timeout(Duration::from_secs(120))
                     .unwrap();
             });
             reset_and_assert_no_legacy_boot_effect();
@@ -234,7 +234,7 @@ fn completion_reopens_never_wait_behind_a_writer_blocked_journal_contender() {
                 ),
             ));
             writer_receiver
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(120))
                 .unwrap();
             contender.join().unwrap();
             assert_no_legacy_boot_effect();

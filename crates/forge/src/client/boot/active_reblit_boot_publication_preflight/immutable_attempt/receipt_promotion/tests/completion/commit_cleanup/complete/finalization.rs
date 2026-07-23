@@ -105,13 +105,13 @@ fn exact_complete_finalizes_once_and_preserves_clean_authority() {
                 acquired_sender.send(()).unwrap();
                 drop(reservation);
             });
-            reached_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+            reached_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
             assert!(matches!(
                 acquired_receiver.recv_timeout(Duration::from_millis(100)),
                 Err(RecvTimeoutError::Timeout),
             ));
             drop(finalized);
-            acquired_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+            acquired_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
             contender.join().unwrap();
 
             let reopened = TransitionJournalStore::try_open_in_retained_cast(

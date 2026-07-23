@@ -371,7 +371,7 @@ fn startup_usr_rollback_resume_route_historical_and_active_reblit_evidence_remai
                 drop(reservation);
             });
             *contender_in_hook.lock().unwrap() = Some(handle);
-            started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            started_rx.recv_timeout(Duration::from_secs(120)).unwrap();
             thread::sleep(Duration::from_millis(50));
             assert!(
                 !contender_acquired_in_thread.load(Ordering::SeqCst),

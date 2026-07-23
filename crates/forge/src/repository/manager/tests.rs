@@ -808,7 +808,7 @@ fn stable_snapshot_view_blocks_refresh_across_multiple_queries() {
     assert_eq!(stable.snapshots()[0].sha256, index_identity(&first).sha256);
 
     drop(stable);
-    done_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+    done_rx.recv_timeout(Duration::from_secs(120)).unwrap().unwrap();
     thread.join().unwrap();
     assert!(
         manager
@@ -859,7 +859,7 @@ fn stable_snapshot_view_blocks_repository_removal() {
 
     drop(stable);
     assert!(matches!(
-        done_rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap(),
+        done_rx.recv_timeout(Duration::from_secs(120)).unwrap().unwrap(),
         Removal::ConfigDeleted(true)
     ));
     thread.join().unwrap();

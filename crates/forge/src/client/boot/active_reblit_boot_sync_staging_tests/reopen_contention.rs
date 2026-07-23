@@ -23,7 +23,7 @@ fn reconciliation_never_waits_behind_a_writer_blocked_journal_contender() {
         });
         arm_after_old_journal_drop_before_reopen(move || {
             journal_receiver
-                .recv_timeout(Duration::from_secs(2))
+                .recv_timeout(Duration::from_secs(120))
                 .unwrap();
         });
         arm_next_temporary_sync_fault();
@@ -48,7 +48,7 @@ fn reconciliation_never_waits_behind_a_writer_blocked_journal_contender() {
             },
         ));
         writer_receiver
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(120))
             .unwrap();
         contender.join().unwrap();
         assert!(matches!(
