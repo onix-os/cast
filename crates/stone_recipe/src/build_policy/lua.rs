@@ -19,7 +19,9 @@ use serde::Deserialize;
 
 use super::{
     ArrayPatch, BuildCommandSpec, BuildProgramSpec, BuildToolSpec, CompilerFlagsSpec,
-    CompilerToolsSpec, ContextValue, InstallLayoutSpec, TextSpec, ToolchainsSpec, ValuePatch,
+    CompilerToolsSpec, ContextValue, EnvironmentBindingSpec, EnvironmentCondition,
+    InstallLayoutSpec, PlatformPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec,
+    ToolchainFlagsSpec, ToolchainsSpec, ValuePatch,
 };
 
 /// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
@@ -284,6 +286,81 @@ impl From<LuaToolchainsSpec> for ToolchainsSpec {
     }
 }
 
+/// The Lua encoding of a [`ToolchainFlagsSpec`] — common/GNU/LLVM flag sets.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaToolchainFlagsSpec {
+    pub common: LuaCompilerFlagsSpec,
+    pub gnu: LuaCompilerFlagsSpec,
+    pub llvm: LuaCompilerFlagsSpec,
+}
+
+impl From<LuaToolchainFlagsSpec> for ToolchainFlagsSpec {
+    fn from(flags: LuaToolchainFlagsSpec) -> Self {
+        Self {
+            common: flags.common.into(),
+            gnu: flags.gnu.into(),
+            llvm: flags.llvm.into(),
+        }
+    }
+}
+
+/// The Lua encoding of an [`EnvironmentBindingSpec`]. `condition` reuses the
+/// all-unit [`EnvironmentCondition`], which decodes from its snake_case name.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaEnvironmentBindingSpec {
+    pub name: String,
+    pub value: LuaTextSpec,
+    pub condition: EnvironmentCondition,
+}
+
+impl From<LuaEnvironmentBindingSpec> for EnvironmentBindingSpec {
+    fn from(binding: LuaEnvironmentBindingSpec) -> Self {
+        Self {
+            name: binding.name,
+            value: binding.value.into(),
+            condition: binding.condition,
+        }
+    }
+}
+
+/// The Lua encoding of a [`TargetPolicySpec`]. The triple/platform fields are
+/// plain data; emulation and the platforms decode directly on their domain
+/// types, while the architecture flags and environment reuse the Lua wrappers.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaTargetPolicySpec {
+    pub name: String,
+    pub target_triple: String,
+    pub build_triple: String,
+    pub host_triple: String,
+    pub lib_suffix: String,
+    pub artifact_architecture: String,
+    pub emulation: TargetEmulationSpec,
+    pub build_platform: PlatformPolicySpec,
+    pub host_platform: PlatformPolicySpec,
+    pub target_platform: PlatformPolicySpec,
+    pub architecture_flags: LuaToolchainFlagsSpec,
+    pub environment: Vec<LuaEnvironmentBindingSpec>,
+}
+
+impl From<LuaTargetPolicySpec> for TargetPolicySpec {
+    fn from(target: LuaTargetPolicySpec) -> Self {
+        Self {
+            name: target.name,
+            target_triple: target.target_triple,
+            build_triple: target.build_triple,
+            host_triple: target.host_triple,
+            lib_suffix: target.lib_suffix,
+            artifact_architecture: target.artifact_architecture,
+            emulation: target.emulation,
+            build_platform: target.build_platform,
+            host_platform: target.host_platform,
+            target_platform: target.target_platform,
+            architecture_flags: target.architecture_flags.into(),
+            environment: target.environment.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::Source;
@@ -404,6 +481,42 @@ return {
         assert_eq!(command.program.path, "/usr/bin/cc");
         assert_eq!(command.program.requirement, BuildToolSpec::Package("llvm".to_owned()));
         assert_eq!(command.args, vec!["-fPIC".to_owned(), "-O2".to_owned()]);
+    }
+
+    #[test]
+    fn pure_target_types_decode_directly_on_the_domain_type() {
+        let platform: PlatformPolicySpec = decode(
+            r#"return { architecture = "x86_64", vendor = "unknown", operating_system = "linux", abi = "gnu" }"#,
+        );
+        assert_eq!(platform.architecture, "x86_64");
+
+        let native: TargetEmulationSpec = decode(r#"return { kind = "native" }"#);
+        assert_eq!(native, TargetEmulationSpec::Native);
+
+        let emul32: TargetEmulationSpec =
+            decode(r#"return { kind = "emul32", host_architecture = "x86_64" }"#);
+        assert_eq!(
+            emul32,
+            TargetEmulationSpec::Emul32 { host_architecture: "x86_64".to_owned() }
+        );
+
+        let condition: EnvironmentCondition = decode(r#"return "compiler_cache_enabled""#);
+        assert_eq!(condition, EnvironmentCondition::CompilerCacheEnabled);
+    }
+
+    #[test]
+    fn an_environment_binding_decodes_value_and_condition() {
+        let source = r#"
+return {
+    name = "CFLAGS",
+    value = { kind = "context", value = "c_flags" },
+    condition = "always",
+}
+"#;
+        let binding: EnvironmentBindingSpec = decode::<LuaEnvironmentBindingSpec>(source).into();
+        assert_eq!(binding.name, "CFLAGS");
+        assert_eq!(binding.value, TextSpec::Context(ContextValue::CFlags));
+        assert_eq!(binding.condition, EnvironmentCondition::Always);
     }
 
     fn literal_layout_field(name: &str) -> String {

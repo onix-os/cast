@@ -254,7 +254,7 @@ pub struct TuningPolicySpec {
 }
 
 /// One concrete platform identity recorded in a frozen build lock.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PlatformPolicySpec {
     pub architecture: String,
     pub vendor: String,
@@ -264,7 +264,8 @@ pub struct PlatformPolicySpec {
 
 /// Whether a target executes natively or through one explicitly named
 /// compatibility mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TargetEmulationSpec {
     Native,
     Emul32 { host_architecture: String },
@@ -291,14 +292,15 @@ pub struct TargetPolicySpec {
 
 /// A legacy target which must remain visible to policy consumers without
 /// silently remaining selectable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct RetiredTargetPolicySpec {
     pub name: String,
     pub reason: String,
 }
 
 /// Condition under which an environment binding is present.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvironmentCondition {
     Always,
     CompilerCacheEnabled,
