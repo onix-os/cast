@@ -321,6 +321,14 @@ where
         .map_err(ActiveReblitBootCommitDecisionPostAdvanceError::CommittedEvidence)
 }
 
+#[path = "commit_decision/commit_cleanup.rs"]
+mod commit_cleanup;
+pub(in crate::client) use commit_cleanup::{
+    ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootCommitCleanupError,
+    ActiveReblitBootCommitCleanupPostAdvanceError,
+};
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootCommitDecisionError {
     #[error("revalidate exact completed terminal evidence immediately before commit decision")]

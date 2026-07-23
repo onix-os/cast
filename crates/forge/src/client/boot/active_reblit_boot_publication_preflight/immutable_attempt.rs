@@ -113,6 +113,14 @@ pub(in crate::client) struct ActiveReblitBootSyncCommitDecisionSeal {
     _private: (),
 }
 
+/// Unforgeable proof that the live boot coordinator retained the exact
+/// generation-13 `CommitDecided` handoff through its terminal-evidence check.
+/// Only descendants of this module can mint the fieldless seal; the shared
+/// startup cleanup authority may consume it but cannot manufacture it.
+pub(in crate::client) struct ActiveReblitCommitCleanupSeal {
+    _private: (),
+}
+
 /// Terminal exact-output evidence which still owns the original staged
 /// `BootSyncStarted` authority.
 ///
@@ -676,6 +684,9 @@ mod tests;
 #[path = "immutable_attempt/receipt_promotion.rs"]
 mod receipt_promotion;
 pub(in crate::client) use receipt_promotion::{
+    ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootCommitCleanupError,
+    ActiveReblitBootCommitCleanupPostAdvanceError,
     ActiveReblitBootCommitDecisionError,
     ActiveReblitBootCommitDecisionFinalValidation,
     ActiveReblitBootCommitDecisionHandoff,

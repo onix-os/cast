@@ -20,7 +20,9 @@ use super::super::startup_reconciliation::{
     ActiveReblitCommitCleanupDurableAuthority, ActiveReblitCommitCleanupEffectError,
     ActiveReblitCommitCleanupPostAdvanceAuthority, ActiveReblitCommitCleanupRecordAdvanceError,
 };
-use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
+use super::canonical_journal_reopen::{
+    CanonicalJournalReopenError, reopen_canonical_journal, try_reopen_canonical_journal,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum DurableActiveReblitCommitCleanupRecord {
@@ -45,12 +47,60 @@ enum AdvanceOutcome<'reservation> {
     StorageFailed(StorageError),
 }
 
+#[derive(Clone, Copy)]
+enum CanonicalReopenMode {
+    StartupBlocking,
+    RetainedNonBlocking,
+}
+
 /// Persist the sole exact cleanup-complete successor and return only a freshly
 /// reopened store which still authenticates the published successor inode.
 pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_and_reopen(
     journal: TransitionJournalStore,
     authority: ActiveReblitCommitCleanupDurableAuthority<'_>,
 ) -> Result<(TransitionJournalStore, TransitionRecord), ActiveReblitCommitCleanupPersistenceError> {
+    let (journal, record, binding) =
+        persist_active_reblit_commit_cleanup_complete_inner(
+            journal,
+            authority,
+            CanonicalReopenMode::StartupBlocking,
+        )?;
+    drop(binding);
+    Ok((journal, record))
+}
+
+/// Persist the same exact successor while returning the fresh binding needed
+/// by continuous same-process coordination.
+pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_retaining_binding(
+    journal: TransitionJournalStore,
+    authority: ActiveReblitCommitCleanupDurableAuthority<'_>,
+) -> Result<
+    (
+        TransitionJournalStore,
+        TransitionRecord,
+        TransitionJournalRecordBinding,
+    ),
+    ActiveReblitCommitCleanupPersistenceError,
+> {
+    persist_active_reblit_commit_cleanup_complete_inner(
+        journal,
+        authority,
+        CanonicalReopenMode::RetainedNonBlocking,
+    )
+}
+
+fn persist_active_reblit_commit_cleanup_complete_inner(
+    journal: TransitionJournalStore,
+    authority: ActiveReblitCommitCleanupDurableAuthority<'_>,
+    reopen_mode: CanonicalReopenMode,
+) -> Result<
+    (
+        TransitionJournalStore,
+        TransitionRecord,
+        TransitionJournalRecordBinding,
+    ),
+    ActiveReblitCommitCleanupPersistenceError,
+> {
     authority
         .revalidate(&journal)
         .map_err(ActiveReblitCommitCleanupPersistenceError::Authority)?;
@@ -112,8 +162,11 @@ pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_and_reope
     if let AdvanceOutcome::Published { .. } = &advance {
         after_active_reblit_commit_cleanup_same_store_check_before_reopen();
     }
-    let reopened = reopen_canonical_journal(&installation)
-        .map_err(ActiveReblitCommitCleanupReopenError::from);
+    let reopened = match reopen_mode {
+        CanonicalReopenMode::StartupBlocking => reopen_canonical_journal(&installation),
+        CanonicalReopenMode::RetainedNonBlocking => try_reopen_canonical_journal(&installation),
+    }
+    .map_err(ActiveReblitCommitCleanupReopenError::from);
 
     match advance {
         AdvanceOutcome::Published {
@@ -176,11 +229,11 @@ pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_and_reope
                     &fresh_binding,
                     &successor,
                 );
-                drop(fresh_binding);
                 drop(post_advance_authority);
                 match final_validation {
-                    Ok(()) => Ok((reopened, successor)),
+                    Ok(()) => Ok((reopened, successor, fresh_binding)),
                     Err(source) => {
+                        drop(fresh_binding);
                         drop(reopened);
                         Err(ActiveReblitCommitCleanupPersistenceError::PostAdvanceValidation {
                             durable: DurableActiveReblitCommitCleanupRecord::CommitCleanupComplete,

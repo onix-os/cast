@@ -18,7 +18,10 @@ use crate::{
     },
 };
 
-use super::super::active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot};
+use super::super::{
+    active_reblit_boot_publication_preflight::ActiveReblitCommitCleanupSeal,
+    active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot},
+};
 use super::{
     DatabaseEvidence, InspectionError, database_ownership_evidence_compatible, inspect_database,
     metadata_provenance_evidence_compatible,
@@ -133,6 +136,89 @@ impl ActiveReblitCommitCleanupAuthority {
         ActiveReblitCommitCleanupAdmission<'reservation>,
         ActiveReblitCommitCleanupAuthorityError,
     > {
+        Self::capture_with_record_binding(
+            installation,
+            journal,
+            state_db,
+            active_state_reservation,
+            record,
+            || {
+                installation.revalidate_mutable_namespace()?;
+                let binding = journal.record_binding(
+                    installation.retained_mutable_cast_directory()?,
+                    record,
+                )?;
+                installation.revalidate_mutable_namespace()?;
+                Ok(binding)
+            },
+        )
+    }
+
+    /// Admit only the live generation-13 promoted-boot Apply layout while
+    /// consuming the journal binding retained by commit-decision coordination.
+    /// Finish is deliberately restart-only and can enter only through
+    /// [`Self::capture`].
+    pub(in crate::client) fn capture_retained_binding<'reservation>(
+        _cleanup_seal: ActiveReblitCommitCleanupSeal,
+        installation: &Installation,
+        journal: &TransitionJournalStore,
+        state_db: &db::state::Database,
+        active_state_reservation: &'reservation ActiveStateReservation,
+        record: &TransitionRecord,
+        journal_record_binding: TransitionJournalRecordBinding,
+    ) -> Result<
+        ActiveReblitCommitCleanupApplyAuthority<'reservation>,
+        ActiveReblitCommitCleanupAuthorityError,
+    > {
+        let receipt_pair = record
+            .boot_publication_receipt_correlation()
+            .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::Record)?;
+        if record.operation != Operation::ActiveReblit
+            || record.phase != Phase::CommitDecided
+            || record.generation != 13
+            || record.rollback.is_some()
+            || record.options.archive_previous
+            || !record.options.run_system_triggers
+            || !record.options.run_boot_sync
+            || receipt_pair.is_none()
+            || !same_nonempty_candidate_and_previous(record)
+        {
+            return Err(
+                ActiveReblitCommitCleanupAuthorityErrorKind::RetainedCommitDecisionRejected.into(),
+            );
+        }
+
+        match Self::capture_with_record_binding(
+            installation,
+            journal,
+            state_db,
+            active_state_reservation,
+            record,
+            || Ok(journal_record_binding),
+        )? {
+            ActiveReblitCommitCleanupAdmission::Apply(authority) => Ok(authority),
+            ActiveReblitCommitCleanupAdmission::NotApplicable
+            | ActiveReblitCommitCleanupAdmission::Deferred
+            | ActiveReblitCommitCleanupAdmission::Finish(_) => Err(
+                ActiveReblitCommitCleanupAuthorityErrorKind::RetainedCommitDecisionRejected.into(),
+            ),
+        }
+    }
+
+    fn capture_with_record_binding<'reservation>(
+        installation: &Installation,
+        journal: &TransitionJournalStore,
+        state_db: &db::state::Database,
+        active_state_reservation: &'reservation ActiveStateReservation,
+        record: &TransitionRecord,
+        capture_binding: impl FnOnce() -> Result<
+            TransitionJournalRecordBinding,
+            ActiveReblitCommitCleanupAuthorityError,
+        >,
+    ) -> Result<
+        ActiveReblitCommitCleanupAdmission<'reservation>,
+        ActiveReblitCommitCleanupAuthorityError,
+    > {
         if record.operation != Operation::ActiveReblit || record.phase != Phase::CommitDecided {
             return Ok(ActiveReblitCommitCleanupAdmission::NotApplicable);
         }
@@ -143,11 +229,8 @@ impl ActiveReblitCommitCleanupAuthority {
             return Ok(ActiveReblitCommitCleanupAdmission::Deferred);
         };
 
-        installation.revalidate_mutable_namespace()?;
-        let journal_record_binding = journal.record_binding(
-            installation.retained_mutable_cast_directory()?,
-            record,
-        )?;
+        let journal_record_binding = capture_binding()?;
+        require_exact_record_binding(installation, journal, &journal_record_binding, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database_for_plan(record, &route_plan, state_db)? {
@@ -713,6 +796,8 @@ enum ActiveReblitCommitCleanupAuthorityErrorKind {
     Record(#[source] CodecError),
     #[error("the exact ActiveReblit CommitDecided journal-record binding changed")]
     JournalRecordBindingChanged,
+    #[error("the retained live CommitDecided handoff is not the exact generation-13 promoted-boot Apply route")]
+    RetainedCommitDecisionRejected,
     #[error("the exact ActiveReblit CommitCleanupComplete successor binding changed")]
     SuccessorRecordBindingChanged,
     #[error("read or revalidate the exact bound ActiveReblit CommitDecided journal")]
