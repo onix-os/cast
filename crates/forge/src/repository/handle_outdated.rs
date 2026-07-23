@@ -2,8 +2,11 @@
 
 use std::collections::HashMap;
 
+use config::declaration::{
+    DeclarationEvaluatorSet, SaveDeclarationError,
+    SaveManagedDeclarationError,
+};
 use fs_err as fs;
-use gluon_config::Evaluator;
 use tui::Styled;
 use url::Url;
 
@@ -27,17 +30,17 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
 
     match source {
         manager::Source::ConfigManager(config_manager) => {
-            println!("{count} {repo_plural} {require_plural} an updated Gluon repository source");
+            println!(
+                "{count} {repo_plural} {require_plural} an updated repository declaration"
+            );
 
-            let loaded_config = match config_manager
-                .load_gluon(
-                    &Evaluator::default(),
-                    &repository::RepositoryCodec::default(),
-                )
-            {
+            let codec = repository::RepositoryCodec::default();
+            let evaluators = DeclarationEvaluatorSet::new([codec.clone()])
+                .expect("one validated repository adapter has no extension collision");
+            let loaded_config = match config_manager.load_declarations(&evaluators) {
                 Ok(config) => config,
                 Err(error) => {
-                    eprintln!("Failed to load Gluon repository configuration: {error:#}");
+                    eprintln!("Failed to load repository declarations: {error:#}");
                     return;
                 }
             }
@@ -79,13 +82,15 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
                 }
                 let old_content = fs::read_to_string(&current_config.path).unwrap_or_default();
 
-                let gluon_path = match config_manager.save_gluon(
+                let declaration_path = match config_manager.save_declaration(
                     &current_config.logical_name,
                     &updated_map,
-                    &repository::RepositoryCodec::default(),
+                    &codec,
                 ) {
                     Ok(path) => path,
-                    Err(config::SaveGluonError::AuthoredFragment { path }) => {
+                    Err(SaveManagedDeclarationError::Storage {
+                        source: SaveDeclarationError::AuthoredDeclaration { path },
+                    }) => {
                         println!("\nCast left the authored source at {path:?} unchanged.");
                         for update in &updates {
                             print_repository_suggestion(update);
@@ -93,14 +98,14 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
                         continue;
                     }
                     Err(error) => {
-                        eprintln!("Failed to save updated Gluon repository configuration: {error:#}");
+                        eprintln!("Failed to save updated repository declaration: {error:#}");
                         continue;
                     }
                 };
 
-                let new_content = fs::read_to_string(&gluon_path).unwrap_or_default();
+                let new_content = fs::read_to_string(&declaration_path).unwrap_or_default();
 
-                println!("\nUpdate applied to {gluon_path:?}");
+                println!("\nUpdate applied to {declaration_path:?}");
 
                 println!("\n```diff");
                 print_diff(
@@ -108,14 +113,16 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
                     &new_content,
                     Some((
                         current_config.path.as_os_str().to_str().unwrap_or_default(),
-                        gluon_path.as_os_str().to_str().unwrap_or_default(),
+                        declaration_path.as_os_str().to_str().unwrap_or_default(),
                     )),
                 );
                 println!("```");
             }
         }
         manager::Source::SystemModel { system_model, .. } => {
-            println!("{count} system-intent {repo_plural} {require_plural} an authored Gluon source update");
+            println!(
+                "{count} system-intent {repo_plural} {require_plural} an authored source update"
+            );
 
             let path = system_model.path().to_owned();
 

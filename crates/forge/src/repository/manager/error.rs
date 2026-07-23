@@ -1,5 +1,8 @@
 use std::{collections::TryReserveError, io, path::PathBuf, sync::Arc};
 
+use config::declaration::{
+    LoadManagedDeclarationError, SaveManagedDeclarationError,
+};
 use stone::{StoneHeaderV1FileType, StonePayloadKind, StonePayloadMetaTag, StoneReadError};
 use thiserror::Error;
 use url::Url;
@@ -42,7 +45,7 @@ pub enum PackageUriError {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Can't modify repos when using explicit configs or authored Gluon system intent")]
+    #[error("Can't modify repos when using explicit configs or authored system intent")]
     ExplicitUnsupported,
     #[error("invalid root-index architecture {0:?}")]
     InvalidRootArchitecture(String),
@@ -249,10 +252,16 @@ pub enum Error {
     },
     #[error("meta db")]
     Database(#[from] meta::Error),
-    #[error("save config")]
-    SaveConfig(#[source] Box<config::SaveGluonError>),
-    #[error("load config")]
-    LoadConfig(#[source] Box<config::LoadGluonError>),
+    #[error("save repository declaration")]
+    SaveConfig(
+        #[source]
+        Box<SaveManagedDeclarationError<repository::RepositoryConversionError>>,
+    ),
+    #[error("load repository declarations")]
+    LoadConfig(
+        #[source]
+        Box<LoadManagedDeclarationError<repository::RepositoryConversionError>>,
+    ),
     #[error("unknown repo")]
     UnknownRepo(repository::Id),
     #[error("resolve history index uri from root index")]
@@ -265,6 +274,26 @@ pub enum Error {
     UnsupportedRepos(Vec<UnsupportedRepoFormat>),
     #[error("one or more repositories with a legacy URI need to be upgraded to the new configuration format")]
     OutdatedRepos(Arc<Source>, Vec<OutdatedRepoIndexUri>),
+}
+
+impl From<SaveManagedDeclarationError<repository::RepositoryConversionError>>
+    for Error
+{
+    fn from(
+        error: SaveManagedDeclarationError<repository::RepositoryConversionError>,
+    ) -> Self {
+        Self::SaveConfig(Box::new(error))
+    }
+}
+
+impl From<LoadManagedDeclarationError<repository::RepositoryConversionError>>
+    for Error
+{
+    fn from(
+        error: LoadManagedDeclarationError<repository::RepositoryConversionError>,
+    ) -> Self {
+        Self::LoadConfig(Box::new(error))
+    }
 }
 
 impl From<package::MissingMetaFieldError> for Error {

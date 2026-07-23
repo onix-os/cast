@@ -2,9 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use config::declaration::DeclarationEvaluatorSet;
 use fs_err as fs;
 use futures_util::{StreamExt, stream};
-use gluon_config::Evaluator;
 use url::Url;
 #[cfg(test)]
 use xxhash_rust::xxh3::xxh3_64;
@@ -151,12 +151,12 @@ impl Manager {
             Source::ConfigManager(config) =>
             // Load all configs, default if none exist
             {
+                let evaluators = DeclarationEvaluatorSet::new([
+                    repository::RepositoryCodec::default(),
+                ])
+                .expect("one validated repository adapter has no extension collision");
                 config
-                    .load_gluon(
-                        &Evaluator::default(),
-                        &repository::RepositoryCodec::default(),
-                    )
-                    .map_err(|error| Error::LoadConfig(Box::new(error)))?
+                    .load_declarations(&evaluators)?
                     .into_iter()
                     .map(|loaded| (Some(loaded.path), loaded.value))
                     .collect()
@@ -202,9 +202,9 @@ impl Manager {
         // We save it as a map for easy merging across
         // multiple configuration files
         let map = repository::Map::with([(id.clone(), repository.clone())]);
+        let codec = repository::RepositoryCodec::default();
         let config_path = config
-            .save_gluon(&id, &map, &repository::RepositoryCodec::default())
-            .map_err(|error| Error::SaveConfig(Box::new(error)))?;
+            .save_declaration(&id, &map, &codec)?;
 
         let (db, cache_dir) = open_meta_db(self.source.identifier(), &id, &repository, &self.installation)?;
 
@@ -499,7 +499,8 @@ impl Manager {
 
         // Delete config, only succeeds for configs that live in their
         // own config file w/ matching repo name
-        if config.delete_gluon::<repository::Map>(&repo.id).is_err() {
+        let adapter = repository::RepositoryCodec::default();
+        if config.delete_declaration(&repo.id, &adapter).is_err() {
             return Ok(Removal::ConfigDeleted(false));
         }
         self.repositories.remove(&id);
@@ -527,9 +528,9 @@ impl Manager {
             cached.repository.active = active;
 
             let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
+            let codec = repository::RepositoryCodec::default();
             config
-                .save_gluon(id, &map, &repository::RepositoryCodec::default())
-                .map_err(|error| Error::SaveConfig(Box::new(error)))?;
+                .save_declaration(id, &map, &codec)?;
         }
 
         Ok(())

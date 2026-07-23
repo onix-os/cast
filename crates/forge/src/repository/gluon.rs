@@ -434,7 +434,13 @@ fn gluon_string(value: &str) -> String {
 mod tests {
     use std::path::Path;
 
-    use config::{LoadGluonError, Manager};
+    use config::{
+        Manager,
+        declaration::{
+            DeclarationEvaluatorSet, LoadManagedDeclarationError,
+            SaveDeclarationError, SaveManagedDeclarationError,
+        },
+    };
     use fs_err as fs;
     use gluon_config::{DiagnosticCategory, Evaluator};
 
@@ -457,12 +463,14 @@ mod tests {
             "docs/examples/gluon/repositories.glu",
             include_str!("../../../../docs/examples/gluon/repositories.glu"),
         );
-        let decoded = RepositoryCodec::default()
-            .decode(&Evaluator::default(), &source)
-            .unwrap();
+        let evaluated = <RepositoryCodec as DeclarationEvaluator<Map>>::evaluate(
+            &RepositoryCodec::default(),
+            &source,
+        )
+        .unwrap();
 
-        assert!(decoded.value.contains_id(&repository::Id::new("local")));
-        assert!(decoded.value.contains_id(&repository::Id::new("volatile")));
+        assert!(evaluated.value.contains_id(&repository::Id::new("local")));
+        assert!(evaluated.value.contains_id(&repository::Id::new("volatile")));
     }
 
     #[test]
@@ -479,9 +487,9 @@ mod tests {
             ),
         );
 
-        let loaded = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap();
+        let evaluators =
+            DeclarationEvaluatorSet::new([RepositoryCodec::default()]).unwrap();
+        let loaded = manager.load_declarations(&evaluators).unwrap();
         assert_eq!(loaded.len(), 1);
         let repositories = &loaded[0].value;
 
@@ -500,7 +508,7 @@ mod tests {
         assert_eq!(root.version.to_string(), "stream/volatile");
         assert!(
             loaded[0]
-                .fingerprint
+                .identity
                 .imported_modules
                 .iter()
                 .any(|module| module.logical_name == "cast.repository.v1")
@@ -508,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_save_is_deterministic_and_loadable() {
+    fn typed_and_legacy_adapters_generate_the_same_deterministic_fragment() {
         let source = GluonSource::new(
             "authored.glu",
             authored(
@@ -546,7 +554,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let manager = Manager::custom(temporary.path());
         let path = manager
-            .save_gluon("generated", &decoded.value, &codec)
+            .save_declaration("generated", &typed.value, &codec)
             .unwrap();
         let generated = fs::read_to_string(&path).unwrap();
         assert_eq!(
@@ -554,12 +562,38 @@ mod tests {
             include_bytes!("../../../../tests/fixtures/gluon/goldens/repository-fragment.glu")
         );
 
-        let loaded = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap();
+        let evaluators = DeclarationEvaluatorSet::new([codec]).unwrap();
+        let loaded = manager.load_declarations(&evaluators).unwrap();
         assert_eq!(loaded.len(), 1);
         assert!(loaded[0].value.contains_id(&repository::Id::new("a-direct")));
         assert!(loaded[0].value.contains_id(&repository::Id::new("z-root")));
+    }
+
+    #[test]
+    fn generated_save_refuses_to_overwrite_an_authored_fragment() {
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("repo.d/owned.glu");
+        let source = authored(
+            r#"cast.repositories [cast.repository.direct "owned" "file:///owned.index"]"#,
+        );
+        write(&path, &source);
+        let manager = Manager::custom(temporary.path());
+        let codec = RepositoryCodec::default();
+        let evaluators = DeclarationEvaluatorSet::new([codec.clone()]).unwrap();
+        let loaded = manager.load_declarations(&evaluators).unwrap();
+
+        let error = manager
+            .save_declaration("owned", &loaded[0].value, &codec)
+            .expect_err("authored fragment must be protected");
+        assert!(matches!(
+            error,
+            SaveManagedDeclarationError::Storage {
+                source: SaveDeclarationError::AuthoredDeclaration {
+                    path: ref error_path,
+                },
+            } if error_path == &path
+        ));
+        assert_eq!(fs::read_to_string(path).unwrap(), source);
     }
 
     #[test]
@@ -569,10 +603,10 @@ mod tests {
         let malformed = temporary.path().join("repo.d/malformed.glu");
         write(&malformed, "let value = in value");
 
-        let error = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap_err();
-        let LoadGluonError::Evaluation { path, source } = error else {
+        let evaluators =
+            DeclarationEvaluatorSet::new([RepositoryCodec::default()]).unwrap();
+        let error = manager.load_declarations(&evaluators).unwrap_err();
+        let LoadManagedDeclarationError::Evaluation { path, source } = error else {
             panic!("expected evaluation error");
         };
         assert_eq!(path, malformed);
@@ -589,10 +623,8 @@ mod tests {
 ]"#,
             ),
         );
-        let error = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap_err();
-        let LoadGluonError::Conversion { path, source } = error else {
+        let error = manager.load_declarations(&evaluators).unwrap_err();
+        let LoadManagedDeclarationError::Conversion { path, source } = error else {
             panic!("expected conversion error");
         };
         assert_eq!(path, invalid);
@@ -608,10 +640,10 @@ mod tests {
             &authored("let _ = import! std.fs\ncast.repositories []"),
         );
 
-        let error = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap_err();
-        let LoadGluonError::Evaluation { source, .. } = error else {
+        let evaluators =
+            DeclarationEvaluatorSet::new([RepositoryCodec::default()]).unwrap();
+        let error = manager.load_declarations(&evaluators).unwrap_err();
+        let LoadManagedDeclarationError::Evaluation { source, .. } = error else {
             panic!("expected evaluation error");
         };
         assert_eq!(source.category, DiagnosticCategory::Import);
@@ -631,10 +663,10 @@ mod tests {
             ),
         );
 
-        let error = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap_err();
-        let LoadGluonError::Conversion { source, .. } = error else {
+        let evaluators =
+            DeclarationEvaluatorSet::new([RepositoryCodec::default()]).unwrap();
+        let error = manager.load_declarations(&evaluators).unwrap_err();
+        let LoadManagedDeclarationError::Conversion { source, .. } = error else {
             panic!("expected conversion error");
         };
         assert!(source.to_string().contains("repositories[1].id"));
@@ -642,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_manager_loads_have_the_same_fingerprint() {
+    fn repeated_manager_loads_have_the_same_identity() {
         let temporary = tempfile::tempdir().unwrap();
         let manager = Manager::custom(temporary.path());
         write(
@@ -650,13 +682,14 @@ mod tests {
             &authored(r#"cast.repositories [cast.repository.direct "local" "file:///local.index"]"#),
         );
 
-        let first = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap();
-        let repeated = manager
-            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
-            .unwrap();
-        assert_eq!(first[0].fingerprint, repeated[0].fingerprint);
-        assert!(!first[0].fingerprint.imported_modules.is_empty());
+        let evaluators =
+            DeclarationEvaluatorSet::new([RepositoryCodec::default()]).unwrap();
+        let first = manager.load_declarations(&evaluators).unwrap();
+        let repeated = manager.load_declarations(&evaluators).unwrap();
+        assert_eq!(first[0].identity, repeated[0].identity);
+        first[0].identity.validate().unwrap();
+        assert_eq!(first[0].identity.configuration_abi_version, 1);
+        assert_eq!(first[0].identity.evaluator_policy_version, 1);
+        assert!(!first[0].identity.imported_modules.is_empty());
     }
 }

@@ -283,6 +283,48 @@ fn read_only_installation_rejects_repository_cache_without_weakening_ownership()
 }
 
 #[test]
+fn config_manager_preserves_repository_fragment_precedence() {
+    let config_directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(
+        config_directory.path(),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let fragments = config_directory.path().join("repo.d");
+    fs::create_dir_all(&fragments).unwrap();
+    fs::write(
+        fragments.join("a.glu"),
+        r#"let cast = import! cast.repository.v1
+cast.repositories [cast.repository.direct "selected" "file:///a.index"]
+"#,
+    )
+    .unwrap();
+    fs::write(
+        fragments.join("z.glu"),
+        r#"let cast = import! cast.repository.v1
+cast.repositories [cast.repository.direct "selected" "file:///z.index"]
+"#,
+    )
+    .unwrap();
+
+    let (_root, installation) = test_installation();
+    let manager = Manager::with_config_manager(
+        config::Manager::custom(config_directory.path()),
+        installation,
+    )
+    .unwrap();
+    let selected = manager
+        .repositories
+        .get(&repository::Id::new("selected"))
+        .unwrap();
+    let repository::Source::DirectIndex(uri) = &selected.repository.source else {
+        panic!("expected direct repository source");
+    };
+    assert_eq!(uri.as_str(), "file:///z.index");
+    assert!(selected.config_path.as_ref().unwrap().ends_with("repo.d/z.glu"));
+}
+
+#[test]
 fn repository_transport_errors_never_render_credentials() {
     let uri = Url::parse("https://user:secret@example.test/stone.index").unwrap();
     let error = validate_repository_transport(&uri).unwrap_err().to_string();

@@ -51,16 +51,16 @@ fn repository_value(id: &repository::Id, repository: &Repository) -> RepositoryV
 
 #[test]
 fn generated_repository_fragment_has_exact_normalized_owned_value() {
-    let decoded = RepositoryCodec::default()
-        .decode(
-            &Evaluator::default(),
-            &GluonSource::new(
-                "repository-fragment.glu",
-                include_str!("../../../../../../tests/fixtures/gluon/goldens/repository-fragment.glu"),
-            ),
-        )
-        .unwrap();
-    let actual = decoded
+    let source = GluonSource::new(
+        "repository-fragment.glu",
+        include_str!("../../../../../../tests/fixtures/gluon/goldens/repository-fragment.glu"),
+    );
+    let evaluated = <RepositoryCodec as DeclarationEvaluator<Map>>::evaluate(
+        &RepositoryCodec::default(),
+        &source,
+    )
+    .unwrap();
+    let actual = evaluated
         .value
         .iter()
         .map(|(id, repository)| repository_value(id, repository))
