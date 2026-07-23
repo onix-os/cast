@@ -6,8 +6,18 @@
 
 use std::{error::Error, fmt, fmt::Write as _};
 
-use config::{DecodedGluon, GluonCodec, GluonCodecError};
-use gluon_config::{Evaluator, Source as GluonSource};
+use config::{
+    DecodedGluon, GluonCodec, GluonCodecError,
+    declaration::ConfigDeclarationEvaluator,
+};
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+};
+use gluon_config::{
+    EvaluationFingerprint, Evaluator, GluonEngine, ImportPolicy,
+    Source as GluonSource,
+};
 
 use super::{Map, Repository, Source};
 use crate::{
@@ -48,9 +58,30 @@ type RepositorySpec = {
 
 "#;
 
-/// Stateless repository configuration codec used by [`config::Manager`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RepositoryCodec;
+/// Stateful repository declaration adapter with its ABI fixed at construction.
+#[derive(Debug, Clone)]
+pub struct RepositoryCodec {
+    engine: GluonEngine,
+}
+
+impl Default for RepositoryCodec {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
+}
+
+impl RepositoryCodec {
+    pub fn new(limits: Limits) -> Self {
+        let mut import_policy = ImportPolicy::new();
+        import_policy
+            .insert_embedded_module("cast.repository.v1", GLUON_REPOSITORY_ABI)
+            .expect("the embedded repository ABI is a valid, unique module");
+
+        Self {
+            engine: GluonEngine::new(limits).with_import_policy(import_policy),
+        }
+    }
+}
 
 /// Semantic repository conversion failure with a stable field path.
 #[derive(Debug)]
@@ -218,11 +249,62 @@ impl GluonCodec for RepositoryCodec {
     }
 
     fn encode(&self, config: &Self::Config) -> Result<String, GluonCodecError> {
+        <Self as DeclarationCodec<Map>>::encode(self, config)
+            .map_err(GluonCodecError::conversion)
+    }
+}
+
+impl DeclarationEvaluator<Map> for RepositoryCodec {
+    type Identity = EvaluationFingerprint;
+    type Error = RepositoryConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &GluonSource,
+    ) -> Result<
+        DeclarationEvaluation<Map, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate::<Vec<GluonRepositorySpec>>(source)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let value = decode_specs(
+            evaluation.value.into_iter().map(Into::into).collect(),
+        )
+        .map_err(DeclarationEvaluationError::Conversion)?;
+
+        Ok(DeclarationEvaluation {
+            value,
+            identity: evaluation.fingerprint,
+        })
+    }
+}
+
+impl ConfigDeclarationEvaluator for RepositoryCodec {
+    type Config = Map;
+}
+
+impl DeclarationCodec<Map> for RepositoryCodec {
+    fn encode(&self, config: &Map) -> Result<String, Self::Error> {
         let specs = config
             .iter()
             .map(repository_to_spec)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(GluonCodecError::conversion)?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(encode_specs(&specs))
     }
 }
@@ -375,7 +457,9 @@ mod tests {
             "docs/examples/gluon/repositories.glu",
             include_str!("../../../../docs/examples/gluon/repositories.glu"),
         );
-        let decoded = RepositoryCodec.decode(&Evaluator::default(), &source).unwrap();
+        let decoded = RepositoryCodec::default()
+            .decode(&Evaluator::default(), &source)
+            .unwrap();
 
         assert!(decoded.value.contains_id(&repository::Id::new("local")));
         assert!(decoded.value.contains_id(&repository::Id::new("volatile")));
@@ -395,7 +479,9 @@ mod tests {
             ),
         );
 
-        let loaded = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap();
+        let loaded = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap();
         assert_eq!(loaded.len(), 1);
         let repositories = &loaded[0].value;
 
@@ -423,25 +509,44 @@ mod tests {
 
     #[test]
     fn generated_save_is_deterministic_and_loadable() {
-        let source = authored(
-            r#"cast.repositories [
+        let source = GluonSource::new(
+            "authored.glu",
+            authored(
+                r#"cast.repositories [
     cast.repository.root_index "z-root" "https://packages.example.test" "stream/volatile",
     cast.repository.direct "a-direct" "file:///var/cache/local.index",
 ]"#,
+            ),
         );
         let evaluator = Evaluator::default();
-        let decoded = RepositoryCodec
-            .decode(&evaluator, &GluonSource::new("authored.glu", source))
-            .unwrap();
-        let first = RepositoryCodec.encode(&decoded.value).unwrap();
-        let repeated = RepositoryCodec.encode(&decoded.value).unwrap();
+        let codec = RepositoryCodec::default();
+        let decoded = codec.decode(&evaluator, &source).unwrap();
+        let typed = <RepositoryCodec as DeclarationEvaluator<Map>>::evaluate(
+            &codec, &source,
+        )
+        .unwrap();
+        assert_eq!(typed.identity, decoded.fingerprint);
+
+        let first = GluonCodec::encode(&codec, &decoded.value).unwrap();
+        let repeated = GluonCodec::encode(&codec, &decoded.value).unwrap();
+        let typed_encoded = DeclarationCodec::encode(&codec, &typed.value).unwrap();
         assert_eq!(first, repeated);
+        assert_eq!(typed_encoded, first);
         assert!(first.find("id = \"a-direct\"").unwrap() < first.find("id = \"z-root\"").unwrap());
+        let typed_generated = format!(
+            "{}{}",
+            codec.language_spec().generated_marker(),
+            typed_encoded,
+        );
+        assert_eq!(
+            typed_generated.as_bytes(),
+            include_bytes!("../../../../tests/fixtures/gluon/goldens/repository-fragment.glu")
+        );
 
         let temporary = tempfile::tempdir().unwrap();
         let manager = Manager::custom(temporary.path());
         let path = manager
-            .save_gluon("generated", &decoded.value, &RepositoryCodec)
+            .save_gluon("generated", &decoded.value, &codec)
             .unwrap();
         let generated = fs::read_to_string(&path).unwrap();
         assert_eq!(
@@ -449,7 +554,9 @@ mod tests {
             include_bytes!("../../../../tests/fixtures/gluon/goldens/repository-fragment.glu")
         );
 
-        let loaded = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap();
+        let loaded = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap();
         assert_eq!(loaded.len(), 1);
         assert!(loaded[0].value.contains_id(&repository::Id::new("a-direct")));
         assert!(loaded[0].value.contains_id(&repository::Id::new("z-root")));
@@ -462,7 +569,9 @@ mod tests {
         let malformed = temporary.path().join("repo.d/malformed.glu");
         write(&malformed, "let value = in value");
 
-        let error = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap_err();
+        let error = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap_err();
         let LoadGluonError::Evaluation { path, source } = error else {
             panic!("expected evaluation error");
         };
@@ -480,7 +589,9 @@ mod tests {
 ]"#,
             ),
         );
-        let error = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap_err();
+        let error = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap_err();
         let LoadGluonError::Conversion { path, source } = error else {
             panic!("expected conversion error");
         };
@@ -497,7 +608,9 @@ mod tests {
             &authored("let _ = import! std.fs\ncast.repositories []"),
         );
 
-        let error = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap_err();
+        let error = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap_err();
         let LoadGluonError::Evaluation { source, .. } = error else {
             panic!("expected evaluation error");
         };
@@ -518,7 +631,9 @@ mod tests {
             ),
         );
 
-        let error = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap_err();
+        let error = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap_err();
         let LoadGluonError::Conversion { source, .. } = error else {
             panic!("expected conversion error");
         };
@@ -535,8 +650,12 @@ mod tests {
             &authored(r#"cast.repositories [cast.repository.direct "local" "file:///local.index"]"#),
         );
 
-        let first = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap();
-        let repeated = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap();
+        let first = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap();
+        let repeated = manager
+            .load_gluon(&Evaluator::default(), &RepositoryCodec::default())
+            .unwrap();
         assert_eq!(first[0].fingerprint, repeated[0].fingerprint);
         assert!(!first[0].fingerprint.imported_modules.is_empty());
     }

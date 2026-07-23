@@ -51,7 +51,7 @@ fn repository_value(id: &repository::Id, repository: &Repository) -> RepositoryV
 
 #[test]
 fn generated_repository_fragment_has_exact_normalized_owned_value() {
-    let decoded = RepositoryCodec
+    let decoded = RepositoryCodec::default()
         .decode(
             &Evaluator::default(),
             &GluonSource::new(

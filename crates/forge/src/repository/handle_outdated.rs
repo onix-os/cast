@@ -29,7 +29,12 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
         manager::Source::ConfigManager(config_manager) => {
             println!("{count} {repo_plural} {require_plural} an updated Gluon repository source");
 
-            let loaded_config = match config_manager.load_gluon(&Evaluator::default(), &repository::RepositoryCodec) {
+            let loaded_config = match config_manager
+                .load_gluon(
+                    &Evaluator::default(),
+                    &repository::RepositoryCodec::default(),
+                )
+            {
                 Ok(config) => config,
                 Err(error) => {
                     eprintln!("Failed to load Gluon repository configuration: {error:#}");
@@ -77,7 +82,7 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
                 let gluon_path = match config_manager.save_gluon(
                     &current_config.logical_name,
                     &updated_map,
-                    &repository::RepositoryCodec,
+                    &repository::RepositoryCodec::default(),
                 ) {
                     Ok(path) => path,
                     Err(config::SaveGluonError::AuthoredFragment { path }) => {

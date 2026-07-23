@@ -19,6 +19,7 @@ testing = []
 config = { path = "../../crates/config" }
 container = { path = "../../crates/container" }
 dag = { path = "../../crates/dag" }
+declarative_config = { path = "../../crates/declarative_config" }
 stone = { path = "../../crates/stone" }
 triggers = { path = "../../crates/triggers" }
 tui = { path = "../../crates/tui" }

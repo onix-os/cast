@@ -152,7 +152,10 @@ impl Manager {
             // Load all configs, default if none exist
             {
                 config
-                    .load_gluon(&Evaluator::default(), &repository::RepositoryCodec)
+                    .load_gluon(
+                        &Evaluator::default(),
+                        &repository::RepositoryCodec::default(),
+                    )
                     .map_err(|error| Error::LoadConfig(Box::new(error)))?
                     .into_iter()
                     .map(|loaded| (Some(loaded.path), loaded.value))
@@ -200,7 +203,7 @@ impl Manager {
         // multiple configuration files
         let map = repository::Map::with([(id.clone(), repository.clone())]);
         let config_path = config
-            .save_gluon(&id, &map, &repository::RepositoryCodec)
+            .save_gluon(&id, &map, &repository::RepositoryCodec::default())
             .map_err(|error| Error::SaveConfig(Box::new(error)))?;
 
         let (db, cache_dir) = open_meta_db(self.source.identifier(), &id, &repository, &self.installation)?;
@@ -525,7 +528,7 @@ impl Manager {
 
             let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
             config
-                .save_gluon(id, &map, &repository::RepositoryCodec)
+                .save_gluon(id, &map, &repository::RepositoryCodec::default())
                 .map_err(|error| Error::SaveConfig(Box::new(error)))?;
         }
 
