@@ -66,12 +66,18 @@ impl OperationKind {
             (Self::NewState, Phase::UsrExchangeIntent) => 8,
             (Self::NewState, Phase::UsrExchanged) => 9,
             (Self::NewState, Phase::RootLinksComplete) => 10,
+            (Self::NewState, Phase::SystemTriggersStarted) => 11,
+            (Self::NewState, Phase::SystemTriggersComplete) => 12,
             (Self::Archived, Phase::UsrExchangeIntent) => 4,
             (Self::Archived, Phase::UsrExchanged) => 5,
             (Self::Archived, Phase::RootLinksComplete) => 6,
+            (Self::Archived, Phase::SystemTriggersStarted) => 7,
+            (Self::Archived, Phase::SystemTriggersComplete) => 8,
             (Self::ActiveReblit, Phase::UsrExchangeIntent) => 6,
             (Self::ActiveReblit, Phase::UsrExchanged) => 7,
             (Self::ActiveReblit, Phase::RootLinksComplete) => 8,
+            (Self::ActiveReblit, Phase::SystemTriggersStarted) => 9,
+            (Self::ActiveReblit, Phase::SystemTriggersComplete) => 10,
             _ => panic!("unsupported rollback-decision source {self:?} at {phase:?}"),
         }
     }
@@ -171,6 +177,22 @@ impl Fixture {
     pub(super) fn boot_sync_started(kind: OperationKind, layout: BootSyncStartedLayout, historical: bool) -> Self {
         let fixture = Self::with_forward_source(kind, Phase::BootSyncStarted, layout.post_exchange(), historical);
         assert_eq!(fixture.source.phase, Phase::BootSyncStarted);
+        fixture
+    }
+
+    pub(super) fn system_trigger(
+        kind: OperationKind,
+        phase: Phase,
+        post_exchange: bool,
+        historical: bool,
+    ) -> Self {
+        assert!(matches!(
+            phase,
+            Phase::SystemTriggersStarted | Phase::SystemTriggersComplete
+        ));
+        let fixture = Self::with_forward_source(kind, phase, post_exchange, historical);
+        install_root_abi(&fixture.installation.root);
+        assert_eq!(fixture.source.generation, kind.expected_source_generation(phase));
         fixture
     }
 
@@ -314,6 +336,8 @@ impl Fixture {
             Phase::UsrExchangeIntent => (ForwardPhase::UsrExchangeIntent, RollbackAction::AlreadySatisfied),
             Phase::UsrExchanged => (ForwardPhase::UsrExchanged, RollbackAction::Pending),
             Phase::RootLinksComplete => (ForwardPhase::RootLinksComplete, RollbackAction::Pending),
+            Phase::SystemTriggersStarted => (ForwardPhase::SystemTriggersStarted, RollbackAction::Pending),
+            Phase::SystemTriggersComplete => (ForwardPhase::SystemTriggersComplete, RollbackAction::Pending),
             phase => panic!("unsupported rollback-decision plan source {phase:?}"),
         };
         RollbackPlan {

@@ -208,10 +208,13 @@ fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
     record.operation == Operation::NewState
         && record.phase == Phase::FreshDbInvalidated
         && record.candidate.id.is_some()
-        && matches!(
+        && (matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        )
+        ) || matches!(
+            (rollback.source, record.generation),
+            (ForwardPhase::SystemTriggersStarted, 18) | (ForwardPhase::SystemTriggersComplete, 19)
+        ))
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
             rollback.usr_exchange,

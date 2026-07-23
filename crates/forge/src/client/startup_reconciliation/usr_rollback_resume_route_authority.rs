@@ -158,6 +158,57 @@ fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
         )
+            || matches!(
+                (record.operation, record.phase, rollback.source, record.generation),
+                (
+                    Operation::NewState,
+                    Phase::RollbackDecided,
+                    ForwardPhase::SystemTriggersStarted,
+                    12,
+                )
+                    | (
+                        Operation::NewState,
+                        Phase::RollbackDecided,
+                        ForwardPhase::SystemTriggersComplete,
+                        13,
+                    )
+                    | (
+                        Operation::NewState,
+                        Phase::UsrRestored,
+                        ForwardPhase::SystemTriggersStarted,
+                        14,
+                    )
+                    | (
+                        Operation::NewState,
+                        Phase::UsrRestored,
+                        ForwardPhase::SystemTriggersComplete,
+                        15,
+                    )
+                    | (
+                        Operation::ActiveReblit,
+                        Phase::RollbackDecided,
+                        ForwardPhase::SystemTriggersStarted,
+                        10,
+                    )
+                    | (
+                        Operation::ActiveReblit,
+                        Phase::RollbackDecided,
+                        ForwardPhase::SystemTriggersComplete,
+                        11,
+                    )
+                    | (
+                        Operation::ActiveReblit,
+                        Phase::UsrRestored,
+                        ForwardPhase::SystemTriggersStarted,
+                        12,
+                    )
+                    | (
+                        Operation::ActiveReblit,
+                        Phase::UsrRestored,
+                        ForwardPhase::SystemTriggersComplete,
+                        13,
+                    )
+            )
             || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
     })
 }

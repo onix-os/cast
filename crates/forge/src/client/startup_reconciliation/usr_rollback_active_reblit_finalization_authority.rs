@@ -273,6 +273,8 @@ fn active_reblit_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
             (rollback.source, record.generation),
             (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
                 | (ForwardPhase::RootLinksComplete, 14)
+                | (ForwardPhase::SystemTriggersStarted, 15)
+                | (ForwardPhase::SystemTriggersComplete, 16)
         )
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(

@@ -271,6 +271,8 @@ fn rollback_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
             (rollback.source, record.generation),
             (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
                 | (ForwardPhase::RootLinksComplete, 18)
+                | (ForwardPhase::SystemTriggersStarted, 19)
+                | (ForwardPhase::SystemTriggersComplete, 20)
         )
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(

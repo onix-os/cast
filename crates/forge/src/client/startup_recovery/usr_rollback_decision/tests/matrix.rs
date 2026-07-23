@@ -6,10 +6,12 @@ use crate::client::startup_reconciliation::{
 };
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
-    startup_gate::UsrRollbackDecisionSeal,
-    startup_reconciliation::{UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority},
+    startup_gate::{self, CleanSystemStartup, UsrRollbackDecisionSeal},
+    startup_reconciliation::{
+        UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority, usr_rollback_decision_source_is_supported_for_test,
+    },
 };
-use crate::transition_journal::{Phase, RecoveryDisposition, TransitionJournalStore};
+use crate::transition_journal::{BootRollback, ForwardPhase, Phase, RecoveryDisposition, TransitionJournalStore};
 
 use super::{
     super::{UsrRollbackDecisionPersistenceError, persist_usr_rollback_decision_and_reopen},
@@ -145,4 +147,113 @@ fn startup_usr_rollback_decision_changes_only_the_canonical_journal() {
     assert_eq!(first_journal.load().unwrap(), Some(first.source.clone()));
     assert_eq!(first.canonical_record(), first.source);
     assert_eq!(second.canonical_record(), first.source);
+}
+
+#[test]
+fn startup_system_trigger_post_sources_reach_the_exact_terminal_outcome() {
+    for historical in [false, true] {
+        for kind in [OperationKind::NewState, OperationKind::ActiveReblit] {
+            for source in [Phase::SystemTriggersStarted, Phase::SystemTriggersComplete] {
+                let fixture = Fixture::system_trigger(kind, source, true, historical);
+                assert!(usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+                let expected_source = system_trigger_forward_phase(fixture.source.phase);
+                let expected_terminal_generation = fixture.source.generation
+                    + match kind {
+                        OperationKind::NewState => 8,
+                        OperationKind::ActiveReblit => 6,
+                        OperationKind::Archived => unreachable!("archived system triggers are excluded"),
+                    };
+                let mut observed = Vec::new();
+                let mut last_record = None;
+                let mut clean = false;
+
+                for _ in 0..20 {
+                    match enter_once(&fixture) {
+                        Ok(()) => {
+                            clean = true;
+                            break;
+                        }
+                        Err(error) => {
+                            let pending = pending(&error);
+                            let record = fixture.canonical_record();
+                            assert_eq!(record.phase, pending.phase(), "{kind:?} {source:?} historical={historical}");
+                            assert_eq!(record.operation, fixture.source.operation);
+                            assert_eq!(record.transition_id, fixture.source.transition_id);
+                            assert_eq!(record.creation_epoch, fixture.source.creation_epoch);
+                            assert_eq!(&record.candidate, &fixture.source.candidate);
+                            assert_eq!(&record.previous, &fixture.source.previous);
+                            assert_eq!(&record.options, &fixture.source.options);
+                            assert_eq!(&record.quarantine_name, &fixture.source.quarantine_name);
+                            let rollback = record.rollback.as_ref().expect("rollback successor retains its plan");
+                            assert_eq!(rollback.source, expected_source);
+                            assert_eq!(rollback.boot, BootRollback::NotRequired);
+                            assert!(rollback.external_effects_may_remain);
+                            assert!(record.generation > fixture.source.generation);
+                            assert!(record.generation <= expected_terminal_generation);
+                            if observed.is_empty() {
+                                fixture.assert_exact_decision(&record);
+                            }
+                            observed.push((record.phase, record.generation));
+                            last_record = Some(record);
+                        }
+                    }
+                }
+
+                assert!(clean, "system-trigger rollback did not converge: {kind:?} {source:?} historical={historical}");
+                assert_eq!(observed.first().map(|entry| entry.0), Some(Phase::RollbackDecided));
+                let terminal = last_record.expect("terminal rollback record was observed before deletion");
+                assert_eq!(terminal.phase, Phase::RollbackComplete);
+                assert_eq!(terminal.generation, expected_terminal_generation);
+                assert_eq!(terminal.rollback.as_ref().unwrap().source, expected_source);
+                assert_eq!(
+                    fs::symlink_metadata(canonical_journal(&fixture.installation.root))
+                        .unwrap_err()
+                        .kind(),
+                    std::io::ErrorKind::NotFound,
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn startup_system_trigger_sources_require_post_and_exclude_activate_archived() {
+    for historical in [false, true] {
+        for kind in [OperationKind::NewState, OperationKind::ActiveReblit] {
+            for source in [Phase::SystemTriggersStarted, Phase::SystemTriggersComplete] {
+                let fixture = Fixture::system_trigger(kind, source, false, historical);
+                assert!(usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+                let before = fixture.canonical_bytes();
+                let error = fixture.enter();
+                let pending = pending(&error);
+                assert_eq!(pending.phase(), source);
+                assert!(pending.blockers().contains(&RecoveryBlocker::PhaseNamespaceConflict));
+                assert_eq!(fixture.canonical_bytes(), before);
+                fixture.assert_source_unchanged();
+            }
+        }
+
+        for source in [Phase::SystemTriggersStarted, Phase::SystemTriggersComplete] {
+            let fixture = Fixture::system_trigger(OperationKind::Archived, source, true, historical);
+            assert!(!usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+            let before = fixture.canonical_bytes();
+            let error = fixture.enter();
+            assert_eq!(pending(&error).phase(), source);
+            assert_eq!(fixture.canonical_bytes(), before);
+            fixture.assert_source_unchanged();
+        }
+    }
+}
+
+fn enter_once(fixture: &Fixture) -> Result<(), startup_gate::Error> {
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    CleanSystemStartup::enter(&fixture.system, &reservation).map(drop)
+}
+
+fn system_trigger_forward_phase(phase: Phase) -> ForwardPhase {
+    match phase {
+        Phase::SystemTriggersStarted => ForwardPhase::SystemTriggersStarted,
+        Phase::SystemTriggersComplete => ForwardPhase::SystemTriggersComplete,
+        other => panic!("expected system-trigger source, got {other:?}"),
+    }
 }

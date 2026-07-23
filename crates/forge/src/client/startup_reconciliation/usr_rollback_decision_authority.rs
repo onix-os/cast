@@ -149,6 +149,18 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
+            (
+                Phase::SystemTriggersStarted | Phase::SystemTriggersComplete,
+                UsrExchangeLayout::Post,
+            ) => Some(InitialRollbackAction::Pending),
+            (
+                Phase::SystemTriggersStarted | Phase::SystemTriggersComplete,
+                UsrExchangeLayout::Pre,
+            ) => {
+                return Ok(UsrRollbackDecisionAdmission::Deferred(
+                    UsrRollbackDecisionDeferral::IncompatibleEvidence,
+                ));
+            }
             (Phase::BootSyncStarted, UsrExchangeLayout::Post) if active_reblit_boot_sync => {
                 Some(InitialRollbackAction::Pending)
             }
@@ -227,6 +239,13 @@ fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
         record.phase,
         Phase::UsrExchangeIntent | Phase::UsrExchanged | Phase::RootLinksComplete
     )
+        || matches!(
+            (record.operation, record.phase, record.generation),
+            (Operation::NewState, Phase::SystemTriggersStarted, 11)
+                | (Operation::NewState, Phase::SystemTriggersComplete, 12)
+                | (Operation::ActiveReblit, Phase::SystemTriggersStarted, 9)
+                | (Operation::ActiveReblit, Phase::SystemTriggersComplete, 10)
+        )
         || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
 }
 

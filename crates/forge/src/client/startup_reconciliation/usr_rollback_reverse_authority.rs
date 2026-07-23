@@ -272,7 +272,14 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
         || (!matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !boot_source)
+        ) && !matches!(
+            (record.operation, rollback.source, record.generation),
+            (Operation::NewState, ForwardPhase::SystemTriggersStarted, 13)
+                | (Operation::NewState, ForwardPhase::SystemTriggersComplete, 14)
+                | (Operation::ActiveReblit, ForwardPhase::SystemTriggersStarted, 11)
+                | (Operation::ActiveReblit, ForwardPhase::SystemTriggersComplete, 12)
+        )
+            && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || rollback.usr_exchange != RollbackAction::Pending
         || rollback.candidate.action != RollbackAction::Pending

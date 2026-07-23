@@ -63,7 +63,8 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         if !matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) {
+        ) && !system_trigger_candidate_preserved_source_is_exact(record)
+        {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::NotApplicable);
         }
 
@@ -199,10 +200,10 @@ fn route_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     record.operation == Operation::NewState
         && record.phase == Phase::CandidatePreserved
-        && matches!(
+        && (matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        )
+        ) || system_trigger_candidate_preserved_source_is_exact(record))
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
             rollback.usr_exchange,
@@ -216,6 +217,27 @@ fn route_plan_is_exact(record: &TransitionRecord) -> bool {
         && rollback.fresh_db == RollbackAction::Pending
         && rollback.boot == BootRollback::NotRequired
         && rollback.external_effects_may_remain
+}
+
+fn system_trigger_candidate_preserved_source_is_exact(record: &TransitionRecord) -> bool {
+    let Some(rollback) = record.rollback.as_ref() else {
+        return false;
+    };
+    matches!(
+        (record.operation, record.phase, rollback.source, record.generation),
+        (
+            Operation::NewState,
+            Phase::CandidatePreserved,
+            ForwardPhase::SystemTriggersStarted,
+            16,
+        )
+            | (
+                Operation::NewState,
+                Phase::CandidatePreserved,
+                ForwardPhase::SystemTriggersComplete,
+                17,
+            )
+    )
 }
 
 fn inspect_current_database(

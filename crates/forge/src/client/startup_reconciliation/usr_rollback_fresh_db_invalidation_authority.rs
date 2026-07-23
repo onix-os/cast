@@ -242,10 +242,13 @@ fn fresh_db_invalidation_plan_is_exact(record: &TransitionRecord) -> bool {
     record.operation == Operation::NewState
         && record.phase == Phase::FreshDbInvalidationIntent
         && record.candidate.id.is_some()
-        && matches!(
+        && (matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        )
+        ) || matches!(
+            (rollback.source, record.generation),
+            (ForwardPhase::SystemTriggersStarted, 17) | (ForwardPhase::SystemTriggersComplete, 18)
+        ))
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
             rollback.usr_exchange,

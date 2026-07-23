@@ -202,7 +202,8 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         if !matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
+        ) && !system_trigger_candidate_preserve_source_is_exact(record)
+            && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
         {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
@@ -553,7 +554,8 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
         || (!matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !boot_source)
+        ) && !system_trigger_candidate_preserve_source_is_exact(record)
+            && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || !matches!(
             rollback.usr_exchange,
@@ -580,6 +582,39 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     fresh_is_exact
         && disposition_is_exact
         && rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived)
+}
+
+fn system_trigger_candidate_preserve_source_is_exact(record: &TransitionRecord) -> bool {
+    let Some(rollback) = record.rollback.as_ref() else {
+        return false;
+    };
+    matches!(
+        (record.operation, record.phase, rollback.source, record.generation),
+        (
+            Operation::NewState,
+            Phase::CandidatePreserveIntent,
+            ForwardPhase::SystemTriggersStarted,
+            15,
+        )
+            | (
+                Operation::NewState,
+                Phase::CandidatePreserveIntent,
+                ForwardPhase::SystemTriggersComplete,
+                16,
+            )
+            | (
+                Operation::ActiveReblit,
+                Phase::CandidatePreserveIntent,
+                ForwardPhase::SystemTriggersStarted,
+                13,
+            )
+            | (
+                Operation::ActiveReblit,
+                Phase::CandidatePreserveIntent,
+                ForwardPhase::SystemTriggersComplete,
+                14,
+            )
+    )
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ forge-startup-usr-rollback-decision-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^client::startup_recovery::usr_rollback_decision::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 16; \
+	timeout 10s test "$$count" = 18; \
 	for test in \
 		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_usr_rollback_decision_admitted_matrix_persists_exact_plan \
 		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_usr_rollback_decision_exchanged_pre_remains_incompatible \
@@ -22,12 +22,25 @@ forge-startup-usr-rollback-decision-test:
 		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_storage_faults_reopen_to_exact_source_or_decision \
 		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_root_links_complete_next_entry_routes_exact_decision_without_reverse_effect \
 		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_consumes_journal_before_reopen \
-		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_next_startup_routes_exact_decision; do \
+		client::startup_recovery::usr_rollback_decision::tests::storage_reopen::startup_usr_rollback_decision_next_startup_routes_exact_decision \
+		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_system_trigger_post_sources_reach_the_exact_terminal_outcome \
+		client::startup_recovery::usr_rollback_decision::tests::matrix::startup_system_trigger_sources_require_post_and_exclude_activate_archived; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_decision.rs; \
 	reopen=crates/forge/src/client/startup_recovery/canonical_journal_reopen.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_decision_authority.rs; \
+	resume_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_resume_route_authority.rs; \
+	reverse_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority.rs; \
+	candidate_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority.rs; \
+	fresh_route_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_route_authority.rs; \
+	fresh_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_fresh_db_invalidation_authority.rs; \
+	complete_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_complete_route_authority.rs; \
+	finalization_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_finalization_authority.rs; \
+	active_complete_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_active_reblit_complete_route_authority.rs; \
+	active_finalization_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_active_reblit_finalization_authority.rs; \
+	fixture=crates/forge/src/client/startup_recovery/test_support.rs; \
+	system_matrix=crates/forge/src/client/startup_recovery/usr_rollback_decision/tests/matrix.rs; \
 	reconciliation=crates/forge/src/client/startup_reconciliation.rs; \
 	startup_gate=crates/forge/src/client/startup_gate.rs; \
 	journal_store=crates/forge/src/transition_journal/store.rs; \
@@ -182,12 +195,66 @@ forge-startup-usr-rollback-decision-test:
 	timeout 10s grep -Fqx '            (Phase::UsrExchangeIntent, UsrExchangeLayout::Pre) => Some(InitialRollbackAction::AlreadySatisfied),' "$$authority"; \
 	timeout 10s grep -Fqx '            (Phase::UsrExchanged, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),' "$$authority"; \
 	timeout 10s grep -Fqx '            (Phase::RootLinksComplete, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),' "$$authority"; \
+	for pair in \
+		'Operation::NewState, Phase::SystemTriggersStarted, 11' \
+		'Operation::NewState, Phase::SystemTriggersComplete, 12' \
+		'Operation::ActiveReblit, Phase::SystemTriggersStarted, 9' \
+		'Operation::ActiveReblit, Phase::SystemTriggersComplete, 10'; do \
+		grep -Fq "$$pair" "$$authority"; \
+	done; \
+	for source_gate in \
+		"$$authority" \
+		"$$resume_authority" \
+		"$$reverse_authority" \
+		"$$candidate_authority" \
+		"$$fresh_route_authority" \
+		"$$fresh_authority" \
+		"$$complete_authority" \
+		"$$finalization_authority" \
+		"$$active_complete_authority" \
+		"$$active_finalization_authority"; do \
+		grep -Fq 'SystemTriggersStarted' "$$source_gate"; \
+		grep -Fq 'SystemTriggersComplete' "$$source_gate"; \
+	done; \
+	for pair in \
+		'ForwardPhase::SystemTriggersStarted, 19' \
+		'ForwardPhase::SystemTriggersComplete, 20'; do \
+		grep -Fq "$$pair" "$$finalization_authority"; \
+	done; \
+	for pair in \
+		'ForwardPhase::SystemTriggersStarted, 15' \
+		'ForwardPhase::SystemTriggersComplete, 16'; do \
+		grep -Fq "$$pair" "$$active_finalization_authority"; \
+	done; \
+	for pair in \
+		'Self::NewState, Phase::SystemTriggersStarted' \
+		'Self::NewState, Phase::SystemTriggersComplete' \
+		'Self::ActiveReblit, Phase::SystemTriggersStarted' \
+		'Self::ActiveReblit, Phase::SystemTriggersComplete'; do \
+		grep -Fq "$$pair" "$$fixture"; \
+	done; \
+	if rg -n 'run_system_triggers' \
+		"$$authority" \
+		"$$resume_authority" \
+		"$$reverse_authority" \
+		"$$candidate_authority" \
+		"$$fresh_route_authority" \
+		"$$fresh_authority" \
+		"$$complete_authority" \
+		"$$finalization_authority" \
+		"$$active_complete_authority" \
+		"$$active_finalization_authority"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	grep -Fq 'startup_system_trigger_post_sources_reach_the_exact_terminal_outcome' "$$system_matrix"; \
+	grep -Fq 'startup_system_trigger_sources_require_post_and_exclude_activate_archived' "$$system_matrix"; \
 	if timeout 10s rg -n 'normalize_usr_exchanged_root_abi|synchronize_usr_exchanged_root_abi|publish_root_abi|root_abi\.publish|create_root_links' "$$executor" "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	blocker_count="$$( timeout 10s rg -n 'RecoveryBlocker::ForwardExchangeDurabilityUnproven' "$$reconciliation" | timeout 10s wc -l )"; \
 	timeout 10s test "$$blocker_count" = 1; \
 	timeout 10s grep -Fq 'record.phase == Phase::UsrExchangeIntent && namespace.usr_exchange_layout() == Some(UsrExchangeLayout::Post)' "$$reconciliation"; \
 	for file in "$$executor" "$$authority" "$$reopen" misc/make/startup-recovery-tests.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
+	done; \
+	for file in "$$resume_authority" "$$reverse_authority" "$$candidate_authority" "$$fresh_route_authority" "$$fresh_authority" "$$complete_authority" "$$finalization_authority" "$$active_complete_authority" "$$active_finalization_authority" "$$fixture" "$$system_matrix"; do \
+		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1200s $(CARGO) test -p forge --lib \
 		'client::startup_recovery::usr_rollback_decision::tests::' \
