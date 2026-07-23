@@ -3,7 +3,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 106; \
+	timeout 10s test "$$count" = 110; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -95,14 +95,22 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_effect_failure_runs_once_and_preserves_started \
 		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_persistence_faults_leave_only_bound_predecessor_or_successor \
 		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_successor_inode_replacements_fail_stop_at_both_reopen_seams \
-		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_reopen_never_waits_behind_writer_first_contender; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_reopen_never_waits_behind_writer_first_contender \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_decision_is_exact \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_rejects_other_routes_without_record_change \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_faults_classify_only_source_or_successor \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_binding_replacements_fail_stop \
+		client::active_state_authority_tests::applied_writer_handoff_keeps_the_same_lease_until_reservation_drop; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
 	system_trigger_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers.rs"; \
+	no_boot_commit_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers/no_boot_commit_decision.rs"; \
 	usr_exchange_contract="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_intent.rs"; \
 	usr_exchange_effect="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_effect.rs"; \
 	usr_exchange_authority="crates/forge/src/client/journal_usr_exchange_authority.rs"; \
+	active_state_snapshot="crates/forge/src/client/active_state_snapshot.rs"; \
+	active_state_authority="crates/forge/src/client/active_state_authority.rs"; \
 	prepare_contract="crates/forge/src/transition_identity/journal_coordinator/candidate_preparation.rs"; \
 	isolation_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_isolation.rs"; \
 	coordinator_contract="crates/forge/src/transition_identity/journal_coordinator/mod.rs"; \
@@ -177,6 +185,20 @@ forge-transition-journal-coordinator-test:
 	test "$$( grep -Fc '.advance_record_binding(cast, predecessor_binding, &successor)' "$$system_trigger_contract" )" = 1; \
 	if grep -nE 'Option<.*(RetainedRootAbi|StatefulSystemTriggerAuthority)' "$$system_trigger_contract"; then \
 		printf '%s\n' 'system-trigger retained authority became optional' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
+	grep -Fqx 'mod no_boot_commit_decision;' "$$system_trigger_contract"; \
+	grep -Fq 'fn commit_active_reblit_without_boot(' "$$no_boot_commit_contract"; \
+	grep -Fq 'successor.phase != Phase::CommitDecided || successor.generation != 11' "$$no_boot_commit_contract"; \
+	test "$$( grep -Fc '.forward_successor(None)' "$$no_boot_commit_contract" )" = 1; \
+	grep -Fq 'advance_bound_system_trigger_record(' "$$no_boot_commit_contract"; \
+	grep -Fq 'authority.into_active_state_reservation()' "$$no_boot_commit_contract"; \
+	grep -Fq 'fn into_reservation_after_applied_tree(self) -> ActiveStateReservation' "$$active_state_snapshot"; \
+	grep -Fq 'fn into_active_state_reservation(self) -> ActiveStateReservation' "$$active_state_authority"; \
+	grep -Fq 'pub(crate) fn into_active_state_reservation(self) -> ActiveStateReservation' "$$usr_exchange_authority"; \
+	if rg -n 'ActiveStateReservation::acquire|lock_coordinator' "$$no_boot_commit_contract"; then \
+		printf '%s\n' 'no-boot commit handoff reacquires the cooperating-writer lease' >&2; exit 1; \
 	else \
 		status="$$?"; test "$$status" = 1; \
 	fi; \
@@ -358,4 +380,7 @@ forge-transition-journal-coordinator-test:
 	fi; \
 	timeout 900s $(CARGO) test -p forge --lib \
 		"transition_identity::journal_coordinator::tests::journal_coordinator_" \
-		-- --test-threads=1
+		-- --test-threads=1; \
+	timeout 300s $(CARGO) test -p forge --lib \
+		"client::active_state_authority_tests::applied_writer_handoff_keeps_the_same_lease_until_reservation_drop" \
+		-- --exact --test-threads=1

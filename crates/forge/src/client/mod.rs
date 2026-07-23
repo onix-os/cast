@@ -208,6 +208,7 @@ pub(crate) use journal_usr_exchange_authority::{
     AppliedJournalUsrExchangeAuthority, JournalUsrExchangeAuthority, JournalUsrExchangeAuthorityError,
     JournalUsrExchangeAuthorityPreflight, JournalUsrExchangePreparationSeal, PublishedJournalRootAbiAuthority,
 };
+pub(crate) use active_state_snapshot::ActiveStateReservation as CoordinatorActiveStateReservation;
 
 pub mod extract;
 pub mod index;

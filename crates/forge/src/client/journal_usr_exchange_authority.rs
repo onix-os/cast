@@ -16,6 +16,7 @@ use crate::{
 use super::{
     Error as ClientError, RetainedRootAbi, RootAbiPreflight,
     active_state_authority::ActiveStateAuthority, active_state_authority::AppliedActiveStateWriterAuthority,
+    active_state_snapshot::ActiveStateReservation,
 };
 
 #[derive(Debug, Error)]
@@ -443,5 +444,17 @@ impl PublishedJournalRootAbiAuthority {
 
     pub(crate) fn root_abi(&self) -> &RetainedRootAbi {
         &self.root_abi
+    }
+
+    /// Consume every post-publication proof while preserving the exact
+    /// cooperating-writer lease as startup-style reservation authority.
+    pub(crate) fn into_active_state_reservation(self) -> ActiveStateReservation {
+        let Self {
+            installation: _,
+            _active_state_writer,
+            root_abi: _,
+            active_reblit: _,
+        } = self;
+        _active_state_writer.into_active_state_reservation()
     }
 }

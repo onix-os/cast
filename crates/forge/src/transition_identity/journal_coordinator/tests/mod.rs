@@ -29,8 +29,10 @@ use crate::{
 use super::*;
 use super::root_abi_publication::RootAbiPublicationFailure;
 use super::system_triggers::{
-    StatefulSystemTriggerFailure, arm_after_bound_successor_same_store_validation,
-    arm_after_old_journal_drop_before_reopen, arm_before_reopened_fresh_binding_validation,
+    ActiveReblitNoBootCommitDecisionFailure, BoundSystemTriggerAdvanceFailure,
+    DurableSystemTriggerRecord, StatefulSystemTriggerFailure,
+    arm_after_bound_successor_same_store_validation, arm_after_old_journal_drop_before_reopen,
+    arm_before_reopened_fresh_binding_validation,
 };
 use crate::db::state::TransitionOwnership;
 use crate::transition_identity::StatefulTreeIdentity;

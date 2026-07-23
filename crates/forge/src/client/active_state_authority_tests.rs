@@ -1,9 +1,19 @@
 //! Focused fail-closed tests for strict active-state authority.
 
 use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _};
-use std::{thread, time::Duration};
+use std::{
+    sync::mpsc::{self, RecvTimeoutError},
+    thread,
+    time::Duration,
+};
 
-use super::{Client, Error, Installation, active_state_authority::ActiveStateAuthority, record_state_id};
+use super::{
+    Client, Error, Installation,
+    active_state_authority::ActiveStateAuthority,
+    active_state_snapshot::ActiveStateReservation,
+    fixed_staging::arm_before_coordinator_lock,
+    record_state_id,
+};
 use crate::{Provider, repository, system_model, test_support::prepare_private_installation_root};
 
 struct PreparedRoot {
@@ -133,4 +143,36 @@ fn suspended_strict_authority_rejects_same_inode_mutation_before_resume() {
     thread::sleep(Duration::from_millis(2));
     fs::write(&path, root.state.to_string()).unwrap();
     assert_live_proof_error(snapshot.resume(&client.installation));
+}
+
+#[test]
+fn applied_writer_handoff_keeps_the_same_lease_until_reservation_drop() {
+    let root = prepared_root();
+    let client = open_client(&root).unwrap();
+    let authority = ActiveStateAuthority::acquire(&client.installation).unwrap();
+    let (reached_sender, reached_receiver) = mpsc::channel();
+    let (acquired_sender, acquired_receiver) = mpsc::channel();
+    let contender = thread::spawn(move || {
+        arm_before_coordinator_lock(move || reached_sender.send(()).unwrap());
+        let reservation = ActiveStateReservation::acquire().unwrap();
+        acquired_sender.send(()).unwrap();
+        drop(reservation);
+    });
+    reached_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(matches!(
+        acquired_receiver.recv_timeout(Duration::from_millis(100)),
+        Err(RecvTimeoutError::Timeout)
+    ));
+
+    let reservation = authority
+        .into_applied_writer_authority()
+        .into_active_state_reservation();
+    assert!(matches!(
+        acquired_receiver.recv_timeout(Duration::from_millis(100)),
+        Err(RecvTimeoutError::Timeout)
+    ));
+
+    drop(reservation);
+    acquired_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    contender.join().unwrap();
 }

@@ -70,7 +70,7 @@ pub(super) struct ActiveStateLease {
 /// only after presenting the retained clean-startup gate, which preserves the
 /// coordinator-then-journal lock order without trusting preliminary
 /// Installation discovery as authority.
-pub(super) struct ActiveStateReservation {
+pub(crate) struct ActiveStateReservation {
     coordinator: MutexGuard<'static, ()>,
 }
 
@@ -149,6 +149,17 @@ impl ActiveStateLease {
         } = self;
         drop(_coordinator);
         Ok(ActiveStateSnapshot { active, proof })
+    }
+
+    /// Discard the intentionally invalidated live-tree proof while moving its
+    /// already-held cooperating-writer lease into startup-style reservation
+    /// authority. No writer unlock or lock acquisition occurs in this
+    /// handoff.
+    pub(in crate::client) fn into_reservation_after_applied_tree(self) -> ActiveStateReservation {
+        let Self { _coordinator, .. } = self;
+        ActiveStateReservation {
+            coordinator: _coordinator,
+        }
     }
 }
 

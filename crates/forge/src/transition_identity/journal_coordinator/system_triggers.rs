@@ -8,6 +8,8 @@
 //! at most once, and reopens the canonical journal after each successful
 //! advance before returning reusable typestate authority.
 
+mod no_boot_commit_decision;
+
 use std::error::Error as StdError;
 
 use thiserror::Error;
@@ -28,6 +30,9 @@ use super::{
     root_abi_publication::require_published_root_abi_sandwich,
     usr_exchange_intent::UsrExchangeReadiness,
 };
+
+#[cfg(test)]
+pub(super) use no_boot_commit_decision::ActiveReblitNoBootCommitDecisionFailure;
 
 const RUN_SYSTEM_TRIGGERS: &str = "run stateful system triggers";
 

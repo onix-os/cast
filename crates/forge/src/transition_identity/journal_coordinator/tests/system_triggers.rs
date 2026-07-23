@@ -2,6 +2,18 @@ fn coordinator_ready_for_system_triggers(
     candidate_kind: CandidateKind,
     run_system_triggers: bool,
 ) -> (CoordinatorFixture, RootLinksCompleteCoordinator) {
+    coordinator_ready_for_system_triggers_with_options(
+        candidate_kind,
+        run_system_triggers,
+        false,
+    )
+}
+
+fn coordinator_ready_for_system_triggers_with_options(
+    candidate_kind: CandidateKind,
+    run_system_triggers: bool,
+    run_boot_sync: bool,
+) -> (CoordinatorFixture, RootLinksCompleteCoordinator) {
     let (fixture, identity, authority) =
         fixture_with_exchange_authority(candidate_kind, PreviousKind::Active);
     let (fixture, intent, authority) = coordinator_from_exchange_fixture_with_options(
@@ -10,11 +22,157 @@ fn coordinator_ready_for_system_triggers(
         identity,
         authority,
         run_system_triggers,
-        false,
+        run_boot_sync,
     );
     let exchanged = intent.execute_usr_exchange(authority).unwrap();
     let complete = exchanged.publish_root_abi().unwrap();
     (fixture, complete)
+}
+
+#[test]
+fn journal_coordinator_active_reblit_no_boot_commit_decision_is_exact() {
+    let (fixture, coordinator) =
+        coordinator_ready_for_system_triggers(CandidateKind::ActiveReblit, true);
+    let complete = coordinator
+        .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+        .unwrap();
+    let source = complete.record().clone();
+    assert_record_prefix(
+        &source,
+        Operation::ActiveReblit,
+        Phase::SystemTriggersComplete,
+        10,
+    );
+    assert!(!source.options.run_boot_sync);
+    assert!(source.boot_publication_receipts.is_none());
+    let expected = source.forward_successor(None).unwrap();
+
+    let handoff = complete.commit_active_reblit_without_boot().unwrap();
+
+    assert_eq!(handoff.record(), &expected);
+    assert_record_prefix(
+        handoff.record(),
+        Operation::ActiveReblit,
+        Phase::CommitDecided,
+        11,
+    );
+    assert_eq!(handoff.journal().load().unwrap(), Some(expected));
+    assert_eq!(read_canonical(&fixture.installation.root), *handoff.record());
+}
+
+#[test]
+fn journal_coordinator_active_reblit_no_boot_commit_rejects_other_routes_without_record_change() {
+    {
+        let (fixture, coordinator) =
+            coordinator_ready_for_system_triggers(CandidateKind::NewState, true);
+        let complete = coordinator
+            .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+            .unwrap();
+        let source = complete.record().clone();
+        assert!(matches!(
+            complete.commit_active_reblit_without_boot(),
+            Err(ActiveReblitNoBootCommitDecisionFailure::SourceContract { .. })
+        ));
+        assert_eq!(read_canonical(&fixture.installation.root), source);
+    }
+
+    {
+        let (fixture, coordinator) = coordinator_ready_for_system_triggers_with_options(
+            CandidateKind::ActiveReblit,
+            true,
+            true,
+        );
+        let complete = coordinator
+            .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+            .unwrap();
+        let source = complete.record().clone();
+        assert!(matches!(
+            complete.commit_active_reblit_without_boot(),
+            Err(ActiveReblitNoBootCommitDecisionFailure::SourceContract { .. })
+        ));
+        assert_eq!(read_canonical(&fixture.installation.root), source);
+    }
+}
+
+#[test]
+fn journal_coordinator_active_reblit_no_boot_commit_faults_classify_only_source_or_successor() {
+    for successor_visible in [false, true] {
+        let (fixture, coordinator) =
+            coordinator_ready_for_system_triggers(CandidateKind::ActiveReblit, true);
+        let complete = coordinator
+            .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+            .unwrap();
+        if successor_visible {
+            crate::transition_journal::arm_next_update_first_directory_sync_fault();
+        } else {
+            crate::transition_journal::arm_next_temporary_sync_fault();
+        }
+
+        let failure = match complete.commit_active_reblit_without_boot() {
+            Ok(_) => panic!("faulted no-boot commit unexpectedly returned a handoff"),
+            Err(failure) => failure,
+        };
+
+        if successor_visible {
+            crate::transition_journal::assert_update_first_directory_sync_fault_consumed();
+        } else {
+            crate::transition_journal::assert_temporary_sync_fault_consumed();
+        }
+        assert!(matches!(
+            failure,
+            ActiveReblitNoBootCommitDecisionFailure::Persistence {
+                source: BoundSystemTriggerAdvanceFailure::Advance { durable, .. },
+                ..
+            } if durable == if successor_visible {
+                DurableSystemTriggerRecord::Successor
+            } else {
+                DurableSystemTriggerRecord::Predecessor
+            }
+        ));
+        assert_record_prefix(
+            &read_canonical(&fixture.installation.root),
+            Operation::ActiveReblit,
+            if successor_visible {
+                Phase::CommitDecided
+            } else {
+                Phase::SystemTriggersComplete
+            },
+            if successor_visible { 11 } else { 10 },
+        );
+    }
+}
+
+#[test]
+fn journal_coordinator_active_reblit_no_boot_commit_binding_replacements_fail_stop() {
+    for fresh_binding_seam in [false, true] {
+        let (fixture, coordinator) =
+            coordinator_ready_for_system_triggers(CandidateKind::ActiveReblit, true);
+        let complete = coordinator
+            .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+            .unwrap();
+        let canonical = canonical_journal(&fixture.installation.root);
+        let displaced = fixture.installation.root.join(format!(
+            "no-boot-commit-{}.displaced",
+            if fresh_binding_seam { "fresh" } else { "old" }
+        ));
+        let replace = move || replace_regular_file_with_same_bytes_at(&canonical, &displaced);
+        if fresh_binding_seam {
+            arm_before_reopened_fresh_binding_validation(Phase::CommitDecided, replace);
+        } else {
+            arm_after_bound_successor_same_store_validation(Phase::CommitDecided, replace);
+        }
+
+        assert!(matches!(
+            complete.commit_active_reblit_without_boot(),
+            Err(ActiveReblitNoBootCommitDecisionFailure::Persistence { .. })
+        ));
+        assert_record_prefix(
+            &read_canonical(&fixture.installation.root),
+            Operation::ActiveReblit,
+            Phase::CommitDecided,
+            11,
+        );
+    }
 }
 
 #[test]

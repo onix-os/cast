@@ -7,7 +7,7 @@
 
 use crate::{Installation, state};
 
-use super::active_state_snapshot::{ActiveStateLease, ActiveStateSnapshot};
+use super::active_state_snapshot::{ActiveStateLease, ActiveStateReservation, ActiveStateSnapshot};
 
 /// Non-cloneable strict authority retained across one stateful operation.
 pub(super) struct ActiveStateAuthority(ActiveStateLease);
@@ -58,6 +58,14 @@ impl std::fmt::Debug for AppliedActiveStateWriterAuthority {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let _lease = &self.0;
         formatter.write_str("AppliedActiveStateWriterAuthority")
+    }
+}
+
+impl AppliedActiveStateWriterAuthority {
+    /// Move the existing writer lease into reservation authority without
+    /// reopening or revalidating the displaced pre-exchange tree.
+    pub(super) fn into_active_state_reservation(self) -> ActiveStateReservation {
+        self.0.into_reservation_after_applied_tree()
     }
 }
 
