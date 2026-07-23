@@ -687,6 +687,7 @@ fn before_completion_journal_reopen() {}
 #[path = "boot_sync_complete_persistence/commit_decision_handoff.rs"]
 mod commit_decision_handoff;
 pub(in crate::client) use commit_decision_handoff::{
+    CompleteStagedActiveReblitFinalizationError,
     CommitCleanupCompleteStagedActiveReblitCompleteError,
     CommitCleanupCompleteStagedActiveReblitBootSync,
     CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
@@ -695,6 +696,8 @@ pub(in crate::client) use commit_decision_handoff::{
     CommittedStagedActiveReblitCommitCleanupError,
     CompleteStagedActiveReblitBootSync,
     CompleteStagedActiveReblitBootSyncValidationError,
+    FinalizedStagedActiveReblitBootSync,
+    FinalizedStagedActiveReblitBootSyncValidationError,
     CompletedStagedActiveReblitCommitDecisionError,
 };
 

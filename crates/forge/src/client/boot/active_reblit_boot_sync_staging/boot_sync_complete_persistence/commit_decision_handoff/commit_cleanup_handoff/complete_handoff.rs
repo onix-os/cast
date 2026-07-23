@@ -227,6 +227,14 @@ fn same_nonempty_candidate_and_previous(record: &TransitionRecord) -> bool {
     record.candidate.id.is_some() && record.candidate.id == record.previous.id
 }
 
+#[path = "complete_handoff/finalization.rs"]
+mod finalization;
+pub(in crate::client) use finalization::{
+    CompleteStagedActiveReblitFinalizationError,
+    FinalizedStagedActiveReblitBootSync,
+    FinalizedStagedActiveReblitBootSyncValidationError,
+};
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum CommitCleanupCompleteStagedActiveReblitCompleteError {
     #[error("revalidate exact retained generation-14 cleanup-complete handoff")]

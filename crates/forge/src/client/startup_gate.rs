@@ -649,7 +649,7 @@ impl CleanSystemStartup {
     /// terminal finalizer consumed its record. The finalizer's same locked
     /// journal store is retained through both mutable-namespace captures and
     /// the database audit, then handed to the shared clean residue gate.
-    fn admit_clean_after_terminal_finalization(
+    pub(in crate::client) fn admit_clean_after_terminal_finalization(
         installation: &Installation,
         state_db: &db::state::Database,
         journal: transition_journal::TransitionJournalStore,

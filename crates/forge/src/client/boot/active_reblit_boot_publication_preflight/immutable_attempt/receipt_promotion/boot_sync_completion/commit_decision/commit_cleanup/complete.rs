@@ -267,6 +267,13 @@ where
         .map_err(ActiveReblitBootCompletePostAdvanceError::CompleteEvidence)
 }
 
+#[path = "complete/finalization.rs"]
+mod finalization;
+pub(in crate::client) use finalization::{
+    ActiveReblitBootFinalizationError,
+    ActiveReblitBootFinalizedHandoff,
+};
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootCompleteError {
     #[error("revalidate exact cleanup-complete terminal handoff before Complete")]

@@ -165,10 +165,10 @@ mod commit_decision;
 #[path = "completion/commit_cleanup.rs"]
 mod commit_cleanup;
 
-const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 40;
+const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 44;
 
 #[test]
-fn completion_behavioral_scenario_inventory_is_exactly_forty() {
+fn completion_behavioral_scenario_inventory_is_exactly_forty_four() {
     let module_counts = [
         success::SCENARIO_COUNT,
         deadline::SCENARIO_COUNT,
@@ -177,7 +177,7 @@ fn completion_behavioral_scenario_inventory_is_exactly_forty() {
         commit_decision::SCENARIO_COUNT,
         commit_cleanup::SCENARIO_COUNT,
     ];
-    assert_eq!(module_counts, [3, 1, 7, 10, 11, 8]);
+    assert_eq!(module_counts, [3, 1, 7, 10, 11, 12]);
     assert_eq!(
         module_counts.into_iter().sum::<usize>(),
         EXPECTED_BEHAVIORAL_SCENARIO_COUNT,

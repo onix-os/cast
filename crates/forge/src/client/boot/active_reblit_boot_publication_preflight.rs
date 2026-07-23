@@ -62,6 +62,7 @@ pub(in crate::client) use assessment_seal::{
 
 #[allow(unused_imports)] // mixed evidence is named by VM and cleanup validation slices
 pub(in crate::client) use immutable_attempt::{
+    ActiveReblitBootCompleteFinalizationSeal,
     ActiveReblitBootPublicationEffectSeal,
     ActiveReblitBootPromotedCleanupSeal,
     ActiveReblitCommitCleanupCompleteSeal,
@@ -79,6 +80,8 @@ pub(in crate::client) use immutable_attempt::{
     ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootPromotedCleanupError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootFinalizationError,
+    ActiveReblitBootFinalizedHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,
     ActiveReblitBootCommitDecisionError,

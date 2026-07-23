@@ -949,6 +949,7 @@ pub(in crate::client) use boot_sync_complete_persistence::{
     ActiveReblitBootSyncCompletePersistenceError,
     ActiveReblitBootSyncCompleteValidationError,
     ActiveReblitBootSyncCompletionReconciliationError,
+    CompleteStagedActiveReblitFinalizationError,
     CommitCleanupCompleteStagedActiveReblitCompleteError,
     CommitCleanupCompleteStagedActiveReblitBootSync,
     CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
@@ -961,6 +962,8 @@ pub(in crate::client) use boot_sync_complete_persistence::{
     CompletedStagedActiveReblitBootSync,
     DurableActiveReblitBootSyncCompletionRecord,
     FreshCompletedStagedActiveReblitBootSync,
+    FinalizedStagedActiveReblitBootSync,
+    FinalizedStagedActiveReblitBootSyncValidationError,
 };
 #[cfg(test)]
 pub(in crate::client) use boot_sync_complete_persistence::arm_before_completion_journal_reopen;

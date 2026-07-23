@@ -328,6 +328,8 @@ pub(in crate::client) use commit_cleanup::{
     ActiveReblitBootCompleteHandoff,
     ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootFinalizationError,
+    ActiveReblitBootFinalizedHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,
 };

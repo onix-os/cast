@@ -625,6 +625,8 @@ pub(in crate::client) use commit_decision::{
     ActiveReblitBootCompleteHandoff,
     ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootFinalizationError,
+    ActiveReblitBootFinalizedHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,
     ActiveReblitBootCommitDecisionError,

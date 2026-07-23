@@ -248,12 +248,15 @@ fn receipt_pair(
 #[path = "commit_decision_handoff/commit_cleanup_handoff.rs"]
 mod commit_cleanup_handoff;
 pub(in crate::client) use commit_cleanup_handoff::{
+    CompleteStagedActiveReblitFinalizationError,
     CommitCleanupCompleteStagedActiveReblitCompleteError,
     CommitCleanupCompleteStagedActiveReblitBootSync,
     CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
     CommittedStagedActiveReblitCommitCleanupError,
     CompleteStagedActiveReblitBootSync,
     CompleteStagedActiveReblitBootSyncValidationError,
+    FinalizedStagedActiveReblitBootSync,
+    FinalizedStagedActiveReblitBootSyncValidationError,
 };
 
 #[derive(Debug, Error)]

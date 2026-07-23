@@ -45,7 +45,7 @@ forge-active-reblit-boot-commit-cleanup-test: forge-startup-active-reblit-commit
 	fi
 	@$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/Cargo.toml" -p forge --lib "$(ACTIVE_REBLIT_BOOT_COMMIT_CLEANUP_FILTER)" -- --test-threads=1 --include-ignored
 
-forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal-promotion-test forge-transition-journal-successor-test forge-transition-journal-test forge-active-reblit-boot-commit-cleanup-test
+forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal-promotion-test forge-transition-journal-successor-test forge-transition-journal-test forge-active-reblit-boot-commit-cleanup-test forge-active-reblit-boot-complete-finalization-test
 	@set -euo pipefail; \
 	mkdir -p "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/target"; \
 	listed="$$( mktemp "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/target/active-reblit-boot-sync-completion-list.XXXXXXXXXXXX" )"; \
@@ -53,9 +53,12 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::receipt_promotion::completion::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 24; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 27; \
 	for name in \
-		completion_behavioral_scenario_inventory_is_exactly_forty \
+		completion_behavioral_scenario_inventory_is_exactly_forty_four \
+		commit_cleanup::complete::finalization::exact_complete_finalizes_once_and_preserves_clean_authority \
+		commit_cleanup::complete::finalization::same_bytes_new_inode_rejects_finalization_before_delete_without_other_effects \
+		commit_cleanup::complete::finalization::terminal_delete_fault_states_return_no_clean_handoff \
 		commit_cleanup::complete::complete_reopen_never_waits_behind_writer_blocked_journal_contender \
 		commit_cleanup::complete::exact_cleanup_complete_rolls_forward_once_and_preserves_all_authority \
 		commit_cleanup::complete::same_bytes_new_inode_rejects_complete_without_any_effect \
@@ -227,6 +230,7 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion.rs \
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion/*.rs \
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion/*/*.rs \
+		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion/*/*/*.rs \
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/misc/make/active-reblit-boot-sync-completion-tests.mk"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \

@@ -297,4 +297,6 @@ pub(in crate::client) use complete::{
     ActiveReblitBootCompleteError,
     ActiveReblitBootCompleteHandoff,
     ActiveReblitBootCompletePostAdvanceError,
+    ActiveReblitBootFinalizationError,
+    ActiveReblitBootFinalizedHandoff,
 };

@@ -252,9 +252,12 @@ fn exact_live_options(record: &TransitionRecord) -> bool {
 #[path = "commit_cleanup_handoff/complete_handoff.rs"]
 mod complete_handoff;
 pub(in crate::client) use complete_handoff::{
+    CompleteStagedActiveReblitFinalizationError,
     CommitCleanupCompleteStagedActiveReblitCompleteError,
     CompleteStagedActiveReblitBootSync,
     CompleteStagedActiveReblitBootSyncValidationError,
+    FinalizedStagedActiveReblitBootSync,
+    FinalizedStagedActiveReblitBootSyncValidationError,
 };
 
 #[derive(Debug, Error)]

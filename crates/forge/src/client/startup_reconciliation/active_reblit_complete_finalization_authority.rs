@@ -7,6 +7,8 @@
 //! only mutation surface is one record-bound terminal deletion on the same
 //! locked journal store.
 
+mod retained_binding;
+
 use crate::{
     Installation, State, db, state,
     transition_journal::{
@@ -93,8 +95,14 @@ enum ActiveReblitCompleteFinalizationDatabaseInspection {
     Incompatible,
 }
 
-impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
-    pub(in crate::client) fn capture(
+enum ActiveReblitCompleteFinalizationCapture<'reservation> {
+    NotApplicable,
+    Deferred,
+    Ready(ActiveReblitCompleteFinalizationAuthority<'reservation>),
+}
+
+impl ActiveReblitCompleteFinalizationAuthority<'_> {
+    pub(in crate::client) fn capture<'reservation>(
         _seal: &ActiveReblitCompleteFinalizationSeal,
         installation: &Installation,
         journal: &TransitionJournalStore,
@@ -105,30 +113,70 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
         ActiveReblitCompleteFinalizationAdmission<'reservation>,
         ActiveReblitCompleteFinalizationAuthorityError,
     > {
+        let captured = Self::capture_with_record_binding(
+            installation,
+            journal,
+            state_db,
+            active_state_reservation,
+            record,
+            || {
+                installation.revalidate_mutable_namespace()?;
+                let journal_binding = journal.binding();
+                let journal_record_binding = journal.record_binding(
+                    installation.retained_mutable_cast_directory()?,
+                    record,
+                )?;
+                installation.revalidate_mutable_namespace()?;
+                Ok((journal_binding, journal_record_binding))
+            },
+        )?;
+        Ok(match captured {
+            ActiveReblitCompleteFinalizationCapture::NotApplicable => {
+                ActiveReblitCompleteFinalizationAdmission::NotApplicable
+            }
+            ActiveReblitCompleteFinalizationCapture::Deferred => {
+                ActiveReblitCompleteFinalizationAdmission::Deferred
+            }
+            ActiveReblitCompleteFinalizationCapture::Ready(authority) => {
+                ActiveReblitCompleteFinalizationAdmission::Ready(authority)
+            }
+        })
+    }
+
+    fn capture_with_record_binding<'reservation>(
+        installation: &Installation,
+        journal: &TransitionJournalStore,
+        state_db: &db::state::Database,
+        active_state_reservation: &'reservation ActiveStateReservation,
+        record: &TransitionRecord,
+        capture_binding: impl FnOnce() -> Result<
+            (TransitionJournalBinding, TransitionJournalRecordBinding),
+            ActiveReblitCompleteFinalizationAuthorityError,
+        >,
+    ) -> Result<
+        ActiveReblitCompleteFinalizationCapture<'reservation>,
+        ActiveReblitCompleteFinalizationAuthorityError,
+    > {
         if record.operation != Operation::ActiveReblit || record.phase != Phase::Complete {
-            return Ok(ActiveReblitCompleteFinalizationAdmission::NotApplicable);
+            return Ok(ActiveReblitCompleteFinalizationCapture::NotApplicable);
         }
 
         // Bind the non-clone terminal inode before reading any mutable
         // database, selected-state, or activation-namespace evidence.
-        installation.revalidate_mutable_namespace()?;
-        let journal_binding = journal.binding();
-        let journal_record_binding = journal.record_binding(
-            installation.retained_mutable_cast_directory()?,
-            record,
-        )?;
+        let (journal_binding, journal_record_binding) = capture_binding()?;
+        require_exact_record_binding(installation, journal, &journal_record_binding, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let receipt_correlation = record
             .boot_publication_receipt_correlation()
             .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::Record)?;
         let Some(route_plan) = exact_route_plan(record, receipt_correlation) else {
-            return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred);
+            return Ok(ActiveReblitCompleteFinalizationCapture::Deferred);
         };
         let database_before = match inspect_current_database_for_plan(record, &route_plan, state_db)? {
             ActiveReblitCompleteFinalizationDatabaseInspection::Exact(database) => database,
             ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible => {
-                return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred);
+                return Ok(ActiveReblitCompleteFinalizationCapture::Deferred);
             }
         };
         let active_state = match capture_exact_active_state(
@@ -137,7 +185,7 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
             active_state_reservation,
         )? {
             Some(active_state) => active_state,
-            None => return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred),
+            None => return Ok(ActiveReblitCompleteFinalizationCapture::Deferred),
         };
         let inspection = match ActiveReblitCommitCleanupNamespaceInspection::begin(
             installation,
@@ -147,7 +195,7 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
         ) {
             Ok(inspection) => inspection,
             Err(source) if active_reblit_commit_cleanup_namespace_error_is_mismatch(&source) => {
-                return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred);
+                return Ok(ActiveReblitCompleteFinalizationCapture::Deferred);
             }
             Err(source) => return Err(source.into()),
         };
@@ -160,7 +208,7 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
         )? {
             ActiveReblitCommitCleanupNamespaceProof::Finish(namespace) => namespace,
             ActiveReblitCommitCleanupNamespaceProof::Apply(_) => {
-                return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred);
+                return Ok(ActiveReblitCompleteFinalizationCapture::Deferred);
             }
         };
         let database_after = require_exact_database(
@@ -181,25 +229,29 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
         )?;
         installation.revalidate_mutable_namespace()?;
 
-        Ok(ActiveReblitCompleteFinalizationAdmission::Ready(Self {
-            evidence: ActiveReblitCompleteFinalizationEvidence {
-                installation: installation.clone(),
-                state_db: state_db.clone(),
-                record: record.clone(),
-                database: database_after,
-                active_state,
-                namespace,
-                _active_state_reservation: active_state_reservation,
+        Ok(ActiveReblitCompleteFinalizationCapture::Ready(
+            ActiveReblitCompleteFinalizationAuthority {
+                evidence: ActiveReblitCompleteFinalizationEvidence {
+                    installation: installation.clone(),
+                    state_db: state_db.clone(),
+                    record: record.clone(),
+                    database: database_after,
+                    active_state,
+                    namespace,
+                    _active_state_reservation: active_state_reservation,
+                },
+                journal_binding,
+                journal_record_binding,
             },
-            journal_binding,
-            journal_record_binding,
-        }))
+        ))
     }
 
     pub(in crate::client) fn record(&self) -> &TransitionRecord {
         &self.evidence.record
     }
+}
 
+impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
     pub(in crate::client) fn revalidate(
         &self,
         journal: &TransitionJournalStore,
@@ -681,6 +733,8 @@ pub(in crate::client) struct ActiveReblitCompleteFinalizationAuthorityError(
 enum ActiveReblitCompleteFinalizationAuthorityErrorKind {
     #[error("validate exact v3 ActiveReblit Complete record")]
     Record(#[source] CodecError),
+    #[error("retained live Complete handoff is not the exact generation-15 receipt-backed route")]
+    RetainedCompleteRejected,
     #[error("the exact Complete record binding changed")]
     JournalRecordBindingChanged,
     #[error("the lock-bearing Complete journal store changed")]

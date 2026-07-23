@@ -682,6 +682,8 @@ pub(in crate::client) use boot_sync_completion::{
     ActiveReblitBootCompleteHandoff,
     ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootFinalizationError,
+    ActiveReblitBootFinalizedHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,
     ActiveReblitBootCommitDecisionError,

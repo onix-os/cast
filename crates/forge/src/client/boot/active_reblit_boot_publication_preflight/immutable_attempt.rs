@@ -129,6 +129,14 @@ pub(in crate::client) struct ActiveReblitCommitCleanupCompleteSeal {
     _private: (),
 }
 
+/// Unforgeable proof that the live boot coordinator retained the exact
+/// generation-15 `Complete` handoff through terminal finalization entry.
+/// Only descendants of this module can mint it; shared startup finalization
+/// authority may consume it but cannot manufacture it.
+pub(in crate::client) struct ActiveReblitBootCompleteFinalizationSeal {
+    _private: (),
+}
+
 /// Terminal exact-output evidence which still owns the original staged
 /// `BootSyncStarted` authority.
 ///
@@ -696,6 +704,8 @@ pub(in crate::client) use receipt_promotion::{
     ActiveReblitBootCompleteHandoff,
     ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootFinalizationError,
+    ActiveReblitBootFinalizedHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,
     ActiveReblitBootCommitDecisionError,

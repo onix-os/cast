@@ -2,7 +2,7 @@ use super::*;
 
 use crate::client::startup_recovery::arm_after_active_reblit_commit_cleanup_complete_same_store_before_reopen;
 
-pub(super) const SCENARIO_COUNT: usize = 4;
+pub(super) const SCENARIO_COUNT: usize = 4 + finalization::SCENARIO_COUNT;
 
 const COMPLETE_ABBA_CHILD_ENV: &str = "FORGE_ACTIVE_REBLIT_COMPLETE_ABBA_CHILD";
 const COMPLETE_ABBA_EXACT_TEST: &str = concat!(
@@ -35,6 +35,24 @@ macro_rules! with_exact_cleanup_complete_handoff {
                 )
                 .unwrap();
                 assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), 1);
+                $body
+            }
+        );
+    }};
+}
+
+macro_rules! with_exact_complete_handoff {
+    (|$fixture:ident, $topology_fixture:ident, $plan:ident, $client:ident,
+        $completed:ident| $body:block) => {{
+        with_exact_cleanup_complete_handoff!(
+            |$fixture, $topology_fixture, $plan, $client, cleaned| {
+                let $completed = persist_complete_with_assessments!(
+                    cleaned,
+                    &$client,
+                    $topology_fixture.publication_root(),
+                    2
+                )
+                .unwrap();
                 $body
             }
         );
@@ -235,3 +253,6 @@ fn complete_reopen_never_waits_behind_writer_blocked_journal_contender() {
         }
     );
 }
+
+#[path = "complete/finalization.rs"]
+mod finalization;
