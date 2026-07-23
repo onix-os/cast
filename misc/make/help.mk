@@ -149,6 +149,7 @@ help:
 	@echo "  mason-profile-test  Run typed Gluon profile loading and persistence tests"
 	@echo "  mason-planner-bootstrap-test  Run pinned execution-closure planner tests"
 	@echo "  mason-policy-test  Run rooted policy composition and provenance tests"
+	@echo "  config-declaration-manager-test  Run language-neutral typed manager tests"
 	@echo "  config-declaration-storage-test  Run language-neutral declaration slot and persistence tests"
 	@echo "  config-gluon-store-test  Run all descriptor-rooted Gluon fragment store tests"
 	@echo "  gitwrap-repository-fs-test  Run repository filesystem identity, quota, and mirror tests"
