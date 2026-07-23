@@ -156,13 +156,25 @@ substantial populated values (the authored policies are ~600 lines of `.glu`).
 These are the reasons the recipe domains are estimated in engineer-weeks, not the
 hours the config-style domains took.
 
+## Done
+
+Every declaration domain now decodes through Lua to the shared Rust value with a
+differential parity test: triggers, repositories, profiles, system model,
+build-policy layers, the full build policy (and its patch overlay), the build
+lock, the package recipe, and both machine-local boot intents. Repositories,
+profiles, and triggers dispatch `.lua` by extension through the real config
+loader; the two boot intents are wired into their fixed retained `etc/cast/*`
+slots with the same retention, double-revalidation, and strict fingerprint
+contract as Gluon. The authored dialect, sandbox, import rules, encoding, file
+authority, and provenance are documented in
+[`../lua-configuration.md`](../lua-configuration.md).
+
 ## Still open
 
-- register the Lua ABI/runtime source roots in semantic implementation
-  fingerprints once the ABI tree exists;
-- a documented selected-engine call-depth bound;
-- the remaining domains (system model, packages, builders, boot topology,
-  root filesystem), canonical `.lua` emitters, the full authored corpus, the
-  installed-state migration bridge, and Endpoint finish;
+- the full 218-reference `.glu` corpus + 132 documentation examples paired with
+  reviewed `.lua` forms (Phase L7);
+- the crash-safe installed-state SQLite migration bridge and release-parity
+  gates (Phase L8, `make lua-release-test` / `make lua-installed-state-test`);
+- Endpoint finish — Gluon removal (L9A) or permanent dual support (L9B);
 - musl-target release execution and dependency/license audit
-  (`make lua-release-test`, `make lua-dependency-audit`).
+  (`make lua-dependency-audit`).
