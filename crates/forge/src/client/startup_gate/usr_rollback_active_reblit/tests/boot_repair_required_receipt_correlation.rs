@@ -27,7 +27,8 @@ use super::{
         assert_boot_required_capture_authority_error, assert_boot_required_persistence_authority_error,
         assert_no_boot_synchronize_attempts, assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started,
         build_legacy_boot_sync_started, drive_boot_sync_started_to_candidate_preserved, enter_boot,
-        expected_boot_repair_required, reset_boot_synchronize_observer, reset_candidate_effect_observers,
+        expected_boot_repair_required, expected_boot_repair_started, reset_boot_synchronize_observer,
+        reset_candidate_effect_observers,
     },
 };
 
@@ -106,6 +107,15 @@ fn startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preser
 
             assert_pending_phase(&error, Phase::BootRepairRequired);
             assert_eq!(fixture.fixture.canonical_record(), expected);
+            assert_eq!(fixture.fixture.database_snapshot(), database_before);
+            assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
+            assert_no_candidate_effects();
+            assert_no_boot_synchronize_attempts();
+
+            let started = expected_boot_repair_started(&expected);
+            let start_error = enter_boot(&fixture);
+            assert_pending_phase(&start_error, Phase::BootRepairStarted);
+            assert_eq!(fixture.fixture.canonical_record(), started);
             assert_eq!(fixture.fixture.database_snapshot(), database_before);
             assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
             assert_no_candidate_effects();

@@ -11,6 +11,7 @@ mod boot_repair_required_exclusions;
 mod boot_repair_required_matrix;
 mod boot_repair_required_prefix_boundaries;
 mod boot_repair_required_receipt_correlation;
+mod boot_repair_required_start_record_binding;
 mod boot_repair_required_storage_faults;
 mod boot_repair_unverified_capture_faults;
 mod boot_repair_unverified_retention;

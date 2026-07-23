@@ -151,6 +151,20 @@ restart reconciliation, and VM durability evidence remain required by the
 current Phase 11 plan. Only alternative foundations that cannot establish that
 authority are deferred here.
 
+- Add automatic pending-receipt boot rollback only after incomplete private
+  publication residue has receipt-bound ownership and exact reconciliation.
+  Process death while streaming can currently leave a partial immutable
+  `.stage` or replacement `.replace` leaf which the exact terminal-state
+  reconcilers correctly refuse to adopt or remove. The future protocol must
+  bind every such private name to the exact pending receipt and safely
+  authenticate, resume, or remove partial residue without widening deletion
+  authority. It must also add one conditional database operation which clears
+  only the exact pending receipt head while retaining its committed
+  predecessor. These are prerequisites for automatic inverse repair across
+  every `BootSyncStarted` crash prefix; they are deliberately not required for
+  the current safe journal-only `BootRepairRequired -> BootRepairStarted ->
+  BootRepairUnverified` closure and manual-recovery retention.
+
 - Reconsider a standalone, authority-free
   `active_reblit_publication_ownership` policy module after authenticated boot
   publication provenance exists. The proposed module would distinguish

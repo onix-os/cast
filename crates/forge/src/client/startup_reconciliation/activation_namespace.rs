@@ -17,6 +17,7 @@ mod activate_archived_complete_route_proof;
 mod activate_archived_finalization_proof;
 mod active_reblit_boot_repair_complete_proof;
 mod active_reblit_boot_repair_required_proof;
+mod active_reblit_boot_repair_start_proof;
 mod active_reblit_boot_repair_started_error_classification;
 mod active_reblit_boot_repair_started_proof;
 mod active_reblit_boot_sync_started_proof;
@@ -76,8 +77,14 @@ pub(super) use active_reblit_boot_repair_required_proof::{
     UsrRollbackActiveReblitBootRepairRequiredNamespaceInspection,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceProof,
 };
+pub(super) use active_reblit_boot_repair_start_proof::{
+    UsrRollbackActiveReblitBootRepairStartNamespaceError,
+    UsrRollbackActiveReblitBootRepairStartNamespaceInspection,
+    UsrRollbackActiveReblitBootRepairStartNamespaceProof,
+};
 pub(super) use active_reblit_boot_repair_started_error_classification::{
-    complete_namespace_error_is_structural, started_namespace_error_is_structural,
+    complete_namespace_error_is_structural, start_namespace_error_is_structural,
+    started_namespace_error_is_structural,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_boot_repair_started_proof::{

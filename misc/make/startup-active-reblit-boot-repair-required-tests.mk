@@ -14,7 +14,7 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 300s $(CARGO) test -p forge --lib -- --list | timeout 300s tee "$$listed" >/dev/null; \
 	timeout 10s grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_active_reblit::tests::'; \
-	timeout 10s test "$$( timeout 10s grep -c "^$$prefix"'boot_repair_required_.*: test$$' "$$listed" )" = 9; \
+	test "$$( grep -c "^$$prefix"'boot_repair_required_.*: test$$' "$$listed" )" = 12; \
 	for name in \
 		boot_repair_required_authority_binding::startup_active_reblit_boot_repair_required_authority_rejects_reopened_and_cross_root_journal_bindings \
 		boot_repair_required_evidence_races::startup_active_reblit_boot_repair_required_rejects_database_provenance_journal_and_namespace_races \
@@ -24,12 +24,16 @@ forge-startup-active-reblit-boot-repair-required-test: \
 		boot_repair_required_prefix_boundaries::startup_active_reblit_boot_repair_required_prefix_boundaries_are_exact_and_effect_free \
 		boot_repair_required_receipt_correlation::startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preserves_legacy_route \
 		boot_repair_required_receipt_correlation::startup_active_reblit_boot_repair_required_rejects_receipt_races_and_corruption_without_effects \
+		boot_repair_required_start_record_binding::startup_active_reblit_boot_repair_required_start_bound_advance_same_byte_replacements_never_succeed \
+		boot_repair_required_start_record_binding::startup_active_reblit_boot_repair_required_start_same_byte_successor_replacement_fails_same_store_binding \
+		boot_repair_required_start_record_binding::startup_active_reblit_boot_repair_required_start_same_byte_successor_replacement_fails_reopened_binding \
 		boot_repair_required_storage_faults::startup_active_reblit_boot_repair_required_all_five_journal_faults_converge_fresh_without_boot; do \
 		timeout 10s grep -Fqx "$$prefix$$name: test" "$$listed"; \
 	done; \
 	gate=crates/forge/src/client/startup_gate.rs; \
 	orchestrator=crates/forge/src/client/startup_gate/usr_rollback_active_reblit.rs; \
 	authority=crates/forge/src/client/startup_reconciliation/usr_rollback_active_reblit_boot_repair_required_authority.rs; \
+	start_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_active_reblit_boot_repair_start_authority.rs; \
 	decision_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_decision_authority.rs; \
 	resume_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_resume_route_authority.rs; \
 	reverse_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_reverse_authority.rs; \
@@ -39,28 +43,57 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	recovery_root=crates/forge/src/client/startup_recovery.rs; \
 	focused_exports=crates/forge/src/client/startup_reconciliation/focused_test_exports.rs; \
 	proof=crates/forge/src/client/startup_reconciliation/activation_namespace/active_reblit_boot_repair_required_proof.rs; \
+	start_proof=crates/forge/src/client/startup_reconciliation/activation_namespace/active_reblit_boot_repair_start_proof.rs; \
 	executor=crates/forge/src/client/startup_recovery/usr_rollback_active_reblit_boot_repair_required.rs; \
+	start_executor=crates/forge/src/client/startup_recovery/usr_rollback_active_reblit_boot_repair_start.rs; \
 	complete_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_active_reblit_complete_route_authority.rs; \
 	fixture=crates/forge/src/client/startup_recovery/test_support.rs; \
 	boot_worker=crates/forge/src/client/boot.rs; \
 	tests=crates/forge/src/client/startup_gate/usr_rollback_active_reblit/tests; \
-	for module in boot_repair_required_authority_binding boot_repair_required_evidence_races boot_repair_required_exclusions boot_repair_required_matrix boot_repair_required_prefix_boundaries boot_repair_required_receipt_correlation boot_repair_required_storage_faults; do \
+	for module in boot_repair_required_authority_binding boot_repair_required_evidence_races boot_repair_required_exclusions boot_repair_required_matrix boot_repair_required_prefix_boundaries boot_repair_required_receipt_correlation boot_repair_required_start_record_binding boot_repair_required_storage_faults; do \
 		timeout 10s grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
 	timeout 10s grep -Fqx 'mod usr_rollback_active_reblit_boot_repair_required_authority;' "$$reconciliation_root"; \
 	timeout 10s grep -Fq 'pub(in crate::client) use usr_rollback_active_reblit_boot_repair_required_authority::{' "$$reconciliation_root"; \
+	grep -Fqx 'mod usr_rollback_active_reblit_boot_repair_start_authority;' "$$reconciliation_root"; \
+	grep -Fq 'pub(in crate::client) use usr_rollback_active_reblit_boot_repair_start_authority::{' "$$reconciliation_root"; \
 	timeout 10s grep -Fqx 'mod active_reblit_boot_repair_required_proof;' "$$namespace_root"; \
 	timeout 10s grep -Fq 'pub(super) use active_reblit_boot_repair_required_proof::{' "$$namespace_root"; \
+	grep -Fqx 'mod active_reblit_boot_repair_start_proof;' "$$namespace_root"; \
+	grep -Fq 'pub(super) use active_reblit_boot_repair_start_proof::{' "$$namespace_root"; \
 	timeout 10s grep -Fqx 'mod usr_rollback_active_reblit_boot_repair_required;' "$$recovery_root"; \
 	timeout 10s grep -Fq 'pub(super) use usr_rollback_active_reblit_boot_repair_required::{' "$$recovery_root"; \
+	grep -Fqx 'mod usr_rollback_active_reblit_boot_repair_start;' "$$recovery_root"; \
+	grep -Fq 'pub(super) use usr_rollback_active_reblit_boot_repair_start::{' "$$recovery_root"; \
 	for predicate in usr_rollback_decision_source_is_supported_for_test usr_rollback_resume_route_plan_is_exact_for_test usr_rollback_reverse_plan_is_exact_for_test usr_rollback_candidate_preserve_plan_is_exact_for_test; do \
 		timeout 10s grep -Fq "$$predicate" "$$focused_exports"; \
 	done; \
-	timeout 10s test "$$( timeout 10s rg -n '^#\[test\]$$' "$$tests"/boot_repair_required_*.rs | timeout 10s wc -l )" = 9; \
+	test "$$( rg -n '^#\[test\]$$' "$$tests"/boot_repair_required_*.rs | wc -l )" = 12; \
 	timeout 10s grep -Fq 'UsrRollbackActiveReblitBootRepairRequiredSeal,' "$$gate"; \
 	timeout 10s grep -Fqx 'pub(in crate::client) struct UsrRollbackActiveReblitBootRepairRequiredSeal {' "$$orchestrator"; \
+	grep -Fqx 'pub(in crate::client) struct UsrRollbackActiveReblitBootRepairStartSeal {' "$$orchestrator"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'UsrRollbackActiveReblitBootRepairRequiredAuthority::capture(' "$$orchestrator" )" = 1; \
+	test "$$( grep -Fc 'UsrRollbackActiveReblitBootRepairStartAuthority::capture(' "$$orchestrator" )" = 1; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'persist_usr_rollback_active_reblit_boot_repair_required_and_reopen(journal, authority)?' "$$orchestrator" )" = 1; \
+	test "$$( grep -Fc 'persist_usr_rollback_active_reblit_boot_repair_start_and_reopen(journal, authority)?' "$$orchestrator" )" = 1; \
+	grep -Fq 'Phase::BootRepairRequired => {' "$$orchestrator"; \
+	start_arm="$$( sed -n '/Phase::BootRepairRequired => {/,/Phase::BootRepairStarted => {/p' "$$orchestrator" | sed '$$d' )"; \
+	if rg -n 'boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt|renameat|unlink|create_dir' <<<"$$start_arm"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	grep -Fq 'record.operation != Operation::ActiveReblit || record.phase != Phase::BootRepairRequired' "$$start_authority"; \
+	grep -Fq 'active_reblit_pending_boot_repair_plan_is_exact(record, Phase::BootRepairRequired)' "$$start_authority"; \
+	grep -Fq 'require_exact_active_reblit_boot_repair_required_topology(expected, &before)?' "$$start_proof"; \
+	test "$$( grep -Fc 'authority.revalidate(&journal)' "$$start_executor" )" = 1; \
+	test "$$( grep -Fc 'authority.boot_repair_started_successor()' "$$start_executor" )" = 1; \
+	test "$$( grep -Fc 'authority.advance_record_binding(&journal, &successor)' "$$start_executor" )" = 1; \
+	test "$$( grep -Fc 'self.revalidate(journal)?;' "$$start_authority" )" = 1; \
+	grep -Fq 'journal.record_binding(installation.retained_mutable_cast_directory()?, record)?' "$$start_authority"; \
+	grep -Fq 'journal.has_record_store_binding(binding)' "$$start_authority"; \
+	grep -Fq '.advance_record_binding(cast, self.journal_record_binding, next)' "$$start_authority"; \
+	grep -Fq 'journal.has_record_store_binding(successor_binding)' "$$start_executor"; \
+	grep -Fq '.has_record_binding(cast, successor_binding, successor)' "$$start_executor"; \
+	grep -Fq '.has_reopened_record_binding(cast, successor_binding, successor)' "$$start_executor"; \
+	if rg -n 'TransitionJournalBinding|journal\.advance\(' "$$start_authority" "$$start_proof" "$$start_executor"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n '^[[:space:]]*(loop|while)[[:space:]]|diesel::|SqliteConnection|boot::|synchronize_boot|synchronize_databases|synchronize_excluding|run_(transaction|system)_triggers|finalize_usr_rollback|journal\.delete|stage_boot_publication_receipt|remove_exact_fresh_transition|rename(at)?|unlink(at)?|mkdir|create_dir|remove_(dir|file)' "$$start_authority" "$$start_proof" "$$start_executor"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	boot_line="$$( timeout 10s grep -nF 'UsrRollbackActiveReblitBootRepairRequiredAuthority::capture(' "$$orchestrator" | timeout 10s cut -d: -f1 )"; \
 	complete_line="$$( timeout 10s grep -nF 'UsrRollbackActiveReblitCompleteRouteAuthority::capture(' "$$orchestrator" | timeout 10s cut -d: -f1 )"; \
 	timeout 10s test "$$boot_line" -lt "$$complete_line"; \
@@ -171,10 +204,21 @@ forge-startup-active-reblit-boot-repair-required-test: \
 	timeout 10s test "$$observer_line" -lt "$$first_return_line"; \
 	timeout 10s grep -Fq 'reset_boot_synchronize_observer();' "$$tests/boot_repair_required_matrix.rs"; \
 	timeout 10s grep -Fq 'assert_no_boot_synchronize_attempts();' "$$tests/boot_repair_required_matrix.rs"; \
+	grep -Fq 'assert_pending_phase(&start_error, Phase::BootRepairStarted);' "$$tests/boot_repair_required_matrix.rs"; \
 	for fault in temporary_sync update_exchange update_first_directory_sync displaced_unlink update_final_directory_sync; do timeout 10s grep -Fq "$$fault" "$$tests/boot_repair_required_storage_faults.rs"; done; \
+	grep -Fq 'DurableUsrRollbackActiveReblitBootRepairStartRecord::BootRepairRequired' "$$tests/boot_repair_required_storage_faults.rs"; \
+	grep -Fq 'DurableUsrRollbackActiveReblitBootRepairStartRecord::BootRepairStarted' "$$tests/boot_repair_required_storage_faults.rs"; \
 	timeout 10s grep -Fq 'release_boot_handles(fixture)' "$$tests/boot_repair_required_storage_faults.rs"; \
 	timeout 10s grep -Fq 'enter_fresh_handles(retained.path())' "$$tests/boot_repair_required_storage_faults.rs"; \
-	for file in "$$gate" "$$orchestrator" "$$authority" "$$decision_authority" "$$resume_authority" "$$reverse_authority" "$$candidate_authority" "$$reconciliation_root" "$$namespace_root" "$$recovery_root" "$$focused_exports" "$$proof" "$$executor" "$$fixture" "$$boot_worker" "$$tests/mod.rs" "$$tests"/boot_repair_required_*.rs "$$tests/support.rs" misc/make/startup-active-reblit-boot-repair-required-tests.mk; do \
+	start_binding_tests="$$tests/boot_repair_required_start_record_binding.rs"; \
+	grep -Fq 'PublicBindingRevalidationBoundary::BeforeBoundAdvancePublish' "$$start_binding_tests"; \
+	grep -Fq 'PublicBindingRevalidationBoundary::BeforeBoundAdvanceFinalBinding' "$$start_binding_tests"; \
+	grep -Fq 'arm_before_usr_rollback_active_reblit_boot_repair_start_successor_binding_revalidation' "$$start_binding_tests"; \
+	grep -Fq 'arm_after_usr_rollback_active_reblit_boot_repair_start_successor_binding_check_before_reopen' "$$start_binding_tests"; \
+	test "$$( grep -Fc 'same_byte_different_inode_hook(' "$$start_binding_tests" )" = 4; \
+	grep -Fq 'assert_no_boot_synchronize_attempts();' "$$start_binding_tests"; \
+	grep -Fq 'assert_no_candidate_effects();' "$$start_binding_tests"; \
+	for file in "$$gate" "$$orchestrator" "$$authority" "$$start_authority" "$$decision_authority" "$$resume_authority" "$$reverse_authority" "$$candidate_authority" "$$reconciliation_root" "$$namespace_root" "$$recovery_root" "$$focused_exports" "$$proof" "$$start_proof" "$$executor" "$$start_executor" "$$fixture" "$$boot_worker" "$$tests/mod.rs" "$$tests"/boot_repair_required_*.rs "$$tests/support.rs" misc/make/startup-active-reblit-boot-repair-required-tests.mk; do \
 		timeout 10s test "$$( timeout 10s wc -l < "$$file" )" -le 1000; \
 	done; \
 	timeout 1800s $(CARGO) test -p forge --lib startup_active_reblit_boot_repair_required -- --test-threads=1

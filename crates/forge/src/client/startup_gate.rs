@@ -29,7 +29,8 @@ pub(in crate::client) use usr_rollback_activate_archived::{
 };
 pub(in crate::client) use usr_rollback_active_reblit::{
     UsrRollbackActiveReblitBootRepairCompleteSeal, UsrRollbackActiveReblitBootRepairRequiredSeal,
-    UsrRollbackActiveReblitBootRepairUnverifiedSeal, UsrRollbackActiveReblitCompleteRouteSeal,
+    UsrRollbackActiveReblitBootRepairStartSeal, UsrRollbackActiveReblitBootRepairUnverifiedSeal,
+    UsrRollbackActiveReblitCompleteRouteSeal,
     UsrRollbackActiveReblitFinalizationSeal,
 };
 pub(in crate::client) use usr_rollback_new_state::{

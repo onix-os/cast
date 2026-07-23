@@ -28,9 +28,11 @@ use crate::{
         startup_recovery::{
             DurableUsrRollbackActiveReblitBootRepairCompleteRecord,
             DurableUsrRollbackActiveReblitBootRepairRequiredRecord,
+            DurableUsrRollbackActiveReblitBootRepairStartRecord,
             DurableUsrRollbackActiveReblitCandidatePreserveRecord, DurableUsrRollbackActiveReblitCompleteRouteRecord,
             UsrRollbackActiveReblitBootRepairCompletePersistenceError,
             UsrRollbackActiveReblitBootRepairRequiredPersistenceError,
+            UsrRollbackActiveReblitBootRepairStartPersistenceError,
             UsrRollbackActiveReblitCandidatePreservePersistenceError,
             UsrRollbackActiveReblitCompleteRoutePersistenceError, UsrRollbackCandidatePreserveDispatchError,
         },
@@ -292,9 +294,9 @@ pub(super) fn expected_boot_repair_rollback_complete(boot_repair_complete: &Tran
     successor
 }
 
-/// Seed the durable post-attempt checkpoint without invoking a boot worker.
-/// The production Required -> Started edge remains deliberately disconnected
-/// until the descriptor-safe publisher consumes all hardened preclaims.
+/// Seed the durable post-intent checkpoint without invoking startup dispatch.
+/// Focused later-phase tests use this shortcut when the production
+/// Required -> Started boundary is not the subject under test.
 pub(super) fn seed_boot_repair_started_for_test(
     fixture: &BootRepairFixture,
     boot_repair_required: &TransitionRecord,
@@ -743,6 +745,26 @@ pub(super) fn assert_boot_required_persistence_authority_error(error: &startup_g
             )
         ),
         "expected exact ActiveReblit boot-required persistence authority error, got {error:?}"
+    );
+}
+
+pub(super) fn assert_boot_start_persistence_advance(
+    error: &startup_gate::Error,
+    expected: DurableUsrRollbackActiveReblitBootRepairStartRecord,
+) {
+    assert!(
+        matches!(
+            error,
+            startup_gate::Error::UsrRollbackActiveReblitDispatch(
+                ActiveReblitDispatchError::BootRepairStartPersistence(
+                    UsrRollbackActiveReblitBootRepairStartPersistenceError::Advance {
+                        durable,
+                        ..
+                    }
+                )
+            ) if *durable == expected
+        ),
+        "expected durable {expected:?} ActiveReblit boot-start advance failure, got {error:?}"
     );
 }
 

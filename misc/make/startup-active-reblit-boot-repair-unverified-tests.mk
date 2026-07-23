@@ -37,7 +37,8 @@ forge-startup-active-reblit-boot-repair-unverified-test: \
 	timeout 10s grep -Fq 'persist_usr_rollback_active_reblit_boot_repair_unverified_and_reopen' "$$orchestrator"; \
 	timeout 10s grep -Fq 'mod usr_rollback_active_reblit_boot_repair_unverified_authority;' "$$reconciliation"; \
 	timeout 10s grep -Fq 'mod usr_rollback_active_reblit_boot_repair_unverified;' "$$recovery"; \
-	if timeout 10s grep -Fq 'Phase::BootRepairRequired =>' "$$orchestrator"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	grep -Fq 'Phase::BootRepairRequired =>' "$$orchestrator"; \
+	grep -Fq 'persist_usr_rollback_active_reblit_boot_repair_start_and_reopen' "$$orchestrator"; \
 	if timeout 10s rg -q 'start_and_attempt_usr_rollback_active_reblit_boot_repair|claim_for_active_reblit_boot_repair|synchronize_active_reblit_boot_repair' crates/forge/src/client; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	if timeout 10s grep -Fq 'Err(_) => return Ok(UsrRollbackActiveReblitBootRepairUnverifiedAdmission::Deferred)' "$$authority"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'started_namespace_error_is_structural(&source)' "$$authority"; \

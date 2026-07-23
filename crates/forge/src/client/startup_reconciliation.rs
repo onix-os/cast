@@ -40,6 +40,7 @@ mod usr_rollback_activate_archived_complete_route_authority;
 mod usr_rollback_activate_archived_finalization_authority;
 mod usr_rollback_active_reblit_boot_repair_complete_authority;
 mod usr_rollback_active_reblit_boot_repair_required_authority;
+mod usr_rollback_active_reblit_boot_repair_start_authority;
 mod usr_rollback_active_reblit_boot_repair_unverified_authority;
 mod usr_rollback_active_reblit_complete_route_authority;
 mod usr_rollback_active_reblit_finalization_authority;
@@ -142,6 +143,11 @@ pub(in crate::client) use usr_rollback_active_reblit_boot_repair_required_author
     UsrRollbackActiveReblitBootRepairRequiredAdmission, UsrRollbackActiveReblitBootRepairRequiredAuthority,
     UsrRollbackActiveReblitBootRepairRequiredAuthorityError,
 };
+pub(in crate::client) use usr_rollback_active_reblit_boot_repair_start_authority::{
+    UsrRollbackActiveReblitBootRepairStartAdmission, UsrRollbackActiveReblitBootRepairStartAuthority,
+    UsrRollbackActiveReblitBootRepairStartAuthorityError,
+    UsrRollbackActiveReblitBootRepairStartRecordAdvanceError,
+};
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_unverified_authority::{
     UsrRollbackActiveReblitBootRepairUnverifiedAdmission, UsrRollbackActiveReblitBootRepairUnverifiedAuthority,
     UsrRollbackActiveReblitBootRepairUnverifiedAuthorityError,
@@ -231,6 +237,9 @@ use activation_namespace::{
     UsrRollbackActiveReblitBootRepairCompleteNamespaceProof, UsrRollbackActiveReblitBootRepairRequiredNamespaceError,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceInspection,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceProof, UsrRollbackActiveReblitBootRepairStartedNamespaceError,
+    UsrRollbackActiveReblitBootRepairStartNamespaceError,
+    UsrRollbackActiveReblitBootRepairStartNamespaceInspection,
+    UsrRollbackActiveReblitBootRepairStartNamespaceProof,
     UsrRollbackActiveReblitBootRepairStartedNamespaceInspection,
     UsrRollbackActiveReblitBootRepairStartedNamespaceProof, UsrRollbackActiveReblitCompleteRouteNamespaceError,
     UsrRollbackActiveReblitCompleteRouteNamespaceInspection, UsrRollbackActiveReblitCompleteRouteNamespaceProof,
@@ -257,7 +266,7 @@ use activation_namespace::{
     UsrRollbackArchivedCandidatePreserveAppliedNamespace, UsrRollbackArchivedCandidatePreserveDurableNamespace,
     UsrRollbackArchivedCandidatePreserveNamespaceApplyReconciliation,
     UsrRollbackArchivedCandidatePreserveNamespaceEffectEvidence, complete_namespace_error_is_structural,
-    started_namespace_error_is_structural,
+    start_namespace_error_is_structural, started_namespace_error_is_structural,
 };
 use active_reblit_boot_repair_evidence::{
     ActiveReblitBootRepairDatabaseEvidence, ActiveReblitBootRepairDatabaseInspection,

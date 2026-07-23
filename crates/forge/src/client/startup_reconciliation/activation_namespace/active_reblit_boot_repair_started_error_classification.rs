@@ -12,9 +12,28 @@ use crate::{transition_journal::RuntimeEvidenceError, tree_marker::TreeMarkerErr
 
 use super::{
     active_reblit_boot_repair_complete_proof::UsrRollbackActiveReblitBootRepairCompleteNamespaceError,
+    active_reblit_boot_repair_start_proof::UsrRollbackActiveReblitBootRepairStartNamespaceError,
     active_reblit_boot_repair_started_proof::UsrRollbackActiveReblitBootRepairStartedNamespaceError,
     candidate_preserve_proof::UsrRollbackCandidatePreserveNamespaceError, capture::CaptureError,
 };
+
+pub(in crate::client::startup_reconciliation) fn start_namespace_error_is_structural(
+    error: &UsrRollbackActiveReblitBootRepairStartNamespaceError,
+) -> bool {
+    match error {
+        UsrRollbackActiveReblitBootRepairStartNamespaceError::Capture(source) => {
+            capture_error_is_structural(source)
+        }
+        UsrRollbackActiveReblitBootRepairStartNamespaceError::Topology(source) => {
+            topology_error_is_structural(source)
+        }
+        UsrRollbackActiveReblitBootRepairStartNamespaceError::Journal(_)
+        | UsrRollbackActiveReblitBootRepairStartNamespaceError::Installation(_) => false,
+        UsrRollbackActiveReblitBootRepairStartNamespaceError::JournalChanged
+        | UsrRollbackActiveReblitBootRepairStartNamespaceError::NamespaceChanged
+        | UsrRollbackActiveReblitBootRepairStartNamespaceError::WrapperIndexChanged { .. } => false,
+    }
+}
 
 pub(in crate::client::startup_reconciliation) fn complete_namespace_error_is_structural(
     error: &UsrRollbackActiveReblitBootRepairCompleteNamespaceError,
@@ -104,6 +123,7 @@ fn topology_error_is_structural(error: &UsrRollbackCandidatePreserveNamespaceErr
         | UsrRollbackCandidatePreserveNamespaceError::WrongPhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongCandidatePreservedPhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitCompleteRoutePhase
+        | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitBootRepairRequiredPhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitBootRepairStartedPhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitBootRepairCompletePhase
         | UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitFinalizationPhase

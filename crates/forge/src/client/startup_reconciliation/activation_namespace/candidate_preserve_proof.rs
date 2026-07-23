@@ -384,6 +384,30 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     Ok(wrapper_index)
 }
 
+/// Require the exact whole-wrapper ActiveReblit preservation topology while
+/// the journal holds the durable boot-repair intent.
+///
+/// This phase-specific predicate prevents the journal-only Required -> Started
+/// boundary from borrowing either the preceding candidate route or the later
+/// Started recovery proof.
+pub(in crate::client::startup_reconciliation::activation_namespace) fn require_exact_active_reblit_boot_repair_required_topology(
+    record: &TransitionRecord,
+    snapshot: &NamespaceSnapshot,
+) -> Result<usize, UsrRollbackCandidatePreserveNamespaceError> {
+    if record.phase != Phase::BootRepairRequired {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::WrongActiveReblitBootRepairRequiredPhase);
+    }
+    if record.operation != Operation::ActiveReblit {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::ActiveReblitRequired);
+    }
+    let UsrRollbackCandidatePreserveTopology::ActiveReblitPreserved { wrapper_index } =
+        candidate_preserve_topology_after_phase(record, snapshot)?
+    else {
+        return Err(UsrRollbackCandidatePreserveNamespaceError::TopologyMismatch);
+    };
+    Ok(wrapper_index)
+}
+
 /// Require the exact whole-wrapper ActiveReblit preservation topology after
 /// the boot-attempt intent is durably `BootRepairStarted`.
 ///
@@ -814,6 +838,8 @@ pub(in crate::client::startup_reconciliation) enum UsrRollbackCandidatePreserveN
     WrongCandidatePreservedPhase,
     #[error("ActiveReblit rollback-completion routing requires CandidatePreserved")]
     WrongActiveReblitCompleteRoutePhase,
+    #[error("ActiveReblit boot-repair start routing requires BootRepairRequired")]
+    WrongActiveReblitBootRepairRequiredPhase,
     #[error("ActiveReblit boot-repair attempt evidence requires BootRepairStarted")]
     WrongActiveReblitBootRepairStartedPhase,
     #[error("ActiveReblit successful boot-repair routing requires BootRepairComplete")]

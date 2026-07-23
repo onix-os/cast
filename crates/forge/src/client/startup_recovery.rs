@@ -19,6 +19,7 @@ mod usr_rollback_activate_archived_complete_route;
 mod usr_rollback_activate_archived_finalization;
 mod usr_rollback_active_reblit_boot_repair_complete;
 mod usr_rollback_active_reblit_boot_repair_required;
+mod usr_rollback_active_reblit_boot_repair_start;
 mod usr_rollback_active_reblit_boot_repair_unverified;
 mod usr_rollback_active_reblit_candidate_preserve_persistence;
 mod usr_rollback_active_reblit_complete_route;
@@ -163,6 +164,11 @@ pub(super) use usr_rollback_active_reblit_boot_repair_required::{
     persist_usr_rollback_active_reblit_boot_repair_required_and_reopen,
 };
 
+pub(super) use usr_rollback_active_reblit_boot_repair_start::{
+    UsrRollbackActiveReblitBootRepairStartPersistenceError,
+    persist_usr_rollback_active_reblit_boot_repair_start_and_reopen,
+};
+
 pub(super) use usr_rollback_active_reblit_boot_repair_unverified::{
     UsrRollbackActiveReblitBootRepairUnverifiedPersistenceError,
     persist_usr_rollback_active_reblit_boot_repair_unverified_and_reopen,
@@ -259,6 +265,14 @@ pub(in crate::client) use usr_rollback_active_reblit_boot_repair_complete::{
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_required::{
     DurableUsrRollbackActiveReblitBootRepairRequiredRecord,
     arm_before_usr_rollback_active_reblit_boot_repair_required_final_revalidation,
+};
+
+#[cfg(test)]
+pub(in crate::client) use usr_rollback_active_reblit_boot_repair_start::{
+    DurableUsrRollbackActiveReblitBootRepairStartRecord,
+    UsrRollbackActiveReblitBootRepairStartSuccessorBindingError,
+    arm_after_usr_rollback_active_reblit_boot_repair_start_successor_binding_check_before_reopen,
+    arm_before_usr_rollback_active_reblit_boot_repair_start_successor_binding_revalidation,
 };
 
 #[cfg(test)]
