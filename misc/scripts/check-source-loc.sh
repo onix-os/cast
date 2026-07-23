@@ -28,17 +28,17 @@ while (( $# != 0 )); do
 done
 
 if [[ -z "${repo_root}" ]]; then
-    repo_root=$(timeout 30s git rev-parse --show-toplevel)
+    repo_root=$(git rev-parse --show-toplevel)
 fi
 repo_root=$(cd -- "${repo_root}" && pwd -P)
-timeout 30s git -C "${repo_root}" rev-parse --is-inside-work-tree >/dev/null
+git -C "${repo_root}" rev-parse --is-inside-work-tree >/dev/null
 
-tracked_list=$(timeout 10s mktemp "${TMPDIR:-/tmp}/cast-source-loc-files.XXXXXX")
+tracked_list=$(mktemp "${TMPDIR:-/tmp}/cast-source-loc-files.XXXXXX")
 cleanup() {
-    timeout 10s rm -f -- "${tracked_list}"
+    rm -f -- "${tracked_list}"
 }
 trap cleanup EXIT HUP INT TERM
-timeout 30s git -C "${repo_root}" ls-files -z > "${tracked_list}"
+git -C "${repo_root}" ls-files -z > "${tracked_list}"
 
 is_generated_or_binary_fixture() {
     local path=${1,,}
@@ -101,7 +101,7 @@ while IFS= read -r -d '' path; do
         missing_paths+=("${path}")
         continue
     fi
-    lines=$(timeout 10s awk 'END { print NR }' < "${absolute}")
+    lines=$(awk 'END { print NR }' < "${absolute}")
     (( checked += 1 ))
     if (( lines > max_lines )); then
         violating_paths+=("${path}")

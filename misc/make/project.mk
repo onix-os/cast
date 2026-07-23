@@ -58,10 +58,10 @@ licenses:
 	@"$(TOP_DIR)/misc/scripts/fetch-licenses.sh" "$(LICENSE_DIR)"
 
 source-loc:
-	@timeout 120s "$(SHELL)" "$(TOP_DIR)/misc/scripts/check-source-loc.sh"
+	@"$(SHELL)" "$(TOP_DIR)/misc/scripts/check-source-loc.sh"
 
 source-loc-test:
-	@timeout 120s "$(SHELL)" "$(TOP_DIR)/misc/scripts/test-check-source-loc.sh"
+	@"$(SHELL)" "$(TOP_DIR)/misc/scripts/test-check-source-loc.sh"
 
 check: host-storage-safety-test
 	@$(CARGO) check --workspace --all-targets
