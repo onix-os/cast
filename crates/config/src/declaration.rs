@@ -6,6 +6,7 @@ mod fragment_set;
 mod loaded;
 mod manager;
 mod manager_error;
+mod rooted_fragment_set;
 mod root_slot;
 mod storage_error;
 
@@ -25,6 +26,10 @@ pub use loaded::LoadedDeclaration;
 pub use manager_error::{
     DeleteManagedDeclarationError, DeclarationRevalidationPhase,
     LoadManagedDeclarationError, SaveManagedDeclarationError,
+};
+pub use rooted_fragment_set::{
+    RootedFragmentDeclaration, RootedFragmentDeclarationSet,
+    RootedFragmentDeclarationSetError,
 };
 pub use root_slot::{
     DiscoveredRootDeclaration, LanguageRegistrationError, RegisteredLanguages,
