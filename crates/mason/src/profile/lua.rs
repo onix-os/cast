@@ -9,12 +9,18 @@
 
 use std::fmt::Write as _;
 
+use config::declaration::ConfigDeclarationEvaluator;
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
+    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+};
 use lua_config::{
-    GENERATED_LUA_MARKER, LuaOption, lua_optional_bool, lua_optional_integer, lua_optional_string,
-    lua_string,
+    GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_optional_bool, lua_optional_integer,
+    lua_optional_string, lua_string,
 };
 use serde::Deserialize;
 
+use super::gluon::ProfileCodec;
 use super::{
     Map, ProfileConversionError, ProfileSpec, RepositorySourceSpec, RepositorySpec, decode_specs,
     profile_to_spec,
@@ -94,6 +100,117 @@ pub(crate) fn decode_lua_specs(
     specs: Vec<LuaProfileSpec>,
 ) -> Result<Map, ProfileConversionError> {
     decode_specs(specs.into_iter().map(Into::into).collect())
+}
+
+/// Stateful Lua adapter for the profile declaration boundary. Decodes an
+/// authored `.lua` fragment into the same shared [`Map`] the Gluon codec
+/// produces, with an intentionally distinct evaluation identity.
+#[derive(Debug, Clone, Default)]
+pub struct LuaProfileCodec {
+    engine: LuaEngine,
+}
+
+impl DeclarationEvaluator<Map> for LuaProfileCodec {
+    type Identity = EvaluationIdentity;
+    type Error = ProfileConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<Map, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        let evaluated = self
+            .engine
+            .evaluate_within_as::<Vec<LuaProfileSpec>>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let map = decode_lua_specs(evaluated.value).map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(Evaluation {
+            value: map,
+            identity: evaluated.identity,
+        })
+    }
+}
+
+impl ConfigDeclarationEvaluator for LuaProfileCodec {
+    type Config = Map;
+}
+
+/// One registered profile declaration language (`.glu` or `.lua`), selected by
+/// file extension. Both engines reach the same [`Map`] and share the conversion
+/// error type.
+#[derive(Debug, Clone)]
+pub enum ProfileEvaluator {
+    Gluon(ProfileCodec),
+    Lua(LuaProfileCodec),
+}
+
+impl DeclarationEvaluator<Map> for ProfileEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = ProfileConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        match self {
+            Self::Gluon(codec) => <ProfileCodec as DeclarationEvaluator<Map>>::language_spec(codec),
+            Self::Lua(codec) => <LuaProfileCodec as DeclarationEvaluator<Map>>::language_spec(codec),
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        match self {
+            Self::Gluon(codec) => <ProfileCodec as DeclarationEvaluator<Map>>::limits(codec),
+            Self::Lua(codec) => <LuaProfileCodec as DeclarationEvaluator<Map>>::limits(codec),
+        }
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        match self {
+            Self::Gluon(codec) => Self::Gluon(
+                <ProfileCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
+            ),
+            Self::Lua(codec) => Self::Lua(
+                <LuaProfileCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
+            ),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<Map, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        match self {
+            Self::Gluon(codec) => codec.evaluate_within(source, deadline),
+            Self::Lua(codec) => codec.evaluate_within(source, deadline),
+        }
+    }
+}
+
+impl ConfigDeclarationEvaluator for ProfileEvaluator {
+    type Config = Map;
+}
+
+impl ProfileEvaluator {
+    /// The registered profile languages, `.glu` first, sharing a limit.
+    pub fn registered() -> [Self; 2] {
+        [
+            Self::Gluon(ProfileCodec::default()),
+            Self::Lua(LuaProfileCodec::default()),
+        ]
+    }
 }
 
 /// Emit a profile [`Map`] as canonical, generated-marked Lua source that

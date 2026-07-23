@@ -323,8 +323,8 @@ pub struct Manager<'a> {
 
 impl<'a> Manager<'a> {
     pub fn new(env: &'a Env) -> Result<Manager<'a>, Error> {
-        let evaluators = DeclarationEvaluatorSet::new([ProfileCodec::default()])
-            .expect("one validated profile adapter has no extension collision");
+        let evaluators = DeclarationEvaluatorSet::new(lua::ProfileEvaluator::registered())
+            .expect("the profile languages register distinct extensions");
         let loaded = env.config.load_declarations(&evaluators)?;
         let fragments = loaded
             .iter()
