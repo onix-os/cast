@@ -378,4 +378,55 @@ let cast = import! cast.profile.v1
         let round_tripped = lua_map(&emitted);
         assert_eq!(format!("{original:?}"), format!("{round_tripped:?}"));
     }
+
+    // The shipped default profile (`crates/mason/data/profile.d/default-x86_64.glu`)
+    // paired with its reviewed Lua form (Phase L7 corpus pairing).
+    const SHIPPED_PROFILE_GLUON: &str = r#"
+let cast = import! cast.profile.v1
+cast.profiles [
+    cast.profile "default-x86_64" [
+        cast.repository.root_index_with {
+            id = "volatile",
+            description = cast.optional.some "AerynOS volatile stream (CDN)",
+            base_uri = "https://cdn.aerynos.dev/",
+            channel = cast.optional.some "main",
+            version = "stream/volatile",
+            arch = cast.optional.some "x86_64",
+            priority = cast.optional.some 0,
+            enabled = cast.optional.some cast.boolean.true,
+        },
+    ],
+]
+"#;
+
+    const SHIPPED_PROFILE_LUA: &str = r#"
+return {
+    {
+        id = "default-x86_64",
+        repositories = {
+            {
+                id = "volatile",
+                description = { kind = "some", value = "AerynOS volatile stream (CDN)" },
+                source = {
+                    kind = "root_index",
+                    base_uri = "https://cdn.aerynos.dev/",
+                    channel = { kind = "some", value = "main" },
+                    version = "stream/volatile",
+                    arch = { kind = "some", value = "x86_64" },
+                },
+                priority = { kind = "some", value = 0 },
+                enabled = { kind = "some", value = true },
+            },
+        },
+    },
+}
+"#;
+
+    #[test]
+    fn the_shipped_default_profile_pairs_to_an_equal_lua_map() {
+        assert_eq!(
+            format!("{:?}", lua_map(SHIPPED_PROFILE_LUA)),
+            format!("{:?}", gluon_map(SHIPPED_PROFILE_GLUON)),
+        );
+    }
 }

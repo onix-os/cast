@@ -236,4 +236,34 @@ return {
             .identity;
         assert_ne!(lua.engine.implementation(), gluon.engine.implementation());
     }
+
+    // The shipped repository-policy manifest (`crates/mason/data/policy/policy.glu`)
+    // paired with its reviewed Lua form (Phase L7 corpus pairing).
+    const SHIPPED_POLICY_GLUON: &str = r#"
+let layers = import! cast.build_policy.layers.v1
+layers.policy "aerynos" [
+    layers.layer "foundation" [
+        layers.add "default.glu",
+    ],
+]
+"#;
+
+    const SHIPPED_POLICY_LUA: &str = r#"
+return {
+    name = "aerynos",
+    layers = {
+        {
+            name = "foundation",
+            entries = {
+                { operation = { kind = "add" }, origin = "default.glu" },
+            },
+        },
+    },
+}
+"#;
+
+    #[test]
+    fn the_shipped_policy_manifest_pairs_to_an_equal_lua_form() {
+        assert_eq!(lua_spec(SHIPPED_POLICY_LUA), gluon_spec(SHIPPED_POLICY_GLUON));
+    }
 }
