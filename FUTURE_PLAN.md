@@ -253,6 +253,12 @@ authority are deferred here.
 
 ## Maintenance
 
+- Repair the stale `forge-ephemeral-candidate-metadata-test` inventory. The
+  Make gate still requires the removed test
+  `client::postblit::retained_ephemeral::tests::system_container_mounts_usr_and_etc_read_write`,
+  while the adjacent transaction and public-root coverage remains present.
+  This pre-existing expected-name mismatch is unrelated to declaration-adapter
+  extraction and must not delay `plans/agnostic_config.md`.
 - Reconcile the stale workspace-package entries in `Cargo.lock` with the
   workspace's current inherited version in a separate release-metadata change.
   Current Make/Cargo runs rewrite existing local package entries from `0.26.6`
