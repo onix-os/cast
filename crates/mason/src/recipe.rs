@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use fs_err as fs;
-use gluon_config::{EvaluationFingerprint, Evaluator, SourceRoot};
+use gluon_config::{EvaluationFingerprint, GluonEngine, SourceRoot};
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{BuilderSpec, HooksSpec, PackageSpec, PhasesSpec, ProfileSpec, evaluate_gluon_with_inputs};
 use thiserror::Error;
@@ -151,7 +151,7 @@ fn load_gluon(
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let file_name = path.file_name().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let source_root = SourceRoot::new(parent).map_err(Error::LoadGluonSource)?;
-    let evaluator = Evaluator::default();
+    let evaluator = GluonEngine::default();
     let source = source_root
         .load(Path::new(file_name), evaluator.limits().max_source_bytes)
         .map_err(Error::LoadGluonSource)?;

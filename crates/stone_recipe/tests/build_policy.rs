@@ -1,4 +1,4 @@
-use gluon_config::{Evaluator, Source, SourceRoot};
+use gluon_config::{GluonEngine, Source, SourceRoot};
 use stone_recipe::build_policy::{
     AnalyzerKind, BUILD_POLICY_ABI_VERSION, BuildPolicyConversionError, BuildPolicySpec, BuildToolSpec, ContextValue,
     EnvironmentBindingSpec, EnvironmentCondition, GLUON_BUILD_POLICY_ABI, SandboxCredentialPolicySpec,
@@ -6,9 +6,9 @@ use stone_recipe::build_policy::{
     evaluate_gluon_with, evaluate_gluon_with_inputs,
 };
 
-fn repository_policy() -> (Evaluator, Source) {
+fn repository_policy() -> (GluonEngine, Source) {
     let source_root = SourceRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mason/data/policy")).unwrap();
-    let evaluator = Evaluator::default().with_source_root(source_root.clone());
+    let evaluator = GluonEngine::default().with_source_root(source_root.clone());
     let source = source_root
         .load("default.glu", evaluator.limits().max_source_bytes)
         .unwrap();

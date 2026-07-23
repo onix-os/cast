@@ -110,9 +110,10 @@ fn composed_module_input_changes_the_manifest_fingerprint() {
     layers.layer "foundation" [layers.add "default.glu"],
 ]"#,
     );
-    let first = evaluate_gluon_with_inputs(&gluon_config::Evaluator::default(), &source, b"module-a").unwrap();
-    let repeated = evaluate_gluon_with_inputs(&gluon_config::Evaluator::default(), &source, b"module-a").unwrap();
-    let changed = evaluate_gluon_with_inputs(&gluon_config::Evaluator::default(), &source, b"module-b").unwrap();
+    let first = evaluate_gluon_with_inputs(&gluon_config::GluonEngine::default(), &source, b"module-a").unwrap();
+    let repeated =
+        evaluate_gluon_with_inputs(&gluon_config::GluonEngine::default(), &source, b"module-a").unwrap();
+    let changed = evaluate_gluon_with_inputs(&gluon_config::GluonEngine::default(), &source, b"module-b").unwrap();
 
     assert_eq!(first.fingerprint, repeated.fingerprint);
     assert_ne!(first.fingerprint, changed.fingerprint);

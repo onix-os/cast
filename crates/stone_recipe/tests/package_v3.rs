@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gluon_config::{DiagnosticCategory, Evaluator, Source, SourceRoot};
+use gluon_config::{DiagnosticCategory, GluonEngine, Source, SourceRoot};
 use stone_recipe::package::{
     BuilderEnvironmentSpec, BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec, PACKAGE_ABI_VERSION,
     PackageConversionError, PackageEvaluationError, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,
@@ -91,7 +91,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     let source = source_root
         .load(Path::new("package_v3_stone.glu"), 1024 * 1024)
         .unwrap();
-    let evaluator = Evaluator::default().with_source_root(source_root);
+    let evaluator = GluonEngine::default().with_source_root(source_root);
 
     let evaluated = evaluate_gluon_with(&evaluator, &source).unwrap();
 
@@ -855,7 +855,7 @@ b.mk_package (b.meta {
 })
 "#,
     );
-    let evaluator = Evaluator::default();
+    let evaluator = GluonEngine::default();
 
     let first = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
     let repeated = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v1").unwrap();

@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use gluon_config::{Diagnostic, Evaluator, SourceRoot};
+use gluon_config::{Diagnostic, GluonEngine, SourceRoot};
 use stone_recipe::build_policy::{
     BuildPolicyConversionError, BuildPolicyEvaluationError, BuildPolicySpec, TargetPolicySpec,
     layers::{BuildPolicyOperation, BuildPolicyRootEvaluationError},
@@ -36,7 +36,7 @@ impl BuildPolicy {
             path: policy_dir.to_path_buf(),
             source: Box::new(source),
         })?;
-        let evaluator = Evaluator::default().with_source_root(source_root.clone());
+        let evaluator = GluonEngine::default().with_source_root(source_root.clone());
         let root_path = policy_dir.join(Self::ROOT);
         let root_source = source_root
             .load(Self::ROOT, evaluator.limits().max_source_bytes)
@@ -130,7 +130,7 @@ impl BuildPolicy {
 
 fn apply_entry(
     source_root: &SourceRoot,
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     policy: &str,
     layer: &str,
     layer_index: usize,

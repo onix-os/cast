@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gluon_config::{Evaluator, Source, SourceRoot};
+use gluon_config::{GluonEngine, Source, SourceRoot};
 use stone_recipe::{
     UpstreamSpec,
     derivation::{
@@ -145,7 +145,7 @@ fn assert_disabled_factory_variant() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/examples/gluon/packages/optional-component-source-graph");
     let source_root = SourceRoot::new(&root).expect("open optional component example source root");
-    let evaluator = Evaluator::default().with_source_root(source_root);
+    let evaluator = GluonEngine::default().with_source_root(source_root);
     let source = Source::new(
         "disabled.glu",
         r#"let b = import! cast.package.v3

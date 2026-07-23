@@ -1,4 +1,4 @@
-use gluon_config::{Evaluator, Source, SourceRoot};
+use gluon_config::{GluonEngine, Source, SourceRoot};
 use stone_recipe::build_policy::{
     AnalyzerKind, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, EnvironmentBindingSpec,
     EnvironmentCondition, RetiredTargetPolicySpec, TextSpec, ValuePatch, evaluate_gluon_with, evaluate_patch_gluon,
@@ -7,7 +7,7 @@ use stone_recipe::build_policy::{
 
 fn repository_policy() -> stone_recipe::build_policy::BuildPolicySpec {
     let source_root = SourceRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../mason/data/policy")).unwrap();
-    let evaluator = Evaluator::default().with_source_root(source_root.clone());
+    let evaluator = GluonEngine::default().with_source_root(source_root.clone());
     let source = source_root
         .load("default.glu", evaluator.limits().max_source_bytes)
         .unwrap();
@@ -156,7 +156,7 @@ b.policy_patch {
 #[test]
 fn patch_bridge_honors_custom_evaluator_and_explicit_identity_inputs() {
     let source = authored_patch("b.defaults.policy_patch");
-    let evaluator = Evaluator::default();
+    let evaluator = GluonEngine::default();
     let plain = evaluate_patch_gluon_with(&evaluator, &source).unwrap();
     let first = evaluate_patch_gluon_with_inputs(&evaluator, &source, b"first").unwrap();
     let second = evaluate_patch_gluon_with_inputs(&evaluator, &source, b"second").unwrap();

@@ -1,6 +1,6 @@
 //! Gluon evaluation boundary for package declarations.
 
-use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
+use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
 use thiserror::Error;
 
 use super::{
@@ -630,17 +630,20 @@ impl From<GluonNamedTuningSpec> for NamedTuningSpec {
 
 /// Evaluate a v3 package with the restricted default evaluator.
 pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    evaluate_gluon_with(&Evaluator::default(), source)
+    evaluate_gluon_with(&GluonEngine::default(), source)
 }
 
 /// Evaluate a v3 package with caller-selected limits and source root.
-pub fn evaluate_gluon_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedPackage, PackageEvaluationError> {
+pub fn evaluate_gluon_with(
+    evaluator: &GluonEngine,
+    source: &Source,
+) -> Result<EvaluatedPackage, PackageEvaluationError> {
     evaluate_gluon_with_inputs(evaluator, source, &[])
 }
 
 /// Evaluate a v3 package and bind lock bytes into its fingerprint.
 pub fn evaluate_gluon_with_inputs(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedPackage, PackageEvaluationError> {

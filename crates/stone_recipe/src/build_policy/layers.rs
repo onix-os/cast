@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
+use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
 use thiserror::Error;
 
 /// Version of the ordered build-policy layer ABI.
@@ -178,12 +178,12 @@ impl From<GluonBuildPolicyRootSpec> for BuildPolicyRootSpec {
 
 /// Evaluate a manifest with the restricted default evaluator.
 pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedBuildPolicyRoot, BuildPolicyRootEvaluationError> {
-    evaluate_gluon_with(&Evaluator::default(), source)
+    evaluate_gluon_with(&GluonEngine::default(), source)
 }
 
 /// Evaluate a manifest with caller-selected limits and source containment.
 pub fn evaluate_gluon_with(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
 ) -> Result<EvaluatedBuildPolicyRoot, BuildPolicyRootEvaluationError> {
     evaluate_gluon_with_inputs(evaluator, source, &[])
@@ -192,7 +192,7 @@ pub fn evaluate_gluon_with(
 /// Evaluate a manifest while binding host-composed module identities into its
 /// otherwise pure fingerprint.
 pub fn evaluate_gluon_with_inputs(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedBuildPolicyRoot, BuildPolicyRootEvaluationError> {

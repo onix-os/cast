@@ -1,6 +1,6 @@
 //! Restricted Gluon evaluation boundary for typed build policy.
 
-use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
+use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
 use thiserror::Error;
 
 use super::{
@@ -568,12 +568,12 @@ include!("gluon/conversions.rs");
 
 /// Evaluate a typed policy with the restricted default evaluator.
 pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedBuildPolicy, BuildPolicyEvaluationError> {
-    evaluate_gluon_with(&Evaluator::default(), source)
+    evaluate_gluon_with(&GluonEngine::default(), source)
 }
 
 /// Evaluate a typed policy with caller-selected limits and imports.
 pub fn evaluate_gluon_with(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
 ) -> Result<EvaluatedBuildPolicy, BuildPolicyEvaluationError> {
     evaluate_gluon_with_inputs(evaluator, source, &[])
@@ -581,7 +581,7 @@ pub fn evaluate_gluon_with(
 
 /// Evaluate policy and bind host-resolved inputs into its fingerprint.
 pub fn evaluate_gluon_with_inputs(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedBuildPolicy, BuildPolicyEvaluationError> {
@@ -604,13 +604,13 @@ pub fn evaluate_gluon_with_inputs(
 
 /// Evaluate a total typed policy patch with the restricted default evaluator.
 pub fn evaluate_patch_gluon(source: &Source) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
-    evaluate_patch_gluon_with(&Evaluator::default(), source)
+    evaluate_patch_gluon_with(&GluonEngine::default(), source)
 }
 
 /// Evaluate a total typed policy patch with caller-selected limits and
 /// imports.
 pub fn evaluate_patch_gluon_with(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
 ) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
     evaluate_patch_gluon_with_inputs(evaluator, source, &[])
@@ -622,7 +622,7 @@ pub fn evaluate_patch_gluon_with(
 /// need a concrete base. Call [`BuildPolicyPatchSpec::apply_validated`] before
 /// accepting a composed policy.
 pub fn evaluate_patch_gluon_with_inputs(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<EvaluatedBuildPolicyPatch, BuildPolicyEvaluationError> {
