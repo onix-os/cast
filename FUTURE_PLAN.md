@@ -251,6 +251,13 @@ authority are deferred here.
 
 ## Maintenance
 
+- Audit and remove inappropriate `timeout` wrappers from the remaining Make
+  fragments and test helpers. The declaration-core prerequisite fixed only the
+  `source-loc` lane; at that checkpoint 117 other files under `misc/make` and
+  `misc/scripts` still mentioned `timeout`, including wrappers around Git,
+  Cargo, `grep`, `rg`, `awk`, `sed`, `mkdir`, and `rm`. Preserve bounds around
+  actual evaluator/application/fixture execution that can hang, but do not
+  time-limit compilation or ordinary deterministic helpers.
 - Restore workspace rustfmt cleanliness before treating the aggregate
   `make test` gate as green. On merged `develop` at `6c324985`, `make check`
   passed, but `make test` stopped in its `lint` prerequisite because
