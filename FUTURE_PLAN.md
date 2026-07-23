@@ -1,9 +1,9 @@
 # Future Plan
 
 This file records useful work deliberately excluded from the current
-[`PLAN.md`](PLAN.md). Items here must not delay that plan's validation, VM
-evidence, or repository closure. Moving an item into active work requires a
-separate decision after the current plan is finished.
+[`PLAN.md`](PLAN.md). Items here must not delay that plan's validation or
+repository closure. Moving an item into active work requires a separate
+decision after the current plan is finished.
 
 Proposals rejected from the current implementation sequence are deferred here
 rather than discarded. Each entry should retain the useful idea, state why it
@@ -16,6 +16,47 @@ mutation, ambient host or `/nix/store` fixture mounts, mutable untracked recipe
 mounts, fake tool shims, and claiming same-boot tests as reboot or power-loss
 proof remain forbidden. Everything else listed below is preserved for a later,
 explicit scope decision.
+
+## Deferred state-activation closure
+
+On 2026-07-23 the remaining broad Phase 11 system-manager campaign was moved
+out of the active plan so the completed Gluon package architecture and the
+reviewed ActiveReblit foundation could merge. This is an honest deferral, not
+evidence that the following work is complete:
+
+- Migrate fresh-state creation from the legacy
+  `client/core/stateful_transition.rs` path into the durable journal
+  coordinator. The live call remains
+  `client/core/state_planning.rs::apply_stateful_candidate`; existing
+  coordinator typestates and recovery foundations do not by themselves prove
+  production dispatch.
+- Migrate archived-state verification repair from
+  `client/verify.rs::repair_archived_state` into its operation-specific durable
+  coordinator route. Its established repair tests cover the legacy path, not
+  a journal-coordinated live activation.
+- Add a direct production-boundary test for the boot-applicable `Ready` branch
+  of `client/active_reblit_transition.rs`. Commit `ce060c13` production-wires
+  both branches and proves real `Client::verify(true, false)` through the
+  no-boot `NotApplicable` branch; the receipt-backed boot branch is presently
+  supported by component compositions rather than one complete live-client
+  regression.
+- Complete real startup boot repair. Current production recovery can preserve
+  `BootRepairRequired` evidence and fail closed at terminal
+  `BootRepairUnverified`, but it intentionally invokes no repair effect and
+  emits no `BootRepairComplete` success.
+- Prove forward ActiveReblit cleanup and finalization across genuine process
+  interruption, reboot, and power-loss-equivalent boundaries. Existing
+  same-boot component and terminal-delete campaigns must not be described as
+  reboot or power-loss proof.
+- Run the remaining destructive evidence only inside the user-approved
+  disposable UEFI VM, never on the host: selected-payload bootability,
+  interruption at every persisted boot-publication boundary, reboot recovery,
+  and power-loss-equivalent durability. A VM reboot may return to installation
+  media and lose SSH access; campaign orchestration must account for that
+  before rebooting.
+- After those routes and VM campaigns exist, rerun the complete Phase 11 exit
+  gate and update the recovery subplans with exact accepted commits, machine
+  identity, target-disk identity, logs, hashes, and explicit non-claims.
 
 ## Package model
 
