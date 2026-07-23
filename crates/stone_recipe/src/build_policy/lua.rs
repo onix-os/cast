@@ -17,7 +17,15 @@
 use lua_config::LuaPatch;
 use serde::Deserialize;
 
-use super::{ArrayPatch, BuildToolSpec, ContextValue, TextSpec, ValuePatch};
+use super::{
+    ArrayPatch, BuildToolSpec, CompilerFlagsSpec, ContextValue, InstallLayoutSpec, TextSpec,
+    ValuePatch,
+};
+
+/// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
+fn text_vec(values: Vec<LuaTextSpec>) -> Vec<TextSpec> {
+    values.into_iter().map(Into::into).collect()
+}
 
 /// Convert a decoded [`LuaPatch`] into the domain [`ValuePatch`], mapping the
 /// `set` payload through its own `Into` conversion so patched DTO values reach
@@ -97,6 +105,94 @@ impl From<LuaBuildToolSpec> for BuildToolSpec {
             LuaBuildToolSpec::Package { value } => Self::Package(value),
             LuaBuildToolSpec::Binary { value } => Self::Binary(value),
             LuaBuildToolSpec::SystemBinary { value } => Self::SystemBinary(value),
+        }
+    }
+}
+
+/// The Lua encoding of a [`CompilerFlagsSpec`] — eight ordered flag lists, each
+/// element a [`TextSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaCompilerFlagsSpec {
+    pub c: Vec<LuaTextSpec>,
+    pub cxx: Vec<LuaTextSpec>,
+    pub f: Vec<LuaTextSpec>,
+    pub d: Vec<LuaTextSpec>,
+    pub rust: Vec<LuaTextSpec>,
+    pub vala: Vec<LuaTextSpec>,
+    pub go: Vec<LuaTextSpec>,
+    pub ld: Vec<LuaTextSpec>,
+}
+
+impl From<LuaCompilerFlagsSpec> for CompilerFlagsSpec {
+    fn from(flags: LuaCompilerFlagsSpec) -> Self {
+        Self {
+            c: text_vec(flags.c),
+            cxx: text_vec(flags.cxx),
+            f: text_vec(flags.f),
+            d: text_vec(flags.d),
+            rust: text_vec(flags.rust),
+            vala: text_vec(flags.vala),
+            go: text_vec(flags.go),
+            ld: text_vec(flags.ld),
+        }
+    }
+}
+
+/// The Lua encoding of an [`InstallLayoutSpec`] — the canonical install
+/// directory locators, each a [`TextSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaInstallLayoutSpec {
+    pub prefix: LuaTextSpec,
+    pub bindir: LuaTextSpec,
+    pub sbindir: LuaTextSpec,
+    pub includedir: LuaTextSpec,
+    pub libdir: LuaTextSpec,
+    pub libexecdir: LuaTextSpec,
+    pub datadir: LuaTextSpec,
+    pub vendordir: LuaTextSpec,
+    pub docdir: LuaTextSpec,
+    pub infodir: LuaTextSpec,
+    pub localedir: LuaTextSpec,
+    pub mandir: LuaTextSpec,
+    pub sysconfdir: LuaTextSpec,
+    pub localstatedir: LuaTextSpec,
+    pub sharedstatedir: LuaTextSpec,
+    pub runstatedir: LuaTextSpec,
+    pub sysusersdir: LuaTextSpec,
+    pub tmpfilesdir: LuaTextSpec,
+    pub udevrulesdir: LuaTextSpec,
+    pub bash_completions_dir: LuaTextSpec,
+    pub fish_completions_dir: LuaTextSpec,
+    pub elvish_completions_dir: LuaTextSpec,
+    pub zsh_completions_dir: LuaTextSpec,
+}
+
+impl From<LuaInstallLayoutSpec> for InstallLayoutSpec {
+    fn from(layout: LuaInstallLayoutSpec) -> Self {
+        Self {
+            prefix: layout.prefix.into(),
+            bindir: layout.bindir.into(),
+            sbindir: layout.sbindir.into(),
+            includedir: layout.includedir.into(),
+            libdir: layout.libdir.into(),
+            libexecdir: layout.libexecdir.into(),
+            datadir: layout.datadir.into(),
+            vendordir: layout.vendordir.into(),
+            docdir: layout.docdir.into(),
+            infodir: layout.infodir.into(),
+            localedir: layout.localedir.into(),
+            mandir: layout.mandir.into(),
+            sysconfdir: layout.sysconfdir.into(),
+            localstatedir: layout.localstatedir.into(),
+            sharedstatedir: layout.sharedstatedir.into(),
+            runstatedir: layout.runstatedir.into(),
+            sysusersdir: layout.sysusersdir.into(),
+            tmpfilesdir: layout.tmpfilesdir.into(),
+            udevrulesdir: layout.udevrulesdir.into(),
+            bash_completions_dir: layout.bash_completions_dir.into(),
+            fish_completions_dir: layout.fish_completions_dir.into(),
+            elvish_completions_dir: layout.elvish_completions_dir.into(),
+            zsh_completions_dir: layout.zsh_completions_dir.into(),
         }
     }
 }
@@ -184,5 +280,46 @@ return {
             append,
             ArrayPatch::Append(vec![BuildToolSpec::Package("ninja".to_owned())])
         );
+    }
+
+    #[test]
+    fn compiler_flags_decode_with_empty_and_populated_lists() {
+        let source = r#"
+return {
+    c = { { kind = "literal", value = "-Wall" } },
+    cxx = {},
+    f = {},
+    d = {},
+    rust = {},
+    vala = {},
+    go = {},
+    ld = { { kind = "context", value = "ld_flags" } },
+}
+"#;
+        let flags: CompilerFlagsSpec = decode::<LuaCompilerFlagsSpec>(source).into();
+        assert_eq!(flags.c, vec![TextSpec::Literal("-Wall".to_owned())]);
+        assert!(flags.cxx.is_empty());
+        assert_eq!(flags.ld, vec![TextSpec::Context(ContextValue::LdFlags)]);
+    }
+
+    fn literal_layout_field(name: &str) -> String {
+        format!(r#"{name} = {{ kind = "literal", value = "/{name}" }}"#)
+    }
+
+    #[test]
+    fn an_install_layout_decodes_every_locator() {
+        let fields = [
+            "prefix", "bindir", "sbindir", "includedir", "libdir", "libexecdir", "datadir",
+            "vendordir", "docdir", "infodir", "localedir", "mandir", "sysconfdir", "localstatedir",
+            "sharedstatedir", "runstatedir", "sysusersdir", "tmpfilesdir", "udevrulesdir",
+            "bash_completions_dir", "fish_completions_dir", "elvish_completions_dir",
+            "zsh_completions_dir",
+        ];
+        let body = fields.iter().map(|name| literal_layout_field(name)).collect::<Vec<_>>().join(",\n    ");
+        let source = format!("return {{\n    {body},\n}}");
+
+        let layout: InstallLayoutSpec = decode::<LuaInstallLayoutSpec>(&source).into();
+        assert_eq!(layout.prefix, TextSpec::Literal("/prefix".to_owned()));
+        assert_eq!(layout.zsh_completions_dir, TextSpec::Literal("/zsh_completions_dir".to_owned()));
     }
 }
