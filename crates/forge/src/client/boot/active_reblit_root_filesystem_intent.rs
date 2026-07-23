@@ -37,6 +37,8 @@ mod filesystem;
 mod gluon;
 #[path = "active_reblit_root_filesystem_intent/normalization.rs"]
 mod normalization;
+#[path = "active_reblit_root_filesystem_intent/lua.rs"]
+mod lua;
 
 const KIB: usize = 1024;
 const MAX_ROOT_FILESYSTEM_SOURCE_BYTES: usize = 64 * KIB;
