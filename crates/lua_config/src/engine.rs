@@ -195,6 +195,19 @@ where
         source: &Source,
         _deadline: EvaluationDeadline,
     ) -> Result<T, Diagnostic> {
+        // The authored root must use only the Cast Lua declaration profile.
+        crate::profile::validate_profile(source.text()).map_err(|violation| {
+            Diagnostic::new(
+                DiagnosticCategory::Parse,
+                None,
+                Some(source.logical_name().to_owned()),
+                None,
+                format!(
+                    "lua source uses a construct outside the declaration profile: {}",
+                    violation.construct
+                ),
+            )
+        })?;
         let value = evaluate_chunk(
             &runtime.lua,
             &runtime.loaded,
@@ -413,6 +426,19 @@ mod tests {
             .evaluate::<bool>(&Source::new("root.lua", "return true"))
             .unwrap();
         assert!(flag.value);
+    }
+
+    #[test]
+    fn a_root_using_a_loop_is_rejected_by_the_profile() {
+        let engine = LuaEngine::default();
+        let error = engine
+            .evaluate::<i64>(&Source::new(
+                "root.lua",
+                "local n = 0\nwhile true do n = n + 1 end\nreturn n",
+            ))
+            .unwrap_err();
+        assert_eq!(error.category, declarative_config::DiagnosticCategory::Parse);
+        assert!(error.message.contains("while loop"));
     }
 
     #[test]

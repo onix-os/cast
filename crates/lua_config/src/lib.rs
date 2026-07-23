@@ -14,10 +14,12 @@ use declarative_config::{
 
 mod engine;
 mod imports;
+mod profile;
 mod value;
 
 pub use engine::{LuaPrepared, LuaRuntime, LuaValueDecoder, PreparedLuaModule};
 pub use imports::discover_imports;
+pub use profile::{ProfileViolation, validate_profile};
 pub use value::{ValueLimits, validate_value_tree};
 
 /// The exact vendored Lua release whose behavior this engine commits to.
