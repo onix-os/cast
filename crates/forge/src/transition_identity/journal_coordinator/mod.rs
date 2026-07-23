@@ -3,7 +3,10 @@
 //! This module owns the shared contract through `CandidatePrepared` and the
 //! stateful transaction-trigger boundary for `NewState` and `ActiveReblit`,
 //! then records the common `/usr` exchange and retained merged-/usr root-ABI
-//! publication boundaries through durable `RootLinksComplete`.
+//! publication boundaries through durable `RootLinksComplete`. New-state and
+//! active-reblit transitions which already retain transaction-isolation
+//! authority also own the system-trigger boundary through durable
+//! `SystemTriggersComplete`.
 //! It is not wired into live activation until startup can reconcile every
 //! record it may publish. Consuming transitions deliberately make an uncertain
 //! journal write fail-stop: an error drops the coordinator and its lock rather
@@ -20,6 +23,7 @@ mod candidate_preparation;
 mod error;
 mod request;
 mod root_abi_publication;
+mod system_triggers;
 mod transaction_isolation;
 mod transaction_triggers;
 mod usr_exchange_effect;
@@ -41,6 +45,8 @@ pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[allow(unused_imports)] // contract-only until the next durable forward phase is implemented
 pub(crate) use root_abi_publication::RootLinksCompleteCoordinator;
+#[allow(unused_imports)] // contract-only until live lifecycle wiring consumes this suffix
+pub(crate) use system_triggers::SystemTriggersCompleteCoordinator;
 #[cfg(test)]
 use transaction_isolation::TransactionIsolationAbiFailure;
 #[cfg(test)]

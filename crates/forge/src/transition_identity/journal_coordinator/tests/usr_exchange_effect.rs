@@ -30,8 +30,35 @@ fn coordinator_from_exchange_fixture(
     UsrExchangeIntentCoordinator,
     JournalUsrExchangeAuthority,
 ) {
+    coordinator_from_exchange_fixture_with_options(
+        candidate_kind,
+        fixture,
+        identity,
+        authority,
+        false,
+        false,
+    )
+}
+
+fn coordinator_from_exchange_fixture_with_options(
+    candidate_kind: CandidateKind,
+    fixture: CoordinatorFixture,
+    identity: StatefulTreeIdentity,
+    authority: JournalUsrExchangeAuthority,
+    run_system_triggers: bool,
+    run_boot_sync: bool,
+) -> (
+    CoordinatorFixture,
+    UsrExchangeIntentCoordinator,
+    JournalUsrExchangeAuthority,
+) {
     let mut coordinator = identity
-        .begin_transition(request(candidate_kind, &fixture, false, false))
+        .begin_transition(request(
+            candidate_kind,
+            &fixture,
+            run_system_triggers,
+            run_boot_sync,
+        ))
         .unwrap();
     if candidate_kind == CandidateKind::NewState {
         coordinator = coordinator.begin_fresh_allocation().unwrap();

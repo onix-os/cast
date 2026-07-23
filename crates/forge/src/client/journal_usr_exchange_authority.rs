@@ -316,6 +316,31 @@ impl JournalUsrExchangeAuthorityPreflight {
         Ok((identity, authority))
     }
 
+    /// Prepare an ActiveReblit identity from the candidate capability retained
+    /// by fixed staging. `candidate_path` must be the canonical fixed-staging
+    /// `/usr` path. This constructor does not resolve that path while preparing
+    /// the identity; later coordinator phases may use it for canonical-name
+    /// checks.
+    pub(crate) fn prepare_retained_active_reblit_identity(
+        self,
+        state_db: &crate::db::state::Database,
+        candidate_usr: &std::fs::File,
+        candidate_path: &std::path::Path,
+        candidate_state: state::Id,
+    ) -> Result<(StatefulTreeIdentity, JournalUsrExchangeAuthority), JournalUsrExchangeAuthorityError> {
+        let identity = StatefulTreeIdentity::prepare_usr_exchange_retained_active_reblit_candidate(
+            &self.installation,
+            state_db,
+            candidate_usr,
+            candidate_path,
+            candidate_state,
+            &JournalUsrExchangePreparationSeal { _private: () },
+        )
+        .map_err(JournalUsrExchangeAuthorityError::Identity)?;
+        let authority = self.refresh_after_tree_identity_preparation()?;
+        Ok((identity, authority))
+    }
+
     /// Admit exactly the marker change performed by tree-identity
     /// preparation while preserving the old live tree and writer mutex.
     fn refresh_after_tree_identity_preparation(

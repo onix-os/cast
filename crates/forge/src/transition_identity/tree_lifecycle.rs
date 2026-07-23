@@ -41,11 +41,56 @@ impl JournalAcquisition<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum CandidateNameAuthority {
+    Pathname,
+    RetainedStaging,
+}
+
+enum RetainedCandidateName {
+    Pathname,
+    Staging(RetainedDirectory),
+}
+
+impl CandidateNameAuthority {
+    fn retain(self, installation: &Installation) -> Result<RetainedCandidateName, Error> {
+        match self {
+            Self::Pathname => Ok(RetainedCandidateName::Pathname),
+            Self::RetainedStaging => RetainedDirectory::open_beneath(
+                installation.root_directory(),
+                STAGING_RELATIVE,
+                installation.staging_dir(),
+            )
+            .map(RetainedCandidateName::Staging),
+        }
+    }
+}
+
+impl RetainedCandidateName {
+    fn open(
+        &self,
+        installation: &Installation,
+        diagnostic_path: &Path,
+    ) -> Result<TreeMarkerStore, Error> {
+        match self {
+            Self::Pathname => TreeMarkerStore::open_path(diagnostic_path).map_err(Error::from),
+            Self::Staging(staging) => {
+                staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
+                let candidate = open_retained_exchange_tree(&staging.file, diagnostic_path)?;
+                staging.revalidate_beneath(installation.root_directory(), STAGING_RELATIVE)?;
+                Ok(candidate)
+            }
+        }
+    }
+}
+
 impl StatefulTreeIdentity {
     /// Exact candidate `/usr` capability retained before metadata decoration.
     ///
-    /// The path is diagnostic only. Callers must perform every traversal from
-    /// the descriptor and sandwich their work between strict guard proofs.
+    /// The path is never mutation authority. Coordinator-owned fixed staging
+    /// retains its canonical path for later descriptor-rooted name checks;
+    /// callers must perform traversal from retained descriptors and sandwich
+    /// their work between strict guard proofs.
     pub(crate) fn retained_candidate_usr(&self) -> (&std::fs::File, &Path) {
         (
             self.candidate.store.retained_directory(),
@@ -68,6 +113,7 @@ impl StatefulTreeIdentity {
             None,
             CandidateStatePreparation::ExistingId(candidate_state),
             JournalAcquisition::LegacyBlocking,
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -88,6 +134,7 @@ impl StatefulTreeIdentity {
             None,
             CandidateStatePreparation::UnknownIdAbsent,
             JournalAcquisition::LegacyBlocking,
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -109,6 +156,7 @@ impl StatefulTreeIdentity {
             None,
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
             JournalAcquisition::LegacyBlocking,
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -129,6 +177,7 @@ impl StatefulTreeIdentity {
             Some(candidate_usr),
             CandidateStatePreparation::ExistingId(candidate_state),
             JournalAcquisition::LegacyBlocking,
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -147,6 +196,7 @@ impl StatefulTreeIdentity {
             Some(candidate_usr),
             CandidateStatePreparation::UnknownIdAbsent,
             JournalAcquisition::LegacyBlocking,
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -167,6 +217,7 @@ impl StatefulTreeIdentity {
             Some(candidate_usr),
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
             JournalAcquisition::LegacyBlocking,
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -187,6 +238,7 @@ impl StatefulTreeIdentity {
             None,
             CandidateStatePreparation::ExistingId(candidate_state),
             JournalAcquisition::CoordinatorNonblocking(seal),
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -205,6 +257,7 @@ impl StatefulTreeIdentity {
             None,
             CandidateStatePreparation::UnknownIdAbsent,
             JournalAcquisition::CoordinatorNonblocking(seal),
+            CandidateNameAuthority::Pathname,
         )
     }
 
@@ -224,6 +277,41 @@ impl StatefulTreeIdentity {
             None,
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
             JournalAcquisition::CoordinatorNonblocking(seal),
+            CandidateNameAuthority::Pathname,
+        )
+    }
+
+    /// Coordinator-only ActiveReblit preparation from the exact candidate
+    /// descriptor retained by fixed staging. `candidate_path` must lexically
+    /// equal the canonical fixed-staging `/usr` path. This constructor does not
+    /// resolve it; later coordinator phases may reopen that canonical name.
+    pub(crate) fn prepare_usr_exchange_retained_active_reblit_candidate(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_usr: &std::fs::File,
+        candidate_path: &Path,
+        candidate_state: state::Id,
+        seal: &crate::client::JournalUsrExchangePreparationSeal,
+    ) -> Result<Self, Error> {
+        let canonical_candidate_path = installation.staging_path("usr");
+        if candidate_path != canonical_candidate_path {
+            return Err(live_usr_io(
+                "require canonical fixed-staging /usr diagnostic path",
+                candidate_path,
+                io::Error::other(format!(
+                    "expected canonical candidate path {}",
+                    canonical_candidate_path.display()
+                )),
+            ));
+        }
+        Self::prepare_candidate(
+            installation,
+            state_db,
+            candidate_path,
+            Some(candidate_usr),
+            CandidateStatePreparation::KnownIdAbsent(candidate_state),
+            JournalAcquisition::CoordinatorNonblocking(seal),
+            CandidateNameAuthority::RetainedStaging,
         )
     }
 
@@ -234,6 +322,7 @@ impl StatefulTreeIdentity {
         retained_candidate_usr: Option<&std::fs::File>,
         candidate_state: CandidateStatePreparation,
         journal_acquisition: JournalAcquisition<'_>,
+        candidate_name_authority: CandidateNameAuthority,
     ) -> Result<Self, Error> {
         let root = &installation.root;
         let previous_path = root.join("usr");
@@ -252,12 +341,14 @@ impl StatefulTreeIdentity {
         namespace?;
         baseline?;
 
+        let candidate_name = candidate_name_authority.retain(installation)?;
+
         // Authenticate the materialized candidate and establish a strictly
         // empty, same-mount previous tree only when the retained root proves
         // that `usr` is genuinely absent.
         let candidate_store = if let Some(candidate_usr) = retained_candidate_usr {
             let retained = TreeMarkerStore::open(candidate_usr, candidate_path)?;
-            let named = TreeMarkerStore::open_path(candidate_path)?;
+            let named = candidate_name.open(installation, candidate_path)?;
             retained.require_same_directory(&named)?;
             retained
         } else {
@@ -281,12 +372,13 @@ impl StatefulTreeIdentity {
         // child name and the complete mutable installation namespace before
         // publishing any marker. Authority errors supersede any simultaneous
         // inventory failure.
-        let candidate_name =
-            TreeMarkerStore::open_path(candidate_path).and_then(|named| candidate_store.require_same_directory(&named));
+        let candidate_name_check = candidate_name
+            .open(installation, candidate_path)
+            .and_then(|named| candidate_store.require_same_directory(&named).map_err(Error::from));
         let previous_name = require_named_live_usr(installation, previous_store.retained_directory(), &previous_path);
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
-        candidate_name?;
+        candidate_name_check?;
         previous_name?;
         let candidate_durability = candidate_durability?;
         let mut candidate = match candidate_state {
@@ -304,11 +396,13 @@ impl StatefulTreeIdentity {
         // Marker publication is the only admitted inventory delta. Bind that
         // delta to the exact retained marker and state-ID inode on both sides
         // of the post-publication inventory and durability pass.
-        candidate.verify_named_read_only(candidate_path)?;
+        let named_candidate = candidate_name.open(installation, candidate_path)?;
+        candidate.verify_store_read_only(&named_candidate)?;
         candidate_state_id.verify_initial(&candidate)?;
         let durability = candidate_durability.validate_after_marker();
-        let identity = candidate
-            .verify_named_read_only(candidate_path)
+        let identity = candidate_name
+            .open(installation, candidate_path)
+            .and_then(|named| candidate.verify_store_read_only(&named))
             .and_then(|()| candidate_state_id.verify_initial(&candidate));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;

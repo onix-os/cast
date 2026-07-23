@@ -443,6 +443,139 @@ fn journal_coordinator_active_reblit_prejournal_authority_preserves_residue_and_
 }
 
 #[test]
+fn journal_coordinator_retained_active_reblit_preparation_retains_canonical_identity_after_caller_drop() {
+    let temporary = private_installation_tempdir();
+    let mut installation = Installation::open(temporary.path(), None).unwrap();
+    let database = db::state::Database::new(":memory:").unwrap();
+    let active = add_cleared_state_with_provenance(&database, "retained active reblit", '7');
+    prepare_previous_tree(&installation, PreviousKind::Active, active);
+    installation.active_state = Some(active);
+
+    let preflight = JournalUsrExchangeAuthorityPreflight::acquire_prejournal_for_test(
+        &installation,
+        Some(database.get(active).unwrap()),
+    )
+    .unwrap();
+    let candidate_path = installation.staging_path("usr");
+    create_canonical_directory(&candidate_path);
+    write_canonical_file(&candidate_path.join("sentinel"), b"retained candidate must stay exact");
+    let candidate_usr = fs::File::open(&candidate_path).unwrap();
+    let retained = candidate_usr.metadata().unwrap();
+
+    let (identity, authority) = preflight
+        .prepare_retained_active_reblit_identity(&database, &candidate_usr, &candidate_path, active)
+        .unwrap();
+    drop(candidate_usr);
+    let (prepared_usr, prepared_path) = identity.retained_candidate_usr();
+    let prepared = prepared_usr.metadata().unwrap();
+    assert_eq!((prepared.dev(), prepared.ino()), (retained.dev(), retained.ino()));
+    assert_eq!(prepared_path, candidate_path);
+    assert!(candidate_path.join(".cast-tree-id").exists());
+    assert_state_metadata_name_absent(&candidate_path.join(".stateID"));
+    assert_state_metadata_name_absent(&candidate_path.join(".cast-state-id.tmp"));
+    assert_eq!(
+        fs::read(candidate_path.join("sentinel")).unwrap(),
+        b"retained candidate must stay exact"
+    );
+    authority
+        .require_pre_exchange(Operation::ActiveReblit, active, Some(active))
+        .unwrap();
+
+    drop(identity);
+    drop(authority);
+    assert_canonical_journal_absent(&installation.root);
+}
+
+#[test]
+fn journal_coordinator_retained_active_reblit_preparation_rejects_rebound_public_name_before_marker() {
+    let temporary = private_installation_tempdir();
+    let mut installation = Installation::open(temporary.path(), None).unwrap();
+    let database = db::state::Database::new(":memory:").unwrap();
+    let active = add_cleared_state_with_provenance(&database, "rebound retained active reblit", '8');
+    prepare_previous_tree(&installation, PreviousKind::Active, active);
+    installation.active_state = Some(active);
+
+    let preflight = JournalUsrExchangeAuthorityPreflight::acquire_prejournal_for_test(
+        &installation,
+        Some(database.get(active).unwrap()),
+    )
+    .unwrap();
+    let candidate_path = installation.staging_path("usr");
+    let displaced_path = installation.staging_path("usr-retained-displaced");
+    create_canonical_directory(&candidate_path);
+    let candidate_usr = fs::File::open(&candidate_path).unwrap();
+    fs::rename(&candidate_path, &displaced_path).unwrap();
+    create_canonical_directory(&candidate_path);
+    write_canonical_file(&candidate_path.join("sentinel"), b"replacement must remain untouched");
+
+    let error = preflight
+        .prepare_retained_active_reblit_identity(&database, &candidate_usr, &candidate_path, active)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::client::JournalUsrExchangeAuthorityError::Identity(
+            crate::transition_identity::Error::TreeMarker(
+                crate::tree_marker::TreeMarkerError::DirectoryChanged { .. }
+            )
+        )
+    ));
+    assert_eq!(
+        fs::read(candidate_path.join("sentinel")).unwrap(),
+        b"replacement must remain untouched"
+    );
+    for path in [&candidate_path, &displaced_path] {
+        assert_state_metadata_name_absent(&path.join(".cast-tree-id"));
+        assert_state_metadata_name_absent(&path.join(".stateID"));
+        assert_state_metadata_name_absent(&path.join(".cast-state-id.tmp"));
+    }
+    assert_canonical_journal_absent(&installation.root);
+}
+
+#[test]
+fn journal_coordinator_retained_active_reblit_preparation_rejects_noncanonical_path_before_publication() {
+    let temporary = private_installation_tempdir();
+    let mut installation = Installation::open(temporary.path(), None).unwrap();
+    let database = db::state::Database::new(":memory:").unwrap();
+    let active = add_cleared_state_with_provenance(&database, "noncanonical retained active reblit", '9');
+    prepare_previous_tree(&installation, PreviousKind::Active, active);
+    installation.active_state = Some(active);
+
+    let preflight = JournalUsrExchangeAuthorityPreflight::acquire_prejournal_for_test(
+        &installation,
+        Some(database.get(active).unwrap()),
+    )
+    .unwrap();
+    let candidate_path = installation.staging_path("usr");
+    let noncanonical_path = installation.staging_path("usr-diagnostic-decoy");
+    create_canonical_directory(&candidate_path);
+    let candidate_usr = fs::File::open(&candidate_path).unwrap();
+
+    let error = preflight
+        .prepare_retained_active_reblit_identity(
+            &database,
+            &candidate_usr,
+            &noncanonical_path,
+            active,
+        )
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::client::JournalUsrExchangeAuthorityError::Identity(
+            crate::transition_identity::Error::LiveUsr {
+                operation: "require canonical fixed-staging /usr diagnostic path",
+                ..
+            }
+        )
+    ));
+    for path in [&candidate_path, &noncanonical_path] {
+        assert_state_metadata_name_absent(&path.join(".cast-tree-id"));
+        assert_state_metadata_name_absent(&path.join(".stateID"));
+        assert_state_metadata_name_absent(&path.join(".cast-state-id.tmp"));
+    }
+    assert_canonical_journal_absent(&installation.root);
+}
+
+#[test]
 fn journal_coordinator_wrong_operation_or_phase_is_rejected_without_record_change() {
     {
         let temporary = private_installation_tempdir();

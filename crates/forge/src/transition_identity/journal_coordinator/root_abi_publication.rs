@@ -248,7 +248,7 @@ fn exact_root_links_successor(
     Ok(complete)
 }
 
-fn require_published_root_abi_sandwich(
+pub(super) fn require_published_root_abi_sandwich(
     coordinator: &StatefulTransitionCoordinator,
     metadata: &CandidateMetadataProof,
     provenance: &db::state::MetadataProvenance,

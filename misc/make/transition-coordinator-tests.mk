@@ -3,7 +3,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 97; \
+	timeout 10s test "$$count" = 106; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -86,10 +86,20 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_substitution_after_started_blocks_callback \
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_is_mandatory_for_both_trigger_operations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_tamper_blocks_later_readiness_boundary \
-		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_candidate_prepared_and_started_are_reopenable; do \
+		transition_identity::journal_coordinator::tests::journal_coordinator_transaction_isolation_candidate_prepared_and_started_are_reopenable \
+		transition_identity::journal_coordinator::tests::journal_coordinator_retained_active_reblit_preparation_retains_canonical_identity_after_caller_drop \
+		transition_identity::journal_coordinator::tests::journal_coordinator_retained_active_reblit_preparation_rejects_rebound_public_name_before_marker \
+		transition_identity::journal_coordinator::tests::journal_coordinator_retained_active_reblit_preparation_rejects_noncanonical_path_before_publication \
+		transition_identity::journal_coordinator::tests::journal_coordinator_system_triggers_complete_exact_new_state_and_active_reblit_generations \
+		transition_identity::journal_coordinator::tests::journal_coordinator_system_triggers_reject_archived_or_disabled_paths_without_effect \
+		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_effect_failure_runs_once_and_preserves_started \
+		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_persistence_faults_leave_only_bound_predecessor_or_successor \
+		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_successor_inode_replacements_fail_stop_at_both_reopen_seams \
+		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_reopen_never_waits_behind_writer_first_contender; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 	done; \
 	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
+	system_trigger_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers.rs"; \
 	usr_exchange_contract="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_intent.rs"; \
 	usr_exchange_effect="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_effect.rs"; \
 	usr_exchange_authority="crates/forge/src/client/journal_usr_exchange_authority.rs"; \
@@ -110,6 +120,10 @@ forge-transition-journal-coordinator-test:
 	done; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare_active_reblit_candidate(' "$$tree_lifecycle"; \
 	timeout 10s grep -Fq 'pub(crate) fn prepare_retained_active_reblit_candidate(' "$$tree_lifecycle"; \
+	grep -Fq 'pub(crate) fn prepare_usr_exchange_retained_active_reblit_candidate(' "$$tree_lifecycle"; \
+	grep -Fq 'CandidateNameAuthority::RetainedStaging' "$$tree_lifecycle"; \
+	grep -Fq 'pub(crate) fn prepare_retained_active_reblit_identity(' "$$usr_exchange_authority"; \
+	grep -Fq 'StatefulTreeIdentity::prepare_usr_exchange_retained_active_reblit_candidate(' "$$usr_exchange_authority"; \
 	if timeout 10s grep -nF 'candidate_state: Option<state::Id>' "$$tree_lifecycle"; then \
 		timeout 10s printf '%s\n' 'candidate preparation collapsed three-way state authority back into Option' >&2; exit 1; \
 	else \
@@ -142,6 +156,30 @@ forge-transition-journal-coordinator-test:
 	timeout 10s grep -Fqx "    installation: &'authority crate::Installation," "$$trigger_contract"; \
 	timeout 10s grep -Fqx "    isolation_root: &'authority crate::client::RetainedRootAbi," "$$trigger_contract"; \
 	timeout 10s grep -Fqx 'pub(super) enum StatefulTransactionTriggerFailure<E>' "$$trigger_contract"; \
+	grep -Fqx "pub(super) struct StatefulSystemTriggerAuthority<'authority> {" "$$system_trigger_contract"; \
+	for field in \
+		"    transition_id: &'authority TransitionId," \
+		'    candidate_state: state::Id,' \
+		"    installation: &'authority Installation," \
+		"    candidate_usr: &'authority std::fs::File," \
+		"    isolation_root: &'authority crate::client::RetainedRootAbi,"; do \
+		grep -Fqx "$$field" "$$system_trigger_contract"; \
+	done; \
+	grep -Fqx 'pub(super) enum StatefulSystemTriggerFailure<E>' "$$system_trigger_contract"; \
+	grep -Fqx '    pub(super) fn run_system_triggers<E, F>(' "$$system_trigger_contract"; \
+	grep -Fq 'UsrExchangeReadiness::Archived' "$$system_trigger_contract"; \
+	grep -Fq 'TransitionJournalStore::try_open_in_retained_cast' "$$system_trigger_contract"; \
+	if grep -nF 'TransitionJournalStore::open_in_retained_cast' "$$system_trigger_contract"; then \
+		printf '%s\n' 'system-trigger reopen may block while writer-first authority is held' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
+	test "$$( grep -Fc '.advance_record_binding(cast, predecessor_binding, &successor)' "$$system_trigger_contract" )" = 1; \
+	if grep -nE 'Option<.*(RetainedRootAbi|StatefulSystemTriggerAuthority)' "$$system_trigger_contract"; then \
+		printf '%s\n' 'system-trigger retained authority became optional' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
 	timeout 10s grep -Fqx 'pub(crate) enum PreparedStatefulTransitionCoordinator {' "$$prepare_contract"; \
 	for variant in \
 		'    NewStateIsolation(PreparedTransactionIsolationCoordinator),' \
