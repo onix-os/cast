@@ -30,24 +30,22 @@ trigger-declaration-test:
 	@$(CARGO) test -p triggers --test gluon -- --test-threads=1
 
 # Architectural boundary proof: the neutral core and generic storage never
-# depend on Gluon, no removed Gluon-named storage/evaluation API survives, Gluon
-# derives stay inside explicit adapter/engine/test modules, and no Lua source or
-# dependency has entered the tree. These are dependency/grep assertions over the
-# source, so they are deliberately not wrapped in a runtime timeout.
+# depend on Gluon or Lua, no removed Gluon-named storage/evaluation API
+# survives, Gluon derives stay inside explicit adapter/engine/test modules, and
+# the generic `config` store depends on no engine runtime. A Lua runtime
+# dependency is allowed only inside the Lua adapter/spike crates, never in the
+# neutral core. These are dependency/grep assertions over the source, so they
+# are deliberately not wrapped in a runtime timeout.
 declaration-boundary-check:
 	@set -eu; \
 	if $(CARGO) tree -p declarative_config -e no-dev | grep -qiE 'gluon|lua'; then \
 		echo 'declarative_config must not depend on gluon or lua'; exit 1; fi; \
-	if grep -qiE 'gluon|lua' crates/config/Cargo.toml; then \
-		echo 'config manifest must not depend on gluon or lua'; exit 1; fi; \
-	if grep -rInE 'gluon_config|gluon_codegen|use gluon' crates/config/src --include='*.rs'; then \
-		echo 'config sources must not import gluon symbols'; exit 1; fi; \
+	if grep -qiE 'gluon|lua|mlua' crates/config/Cargo.toml; then \
+		echo 'config manifest must not depend on an engine runtime'; exit 1; fi; \
+	if grep -rInE 'gluon_config|gluon_codegen|use gluon|lua_config|use mlua|use full_moon' crates/config/src --include='*.rs'; then \
+		echo 'config sources must not import engine symbols'; exit 1; fi; \
 	if grep -rInE 'load_gluon|save_gluon|delete_gluon|evaluate_gluon' crates --include='*.rs'; then \
 		echo 'removed gluon-named storage/evaluation APIs must have no callers'; exit 1; fi; \
-	if find crates -name '*.lua' | grep -q .; then \
-		echo 'no .lua source may exist in this plan'; exit 1; fi; \
-	if grep -rInE '^[[:space:]]*(lua|mlua|rlua)[[:space:]]*=' crates/*/Cargo.toml; then \
-		echo 'no Lua runtime dependency may exist in this plan'; exit 1; fi; \
 	offenders="$$( grep -rlnE 'gluon_codegen::|Getable|VmType' crates/*/src --include='*.rs' \
 		| grep -vE '/gluon\.rs$$|gluon_adapter|gluon_codec|crates/gluon_config/|/tests/|tests\.rs$$' || true )"; \
 	if [ -n "$$offenders" ]; then \
