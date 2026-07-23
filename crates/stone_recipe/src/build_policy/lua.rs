@@ -14,19 +14,21 @@
 // evaluator that consumes them lands.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use lua_config::{LuaOption, LuaPatch};
+use declarative_config::{Diagnostic, Source};
+use lua_config::{LuaEngine, LuaOption, LuaPatch};
 use serde::Deserialize;
 
 use super::{
-    AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArrayPatch, BuildCommandSpec,
-    BuildProgramSpec, BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec,
-    CompilerCachePolicySpec, CompilerFlagsSpec, CompilerToolsSpec, ContextValue,
-    Emul32InputPolicySpec, EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec,
-    InstallLayoutSpec, MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec,
-    NamedTuningGroupSpec, PgoFinishSpec, PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec,
-    SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec,
-    TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec,
-    TuningOptionSpec, TuningPolicySpec, ValuePatch,
+    AnalyzerKind, AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArrayPatch,
+    BuildCommandSpec, BuildPolicyPatchSpec, BuildPolicySpec, BuildProgramSpec, BuildRootPolicySpec,
+    BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec,
+    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec,
+    EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec,
+    MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec,
+    PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec, RetiredTargetPolicySpec,
+    SandboxPolicySpec, SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec,
+    TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
+    TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
 };
 
 /// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
@@ -740,12 +742,106 @@ impl From<LuaPgoPolicySpec> for PgoPolicySpec {
     }
 }
 
+/// The Lua encoding of a complete [`BuildPolicySpec`]. Pure fields
+/// (`retired_targets`, `sandbox`, `analyzers`) decode directly; the rest use the
+/// sub-spec DTOs above.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaBuildPolicySpec {
+    pub build_subdir: String,
+    pub layout: LuaInstallLayoutSpec,
+    pub toolchains: LuaToolchainsSpec,
+    pub targets: Vec<LuaTargetPolicySpec>,
+    pub retired_targets: Vec<RetiredTargetPolicySpec>,
+    pub sandbox: SandboxPolicySpec,
+    pub build_root: LuaBuildRootPolicySpec,
+    pub sources: LuaSourcePreparationPolicySpec,
+    pub tuning: LuaTuningPolicySpec,
+    pub environment: Vec<LuaEnvironmentBindingSpec>,
+    pub builders: LuaBuildersPolicySpec,
+    pub analyzers: Vec<AnalyzerKind>,
+    pub pgo: LuaPgoPolicySpec,
+}
+
+impl From<LuaBuildPolicySpec> for BuildPolicySpec {
+    fn from(policy: LuaBuildPolicySpec) -> Self {
+        Self {
+            build_subdir: policy.build_subdir,
+            layout: policy.layout.into(),
+            toolchains: policy.toolchains.into(),
+            targets: policy.targets.into_iter().map(Into::into).collect(),
+            retired_targets: policy.retired_targets,
+            sandbox: policy.sandbox,
+            build_root: policy.build_root.into(),
+            sources: policy.sources.into(),
+            tuning: policy.tuning.into(),
+            environment: policy.environment.into_iter().map(Into::into).collect(),
+            builders: policy.builders.into(),
+            analyzers: policy.analyzers,
+            pgo: policy.pgo.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`BuildPolicyPatchSpec`] — a sparse overlay where every
+/// field is a keep/set (or keep/replace/prepend/append) operation.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaBuildPolicyPatchSpec {
+    pub build_subdir: LuaPatch<String>,
+    pub layout: LuaPatch<LuaInstallLayoutSpec>,
+    pub toolchains: LuaPatch<LuaToolchainsSpec>,
+    pub targets: LuaArrayPatch<LuaTargetPolicySpec>,
+    pub retired_targets: LuaArrayPatch<RetiredTargetPolicySpec>,
+    pub sandbox: LuaPatch<SandboxPolicySpec>,
+    pub build_root: LuaPatch<LuaBuildRootPolicySpec>,
+    pub sources: LuaPatch<LuaSourcePreparationPolicySpec>,
+    pub tuning: LuaPatch<LuaTuningPolicySpec>,
+    pub environment: LuaArrayPatch<LuaEnvironmentBindingSpec>,
+    pub builders: LuaPatch<LuaBuildersPolicySpec>,
+    pub analyzers: LuaArrayPatch<AnalyzerKind>,
+    pub pgo: LuaPatch<LuaPgoPolicySpec>,
+}
+
+impl From<LuaBuildPolicyPatchSpec> for BuildPolicyPatchSpec {
+    fn from(patch: LuaBuildPolicyPatchSpec) -> Self {
+        Self {
+            build_subdir: value_patch(patch.build_subdir),
+            layout: value_patch(patch.layout),
+            toolchains: value_patch(patch.toolchains),
+            targets: array_patch(patch.targets),
+            retired_targets: array_patch(patch.retired_targets),
+            sandbox: value_patch(patch.sandbox),
+            build_root: value_patch(patch.build_root),
+            sources: value_patch(patch.sources),
+            tuning: value_patch(patch.tuning),
+            environment: array_patch(patch.environment),
+            builders: value_patch(patch.builders),
+            analyzers: array_patch(patch.analyzers),
+            pgo: value_patch(patch.pgo),
+        }
+    }
+}
+
+/// Stateless Lua adapter for the build-policy declaration and its patch overlay.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LuaBuildPolicyEvaluator {
+    engine: LuaEngine,
+}
+
+impl LuaBuildPolicyEvaluator {
+    /// Decode a complete authored build policy.
+    pub(crate) fn evaluate(&self, source: &Source) -> Result<BuildPolicySpec, Diagnostic> {
+        Ok(self.engine.evaluate_as::<LuaBuildPolicySpec>(source)?.value.into())
+    }
+
+    /// Decode a sparse build-policy patch overlay.
+    pub(crate) fn evaluate_patch(&self, source: &Source) -> Result<BuildPolicyPatchSpec, Diagnostic> {
+        Ok(self.engine.evaluate_as::<LuaBuildPolicyPatchSpec>(source)?.value.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use declarative_config::Source;
-    use lua_config::LuaEngine;
-
-    use super::super::{SandboxDevPolicySpec, SandboxPolicySpec};
+    use super::super::SandboxDevPolicySpec;
     use super::*;
 
     fn decode<T: serde::de::DeserializeOwned>(source: &str) -> T {
@@ -994,6 +1090,57 @@ return {
         assert_eq!(group.default, Some("balanced".to_owned()));
         assert_eq!(group.choices.len(), 1);
         assert_eq!(group.choices[0].name, "balanced");
+    }
+
+    #[test]
+    fn an_all_keep_build_policy_patch_decodes_to_the_default_overlay() {
+        let source = r#"
+return {
+    build_subdir = { kind = "keep" },
+    layout = { kind = "keep" },
+    toolchains = { kind = "keep" },
+    targets = { kind = "keep" },
+    retired_targets = { kind = "keep" },
+    sandbox = { kind = "keep" },
+    build_root = { kind = "keep" },
+    sources = { kind = "keep" },
+    tuning = { kind = "keep" },
+    environment = { kind = "keep" },
+    builders = { kind = "keep" },
+    analyzers = { kind = "keep" },
+    pgo = { kind = "keep" },
+}
+"#;
+        let patch = LuaBuildPolicyEvaluator::default()
+            .evaluate_patch(&Source::new("build-policy.lua", source))
+            .expect("all-keep patch decodes");
+        assert_eq!(patch, BuildPolicyPatchSpec::default());
+    }
+
+    #[test]
+    fn a_build_policy_patch_sets_a_scalar_and_appends_an_analyzer() {
+        let source = r#"
+return {
+    build_subdir = { kind = "set", value = "build" },
+    layout = { kind = "keep" },
+    toolchains = { kind = "keep" },
+    targets = { kind = "keep" },
+    retired_targets = { kind = "keep" },
+    sandbox = { kind = "keep" },
+    build_root = { kind = "keep" },
+    sources = { kind = "keep" },
+    tuning = { kind = "keep" },
+    environment = { kind = "keep" },
+    builders = { kind = "keep" },
+    analyzers = { kind = "append", values = { "elf" } },
+    pgo = { kind = "keep" },
+}
+"#;
+        let patch = LuaBuildPolicyEvaluator::default()
+            .evaluate_patch(&Source::new("build-policy.lua", source))
+            .expect("patch decodes");
+        assert_eq!(patch.build_subdir, ValuePatch::Set("build".to_owned()));
+        assert_eq!(patch.analyzers, ArrayPatch::Append(vec![AnalyzerKind::Elf]));
     }
 
     #[test]
