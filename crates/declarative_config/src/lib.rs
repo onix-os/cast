@@ -5,6 +5,7 @@ mod deadline;
 mod declaration_error;
 mod diagnostic;
 mod evaluation;
+mod identity;
 mod language;
 mod limits;
 mod module_graph;
@@ -17,6 +18,10 @@ pub use evaluation::{
     DeclarationCodec, DeclarationEvaluator, DeclarationInputEvaluator,
     EngineAdapter, Evaluation, IdentityInputs, TypedDecoder, evaluate,
     evaluate_file, evaluate_with_inputs,
+};
+pub use identity::{
+    EvaluationIdentity, EvaluationIdentityValidationError, IdentityDependency,
+    IdentityModule,
 };
 pub use language::{
     AbiId, DescriptorError, EngineId, EvaluatorPolicyId, LanguageId, LanguageSpec,
