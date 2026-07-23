@@ -114,6 +114,13 @@ evidence that the following work is complete:
 
 ## Language and evaluation model
 
+- Revisit the policy-layer adapter's currently enabled pure array capability
+  after neutral identity v2 is authoritative. The present Gluon adapter admits
+  it even though the reachable policy-layer ABI does not import it; tightening
+  that capability during the equivalence migration would mix a security-policy
+  behavior change into identity extraction. Preserve it for now, then remove
+  it through a separately versioned evaluator-policy change with explicit
+  before/after evidence.
 - Reconsider recursive policy-overlay fixed points only if the completed
   one-way `add`, `replace`, and `modify` model cannot express a concrete package
   family without duplication. Any later design must remain finite, explainable,
