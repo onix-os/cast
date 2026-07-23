@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use super::CanonicalEncoder;
@@ -14,6 +15,7 @@ pub use self::{
 
 mod closure_validation;
 mod gluon_codec;
+mod lua;
 mod validation_errors;
 
 #[cfg(test)]
@@ -27,7 +29,7 @@ const REQUESTED_INPUTS_HASH_DOMAIN: &[u8] = b"os-tools-requested-inputs-v2\0";
 
 /// Exact package, repository, platform, policy, and selected structural
 /// builder resolution used by a plan.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BuildLock {
     pub schema_version: u32,
     pub request_fingerprint: String,
@@ -243,7 +245,7 @@ impl BuildLock {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Platform {
     pub architecture: String,
     pub vendor: String,
@@ -267,7 +269,7 @@ impl Platform {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RepositorySnapshot {
     pub id: String,
     pub index_uri: String,
@@ -282,7 +284,7 @@ impl RepositorySnapshot {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LockedIdentity {
     pub name: String,
     pub fingerprint: String,
@@ -300,7 +302,7 @@ impl LockedIdentity {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LockedPackage {
     pub package_id: String,
     pub name: String,
@@ -311,7 +313,7 @@ pub struct LockedPackage {
     pub dependencies: Vec<LockedOutputRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LockedRequest {
     pub request: String,
     pub package_id: String,
@@ -371,14 +373,16 @@ pub fn requested_inputs_digest(requests: &[RequestedInput]) -> String {
 }
 
 /// Which package-level declaration supplied one dependency.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PackageInputSelection {
     Package,
     Profile { name: String },
 }
 
 /// Exact position of a step within a frozen phase.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobStepSection {
     Pre,
     Steps,
@@ -386,7 +390,8 @@ pub enum JobStepSection {
 }
 
 /// Executable position inside a typed build step.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobExecutableRole {
     RunProgram,
     ShellInterpreter,
@@ -394,7 +399,8 @@ pub enum JobExecutableRole {
 }
 
 /// Semantic role of a frozen analyzer executable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AnalyzerRole {
     PkgConfig,
     Python,
@@ -403,7 +409,8 @@ pub enum AnalyzerRole {
 }
 
 /// Semantic compiler command selected from the repository toolchain policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CompilerExecutableRole {
     Cc,
     Cxx,
@@ -421,14 +428,16 @@ pub enum CompilerExecutableRole {
 }
 
 /// Explicit cache executable selected when compiler caching is enabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CompilerCacheRole {
     Ccache,
     Sccache,
 }
 
 /// Typed reason a provider request participates in the frozen build closure.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputOrigin {
     BuilderTool {
         selection: PackageInputSelection,
@@ -719,7 +728,7 @@ impl LockedPackage {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LockedOutput {
     pub name: String,
 }
@@ -730,7 +739,7 @@ impl LockedOutput {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 pub struct LockedOutputRef {
     pub package_id: String,
     pub output: String,
