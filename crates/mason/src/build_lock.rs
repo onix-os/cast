@@ -441,7 +441,7 @@ mod tests {
 
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(BUILD_LOCK_FILE_NAME);
-        let limit = gluon_config::Limits::default().max_source_bytes;
+        let limit = GluonBuildLockCodec::default().limits().max_source_bytes;
         fs::File::create(&path)
             .unwrap()
             .set_len(u64::try_from(limit).unwrap() + 1)
