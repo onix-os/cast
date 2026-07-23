@@ -6,48 +6,143 @@
 //! byte-limit, work-reservation, and deadline authority is identical. Equivalent
 //! Gluon and Lua sources reach the identical validated intent value.
 //!
-//! This is the evaluator-level adapter. Wiring `.lua` into the fixed retained
-//! `etc/cast/root-filesystem.*` path (with its `.glu`-specific revalidation
-//! contract) is a separate, security-sensitive step tracked for later.
+//! This is the budget-integrated adapter registered alongside the Gluon one, so
+//! a retained `etc/cast/root-filesystem.lua` is discovered by extension and
+//! normalized under the same absolute deadline, byte limits, and work
+//! reservation. Its evaluation contract mirrors the Gluon adapter's strictness:
+//! the fixed slot name, no admitted external inputs, and — because the Lua root
+//! declaration imports nothing — an empty module set.
 
-use declarative_config::{EvaluationDeadline, Source};
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
+    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+};
 use lua_config::LuaEngine;
 use serde::Deserialize;
 
+use super::gluon::SOURCE_LOGICAL_NAME;
 use super::normalization::materialize_root_argument;
 use super::{
     ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue,
 };
+
+const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+const MAX_EVALUATION_TIME: Duration = Duration::from_secs(2);
+
+/// Neutral language descriptor for the Lua root-filesystem adapter, used to
+/// register the `.lua` extension in the fixed-path discovery slot.
+pub(super) fn language_spec() -> LanguageSpec {
+    LuaEngine::default().language_spec().clone()
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct LuaRootFilesystemIntent {
     root: String,
 }
 
-/// Stateless Lua adapter for the root-filesystem declaration.
-#[derive(Debug, Clone, Default)]
-pub(super) struct LuaRootFilesystemIntentEvaluator {
+/// Budget-integrated Lua adapter for the closed root-filesystem declaration.
+pub(super) struct LuaRootFilesystemIntentEvaluator<'budget> {
     engine: LuaEngine,
+    budget: Rc<RefCell<&'budget mut RootFilesystemIntentBudget>>,
 }
 
-impl LuaRootFilesystemIntentEvaluator {
-    /// Decode and normalize an authored Lua root-filesystem source under the
-    /// caller-established budget.
-    fn evaluate(
+impl<'budget> LuaRootFilesystemIntentEvaluator<'budget> {
+    pub(super) fn new(
+        budget: &'budget mut RootFilesystemIntentBudget,
+    ) -> Result<Self, ActiveReblitRootFilesystemIntentError> {
+        budget.require_deadline()?;
+        let remaining = budget.remaining_duration()?;
+        let mut limits = Limits::default();
+        limits.max_source_bytes = budget.policy.max_source_bytes;
+        limits.max_explicit_input_bytes = 0;
+        // The Lua root-filesystem declaration is self-contained: it imports no ABI.
+        limits.max_imported_file_bytes = 0;
+        limits.max_imports = 0;
+        limits.max_import_graph_bytes = budget.policy.max_source_bytes;
+        limits.timeout = remaining.min(MAX_EVALUATION_TIME);
+
+        Ok(Self {
+            engine: LuaEngine::new(limits),
+            budget: Rc::new(RefCell::new(budget)),
+        })
+    }
+}
+
+impl DeclarationEvaluator<RootFilesystemIntentValue> for LuaRootFilesystemIntentEvaluator<'_> {
+    type Identity = EvaluationIdentity;
+    type Error = ActiveReblitRootFilesystemIntentError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+            budget: Rc::clone(&self.budget),
+        }
+    }
+
+    fn evaluate_within(
         &self,
         source: &Source,
-        budget: &mut RootFilesystemIntentBudget,
-    ) -> Result<RootFilesystemIntentValue, ActiveReblitRootFilesystemIntentError> {
-        let deadline = EvaluationDeadline::start(self.engine.limits().timeout);
-        let intent = self
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<RootFilesystemIntentValue, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
             .engine
             .evaluate_within_as::<LuaRootFilesystemIntent>(source, deadline)
-            .map_err(|_| ActiveReblitRootFilesystemIntentError::EvaluationContract {
-                reason: "authored Lua root-filesystem source did not evaluate to the intent schema",
-            })?
-            .value;
-        materialize_root_argument(intent.root, budget)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let mut budget = self.budget.borrow_mut();
+        budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_lua_fingerprint_contract(&evaluation.identity)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+
+        let value = materialize_root_argument(evaluation.value.root, &mut budget)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value,
+            identity: evaluation.identity,
+        })
     }
+}
+
+fn require_lua_fingerprint_contract(
+    fingerprint: &EvaluationIdentity,
+) -> Result<(), ActiveReblitRootFilesystemIntentError> {
+    fingerprint.validate()?;
+    // The fixed slot has one canonical logical name regardless of engine.
+    if fingerprint.root_logical_name != SOURCE_LOGICAL_NAME {
+        return Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
+            reason: "evaluation fingerprint does not bind the fixed root-filesystem slot name",
+        });
+    }
+    if fingerprint.explicit_inputs_sha256 != EMPTY_SHA256 {
+        return Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
+            reason: "root-filesystem evaluation admitted explicit external inputs",
+        });
+    }
+    if !fingerprint.modules.is_empty() {
+        return Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
+            reason: "the Lua root-filesystem declaration must import nothing",
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -88,13 +183,26 @@ mod tests {
         }
     }
 
+    fn lua_value(
+        budget: &mut RootFilesystemIntentBudget,
+        source: &str,
+    ) -> Result<RootFilesystemIntentValue, ActiveReblitRootFilesystemIntentError> {
+        LuaRootFilesystemIntentEvaluator::new(budget)?
+            .evaluate(&Source::new(SOURCE_LOGICAL_NAME, source))
+            .map(|evaluation| evaluation.value)
+            .map_err(|error| match error {
+                DeclarationEvaluationError::Evaluation(source) => {
+                    ActiveReblitRootFilesystemIntentError::Evaluation(source)
+                }
+                DeclarationEvaluationError::Conversion(source) => source,
+            })
+    }
+
     #[test]
     fn a_lua_root_intent_matches_the_gluon_normalization() {
         let fixture = Fixture::new();
-        let source = r#"return { root = "UUID=1111-2222" }"#;
 
-        let lua = LuaRootFilesystemIntentEvaluator::default()
-            .evaluate(&Source::new("root-filesystem.lua", source), &mut fixture.budget())
+        let lua = lua_value(&mut fixture.budget(), r#"return { root = "UUID=1111-2222" }"#)
             .expect("lua root intent evaluates");
         let gluon = gluon_value_for_test("UUID=1111-2222", &mut fixture.budget())
             .expect("gluon root intent normalizes");
@@ -105,11 +213,17 @@ mod tests {
     #[test]
     fn a_lua_root_intent_with_the_reserved_prefix_is_rejected() {
         let fixture = Fixture::new();
-        let source = r#"return { root = "root=UUID=1111-2222" }"#;
+        assert!(lua_value(&mut fixture.budget(), r#"return { root = "root=UUID=1111-2222" }"#).is_err());
+    }
 
+    #[test]
+    fn a_lua_root_intent_under_the_wrong_source_name_is_rejected_by_the_contract() {
+        let fixture = Fixture::new();
+        let mut budget = fixture.budget();
         assert!(
-            LuaRootFilesystemIntentEvaluator::default()
-                .evaluate(&Source::new("root-filesystem.lua", source), &mut fixture.budget())
+            LuaRootFilesystemIntentEvaluator::new(&mut budget)
+                .expect("lua evaluator admits")
+                .evaluate(&Source::new("etc/cast/elsewhere.lua", r#"return { root = "UUID=1" }"#))
                 .is_err()
         );
     }

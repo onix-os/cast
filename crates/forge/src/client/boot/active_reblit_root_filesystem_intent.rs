@@ -14,9 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use config::declaration::{
-    RegisteredLanguages, TypedDeclarationEvaluatorSet,
-};
+use config::declaration::RegisteredLanguages;
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     Evaluation as DeclarationEvaluation, LanguageSpec, Source,
@@ -479,26 +477,39 @@ fn evaluate_declaration(
     DeclarationEvaluation<RootFilesystemIntentValue, EvaluationIdentity>,
     ActiveReblitRootFilesystemIntentError,
 > {
-    let evaluator = GluonRootFilesystemIntentEvaluator::new(budget)?;
-    let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
-        .expect("one validated root-filesystem adapter has no extension collision");
-    let evaluator = evaluators.get(language).ok_or(
-        ActiveReblitRootFilesystemIntentError::EvaluationContract {
-            reason: "root-filesystem source language has no registered evaluator",
-        },
-    )?;
+    // The root-filesystem normalization takes `&mut budget`, so the matching
+    // evaluator is constructed by language rather than held together in a set:
+    // two engines cannot borrow the budget mutably at once.
     let source = Source::new(logical_name, source_text);
-    evaluator.evaluate(&source).map_err(|error| match error {
+    if language == &gluon::language_spec() {
+        GluonRootFilesystemIntentEvaluator::new(budget)?
+            .evaluate(&source)
+            .map_err(lift_evaluation_error)
+    } else if language == &lua::language_spec() {
+        lua::LuaRootFilesystemIntentEvaluator::new(budget)?
+            .evaluate(&source)
+            .map_err(lift_evaluation_error)
+    } else {
+        Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
+            reason: "root-filesystem source language has no registered evaluator",
+        })
+    }
+}
+
+fn lift_evaluation_error(
+    error: DeclarationEvaluationError<ActiveReblitRootFilesystemIntentError>,
+) -> ActiveReblitRootFilesystemIntentError {
+    match error {
         DeclarationEvaluationError::Evaluation(source) => {
             ActiveReblitRootFilesystemIntentError::Evaluation(source)
         }
         DeclarationEvaluationError::Conversion(source) => source,
-    })
+    }
 }
 
 fn registered_declaration_languages() -> RegisteredLanguages {
-    RegisteredLanguages::new([gluon::language_spec()])
-        .expect("the one production root-filesystem language is unique")
+    RegisteredLanguages::new([gluon::language_spec(), lua::language_spec()])
+        .expect("the production root-filesystem languages register distinct extensions")
 }
 
 fn revalidate_installation_root(
