@@ -4,7 +4,7 @@ use thiserror::Error;
 use url::Url;
 
 /// Recipe-wide build options selected by a concrete package declaration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct OptionsSpec {
     pub toolchain: ToolchainSpec,
     pub cspgo: bool,
@@ -32,7 +32,7 @@ impl Default for OptionsSpec {
 }
 
 /// One explicitly named package tuning selection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct NamedTuningSpec {
     pub key: String,
     pub value: TuningSpec,
@@ -305,7 +305,8 @@ pub(crate) fn is_normalized_relative_path(value: &str) -> bool {
 }
 
 /// A package output path with its matching behavior encoded explicitly.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PathSpec {
     Any { path: String },
     Exe { path: String },
@@ -316,7 +317,8 @@ pub enum PathSpec {
 }
 
 /// One explicit package tuning selection.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TuningSpec {
     Enable,
     Disable,
@@ -324,7 +326,8 @@ pub enum TuningSpec {
 }
 
 /// A supported compiler toolchain.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolchainSpec {
     #[default]
     Llvm,
