@@ -362,7 +362,6 @@ mod tests {
     use std::error::Error as _;
 
     use fs_err as fs;
-    use gluon_config::{EvaluationFingerprint, ModuleFingerprint};
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -442,33 +441,40 @@ mod tests {
     }
 
     #[test]
-    fn registered_root_discovery_preserves_complete_v1_fingerprint_golden() {
+    fn registered_root_discovery_preserves_complete_identity_golden() {
         let policy = BuildPolicy::repository_for_tests();
+        let root = &policy.provenance.root;
 
+        assert_eq!(root.root_logical_name, "policy.glu");
         assert_eq!(
-            policy.provenance.root,
-            EvaluationFingerprint {
-                root_logical_name: "policy.glu".to_owned(),
-                root_source_sha256:
-                    "758b6ad54d17bf82273f1e6f31acca3a8edb27ea473e4af128e04b8232dcd688"
-                        .to_owned(),
-                imported_modules: vec![ModuleFingerprint {
-                    logical_name: "cast.build_policy.layers.v1".to_owned(),
-                    sha256:
-                        "c70b6d7a4f816d639615f034c84fefb0d3c4918db657c124987f7f37a3bdd064"
-                            .to_owned(),
-                }],
-                gluon_version: "0.18.3",
-                configuration_abi_version: 1,
-                evaluator_policy_version: 1,
-                explicit_inputs_sha256:
-                    "7eb290dd9156dc641eec6f827394f412e7ef295164c18cafbfa4b9e13e47d252"
-                        .to_owned(),
-                sha256:
-                    "d97bce90558c046c881d3dcaa1560c4c0bc014b0609c7b7593d81613600362f4"
-                        .to_owned(),
-            }
+            root.root_source_sha256,
+            "758b6ad54d17bf82273f1e6f31acca3a8edb27ea473e4af128e04b8232dcd688"
         );
+        assert_eq!(
+            root.modules
+                .iter()
+                .map(|module| (module.logical_name.as_str(), module.sha256.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                "cast.build_policy.layers.v1",
+                "c70b6d7a4f816d639615f034c84fefb0d3c4918db657c124987f7f37a3bdd064"
+            )]
+        );
+        assert_eq!(root.language.as_str(), "gluon");
+        assert_eq!(root.engine.implementation(), "gluon-vm");
+        assert_eq!(root.engine.version(), "0.18.3");
+        assert_eq!(root.configuration_abi.name(), "cast.configuration");
+        assert_eq!(root.configuration_abi.version(), "1");
+        assert_eq!(root.evaluator_policy.as_str(), "1");
+        assert_eq!(
+            root.explicit_inputs_sha256,
+            "4576620dd772958765bf3b4f6f6580679d3e2933294e406ea0f3d620e9f68ff1"
+        );
+        assert_eq!(
+            root.sha256,
+            "868b0ff848d3cab239c8c6bb17a071b426e644d899e4792cb6a87c561eab695d"
+        );
+        root.validate().unwrap();
     }
 
     #[test]
@@ -503,7 +509,7 @@ mod tests {
             policy
                 .provenance
                 .root
-                .imported_modules
+                .modules
                 .iter()
                 .any(|module| module.logical_name == "cast.build_policy.layers.v1")
         );
@@ -512,19 +518,19 @@ mod tests {
         assert_eq!(transition.evaluation.root_source_sha256.len(), 64);
         assert_eq!(transition.evaluation.explicit_inputs_sha256.len(), 64);
         assert_eq!(transition.evaluation.sha256.len(), 64);
-        assert_eq!(transition.evaluation.gluon_version, gluon_config::GLUON_VERSION);
+        assert_eq!(transition.evaluation.engine.version(), gluon_config::GLUON_VERSION);
         assert_eq!(
-            transition.evaluation.configuration_abi_version,
-            gluon_config::CONFIGURATION_ABI_VERSION
+            transition.evaluation.configuration_abi.version(),
+            gluon_config::CONFIGURATION_ABI_VERSION.to_string()
         );
         assert_eq!(
-            transition.evaluation.evaluator_policy_version,
-            gluon_config::EVALUATOR_POLICY_VERSION
+            transition.evaluation.evaluator_policy.as_str(),
+            gluon_config::EVALUATOR_POLICY_VERSION.to_string()
         );
         assert!(
             transition
                 .evaluation
-                .imported_modules
+                .modules
                 .iter()
                 .any(|module| module.logical_name == "cast.build_policy.v5")
         );
@@ -532,7 +538,7 @@ mod tests {
             assert!(
                 transition
                     .evaluation
-                    .imported_modules
+                    .modules
                     .iter()
                     .any(|module| module.logical_name == expected),
                 "missing repository policy module {expected} from evaluation provenance"
@@ -752,12 +758,12 @@ b.policy_patch {
             let baseline_transition = &baseline.provenance.layers[0].transitions[0].evaluation;
             let changed_transition = &changed.provenance.layers[0].transitions[0].evaluation;
             let baseline_module = baseline_transition
-                .imported_modules
+                .modules
                 .iter()
                 .find(|module| module.logical_name == logical_name)
                 .unwrap();
             let changed_module = changed_transition
-                .imported_modules
+                .modules
                 .iter()
                 .find(|module| module.logical_name == logical_name)
                 .unwrap();
@@ -782,7 +788,7 @@ b.policy_patch {
             policy
                 .provenance
                 .root
-                .imported_modules
+                .modules
                 .iter()
                 .all(|module| module.logical_name != "ignored.glu")
         );
@@ -791,7 +797,7 @@ b.policy_patch {
                 transition.evaluation.root_logical_name != "ignored.glu"
                     && transition
                         .evaluation
-                        .imported_modules
+                        .modules
                         .iter()
                         .all(|module| module.logical_name != "ignored.glu")
             })

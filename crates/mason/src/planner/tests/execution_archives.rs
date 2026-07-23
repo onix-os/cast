@@ -188,7 +188,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         if name == "factory-override" {
             let factory = recipe
                 .fingerprint
-                .imported_modules
+                .modules
                 .iter()
                 .find(|module| module.logical_name == "factory.glu")
                 .expect("factory-override: local Gluon factory is absent from recipe provenance");

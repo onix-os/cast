@@ -21,7 +21,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     Evaluation as DeclarationEvaluation, LanguageSpec, Source,
 };
-use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
+use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
 
 use crate::{Installation, installation};
@@ -62,7 +62,7 @@ pub(in crate::client) struct PreparedActiveReblitRootFilesystemIntent {
     source: RetainedRootFilesystemSource,
     source_text: Box<str>,
     value: RootFilesystemIntentValue,
-    fingerprint: EvaluationFingerprint,
+    fingerprint: EvaluationIdentity,
     #[cfg(test)]
     preparation_work: usize,
 }
@@ -212,7 +212,7 @@ impl PreparedActiveReblitRootFilesystemIntent {
         &self,
         evaluated: &DeclarationEvaluation<
             RootFilesystemIntentValue,
-            EvaluationFingerprint,
+            EvaluationIdentity,
         >,
     ) -> Result<(), ActiveReblitRootFilesystemIntentError> {
         if evaluated.value == self.value && evaluated.identity == self.fingerprint {
@@ -237,7 +237,7 @@ impl RevalidatedActiveReblitRootFilesystemIntent<'_> {
         &self.intent.value.kernel_argument
     }
 
-    pub(in crate::client) fn fingerprint(&self) -> &EvaluationFingerprint {
+    pub(in crate::client) fn fingerprint(&self) -> &EvaluationIdentity {
         &self.intent.fingerprint
     }
 }
@@ -474,7 +474,7 @@ fn evaluate_declaration(
     logical_name: &str,
     budget: &mut RootFilesystemIntentBudget,
 ) -> Result<
-    DeclarationEvaluation<RootFilesystemIntentValue, EvaluationFingerprint>,
+    DeclarationEvaluation<RootFilesystemIntentValue, EvaluationIdentity>,
     ActiveReblitRootFilesystemIntentError,
 > {
     let evaluator = GluonRootFilesystemIntentEvaluator::new(budget)?;
@@ -563,7 +563,7 @@ pub(in crate::client) enum ActiveReblitRootFilesystemIntentError {
     #[error(transparent)]
     Evaluation(#[from] gluon_config::Diagnostic),
     #[error(transparent)]
-    EvaluationFingerprint(#[from] EvaluationFingerprintValidationError),
+    EvaluationIdentity(#[from] EvaluationIdentityValidationError),
     #[error("unsafe root-filesystem intent inode at `{}`: {reason}", path.display())]
     UnsafeInode { path: PathBuf, reason: &'static str },
     #[error("root-filesystem intent changed at `{}`: {reason}", path.display())]

@@ -18,8 +18,8 @@ fn authored_intent_exposes_one_revalidated_root_token_and_exact_provenance() {
     let fingerprint = revalidated.fingerprint();
     fingerprint.validate().unwrap();
     assert_eq!(fingerprint.root_logical_name, "etc/cast/root-filesystem.glu");
-    assert_eq!(fingerprint.imported_modules.len(), 1);
-    assert_eq!(fingerprint.imported_modules[0].logical_name, "cast.root_filesystem.v1");
+    assert_eq!(fingerprint.modules.len(), 1);
+    assert_eq!(fingerprint.modules[0].logical_name, "cast.root_filesystem.v1");
 }
 
 #[test]
@@ -170,8 +170,8 @@ fn exact_source_and_embedded_abi_participate_in_a_deterministic_fingerprint() {
         .clone();
     assert_ne!(first_fingerprint.sha256, changed_fingerprint.sha256);
     assert_eq!(
-        first_fingerprint.imported_modules[0].sha256,
-        changed_fingerprint.imported_modules[0].sha256
+        first_fingerprint.modules[0].sha256,
+        changed_fingerprint.modules[0].sha256
     );
 }
 

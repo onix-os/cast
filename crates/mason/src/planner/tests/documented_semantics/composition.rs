@@ -10,7 +10,7 @@ fn assert_imports(plan: &DerivationPlan, expected: &[&str]) {
         assert!(
             plan.provenance
                 .recipe
-                .imported_modules
+                .modules
                 .iter()
                 .any(|module| module.logical_name == *logical_name),
             "frozen composition lost imported module {logical_name}"

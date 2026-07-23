@@ -58,7 +58,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
         assert!(
             plan.provenance
                 .recipe
-                .imported_modules
+                .modules
                 .iter()
                 .any(|imported| imported.logical_name == module),
             "the frozen interpreter suite lost imported module {module}"
@@ -415,11 +415,11 @@ pub(super) fn assert_source_and_import_invalidation(matrix: &PackageExampleMatri
 }
 
 fn imported_sha256<'a>(
-    fingerprint: &'a gluon_config::EvaluationFingerprint,
+    fingerprint: &'a gluon_config::EvaluationIdentity,
     logical_name: &str,
 ) -> &'a str {
     fingerprint
-        .imported_modules
+        .modules
         .iter()
         .find(|module| module.logical_name == logical_name)
         .unwrap_or_else(|| panic!("missing imported module {logical_name}"))

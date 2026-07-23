@@ -2,14 +2,12 @@ use std::convert::Infallible;
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationInputEvaluator,
-    Evaluation as DeclarationEvaluation,
+    Evaluation as DeclarationEvaluation, EvaluationIdentity,
 };
-use gluon_config::{
-    EvaluationFingerprint, GluonEngine, ImportPolicy, Limits, Source,
-};
+use gluon_config::{GluonEngine, ImportPolicy, Limits, Source};
 
 #[test]
-fn gluon_engine_returns_a_deterministic_valid_v1_result() {
+fn gluon_engine_returns_a_deterministic_valid_result() {
     let policy = ImportPolicy::new()
         .with_embedded_module("fixture.answer", "41")
         .unwrap();
@@ -25,11 +23,11 @@ fn gluon_engine_returns_a_deterministic_valid_v1_result() {
 
     assert_eq!(first, repeated);
     assert_eq!(first.value, 41);
-    assert_eq!(first.fingerprint.validate(), Ok(()));
+    assert_eq!(first.identity.validate(), Ok(()));
 }
 
 #[test]
-fn typed_input_role_matches_the_inherent_gluon_v1_pipeline() {
+fn typed_input_role_matches_the_inherent_gluon_pipeline() {
     let policy = ImportPolicy::new()
         .with_embedded_module("fixture.answer", "41")
         .unwrap();
@@ -41,7 +39,7 @@ fn typed_input_role_matches_the_inherent_gluon_v1_pipeline() {
         .evaluate_with_inputs::<i64>(&source, explicit_inputs)
         .unwrap();
     let typed: Result<
-        DeclarationEvaluation<i64, EvaluationFingerprint>,
+        DeclarationEvaluation<i64, EvaluationIdentity>,
         DeclarationEvaluationError<Infallible>,
     > = <GluonEngine as DeclarationInputEvaluator<i64>>::evaluate_with_inputs(
         &engine,
@@ -51,9 +49,11 @@ fn typed_input_role_matches_the_inherent_gluon_v1_pipeline() {
     let typed = typed.unwrap();
 
     assert_eq!(typed.value, inherent.value);
-    assert_eq!(typed.identity, inherent.fingerprint);
-    assert_eq!(typed.identity.configuration_abi_version, 1);
-    assert_eq!(typed.identity.evaluator_policy_version, 1);
+    assert_eq!(typed.identity, inherent.identity);
+    assert_eq!(typed.identity.configuration_abi.name(), "cast.configuration");
+    assert_eq!(typed.identity.configuration_abi.version(), "1");
+    assert_eq!(typed.identity.evaluator_policy.as_str(), "1");
+    assert_eq!(typed.identity.engine.implementation(), "gluon-vm");
     assert_eq!(typed.identity.validate(), Ok(()));
 
     let changed = <GluonEngine as DeclarationInputEvaluator<i64>>::evaluate_with_inputs(

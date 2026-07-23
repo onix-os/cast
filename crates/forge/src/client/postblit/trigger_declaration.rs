@@ -7,7 +7,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation,
     LanguageSpec, Limits, Source, SourceRoot,
 };
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use triggers::{
     GluonTriggerConversionError, GluonTriggerEvaluator,
     format::Trigger,
@@ -58,7 +58,7 @@ pub(super) struct SystemTriggerEvaluator {
 macro_rules! trigger_evaluator {
     ($evaluator:ty, $config:ty) => {
         impl DeclarationEvaluator<$config> for $evaluator {
-            type Identity = EvaluationFingerprint;
+            type Identity = EvaluationIdentity;
             type Error = GluonTriggerConversionError;
 
             fn language_spec(&self) -> &LanguageSpec {

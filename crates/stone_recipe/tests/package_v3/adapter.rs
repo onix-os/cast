@@ -2,13 +2,13 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     DeclarationInputEvaluator, Evaluation, Source, SourceRoot,
 };
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use stone_recipe::package::{
     GluonPackageEvaluator, PackageConversionError, PackageSpec,
 };
 
 pub(super) type PackageEvaluation =
-    Evaluation<PackageSpec, EvaluationFingerprint>;
+    Evaluation<PackageSpec, EvaluationIdentity>;
 pub(super) type PackageDeclarationError =
     DeclarationEvaluationError<PackageConversionError>;
 

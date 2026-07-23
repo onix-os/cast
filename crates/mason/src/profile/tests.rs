@@ -25,7 +25,7 @@ fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_
     assert!(
         fragment
             .evaluation
-            .imported_modules
+            .modules
             .iter()
             .all(|module| !Path::new(&module.logical_name).is_absolute())
     );
@@ -36,7 +36,7 @@ fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_
     assert!(
         fragment
             .evaluation
-            .imported_modules
+            .modules
             .iter()
             .all(|module| !module.logical_name.contains(host_root.as_ref()))
     );
@@ -116,7 +116,7 @@ fn manager_loads_direct_root_and_repository_defaults() {
     assert!(
         fragment
             .evaluation
-            .imported_modules
+            .modules
             .iter()
             .any(|module| module.logical_name == "cast.profile.v1")
     );

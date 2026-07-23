@@ -67,12 +67,12 @@ fn validation_requires_explicit_isolated_credentials() {
 fn complete_evaluation_fingerprint_is_part_of_canonical_identity() {
     let original = sample_plan();
     let original_id = original.derivation_id();
-    assert_eq!(original.provenance.recipe.imported_modules.len(), 1);
+    assert_eq!(original.provenance.recipe.modules.len(), 1);
     assert_eq!(
-        original.provenance.recipe.imported_modules[0].logical_name,
+        original.provenance.recipe.modules[0].logical_name,
         "sample.provenance"
     );
-    let mutations: Vec<NamedMutation<EvaluationFingerprint>> = vec![
+    let mutations: Vec<NamedMutation<EvaluationIdentity>> = vec![
         (
             "root-logical-name",
             Box::new(|fingerprint| fingerprint.root_logical_name.push_str("-changed")),
@@ -83,23 +83,27 @@ fn complete_evaluation_fingerprint_is_part_of_canonical_identity() {
         ),
         (
             "import-logical-name",
-            Box::new(|fingerprint| fingerprint.imported_modules[0].logical_name.push_str("-changed")),
+            Box::new(|fingerprint| fingerprint.modules[0].logical_name.push_str("-changed")),
         ),
         (
             "import-sha256",
-            Box::new(|fingerprint| fingerprint.imported_modules[0].sha256.push('0')),
+            Box::new(|fingerprint| fingerprint.modules[0].sha256.push('0')),
         ),
         (
-            "gluon-version",
-            Box::new(|fingerprint| fingerprint.gluon_version = "test-gluon-version"),
+            "module-identity",
+            Box::new(|identity| identity.modules[0].identity.push_str("-changed")),
         ),
         (
-            "configuration-abi",
-            Box::new(|fingerprint| fingerprint.configuration_abi_version += 1),
+            "module-class",
+            Box::new(|identity| identity.modules[0].class = ModuleClass::External),
         ),
         (
-            "evaluator-policy-abi",
-            Box::new(|fingerprint| fingerprint.evaluator_policy_version += 1),
+            "source-profile",
+            Box::new(|identity| identity.source_profile.push_str("-changed")),
+        ),
+        (
+            "resource-policy",
+            Box::new(|identity| identity.resource_policy_sha256.push('0')),
         ),
         (
             "explicit-inputs-sha256",
@@ -198,7 +202,7 @@ fn v2_provenance_aggregate_helpers_preserve_nested_semantics() {
     profiles[0].logical_name.push_str("-changed");
     assert_ne!(profile_identity, profile_aggregate_fingerprint(&profiles));
     profiles = provenance.profiles.clone();
-    profiles[0].evaluation.evaluator_policy_version += 1;
+    profiles[0].evaluation.source_profile.push_str("-changed");
     assert_ne!(profile_identity, profile_aggregate_fingerprint(&profiles));
 
     let mut layers = provenance.policy.layers.clone();
@@ -215,7 +219,7 @@ fn v2_provenance_aggregate_helpers_preserve_nested_semantics() {
         policy_composition_identity(&provenance.policy.name, &layers)
     );
     layers = provenance.policy.layers.clone();
-    layers[0].transitions[0].evaluation.configuration_abi_version += 1;
+    layers[0].transitions[0].evaluation.resource_policy_sha256.push('0');
     assert_ne!(
         policy_identity,
         policy_composition_identity(&provenance.policy.name, &layers)
@@ -253,7 +257,7 @@ fn validation_rejects_invalid_nested_evaluation_fingerprints_at_the_exact_field(
         corrupt(&mut plan);
         assert!(matches!(
             plan.validate(),
-            Err(DerivationValidationError::InvalidEvaluationFingerprint { field, .. })
+            Err(DerivationValidationError::InvalidEvaluationIdentity { field, .. })
                 if field == expected
         ));
     }
@@ -267,9 +271,9 @@ fn validation_rejects_ambient_or_non_normalized_provenance_names() {
             Box::new(|plan| plan.provenance.recipe.root_logical_name = "/home/user/stone.glu".to_owned()),
         ),
         (
-            "provenance.recipe.imported_modules[0].logical_name",
+            "provenance.recipe.modules[0].logical_name",
             Box::new(|plan| {
-                plan.provenance.recipe.imported_modules[0].logical_name = "nested/../module.glu".to_owned();
+                plan.provenance.recipe.modules[0].logical_name = "nested/../module.glu".to_owned();
             }),
         ),
         (

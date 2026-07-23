@@ -6,7 +6,7 @@ use declarative_config::{
     LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{
-    Diagnostic, Evaluation as GluonEvaluation, EvaluationFingerprint,
+    Diagnostic, Evaluation as GluonEvaluation, EvaluationIdentity,
     GluonEngine, Source,
 };
 use thiserror::Error;
@@ -177,7 +177,7 @@ where
 }
 
 impl DeclarationEvaluator<Trigger> for GluonTriggerEvaluator {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = GluonTriggerConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -230,12 +230,12 @@ impl DeclarationInputEvaluator<Trigger> for GluonTriggerEvaluator {
 fn convert_evaluation(
     evaluation: GluonEvaluation<GluonTriggerSpec>,
 ) -> Result<
-    DeclarationEvaluation<Trigger, EvaluationFingerprint>,
+    DeclarationEvaluation<Trigger, EvaluationIdentity>,
     GluonTriggerConversionError,
 > {
     if !evaluation
-        .fingerprint
-        .imported_modules
+        .identity
+        .modules
         .iter()
         .any(|module| module.logical_name == "cast.trigger.v1")
     {
@@ -245,6 +245,6 @@ fn convert_evaluation(
 
     Ok(DeclarationEvaluation {
         value: trigger,
-        identity: evaluation.fingerprint,
+        identity: evaluation.identity,
     })
 }

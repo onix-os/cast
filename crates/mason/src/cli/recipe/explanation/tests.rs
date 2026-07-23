@@ -2,7 +2,7 @@
 mod tests {
     use std::collections::BTreeMap;
 
-    use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy, Source};
+    use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy, Source};
     use stone_recipe::{
         build_policy::{AnalyzerKind, layers::BuildPolicyOperation},
         derivation::{
@@ -35,14 +35,14 @@ mod tests {
         }
     }
 
-    fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+    fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
         GluonEngine::default()
             .evaluate_with_inputs::<i64>(&Source::new(logical_name, source), explicit_inputs)
             .expect("fixture evaluation must succeed")
-            .fingerprint
+            .identity
     }
 
-    fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+    fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
         let policy = ImportPolicy::new()
             .with_embedded_module("fixture.provenance", "41")
             .expect("fixture module name must be valid");
@@ -53,7 +53,7 @@ mod tests {
                 explicit_inputs,
             )
             .expect("fixture import evaluation must succeed")
-            .fingerprint
+            .identity
     }
 
     fn fixture() -> Fixture {

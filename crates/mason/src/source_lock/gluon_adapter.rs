@@ -7,7 +7,7 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
-use gluon_config::{EvaluationFingerprint, GluonEngine};
+use gluon_config::{EvaluationIdentity, GluonEngine};
 
 use super::{ArchiveResolution, GitResolution, SourceLock, SourceResolution, ValidationError};
 
@@ -135,7 +135,7 @@ impl GluonSourceLockCodec {
 }
 
 impl DeclarationEvaluator<SourceLock> for GluonSourceLockCodec {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = ValidationError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -169,7 +169,7 @@ impl DeclarationEvaluator<SourceLock> for GluonSourceLockCodec {
             .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(DeclarationEvaluation {
             value: lock,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }

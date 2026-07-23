@@ -2,7 +2,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     DeclarationInputEvaluator, Evaluation,
 };
-use gluon_config::{DiagnosticCategory, EvaluationFingerprint, Source};
+use gluon_config::{DiagnosticCategory, EvaluationIdentity, Source};
 use fnmatch::Pattern;
 use triggers::{
     Collection, GluonTriggerConversionError, GluonTriggerEvaluator,
@@ -86,7 +86,7 @@ fn authored(body: &str) -> Source {
 fn evaluate_trigger(
     source: &Source,
 ) -> Result<
-    Evaluation<Trigger, EvaluationFingerprint>,
+    Evaluation<Trigger, EvaluationIdentity>,
     DeclarationEvaluationError<GluonTriggerConversionError>,
 > {
     <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
@@ -99,7 +99,7 @@ fn evaluate_trigger_with_inputs(
     source: &Source,
     explicit_inputs: &[u8],
 ) -> Result<
-    Evaluation<Trigger, EvaluationFingerprint>,
+    Evaluation<Trigger, EvaluationIdentity>,
     DeclarationEvaluationError<GluonTriggerConversionError>,
 > {
     <GluonTriggerEvaluator as DeclarationInputEvaluator<Trigger>>::evaluate_with_inputs(
@@ -326,11 +326,11 @@ let base = cast.trigger "fingerprint" "Fingerprint"
         normalized_trigger_value(&first.value)
     );
     assert_eq!(TRIGGER_ABI_VERSION, 1);
-    assert_eq!(first.identity.configuration_abi_version, TRIGGER_ABI_VERSION);
+    assert_eq!(first.identity.configuration_abi.version(), "1");
     assert_eq!(
         first
             .identity
-            .imported_modules
+            .modules
             .iter()
             .map(|module| module.logical_name.as_str())
             .collect::<Vec<_>>(),

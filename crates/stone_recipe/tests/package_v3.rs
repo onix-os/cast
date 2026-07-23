@@ -192,7 +192,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     assert!(
         evaluated
             .identity
-            .imported_modules
+            .modules
             .iter()
             .any(|module| module.logical_name == "cast.package.v3")
     );

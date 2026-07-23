@@ -18,7 +18,7 @@ use declarative_config::{
     LanguageSpec, Limits, Source, SourceRoot,
 };
 use fs_err as fs;
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{
     BuilderSpec, GluonPackageEvaluator, HooksSpec, PackageConversionError,
@@ -41,7 +41,7 @@ pub struct Recipe {
     /// Concrete package-v3 declaration produced by the authored factory.
     pub declaration: PackageSpec,
     pub source_lock: Option<SourceLock>,
-    pub fingerprint: EvaluationFingerprint,
+    pub fingerprint: EvaluationIdentity,
     pub build_time: DateTime<Utc>,
 }
 
@@ -81,7 +81,7 @@ impl Recipe {
         source: String,
         declaration: PackageSpec,
         source_lock: Option<SourceLock>,
-        fingerprint: EvaluationFingerprint,
+        fingerprint: EvaluationIdentity,
         explicit_build_time: Option<DateTime<Utc>>,
     ) -> Result<Self, Error> {
         let build_time = explicit_build_time
@@ -170,7 +170,7 @@ enum SourceLockPolicy {
 fn load_recipe_declaration(
     path: &Path,
     source_lock_policy: SourceLockPolicy,
-) -> Result<(String, PackageSpec, Option<SourceLock>, EvaluationFingerprint), Error> {
+) -> Result<(String, PackageSpec, Option<SourceLock>, EvaluationIdentity), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
     let package = GluonPackageEvaluator::default();
     let language =
@@ -271,7 +271,7 @@ struct RecipeDeclarationEvaluator {
 }
 
 impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = PackageConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -679,7 +679,7 @@ let base = cast.mk_package (cast.meta {SOURCE_SPEC})
         assert_eq!(fingerprint.root_source_sha256.len(), 64);
         assert!(
             fingerprint
-                .imported_modules
+                .modules
                 .iter()
                 .any(|module| module.logical_name == "cast.package.v3")
         );
@@ -718,12 +718,16 @@ cast.mk_package (cast.meta source)
         assert_eq!(recipe.path, root.path().join("stone.glu").canonicalize().unwrap());
         assert_eq!(recipe.declaration.meta.version, "1.2.3");
         assert_eq!(fingerprint.root_logical_name, RECIPE_ROOT_LOGICAL_NAME_V1);
+        let mut modules = fingerprint
+            .modules
+            .iter()
+            .map(|module| module.logical_name.as_str())
+            .collect::<Vec<_>>();
+        // v2 identity orders modules by canonical graph identity; assert
+        // membership independent of that ordering.
+        modules.sort_unstable();
         assert_eq!(
-            fingerprint
-                .imported_modules
-                .iter()
-                .map(|module| module.logical_name.as_str())
-                .collect::<Vec<_>>(),
+            modules,
             [
                 "cast.package.v3",
                 "source.glu",

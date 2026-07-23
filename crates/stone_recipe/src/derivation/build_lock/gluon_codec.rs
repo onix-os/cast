@@ -4,7 +4,7 @@ use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
-use gluon_config::{EvaluationFingerprint, GluonEngine, Source};
+use gluon_config::{EvaluationIdentity, GluonEngine, Source};
 
 use super::{
     AnalyzerRole, BuildLock, BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole,
@@ -159,7 +159,7 @@ impl GluonBuildLockCodec {
 }
 
 impl DeclarationEvaluator<BuildLock> for GluonBuildLockCodec {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = BuildLockValidationError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -194,7 +194,7 @@ impl DeclarationEvaluator<BuildLock> for GluonBuildLockCodec {
             .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(DeclarationEvaluation {
             value: lock,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }

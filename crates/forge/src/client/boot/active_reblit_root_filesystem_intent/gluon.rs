@@ -11,7 +11,7 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
-use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy};
+use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
 use super::{
     ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue, normalization,
@@ -76,7 +76,7 @@ impl<'budget> GluonRootFilesystemIntentEvaluator<'budget> {
 impl DeclarationEvaluator<RootFilesystemIntentValue>
     for GluonRootFilesystemIntentEvaluator<'_>
 {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = ActiveReblitRootFilesystemIntentError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -109,7 +109,7 @@ impl DeclarationEvaluator<RootFilesystemIntentValue>
         budget
             .require_deadline()
             .map_err(DeclarationEvaluationError::Conversion)?;
-        require_fingerprint_contract(&evaluation.fingerprint)
+        require_fingerprint_contract(&evaluation.identity)
             .map_err(DeclarationEvaluationError::Conversion)?;
 
         let value = normalization::materialize_root_argument(
@@ -122,13 +122,13 @@ impl DeclarationEvaluator<RootFilesystemIntentValue>
             .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(DeclarationEvaluation {
             value,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }
 
 fn require_fingerprint_contract(
-    fingerprint: &EvaluationFingerprint,
+    fingerprint: &EvaluationIdentity,
 ) -> Result<(), ActiveReblitRootFilesystemIntentError> {
     fingerprint.validate()?;
     if fingerprint.root_logical_name != SOURCE_LOGICAL_NAME {
@@ -141,8 +141,8 @@ fn require_fingerprint_contract(
             reason: "root-filesystem evaluation admitted explicit external inputs",
         });
     }
-    if fingerprint.imported_modules.len() != 1
-        || fingerprint.imported_modules[0].logical_name != ROOT_FILESYSTEM_ABI_NAME
+    if fingerprint.modules.len() != 1
+        || fingerprint.modules[0].logical_name != ROOT_FILESYSTEM_ABI_NAME
     {
         return Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
             reason: "root-filesystem intent must import exactly cast.root_filesystem.v1",

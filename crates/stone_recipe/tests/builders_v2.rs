@@ -1,5 +1,5 @@
 use declarative_config::{DeclarationEvaluationError, DeclarationEvaluator, Evaluation, Source};
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use stone_recipe::package::{
     BuilderEnvironmentSpec, DependencySpec, GluonPackageEvaluator, PackageConversionError,
     PackageSpec, ProgramSpec, StepSpec, SupportedHooksSpec,
@@ -8,7 +8,7 @@ use stone_recipe::package::{
 fn evaluate_package(
     source: &Source,
 ) -> Result<
-    Evaluation<PackageSpec, EvaluationFingerprint>,
+    Evaluation<PackageSpec, EvaluationIdentity>,
     DeclarationEvaluationError<PackageConversionError>,
 > {
     DeclarationEvaluator::<PackageSpec>::evaluate(&GluonPackageEvaluator::default(), source)
@@ -90,7 +90,7 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
     assert!(
         evaluated
             .identity
-            .imported_modules
+            .modules
             .iter()
             .any(|module| module.logical_name == "cast.builders.meson.v2")
     );

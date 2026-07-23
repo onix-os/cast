@@ -2,13 +2,13 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     DeclarationInputEvaluator, Evaluation, Source,
 };
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use stone_recipe::build_policy::layers::{
     BuildPolicyLayerEntrySpec, BuildPolicyLayerSpec, BuildPolicyOperation, BuildPolicyRootConversionError,
     BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
 };
 
-type RootEvaluation = Evaluation<BuildPolicyRootSpec, EvaluationFingerprint>;
+type RootEvaluation = Evaluation<BuildPolicyRootSpec, EvaluationIdentity>;
 type RootEvaluationError =
     DeclarationEvaluationError<BuildPolicyRootConversionError>;
 
@@ -94,7 +94,7 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
     assert!(
         evaluated
             .identity
-            .imported_modules
+            .modules
             .iter()
             .any(|module| module.logical_name == "cast.build_policy.layers.v1")
     );

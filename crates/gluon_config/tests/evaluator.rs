@@ -23,10 +23,11 @@ fn evaluates_a_typed_record_literal() {
             generation: 1,
         }
     );
-    assert_eq!(evaluation.fingerprint.gluon_version, "0.18.3");
-    assert_eq!(evaluation.fingerprint.root_logical_name, "literal.glu");
-    assert!(evaluation.fingerprint.imported_modules.is_empty());
-    assert_eq!(evaluation.fingerprint.validate(), Ok(()));
+    assert_eq!(evaluation.identity.engine.implementation(), "gluon-vm");
+    assert_eq!(evaluation.identity.engine.version(), "0.18.3");
+    assert_eq!(evaluation.identity.root_logical_name, "literal.glu");
+    assert!(evaluation.identity.modules.is_empty());
+    assert_eq!(evaluation.identity.validate(), Ok(()));
 }
 
 #[test]
@@ -36,13 +37,13 @@ fn root_logical_name_participates_in_the_evaluation_identity() {
     let renamed = evaluator.evaluate::<i64>(&Source::new("renamed.glu", "42")).unwrap();
 
     assert_eq!(first.value, renamed.value);
-    assert_eq!(first.fingerprint.root_logical_name, "first.glu");
-    assert_eq!(renamed.fingerprint.root_logical_name, "renamed.glu");
+    assert_eq!(first.identity.root_logical_name, "first.glu");
+    assert_eq!(renamed.identity.root_logical_name, "renamed.glu");
     assert_eq!(
-        first.fingerprint.root_source_sha256,
-        renamed.fingerprint.root_source_sha256
+        first.identity.root_source_sha256,
+        renamed.identity.root_source_sha256
     );
-    assert_ne!(first.fingerprint.sha256, renamed.fingerprint.sha256);
+    assert_ne!(first.identity.sha256, renamed.identity.sha256);
 }
 
 #[test]
@@ -65,8 +66,8 @@ array.append ["one"] ["two"]"#,
     assert_eq!(evaluated.value, ["one", "two"]);
     assert!(
         evaluated
-            .fingerprint
-            .imported_modules
+            .identity
+            .modules
             .iter()
             .any(|module| module.logical_name == "std.array.prim")
     );
@@ -104,7 +105,7 @@ array.append ["one"] ["two"]"#,
             .evaluate::<Vec<String>>(&source)
             .unwrap();
         assert_eq!(evaluated.value, ["one", "two"]);
-        assert_eq!(evaluated.fingerprint, expected.fingerprint);
+        assert_eq!(evaluated.identity, expected.identity);
     }
 }
 
@@ -127,7 +128,7 @@ second.append ["one"] ["two"]"#,
     .unwrap();
 
     assert_eq!(evaluated.value, ["one", "two"]);
-    assert_eq!(evaluated.fingerprint.imported_modules.len(), 1);
+    assert_eq!(evaluated.identity.modules.len(), 1);
 }
 
 #[test]
@@ -138,8 +139,8 @@ fn fingerprints_source_and_explicit_inputs() {
     let repeated = evaluator.evaluate_with_inputs::<i64>(&source, b"first").unwrap();
     let changed = evaluator.evaluate_with_inputs::<i64>(&source, b"second").unwrap();
 
-    assert_eq!(first.fingerprint, repeated.fingerprint);
-    assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
+    assert_eq!(first.identity, repeated.identity);
+    assert_ne!(first.identity.sha256, changed.identity.sha256);
 }
 
 #[test]
@@ -301,8 +302,8 @@ fn evaluates_a_contained_relative_import() {
     let evaluation = evaluator.evaluate::<i64>(&source).unwrap();
 
     assert_eq!(evaluation.value, 42);
-    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
-    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "answer.glu");
+    assert_eq!(evaluation.identity.modules.len(), 1);
+    assert_eq!(evaluation.identity.modules[0].logical_name, "answer.glu");
 }
 
 #[test]
@@ -321,8 +322,8 @@ fn nested_relative_imports_resolve_from_the_importing_module() {
     assert_eq!(evaluation.value, 42);
     assert_eq!(
         evaluation
-            .fingerprint
-            .imported_modules
+            .identity
+            .modules
             .iter()
             .map(|module| module.logical_name.as_str())
             .collect::<Vec<_>>(),
@@ -341,8 +342,8 @@ fn evaluates_an_explicit_embedded_module() {
         .unwrap();
 
     assert_eq!(evaluation.value, 42);
-    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
-    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "cast.answer");
+    assert_eq!(evaluation.identity.modules.len(), 1);
+    assert_eq!(evaluation.identity.modules[0].logical_name, "cast.answer");
 }
 
 #[test]
@@ -587,10 +588,10 @@ fn imported_content_changes_the_evaluation_fingerprint() {
     assert_eq!(first.value, 41);
     assert_eq!(changed.value, 42);
     assert_ne!(
-        first.fingerprint.imported_modules[0].sha256,
-        changed.fingerprint.imported_modules[0].sha256
+        first.identity.modules[0].sha256,
+        changed.identity.modules[0].sha256
     );
-    assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
+    assert_ne!(first.identity.sha256, changed.identity.sha256);
 }
 
 #[test]
@@ -606,8 +607,8 @@ fn import_aliases_share_a_stable_logical_identity() {
     let evaluation = evaluator.evaluate::<i64>(&source).unwrap();
 
     assert_eq!(evaluation.value, 42);
-    assert_eq!(evaluation.fingerprint.imported_modules.len(), 1);
-    assert_eq!(evaluation.fingerprint.imported_modules[0].logical_name, "answer.glu");
+    assert_eq!(evaluation.identity.modules.len(), 1);
+    assert_eq!(evaluation.identity.modules[0].logical_name, "answer.glu");
 }
 
 #[cfg(unix)]
@@ -637,7 +638,7 @@ fn portable_path(path: &Path) -> String {
 }
 
 #[test]
-fn full_fingerprint_v1_fields_and_hashes_are_frozen() {
+fn full_identity_fields_and_hashes_are_frozen() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("z.glu"), "1").unwrap();
     fs::write(directory.path().join("a.glu"), "41").unwrap();
@@ -651,15 +652,15 @@ fn full_fingerprint_v1_fields_and_hashes_are_frozen() {
         .unwrap();
 
     assert_eq!(evaluation.value, 41);
-    let fingerprint = evaluation.fingerprint;
-    assert_eq!(fingerprint.root_logical_name, "root.glu");
+    let identity = evaluation.identity;
+    assert_eq!(identity.root_logical_name, "root.glu");
     assert_eq!(
-        fingerprint.root_source_sha256,
+        identity.root_source_sha256,
         "5f50214cf87556218166a815eed07d3adddd95d7cef230041dbfc02d07b6f6c5"
     );
     assert_eq!(
-        fingerprint
-            .imported_modules
+        identity
+            .modules
             .iter()
             .map(|module| (module.logical_name.as_str(), module.sha256.as_str()))
             .collect::<Vec<_>>(),
@@ -674,24 +675,27 @@ fn full_fingerprint_v1_fields_and_hashes_are_frozen() {
             ),
         ]
     );
-    assert_eq!(fingerprint.gluon_version, "0.18.3");
-    assert_eq!(fingerprint.configuration_abi_version, 1);
-    assert_eq!(fingerprint.evaluator_policy_version, 1);
+    assert_eq!(identity.language.as_str(), "gluon");
+    assert_eq!(identity.engine.implementation(), "gluon-vm");
+    assert_eq!(identity.engine.version(), "0.18.3");
+    assert_eq!(identity.configuration_abi.name(), "cast.configuration");
+    assert_eq!(identity.configuration_abi.version(), "1");
+    assert_eq!(identity.evaluator_policy.as_str(), "1");
     assert_eq!(
-        fingerprint.explicit_inputs_sha256,
+        identity.explicit_inputs_sha256,
         "10cb3e66d2e2d8b3473f106fa7d4c10e1d6628bf56523183d317d4a8d6fb9324"
     );
     assert_eq!(
-        fingerprint.sha256,
-        "9a12e007085f94b216112f6c0d32ce24ac96ad2eafc8c4526b8619af0e1b889d"
+        identity.sha256,
+        "40d10c12f0821872d692f72b4cdfe5b2ebe49a9bfad9be7dbfe0f0a87e7458ca"
     );
-    assert_eq!(fingerprint.validate(), Ok(()));
+    assert_eq!(identity.validate(), Ok(()));
 }
 
 const PROCESS_FINGERPRINT_MARKER: &str = "cast-process-fingerprint:";
 
 #[test]
-fn fingerprint_v1_is_stable_across_fresh_processes() {
+fn identity_is_stable_across_fresh_processes() {
     let executable = env::current_exe().unwrap();
     let evaluate = || {
         let output = Command::new(&executable)
@@ -724,7 +728,7 @@ fn fingerprint_v1_is_stable_across_fresh_processes() {
 }
 
 #[test]
-#[ignore = "spawned by fingerprint_v1_is_stable_across_fresh_processes"]
+#[ignore = "spawned by identity_is_stable_across_fresh_processes"]
 fn fingerprint_v1_process_probe() {
     if env::var_os("CAST_FINGERPRINT_PROCESS_PROBE").is_none() {
         return;
@@ -740,7 +744,7 @@ fn fingerprint_v1_process_probe() {
             b"process-input:v1",
         )
         .unwrap();
-    println!("{PROCESS_FINGERPRINT_MARKER}{}", evaluation.fingerprint.sha256);
+    println!("{PROCESS_FINGERPRINT_MARKER}{}", evaluation.identity.sha256);
 }
 
 #[test]

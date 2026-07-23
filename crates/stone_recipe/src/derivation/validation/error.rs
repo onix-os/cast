@@ -1,4 +1,4 @@
-use gluon_config::EvaluationFingerprintValidationError;
+use gluon_config::EvaluationIdentityValidationError;
 use thiserror::Error;
 
 use crate::{build_policy::layers::BuildPolicyOperation, spec::SourceUrlValidationError};
@@ -28,11 +28,11 @@ pub enum DerivationValidationError {
     InvalidArtifactComponent { field: String, value: String },
     #[error("package.version: version must start with an integer (found {value:?})")]
     InvalidPackageVersion { value: String },
-    #[error("{field}: invalid evaluation fingerprint: {source}")]
-    InvalidEvaluationFingerprint {
+    #[error("{field}: invalid evaluation identity: {source}")]
+    InvalidEvaluationIdentity {
         field: String,
         #[source]
-        source: EvaluationFingerprintValidationError,
+        source: EvaluationIdentityValidationError,
     },
     #[error("{field}: logical name {value:?} must be normalized and relative")]
     InvalidLogicalName { field: String, value: String },

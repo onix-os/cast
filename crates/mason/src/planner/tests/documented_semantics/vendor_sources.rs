@@ -148,7 +148,7 @@ pub(super) fn assert_semantics(
         assert!(
             plan.provenance
                 .recipe
-                .imported_modules
+                .modules
                 .iter()
                 .any(|imported| imported.logical_name == module),
             "independent vendor plan lost imported module {module}"

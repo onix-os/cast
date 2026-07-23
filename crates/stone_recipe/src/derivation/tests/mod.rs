@@ -1,4 +1,4 @@
-use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy, Source};
+use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy, ModuleClass, Source};
 use stone::relation::{Dependency, Kind as StoneRelationKind};
 
 use crate::{build_policy::layers::BuildPolicyOperation, spec::SourceUrlValidationError};
@@ -8,14 +8,14 @@ use super::*;
 const SOURCE_LOCK_BYTES: &[u8] = b"canonical sample source lock";
 type NamedMutation<T> = (&'static str, Box<dyn Fn(&mut T)>);
 
-fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+fn evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
     GluonEngine::default()
         .evaluate_with_inputs::<i64>(&Source::new(logical_name, source), explicit_inputs)
         .unwrap()
-        .fingerprint
+        .identity
 }
 
-fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationFingerprint {
+fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> EvaluationIdentity {
     let policy = ImportPolicy::new()
         .with_embedded_module("sample.provenance", "4")
         .unwrap();
@@ -23,7 +23,7 @@ fn evaluation_with_import(logical_name: &str, explicit_inputs: &[u8]) -> Evaluat
         .with_import_policy(policy)
         .evaluate_with_inputs::<i64>(&Source::new(logical_name, "import! sample.provenance"), explicit_inputs)
         .unwrap()
-        .fingerprint
+        .identity
 }
 
 fn sample_provenance() -> DerivationProvenance {

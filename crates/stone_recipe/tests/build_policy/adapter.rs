@@ -2,12 +2,12 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     DeclarationInputEvaluator, Evaluation, Source, SourceRoot,
 };
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use stone_recipe::build_policy::{
     BuildPolicyConversionError, BuildPolicySpec, GluonBuildPolicyEvaluator,
 };
 
-type PolicyEvaluation = Evaluation<BuildPolicySpec, EvaluationFingerprint>;
+type PolicyEvaluation = Evaluation<BuildPolicySpec, EvaluationIdentity>;
 type PolicyEvaluationError =
     DeclarationEvaluationError<BuildPolicyConversionError>;
 

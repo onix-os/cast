@@ -8,7 +8,7 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
-use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy};
+use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
 use super::{
     Map, ProfileConversionError, ProfileSpec, RepositorySourceSpec,
@@ -177,7 +177,7 @@ impl From<GluonRepositorySourceSpec> for RepositorySourceSpec {
 }
 
 impl DeclarationEvaluator<Map> for ProfileCodec {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = ProfileConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -211,7 +211,7 @@ impl DeclarationEvaluator<Map> for ProfileCodec {
 
         Ok(DeclarationEvaluation {
             value,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }

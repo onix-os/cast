@@ -30,8 +30,8 @@ fn alias_intent_exposes_only_revalidated_typed_identity_and_exact_provenance() {
     let fingerprint = revalidated.fingerprint();
     fingerprint.validate().unwrap();
     assert_eq!(fingerprint.root_logical_name, "etc/cast/boot-topology.glu");
-    assert_eq!(fingerprint.imported_modules.len(), 1);
-    assert_eq!(fingerprint.imported_modules[0].logical_name, "cast.boot_topology.v2");
+    assert_eq!(fingerprint.modules.len(), 1);
+    assert_eq!(fingerprint.modules[0].logical_name, "cast.boot_topology.v2");
 }
 
 #[test]
@@ -273,8 +273,8 @@ fn exact_source_and_embedded_abi_participate_in_deterministic_fingerprint() {
         .clone();
     assert_ne!(first_fingerprint.sha256, changed_fingerprint.sha256);
     assert_eq!(
-        first_fingerprint.imported_modules[0].sha256,
-        changed_fingerprint.imported_modules[0].sha256
+        first_fingerprint.modules[0].sha256,
+        changed_fingerprint.modules[0].sha256
     );
 }
 

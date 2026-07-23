@@ -7,7 +7,7 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
-use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy};
+use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
 use super::{
     ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
@@ -92,7 +92,7 @@ impl<'budget> GluonBootTopologyIntentEvaluator<'budget> {
 impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
     for GluonBootTopologyIntentEvaluator<'_>
 {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = ActiveReblitBootTopologyIntentError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -127,7 +127,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
         self.budget
             .require_deadline()
             .map_err(DeclarationEvaluationError::Conversion)?;
-        require_fingerprint_contract(&evaluation.fingerprint)
+        require_fingerprint_contract(&evaluation.identity)
             .map_err(DeclarationEvaluationError::Conversion)?;
 
         let value = ActiveReblitBootTopologyIntentValue::try_from(evaluation.value)
@@ -137,13 +137,13 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
             .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(DeclarationEvaluation {
             value,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }
 
 fn require_fingerprint_contract(
-    fingerprint: &EvaluationFingerprint,
+    fingerprint: &EvaluationIdentity,
 ) -> Result<(), ActiveReblitBootTopologyIntentError> {
     fingerprint.validate()?;
     if fingerprint.root_logical_name != SOURCE_LOGICAL_NAME {
@@ -156,7 +156,7 @@ fn require_fingerprint_contract(
             reason: "boot-topology evaluation admitted explicit external inputs",
         });
     }
-    if fingerprint.imported_modules.len() != 1 || fingerprint.imported_modules[0].logical_name != BOOT_TOPOLOGY_ABI_NAME
+    if fingerprint.modules.len() != 1 || fingerprint.modules[0].logical_name != BOOT_TOPOLOGY_ABI_NAME
     {
         return Err(ActiveReblitBootTopologyIntentError::EvaluationContract {
             reason: "boot-topology intent must import exactly cast.boot_topology.v2",

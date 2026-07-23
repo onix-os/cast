@@ -2,14 +2,14 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     DeclarationInputEvaluator, Evaluation, Source, SourceRoot,
 };
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use stone_recipe::build_policy::{
     AnalyzerKind, ArrayPatch, BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
     EnvironmentBindingSpec, EnvironmentCondition, GluonBuildPolicyEvaluator, RetiredTargetPolicySpec, TextSpec,
     ValuePatch,
 };
 
-type PatchEvaluation = Evaluation<BuildPolicyPatchSpec, EvaluationFingerprint>;
+type PatchEvaluation = Evaluation<BuildPolicyPatchSpec, EvaluationIdentity>;
 type PolicyEvaluationError = DeclarationEvaluationError<BuildPolicyConversionError>;
 
 fn repository_policy() -> BuildPolicySpec {

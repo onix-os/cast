@@ -17,7 +17,7 @@ use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
     Source,
 };
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use thiserror::Error;
 
 use crate::{Package, dependency, repository};
@@ -60,7 +60,7 @@ pub struct SystemModel {
     pub repositories: repository::Map,
     pub packages: BTreeSet<dependency::Provider>,
     generated_snapshot: String,
-    fingerprint: EvaluationFingerprint,
+    fingerprint: EvaluationIdentity,
     source_fingerprint: Option<String>,
 }
 
@@ -70,7 +70,7 @@ impl SystemModel {
         &self.generated_snapshot
     }
 
-    pub fn fingerprint(&self) -> &EvaluationFingerprint {
+    pub fn fingerprint(&self) -> &EvaluationIdentity {
         &self.fingerprint
     }
 
@@ -83,7 +83,7 @@ impl SystemModel {
     pub(super) fn from_generated(
         parts: SystemParts,
         generated_snapshot: String,
-        fingerprint: EvaluationFingerprint,
+        fingerprint: EvaluationIdentity,
     ) -> Self {
         Self {
             disable_warning: parts.disable_warning,
@@ -121,9 +121,9 @@ pub struct LoadedSystemModel {
 #[derive(Debug, Clone)]
 struct LoadedProvenance {
     authored_source: String,
-    authored_fingerprint: EvaluationFingerprint,
+    authored_fingerprint: EvaluationIdentity,
     generated_snapshot: String,
-    generated_fingerprint: EvaluationFingerprint,
+    generated_fingerprint: EvaluationIdentity,
     source_fingerprint: Option<String>,
 }
 
@@ -138,7 +138,7 @@ impl LoadedSystemModel {
         &self.provenance.authored_source
     }
 
-    pub fn fingerprint(&self) -> &EvaluationFingerprint {
+    pub fn fingerprint(&self) -> &EvaluationIdentity {
         &self.provenance.authored_fingerprint
     }
 
@@ -146,7 +146,7 @@ impl LoadedSystemModel {
         &self.provenance.generated_snapshot
     }
 
-    pub fn generated_fingerprint(&self) -> &EvaluationFingerprint {
+    pub fn generated_fingerprint(&self) -> &EvaluationIdentity {
         &self.provenance.generated_fingerprint
     }
 
@@ -227,7 +227,7 @@ fn load_source(
 fn loaded_from_declaration(
     path: &Path,
     declaration: gluon::SystemIntentDeclaration,
-    authored_fingerprint: EvaluationFingerprint,
+    authored_fingerprint: EvaluationIdentity,
 ) -> LoadedSystemModel {
     let authored_source = declaration.authored_source;
     let SystemModel {
@@ -542,13 +542,13 @@ let cast = import! cast.system.v1
         assert_eq!(
             loaded
                 .fingerprint()
-                .imported_modules
+                .modules
                 .iter()
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),
             ["cast.system.v1"]
         );
-        assert!(loaded.generated_fingerprint().imported_modules.is_empty());
+        assert!(loaded.generated_fingerprint().modules.is_empty());
         assert_ne!(loaded.fingerprint().sha256, loaded.generated_fingerprint().sha256);
     }
 
@@ -655,7 +655,7 @@ let cast = import! cast.system.v1
         assert_eq!(
             loaded
                 .fingerprint()
-                .imported_modules
+                .modules
                 .iter()
                 .map(|module| module.logical_name.as_str())
                 .collect::<Vec<_>>(),

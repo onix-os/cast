@@ -5,7 +5,7 @@ use declarative_config::{
     DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
     LanguageSpec, Limits, SourceRoot,
 };
-use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
+use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
 
 use super::{
     BuildPolicyLayerEntrySpec, BuildPolicyLayerSpec, BuildPolicyOperation,
@@ -54,7 +54,7 @@ impl GluonBuildPolicyRootEvaluator {
         source: &Source,
         explicit_inputs: &[u8],
     ) -> Result<
-        DeclarationEvaluation<BuildPolicyRootSpec, EvaluationFingerprint>,
+        DeclarationEvaluation<BuildPolicyRootSpec, EvaluationIdentity>,
         DeclarationEvaluationError<BuildPolicyRootConversionError>,
     > {
         let evaluation = self
@@ -66,7 +66,7 @@ impl GluonBuildPolicyRootEvaluator {
             .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(DeclarationEvaluation {
             value: root,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }
@@ -136,7 +136,7 @@ impl From<GluonBuildPolicyRootSpec> for BuildPolicyRootSpec {
 impl DeclarationEvaluator<BuildPolicyRootSpec>
     for GluonBuildPolicyRootEvaluator
 {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = BuildPolicyRootConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {

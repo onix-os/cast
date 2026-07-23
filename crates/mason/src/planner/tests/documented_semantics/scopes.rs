@@ -28,7 +28,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
         assert!(
             plan.provenance
                 .recipe
-                .imported_modules
+                .modules
                 .iter()
                 .any(|imported| imported.logical_name == module),
             "frozen package scope lost imported module {module}"

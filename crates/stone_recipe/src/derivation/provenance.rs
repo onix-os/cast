@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use gluon_config::EvaluationFingerprint;
+use gluon_config::{EvaluationIdentity, ModuleClass};
 
 use crate::build_policy::layers::BuildPolicyOperation;
 
@@ -13,7 +13,7 @@ const POLICY_COMPOSITION_IDENTITY_DOMAIN: &str = "cast-build-policy-composition-
 /// Complete authored and repository-policy provenance frozen into a plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DerivationProvenance {
-    pub recipe: EvaluationFingerprint,
+    pub recipe: EvaluationIdentity,
     /// Profile fragments retain configuration precedence order.
     pub profiles: Vec<ProfileFragmentProvenance>,
     pub policy: PolicyProvenance,
@@ -25,7 +25,7 @@ pub struct ProfileFragmentProvenance {
     /// Stable loader merge key; distinct from the evaluation root's logical
     /// source name so both identities remain explicit.
     pub logical_name: String,
-    pub evaluation: EvaluationFingerprint,
+    pub evaluation: EvaluationIdentity,
 }
 
 /// The explicit repository policy root and its ordered composition graph.
@@ -34,7 +34,7 @@ pub struct PolicyProvenance {
     pub name: String,
     /// Final root evaluation whose explicit input is
     /// [`policy_composition_identity`].
-    pub root: EvaluationFingerprint,
+    pub root: EvaluationIdentity,
     /// Manifest order is semantic, including named layers with no transitions.
     pub layers: Vec<PolicyLayerProvenance>,
 }
@@ -51,7 +51,7 @@ pub struct PolicyLayerProvenance {
 pub struct PolicyTransitionProvenance {
     pub operation: BuildPolicyOperation,
     pub origin: String,
-    pub evaluation: EvaluationFingerprint,
+    pub evaluation: EvaluationIdentity,
 }
 
 impl DerivationProvenance {
@@ -60,7 +60,7 @@ impl DerivationProvenance {
         source_lock_digest: &str,
         build_lock: &BuildLock,
     ) -> Result<(), DerivationValidationError> {
-        validate_evaluation_fingerprint("provenance.recipe", &self.recipe)?;
+        validate_evaluation_identity("provenance.recipe", &self.recipe)?;
         if self.recipe.explicit_inputs_sha256 != source_lock_digest {
             return Err(DerivationValidationError::RecipeSourceLockDigestMismatch {
                 recipe: self.recipe.explicit_inputs_sha256.clone(),
@@ -79,7 +79,7 @@ impl DerivationProvenance {
                     duplicate_index: index,
                 });
             }
-            validate_evaluation_fingerprint(&format!("{field}.evaluation"), &fragment.evaluation)?;
+            validate_evaluation_identity(&format!("{field}.evaluation"), &fragment.evaluation)?;
         }
         let profile_fingerprint = profile_aggregate_fingerprint(&self.profiles);
         if profile_fingerprint != build_lock.profile.fingerprint {
@@ -93,7 +93,7 @@ impl DerivationProvenance {
     }
 
     pub(super) fn encode(&self, encoder: &mut CanonicalEncoder) {
-        encode_evaluation_fingerprint(encoder, &self.recipe);
+        encode_evaluation_identity(encoder, &self.recipe);
         encoder.sequence(&self.profiles, |encoder, fragment| fragment.encode(encoder));
         self.policy.encode(encoder);
     }
@@ -102,14 +102,14 @@ impl DerivationProvenance {
 impl ProfileFragmentProvenance {
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encoder.string(&self.logical_name);
-        encode_evaluation_fingerprint(encoder, &self.evaluation);
+        encode_evaluation_identity(encoder, &self.evaluation);
     }
 }
 
 impl PolicyProvenance {
     fn validate(&self, locked: &LockedIdentity) -> Result<(), DerivationValidationError> {
         require_nonblank("provenance.policy.name", &self.name)?;
-        validate_evaluation_fingerprint("provenance.policy.root", &self.root)?;
+        validate_evaluation_identity("provenance.policy.root", &self.root)?;
         if self.name != locked.name {
             return Err(DerivationValidationError::PolicyNameMismatch {
                 expected: self.name.clone(),
@@ -138,7 +138,7 @@ impl PolicyProvenance {
             for (transition_index, transition) in layer.transitions.iter().enumerate() {
                 let transition_field = format!("{field}.transitions[{transition_index}]");
                 validate_policy_origin(&format!("{transition_field}.origin"), &transition.origin)?;
-                validate_evaluation_fingerprint(&format!("{transition_field}.evaluation"), &transition.evaluation)?;
+                validate_evaluation_identity(&format!("{transition_field}.evaluation"), &transition.evaluation)?;
                 match transition.operation {
                     BuildPolicyOperation::Add if has_policy => {
                         return Err(DerivationValidationError::InvalidPolicyTransition {
@@ -175,7 +175,7 @@ impl PolicyProvenance {
 
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encoder.string(&self.name);
-        encode_evaluation_fingerprint(encoder, &self.root);
+        encode_evaluation_identity(encoder, &self.root);
         encoder.sequence(&self.layers, |encoder, layer| layer.encode(encoder));
     }
 }
@@ -191,7 +191,7 @@ impl PolicyTransitionProvenance {
     fn encode(&self, encoder: &mut CanonicalEncoder) {
         encode_policy_operation(encoder, self.operation);
         encoder.string(&self.origin);
-        encode_evaluation_fingerprint(encoder, &self.evaluation);
+        encode_evaluation_identity(encoder, &self.evaluation);
     }
 }
 
@@ -223,18 +223,34 @@ pub fn policy_composition_identity(policy: &str, layers: &[PolicyLayerProvenance
     encoder.finish()
 }
 
-fn encode_evaluation_fingerprint(encoder: &mut CanonicalEncoder, fingerprint: &EvaluationFingerprint) {
-    encoder.string(&fingerprint.root_logical_name);
-    encoder.string(&fingerprint.root_source_sha256);
-    encoder.sequence(&fingerprint.imported_modules, |encoder, module| {
+fn encode_evaluation_identity(encoder: &mut CanonicalEncoder, identity: &EvaluationIdentity) {
+    encoder.string(&identity.root_logical_name);
+    encoder.string(&identity.root_source_sha256);
+    encoder.sequence(&identity.modules, |encoder, module| {
+        encoder.string(&module.identity);
+        encoder.variant(module_class_variant(module.class));
         encoder.string(&module.logical_name);
         encoder.string(&module.sha256);
     });
-    encoder.string(fingerprint.gluon_version);
-    encoder.u32(fingerprint.configuration_abi_version);
-    encoder.u32(fingerprint.evaluator_policy_version);
-    encoder.string(&fingerprint.explicit_inputs_sha256);
-    encoder.string(&fingerprint.sha256);
+    encoder.string(identity.language.as_str());
+    encoder.string(&identity.source_profile);
+    encoder.string(identity.engine.implementation());
+    encoder.string(identity.engine.version());
+    encoder.string(identity.configuration_abi.name());
+    encoder.string(identity.configuration_abi.version());
+    encoder.string(identity.evaluator_policy.as_str());
+    encoder.string(&identity.resource_policy_sha256);
+    encoder.string(&identity.explicit_inputs_sha256);
+    encoder.string(&identity.sha256);
+}
+
+fn module_class_variant(class: ModuleClass) -> u8 {
+    match class {
+        ModuleClass::Root => 0,
+        ModuleClass::Embedded => 1,
+        ModuleClass::Relative => 2,
+        ModuleClass::External => 3,
+    }
 }
 
 fn encode_policy_operation(encoder: &mut CanonicalEncoder, operation: BuildPolicyOperation) {
@@ -245,20 +261,20 @@ fn encode_policy_operation(encoder: &mut CanonicalEncoder, operation: BuildPolic
     });
 }
 
-fn validate_evaluation_fingerprint(
+fn validate_evaluation_identity(
     field: &str,
-    fingerprint: &EvaluationFingerprint,
+    identity: &EvaluationIdentity,
 ) -> Result<(), DerivationValidationError> {
-    validate_logical_name(&format!("{field}.root_logical_name"), &fingerprint.root_logical_name)?;
-    for (index, module) in fingerprint.imported_modules.iter().enumerate() {
+    validate_logical_name(&format!("{field}.root_logical_name"), &identity.root_logical_name)?;
+    for (index, module) in identity.modules.iter().enumerate() {
         validate_logical_name(
-            &format!("{field}.imported_modules[{index}].logical_name"),
+            &format!("{field}.modules[{index}].logical_name"),
             &module.logical_name,
         )?;
     }
-    fingerprint
+    identity
         .validate()
-        .map_err(|source| DerivationValidationError::InvalidEvaluationFingerprint {
+        .map_err(|source| DerivationValidationError::InvalidEvaluationIdentity {
             field: field.to_owned(),
             source,
         })

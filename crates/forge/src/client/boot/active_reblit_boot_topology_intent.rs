@@ -35,7 +35,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
     Evaluation as DeclarationEvaluation, LanguageSpec, Source,
 };
-use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
+use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
 
 use crate::{Installation, installation};
@@ -66,7 +66,7 @@ pub(in crate::client) struct PreparedActiveReblitBootTopologyIntent {
     source: RetainedBootTopologySource,
     source_text: Box<str>,
     value: ActiveReblitBootTopologyIntentValue,
-    fingerprint: EvaluationFingerprint,
+    fingerprint: EvaluationIdentity,
     #[cfg(test)]
     preparation_work: usize,
 }
@@ -271,7 +271,7 @@ impl PreparedActiveReblitBootTopologyIntent {
         &self,
         evaluated: &DeclarationEvaluation<
             ActiveReblitBootTopologyIntentValue,
-            EvaluationFingerprint,
+            EvaluationIdentity,
         >,
     ) -> Result<(), ActiveReblitBootTopologyIntentError> {
         if evaluated.value == self.value && evaluated.identity == self.fingerprint {
@@ -295,7 +295,7 @@ impl RevalidatedActiveReblitBootTopologyIntent<'_> {
         self.intent.value.bound()
     }
 
-    pub(in crate::client) fn fingerprint(&self) -> &EvaluationFingerprint {
+    pub(in crate::client) fn fingerprint(&self) -> &EvaluationIdentity {
         &self.intent.fingerprint
     }
 }
@@ -523,7 +523,7 @@ fn evaluate_declaration(
 ) -> Result<
     DeclarationEvaluation<
         ActiveReblitBootTopologyIntentValue,
-        EvaluationFingerprint,
+        EvaluationIdentity,
     >,
     ActiveReblitBootTopologyIntentError,
 > {
@@ -614,7 +614,7 @@ pub(in crate::client) enum ActiveReblitBootTopologyIntentError {
     #[error(transparent)]
     Evaluation(#[from] gluon_config::Diagnostic),
     #[error(transparent)]
-    EvaluationFingerprint(#[from] EvaluationFingerprintValidationError),
+    EvaluationIdentity(#[from] EvaluationIdentityValidationError),
     #[error("unsafe boot-topology intent inode at `{}`: {reason}", path.display())]
     UnsafeInode { path: PathBuf, reason: &'static str },
     #[error("boot-topology intent changed at `{}`: {reason}", path.display())]

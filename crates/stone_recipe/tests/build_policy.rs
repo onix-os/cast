@@ -73,7 +73,7 @@ fn evaluates_repository_build_policy_as_typed_data() {
         assert!(
             evaluated
                 .identity
-                .imported_modules
+                .modules
                 .iter()
                 .any(|module| module.logical_name == expected),
             "missing repository build-policy module {expected} from fingerprint"

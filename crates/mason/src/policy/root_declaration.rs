@@ -12,7 +12,7 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
-use gluon_config::EvaluationFingerprint;
+use gluon_config::EvaluationIdentity;
 use stone_recipe::build_policy::layers::{
     BuildPolicyRootConversionError, BuildPolicyRootSpec,
     GluonBuildPolicyRootEvaluator,
@@ -83,7 +83,7 @@ impl Default for PolicyRootDeclarationEvaluator {
 }
 
 impl DeclarationEvaluator<PolicyRootDeclaration> for PolicyRootDeclarationEvaluator {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = BuildPolicyRootConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {

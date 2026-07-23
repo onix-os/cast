@@ -5,7 +5,7 @@ use declarative_config::{
     DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
     LanguageSpec, Limits, SourceRoot,
 };
-use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
+use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
 
 use super::{
     AnalyzerKind, AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArrayPatch, BuildCommandSpec,
@@ -87,7 +87,7 @@ impl GluonBuildPolicyEvaluator {
         source: &Source,
         explicit_inputs: &[u8],
     ) -> Result<
-        DeclarationEvaluation<BuildPolicySpec, EvaluationFingerprint>,
+        DeclarationEvaluation<BuildPolicySpec, EvaluationIdentity>,
         DeclarationEvaluationError<BuildPolicyConversionError>,
     > {
         let evaluation = self
@@ -100,7 +100,7 @@ impl GluonBuildPolicyEvaluator {
             .map_err(DeclarationEvaluationError::Conversion)?;
         Ok(DeclarationEvaluation {
             value: policy,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 
@@ -109,7 +109,7 @@ impl GluonBuildPolicyEvaluator {
         source: &Source,
         explicit_inputs: &[u8],
     ) -> Result<
-        DeclarationEvaluation<BuildPolicyPatchSpec, EvaluationFingerprint>,
+        DeclarationEvaluation<BuildPolicyPatchSpec, EvaluationIdentity>,
         DeclarationEvaluationError<BuildPolicyConversionError>,
     > {
         let evaluation = self
@@ -118,7 +118,7 @@ impl GluonBuildPolicyEvaluator {
             .map_err(DeclarationEvaluationError::Evaluation)?;
         Ok(DeclarationEvaluation {
             value: evaluation.value.into(),
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }
@@ -624,7 +624,7 @@ struct GluonBuildPolicyPatchSpec {
 include!("gluon/conversions.rs");
 
 impl DeclarationEvaluator<BuildPolicySpec> for GluonBuildPolicyEvaluator {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = BuildPolicyConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -666,7 +666,7 @@ impl DeclarationInputEvaluator<BuildPolicySpec> for GluonBuildPolicyEvaluator {
 }
 
 impl DeclarationEvaluator<BuildPolicyPatchSpec> for GluonBuildPolicyEvaluator {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = BuildPolicyConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {

@@ -5,7 +5,7 @@ use declarative_config::{
     DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
     LanguageSpec, Limits, SourceRoot,
 };
-use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
+use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
 
 use super::{
     BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec,
@@ -87,7 +87,7 @@ impl GluonPackageEvaluator {
         source: &Source,
         explicit_inputs: &[u8],
     ) -> Result<
-        DeclarationEvaluation<PackageSpec, EvaluationFingerprint>,
+        DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
         DeclarationEvaluationError<PackageConversionError>,
     > {
         let evaluation = self
@@ -101,13 +101,13 @@ impl GluonPackageEvaluator {
 
         Ok(DeclarationEvaluation {
             value: package,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }
 
 impl DeclarationEvaluator<PackageSpec> for GluonPackageEvaluator {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = PackageConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {

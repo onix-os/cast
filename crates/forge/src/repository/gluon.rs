@@ -12,7 +12,7 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{
-    EvaluationFingerprint, GluonEngine, ImportPolicy, Source as GluonSource,
+    EvaluationIdentity, GluonEngine, ImportPolicy, Source as GluonSource,
 };
 
 use super::{Map, Repository, Source};
@@ -226,7 +226,7 @@ impl From<GluonRepositorySourceSpec> for RepositorySourceSpec {
 }
 
 impl DeclarationEvaluator<Map> for RepositoryCodec {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = RepositoryConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -261,7 +261,7 @@ impl DeclarationEvaluator<Map> for RepositoryCodec {
 
         Ok(DeclarationEvaluation {
             value,
-            identity: evaluation.fingerprint,
+            identity: evaluation.identity,
         })
     }
 }
@@ -480,7 +480,7 @@ mod tests {
         assert!(
             loaded[0]
                 .identity
-                .imported_modules
+                .modules
                 .iter()
                 .any(|module| module.logical_name == "cast.repository.v1")
         );
@@ -665,8 +665,8 @@ mod tests {
         let repeated = manager.load_declarations(&evaluators).unwrap();
         assert_eq!(first[0].identity, repeated[0].identity);
         first[0].identity.validate().unwrap();
-        assert_eq!(first[0].identity.configuration_abi_version, 1);
-        assert_eq!(first[0].identity.evaluator_policy_version, 1);
-        assert!(!first[0].identity.imported_modules.is_empty());
+        assert_eq!(first[0].identity.configuration_abi.version(), "1");
+        assert_eq!(first[0].identity.evaluator_policy.as_str(), "1");
+        assert!(!first[0].identity.modules.is_empty());
     }
 }

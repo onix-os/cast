@@ -263,13 +263,16 @@ fn load_bootstrap_closure() -> BootstrapClosure {
 #[test]
 fn bootstrap_closure_fingerprints_every_functional_data_module() {
     let evaluation = evaluate_bootstrap_closure();
-    evaluation.fingerprint.validate().unwrap();
-    let imported = evaluation
-        .fingerprint
-        .imported_modules
+    evaluation.identity.validate().unwrap();
+    let mut imported = evaluation
+        .identity
+        .modules
         .iter()
         .map(|module| module.logical_name.as_str())
         .collect::<Vec<_>>();
+    // v2 identity orders modules by their canonical graph identity; assert
+    // membership independent of that ordering.
+    imported.sort_unstable();
     assert_eq!(
         imported,
         [

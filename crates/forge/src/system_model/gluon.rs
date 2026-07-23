@@ -5,7 +5,7 @@ use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
-use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, ImportPolicy, Source};
+use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, ImportPolicy, Source};
 
 use super::{SystemModel, spec};
 
@@ -199,7 +199,7 @@ impl From<GluonRepositorySourceSpec> for spec::RepositorySourceSpec {
 }
 
 impl DeclarationEvaluator<SystemIntentDeclaration> for SystemIntentEvaluator {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = spec::ConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -240,7 +240,7 @@ impl DeclarationEvaluator<SystemIntentDeclaration> for SystemIntentEvaluator {
 }
 
 impl DeclarationEvaluator<SystemModel> for SystemSnapshotCodec {
-    type Identity = EvaluationFingerprint;
+    type Identity = EvaluationIdentity;
     type Error = spec::ConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
@@ -306,7 +306,7 @@ fn evaluate_spec(
     evaluator: &GluonEngine,
     source: &Source,
 ) -> Result<
-    DeclarationEvaluation<spec::SystemSpec, EvaluationFingerprint>,
+    DeclarationEvaluation<spec::SystemSpec, EvaluationIdentity>,
     DeclarationEvaluationError<spec::ConversionError>,
 > {
     let evaluation = evaluator
@@ -315,7 +315,7 @@ fn evaluate_spec(
 
     Ok(DeclarationEvaluation {
         value: spec::SystemSpec::from(evaluation.value),
-        identity: evaluation.fingerprint,
+        identity: evaluation.identity,
     })
 }
 
@@ -329,7 +329,7 @@ mod tests {
     #[derive(Debug)]
     struct EvaluatedSystem {
         model: SystemModel,
-        fingerprint: EvaluationFingerprint,
+        fingerprint: EvaluationIdentity,
     }
 
     fn evaluate(
@@ -554,7 +554,7 @@ mod tests {
         let empty = evaluate(&authored("cast.system")).unwrap();
         assert!(empty.model.repositories.iter().next().is_none());
         assert!(empty.model.packages.is_empty());
-        assert_eq!(empty.fingerprint.imported_modules[0].logical_name, "cast.system.v1");
+        assert_eq!(empty.fingerprint.modules[0].logical_name, "cast.system.v1");
 
         let populated = evaluate(&authored(
             r#"
@@ -697,9 +697,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(intent.value.authored_source, source.text());
-        assert_eq!(intent.identity.gluon_version, "0.18.3");
-        assert_eq!(intent.identity.configuration_abi_version, 1);
-        assert_eq!(intent.identity.evaluator_policy_version, 1);
+        assert_eq!(intent.identity.engine.version(), "0.18.3");
+        assert_eq!(intent.identity.configuration_abi.version(), "1");
+        assert_eq!(intent.identity.evaluator_policy.as_str(), "1");
         intent.identity.validate().unwrap();
 
         let model = SystemModel::try_from(complete_normalized_system_value()).unwrap();
