@@ -15,6 +15,7 @@ rust-version.workspace = true
 declarative_config = { path = "../declarative_config" }
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
 full_moon = { version = "1", features = ["lua54"] }
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 tempfile.workspace = true

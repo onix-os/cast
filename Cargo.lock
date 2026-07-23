@@ -2456,6 +2456,7 @@ dependencies = [
  "declarative_config",
  "full_moon",
  "mlua",
+ "serde",
  "tempfile",
 ]
 

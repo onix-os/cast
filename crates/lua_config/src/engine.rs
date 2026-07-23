@@ -51,6 +51,16 @@ impl LuaEngine {
     {
         evaluate_declaration(self, source, LuaValueDecoder::new())
     }
+
+    /// Evaluate `source` and deserialize the root value into a serde schema
+    /// type `T` — the entry point domain adapters use to reach shared wire
+    /// types.
+    pub fn evaluate_as<T>(&self, source: &Source) -> Result<Evaluation<T, EvaluationIdentity>, Diagnostic>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        evaluate_declaration(self, source, LuaSerdeDecoder::new())
+    }
 }
 
 impl EngineAdapter for LuaEngine {
@@ -195,33 +205,7 @@ where
         source: &Source,
         _deadline: EvaluationDeadline,
     ) -> Result<T, Diagnostic> {
-        // The authored root must use only the Cast Lua declaration profile.
-        crate::profile::validate_profile(source.text()).map_err(|violation| {
-            Diagnostic::new(
-                DiagnosticCategory::Parse,
-                None,
-                Some(source.logical_name().to_owned()),
-                None,
-                format!(
-                    "lua source uses a construct outside the declaration profile: {}",
-                    violation.construct
-                ),
-            )
-        })?;
-        let value = evaluate_chunk(
-            &runtime.lua,
-            &runtime.loaded,
-            source.logical_name(),
-            source.text(),
-        )?;
-        // Bound and cycle-check the value tree before any domain decoding sees
-        // it: reject floats, functions, cycles, sparse/mixed tables, and
-        // oversized values first.
-        crate::value::validate_value_tree(
-            &value,
-            source.logical_name(),
-            &crate::value::ValueLimits::default(),
-        )?;
+        let value = evaluate_root_value(runtime, source)?;
         T::from_lua(value, &runtime.lua).map_err(|error| {
             Diagnostic::new(
                 DiagnosticCategory::Type,
@@ -232,6 +216,84 @@ where
             )
         })
     }
+}
+
+/// A typed decoder that runs the authored root chunk and deserializes its final
+/// value into `T` via serde. Domain adapters use this to reach the same shared
+/// wire types the Gluon adapters decode into.
+pub struct LuaSerdeDecoder<T>(PhantomData<fn() -> T>);
+
+impl<T> LuaSerdeDecoder<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T> Default for LuaSerdeDecoder<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> TypedDecoder<LuaRuntime> for LuaSerdeDecoder<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    type Output = T;
+
+    fn decode(
+        self,
+        runtime: &LuaRuntime,
+        source: &Source,
+        _deadline: EvaluationDeadline,
+    ) -> Result<T, Diagnostic> {
+        use mlua::LuaSerdeExt as _;
+
+        let value = evaluate_root_value(runtime, source)?;
+        runtime.lua.from_value::<T>(value).map_err(|error| {
+            Diagnostic::new(
+                DiagnosticCategory::Type,
+                None,
+                Some(source.logical_name().to_owned()),
+                None,
+                format!("lua value does not match the target schema: {error}"),
+            )
+        })
+    }
+}
+
+/// Run the authored root chunk and return its bounded, profile-checked final
+/// value. Shared by every root decoder: enforce the authored profile, evaluate
+/// the chunk in the sandbox, then bound and cycle-check the value tree before
+/// any domain decoding sees it.
+pub(crate) fn evaluate_root_value(
+    runtime: &LuaRuntime,
+    source: &Source,
+) -> Result<Value, Diagnostic> {
+    crate::profile::validate_profile(source.text()).map_err(|violation| {
+        Diagnostic::new(
+            DiagnosticCategory::Parse,
+            None,
+            Some(source.logical_name().to_owned()),
+            None,
+            format!(
+                "lua source uses a construct outside the declaration profile: {}",
+                violation.construct
+            ),
+        )
+    })?;
+    let value = evaluate_chunk(
+        &runtime.lua,
+        &runtime.loaded,
+        source.logical_name(),
+        source.text(),
+    )?;
+    crate::value::validate_value_tree(
+        &value,
+        source.logical_name(),
+        &crate::value::ValueLimits::default(),
+    )?;
+    Ok(value)
 }
 
 /// Evaluate one chunk in a fresh controlled environment whose only visible

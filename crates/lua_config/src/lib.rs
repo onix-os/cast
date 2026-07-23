@@ -12,12 +12,16 @@ use declarative_config::{
     Limits, SourceRoot,
 };
 
+mod decode;
 mod engine;
 mod imports;
 mod profile;
 mod value;
 
-pub use engine::{LuaPrepared, LuaRuntime, LuaValueDecoder, PreparedLuaModule};
+pub use decode::{LuaOption, LuaPatch};
+pub use engine::{
+    LuaPrepared, LuaRuntime, LuaSerdeDecoder, LuaValueDecoder, PreparedLuaModule,
+};
 pub use imports::discover_imports;
 pub use profile::{ProfileViolation, validate_profile};
 pub use value::{ValueLimits, validate_value_tree};
