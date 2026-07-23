@@ -1,8 +1,78 @@
 use gluon_config::{DiagnosticCategory, Evaluator, Source};
+use fnmatch::Pattern;
 use triggers::{
     Collection, TRIGGER_ABI_VERSION, TriggerEvaluationError, evaluate_gluon, evaluate_gluon_with_inputs,
-    format::{Handler, PathKind},
+    format::{Handler, PathKind, Trigger},
 };
+
+#[derive(Debug, PartialEq, Eq)]
+struct NormalizedTriggerValue {
+    name: String,
+    description: String,
+    before: Option<String>,
+    after: Option<String>,
+    inhibitors: Option<NormalizedInhibitorsValue>,
+    paths: Vec<NormalizedPathValue>,
+    handlers: Vec<NormalizedHandlerValue>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NormalizedInhibitorsValue {
+    paths: Vec<String>,
+    environment: Vec<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NormalizedPathValue {
+    pattern: Pattern,
+    handlers: Vec<String>,
+    kind: Option<NormalizedPathKind>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NormalizedPathKind {
+    Directory,
+    Symlink,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct NormalizedHandlerValue {
+    name: String,
+    action: Handler,
+}
+
+fn normalized_trigger_value(trigger: &Trigger) -> NormalizedTriggerValue {
+    NormalizedTriggerValue {
+        name: trigger.name.clone(),
+        description: trigger.description.clone(),
+        before: trigger.before.clone(),
+        after: trigger.after.clone(),
+        inhibitors: trigger.inhibitors.as_ref().map(|inhibitors| NormalizedInhibitorsValue {
+            paths: inhibitors.paths.clone(),
+            environment: inhibitors.environment.clone(),
+        }),
+        paths: trigger
+            .paths
+            .iter()
+            .map(|(pattern, definition)| NormalizedPathValue {
+                pattern: pattern.clone(),
+                handlers: definition.handlers.clone(),
+                kind: definition.kind.as_ref().map(|kind| match kind {
+                    PathKind::Directory => NormalizedPathKind::Directory,
+                    PathKind::Symlink => NormalizedPathKind::Symlink,
+                }),
+            })
+            .collect(),
+        handlers: trigger
+            .handlers
+            .iter()
+            .map(|(name, action)| NormalizedHandlerValue {
+                name: name.clone(),
+                action: action.clone(),
+            })
+            .collect(),
+    }
+}
 
 fn authored(body: &str) -> Source {
     Source::new("trigger.glu", format!("let cast = import! cast.trigger.v1\n{body}"))
@@ -68,39 +138,48 @@ let base = cast.trigger "kernel" "Maintain kernel metadata"
     let evaluated = evaluate_gluon(&source).unwrap();
     let trigger = &evaluated.trigger;
 
-    assert_eq!(trigger.name, "kernel");
-    assert_eq!(trigger.before.as_deref(), Some("boot"));
-    assert_eq!(trigger.after.as_deref(), Some("filesystem"));
-    let inhibitors = trigger.inhibitors.as_ref().unwrap();
-    assert_eq!(inhibitors.paths, ["/etc/inhibit"]);
-    assert_eq!(inhibitors.environment, ["chroot", "live"]);
-
-    let module_path = trigger
-        .paths
-        .iter()
-        .find(|(pattern, _)| pattern.match_path("/usr/lib/modules/6.12.1/kernel").is_some())
-        .map(|(_, definition)| definition)
-        .unwrap();
-    assert!(matches!(module_path.kind, Some(PathKind::Directory)));
-    assert_eq!(module_path.handlers, ["depmod"]);
-    let link_path = trigger
-        .paths
-        .iter()
-        .find(|(pattern, _)| pattern.match_path("/var/lib/example-link").is_some())
-        .map(|(_, definition)| definition)
-        .unwrap();
-    assert!(matches!(link_path.kind, Some(PathKind::Symlink)));
-
-    assert!(matches!(
-        trigger.handlers.get("depmod"),
-        Some(Handler::Run { run, args })
-            if run == "/sbin/depmod" && args == &["-a", "$(version)"]
-    ));
-    assert!(matches!(
-        trigger.handlers.get("cleanup"),
-        Some(Handler::Delete { delete })
-            if delete == &["/var/cache/example", "/var/lib/example.old"]
-    ));
+    assert_eq!(
+        normalized_trigger_value(trigger),
+        NormalizedTriggerValue {
+            name: "kernel".to_owned(),
+            description: "Maintain kernel metadata".to_owned(),
+            before: Some("boot".to_owned()),
+            after: Some("filesystem".to_owned()),
+            inhibitors: Some(NormalizedInhibitorsValue {
+                paths: vec!["/etc/inhibit".to_owned()],
+                environment: ["chroot", "live"].map(str::to_owned).to_vec(),
+            }),
+            paths: vec![
+                NormalizedPathValue {
+                    pattern: "/usr/lib/modules/(version:*)/kernel".parse().unwrap(),
+                    handlers: vec!["depmod".to_owned()],
+                    kind: Some(NormalizedPathKind::Directory),
+                },
+                NormalizedPathValue {
+                    pattern: "/var/lib/example-link".parse().unwrap(),
+                    handlers: vec!["cleanup".to_owned()],
+                    kind: Some(NormalizedPathKind::Symlink),
+                },
+            ],
+            handlers: vec![
+                NormalizedHandlerValue {
+                    name: "cleanup".to_owned(),
+                    action: Handler::Delete {
+                        delete: ["/var/cache/example", "/var/lib/example.old"]
+                            .map(str::to_owned)
+                            .to_vec(),
+                    },
+                },
+                NormalizedHandlerValue {
+                    name: "depmod".to_owned(),
+                    action: Handler::Run {
+                        run: "/sbin/depmod".to_owned(),
+                        args: ["-a", "$(version)"].map(str::to_owned).to_vec(),
+                    },
+                },
+            ],
+        }
+    );
 
     Collection::new([trigger]).unwrap();
 }

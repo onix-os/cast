@@ -358,6 +358,8 @@ mod tests {
 
     use super::*;
 
+    mod normalized_value_golden;
+
     fn write(path: &Path, source: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, source).unwrap();

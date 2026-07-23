@@ -865,3 +865,5 @@ b.mk_package (b.meta {
     assert_eq!(first.fingerprint, repeated.fingerprint);
     assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
 }
+
+include!("package_v3/normalized_value.rs");

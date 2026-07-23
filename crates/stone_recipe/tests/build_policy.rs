@@ -987,3 +987,4 @@ fn compiler_commands_are_absolute_tokenized_and_provider_bound() {
 }
 
 include!("build_policy/sandbox_validation.rs");
+include!("build_policy/normalized_value.rs");

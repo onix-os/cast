@@ -186,6 +186,36 @@ mod tests {
         Source::new("system.glu", format!("let cast = import! cast.system.v1\n{body}"))
     }
 
+    fn complete_normalized_system_value() -> spec::SystemSpec {
+        spec::SystemSpec {
+            disable_warning: true,
+            repositories: vec![
+                spec::RepositorySpec {
+                    id: "a-direct".to_owned(),
+                    description: Some("line \"quoted\"\npath\\leaf\t雪".to_owned()),
+                    source: spec::RepositorySourceSpec::DirectIndex {
+                        uri: "file:///var/cache/local.index".to_owned(),
+                    },
+                    priority: Some(5),
+                    enabled: Some(false),
+                },
+                spec::RepositorySpec {
+                    id: "z-root".to_owned(),
+                    description: Some(String::new()),
+                    source: spec::RepositorySourceSpec::RootIndex {
+                        base_uri: "https://packages.example.test/".to_owned(),
+                        channel: Some("main".to_owned()),
+                        version: "stream/volatile".to_owned(),
+                        arch: Some("x86_64".to_owned()),
+                    },
+                    priority: Some(0),
+                    enabled: Some(true),
+                },
+            ],
+            packages: ["alpha", "binary(tool)", "soname(libc.so.6)"].map(str::to_owned).to_vec(),
+        }
+    }
+
     #[test]
     fn documented_system_example_remains_loadable() {
         let source = Source::new(
@@ -237,6 +267,41 @@ mod tests {
         assert_eq!(u64::from(local.priority), 5);
         assert!(!local.active);
         assert!(populated.model.packages.contains(&Provider::package_name("cast")));
+    }
+
+    #[test]
+    fn authored_intent_and_generated_snapshot_share_the_complete_normalized_value() {
+        let authored = evaluate(&authored(
+            r#"
+{
+    disable_warning = cast.boolean.true,
+    repositories = [
+        cast.repository.root "z-root" "https://packages.example.test" "stream/volatile",
+        cast.repository.direct_with {
+            id = "a-direct",
+            description = cast.optional.some "line \"quoted\"\npath\\leaf\t雪",
+            uri = "file:///var/cache/local.index",
+            priority = cast.optional.some 5,
+            enabled = cast.optional.some cast.boolean.false,
+        },
+    ],
+    packages = ["soname(libc.so.6)", "alpha", "binary(tool)"],
+}
+"#,
+        ))
+        .unwrap();
+        let authored_value = spec::SystemSpec::try_from(&authored.model).unwrap();
+
+        let snapshot = evaluate_generated_snapshot(&Source::new(
+            "system-model.glu",
+            include_str!("../../../../tests/fixtures/gluon/goldens/system-snapshot.glu"),
+        ))
+        .unwrap();
+        let snapshot_value = spec::SystemSpec::try_from(&snapshot).unwrap();
+        let expected = complete_normalized_system_value();
+
+        assert_eq!(authored_value, expected);
+        assert_eq!(snapshot_value, expected);
     }
 
     #[test]

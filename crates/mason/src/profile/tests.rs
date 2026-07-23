@@ -8,6 +8,9 @@ use fs_err as fs;
 
 use super::*;
 
+#[path = "tests/normalized_value_golden.rs"]
+mod normalized_value_golden;
+
 fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_root: &Path) {
     fragment.evaluation.validate().unwrap();
     assert!(!Path::new(&fragment.logical_name).is_absolute());

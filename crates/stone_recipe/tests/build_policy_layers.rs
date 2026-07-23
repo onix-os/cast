@@ -1,7 +1,7 @@
 use gluon_config::Source;
 use stone_recipe::build_policy::layers::{
-    BuildPolicyOperation, BuildPolicyRootConversionError, BuildPolicyRootEvaluationError, evaluate_gluon,
-    evaluate_gluon_with_inputs,
+    BuildPolicyLayerEntrySpec, BuildPolicyLayerSpec, BuildPolicyOperation, BuildPolicyRootConversionError,
+    BuildPolicyRootEvaluationError, BuildPolicyRootSpec, evaluate_gluon, evaluate_gluon_with_inputs,
 };
 
 fn authored(body: &str) -> Source {
@@ -37,30 +37,33 @@ fn ordered_layer_manifest_preserves_every_authored_operation() {
     ))
     .unwrap();
 
-    assert_eq!(evaluated.root.name, "repository");
     assert_eq!(
-        evaluated
-            .root
-            .layers
-            .iter()
-            .map(|layer| layer.name.as_str())
-            .collect::<Vec<_>>(),
-        ["foundation", "replacement"]
-    );
-    assert_eq!(
-        evaluated.root.layers[0]
-            .entries
-            .iter()
-            .map(|entry| (entry.operation, entry.origin.as_str()))
-            .collect::<Vec<_>>(),
-        [
-            (BuildPolicyOperation::Add, "default.glu"),
-            (BuildPolicyOperation::Modify, "layers/local.glu"),
-        ]
-    );
-    assert_eq!(
-        evaluated.root.layers[1].entries[0].operation,
-        BuildPolicyOperation::Replace
+        evaluated.root,
+        BuildPolicyRootSpec {
+            name: "repository".to_owned(),
+            layers: vec![
+                BuildPolicyLayerSpec {
+                    name: "foundation".to_owned(),
+                    entries: vec![
+                        BuildPolicyLayerEntrySpec {
+                            operation: BuildPolicyOperation::Add,
+                            origin: "default.glu".to_owned(),
+                        },
+                        BuildPolicyLayerEntrySpec {
+                            operation: BuildPolicyOperation::Modify,
+                            origin: "layers/local.glu".to_owned(),
+                        },
+                    ],
+                },
+                BuildPolicyLayerSpec {
+                    name: "replacement".to_owned(),
+                    entries: vec![BuildPolicyLayerEntrySpec {
+                        operation: BuildPolicyOperation::Replace,
+                        origin: "replacement.glu".to_owned(),
+                    }],
+                },
+            ],
+        }
     );
     assert!(
         evaluated

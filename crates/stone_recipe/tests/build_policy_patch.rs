@@ -166,6 +166,28 @@ fn patch_bridge_honors_custom_evaluator_and_explicit_identity_inputs() {
 }
 
 #[test]
+fn normalized_build_policy_patch_root_matches_the_complete_owned_value() {
+    let evaluated = evaluate_patch_gluon(&authored_patch("b.defaults.policy_patch")).unwrap();
+    let expected = BuildPolicyPatchSpec {
+        build_subdir: ValuePatch::Keep,
+        layout: ValuePatch::Keep,
+        toolchains: ValuePatch::Keep,
+        targets: ArrayPatch::Keep,
+        retired_targets: ArrayPatch::Keep,
+        sandbox: ValuePatch::Keep,
+        build_root: ValuePatch::Keep,
+        sources: ValuePatch::Keep,
+        tuning: ValuePatch::Keep,
+        environment: ArrayPatch::Keep,
+        builders: ValuePatch::Keep,
+        analyzers: ArrayPatch::Keep,
+        pgo: ValuePatch::Keep,
+    };
+
+    assert_eq!(evaluated.patch, expected);
+}
+
+#[test]
 fn analyzer_order_is_preserved_and_participates_in_patch_identity() {
     let first = evaluate_patch_gluon(&authored_patch(
         "b.policy_patch { analyzers = b.patch.array.replace [b.analyzer.binary, b.analyzer.elf, b.analyzer.include_any], .. b.defaults.policy_patch }",

@@ -590,6 +590,8 @@ impl Drop for TemporaryGuard {
 mod tests {
     use super::*;
 
+    mod normalized_value_golden;
+
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
     const ARCHIVE_SHA256: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const MATERIALIZATION_SHA256: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
