@@ -13,6 +13,28 @@ semantically validated in Rust. Values such as URLs, paths, dependency
 providers, package versions, glob patterns, and repository identifiers are
 constructed only during that conversion.
 
+## Architecture: a neutral core with Gluon as the only adapter
+
+Gluon is the only registered configuration language, but it is no longer the
+configuration *architecture*. Source security, resource limits, the evaluation
+deadline, the bounded import graph, diagnostics, the language/engine descriptors,
+and the evaluation identity live in the language-neutral `declarative_config`
+crate. Gluon is one `EngineAdapter` over that core (`gluon_config::GluonEngine`),
+and each domain confines its `Getable`/`VmType` conversions to an explicit
+`declaration/gluon.rs`-style adapter module. Neither `declarative_config` nor the
+generic `config` storage layer depends on `gluon_config` or `gluon_codegen`; the
+`make declaration-boundary-check` gate enforces that boundary.
+
+Evaluation identity is engine-neutral. Every evaluation carries an
+`EvaluationIdentity` that records the language and engine descriptors, the
+configuration-ABI and evaluator-policy versions, the resource policy, the root
+source hash, the canonical prepared-module graph, and explicit inputs, hashed
+under a neutral domain (`os-tools-declaration-evaluation`). Two engines that
+produced the same value would still receive distinct identities, because the
+engine descriptor participates in the hash. Under the current evaluator policy,
+import cycles are rejected during graph preparation with an import diagnostic,
+before any runtime is created.
+
 ## Entry points
 
 | Purpose | Authored source | Embedded ABI |
