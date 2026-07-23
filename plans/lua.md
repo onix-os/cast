@@ -1,773 +1,743 @@
-# Plan: Add Lua as a First-Class Declarative Frontend
+# Plan: Add Lua Through the Language-Agnostic Declaration Adapter
 
-**Status:** Active implementation handoff
-**Priority:** P1
-**Effort:** XL
+**Status:** Planned; blocked on [`agnostic_config.md`](agnostic_config.md)
+**Priority:** P1 after the P0 foundation
+**Effort:** Extra large
 **Risk:** High
-**Planned against:** `develop` at `700202dc`
+**Planned against:** `develop` at `5e995525`
 **Audit date:** 2026-07-23
 
-This plan replaces the archived Lua feasibility report. It describes the work required to add
-Lua without weakening Cast's declarative, reproducible, atomic system model. It also separates
-the two possible end states:
+This plan starts only after [`agnostic_config.md`](agnostic_config.md) is completely accepted. That
+plan extracts Cast's declaration infrastructure, reconnects all existing Gluon behavior through the
+first adapter, generalizes storage and all 12 domain boundaries, and makes evaluation identity v2
+authoritative.
 
-1. **Recommended:** use Gluon only as a temporary differential-testing bridge, then remove it and
-   make Lua the sole authored declaration language.
-2. **Optional:** keep Lua and Gluon as permanent first-class authored frontends behind one
-   language-neutral evaluation and domain layer.
+Lua must then be implemented as a second adapter over those frozen contracts. It must not trigger
+another source-loader, config-manager, fingerprint, persistence, or domain-schema redesign.
 
-The shared foundation is the same through the parity gate. The final Gluon-removal phase is not
-started until the endpoint is recorded explicitly in `PLAN.md` and `FUTURE_PLAN.md`.
-
-## 1. Goal and non-negotiable invariants
+## 1. Goal and endpoints
 
 ### Goal
 
-Allow users to describe packages, policies, profiles, repositories, triggers, system intent, and
-boot intent in a small deterministic Lua declaration language. Lua must produce the same owned
-Rust domain values that Gluon produces today; the runtime must disappear before any transaction,
-artifact, or activation code runs.
+Add a deterministic Lua declaration profile for packages, build policy, profiles, repositories,
+triggers, system intent, boot topology, and root-filesystem intent. A Lua source is loaded and
+prepared by the shared core, evaluated by `lua_config`, decoded through the same shared domain
+wire/semantic types used by the Gluon adapters, and dropped before downstream planning or mutation.
 
-This is a declaration-frontend migration, not a package-manager rewrite.
+The architecture after Lua registration is:
 
-### Invariants that must survive unchanged
+```text
+                     crates/declarative_config
+        shared source / limits / graph / diagnostics / identity v2
+                       adapter and codec contracts
+                          /                 \
+                         /                   \
+       crates/gluon_config                   crates/lua_config
+          GluonEngine                           LuaEngine
+                \                               /
+                 \                             /
+          per-domain Gluon/Lua typed adapters and codecs
+                              |
+                    shared Rust domain values
+                              |
+             existing planners / transactions / `.stone`
+```
 
-- `.stone` remains the built package artifact. No new package artifact format is introduced.
-- Package construction, container-based transaction triggers, atomic activation, atomic rollback,
-  USR merge compliance, and the separation between OS state and local configuration remain owned
-  by the existing Rust transaction/system layers.
-- Evaluation remains one-shot: source enters a fresh restricted VM, becomes an owned Rust value,
-  and the VM is dropped. No script callbacks or live VM objects enter the transaction engine.
-- Source loading remains descriptor-rooted, bounded, symlink-safe, TOCTOU-resistant, and detached
-  from ambient interpreter search paths.
-- Invalid declarations fail closed before mutation.
-- Evaluation provenance remains part of derivation identity. Different engines may never alias
-  merely because their source bytes or resulting Rust values happen to match.
-- YAML and KDL remain removed. Lua support must not restore either format or add fallback parsing.
-- There is no automatic Nix-to-Lua translator and no Nix compatibility target. Similarity is a
-  language-design preference, not a compatibility promise.
+### Possible final endpoints
 
-### Executor rules
+#### Endpoint A — Lua-only (recommended)
 
-- Work only in this repository. Do not read from or change `../bedrock` as part of execution.
-- Work on `develop`; leave `main` untouched and do not leave migration branches behind.
-- Use the root Makefile for every relevant build, test, audit, and validation action. Add a focused
-  Make target before introducing a new validation lane.
-- Commit after every cohesive slice. Do not accumulate several phases in one commit, and do not
-  push unless the user asks.
-- Do not change release/version metadata unless a later explicit request requires it.
-- Do not add or restore `.clippy.toml`, `.rustfmt.toml`, or `.typos.toml`. Formatting and typo-policy
-  configuration is outside this plan.
-- Do not use Python to edit files. Use patch/edit tools.
-- No source file may exceed 1,000 lines. Split near-limit files by behavior and name the new files
-  for that behavior, never `file_01`, `part_02`, or similar.
-- Do not wrap Git, Make, or compilation commands in `timeout`. Use a timeout only when actually
-  executing the evaluator/application or a remote VM operation that may hang.
-- Never perform ESP, BOOT, filesystem, block-device, activation, rollback, reboot, or destructive
-  system tests on the host. Those tests run only inside a user-provided disposable VM.
-- Any useful work discovered outside this plan goes into `FUTURE_PLAN.md`; it does not expand the
-  current implementation.
+Keep Gluon during a complete differential and installed-state migration window. After every Lua
+domain, generated artifact, example, active configuration, and archived state is proven, remove the
+Gluon adapters, dependencies, and `.glu` corpus.
 
-**Known baseline gate:** `make source-loc` currently fails on the pre-existing 2,374-line
-`CHANGELOG.md`. Do not report the repository-wide LOC gate as green. Resolve that previously
-requested repository cleanup before Phase 0 implementation, without folding it into a Lua commit.
-The Lua plan itself must add `*.lua` coverage before creating its first Lua source file.
-
-## 2. Current state and real migration size
-
-The former report was stale. The current tracked declaration surface is:
-
-| Surface | Files | LOC |
-|---|---:|---:|
-| Versioned embedded Gluon ABI modules | 13 | 2,007 |
-| Other crate-owned/shipped Gluon declarations | 5 | 2,390 |
-| Documentation examples | 132 | 4,554 |
-| Test fixtures | 68 | 4,251 |
-| **All tracked `.glu` files** | **218** | **13,202** |
-| Tracked `.lua` files | 0 | 0 |
-
-The 13 public ABI modules are package v3; four builder v2 modules; build-policy v5; policy-layers
-v1; profile v1; repository v1; system v1; boot-topology v2; root-filesystem v1; and trigger v1.
-The broader 18-file/4,397-LOC crate-owned count includes five shipped Mason declarations and must
-not be confused with the embedded ABI count.
-
-### Rust coupling
-
-- `crates/gluon_config` is about 3,031 Rust LOC, including 2,373 production LOC.
-- The primary production Gluon boundary is about 11,752 LOC across 26 files before documentation,
-  fixtures, and broad lexical references.
-- There are 129 `Getable`/`VmType` derive sites: 123 production and 6 test-only.
-- Five crates depend directly on Gluon/codegen: `gluon_config`, `stone_recipe`, `mason`, `forge`,
-  and `triggers`; `config` depends through `gluon_config`.
-- Six output paths emit canonical Gluon: draft recipes, profiles, repositories, system snapshots,
-  source locks, and build locks.
-- At least 227 focused tests exercise evaluator and downstream boundary behavior. A broader selected
-  inventory reaches 259 tests. Phase 0 must generate one checked-in category ledger instead of
-  relying on either approximate count.
-
-The 12 decoded root shapes are package, build-policy total, build-policy patch, policy-layer
-manifest, source lock, build lock, profile fragment, repository fragment, system intent/snapshot,
-boot topology, root-filesystem intent, and trigger. Each is an independent parity obligation.
-
-### Gluon features actually used
-
-| Feature | Current use | Lua implication |
-|---|---:|---|
-| `let` | 189 files / about 807 occurrences | `local` bindings |
-| `import!` | 180 / 286 | restricted, prepared imports |
-| record update | 117 / about 420 | immutable `cast.extend` helper |
-| type declarations | 41 / about 173 | authoritative Rust schema; optional authoring types |
-| pattern matching | 7 / 11 | closed tagged variants |
-| recursion | 1 / 1 | allowed only within resource policy |
-| array/string primitives | 8 files each | tiny deterministic host helpers |
-
-The corpus is mechanically approachable, but translation is not the hard part. The hard parts are
-source provenance, import discovery, sandbox capability removal, DTO semantics, generated state,
-and proving that system transactions remain unchanged.
-
-### Current evaluator contracts to preserve
-
-`crates/gluon_config` currently enforces these defaults:
-
-- root source: 1 MiB;
-- explicit input: 1 MiB;
-- each imported file: 256 KiB;
-- imports: 64;
-- total import graph: 2 MiB;
-- VM memory: 32 MiB;
-- VM stack: 64 KiB;
-- one two-second wall-clock deadline spanning load, imports, fingerprinting, and execution.
-
-`SourceRoot` and most of `source.rs` are language-neutral in behavior, but they are physically
-owned by `gluon_config`. Imports, VM interruption, diagnostics, `.glu` normalization, and the
-fingerprint schema are language-specific. Therefore the existing crate cannot simply be copied.
-
-The 64-KiB Gluon stack setting has no assumed one-to-one Lua API. Phase 0 must characterize its
-observable recursion boundary and diagnostic first. The selected engine must either enforce an
-equivalent bound or propose a versioned engine-neutral call-depth policy for explicit approval.
-Silently substituting an engine default is not acceptable.
-
-## 3. Required decisions before implementation
-
-### 3.1 Engine/dialect gate: Lua 5.4 versus Luau
-
-Luau is not “Lua 5.4 with types.” It is derived from Lua 5.1 and deliberately differs from PUC
-Lua. The project must select and name one dialect; it must not compile both Lua engines.
-
-| Candidate | Advantages | Costs/risks |
-|---|---|---|
-| `mlua 0.12` + vendored Lua 5.4 + serde | Literal Lua 5.4, C toolchain, simpler musl/static release story, familiar language | Must construct a minimal environment manually; hook-based deadline; `__gc`, loaders, IO, OS, package, debug, and nondeterministic facilities must be absent |
-| `mlua 0.12` + Luau + serde | Memory limiter, interrupt support, sandbox primitives, no standard `io`/`package`, optional authoring-time analyzer | Lua 5.1-derived dialect, C++17 build/runtime implications, sandbox is still broader than Cast's current empty VM and must be reduced |
-
-**Starting preference:** test standard Lua 5.4 first because that is the requested language and it
-has the simpler C/musl packaging story. Select it only if every security, deadline, memory, stack,
-import, determinism, and release gate passes. Select Luau instead if Lua 5.4 cannot meet those
-contracts without fragile patches. If neither passes, stop the migration; do not silently weaken
-the evaluator policy.
-
-The Phase 0 spike must prove, for both candidates where feasible:
-
-1. workspace MSRV and all supported release targets build through Make;
-2. the release-profile musl binary runs and has the intended static/dynamic linkage;
-3. a fresh VM has only the explicit allowlist;
-4. memory exhaustion, infinite loops, deep recursion, and caught errors cannot bypass limits;
-5. one total deadline covers source loading through output validation;
-6. a grammar-aware literal-import pass can prepare the complete graph before execution;
-7. repeated evaluation in separate processes produces identical normalized output and fingerprints;
-8. dependency licenses/notices are included by the existing packaging lane.
-
-Record the winner, exact crate features, runtime version source, toolchain implications, and rejected
-alternative in this file before Phase 1. Do not use system Lua: host-selected runtimes would break
-reproducibility and provenance.
-
-### 3.2 Endpoint gate: replacement versus permanent coexistence
-
-The architecture must support a temporary dual-runtime window for differential testing. That does
-not automatically make both languages a permanent public feature.
-
-#### Endpoint A — Lua-only (recommended default)
-
-- Add the language-neutral foundation and Lua while Gluon remains operational.
-- Translate and differential-test every domain.
-- Make Lua authoritative.
-- Remove all production Gluon code, dependencies, public names, declarations, and gates in one
-  final sequence of small commits.
-
-This yields one language, one security matrix, and the dependency/build-maintenance benefit.
+This produces one user language and one long-term runtime/security matrix.
 
 #### Endpoint B — permanent Lua plus Gluon
 
-- Retain both evaluator adapters and both complete test matrices.
-- Dispatch only by explicit file extension; never sniff source and never fall back after an error.
-- Retain all Gluon dependencies while adding Lua's runtime/toolchain.
-- Accept a permanently doubled ABI/documentation/security maintenance surface.
+Keep both adapters as first-class public languages. Selection remains explicit by extension; there
+is no content sniffing, fallback, cross-language import, or dual write.
 
-This avoids forced declaration conversion but does not deliver the Gluon dependency reduction.
+This avoids a forced authored-source conversion but permanently retains both dependency trees,
+both runtime threat surfaces, both ABI implementations, and both complete test matrices.
 
-Phase 0 must amend the Gluon-only promises in `PLAN.md`, `FUTURE_PLAN.md`, `README.md`, and
-`docs/gluon-configuration.md` only after the endpoint is chosen. Until then, this file is the
-implementation proposal and those files still describe current shipped behavior.
+The endpoint must be recorded before Lua becomes public, but it does not change the Lua adapter
+architecture. Endpoint A and B share every phase through production parity.
 
-## 4. Target architecture
+## 2. Inherited foundation contracts
 
-### 4.1 Crate boundaries
+Do not restate or reimplement the P0 architecture. Lua must consume these accepted outputs from
+`agnostic_config.md`:
 
-Create one shared core rather than cloning the security-critical loader:
+- one descriptor-rooted `Source`/`SourceRoot` implementation;
+- shared source/import/graph/resource limits and monotonic deadline budget;
+- deterministic prepared-module graph and rooted/embedded resolution;
+- adapter/domain-supplied `AbiCatalog` entries binding semantic ABI IDs to the active language's
+  immutable implementation bytes and capability requirements;
+- stable generic diagnostics;
+- validated opaque `LanguageId`, `EngineId`, `LanguageSpec`, `AbiId`, and evaluator policy;
+- evaluation identity v2 already used by Gluon and every provenance consumer;
+- typed `DeclarationEvaluator<T>` and writable `DeclarationCodec<T>` contracts;
+- engine-neutral `config::Manager`, fragment layering, logical-slot collision policy, atomic
+  persistence, and one-active-authority rule;
+- all 12 shared wire/semantic domain boundaries;
+- Gluon as the passing reference adapter.
+
+The accepted P0 evaluator policy is also fixed: each root or fragment has one budget beginning
+immediately before descriptor-rooted read and ending after typed decode; each shadowed fragment is
+still evaluated under its own budget; and import cycles fail before VM execution. Lua implements
+those rules exactly rather than choosing different admission points.
+
+If Lua reveals a missing shared capability, stop and amend/review `agnostic_config.md`. Do not hide
+a Lua-only source loader, deadline, module resolver, diagnostic format, fingerprint field, config
+store, or persistence path inside `lua_config`.
+
+## 3. Non-negotiable rules
+
+- `.stone` remains the package artifact. Lua does not alter the artifact format or transaction
+  architecture.
+- Atomic updates, rollback architecture, container-trigger behavior, USR merge compliance, and
+  OS/local-configuration separation remain owned by existing Rust layers.
+- YAML and KDL remain removed. No legacy parser or fallback is restored.
+- There is no Nix-to-Lua translator or Nix compatibility goal.
+- Do not read or modify `../bedrock`.
+- Work on `develop`; leave `main` untouched and do not leave migration branches behind.
+- Use the root Makefile for all relevant actions. Put Lua targets in an imported fragment such as
+  `misc/make/lua-tests.mk`; keep the FOL-style root Makefile small.
+- Commit each green slice. Runtime, pilot domain, fragment domains, recipes, system intent, corpus,
+  installed-state migration, and final Gluon removal must not be one commit.
+- Do not change release/version metadata unless separately requested.
+- Do not add or restore `.clippy.toml`, `.rustfmt.toml`, or `.typos.toml`.
+- Do not use Python to edit files.
+- No file may exceed 1,000 lines. Split by function before crossing the limit and use descriptive
+  names, never numbered chunks.
+- Do not wrap Git, Make, or compilation in `timeout`. Bound only execution of an already-built
+  evaluator/application or remote VM operation that could hang.
+- Never run ESP, BOOT, block-device, activation, rollback, reboot, or destructive system tests on
+  the host. Rerun only already-established, user-approved VM gates, retaining their exact non-claims.
+  Do not autonomously reboot the VM.
+- Unrelated improvements go into `FUTURE_PLAN.md` rather than expanding this plan.
+
+### Source-LOC prerequisite
+
+The P0 plan requires the pre-existing oversized `CHANGELOG.md` blocker to be resolved. Before the
+first Lua source is added, extend the existing source-LOC classifier to include `*.lua` and prove
+`make source-loc` rejects an oversized Lua fixture.
+
+## 4. Lua-specific migration surface
+
+The Gluon reference corpus currently contains:
+
+| Surface to pair/convert | Files | LOC |
+|---|---:|---:|
+| Embedded versioned ABIs | 13 | 2,007 |
+| Other shipped declarations | 5 | 2,390 |
+| Documentation examples | 132 | 4,554 |
+| Test fixtures | 68 | 4,251 |
+| **Total `.glu` reference corpus** | **218** | **13,202** |
+
+There are six generated Gluon paths requiring Lua codecs or deliberate migration behavior: draft
+recipe, profile, repository, system snapshot, source lock, and build lock.
+
+### Used language features
+
+| Gluon feature | Current use | Lua declaration-profile mapping |
+|---|---:|---|
+| `let` | 189 files / about 807 occurrences | initialized `local` binding |
+| `import!` | 180 / 286 | grammar-validated literal import supplied to the shared graph |
+| record update | 117 / about 420 | pure `cast.extend(base, patch)` |
+| type declaration | 41 / about 173 | shared Rust schema; optional authoring-only annotations |
+| pattern match | 7 / 11 | closed tagged variants and explicit dispatch |
+| recursion | 1 / 1 | allowed only if the selected profile and limit policy prove it |
+| array/string primitives | 8 files each | small deterministic ABI helpers |
+
+Translation is broad but not the main risk. The main Lua-specific risks are capability removal,
+literal-import parsing, resource enforcement, mutable-table semantics, bounded output conversion,
+runtime packaging, and conversion of installed/archived Gluon state.
+
+## 5. Select exactly one Lua dialect/runtime
+
+Luau is not Lua 5.4. It is derived from Lua 5.1 and has meaningful syntax/runtime differences.
+Cast must select and document one dialect; it must not compile both Lua engines.
+
+| Candidate | Advantages | Risks |
+|---|---|---|
+| `mlua 0.12` + vendored Lua 5.4 + serde | Literal Lua 5.4, C toolchain, simpler musl/static packaging, familiar language | Manual minimal sandbox, hook-based deadline, `__gc`/loaders/stdlib must be absent, no native readonly tables |
+| `mlua 0.12` + Luau + serde | Interrupt support, memory limiter, sandbox primitives, no standard `io`/`package`, optional analyzer | Lua 5.1-derived dialect, C++17 build/link implications, upstream sandbox is still broader than Cast policy |
+
+**Starting preference:** test standard Lua 5.4 first because it is the requested language and has
+the simpler C/musl release story. Select it only if it passes every gate below. Use Luau if Lua 5.4
+cannot satisfy the policy without fragile runtime patches. If neither passes, stop; do not weaken
+the shared evaluator policy to force Lua in.
+
+The engine spike must prove:
+
+1. workspace MSRV and every supported build target through Make;
+2. release-profile musl build, execution, and intended static/dynamic linkage;
+3. a fresh VM exposes only the explicit allowlist;
+4. memory exhaustion, infinite loops, deep recursion, and caught errors cannot bypass host limits;
+5. the shared monotonic deadline can drive the engine hook/interrupt and remains host-latched;
+6. a maintained grammar-aware parser can validate the Cast Lua profile and extract literal imports;
+7. repeated evaluation in separate processes produces identical normalized output and v2 identity;
+8. selected runtime sources and notices enter semantic fingerprints and packaged licenses.
+
+The current Gluon 64-KiB stack setting has no assumed Lua equivalent. Characterize it in the P0
+baseline, then require either an equivalent selected-engine bound or an explicitly approved,
+versioned engine-neutral call-depth policy. Never accept an undocumented engine default.
+
+Do not use system Lua. Host-selected runtime versions, modules, and search paths would break
+reproducibility and provenance.
+
+## 6. Lua adapter contract
+
+### 6.1 `crates/lua_config`
+
+Create `crates/lua_config` as an engine implementation, not a parallel config framework. It owns:
+
+- selected-dialect parsing and declaration-profile validation;
+- literal-import extraction into shared `ImportRequest` values;
+- preparation of engine-native chunks from the core-prepared graph;
+- fresh restricted VM construction;
+- mapping shared memory/deadline/call-depth policy to the selected engine;
+- host-latched limit failure and panic containment;
+- Lua-native error translation into the shared diagnostic envelope;
+- bounded conversion of the final Lua value into the shared domain decoder callback.
+
+It must not own:
+
+- filesystem/path discovery or hardened reads;
+- independent source/import/graph limits;
+- relative path resolution;
+- fragment layering or persistence;
+- evaluation identity encoding;
+- domain DTO meaning;
+- generated-file authority.
+
+`LuaEngine` supplies opaque language/profile/engine descriptors to the shared core. The core must
+not gain `if language == Lua` branches.
+
+### 6.2 Cast's Lua declaration profile
+
+Lua is accepted through a restricted declarative profile, not as unrestricted general-purpose
+Lua. A dialect-aware AST pass runs before execution.
+
+Authored roots and relative modules may use:
+
+- initialized local bindings;
+- scalar/table literals and field/index reads;
+- pure expressions and allowlisted ABI helper calls;
+- functions/conditionals required by the translated corpus;
+- one final root return.
+
+Reject unless a later policy version explicitly adds and tests them:
+
+- global writes;
+- reassignment or post-construction table mutation;
+- duplicate literal keys;
+- loops/goto and variable/dynamic imports;
+- varargs and coroutine constructs;
+- bytecode, `load`, `loadfile`, `dofile`, or external modules.
+
+Embedded ABI modules may use a wider reviewed subset internally, but remain capability-restricted,
+implementation-fingerprinted, and unable to leak mutable state across evaluations.
+
+### 6.3 Final value-tree validation
+
+Only the authored root's final value crosses into Rust. Imported modules may privately return
+functions/constructors; executable values may not appear in the root result.
+
+Before shared schema decoding, walk the Lua value and accept only:
+
+- booleans;
+- UTF-8 strings;
+- signed integers with explicit target-bound checks;
+- contiguous one-based arrays;
+- string-keyed closed records;
+- explicit tagged option/patch/variant records.
+
+The tree walk rejects floats, NaN/infinity, functions, threads, userdata/lightuserdata, metatables,
+bytecode, cycles, sparse arrays, mixed-key tables, and invalid UTF-8. The existing shared domain
+schema then rejects missing/unknown fields, malformed tags, and target integer overflows. Bound
+depth, total nodes, table entries, per-string bytes, and aggregate host allocation before schema
+conversion. These limits are part of the shared evaluator-policy identity.
+
+`nil` is never an option value. Use explicit values such as:
 
 ```text
-crates/declarative_config
-    Source / SourceRoot / hardened reads
-    limits / total deadline
-    generic diagnostics
-    language-tagged fingerprint v2
-    prepared-module graph and evaluation policy traits
-             |                         |
-             v                         v
-crates/gluon_config              crates/lua_config
-    Gluon AST/import adapter         Lua AST/import adapter
-    Gluon VM adapter                 selected Lua VM adapter
-             \                         /
-              v                       v
-                    crates/config
-          extension dispatch, fragment layering,
-              atomic persistence, collisions
-                         |
-                         v
-        shared wire DTOs -> existing semantic TryFrom
-                         |
-                         v
-        stone_recipe / mason / forge / triggers
+{ kind = "none" }
+{ kind = "some", value = ... }
+{ kind = "keep" }
+{ kind = "set", value = ... }
 ```
 
-Responsibilities:
+`cast.extend` and array helpers return new values. Shared defaults/module exports must be read-only
+or independently copied. Modules execute dependencies-first, at most once per fresh VM; there is
+no process-global module cache and no state survives evaluation.
 
-- `declarative_config` owns behavior that must be identical for every engine. Moving code must be a
-  behavior-preserving extraction with characterization tests before Lua is introduced.
-- `gluon_config` becomes an adapter and remains green during the migration.
-- `lua_config` owns only selected-dialect parsing, prepared imports, VM construction/interruption,
-  and conversion into the validated language-neutral value tree.
-- `config` becomes an engine-neutral store/fragment manager. It must not duplicate evaluation or
-  source-root logic.
-- Domain crates own shared wire DTOs and existing semantic validation. Engine adapters must not
-  independently redefine package, policy, repository, or system meaning.
+### 6.4 Capability policy
 
-### 4.2 Fingerprint v2 and persisted identity
+Construct an empty-by-default environment. Do not expose filesystem, IO, environment, process,
+network, clocks/time, randomness, OS, package loaders, debug, FFI, bytecode loading, coroutines,
+mutable ambient globals, or nondeterministic `pairs`/`next` iteration.
 
-The current fingerprint contains `gluon_version` and uses the hash domain
-`os-tools-gluon-evaluation\0`. Lua values must never enter that identity.
+Omit `pcall`/`xpcall` unless tests prove every hook/interrupt/memory/call-depth failure remains
+latched in Rust and rejects the evaluation after any script catch. A fresh VM is required for every
+evaluation.
 
-Before the first Lua domain is accepted, introduce fingerprint schema v2 with:
+### 6.5 Import policy
 
-- declaration language and language-profile version;
-- engine kind and exact engine version/source;
-- configuration ABI version and evaluator-policy version;
-- root logical name and source hash;
-- sorted prepared import identities and hashes;
-- explicit-input identities and hashes;
-- resource-policy identity;
-- a new language-neutral hash domain.
+Lua parses imports; the shared core resolves them.
 
-V2 is an intentional identity boundary. Existing v1 build locks, derivation identities, snapshots,
-and metadata may be readable for diagnostics, but they must be rejected as current inputs and
-regenerated. A Lua and Gluon declaration that normalize to the same domain value must have
-different evaluation fingerprints and derivation identities. Document this as expected cache/lock
-invalidation, not an accidental regression.
+- Embedded imports use semantic ABI names such as `cast.package.v3`.
+- Relative imports contain an exact `.lua` extension.
+- Only grammar-recognized literal imports are accepted.
+- Absolute paths, traversal, NUL, ambient `LUA_PATH`/`LUA_CPATH`, computed imports, and
+  cross-language imports are rejected.
+- The existing core applies graph ordering/deduplication, source authority, limits, and identity.
+- The VM receives only the prepared in-memory module set; standard `package` loading is absent.
 
-Do not rewrite or delete historical immutable generations. V1 declarations/locks are stale for
-creating a new derivation, but already materialized generations must remain addressable for
-rollback without re-evaluating their old declaration source. The VM matrix must cross this migration
-boundary in both directions.
+If the selected dialect lacks a maintained grammar-aware parser, stop. A regex/text scanner is not
+an acceptable security boundary.
 
-Update every consumer, including `crates/stone_recipe/src/derivation/provenance.rs`, Mason recipe
-state/explanations, package metadata emission, Forge boot intent contracts, and trigger contracts.
+## 7. Register Lua without special cases
 
-### 4.3 Lua declaration contract
+Lua registration must use the second-adapter seam already proven synthetically by the P0 plan.
+Register a real production `LanguageSpec` through that seam and retain the synthetic conformance
+tests; do not redesign dispatch.
 
-Lua is accepted through a Cast declaration profile, not as unrestricted general-purpose Lua.
-A dialect-aware source pass enforces the profile before the VM runs. Authored roots and relative
-modules may use initialized local bindings, literals, pure expressions, calls to allowlisted ABI
-helpers, functions required by the translated corpus, conditionals, and one final return. Reject
-global writes, reassignment, post-construction table mutation, duplicate literal keys, loops/goto,
-dynamic loading/imports, varargs, and coroutine constructs unless a later policy version adds a
-specific construct with tests. Embedded ABI modules may use a wider reviewed subset internally,
-but run in the same capability sandbox and are included in semantic fingerprints.
+Concrete rules:
 
-The declaration result obeys these rules:
+- `.lua` selects `LuaEngine`; `.glu` selects `GluonEngine` while Gluon is supported.
+- `stone.lua` plus `stone.glu` in one recipe directory is a hard collision before evaluation.
+- `system.lua`/`system.glu`, `boot-topology.lua`/`.glu`, and
+  `root-filesystem.lua`/`.glu` collide in the same logical slot.
+- Same-layer `foo.lua` plus `foo.glu` is a hard duplicate. Across vendor/admin/user layers, the
+  existing higher-layer whole-fragment override remains, but every discovered fragment validates.
+- A failed source is never retried with the other engine.
+- Cross-language imports are never allowed.
 
-- An authored root returns exactly one data value. Imported/embedded modules may privately return
-  helpers or constructors, but executable values may not cross the root-output boundary.
-- Values are limited to booleans, UTF-8 strings, signed integers, arrays, closed records, and
-  explicitly tagged variants/options.
-- Floating-point values, NaN/infinity, functions, threads/coroutines, userdata/lightuserdata,
-  metatables, bytecode, cycles, sparse arrays, and mixed-key tables are rejected before
-  serde/domain conversion.
-- Arrays are contiguous and one-based. Records use string keys only. Unknown fields are errors.
-- Conversion is bounded by depth, node count, table entries, per-string bytes, and aggregate host
-  allocation; those limits are part of evaluator policy and fingerprint identity.
-- `nil` is not an option value. ABI helpers return explicit tagged records such as
-  `{ kind = "none" }`, `{ kind = "some", value = ... }`, `{ kind = "keep" }`, and
-  `{ kind = "set", value = ... }`.
-- Record update uses a pure `cast.extend(base, patch)` helper. Array helpers return new arrays.
-  Shared defaults and ABI values are deeply frozen or otherwise made unmodifiable.
-- Existing Rust semantic `TryFrom` validation remains authoritative after structural conversion.
-- Lua 5.4 has no static type guarantee. If Luau is selected, analyzer output is an additional
-  authoring aid only; it is never the runtime security or correctness boundary.
+Generated artifacts have one active authority:
 
-Prepared modules execute dependencies-first in one deterministic order, at most once per fresh VM.
-There is no process-global module cache. Module exports are read-only within that evaluation: use
-an engine-native freeze only if it is complete, otherwise expose host-owned wrappers or independent
-copies. A module must not leak mutable state between importers, and no state survives evaluation.
+- `stone.lua` writes `sources.lock.lua` and `build.lock.lua` only;
+- `stone.glu` retains the `.glu` pair while supported;
+- a system snapshot uses the accepted system intent's language;
+- new CLI-created declarations may default to Lua only after public activation;
+- existing generated files preserve their registered codec until explicit migration;
+- emitters sort keys, escape deterministically, use explicit tags, and never rewrite authored files.
 
-### 4.4 Capability and import contract
+Every save/delete/update checks every registered extension through the same retained directory
+authority. An alternate-language authored file blocks mutation. Alternate generated state requires
+the explicit transactional migration path; a normal command never creates dual authority or
+silently orphans old locks/snapshots.
 
-Each evaluation uses a new VM with an explicit empty-by-default environment. Do not expose IO,
-filesystem, environment, process, network, clocks/time, randomness, OS, package loaders, debug,
-FFI, bytecode/loadfile/dofile, coroutines, mutable ambient globals, `pairs`/`next`, or exception
-paths capable of clearing a host-side limit latch. Omit `pcall`/`xpcall` unless the selected design
-proves that every host limit remains latched across them. Any hook/interrupt/memory/stack violation
-is latched by Rust and rejects the evaluation even if script code catches an interpreter error.
+Do not bump `cast.package.v3`, `cast.trigger.v1`, or other semantic ABI names merely because Lua
+implements them. ABI versions change only with domain meaning; engine/language belongs in v2.
 
-Imports must retain the current pre-execution evidence model:
+## 8. Lua-specific path impact
 
-- only grammar-recognized literal imports are accepted;
-- embedded ABI imports use names such as `cast.package.v3`;
-- relative imports include an exact `.lua` extension and resolve through `SourceRoot`;
-- absolute paths, traversal, NUL, ambient `LUA_PATH`/`LUA_CPATH`, dynamic/computed imports, and
-  cross-language imports are rejected;
-- the complete graph is loaded, bounded, cycle-checked, and fingerprinted before VM execution;
-- the VM receives only the prepared in-memory module registry.
-
-If the selected dialect lacks a maintained grammar-aware way to prove literal imports, stop at
-Phase 0. A text/regex scanner is not acceptable, and changing to runtime-only import tracing needs
-a separate explicit policy decision.
-
-### 4.5 File discovery, collisions, and generated output
-
-In temporary or permanent dual mode:
-
-- Extension is authoritative: `.lua` selects Lua and `.glu` selects Gluon.
-- `stone.lua` and `stone.glu` in one recipe directory are a hard error before evaluation.
-- Fixed intents such as `system`, `boot-topology`, and `root-filesystem` hard-fail when both
-  extensions exist.
-- Within one fragment layer, `foo.lua` plus `foo.glu` is a hard duplicate error. Across vendor,
-  admin, and user layers, the existing higher-layer whole-fragment override by logical stem remains
-  valid regardless of language, but every discovered fragment is still validated first.
-- No import crosses engines.
-- No command retries a failed declaration under the other engine.
-
-Generated artifacts have one authority, never dual writes:
-
-- `stone.lua` produces `sources.lock.lua` and `build.lock.lua`; `stone.glu` keeps the `.glu` pair.
-- A save operation preserves the language of an existing generated fragment; a newly created
-  fragment requires an explicit language, with Lua becoming the CLI default only after activation.
-- A system snapshot uses the language of its accepted system intent and records that language in
-  provenance. The corresponding alternate-extension snapshot must not coexist in the same active
-  logical slot; immutable historical generations may retain their original snapshot.
-- Emitters sort keys, use stable escaping/tagged values, never rewrite authored files, and emit no
-  metatables or executable ambient lookups.
-
-Every save, delete, update, and language-switch operation must inspect both extensions through the
-same retained directory authority used for mutation. An alternate-extension authored file blocks
-the operation. Alternate generated locks/snapshots also hard-fail until an explicit transactional
-language migration validates the replacement, durably switches the authoritative names, and
-removes stale generated names. A normal save/delete command must never create `foo.lua` beside
-`foo.glu` or silently orphan a `.glu` lock pair after switching to `stone.lua`. Tests must interrupt
-the migration at every persistence boundary and prove one recoverable authority remains.
-
-Do not bump names such as `cast.package.v3` merely because their implementation language changes.
-Provide a Gluon and Lua implementation of the same semantic ABI during coexistence. Bump an ABI
-version only when its domain meaning changes. Engine/language identity belongs in fingerprint v2.
-
-### 4.6 Installed-state upgrade contract
-
-Endpoint A requires a bridge release; deleting repository Gluon support is not enough. Phase 0
-must inventory active authored `.glu` (including `/etc/cast/system.glu`), active generated
-snapshots/locks (including `/usr/lib/system-model.glu`), and every archived state snapshot that can
-still be exported or activated. The default upgrade sequence is:
-
-1. ship one dual-runtime bridge version that can read v1/Gluon state and write v2/Lua state;
-2. require operators to supply/approve Lua replacements for authored files—never overwrite
-   authored Gluon automatically;
-3. transactionally create canonical Lua copies/index entries for active and archived generated
-   snapshots without modifying the immutable old generations;
-4. record a durable migration-complete marker only after live load, archived export, interrupted
-   resume, and rollback checks pass;
-5. make the final Lua-only version refuse upgrade with a precise diagnostic if unmigrated state is
-   found, directing the operator through the bridge version;
-6. remove Gluon only after an old installation containing archived states passes the complete
-   upgrade/export/rollback acceptance path.
-
-If immutable archived snapshots cannot be represented without in-place mutation, stop and choose
-either a bounded legacy generated-snapshot reader or a new versioned archive representation. Do not
-pretend regeneration covers historical state, and do not retain unrestricted Gluon evaluation as a
-hidden fallback in the Lua-only endpoint.
-
-## 5. Domain impact map
-
-| Area | Primary paths | Required change |
+| Area | Expected path | Lua work only |
 |---|---|---|
-| Shared evaluation | `crates/gluon_config/src/{source,limits,deadline,diagnostic,fingerprint}.rs` | Extract generic behavior into `crates/declarative_config`; leave Gluon adapters |
-| Lua adapter | new `crates/lua_config/` | VM, prepared imports, capability allowlist, output-tree validator, diagnostics |
-| Workspace/dependencies | `Cargo.toml`, `Cargo.lock`, `flake.nix`, CI/release workflows | Add only selected engine/features; prove musl/linkage/licenses; later remove Gluon only for Endpoint A |
-| Config store | `crates/config/src/gluon.rs`, `src/gluon/fragment_collection.rs`, `src/gluon/atomic_persistence.rs`, `src/rooted_gluon.rs` | Generalize public names, extension dispatch, collision rules, atomic persistence |
-| Package ABI | `crates/stone_recipe/gluon/package.glu`, `src/package/gluon.rs` | Shared wire DTO; Lua ABI; package parity |
-| Build policy/builders | `crates/stone_recipe/gluon/build_policy*.glu`, `builders/*.glu`, related Rust modules | Lua ABIs, immutable helpers, policy/patch parity |
-| Locks/provenance | Mason `source_lock.rs`; Stone Recipe build-lock and derivation modules | Split near-limit source-lock file; language-aware canonical codecs; fingerprint v2 |
-| Recipes/CLI | `crates/mason/src/recipe.rs`, `draft.rs`, `cli/recipe/` | Exact root selection, Lua drafts, explanations, no fallback |
-| Profiles | `crates/mason/src/profile.rs`, `data/profile.d/`, `crates/config` | Shared DTO, Lua codec/emitter, layer parity |
-| Repositories | `crates/forge/src/repository/` | Shared DTO, Lua codec/emitter, layer parity |
-| Triggers | `crates/triggers/src/gluon.rs`, Forge trigger discovery | First pilot domain, exact ABI evidence, read-only Lua path |
-| System model | `crates/forge/src/system_model/` | Lua intent and canonical snapshot with explicit language provenance |
-| Boot intents | Forge active-reblit boot-topology/root-filesystem modules | Lua adapters and exact fingerprint contracts; VM-only system acceptance |
-| Semantic build identity | `crates/tools_buildinfo/src/semantic_fingerprint.rs` | Include selected Lua ABI trees and tests in implementation fingerprint |
-| Gates/tooling | `misc/make/*.mk`, `misc/scripts/check-config-formats.sh`, `check-source-loc.sh` | Language-neutral target names, Lua fixtures, retain YAML/KDL rejection, count `*.lua` LOC |
-| Corpus/docs | 218 `.glu` files, `docs/examples/gluon/`, `docs/gluon-configuration.md`, README/PLAN files | Paired corpus during parity; convert/delete only at Endpoint A finalization |
+| Runtime | new `crates/lua_config/` | parser/profile, imports, VM, capabilities, output validation, diagnostics adapter |
+| Workspace | `Cargo.toml`, `Cargo.lock`, build shell/CI/release files | selected `mlua` engine/features/toolchain only |
+| Test integration | new `misc/make/lua-tests.mk` | exact Lua spike, evaluator, parity, release, dependency, installed-state targets |
+| Semantic fingerprint | `crates/tools_buildinfo/src/semantic_fingerprint.rs` | register the selected Lua ABI source root and runtime notices |
+| Triggers | `crates/triggers/` Lua adapter/ABI | first public read-only domain |
+| Profiles | `crates/mason/` profile Lua adapter/ABI/emitter | paired fragment evaluation and canonical encoding |
+| Repositories | `crates/forge/src/repository/` Lua adapter/ABI/emitter | paired fragment evaluation and canonical encoding |
+| Package/policy | `crates/stone_recipe/` Lua adapters and ABI tree | package, builders, policy total/patch/layers |
+| Recipes/locks | `crates/mason/` and Stone Recipe lock modules | `stone.lua`, drafts, source/build lock Lua codecs |
+| System | `crates/forge/src/system_model/` | Lua intent and canonical Lua snapshot |
+| Boot intent | Forge boot-topology/root-filesystem adapters | Lua model parity; no new transaction architecture |
+| Corpus/docs | 218-reference Gluon corpus and current configuration docs | paired Lua sources, translation review, user contract |
 
-`crates/mason/src/source_lock.rs` is already near the 1,000-line limit. Split it by decoding,
-canonical emission, and domain validation before adding Lua behavior. Apply the same functional
-split rule to every touched file that would cross the limit.
+The P0 plan must already have split `crates/mason/src/source_lock.rs` by function. Lua must add a
+new codec module rather than growing a near-limit file again.
 
-## 6. Implementation phases and commit boundaries
+## 9. Implementation phases and commits
 
-Each phase ends with a clean tree, a focused Make gate, and one or more cohesive commits. If a
-phase needs unrelated work, record that work in `FUTURE_PLAN.md` instead of widening the phase.
+### Phase L0 — Verify the prerequisite and select the engine
 
-### Phase 0 — Record choices and prove the engine
+1. Verify every completion criterion and accepted commit from `agnostic_config.md`.
+2. Prove the shared core and generic `config` still have no Gluon dependency and no Lua special
+   case.
+3. Add `*.lua` source-LOC coverage before adding any Lua source.
+4. Add `misc/make/lua-tests.mk` with exact targets `lua-engine-spike`,
+   `lua-engine-spike-release`, `lua-config-test`, `lua-domain-parity-test`, `lua-release-test`,
+   `lua-dependency-audit`, and `lua-installed-state-test`.
+5. Run the Lua 5.4/Luau spike from section 5 and select one exact engine/feature set.
+6. Register the now-selected Lua runtime/ABI source roots in semantic implementation fingerprints
+   before adding production Lua sources.
+7. Select Endpoint A or B before public registration and reconcile `PLAN.md`, `FUTURE_PLAN.md`,
+   README, and current configuration documentation.
 
-1. Clear the known baseline LOC blocker separately, then add `*.lua` classification and tests to
-   the source-LOC gate before adding any Lua source.
-2. Teach `tools_buildinfo` semantic collection to include the chosen crate-level Lua ABI tree and
-   pin inclusion/exclusion tests before adding any Lua ABI.
-3. Add exact Make targets `lua-engine-spike` and `lua-engine-spike-release` for Lua 5.4 and Luau
-   experiments without connecting either to production. The release target must execute the built
-   release evaluator tests, not merely compile them.
-4. Prove the eight engine gates in section 3.1, including release-profile musl execution.
-5. Inventory every current focused test as generic, Gluon-specific, or future differential.
-6. Inventory every persisted declaration/lock/snapshot and its reader/writer/rollback lifetime,
-   including state-query/export readers and the installed-state bridge in section 4.6.
-7. Select dialect, exact `mlua` features, import parser, and Endpoint A or B.
-8. Update this plan and reconcile `PLAN.md`, `FUTURE_PLAN.md`, README, and current configuration
-   documentation. Put rejected engines and deferred enhancements in `FUTURE_PLAN.md`.
+**Commit examples:** `test(lua): add adapter guardrails`, then
+`test(lua): prove selected runtime constraints`, then `docs(plan): select lua endpoint`.
 
-**Commit examples:** `test(lua): prove evaluator runtime constraints`, then
-`docs(plan): select lua migration endpoint`.
+**Exit:** the dialect, parser, features, packaging, endpoint, and rejected alternative are recorded;
+no production domain accepts `.lua`.
 
-**Exit:** no production consumer uses Lua; `make source-loc` recognizes Lua and passes; semantic
-fingerprint tests recognize a Lua ABI tree; all current Make gates still pass; the selected engine
-has evidence for sandbox, import, resource, musl, deterministic, and licensing contracts.
+### Phase L1 — Implement isolated `LuaEngine`
 
-### Phase 1 — Extract the language-neutral core
+1. Create `crates/lua_config` using the selected features only.
+2. Implement AST profile validation, literal-import extraction, shared graph integration, fresh VM,
+   capability allowlist, limit/deadline mapping, host latches, and diagnostic translation.
+3. Implement bounded final value-tree validation and typed decoder callback integration.
+4. Test every prohibited construct/capability, source/import limit, deadline bypass, OOM, recursion,
+   panic, cycle, malformed value, fresh-VM isolation, and repeated-process determinism case.
+5. Run both debug and actual release execution through Make.
 
-1. Create `crates/declarative_config` and move `Source`, `SourceRoot`, and hardened reads first.
-2. Move generic limits and total-deadline accounting in a second green slice.
-3. Move engine-neutral diagnostic primitives and prepared-module graph policy separately from
-   Gluon AST parsing and VM interruption.
-4. Keep public compatibility re-exports in `gluon_config` only while consumers migrate.
-5. Add characterization tests before and after each move; do not change fingerprint bytes yet.
+**Commit examples:** `feat(lua): implement declaration engine adapter`, then
+`test(lua): pin capability and value boundaries`.
 
-**Commit examples:** `refactor(config): extract hardened source loading`,
-`refactor(config): extract evaluation limits and deadline`, and
-`refactor(config): separate prepared module policy`.
+**Exit:** `LuaEngine` passes its complete isolated contract; it is not registered for a production
+domain.
 
-**Exit:** Gluon-only behavior and every existing security gate are byte/diagnostic compatible;
-there is one hardened loader implementation, not two.
+### Phase L2 — Prove one complex domain privately
 
-### Phase 2 — Introduce fingerprint v2 deliberately
+Use package v3 or build-policy v5 because it exercises records, variants, options/patches, builders,
+and semantic validation.
 
-1. Implement the schema in section 4.2 and canonical encoding/validation.
-2. Migrate derivation provenance, explanations, package metadata, locks, triggers, and boot intent
-   checks as separate commits.
-3. Add v1-read/stale-reject tests and prove no old lock is accepted as current.
-4. Preserve historical generation references and prove rollback does not re-evaluate stale v1
-   declarations.
-5. Document expected derivation/cache invalidation.
+1. Implement the corresponding Lua ABI under the selected adapter source tree.
+2. Implement the domain's Lua `DeclarationEvaluator<T>` against the already-shared wire type.
+3. Differentially evaluate paired Gluon/Lua fixtures into normalized Rust values.
+4. Test missing/unknown fields, tags, integer boundaries, immutable update helpers, module export
+   isolation, and stable field-path diagnostics.
+5. Keep the adapter private; do not add `.lua` discovery for users yet.
 
-**Commit examples:** `feat(config): add language-tagged evaluation fingerprint`, then
-`refactor(recipe): consume evaluation fingerprint v2`.
+**Commit:** `test(lua): prove complex domain parity`.
 
-**Exit:** Gluon evaluations use v2 correctly before Lua can create a domain value.
+**Exit:** the hardest schema passes without changing any shared P0 interface.
 
-### Phase 3 — Build the isolated Lua evaluator
+### Phase L3 — Register the trigger pilot
 
-1. Create `crates/lua_config` using only the selected engine/features.
-2. Implement the empty capability environment, prepared literal imports, one total deadline,
-   host-latched resource failures, panic containment, and a fresh VM per call.
-3. Validate the bounded Lua value tree before serde and existing semantic conversion.
-4. Map parse/import/schema/limit/runtime/internal failures into stable generic diagnostics with
-   logical source names and line/column or field paths where available.
-5. Add adversarial tests for every forbidden capability and bypass listed in sections 3 and 4.
+Triggers are the smallest read-only ABI and need no encoder.
 
-**Commit examples:** `feat(lua): add restricted evaluator`, then
-`test(lua): pin resource and capability boundaries`.
+1. Add the Lua implementation of `cast.trigger.v1`.
+2. Register `.lua` through the generic trigger evaluator registry.
+3. Preserve exact embedded-ABI and empty-explicit-input evidence contracts in v2.
+4. Add paired success/failure/identity/determinism fixtures and collision/fallback negatives.
 
-**Exit:** evaluator tests pass in debug and release profiles; no production domain dispatches to
-Lua yet.
+**Commit:** `feat(triggers): register lua declaration adapter`.
 
-### Phase 4 — Establish shared schema and one complex proof
+**Exit:** Lua triggers normalize identically to Gluon; engine identities intentionally differ; no
+transaction runs during host tests.
 
-1. Define shared wire representations for closed records, arrays, tagged variants, options, and
-   patches. Do not maintain separate semantic models per engine.
-2. Convert one representative complex contract—package v3 or build-policy v5—without exposing it
-   publicly.
-3. Differentially evaluate paired Gluon/Lua fixtures into normalized Rust domain values.
-4. Cover missing/unknown fields, option/patch tags, integer boundaries, aliasing, mutation,
-   sparse/mixed tables, cycles, and stable diagnostics.
+### Phase L4 — Add profile and repository fragments
 
-**Commit:** `refactor(recipe): share declaration wire schema`.
+1. Add Lua ABIs and typed evaluators/codecs for profile and repository domains.
+2. Add canonical Lua emitters using the shared generated-authority/persistence path.
+3. Register Lua for these domains without modifying generic layering.
+4. Test same-layer cross-extension collisions, cross-layer logical shadowing, validation of shadowed
+   fragments, atomic save/delete, authored protection, alternate-authority blocks, and interrupted
+   generated-language migration.
 
-**Exit:** the hardest DTO shape has semantic parity and intentionally different engine-tagged
-fingerprints.
+**Commit separately:** `feat(profile): add lua declaration codec` and
+`feat(repository): add lua declaration codec`.
 
-### Phase 5 — Pilot Lua through triggers
+**Exit:** fragment storage behavior is adapter-independent and no dual write exists.
 
-Triggers are the smallest public ABI and are read-only, making them the first end-to-end domain.
+### Phase L5 — Add packages, policies, recipes, and locks
 
-1. Add `cast.trigger.v1` as a Lua ABI with the same domain semantics.
-2. Add exact extension selection and rooted loading without changing other domains.
-3. Require the same explicit ABI/import and empty-input fingerprint contract as Gluon.
-4. Add paired success, failure, determinism, and provenance fixtures.
+1. Add Lua implementations for package v3, four builder v2 ABIs, build-policy v5, and
+   policy-layers v1.
+2. Add Lua adapters for package, policy total/patch/layers, source lock, and build lock.
+3. Register exact `stone.lua` discovery and `stone.lua`/`stone.glu` collision behavior.
+4. Add language-matched source/build lock codecs, draft generation, check/freeze/explain behavior,
+   and v2 provenance labels.
+5. Test recipe-language switching, stale alternate lock pairs, interrupted migration, authored-file
+   refusal, repeated builds, and normalized plan parity.
 
-**Commit:** `feat(triggers): accept restricted lua declarations`.
+**Commit by function:** ABI/parity, recipe registration, source-lock codec, build-lock codec, then
+CLI behavior.
 
-**Exit:** trigger planning is identical after normalization; no transaction runs during host tests.
+**Exit:** paired recipes yield equal normalized package plans and expected package filenames while
+retaining intentionally different evaluation/derivation identities. `.stone` format is unchanged.
 
-### Phase 6 — Generalize the configuration manager
+### Phase L6 — Add system and boot intent
 
-1. Replace `GluonCodec`/`DecodedGluon`/`load_gluon`-shaped internals with engine-neutral names.
-2. Preserve atomic persistence, authored-file protection, retained descriptors, root identity,
-   layer order, and fail-closed evaluation.
-3. Implement extension dispatch and same-stem collision rules exactly as section 4.5.
-4. Migrate profile and repository fragments with paired fixtures and canonical Lua emitters.
-5. Preserve temporary compatibility re-exports only until all in-tree callers move.
+1. Add Lua implementations for system v1, boot-topology v2, and root-filesystem v1.
+2. Register Lua through the generic fixed-logical-slot path and preserve collision errors.
+3. Emit/re-evaluate a canonical Lua system snapshot with v2 language provenance.
+4. Prove host-safe model and plan parity first.
+5. In the disposable UEFI VM, rerun only already-established relevant gates showing equivalent Lua
+   values reach the same Rust plans/publication paths. Retain every existing non-claim for startup
+   repair, interruption, selected-payload bootability, reboot recovery, and power-loss durability.
+6. Never reboot autonomously. Any new reboot experiment remains in `FUTURE_PLAN.md` and requires
+   fresh approval, confirmed snapshot/guest/target-disk identity, and loss-of-access planning.
 
-**Commit examples:** `refactor(config): generalize declaration storage`,
-`feat(profile): add lua fragments`, and `feat(repository): add lua fragments`.
+**Commit separately:** system intent, boot topology, root filesystem, then VM evidence.
 
-**Exit:** mixed-layer behavior is deterministic; same-layer collisions are errors; no fallback or
-dual write exists.
+**Exit:** Lua reaches the same accepted system-model boundaries as Gluon without changing the
+transaction engine or claiming deferred closure.
 
-### Phase 7 — Migrate recipes, policy, and generated locks
+### Phase L7 — Pair the complete corpus and documentation
 
-1. Split `source_lock.rs` by function before extending it.
-2. Add Lua implementations of package v3, builder v2, build-policy v5, and policy-layers v1.
-3. Add exact `stone.lua`/`stone.glu` root collision handling.
-4. Add language-matched source-lock and build-lock codecs and canonical emitters.
-5. Migrate recipe draft/check/explain CLI behavior and provenance labels.
-6. Differentially test every root contract and representative package corpus before expanding to
-   all examples.
+1. Pair all 13 embedded ABIs, five shipped declarations, 68 fixtures, and 132 documentation
+   examples.
+2. Use mechanical translation only for simple constructs; hand-review ABI modules and every file
+   using matches, recursion, variants, options/patches, or primitive helpers.
+3. Differentially compare all paired roots after normalization into shared Rust values.
+4. Verify v2 fingerprints differ by language/engine as designed.
+5. Update scripts, CLI help, README, plans, configuration guide, and examples.
+6. Keep YAML/KDL rejection explicit while allowing only the selected registered language set.
+7. Audit source-LOC, semantic source-tree inclusion, runtime licenses, and release packaging.
 
-**Commit examples:** `refactor(lock): separate source lock codecs`,
-`feat(recipe): evaluate stone lua declarations`, and
-`feat(lock): emit language-matched canonical locks`.
+**Commit in small domain/corpus slices**, never one mass translation commit.
 
-**Exit:** a Lua recipe builds the same normalized package plan and expected package filename as its
-Gluon pair while retaining intentionally distinct evaluation/derivation identity; the `.stone`
-format is unchanged, and authored/generated files cannot conflict silently.
+**Exit:** every public domain/example has a passing Lua form and the documentation describes the
+actual selected dialect, sandbox, import rules, file authority, and endpoint.
 
-### Phase 8 — Migrate system and boot intent
+### Phase L8 — Ship the installed-state bridge and release parity
 
-1. Add Lua implementations of system v1, boot-topology v2, and root-filesystem v1.
-2. Generalize fixed-path discovery and hard-fail alternate-extension conflicts.
-3. Emit and re-evaluate a language-matched canonical system snapshot.
-4. First pass all evaluator/model/plan tests on the host without touching disk state.
-5. In the disposable UEFI VM, rerun only the already established, user-approved VM gates needed to
-   show that equivalent Lua intent reaches the same Rust plans and existing publication paths.
-   Preserve every baseline non-claim: this migration does not close deferred startup repair,
-   interruption, selected-payload bootability, reboot recovery, or power-loss durability.
-6. Exercise the installed-state bridge with active and archived v1 data, including export,
-   interrupted resume, and rollback selection, without rewriting the historical generation.
-7. Never reboot autonomously. A reboot experiment remains deferred to `FUTURE_PLAN.md` and needs
-   fresh user approval plus confirmed VM snapshot, guest identity, target-disk identity, and a plan
-   for losing guest state/SSH or returning to installation media.
+Endpoint A requires at least one dual-runtime bridge release. Endpoint B still needs safe explicit
+language switching.
 
-**Commit examples:** `feat(system): accept lua system intent`, then
-`test(vm): prove lua atomic activation and rollback`.
+Inventory and handle:
 
-**Exit:** Lua reaches the same accepted model and VM boundaries as Gluon, and the report repeats the
-baseline's exact non-claims. No risky operation ran on the host and no deferred system-manager
-closure was pulled into this migration.
+- active authored files such as `/etc/cast/system.glu`;
+- active generated files such as `/usr/lib/system-model.glu` and lock pairs;
+- every archived system snapshot that current state-query/export paths can read;
+- legacy generated profile/repository fragments;
+- migration state and interrupted temporary files.
 
-### Phase 9 — Convert the corpus, documentation, and tooling
+#### Durable migration authority
 
-1. Pair all 13 ABI modules, five shipped declarations, 68 fixtures, and 132 documentation examples.
-2. Translate mechanically where safe; hand-review ABI modules and the files using pattern matching,
-   recursion, variants, option/patch semantics, and array/string primitives.
-3. Add differential gates over all paired domain roots. Compare normalized Rust values; assert that
-   fingerprints differ by engine as designed.
-4. Update Make fragments, scripts, CLI help, README, plan documents, and configuration guide.
-5. Rename `check-config-formats.sh` or its messages so it permits the selected declarative
-   language set while continuing to reject YAML/KDL exactly. Audit that the Phase 0 `*.lua` LOC
-   and semantic-ABI fingerprint coverage still spans the final corpus layout.
-6. Include selected runtime notices in license output.
+Use one concrete catalog rather than a loose marker or directory scan:
 
-**Commit in small corpus/domain slices**, not one repository-wide conversion commit.
+- add a `declaration_migrations` table to the existing
+  `<installation-root>/.cast/db/state` SQLite database;
+- use that catalog only for immutable state-owned material, keyed by `(state_id, logical_slot)` with
+  `state_id` referencing `state(id) ON DELETE CASCADE`;
+- store a catalog schema version, authenticated state-tree marker, original language/logical path
+  and SHA-256, migrated language/blob SHA-256, and canonical evaluation-identity-v2 bytes;
+- store immutable converted bytes at
+  `<installation-root>/.cast/declaration-migrations/v1/blobs/<sha256>.lua`, created beneath a
+  retained private `.cast` directory authority; the hash in the filename and catalog must match
+  the reopened file;
+- treat only a committed catalog row as selection authority. A file with no committed row is
+  unreachable residue, never an implicit candidate; a committed row whose state marker, original
+  source, converted blob, or v2 identity no longer matches fails closed rather than falling back.
 
-**Exit:** every public example and fixture has a passing Lua form; docs describe the exact dialect,
-capability/import rules, collision semantics, generated files, and migration path.
+The bridge writes a blob with no-replace semantics, synchronizes and reopens the file, synchronizes
+its retained parent directories, and only then commits the catalog row in one exclusive SQLite
+transaction. A retry accepts an existing blob/row only after exact byte, hash, state, slot, source,
+and identity equality. The database commit is the single authority switch; directory naming,
+mtime, newest-file order, and temporary files never select a declaration.
 
-### Phase 10 — Release parity gate
+The state catalog is not authority for every mutable declaration store. Handle the remaining
+scopes through their existing P0 authorities:
 
-Run the complete host-safe matrix through Make in debug and release configurations:
+- profile/repository roots and other registered mutable config stores use
+  `GeneratedDeclarationSlot`'s transactional language-authority switch, then prove by rooted
+  enumeration that no generated `.glu` authority remains;
+- a recipe tree is migrated only when the operator supplies its exact root and a Lua replacement
+  for its authored `stone.glu`; after semantic comparison, regenerate/migrate the source/build lock
+  pair through that recipe directory's retained generated-slot authority;
+- user-authored system/profile/repository/recipe sources are never copied automatically and never
+  receive a fabricated catalog row. They require an operator-provided Lua replacement;
+- arbitrary recipe directories outside the roots explicitly presented to the bridge cannot be
+  globally enumerated. Lua-only tooling must reject any later-discovered `.glu` recipe or lock with
+  the precise bridge-release migration command instead of silently treating it as converted.
 
-- evaluator/source-root security and races;
-- import graph bounds and fingerprints;
-- all 12 root declaration shapes;
-- fragments and persistence;
-- package, policy, profile, repository, trigger, system, and boot models;
-- canonical source/build locks and system snapshots;
-- repeated-process determinism;
-- examples and semantic implementation fingerprints;
-- musl/release binary execution and license notices.
+Bridge-era readers resolve every live, archive-export, and rollback request by state ID and logical
+slot. If no committed row exists, they may invoke the authenticated legacy Gluon reader. If a row
+exists, they must revalidate the state wrapper/tree marker and both source hashes before selecting
+the Lua blob. Old bridge-release binaries remain safe because original immutable `.glu` material is
+left in place and they ignore the new catalog; a later Lua-only binary requires complete catalog
+coverage and never needs to reinterpret legacy bytes.
 
-The exact release execution gate is `make lua-release-test`; it must run evaluator and parity tests
-against release-built binaries. `make build` alone is not release execution, and `make test` alone
-is the debug test lane. Run `make declarative-config-test`, `make lua-config-test`,
-`make declaration-parity-test`, and `make lua-release-test` before the aggregate project gates.
+Migration completion is one aggregate report containing: database coverage of every required
+state-owned logical slot for every retained state; rooted enumeration showing every registered
+mutable generated store has Lua authority; and explicit records for every authored/config/recipe
+root the operator asked the bridge to migrate. It is not a standalone marker file and does not
+claim to discover arbitrary recipe trees elsewhere on disk. Pruning a state transactionally
+cascades its catalog rows; content-addressed blobs are removed only by a later retained-authority
+garbage collection pass after proving that no committed row references them. A crash may therefore
+leave an unreachable blob, but may never leave a row pointing at an undurable or unverified blob.
 
-Then run the bounded disposable-VM parity matrix from Phase 8 without claiming the deferred reboot,
-power-loss, or startup-repair campaigns. Fix only failures caused by this plan; record unrelated
-improvements in `FUTURE_PLAN.md`.
+Bridge sequence:
 
-**Exit:** Lua is production-capable and the tree is ready for the chosen endpoint.
+1. read/verify legacy state through the Gluon adapter and v1/container-aware compatibility path;
+2. never overwrite authored Gluon automatically—require an operator-provided Lua replacement and
+   prove normalized equality where requested;
+3. create content-addressed v2/Lua blobs and commit their state/slot catalog mappings without
+   mutating immutable historical generations;
+4. migrate each registered mutable generated store and each explicitly supplied recipe lock pair
+   through its own retained P0 authority, never through the state catalog;
+5. test crashes before blob sync, after blob sync but before database commit, during commit, after
+   commit, during state pruning, and during deferred blob garbage collection;
+6. test interruption before and after every mutable-store/recipe authority switch, including
+   alternate authored files and stale generated lock pairs;
+7. test same-byte path replacement, state-tree/source drift, catalog/blob mismatch, and repeated
+   migration; every ambiguous or mismatched case fails closed;
+8. prove live load, archived export, rollback selection, resume, forward selection, and aggregate
+   state/store/operator-scope coverage reporting;
+9. make a future Lua-only release refuse upgrade with a precise bridge instruction if any required
+   state-owned or registered-store declaration remains unmigrated.
 
-### Phase 11A — Finish the recommended Lua-only cutover
+Run `make lua-config-test`, `make lua-domain-parity-test`, `make lua-release-test`,
+`make lua-dependency-audit`, `make lua-installed-state-test`, and the aggregate project gates. The
+release target must execute release-built tests; `make build` alone is not execution.
 
-1. Make Lua the only accepted declaration extension and remove temporary dispatch/fallback-shaped
-   compatibility code.
-2. Remove production `Getable`/`VmType` derives, Gluon DTOs, `gluon_config`, workspace Gluon/codegen
-   dependencies, Gluon ABI sources, `.glu` data, fixtures, and examples.
-3. Remove Gluon-only APIs, target names, diagnostics, documentation promises, and lexical paths.
-4. Regenerate the lockfile and measure the net removed/added dependency and license surface. Do not
-   repeat the old unverified “52 crates removed” claim.
-5. Rerun Phase 10 and the VM matrix after deletion.
-6. Do not remove the Gluon runtime/decoders until the bridge release has atomically migrated every
-   active and archived state, and old-installation upgrade/export/rollback acceptance passes.
+**Commit separately:** bridge implementation, interruption tests, old-installation fixture, then
+release evidence.
 
-**Commit in domain/dependency/doc slices.** The final cleanup commit must contain only dead Gluon
-removal after all consumers are already on Lua.
+**Exit:** production Lua and bridge behavior pass host-safe and bounded established VM gates; no
+historical state is stranded and no deferred reboot/power-loss claim is made.
 
-### Phase 11B — Finish permanent dual support instead
+### Phase L9A — Finish Lua-only
 
-1. Remove only temporary migration shims; retain explicit extension dispatch.
-2. Keep complete Lua and Gluon ABI, evaluator, corpus, diagnostics, docs, and release gates.
-3. Document that both runtimes are security-critical and that Gluon dependencies remain.
-4. Rerun both matrices for every ABI or evaluator-policy change going forward.
+1. Make Lua the sole registered production language.
+2. Remove Gluon per-domain adapters, `gluon_config`, Gluon/codegen dependencies, Gluon ABIs,
+   shipped `.glu` data, fixtures, examples, and Gluon-only documentation/Make targets.
+3. Remove production `Getable`/`VmType` derives and Gluon-specific public names.
+4. Remove the verified legacy reader only after complete catalog coverage and old-installation
+   upgrade/export/rollback acceptance prove it is safe.
+5. Regenerate the lockfile and report net removed and added dependencies/licenses; do not reuse an
+   old gross dependency claim.
+6. Rerun L8 after deletion.
 
-Do **one** of Phase 11A or 11B, never a partial mixture.
+Commit removal by domain, dependency, corpus, and documentation. The final cleanup commit contains
+only dead Gluon removal.
 
-## 7. Make-driven validation matrix
+### Phase L9B — Finish permanent dual support
 
-During implementation, add the exact root targets `declarative-config-test`, `lua-config-test`,
-`declaration-parity-test`, `lua-release-test`, and `lua-dependency-audit`, then compose them into
-existing project targets. Users must not need raw Cargo commands to reproduce acceptance.
+1. Remove migration-only shims but retain both explicit adapters.
+2. Keep both ABI/corpus/documentation/runtime/release/security matrices mandatory.
+3. Preserve concrete collision, no-fallback, no-cross-import, and one-authority rules.
+4. Document that Gluon dependencies remain and both engines are security-critical.
 
-| Gate | Location | Required evidence |
+Do one of L9A or L9B, never a partial mixture.
+
+## 10. Make-driven validation
+
+All targets live in `misc/make/lua-tests.mk` and are invoked from the root Makefile:
+
+- `make lua-engine-spike`;
+- `make lua-engine-spike-release`;
+- `make lua-config-test`;
+- `make lua-domain-parity-test`;
+- `make lua-release-test`;
+- `make lua-dependency-audit`;
+- `make lua-installed-state-test`;
+- inherited P0 targets `declarative-config-test`, `gluon-adapter-test`, and
+  `declaration-regression-test` while Gluon remains;
+- `make build`, `make test`, `make check`, `make examples`, and `make source-loc`.
+
+Validation matrix:
+
+| Gate | Location | Evidence |
 |---|---|---|
-| Focused evaluator/core | Host | sandbox/capabilities, source races, imports, resource latches, output-tree bounds |
-| Domain differential | Host | paired normalized Rust values for all 12 root shapes |
-| Storage/discovery | Host temp dirs | collisions, layer precedence, atomic save/delete, authored protection |
-| Determinism | Host isolated processes | repeated values and fingerprints; no ambient env/path/time/random influence |
-| Full project | Host | `make build`, `make test`, `make check`, `make examples`, `make source-loc` |
-| Packaging | Host/CI-safe | `make lua-release-test` executes release tests; musl binary runs; linkage, semantic fingerprints, notices correct |
-| Existing system/boot parity | Disposable VM only | rerun only accepted baseline gates against equivalent Lua-derived Rust plans, with the same explicit non-claims |
+| Lua parser/runtime | Host | profile syntax, capabilities, imports, resource latches, output bounds |
+| Shared-interface conformance | Host | no duplicated source/graph/identity/persistence and no Lua special case in core |
+| Domain differential | Host | equal normalized values for all 12 shapes; intentionally distinct v2 identities |
+| Storage/authority | Host temp dirs | extension collisions, layering, atomic persistence, interrupted migration |
+| Determinism | Host isolated processes | no environment/path/time/random/order influence |
+| Packaging | Host/CI-safe | release execution, musl/linkage, semantic fingerprints, notices |
+| Installed state | Host fixtures; established VM if needed | live/archive export, catalog coverage, rollback selection, resume |
+| System/boot parity | Disposable VM only | only accepted baseline boundaries with exact non-claims |
 
-Commands that execute the already-built evaluator or VM tooling should have bounded runtime. Builds
-and Make compilation targets should not be wrapped in arbitrary timeouts; do not wrap one combined
-compile-and-run command when that would also time-limit compilation.
+Bound evaluator/application executions, not compilation. Do not put an entire compile-and-run Make
+invocation under an execution timeout.
 
-## 8. Completion criteria
+## 11. Completion criteria
 
-### Shared Lua production readiness
+### Lua production readiness
 
-- One selected and accurately named Lua dialect is reproducibly built.
-- There is exactly one hardened source loader and one engine-neutral limits/fingerprint policy.
-- Lua has no ambient capabilities or search paths and cannot bypass latched resource limits.
-- All 12 root declaration shapes reach existing Rust semantic validators.
-- Every generated file has one authoritative language and canonical emitter.
-- Evaluation fingerprints distinguish language, engine, policy, ABI, source graph, and inputs.
-- `.stone` format and transaction/system architecture are unchanged.
-- All host-safe gates and the bounded, already-established disposable-VM parity gates pass with
-  exact non-claims for deferred system-manager closure.
-- No touched file exceeds 1,000 LOC.
+- The exact selected Lua dialect/runtime is documented and reproducibly packaged.
+- `LuaEngine` uses the P0 source, deadline, graph, diagnostics, identity, storage, and domain
+  contracts without a fork or special case.
+- The Lua AST profile, capability allowlist, imports, host-latched limits, and output tree are
+  adversarially tested in debug and release.
+- All 12 domain shapes reach the same shared Rust semantic validators.
+- Equivalent Gluon/Lua declarations normalize to equal domain values and intentionally different
+  v2 evaluation/derivation identities.
+- Every generated logical slot has one active codec/authority; no fallback or dual write exists.
+- The complete corpus, documentation, packaging, installed-state bridge, and bounded VM parity
+  gates pass.
+- `.stone` and transaction/system architecture remain unchanged.
+- Every touched file is below 1,000 lines; YAML/KDL remain rejected; forbidden config files remain
+  absent.
 
-### Additional Endpoint A criteria: Lua-only
+### Additional Endpoint A criteria
 
 - `git ls-files '*.glu'` is empty.
-- No production dependency on `gluon`, `gluon_codegen`, or `gluon_config` remains.
-- No production `Getable`/`VmType` DTO derives or Gluon-specific public APIs remain.
-- No CLI, documentation, Make gate, semantic fingerprint, or generated-file path promises Gluon.
-- YAML and KDL remain rejected; there is no hidden legacy fallback.
-- The bridge-release migration marker proves every active/archive state was migrated; an old
-  installation with archived states passes upgrade, export, rollback selection, and interruption
-  recovery before the last Gluon decoder is removed.
+- No production `gluon`, `gluon_codegen`, or `gluon_config` dependency remains.
+- No production Gluon DTO derive, adapter, public API, generated path, CLI promise, or Make gate
+  remains.
+- The aggregate state-catalog, registered-store, and operator-supplied-root report proves every
+  required in-scope declaration is migrated; an old installation passes upgrade, export, rollback
+  selection, interruption resume, pruning, and forward selection; later-discovered out-of-scope
+  Gluon recipe trees fail with an exact bridge instruction.
 
-### Additional Endpoint B criteria: permanent dual
+### Additional Endpoint B criteria
 
-- Every supported domain accepts both `.lua` and `.glu` through explicit extension dispatch.
-- Same-stem collisions, cross-language imports, fallback, and dual writes are test-pinned errors.
-- Equivalent declarations normalize to equal domain values but intentionally different evaluation
-  and derivation identities.
-- Both complete evaluator/security/corpus/release matrices remain mandatory.
+- Every supported domain registers both adapters through the shared registry.
+- Same-slot collisions, fallback, cross-language imports, and dual writes are test-pinned errors.
+- Both complete evaluator/corpus/release/security matrices remain mandatory.
 
-## 9. Effort and trade-off estimate
+## 12. Effort estimate
 
-These are engineering ranges, not calendar promises. Refine them after Phase 0.
-
-| Workstream | Estimate |
+| Lua-specific workstream | Estimate |
 |---|---:|
-| Engine proof plus language-neutral evaluation/fingerprint foundation | 5–8 engineer-weeks |
-| Lua evaluator, shared schemas, and all domain bridges | 10–16 engineer-weeks |
-| Corpus, documentation, tooling, packaging, and VM acceptance | 8–12 engineer-weeks |
-| **Production dual-capable foundation through Phase 10** | **23–36 engineer-weeks** |
-| Optional final Gluon deletion and post-delete proof | 3–5 engineer-weeks |
-| **Recommended Lua-only endpoint** | **26–41 engineer-weeks** |
+| Runtime selection and isolated `LuaEngine` | 3–4 engineer-weeks |
+| Twelve Lua domain adapters and ABIs | 4–7 engineer-weeks |
+| Generated codecs, corpus, docs, and tooling | 3–5 engineer-weeks |
+| Installed-state bridge, release, and VM parity | 3–5 engineer-weeks |
+| **Lua production parity through L8** | **13–21 engineer-weeks** |
+| Optional final Gluon removal/proof | 3–5 engineer-weeks |
 
-Permanent coexistence avoids the final deletion work but retains both dependency trees and creates
-ongoing doubled security, ABI, documentation, and release-test cost. It is not the cheaper long-term
-option.
+Together with the P0 foundation estimate of 10–17 engineer-weeks, permanent dual production is
+approximately 23–38 engineer-weeks. The recommended Lua-only endpoint is approximately 26–43
+engineer-weeks. Refine both after the engine spike and adapter foundation land.
 
-## 10. Stop conditions
+Permanent dual support avoids deletion work but retains doubled ongoing runtime, ABI,
+documentation, dependency, and security-test cost.
 
-Stop the current phase and report evidence—do not improvise—if any of these occur:
+## 13. Stop conditions
 
-- neither engine can meet deadline, memory, stack/call-depth, capability, deterministic, or musl
-  release contracts;
-- imports cannot be prepared with a real dialect-aware parser before execution;
-- Lua output cannot be cycle-safe and bounded before serde conversion;
-- fingerprint migration could allow a v1 lock/artifact to be accepted as current;
-- persisted-file ownership or same-stem collision behavior remains ambiguous;
-- a change would weaken `SourceRoot`, descriptor identity, atomic persistence, or authored-file
-  protection;
-- a touched file reaches 1,000 LOC without a functional split;
-- a required test would touch host ESP/BOOT/block devices/system activation;
-- completion would require changing `../bedrock`, release/version metadata, adding Nix translation,
-  restoring YAML/KDL, or adding formatting/typo-policy configuration;
-- an unrelated failure or desirable feature is outside this plan—record it in `FUTURE_PLAN.md`.
+Stop and report evidence if:
 
-## 11. First executor batch
+- any `agnostic_config.md` completion criterion is missing or stale;
+- Lua requires a second `SourceRoot`, loader, deadline, graph resolver, fingerprint, config store,
+  persistence path, or domain semantic type;
+- the shared core would need a built-in Lua branch rather than an opaque adapter descriptor;
+- neither engine satisfies capability, memory, deadline, call-depth, determinism, musl, or release
+  constraints;
+- literal imports cannot be extracted with a maintained dialect-aware parser;
+- final Lua values cannot be bounded and cycle-safe before schema decoding;
+- module exports cannot be isolated from mutation across importers/evaluations;
+- `.lua` registration bypasses generic dispatch/collision/authority rules;
+- a Lua value can enter provenance without complete identity v2;
+- installed/archived state would be stranded, rewritten in place, or silently ignored;
+- a file reaches 1,000 lines without a functional split;
+- validation would touch host disk/ESP/BOOT/activation/rollback/reboot;
+- completion requires `../bedrock`, version metadata, YAML/KDL, Nix translation, or
+  formatting/typo-policy configuration;
+- an unrelated improvement appears—record it in `FUTURE_PLAN.md`.
 
-The first implementation batch is intentionally narrow:
+## 14. First implementation batch
 
-1. Confirm a clean `develop` tree and record the current commit.
-2. Clear the pre-existing repository LOC blocker outside the Lua commit, then make `*.lua` visible
-   to `make source-loc` and add Lua ABI-tree semantic-fingerprint coverage.
-3. Commit those two pre-source guardrails.
-4. Add only the Phase 0 Make-driven engine spike and tests.
-5. Run the host-safe engine/release gates; do not connect Lua to a domain.
-6. Commit the spike evidence.
-7. Record the dialect and endpoint decision in this plan and reconcile governing docs in a second
-   documentation-only commit.
-8. Stop for review before extracting `declarative_config`.
+1. Verify the accepted P0 commit and rerun its complete Make gates.
+2. Add `*.lua` LOC coverage and `misc/make/lua-tests.mk` without production registration.
+3. Commit those initial guardrails.
+4. Run the engine spike through `lua-engine-spike` and `lua-engine-spike-release`.
+5. Select the engine, register its real source roots in semantic fingerprints, and commit the spike
+   code/evidence separately.
+6. Record the engine and endpoint decision, plus rejected alternatives, in a documentation commit.
+7. Stop for review before creating production `crates/lua_config`.
 
-## 12. Primary external references
+No production `.lua` discovery or domain adapter belongs in this batch.
 
-- [`mlua` 0.12 documentation](https://docs.rs/mlua/latest/mlua/) — supported runtimes, serde, and
-  conversion model.
-- [`mlua::Lua` API](https://docs.rs/mlua/latest/mlua/struct.Lua.html) — selected libraries, memory
-  limits, hooks/interrupts, sandboxing, and custom Luau require support.
-- [Lua 5.4 reference manual](https://www.lua.org/manual/5.4/) — language and standard-library
-  capabilities that the host must explicitly exclude.
-- [Luau sandbox documentation](https://luau.org/sandbox/) — the upstream sandbox baseline, which
-  is still broader than Cast's required empty-by-default environment.
+## 15. Primary external references
+
+- [`mlua` documentation](https://docs.rs/mlua/latest/mlua/) — supported runtimes and serde
+  conversion.
+- [`mlua::Lua` API](https://docs.rs/mlua/latest/mlua/struct.Lua.html) — selected libraries, hooks,
+  interrupts, memory limits, sandboxing, and custom Luau require support.
+- [Lua 5.4 reference manual](https://www.lua.org/manual/5.4/) — the standard language and libraries
+  that Cast's profile must restrict.
+- [Luau sandbox documentation](https://luau.org/sandbox/) — useful baseline, still broader than
+  Cast's empty-by-default policy.
 - [Luau compatibility documentation](https://luau.org/compatibility/) — why Luau must not be
   described as Lua 5.4.
