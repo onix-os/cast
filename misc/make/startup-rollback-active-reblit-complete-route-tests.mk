@@ -9,7 +9,7 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	$(CARGO) test -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	grep -q . "$$listed"; \
 	prefix='client::startup_gate::usr_rollback_active_reblit::tests::'; \
-	test "$$( grep -c "^$$prefix"'complete_.*: test$$' "$$listed" )" = 11; \
+	test "$$( grep -Ec "^$$prefix"'complete_(authority_binding|evidence_races|exclusions|matrix|record_binding|restart|storage_faults)::.*: test$$' "$$listed" )" = 11; \
 	for name in \
 		complete_authority_binding::startup_active_reblit_complete_route_authority_rejects_reopened_and_cross_root_journal_bindings \
 		complete_evidence_races::startup_active_reblit_complete_route_rejects_database_provenance_journal_and_namespace_races \
@@ -35,6 +35,7 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	boot_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_active_reblit_boot_repair_required_authority.rs; \
 	finalization_authority=crates/forge/src/client/startup_reconciliation/usr_rollback_active_reblit_finalization_authority.rs; \
 	tests=crates/forge/src/client/startup_gate/usr_rollback_active_reblit/tests; \
+	route_tests="$$tests/complete_authority_binding.rs $$tests/complete_evidence_races.rs $$tests/complete_exclusions.rs $$tests/complete_matrix.rs $$tests/complete_record_binding.rs $$tests/complete_restart.rs $$tests/complete_storage_faults.rs"; \
 	candidate_support=crates/forge/src/client/startup_reconciliation/usr_rollback_candidate_preserve_authority/tests/support.rs; \
 	root_links_endpoint=crates/forge/src/client/startup_recovery/usr_rollback_resume_route/tests/root_links_route_endpoint.rs; \
 	resume_make=misc/make/startup-rollback-resume-route-tests.mk; \
@@ -45,7 +46,7 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	for module in complete_authority_binding complete_evidence_races complete_exclusions complete_matrix complete_record_binding complete_restart complete_storage_faults; do \
 		grep -Fqx "mod $$module;" "$$tests/mod.rs"; \
 	done; \
-	test "$$( rg -n '^#\[test\]$$' "$$tests"/complete_*.rs | wc -l )" = 11; \
+	test "$$( rg -n '^#\[test\]$$' $$route_tests | wc -l )" = 11; \
 	grep -Fqx 'pub(in crate::client) struct UsrRollbackActiveReblitCompleteRouteSeal {' "$$orchestrator"; \
 	grep -Fq 'pub(in crate::client) fn new_for_test() -> Self {' "$$orchestrator"; \
 	test "$$( grep -Fc 'UsrRollbackActiveReblitCompleteRouteSeal::new();' "$$orchestrator" )" = 1; \
@@ -189,7 +190,7 @@ forge-startup-usr-rollback-active-reblit-complete-route-test:
 	grep -Fq 'assert_eq!(retained_exchange_syscall_count(), 1, "{case}");' "$$root_links_endpoint"; \
 	grep -Fq 'assert_eq!(root_link_snapshot(&fixture), root_links_before, "{case}");' "$$root_links_endpoint"; \
 	grep -Fq 'exact generation-14 RootLinks ActiveReblit terminal must finalize cleanly' "$$resume_make"; \
-	for file in "$$gate" "$$orchestrator" "$$reconciliation" "$$recovery" "$$namespace" "$$authority" "$$proof" "$$executor" "$$boot_authority" "$$finalization_authority" "$$tests"/complete_*.rs "$$tests/support.rs" "$$root_links_endpoint" misc/make/startup-rollback-active-reblit-complete-route-tests.mk "$$resume_make"; do \
+	for file in "$$gate" "$$orchestrator" "$$reconciliation" "$$recovery" "$$namespace" "$$authority" "$$proof" "$$executor" "$$boot_authority" "$$finalization_authority" $$route_tests "$$tests/support.rs" "$$root_links_endpoint" misc/make/startup-rollback-active-reblit-complete-route-tests.mk "$$resume_make"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \
 	$(CARGO) test -p forge --lib startup_active_reblit_complete_route -- --test-threads=1
