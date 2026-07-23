@@ -368,6 +368,37 @@ return {
 }
 
 #[test]
+fn config_manager_admits_only_registered_declaration_languages() {
+    // Only the registered language set (`glu`, `lua`) is dispatched. Serialized
+    // configuration formats — YAML, KDL, JSON — are never an authored surface;
+    // a fragment with an unregistered extension is not loaded as a repository.
+    let config_directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(config_directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let fragments = config_directory.path().join("repo.d");
+    fs::create_dir_all(&fragments).unwrap();
+    for (name, body) in [
+        ("main.yaml", "- id: yaml-repo\n  source: {direct_index: {uri: 'file:///y.index'}}\n"),
+        ("main.kdl", "repository \"kdl-repo\" { direct_index \"file:///k.index\" }\n"),
+        ("main.json", "[{\"id\":\"json-repo\"}]\n"),
+    ] {
+        fs::write(fragments.join(name), body).unwrap();
+    }
+
+    let (_root, installation) = test_installation();
+    let manager = Manager::with_config_manager(
+        config::Manager::custom(config_directory.path()),
+        installation,
+    )
+    .unwrap();
+
+    // None of the unregistered-extension fragments produced a repository.
+    assert_eq!(manager.repositories.iter().count(), 0);
+    for id in ["yaml-repo", "kdl-repo", "json-repo"] {
+        assert!(manager.repositories.get(&repository::Id::new(id)).is_none());
+    }
+}
+
+#[test]
 fn repository_transport_errors_never_render_credentials() {
     let uri = Url::parse("https://user:secret@example.test/stone.index").unwrap();
     let error = validate_repository_transport(&uri).unwrap_err().to_string();
