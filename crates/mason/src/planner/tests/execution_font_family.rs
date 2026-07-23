@@ -272,7 +272,7 @@ fn validate_font_family_assets(snapshot: &FontFamilySnapshot) -> Result<(), Stri
 fn font_family_contract_fixture() -> (PackageSpec, SourceLock, PathBuf) {
     let package_root = execution_fixture_package_directory("font-family");
     let recipe = crate::Recipe::load_authored(package_root.join("stone.glu")).unwrap();
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )
@@ -284,7 +284,7 @@ fn font_family_contract_fixture() -> (PackageSpec, SourceLock, PathBuf) {
 
 fn assert_font_family_fixture_contract(package: &PackageSpec, source_tree: &Path) {
     let lock_root = execution_fixture_package_directory("font-family");
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(lock_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )

@@ -2,9 +2,13 @@ use super::*;
 
 #[test]
 fn generated_source_lock_has_exact_normalized_owned_value() {
-    let decoded = decode_source_lock(
+    let source = std::str::from_utf8(include_bytes!(
+        "../../../../../tests/fixtures/gluon/execution/packages/daemon-generated/sources.lock.glu"
+    ))
+    .unwrap();
+    let decoded = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
-        include_bytes!("../../../../../tests/fixtures/gluon/execution/packages/daemon-generated/sources.lock.glu"),
+        source,
     )
     .unwrap();
     let expected = SourceLock {

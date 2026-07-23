@@ -21,7 +21,7 @@ const PGO_WORKLOAD_INSTALL_SCRIPT: &str =
 
 fn assert_pgo_workload_fixture_contract(package: &PackageSpec, source_tree: &Path) {
     let package_root = execution_fixture_package_directory("pgo-workload");
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )
@@ -189,7 +189,7 @@ fn assert_pgo_workload_archive_matches_tracked_sources(source_tree: &Path, publi
 fn pgo_workload_declaration_and_training_source_fail_closed() {
     let package_root = execution_fixture_package_directory("pgo-workload");
     let recipe = crate::Recipe::load_authored(package_root.join("stone.glu")).unwrap();
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )

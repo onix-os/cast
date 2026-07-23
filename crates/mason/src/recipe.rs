@@ -2,6 +2,7 @@
 
 use std::{
     path::{Path, PathBuf},
+    str,
     sync::Arc,
 };
 
@@ -27,7 +28,7 @@ use thiserror::Error;
 
 use crate::{
     generated_lock,
-    source_lock::{self, SOURCE_LOCK_FILE_NAME, SourceLock},
+    source_lock::{self, GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock},
 };
 
 #[derive(Debug)]
@@ -188,16 +189,30 @@ fn load_recipe_declaration(
         .ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
 
     let lock_path = path.with_file_name(SOURCE_LOCK_FILE_NAME);
+    let source_lock_codec = GluonSourceLockCodec::default();
     let (explicit_inputs, source_lock) = match source_lock_policy {
         SourceLockPolicy::Ignore => (Vec::new(), None),
-        SourceLockPolicy::RequireCurrent => match generated_lock::read(&lock_path) {
+        SourceLockPolicy::RequireCurrent => match generated_lock::read(
+            &lock_path,
+            <GluonSourceLockCodec as DeclarationEvaluator<SourceLock>>::limits(
+                &source_lock_codec,
+            )
+            .max_source_bytes,
+        ) {
             Ok(bytes) => {
-                let lock = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &bytes).map_err(|source| {
-                    Error::DecodeSourceLock {
+                let text = str::from_utf8(&bytes).map_err(|source| {
+                    Error::SourceLockUtf8 {
                         path: lock_path.clone(),
-                        source: Box::new(source),
+                        source,
                     }
                 })?;
+                let lock = source_lock_codec
+                    .evaluate(&Source::new(SOURCE_LOCK_FILE_NAME, text))
+                    .map(|evaluation| evaluation.value)
+                    .map_err(|source| Error::EvaluateSourceLock {
+                        path: lock_path.clone(),
+                        source: Box::new(source),
+                    })?;
                 (bytes, Some(lock))
             }
             Err(error) if error.is_not_found() => (Vec::new(), None),
@@ -358,11 +373,17 @@ pub enum Error {
         #[source]
         source: Box<generated_lock::ReadError>,
     },
-    #[error("decode Gluon source lock {path:?}")]
-    DecodeSourceLock {
+    #[error("Gluon source lock {path:?} is not UTF-8")]
+    SourceLockUtf8 {
         path: PathBuf,
         #[source]
-        source: Box<source_lock::DecodeError>,
+        source: str::Utf8Error,
+    },
+    #[error("evaluate Gluon source lock {path:?}")]
+    EvaluateSourceLock {
+        path: PathBuf,
+        #[source]
+        source: Box<DeclarationEvaluationError<source_lock::ValidationError>>,
     },
     #[error("stale Gluon source lock {path:?}")]
     StaleSourceLock {
@@ -376,6 +397,7 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use declarative_config::DeclarationCodec;
     use stone_recipe::package::{BuilderSpec, HooksSpec, ProfileSpec};
 
     use super::*;
@@ -394,6 +416,10 @@ mod tests {
     const GIT_REF: &str = "main";
     const FULL_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
     const MATERIALIZATION_SHA256: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn canonical_source_lock(lock: &SourceLock) -> String {
+        GluonSourceLockCodec::default().encode(lock).unwrap()
+    }
 
     fn gluon_recipe(source: &str) -> String {
         format!("let cast = import! cast.package.v3\ncast.mk_package (cast.meta {source})")
@@ -651,7 +677,7 @@ cast.mk_package (cast.meta {
         fs::write(root.path().join("stone.glu"), gluon_recipe_with_upstreams()).unwrap();
         fs::write(
             root.path().join(SOURCE_LOCK_FILE_NAME),
-            source_lock::encode_source_lock(&matching_source_lock()),
+            canonical_source_lock(&matching_source_lock()),
         )
         .unwrap();
 
@@ -684,7 +710,7 @@ cast.mk_package (cast.meta {
 
         fs::remove_file(&lock_path).unwrap();
         let target = root.path().join("lock-target");
-        fs::write(&target, source_lock::encode_source_lock(&matching_source_lock())).unwrap();
+        fs::write(&target, canonical_source_lock(&matching_source_lock())).unwrap();
         symlink(&target, &lock_path).unwrap();
 
         let error = Recipe::load(root.path()).unwrap_err();
@@ -715,10 +741,10 @@ cast.mk_package (cast.meta {
         git.commit = "abc123d".to_owned();
 
         let cases = [
-            ("{".to_owned(), "evaluate source lock"),
-            (source_lock::encode_source_lock(&wrong_schema), "unsupported schema"),
+            ("{".to_owned(), "Unexpected end of file"),
+            (canonical_source_lock(&wrong_schema), "unsupported schema"),
             (
-                source_lock::encode_source_lock(&short_commit),
+                canonical_source_lock(&short_commit),
                 "exactly 40 lowercase hexadecimal",
             ),
         ];
@@ -726,7 +752,7 @@ cast.mk_package (cast.meta {
         for (contents, expected) in cases {
             fs::write(&lock_path, contents).unwrap();
             let error = Recipe::load(root.path()).unwrap_err();
-            let Error::DecodeSourceLock { path, source } = error else {
+            let Error::EvaluateSourceLock { path, source } = error else {
                 panic!("unexpected error: {error}");
             };
             assert_eq!(path, lock_path);
@@ -792,7 +818,7 @@ cast.mk_package (cast.meta {
             (hash, "sources[0].sha256"),
             (requested_ref, "sources[1].requested_ref"),
         ] {
-            fs::write(&lock_path, source_lock::encode_source_lock(&lock)).unwrap();
+            fs::write(&lock_path, canonical_source_lock(&lock)).unwrap();
             let error = Recipe::load(root.path()).unwrap_err();
             let Error::StaleSourceLock { path, source } = error else {
                 panic!("unexpected error: {error}");
@@ -806,7 +832,7 @@ cast.mk_package (cast.meta {
     fn recipe_and_lock_fingerprints_are_deterministic() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
-        let lock = source_lock::encode_source_lock(&SourceLock::default());
+        let lock = canonical_source_lock(&SourceLock::default());
         fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), &lock).unwrap();
 
         let first = Recipe::load(root.path()).unwrap();

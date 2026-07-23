@@ -32,7 +32,8 @@ pub fn path_for_recipe(recipe: &Path) -> PathBuf {
 }
 
 pub fn load(path: &Path, request_fingerprint: &str) -> Result<Status, Error> {
-    let bytes = match generated_lock::read(path) {
+    let codec = GluonBuildLockCodec::default();
+    let bytes = match generated_lock::read(path, codec.limits().max_source_bytes) {
         Ok(bytes) => bytes,
         Err(error) if error.is_not_found() => return Ok(Status::Missing),
         Err(source) => {
@@ -46,7 +47,7 @@ pub fn load(path: &Path, request_fingerprint: &str) -> Result<Status, Error> {
         path: path.to_owned(),
         source,
     })?;
-    let lock = GluonBuildLockCodec::default()
+    let lock = codec
         .evaluate(&Source::new(BUILD_LOCK_FILE_NAME, text))
         .map(|evaluation| evaluation.value)
         .map_err(|source| Error::Decode {
@@ -199,7 +200,7 @@ pub fn write(path: &Path, lock: &BuildLock) -> Result<WriteOutcome, Error> {
     lock.validate()?;
     let codec = GluonBuildLockCodec::default();
     let encoded = codec.encode(lock)?;
-    match generated_lock::read(path) {
+    match generated_lock::read(path, codec.limits().max_source_bytes) {
         Ok(existing) if existing == encoded.as_bytes() => return Ok(WriteOutcome::Unchanged),
         Ok(_) => {}
         Err(error) if error.is_not_found() => {}

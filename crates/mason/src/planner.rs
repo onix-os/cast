@@ -7,6 +7,7 @@ use std::{
 };
 
 use forge::{Installation, runtime};
+use declarative_config::DeclarationEvaluator;
 use sha2::{Digest, Sha256};
 use stone_recipe::derivation::{
     AnalysisPlan, AnalysisToolsPlan, BUILD_LOCK_SCHEMA_VERSION, BuildLock, CollectionRulePlan, CompilerCommandPlan,
@@ -30,7 +31,7 @@ use crate::{
     build_lock, generated_lock,
     package::{Packager, ResolvedOutput},
     profile,
-    source_lock::{SOURCE_LOCK_FILE_NAME, SourceResolution},
+    source_lock::{GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution},
 };
 
 mod freeze;
@@ -120,7 +121,11 @@ fn plan_with_runtime(env: Env, request: Request, output_dir: &Path) -> Result<Pl
     }
     let requested_inputs = aggregate_inputs(unresolved_inputs);
 
-    let source_lock_bytes = match generated_lock::read(&builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME)) {
+    let source_lock_codec = GluonSourceLockCodec::default();
+    let source_lock_bytes = match generated_lock::read(
+        &builder.recipe.path.with_file_name(SOURCE_LOCK_FILE_NAME),
+        DeclarationEvaluator::<SourceLock>::limits(&source_lock_codec).max_source_bytes,
+    ) {
         Ok(bytes) => bytes,
         Err(error) if error.is_not_found() && builder.recipe.declaration.sources.is_empty() => Vec::new(),
         Err(error) if error.is_not_found() => return Err(Error::MissingSourceLock),
@@ -338,9 +343,11 @@ impl From<build::Error> for Error {
 
 #[cfg(test)]
 mod tests {
+    use declarative_config::DeclarationCodec;
     use fs_err as fs;
 
     use super::*;
+    use crate::source_lock::GluonSourceLockCodec;
     use stone_recipe::derivation::PhasePlan;
 
     fn package_shell(script: &str) -> StepSpec {
@@ -428,7 +435,7 @@ let base = b.mk_package (b.meta {{
         )
         .unwrap();
         let lock =
-            crate::source_lock::SourceLock::new(vec![SourceResolution::Git(crate::source_lock::GitResolution {
+            SourceLock::new(vec![SourceResolution::Git(crate::source_lock::GitResolution {
                 order: 0,
                 url: URL.to_owned(),
                 requested_ref: "main".to_owned(),
@@ -437,7 +444,7 @@ let base = b.mk_package (b.meta {{
             })]);
         fs::write(
             root.path().join(SOURCE_LOCK_FILE_NAME),
-            crate::source_lock::encode_source_lock(&lock),
+            GluonSourceLockCodec::default().encode(&lock).unwrap(),
         )
         .unwrap();
 

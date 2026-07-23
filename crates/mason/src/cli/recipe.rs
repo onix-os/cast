@@ -677,7 +677,10 @@ impl From<planner::Error> for Error {
 mod tests {
     use std::os::unix::fs::PermissionsExt as _;
 
+    use declarative_config::{DeclarationCodec, DeclarationEvaluator, Source};
+
     use super::*;
+    use crate::source_lock::GluonSourceLockCodec;
 
     const AUTHORED_EXPRESSION: &str = r#"let cast = import! cast.package.v3
 let release = 1
@@ -915,8 +918,12 @@ let base = cast.mk_package (cast.meta {
         update(environment(root.path()), &recipe_path, None, Vec::new(), false).unwrap();
 
         let first_metadata = fs::metadata(&lock_path).unwrap();
-        let lock =
-            crate::source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &fs::read(&lock_path).unwrap()).unwrap();
+        let lock_bytes = fs::read(&lock_path).unwrap();
+        let lock_source = std::str::from_utf8(&lock_bytes).unwrap();
+        let lock = GluonSourceLockCodec::default()
+            .evaluate(&Source::new(SOURCE_LOCK_FILE_NAME, lock_source))
+            .unwrap()
+            .value;
         assert!(lock.sources.is_empty());
         assert_eq!(fs::read_to_string(&recipe_path).unwrap(), AUTHORED_EXPRESSION);
 
@@ -931,7 +938,7 @@ let base = cast.mk_package (cast.meta {
 
     #[test]
     fn stale_generated_lock_reports_refresh_remediation_without_mutating_source() {
-        use crate::source_lock::{ArchiveResolution, SourceLock, SourceResolution, encode_source_lock};
+        use crate::source_lock::{ArchiveResolution, SourceLock, SourceResolution};
 
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("stone.glu");
@@ -941,7 +948,8 @@ let base = cast.mk_package (cast.meta {
             url: "https://example.com/source.tar.xz".to_owned(),
             sha256: "b".repeat(64),
         })]);
-        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), encode_source_lock(&lock)).unwrap();
+        let encoded = GluonSourceLockCodec::default().encode(&lock).unwrap();
+        fs::write(root.path().join(SOURCE_LOCK_FILE_NAME), encoded).unwrap();
 
         let error = bump(path.clone(), None).unwrap_err();
 

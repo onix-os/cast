@@ -12,7 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use declarative_config::DeclarationCodec;
+use declarative_config::{DeclarationCodec, DeclarationEvaluator, Source};
 use forge::{
     Provider,
     package::{Meta, Name},
@@ -39,8 +39,8 @@ use crate::{
     package::{Packager, Publication},
     profile,
     source_lock::{
-        ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, decode_source_lock,
-        encode_source_lock, write_source_lock,
+        ArchiveResolution, GitResolution, GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution,
+        write_source_lock,
     },
 };
 
@@ -55,6 +55,16 @@ const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef01234567
 
 fn canonical_build_lock(lock: &BuildLock) -> String {
     GluonBuildLockCodec::default().encode(lock).unwrap()
+}
+
+fn canonical_source_lock(lock: &SourceLock) -> String {
+    GluonSourceLockCodec::default().encode(lock).unwrap()
+}
+
+fn evaluate_source_lock(logical_name: &str, bytes: &[u8]) -> Result<SourceLock, Box<dyn StdError>> {
+    let source = std::str::from_utf8(bytes)?;
+    let evaluation = GluonSourceLockCodec::default().evaluate(&Source::new(logical_name, source))?;
+    Ok(evaluation.value)
 }
 const PACKAGE_EXAMPLES: [&str; 64] = [
     "autotools",
@@ -701,7 +711,7 @@ fn synthesize_source_lock(recipe_path: &Path) -> (Option<Vec<u8>>, usize) {
     let path = recipe_path.with_file_name(SOURCE_LOCK_FILE_NAME);
     write_source_lock(&path, &lock).unwrap();
     let bytes = fs::read(&path).unwrap();
-    assert_eq!(bytes, encode_source_lock(&lock).into_bytes());
+    assert_eq!(bytes, canonical_source_lock(&lock).into_bytes());
     (Some(bytes), source_count)
 }
 

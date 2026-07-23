@@ -1,10 +1,10 @@
-//! Bounded, race-resistant reads of generated Gluon lock files.
+//! Bounded, race-resistant reads of generated declaration lock files.
 //!
-//! Generated locks are evaluator inputs, so they share the evaluator's
-//! top-level source-size limit. Paths are inspected before allocation and the
-//! opened descriptor is checked again before any bytes are read. `O_NOFOLLOW`
-//! and `O_NONBLOCK` ensure a path replacement cannot turn the read into a
-//! symlink traversal or a blocking FIFO/device read.
+//! The owning declaration codec supplies its exact source-byte limit. Paths
+//! are inspected before allocation and the opened descriptor is checked again
+//! before any bytes are read. `O_NOFOLLOW` and `O_NONBLOCK` ensure a path
+//! replacement cannot turn the read into a symlink traversal or a blocking
+//! FIFO/device read.
 
 use std::{
     fmt,
@@ -15,19 +15,17 @@ use std::{
 
 use fs_err as fs;
 use fs_err::os::unix::fs::OpenOptionsExt as _;
-use gluon_config::Limits;
 use thiserror::Error;
 
 /// Read one generated lock without following links or allocating from an
 /// untrusted file length.
-pub(crate) fn read(path: &Path) -> Result<Vec<u8>, ReadError> {
-    let limit = Limits::default().max_source_bytes;
+pub(crate) fn read(path: &Path, source_byte_limit: usize) -> Result<Vec<u8>, ReadError> {
     let path_metadata = fs::symlink_metadata(path).map_err(|source| ReadError::Inspect {
         path: path.to_owned(),
         source,
     })?;
     require_regular(path, &path_metadata)?;
-    require_within_limit(path, path_metadata.len(), limit)?;
+    require_within_limit(path, path_metadata.len(), source_byte_limit)?;
 
     let mut file = fs::OpenOptions::new()
         .read(true)
@@ -42,22 +40,28 @@ pub(crate) fn read(path: &Path) -> Result<Vec<u8>, ReadError> {
         source,
     })?;
     require_regular(path, &opened_metadata)?;
-    require_within_limit(path, opened_metadata.len(), limit)?;
+    require_within_limit(path, opened_metadata.len(), source_byte_limit)?;
 
-    let initial_capacity = usize::try_from(opened_metadata.len()).unwrap_or(limit).min(limit);
+    let initial_capacity = usize::try_from(opened_metadata.len())
+        .unwrap_or(source_byte_limit)
+        .min(source_byte_limit);
     let mut bytes = Vec::with_capacity(initial_capacity);
     file.by_ref()
-        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+        .take(
+            u64::try_from(source_byte_limit)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+        )
         .read_to_end(&mut bytes)
         .map_err(|source| ReadError::Read {
             path: path.to_owned(),
             source,
         })?;
-    if bytes.len() > limit {
+    if bytes.len() > source_byte_limit {
         return Err(ReadError::TooLarge {
             path: path.to_owned(),
             size: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-            limit,
+            limit: source_byte_limit,
         });
     }
     Ok(bytes)
@@ -196,13 +200,15 @@ mod tests {
 
     use super::*;
 
+    const TEST_SOURCE_BYTE_LIMIT: usize = 1_024;
+
     #[test]
     fn reads_regular_locks_with_the_evaluator_source_limit() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("sources.lock.glu");
         fs::write(&path, b"lock").unwrap();
 
-        assert_eq!(read(&path).unwrap(), b"lock");
+        assert_eq!(read(&path, TEST_SOURCE_BYTE_LIMIT).unwrap(), b"lock");
     }
 
     #[test]
@@ -224,11 +230,11 @@ mod tests {
     #[test]
     fn rejects_dense_and_sparse_oversized_locks_before_unbounded_allocation() {
         let root = tempfile::tempdir().unwrap();
-        let limit = Limits::default().max_source_bytes;
+        let limit = TEST_SOURCE_BYTE_LIMIT;
         let dense = root.path().join("dense.lock.glu");
         fs::write(&dense, vec![b'x'; limit + 1]).unwrap();
 
-        let error = read(&dense).unwrap_err();
+        let error = read(&dense, limit).unwrap_err();
         assert!(
             matches!(error, ReadError::TooLarge { size, limit: found, .. } if size == limit as u64 + 1 && found == limit)
         );
@@ -239,7 +245,7 @@ mod tests {
             .set_len(16 * 1024 * 1024 * 1024)
             .unwrap();
 
-        let error = read(&sparse).unwrap_err();
+        let error = read(&sparse, limit).unwrap_err();
         assert!(
             matches!(error, ReadError::TooLarge { size, limit: found, .. } if size == 16 * 1024 * 1024 * 1024 && found == limit)
         );
@@ -253,7 +259,7 @@ mod tests {
         fs::write(&target, b"lock").unwrap();
         symlink(&target, &link).unwrap();
 
-        let error = read(&link).unwrap_err();
+        let error = read(&link, TEST_SOURCE_BYTE_LIMIT).unwrap_err();
         assert!(matches!(
             error,
             ReadError::NotRegular {
@@ -267,7 +273,7 @@ mod tests {
     fn rejects_directories_and_fifos_structurally_without_opening_them() {
         let root = tempfile::tempdir().unwrap();
 
-        let error = read(root.path()).unwrap_err();
+        let error = read(root.path(), TEST_SOURCE_BYTE_LIMIT).unwrap_err();
         assert!(matches!(
             error,
             ReadError::NotRegular {
@@ -278,7 +284,7 @@ mod tests {
 
         let fifo = root.path().join("build.lock.glu");
         nix::unistd::mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
-        let error = read(&fifo).unwrap_err();
+        let error = read(&fifo, TEST_SOURCE_BYTE_LIMIT).unwrap_err();
         assert!(matches!(
             error,
             ReadError::NotRegular {
