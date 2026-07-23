@@ -9,7 +9,10 @@
 
 use std::fmt::Write as _;
 
-use lua_config::{GENERATED_LUA_MARKER, LuaOption};
+use lua_config::{
+    GENERATED_LUA_MARKER, LuaOption, lua_optional_bool, lua_optional_integer, lua_optional_string,
+    lua_string,
+};
 use serde::Deserialize;
 
 use super::gluon::{decode_specs, repository_to_spec};
@@ -135,44 +138,6 @@ fn encode_source(output: &mut String, source: &RepositorySourceSpec) {
             output.push_str("        },\n");
         }
     }
-}
-
-fn lua_optional_string(value: Option<&str>) -> String {
-    value.map_or_else(
-        || "{ kind = \"none\" }".to_owned(),
-        |value| format!("{{ kind = \"some\", value = {} }}", lua_string(value)),
-    )
-}
-
-fn lua_optional_integer(value: Option<i64>) -> String {
-    value.map_or_else(
-        || "{ kind = \"none\" }".to_owned(),
-        |value| format!("{{ kind = \"some\", value = {value} }}"),
-    )
-}
-
-fn lua_optional_bool(value: Option<bool>) -> String {
-    value.map_or_else(
-        || "{ kind = \"none\" }".to_owned(),
-        |value| format!("{{ kind = \"some\", value = {value} }}"),
-    )
-}
-
-fn lua_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            character => escaped.push(character),
-        }
-    }
-    escaped.push('"');
-    escaped
 }
 
 #[cfg(test)]

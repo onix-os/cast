@@ -7,10 +7,18 @@
 //! values with intentionally distinct evaluation identities. Registration and
 //! the canonical Lua emitter are added in a later slice.
 
-use lua_config::LuaOption;
+use std::fmt::Write as _;
+
+use lua_config::{
+    GENERATED_LUA_MARKER, LuaOption, lua_optional_bool, lua_optional_integer, lua_optional_string,
+    lua_string,
+};
 use serde::Deserialize;
 
-use super::{Map, ProfileConversionError, ProfileSpec, RepositorySourceSpec, RepositorySpec, decode_specs};
+use super::{
+    Map, ProfileConversionError, ProfileSpec, RepositorySourceSpec, RepositorySpec, decode_specs,
+    profile_to_spec,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LuaProfileSpec {
@@ -88,6 +96,89 @@ pub(crate) fn decode_lua_specs(
     decode_specs(specs.into_iter().map(Into::into).collect())
 }
 
+/// Emit a profile [`Map`] as canonical, generated-marked Lua source that
+/// re-decodes through [`decode_lua_specs`] into the same map. Specs are derived
+/// by the shared `profile_to_spec`, so the Lua and Gluon emitters canonicalize
+/// identical domain values.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn encode_lua_specs(map: &Map) -> Result<String, ProfileConversionError> {
+    let mut specs = map.iter().map(profile_to_spec).collect::<Result<Vec<_>, _>>()?;
+    specs.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    output.push_str("return {\n");
+    for profile in &specs {
+        output.push_str("    {\n");
+        writeln!(output, "        id = {},", lua_string(&profile.id)).unwrap();
+        output.push_str("        repositories = {\n");
+        let mut repositories = profile.repositories.iter().collect::<Vec<_>>();
+        repositories.sort_by(|left, right| left.id.cmp(&right.id));
+        for repository in repositories {
+            output.push_str("            {\n");
+            writeln!(output, "                id = {},", lua_string(&repository.id)).unwrap();
+            writeln!(
+                output,
+                "                description = {},",
+                lua_optional_string(repository.description.as_deref())
+            )
+            .unwrap();
+            encode_source(&mut output, &repository.source);
+            writeln!(
+                output,
+                "                priority = {},",
+                lua_optional_integer(repository.priority)
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "                enabled = {},",
+                lua_optional_bool(repository.enabled)
+            )
+            .unwrap();
+            output.push_str("            },\n");
+        }
+        output.push_str("        },\n");
+        output.push_str("    },\n");
+    }
+    output.push_str("}\n");
+    Ok(output)
+}
+
+fn encode_source(output: &mut String, source: &RepositorySourceSpec) {
+    match source {
+        RepositorySourceSpec::DirectIndex { uri } => {
+            output.push_str("                source = {\n");
+            output.push_str("                    kind = \"direct_index\",\n");
+            writeln!(output, "                    uri = {},", lua_string(uri)).unwrap();
+            output.push_str("                },\n");
+        }
+        RepositorySourceSpec::RootIndex {
+            base_uri,
+            channel,
+            version,
+            arch,
+        } => {
+            output.push_str("                source = {\n");
+            output.push_str("                    kind = \"root_index\",\n");
+            writeln!(output, "                    base_uri = {},", lua_string(base_uri)).unwrap();
+            writeln!(
+                output,
+                "                    channel = {},",
+                lua_optional_string(channel.as_deref())
+            )
+            .unwrap();
+            writeln!(output, "                    version = {},", lua_string(version)).unwrap();
+            writeln!(
+                output,
+                "                    arch = {},",
+                lua_optional_string(arch.as_deref())
+            )
+            .unwrap();
+            output.push_str("                },\n");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::Source;
@@ -149,5 +240,25 @@ return {
             format!("{:?}", lua_map(LUA_PROFILE)),
             format!("{:?}", gluon_map(GLUON_PROFILE)),
         );
+    }
+
+    const GLUON_PROFILE_ROOT_INDEX: &str = r#"
+let cast = import! cast.profile.v1
+[
+    cast.profile "server" [
+        cast.repository.root "core" "https://packages.example/core" "stream/volatile",
+        cast.repository.direct "extra" "https://packages.example/extra.index",
+    ],
+]
+"#;
+
+    #[test]
+    fn emitted_lua_profile_re_decodes_to_the_same_map() {
+        let original = gluon_map(GLUON_PROFILE_ROOT_INDEX);
+        let emitted = encode_lua_specs(&original).expect("map emits to lua");
+        assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+
+        let round_tripped = lua_map(&emitted);
+        assert_eq!(format!("{original:?}"), format!("{round_tripped:?}"));
     }
 }
