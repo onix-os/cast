@@ -15,7 +15,7 @@ use std::{
 };
 
 use fs_err as fs;
-use gluon_config::{Diagnostic, Evaluator, Source as GluonSource};
+use gluon_config::{Diagnostic, GluonEngine, Source as GluonSource};
 use stone_recipe::{
     UpstreamSpec,
     spec::{
@@ -280,7 +280,7 @@ enum GluonSourceResolution {
 /// Decode a standalone lock with the shared restricted Gluon evaluator.
 pub fn decode_source_lock(logical_name: &str, bytes: &[u8]) -> Result<SourceLock, DecodeError> {
     let source = str::from_utf8(bytes)?;
-    let evaluated = Evaluator::default()
+    let evaluated = GluonEngine::default()
         .evaluate::<GluonSourceLock>(&GluonSource::new(logical_name, source))
         .map_err(|error| DecodeError::Evaluation(Box::new(error)))?;
     let lock = SourceLock::try_from(evaluated.value)?;

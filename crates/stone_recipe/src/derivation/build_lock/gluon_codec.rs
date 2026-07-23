@@ -1,6 +1,6 @@
 use std::{fmt::Write as _, str};
 
-use gluon_config::{Evaluator, Source};
+use gluon_config::{GluonEngine, Source};
 
 use super::{
     AnalyzerRole, BuildLock, BuildLockDecodeError, BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole,
@@ -12,7 +12,7 @@ use super::{
 /// Decode a standalone generated lock using the restricted Gluon evaluator.
 pub fn decode_build_lock(logical_name: &str, bytes: &[u8]) -> Result<BuildLock, BuildLockDecodeError> {
     let source = str::from_utf8(bytes)?;
-    let evaluated = Evaluator::default()
+    let evaluated = GluonEngine::default()
         .evaluate::<GluonBuildLock>(&Source::new(logical_name, source))
         .map_err(|error| BuildLockDecodeError::Evaluation(Box::new(error)))?;
     let mut lock = BuildLock::try_from(evaluated.value)?;
