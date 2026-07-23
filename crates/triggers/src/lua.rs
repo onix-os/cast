@@ -7,13 +7,68 @@
 //! exactly, so equivalent Gluon and Lua sources normalize to equal domain
 //! values. It is not yet registered for `.lua` discovery.
 
-use lua_config::LuaOption;
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
+    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+};
+use lua_config::{LuaEngine, LuaOption};
 use serde::Deserialize;
 
+use crate::format::Trigger;
 use crate::spec::{
     HandlerSpec, InhibitorsSpec, KeyValueSpec, PathDefinitionSpec, PathKindSpec,
-    TriggerSpec,
+    TriggerConversionError, TriggerSpec,
 };
+
+/// Stateful read-only Lua adapter for the trigger declaration boundary.
+///
+/// It decodes an authored Lua trigger into the shared [`TriggerSpec`] and runs
+/// the same [`Trigger`] validation the Gluon adapter uses, so both engines
+/// reach identical domain values with intentionally distinct evaluation
+/// identities.
+#[derive(Debug, Clone, Default)]
+pub struct LuaTriggerEvaluator {
+    engine: LuaEngine,
+}
+
+impl DeclarationEvaluator<Trigger> for LuaTriggerEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = TriggerConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        Evaluation<Trigger, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_within_as::<LuaTriggerSpec>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let trigger = Trigger::try_from(TriggerSpec::from(evaluation.value))
+            .map_err(DeclarationEvaluationError::conversion)?;
+        Ok(Evaluation {
+            value: trigger,
+            identity: evaluation.identity,
+        })
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LuaTriggerSpec {
@@ -191,6 +246,21 @@ return {
             format!("{:?}", lua_trigger(LUA_TRIGGER)),
             format!("{:?}", gluon_trigger(GLUON_TRIGGER)),
         );
+    }
+
+    #[test]
+    fn the_lua_trigger_evaluator_matches_gluon_through_the_typed_boundary() {
+        let evaluator = LuaTriggerEvaluator::default();
+        let evaluation = <LuaTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
+            &evaluator,
+            &Source::new("trigger.lua", LUA_TRIGGER),
+        )
+        .expect("lua trigger evaluator succeeds");
+        assert_eq!(
+            format!("{:?}", evaluation.value),
+            format!("{:?}", gluon_trigger(GLUON_TRIGGER)),
+        );
+        assert_eq!(evaluation.identity.engine.implementation(), "lua");
     }
 
     #[test]

@@ -16,7 +16,7 @@ use declarative_config::{
     EvaluationIdentity,
     Evaluation, IdentityInputs, ImportRequest, LanguageSpec, Limits, ModuleView,
     NormalizedRelative, PreparedGraph, Source, SourceRoot, TypedDecoder,
-    evaluate as evaluate_declaration,
+    evaluate as evaluate_declaration, evaluate_within as evaluate_declaration_within,
 };
 use mlua::{FromLua, HookTriggers, Lua, LuaOptions, StdLib, Table, Value, VmState};
 
@@ -60,6 +60,20 @@ impl LuaEngine {
         T: serde::de::DeserializeOwned,
     {
         evaluate_declaration(self, source, LuaSerdeDecoder::new())
+    }
+
+    /// Deserialize the root value into `T` under one caller-established budget.
+    /// Domain `DeclarationEvaluator`s use this so the storage loaders' single
+    /// read-through-decode budget spans Lua evaluation too.
+    pub fn evaluate_within_as<T>(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<T, EvaluationIdentity>, Diagnostic>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        evaluate_declaration_within(self, source, deadline, LuaSerdeDecoder::new())
     }
 }
 
