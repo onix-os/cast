@@ -31,7 +31,7 @@ cast.system
     let created = client.new_state(&[], "Gluon state creation").unwrap().unwrap();
     let snapshot_path = system_model::snapshot_path(temporary.path());
     let recorded = fs::read_to_string(&snapshot_path).unwrap();
-    assert!(recorded.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+    assert!(recorded.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
     assert!(recorded.contains(&format!("// Authored source fingerprint: {authored_fingerprint}")));
     assert_eq!(fs::read_to_string(&intent_path).unwrap(), authored);
 
@@ -86,7 +86,7 @@ packages = ["alpha"],
     let loaded_snapshot = system_model::load(&snapshot_path).unwrap().unwrap();
     let round_trip = SystemModel::try_from(loaded_snapshot).unwrap();
 
-    assert!(snapshot.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+    assert!(snapshot.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
     assert!(snapshot.contains(&format!("// Authored source fingerprint: {imported_fingerprint}")));
     assert!(!snapshot.contains("This authored source must never be copied into state"));
     assert!(evaluated.packages.contains(&Provider::package_name("alpha")));

@@ -35,8 +35,6 @@ pub const SYSTEM_INTENT_PATH: &str = "etc/cast/system.glu";
 /// Cast-generated normalized state snapshot, relative to a state root.
 pub const SYSTEM_SNAPSHOT_PATH: &str = "usr/lib/system-model.glu";
 
-const SOURCE_FINGERPRINT_PREFIX: &str = "// Authored source fingerprint: ";
-
 /// Engine-neutral failure to evaluate or convert a system declaration.
 pub type SystemDeclarationError =
     DeclarationEvaluationError<spec::ConversionError>;
@@ -66,7 +64,7 @@ pub struct SystemModel {
 }
 
 impl SystemModel {
-    /// Canonical generated Gluon snapshot for state storage and export.
+    /// Canonical generated snapshot for state storage and export.
     pub fn encoded(&self) -> &str {
         &self.generated_snapshot
     }
@@ -90,7 +88,7 @@ impl SystemModel {
             disable_warning: parts.disable_warning,
             repositories: parts.repositories,
             packages: parts.packages,
-            source_fingerprint: embedded_source_fingerprint(&generated_snapshot),
+            source_fingerprint: gluon::generated_source_fingerprint(&generated_snapshot),
             generated_snapshot,
             fingerprint,
         }
@@ -105,7 +103,7 @@ impl SystemModel {
             &parts.packages,
         )
         .map_err(DeclarationEvaluationError::conversion)?;
-        let generated = spec::encode_generated_gluon(&normalized);
+        let generated = gluon::SystemSnapshotCodec::encode_normalized(&normalized);
         evaluate_snapshot(&Source::new("system-model.glu", generated))
     }
 }
@@ -181,7 +179,7 @@ impl TryFrom<LoadedSystemModel> for SystemModel {
     }
 }
 
-/// Load and evaluate authored intent or a generated Gluon snapshot.
+/// Load and evaluate authored intent or a generated snapshot.
 pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
     let parent = path
         .parent()
@@ -239,8 +237,8 @@ fn loaded_from_declaration(
         fingerprint: generated_fingerprint,
         ..
     } = declaration.model;
-    let source_fingerprint = if authored_source.starts_with(spec::GENERATED_GLUON_MARKER) {
-        embedded_source_fingerprint(&authored_source)
+    let source_fingerprint = if gluon::is_generated_snapshot(&authored_source) {
+        gluon::generated_source_fingerprint(&authored_source)
     } else {
         Some(authored_fingerprint.sha256.clone())
     };
@@ -303,13 +301,9 @@ impl SystemModel {
         self,
         source_fingerprint: String,
     ) -> Result<Self, SystemDeclarationError> {
-        let generated = self
-            .generated_snapshot
-            .strip_prefix(spec::GENERATED_GLUON_MARKER)
-            .expect("Cast-generated system snapshots always carry the generated marker");
-        let snapshot = format!(
-            "{}{SOURCE_FINGERPRINT_PREFIX}{source_fingerprint}\n{generated}",
-            spec::GENERATED_GLUON_MARKER
+        let snapshot = gluon::with_source_fingerprint(
+            &self.generated_snapshot,
+            &source_fingerprint,
         );
         evaluate_snapshot(&Source::new("system-model.glu", snapshot))
     }
@@ -376,14 +370,6 @@ impl SystemModel {
             source_fingerprint,
         )?)
     }
-}
-
-fn embedded_source_fingerprint(source: &str) -> Option<String> {
-    source
-        .lines()
-        .find_map(|line| line.strip_prefix(SOURCE_FINGERPRINT_PREFIX))
-        .filter(|fingerprint| fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .map(ToOwned::to_owned)
 }
 
 #[derive(Debug, Error)]
@@ -535,7 +521,7 @@ let cast = import! cast.system.v1
 
         assert_eq!(loaded.authored_source(), authored);
         assert_eq!(loaded.encoded(), authored);
-        assert!(loaded.generated_snapshot().starts_with(spec::GENERATED_GLUON_MARKER));
+        assert!(gluon::is_generated_snapshot(loaded.generated_snapshot()));
         assert_eq!(
             loaded
                 .fingerprint()
@@ -674,10 +660,9 @@ let cast = import! cast.system.v1
             .unwrap();
 
         assert_eq!(snapshot.source_fingerprint(), Some(authored_fingerprint.as_str()));
-        assert!(
-            snapshot
-                .encoded()
-                .contains(&format!("{SOURCE_FINGERPRINT_PREFIX}{authored_fingerprint}"))
+        assert_eq!(
+            gluon::generated_source_fingerprint(snapshot.encoded()).as_deref(),
+            Some(authored_fingerprint.as_str())
         );
 
         fs::write(&path, snapshot.encoded()).unwrap();

@@ -394,7 +394,7 @@ mod tests {
             system_model::evaluate_snapshot(&Source::new("system-model.glu", content.clone()))
                 .unwrap();
 
-        assert!(content.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+        assert!(content.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
         assert!(!content.contains("import!"));
         assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
     }
