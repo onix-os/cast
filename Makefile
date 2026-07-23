@@ -510,17 +510,17 @@ forge-stateful-candidate-metadata-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
-		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_lib_or_os_info_symlinks \
-		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_output_symlinks \
-		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_preserves_existing_output_inodes \
-		client::tests::stateful_candidate_metadata::stateful_candidate_metadata_final_name_races_are_no_replace \
-		client::tests::stateful_candidate_metadata::retained_metadata_proof_rejects_post_trigger_mutation \
+		client::candidate_metadata::tests::valid_os_info_derives_exact_release_and_snapshot_bytes client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_lib_or_os_info_symlinks \
+		client::candidate_metadata::tests::invalid_os_info_derives_generic_release_and_exact_snapshot_bytes client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_output_symlinks \
+		client::candidate_metadata::tests::non_utf8_os_info_derives_generic_release_and_exact_snapshot_bytes client::tests::stateful_candidate_metadata::stateful_candidate_metadata_preserves_existing_output_inodes \
+		client::candidate_metadata::tests::missing_os_info_derives_generic_release_and_exact_snapshot_bytes client::tests::stateful_candidate_metadata::stateful_candidate_metadata_final_name_races_are_no_replace \
+		client::candidate_metadata::tests::retained_decoration_publishes_the_same_bytes_as_the_pure_policy client::tests::stateful_candidate_metadata::retained_metadata_proof_rejects_post_trigger_mutation \
 		client::tests::stateful_candidate_metadata::retained_metadata_proof_rejects_post_system_trigger_mutation \
 		client::tests::stateful_candidate_metadata::candidate_usr_clone_failure_precedes_all_metadata_decoration \
 		client::tests::stateful_candidate_metadata::owned_metadata_proof_outlives_source_identity_and_rejects_named_substitution \
 		client::tests::stateful_candidate_metadata::candidate_usr_substitution_before_metadata_never_decorates_replacement \
 		client::postblit::retained_trigger_discovery::tests::stateful_system_scope_compiles_intent_from_the_retained_live_usr \
-		client::postblit::system_trigger_container::tests::non_live_system_root_and_source_substitutions_fail_before_payload_mutation \
+		client::postblit::system_trigger_container::tests::anchored_activation_rejects_substitutions_before_payload_mutation \
 		client::tests::stateful_candidate_metadata::successful_stateful_metadata_is_sealed_and_rollback_capable; do \
 		timeout 10s grep -Fqx "$$test: test" <<<"$$listed"; \
 		$(CARGO) test -p forge --lib "$$test" -- --exact --test-threads=1; \
