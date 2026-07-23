@@ -51,11 +51,12 @@ prove which.
 - **A real, standard filesystem.** All of this happens on an ordinary merged
   `/usr` FHS tree. Unmodified third-party binaries, proprietary software, and
   language package managers work as-is.
-- **Typed, bounded configuration.** All configuration is Gluon: statically
-  typed, evaluated once under strict resource limits in a capability-
-  restricted sandbox, and committed to a SHA-256 evaluation fingerprint.
-  No configuration language runs in the install path — resolution reads
-  binary indexes.
+- **Typed, bounded configuration.** Every declaration — authored in Gluon or
+  Lua — is evaluated once under strict resource limits in a capability-
+  restricted sandbox and committed to a SHA-256 evaluation identity. Both
+  engines decode into the same neutral Rust values with intentionally distinct
+  identities. No configuration language runs in the install path — resolution
+  reads binary indexes.
 
 ## How Cast compares to Nix
 
@@ -96,8 +97,11 @@ normal package manager on a normal Linux tree.
 - **forge** is the internal package and system-state library.
 - **stone** and **libstone** provide Rust and C interfaces for `.stone`
   packages.
-- **gluon_config** provides restricted evaluation, import policy, resource
-  limits, diagnostics, and fingerprints.
+- **declarative_config** is the engine-neutral declaration core: the evaluator
+  trait, typed decoders, resource limits, and the shared evaluation identity.
+- **gluon_config** and **lua_config** are the two engine adapters, each
+  providing restricted evaluation, import policy, and diagnostics behind the
+  neutral core.
 
 ```text
 bin/cast/       external CLI
@@ -111,24 +115,30 @@ misc/           boot integration, MIME data, scripts, and notices
 
 ## Declarative configuration
 
-Gluon is the only Cast configuration language. The main authored entry
-points are:
+Cast has two registered declaration languages, Gluon and Lua, selected by file
+extension (`.glu` or `.lua`) with no content sniffing, fallback, or
+cross-language import. An authored source in either language decodes into the
+same neutral Rust value. The main authored entry points are:
 
-- `stone.glu` for packages;
-- `profile.glu` and `profile.d/*.glu` for build profiles;
-- `repo.glu` and `repo.d/*.glu` for repositories;
-- `/usr/share/cast/triggers/{tx.d,sys.d}/*.glu` for packaged triggers;
-- `/etc/cast/system.glu` for desired system state.
+- `stone.{glu,lua}` for packages;
+- `profile.{glu,lua}` and `profile.d/*.{glu,lua}` for build profiles;
+- `repo.{glu,lua}` and `repo.d/*.{glu,lua}` for repositories;
+- `/usr/share/cast/triggers/{tx.d,sys.d}/*.{glu,lua}` for packaged triggers;
+- `/etc/cast/system.{glu,lua}` for desired system state.
 
-Public modules use only the `cast.*` namespace, including
+Public Gluon modules use only the `cast.*` namespace, including
 `cast.package.v3`, `cast.builders.*.v2`, `cast.profile.v1`,
-`cast.repository.v1`, `cast.trigger.v1`, and `cast.system.v1`.
+`cast.repository.v1`, `cast.trigger.v1`, and `cast.system.v1`. Lua declarations
+are self-contained, using a uniform tagged encoding rather than imported ABI
+modules.
 
-Cast does not fall back to YAML or KDL. The only YAML allowlist belongs to
-external GitHub interfaces under `.github/`. `make test` runs the
-`config-formats` gate so owned YAML or KDL paths fail validation.
+Cast admits only its registered declaration languages. It does not fall back to
+YAML or KDL; the only YAML allowlist belongs to external GitHub interfaces under
+`.github/`. `make test` runs the `config-formats` gate so owned YAML or KDL
+paths fail validation, and the config loader dispatches only `.glu`/`.lua`.
 
-Read the [Gluon configuration contract](docs/gluon-configuration.md) and the
+Read the [Gluon configuration contract](docs/gluon-configuration.md), the
+[Lua configuration guide](docs/lua-configuration.md), and the
 [package-authoring guide](docs/package-authoring.md). Runnable examples live in
 [docs/examples/gluon](docs/examples/gluon).
 
