@@ -244,13 +244,21 @@ authority are deferred here.
   activation and recovery contracts are complete and another platform can
   provide equivalent atomicity, confinement, sandboxing, boot, and durability
   guarantees rather than weaker syscall-shaped substitutes.
-- Retain the [embedded-Lua feasibility report](plans/lua.md) as research, not
-  current direction. Cast remains Gluon-only; reconsidering the evaluator
-  requires a separate user decision after the Gluon ABI and system-manager plan
-  are complete, with no dual-format compatibility layer during this work.
+- Retain the [Lua adapter plan](plans/lua.md) as the next declaration-language
+  phase, blocked on complete acceptance of
+  [`agnostic_config.md`](plans/agnostic_config.md). Cast remains Gluon-only
+  while that foundation is extracted; Lua must connect through the accepted
+  adapter rather than create a second loader, manager, identity, or persistence
+  path.
 
 ## Maintenance
 
+- Reconcile the stale workspace-package entries in `Cargo.lock` with the
+  workspace's current inherited version in a separate release-metadata change.
+  Current Make/Cargo runs rewrite existing local package entries from `0.26.6`
+  to `0.27.0` and also alter an unrelated `windows-sys` resolution. Foundation
+  commits must continue restoring that unrelated churn instead of silently
+  folding a repository-wide lockfile rewrite into declaration extraction.
 - Audit and remove inappropriate `timeout` wrappers from the remaining Make
   fragments and test helpers. The declaration-core prerequisite fixed only the
   `source-loc` lane; at that checkpoint 117 other files under `misc/make` and
