@@ -663,4 +663,33 @@ mod tests {
         assert_eq!(first.identity.engine.implementation(), "lua");
         assert_eq!(first.identity.language.as_str(), "lua");
     }
+
+    #[test]
+    fn explicit_inputs_bind_into_the_evaluation_identity() {
+        use declarative_config::EvaluationDeadline;
+
+        let engine = LuaEngine::default();
+        let source = Source::new("root.lua", "return 7");
+        let deadline = || EvaluationDeadline::start(engine.limits().timeout);
+
+        let none = engine
+            .evaluate_with_inputs_within_as::<i64>(&source, &[], deadline())
+            .unwrap();
+        let alpha = engine
+            .evaluate_with_inputs_within_as::<i64>(&source, b"alpha", deadline())
+            .unwrap();
+        let beta = engine
+            .evaluate_with_inputs_within_as::<i64>(&source, b"beta", deadline())
+            .unwrap();
+
+        // The decoded value is unaffected; only the provenance changes.
+        assert_eq!(alpha.value, 7);
+        // Distinct inputs commit to distinct identities...
+        assert_ne!(none.identity.explicit_inputs_sha256, alpha.identity.explicit_inputs_sha256);
+        assert_ne!(alpha.identity.explicit_inputs_sha256, beta.identity.explicit_inputs_sha256);
+        assert_ne!(none.identity.sha256, alpha.identity.sha256);
+        // ...while the rest of the identity (source, engine) is unchanged.
+        assert_eq!(none.identity.root_source_sha256, alpha.identity.root_source_sha256);
+        assert_eq!(alpha.identity.engine.implementation(), "lua");
+    }
 }
