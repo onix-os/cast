@@ -14,9 +14,49 @@
 // evaluator that consumes them lands.
 #![cfg_attr(not(test), allow(dead_code))]
 
+use lua_config::LuaPatch;
 use serde::Deserialize;
 
-use super::{BuildToolSpec, ContextValue, TextSpec};
+use super::{ArrayPatch, BuildToolSpec, ContextValue, TextSpec, ValuePatch};
+
+/// Convert a decoded [`LuaPatch`] into the domain [`ValuePatch`], mapping the
+/// `set` payload through its own `Into` conversion so patched DTO values reach
+/// their domain form.
+pub(crate) fn value_patch<L, D>(patch: LuaPatch<L>) -> ValuePatch<D>
+where
+    D: From<L>,
+{
+    match patch {
+        LuaPatch::Keep => ValuePatch::Keep,
+        LuaPatch::Set { value } => ValuePatch::Set(value.into()),
+    }
+}
+
+/// The Lua encoding of an [`ArrayPatch`]: `{ kind = "keep" }` or a
+/// `{ kind = "replace" | "prepend" | "append", values = { … } }` overlay.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum LuaArrayPatch<T> {
+    Keep,
+    Replace { values: Vec<T> },
+    Prepend { values: Vec<T> },
+    Append { values: Vec<T> },
+}
+
+/// Convert a decoded [`LuaArrayPatch`] into the domain [`ArrayPatch`], mapping
+/// each element through its own `Into` conversion.
+pub(crate) fn array_patch<L, D>(patch: LuaArrayPatch<L>) -> ArrayPatch<D>
+where
+    D: From<L>,
+{
+    let convert = |values: Vec<L>| values.into_iter().map(Into::into).collect();
+    match patch {
+        LuaArrayPatch::Keep => ArrayPatch::Keep,
+        LuaArrayPatch::Replace { values } => ArrayPatch::Replace(convert(values)),
+        LuaArrayPatch::Prepend { values } => ArrayPatch::Prepend(convert(values)),
+        LuaArrayPatch::Append { values } => ArrayPatch::Append(convert(values)),
+    }
+}
 
 /// The Lua encoding of a [`TextSpec`]. The domain enum's tuple variants become
 /// struct variants so the uniform `{ kind = … }` tag applies; `Context` reuses
@@ -119,5 +159,30 @@ return {
             decode::<LuaBuildToolSpec>(r#"return { kind = "system_binary", value = "/bin/sh" }"#)
                 .into();
         assert_eq!(system, BuildToolSpec::SystemBinary("/bin/sh".to_owned()));
+    }
+
+    #[test]
+    fn a_value_patch_keeps_or_sets_the_converted_payload() {
+        let keep = value_patch::<LuaBuildToolSpec, BuildToolSpec>(decode(r#"return { kind = "keep" }"#));
+        assert_eq!(keep, ValuePatch::Keep);
+
+        let set = value_patch::<LuaBuildToolSpec, BuildToolSpec>(decode(
+            r#"return { kind = "set", value = { kind = "binary", value = "meson" } }"#,
+        ));
+        assert_eq!(set, ValuePatch::Set(BuildToolSpec::Binary("meson".to_owned())));
+    }
+
+    #[test]
+    fn an_array_patch_maps_every_operation_and_element() {
+        let keep = array_patch::<LuaBuildToolSpec, BuildToolSpec>(decode(r#"return { kind = "keep" }"#));
+        assert_eq!(keep, ArrayPatch::Keep);
+
+        let append = array_patch::<LuaBuildToolSpec, BuildToolSpec>(decode(
+            r#"return { kind = "append", values = { { kind = "package", value = "ninja" } } }"#,
+        ));
+        assert_eq!(
+            append,
+            ArrayPatch::Append(vec![BuildToolSpec::Package("ninja".to_owned())])
+        );
     }
 }
