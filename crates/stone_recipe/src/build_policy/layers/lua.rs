@@ -12,13 +12,52 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation, EvaluationDeadline, EvaluationIdentity, LanguageSpec,
     Limits, Source, SourceRoot,
 };
-use lua_config::LuaEngine;
+use std::fmt::Write as _;
+
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
 use serde::Deserialize;
 
 use super::{
     BuildPolicyLayerEntrySpec, BuildPolicyLayerSpec, BuildPolicyOperation,
     BuildPolicyRootConversionError, BuildPolicyRootSpec,
 };
+
+/// Emit an ordered build-policy manifest as canonical, generated-marked Lua
+/// source that re-decodes through this adapter into the same spec.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn encode_lua_manifest(root: &BuildPolicyRootSpec) -> String {
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    output.push_str("return {\n");
+    writeln!(output, "    name = {},", lua_string(&root.name)).unwrap();
+    output.push_str("    layers = {\n");
+    for layer in &root.layers {
+        output.push_str("        {\n");
+        writeln!(output, "            name = {},", lua_string(&layer.name)).unwrap();
+        output.push_str("            entries = {\n");
+        for entry in &layer.entries {
+            writeln!(
+                output,
+                "                {{ operation = {}, origin = {} }},",
+                encode_operation(entry.operation),
+                lua_string(&entry.origin),
+            )
+            .unwrap();
+        }
+        output.push_str("            },\n");
+        output.push_str("        },\n");
+    }
+    output.push_str("    },\n");
+    output.push_str("}\n");
+    output
+}
+
+fn encode_operation(operation: BuildPolicyOperation) -> &'static str {
+    match operation {
+        BuildPolicyOperation::Add => r#"{ kind = "add" }"#,
+        BuildPolicyOperation::Replace => r#"{ kind = "replace" }"#,
+        BuildPolicyOperation::Modify => r#"{ kind = "modify" }"#,
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -265,5 +304,13 @@ return {
     #[test]
     fn the_shipped_policy_manifest_pairs_to_an_equal_lua_form() {
         assert_eq!(lua_spec(SHIPPED_POLICY_LUA), gluon_spec(SHIPPED_POLICY_GLUON));
+    }
+
+    #[test]
+    fn an_emitted_manifest_re_decodes_to_the_same_spec() {
+        let original = gluon_spec(GLUON_MANIFEST);
+        let emitted = encode_lua_manifest(&original);
+        assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+        assert_eq!(lua_spec(&emitted), original);
     }
 }
