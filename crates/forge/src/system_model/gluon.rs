@@ -1,6 +1,6 @@
 //! Versioned Gluon boundary for authored Cast system intent and snapshots.
 
-use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, ImportPolicy, Source};
+use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, ImportPolicy, Source};
 use thiserror::Error;
 
 use super::{SystemModel, spec};
@@ -132,10 +132,10 @@ pub fn import_policy() -> Result<ImportPolicy, Diagnostic> {
 }
 
 pub fn evaluate(source: &Source) -> Result<EvaluatedSystem, EvaluationError> {
-    evaluate_with(&Evaluator::default(), source)
+    evaluate_with(&GluonEngine::default(), source)
 }
 
-pub fn evaluate_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedSystem, EvaluationError> {
+pub fn evaluate_with(evaluator: &GluonEngine, source: &Source) -> Result<EvaluatedSystem, EvaluationError> {
     let evaluated = evaluate_spec_with(evaluator, source)?;
     let parts = spec::into_domain(evaluated.spec)?;
     let model = SystemModel::regenerate(parts)?;
@@ -148,12 +148,12 @@ pub fn evaluate_with(evaluator: &Evaluator, source: &Source) -> Result<Evaluated
 
 /// Evaluate a canonical generated snapshot without rewriting it.
 pub fn evaluate_generated_snapshot(source: &Source) -> Result<SystemModel, EvaluationError> {
-    evaluate_generated_snapshot_with(&Evaluator::default(), source)
+    evaluate_generated_snapshot_with(&GluonEngine::default(), source)
 }
 
 /// Evaluate a canonical generated snapshot with caller-selected limits/root.
 pub fn evaluate_generated_snapshot_with(
-    evaluator: &Evaluator,
+    evaluator: &GluonEngine,
     source: &Source,
 ) -> Result<SystemModel, EvaluationError> {
     let source_text = source.text().to_owned();
@@ -163,7 +163,7 @@ pub fn evaluate_generated_snapshot_with(
     Ok(SystemModel::from_generated(parts, source_text, evaluated.fingerprint))
 }
 
-fn evaluate_spec_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedSpec, EvaluationError> {
+fn evaluate_spec_with(evaluator: &GluonEngine, source: &Source) -> Result<EvaluatedSpec, EvaluationError> {
     let mut policy = evaluator.import_policy().clone();
     policy.insert_embedded_module("cast.system.v1", GLUON_SYSTEM_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(policy);
@@ -319,7 +319,7 @@ mod tests {
         let normalized = spec::SystemSpec::try_from(&authored.model).unwrap();
         let generated = spec::encode_generated_gluon(&normalized);
 
-        let evaluated = Evaluator::default()
+        let evaluated = GluonEngine::default()
             .evaluate::<GluonSystemSpec>(&Source::new("system-model.glu", generated))
             .unwrap();
         let round_trip = SystemModel::try_from(spec::SystemSpec::from(evaluated.value)).unwrap();

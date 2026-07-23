@@ -10,7 +10,7 @@ use std::{
     path::Path,
 };
 
-use gluon_config::{Evaluator, SourceRoot};
+use gluon_config::{GluonEngine, SourceRoot};
 
 use super::{LoadError, LoadedSystemModel, load_source};
 
@@ -71,7 +71,7 @@ pub(crate) fn load_rooted(
     require_named_source(directory, &source_file, &source_path, expected)?;
 
     let source_root = SourceRoot::from_directory(directory_path, directory).map_err(evaluation)?;
-    let evaluator = Evaluator::default().with_source_root(source_root.clone());
+    let evaluator = GluonEngine::default().with_source_root(source_root.clone());
     let source = source_root
         .load(Path::new("system.glu"), evaluator.limits().max_source_bytes)
         .map_err(evaluation)?;

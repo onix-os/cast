@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use gluon_config::{EvaluationFingerprint, Evaluator, Source, SourceRoot};
+use gluon_config::{EvaluationFingerprint, GluonEngine, Source, SourceRoot};
 use thiserror::Error;
 
 use crate::{Package, dependency, repository};
@@ -174,14 +174,14 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
         .file_name()
         .ok_or_else(|| LoadError::InvalidPath(path.to_owned()))?;
     let source_root = SourceRoot::new(parent).map_err(gluon::EvaluationError::from)?;
-    let evaluator = Evaluator::default().with_source_root(source_root.clone());
+    let evaluator = GluonEngine::default().with_source_root(source_root.clone());
     let source = source_root
         .load(Path::new(file_name), evaluator.limits().max_source_bytes)
         .map_err(gluon::EvaluationError::from)?;
     Ok(Some(load_source(path, source, &evaluator)?))
 }
 
-fn load_source(path: &Path, source: Source, evaluator: &Evaluator) -> Result<LoadedSystemModel, LoadError> {
+fn load_source(path: &Path, source: Source, evaluator: &GluonEngine) -> Result<LoadedSystemModel, LoadError> {
     let authored_source = source.text().to_owned();
     let evaluated = gluon::evaluate_with(evaluator, &source)?;
     let authored_fingerprint = evaluated.fingerprint;
