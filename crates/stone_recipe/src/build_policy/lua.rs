@@ -14,15 +14,17 @@
 // evaluator that consumes them lands.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use lua_config::LuaPatch;
+use lua_config::{LuaOption, LuaPatch};
 use serde::Deserialize;
 
 use super::{
-    ArrayPatch, BuildCommandSpec, BuildProgramSpec, BuildToolSpec, CompilerFlagsSpec,
-    CompilerToolsSpec, ContextValue, Emul32InputPolicySpec, EnvironmentBindingSpec,
-    EnvironmentCondition, InstallLayoutSpec, PlatformPolicySpec, TargetEmulationSpec,
-    TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
-    ValuePatch,
+    AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArrayPatch, BuildCommandSpec,
+    BuildProgramSpec, BuildRootPolicySpec, BuildToolSpec, BuilderCommandSpec, CompilerCachePolicySpec,
+    CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec,
+    EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec,
+    MoldPolicySpec, PgoFinishSpec, PgoStagePolicySpec, PlatformPolicySpec, SourcePreparationPolicySpec,
+    TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec,
+    ToolchainsSpec, ValuePatch,
 };
 
 /// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
@@ -33,6 +35,11 @@ fn text_vec(values: Vec<LuaTextSpec>) -> Vec<TextSpec> {
 /// Map a `Vec` of Lua tool DTOs to a `Vec` of their domain values.
 fn tool_vec(values: Vec<LuaBuildToolSpec>) -> Vec<BuildToolSpec> {
     values.into_iter().map(Into::into).collect()
+}
+
+/// Convert an optional Lua DTO into an optional domain value.
+fn optional<L, D: From<L>>(value: LuaOption<L>) -> Option<D> {
+    Option::<L>::from(value).map(Into::into)
 }
 
 /// Convert a decoded [`LuaPatch`] into the domain [`ValuePatch`], mapping the
@@ -400,6 +407,196 @@ impl From<LuaEmul32InputPolicySpec> for Emul32InputPolicySpec {
     }
 }
 
+/// The Lua encoding of a [`BuilderCommandSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaBuilderCommandSpec {
+    pub program: LuaBuildProgramSpec,
+    pub args: Vec<LuaTextSpec>,
+    pub environment: Vec<LuaEnvironmentBindingSpec>,
+    pub working_dir: LuaTextSpec,
+}
+
+impl From<LuaBuilderCommandSpec> for BuilderCommandSpec {
+    fn from(command: LuaBuilderCommandSpec) -> Self {
+        Self {
+            program: command.program.into(),
+            args: text_vec(command.args),
+            environment: command.environment.into_iter().map(Into::into).collect(),
+            working_dir: command.working_dir.into(),
+        }
+    }
+}
+
+/// The Lua encoding of an [`AnalyzerToolchainPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaAnalyzerToolchainPolicySpec {
+    pub objcopy: LuaBuildToolSpec,
+    pub strip: LuaBuildToolSpec,
+}
+
+impl From<LuaAnalyzerToolchainPolicySpec> for AnalyzerToolchainPolicySpec {
+    fn from(tools: LuaAnalyzerToolchainPolicySpec) -> Self {
+        Self {
+            objcopy: tools.objcopy.into(),
+            strip: tools.strip.into(),
+        }
+    }
+}
+
+/// The Lua encoding of an [`AnalyzerToolsPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaAnalyzerToolsPolicySpec {
+    pub pkg_config: LuaBuildToolSpec,
+    pub python: LuaBuildToolSpec,
+    pub llvm: LuaAnalyzerToolchainPolicySpec,
+    pub gnu: LuaAnalyzerToolchainPolicySpec,
+}
+
+impl From<LuaAnalyzerToolsPolicySpec> for AnalyzerToolsPolicySpec {
+    fn from(tools: LuaAnalyzerToolsPolicySpec) -> Self {
+        Self {
+            pkg_config: tools.pkg_config.into(),
+            python: tools.python.into(),
+            llvm: tools.llvm.into(),
+            gnu: tools.gnu.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`CompilerCachePolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaCompilerCachePolicySpec {
+    pub ccache: LuaBuildProgramSpec,
+    pub sccache: LuaBuildProgramSpec,
+    pub ccache_dir: String,
+    pub sccache_dir: String,
+    pub go_cache_dir: String,
+    pub go_mod_cache_dir: String,
+    pub cargo_cache_dir: String,
+    pub zig_cache_dir: String,
+}
+
+impl From<LuaCompilerCachePolicySpec> for CompilerCachePolicySpec {
+    fn from(cache: LuaCompilerCachePolicySpec) -> Self {
+        Self {
+            ccache: cache.ccache.into(),
+            sccache: cache.sccache.into(),
+            ccache_dir: cache.ccache_dir,
+            sccache_dir: cache.sccache_dir,
+            go_cache_dir: cache.go_cache_dir,
+            go_mod_cache_dir: cache.go_mod_cache_dir,
+            cargo_cache_dir: cache.cargo_cache_dir,
+            zig_cache_dir: cache.zig_cache_dir,
+        }
+    }
+}
+
+/// The Lua encoding of a [`MoldPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaMoldPolicySpec {
+    pub linker: LuaBuildCommandSpec,
+    pub flags: LuaCompilerFlagsSpec,
+}
+
+impl From<LuaMoldPolicySpec> for MoldPolicySpec {
+    fn from(mold: LuaMoldPolicySpec) -> Self {
+        Self {
+            linker: mold.linker.into(),
+            flags: mold.flags.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`BuildRootPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaBuildRootPolicySpec {
+    pub base: Vec<LuaBuildToolSpec>,
+    pub toolchains: LuaToolchainInputPolicySpec,
+    pub emul32: LuaEmul32InputPolicySpec,
+    pub analyzer_tools: LuaAnalyzerToolsPolicySpec,
+    pub compiler_cache: LuaCompilerCachePolicySpec,
+    pub mold: LuaMoldPolicySpec,
+}
+
+impl From<LuaBuildRootPolicySpec> for BuildRootPolicySpec {
+    fn from(root: LuaBuildRootPolicySpec) -> Self {
+        Self {
+            base: tool_vec(root.base),
+            toolchains: root.toolchains.into(),
+            emul32: root.emul32.into(),
+            analyzer_tools: root.analyzer_tools.into(),
+            compiler_cache: root.compiler_cache.into(),
+            mold: root.mold.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`GitPreparationPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaGitPreparationPolicySpec {
+    pub create_directory: LuaBuilderCommandSpec,
+    pub copy: LuaBuilderCommandSpec,
+}
+
+impl From<LuaGitPreparationPolicySpec> for GitPreparationPolicySpec {
+    fn from(git: LuaGitPreparationPolicySpec) -> Self {
+        Self {
+            create_directory: git.create_directory.into(),
+            copy: git.copy.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`SourcePreparationPolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaSourcePreparationPolicySpec {
+    pub git: LuaGitPreparationPolicySpec,
+}
+
+impl From<LuaSourcePreparationPolicySpec> for SourcePreparationPolicySpec {
+    fn from(sources: LuaSourcePreparationPolicySpec) -> Self {
+        Self {
+            git: sources.git.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`PgoFinishSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaPgoFinishSpec {
+    pub output: LuaTextSpec,
+    pub inputs: Vec<LuaTextSpec>,
+    pub copy_to: LuaOption<LuaTextSpec>,
+    pub remove_output_first: bool,
+}
+
+impl From<LuaPgoFinishSpec> for PgoFinishSpec {
+    fn from(finish: LuaPgoFinishSpec) -> Self {
+        Self {
+            output: finish.output.into(),
+            inputs: text_vec(finish.inputs),
+            copy_to: optional(finish.copy_to),
+            remove_output_first: finish.remove_output_first,
+        }
+    }
+}
+
+/// The Lua encoding of a [`PgoStagePolicySpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaPgoStagePolicySpec {
+    pub flags: LuaToolchainFlagsSpec,
+    pub finish: LuaOption<LuaPgoFinishSpec>,
+}
+
+impl From<LuaPgoStagePolicySpec> for PgoStagePolicySpec {
+    fn from(stage: LuaPgoStagePolicySpec) -> Self {
+        Self {
+            flags: stage.flags.into(),
+            finish: optional(stage.finish),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::Source;
@@ -591,6 +788,51 @@ return {
         let inputs: ToolchainInputPolicySpec = decode::<LuaToolchainInputPolicySpec>(source).into();
         assert_eq!(inputs.llvm, vec![BuildToolSpec::Package("clang".to_owned())]);
         assert!(inputs.gnu.is_empty());
+    }
+
+    #[test]
+    fn a_pgo_finish_decodes_optional_and_list_fields() {
+        let with_copy = r#"
+return {
+    output = { kind = "literal", value = "merged.profdata" },
+    inputs = { { kind = "literal", value = "a.profraw" }, { kind = "literal", value = "b.profraw" } },
+    copy_to = { kind = "some", value = { kind = "literal", value = "final.profdata" } },
+    remove_output_first = true,
+}
+"#;
+        let finish: PgoFinishSpec = decode::<LuaPgoFinishSpec>(with_copy).into();
+        assert_eq!(finish.output, TextSpec::Literal("merged.profdata".to_owned()));
+        assert_eq!(finish.inputs.len(), 2);
+        assert_eq!(finish.copy_to, Some(TextSpec::Literal("final.profdata".to_owned())));
+        assert!(finish.remove_output_first);
+
+        let without_copy = with_copy.replace(
+            r#"copy_to = { kind = "some", value = { kind = "literal", value = "final.profdata" } },"#,
+            r#"copy_to = { kind = "none" },"#,
+        );
+        let bare: PgoFinishSpec = decode::<LuaPgoFinishSpec>(&without_copy).into();
+        assert_eq!(bare.copy_to, None);
+    }
+
+    #[test]
+    fn analyzer_tools_decode_through_the_wrapper() {
+        let source = r#"
+return {
+    pkg_config = { kind = "binary", value = "pkg-config" },
+    python = { kind = "package", value = "python" },
+    llvm = {
+        objcopy = { kind = "binary", value = "llvm-objcopy" },
+        strip = { kind = "binary", value = "llvm-strip" },
+    },
+    gnu = {
+        objcopy = { kind = "binary", value = "objcopy" },
+        strip = { kind = "binary", value = "strip" },
+    },
+}
+"#;
+        let tools: AnalyzerToolsPolicySpec = decode::<LuaAnalyzerToolsPolicySpec>(source).into();
+        assert_eq!(tools.python, BuildToolSpec::Package("python".to_owned()));
+        assert_eq!(tools.llvm.objcopy, BuildToolSpec::Binary("llvm-objcopy".to_owned()));
     }
 
     fn literal_layout_field(name: &str) -> String {
