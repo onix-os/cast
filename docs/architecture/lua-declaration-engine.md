@@ -106,14 +106,21 @@ validation live in engine-neutral code (`decode_specs`, `into_domain`,
 `spec::validate`), which both engines call. Adding the Lua adapter there is
 purely a new DTO plus `From` impls.
 
-Some recipe domains are not yet split. The build lock, for example, performs its
-entire conversion and validation inside `TryFrom<GluonBuildLock> for BuildLock`
-— a Gluon-typed input with no neutral spec. A Lua adapter cannot reuse that, so
-these domains require a preliminary refactor: extract the conversion/validation
-into a neutral spec-based function (mirroring `into_domain`) before either the
-package recipe, the full build policy, or the build lock can gain a `.lua`
-adapter without duplicating validation. This separation is itself part of the
-remaining work, not just the DTO mirroring.
+Two shapes appear in the recipe domains:
+
+- The build lock's domain types were *already* engine-neutral: the rich semantic
+  `BuildLock::validate` is a method on the domain value, and the Gluon
+  `TryFrom<GluonBuildLock>` only performs the structural `i64 → u32` conversion.
+  So the Lua adapter needed no parallel spec — deriving `serde::Deserialize`
+  (with the tagged encoding on the origin/role enums) on the domain types let
+  Lua decode straight into `BuildLock` and reuse `validate`, leaving the Gluon
+  path untouched. This is the cheapest case.
+
+- Domains whose *validation* still lives inside a `TryFrom<GluonX>` (Gluon-typed
+  input, no neutral method) genuinely need that logic extracted into an
+  engine-neutral function or a domain method first. Confirm which shape the
+  package recipe and full build policy have before adapting them; the build lock
+  shows the neutral-method shape can be adapted with only serde derives.
 
 ## Still open
 
