@@ -8,6 +8,7 @@
 //! at most once, and reopens the canonical journal after each successful
 //! advance before returning reusable typestate authority.
 
+mod boot_sync_handoff;
 mod no_boot_commit_decision;
 
 use std::error::Error as StdError;
@@ -33,6 +34,9 @@ use super::{
 
 #[cfg(test)]
 pub(super) use no_boot_commit_decision::ActiveReblitNoBootCommitDecisionFailure;
+pub(crate) use boot_sync_handoff::{
+    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
+};
 
 const RUN_SYSTEM_TRIGGERS: &str = "run stateful system triggers";
 

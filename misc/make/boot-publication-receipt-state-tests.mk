@@ -23,7 +23,7 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 		grep -Fqx "$$prefix$$name: test" <<<"$$listed"; \
 	done; \
 	staging_prefix='client::active_reblit_boot_sync_staging::tests::'; \
-	test "$$( grep -Ec "^$$staging_prefix.*: test$$" <<<"$$listed" )" = 15; \
+	test "$$( grep -Ec "^$$staging_prefix.*: test$$" <<<"$$listed" )" = 17; \
 	for name in \
 		success_derives_and_stages_exact_receipt_then_retains_successor_binding \
 		fresh_view_retains_the_exact_original_bound_plan_and_inventory \
@@ -42,6 +42,8 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 		grep -Fqx "$$staging_prefix$$name: test" <<<"$$listed"; \
 	done; \
 	grep -Fqx "$${staging_prefix}installed_chain::promoted_a_is_authenticated_as_b_predecessor_and_retained_delta_input: test" <<<"$$listed"; \
+	grep -Fqx "$${staging_prefix}coordinator_handoff::coordinator_handoff_stages_exact_state_and_rejects_same_installation_cross_state_plan: test" <<<"$$listed"; \
+	grep -Fqx "$${staging_prefix}reopen_contention::reconciliation_never_waits_behind_a_writer_blocked_journal_contender: test" <<<"$$listed"; \
 	state="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipts.rs"; \
 	head="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/db/state/boot_publication_receipt_head.rs"; \
 	state_mod="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/db/state/mod.rs"; \
@@ -69,6 +71,8 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 	test "$$( grep -Fc 'diesel::insert_into(boot_publication_receipts::table)' "$$state" )" = 1; \
 	test "$$( grep -Fc 'stage_pending_row(connection, transition_id, &pair)?' "$$state" )" = 1; \
 	staging="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging.rs"; \
+	staging_handoff="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging/coordinator_handoff.rs"; \
+	renderer="$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_bls_renderer.rs"; \
 	test "$$( grep -Fc '.stage_boot_publication_receipt(&receipt)' "$$staging" )" = 1; \
 	test "$$( grep -Fc '.prepare_complete_boot_publication_receipt(' "$$staging" )" = 2; \
 	grep -Fq '.load_current_exact_promoted_boot_publication_receipt_chain()' "$$staging"; \
@@ -81,7 +85,10 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 	grep -Fq 'let rederivation_state = database' "$$staging"; \
 	grep -Fq 'let rederived_committed_predecessor = rederivation_state.head().committed();' "$$staging"; \
 	grep -Fq 'rederived.canonical_body() != receipt.canonical_body()' "$$staging"; \
-	grep -Fq 'if !plan.is_bound_to_installation(installation)' "$$staging"; \
+	grep -Fq 'if !plan.is_bound_to_installation(plan_installation)' "$$staging"; \
+	grep -Fq 'pub(in crate::client) fn global_state(&self) -> crate::state::Id' "$$renderer"; \
+	grep -Fq 'handoff.require_plan_state(plan.global_state())?;' "$$staging_handoff"; \
+	grep -Fq 'self.record.previous.id != plan_state_record_id' "$$staging_handoff"; \
 	grep -Fq 'after_successful_advance_before_validation();' "$$staging"; \
 	test "$$( grep -Fc 'receipt: CanonicalBootPublicationReceipt,' "$$staging" )" = 1; \
 	test "$$( grep -Fc 'receipt: rederived,' "$$staging" )" = 1; \
@@ -112,7 +119,12 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 	if grep -Fq 'CanonicalBootPublicationReceipt' <<<"$$public_api$$private_api"; then exit 1; fi; \
 	test "$$( grep -Fc 'journal.advance_record_binding(cast, predecessor_binding, &successor)' "$$staging" )" = 1; \
 	grep -Fq 'drop(journal);' "$$staging"; \
-	grep -Fq 'TransitionJournalStore::open_in_retained_cast(cast, &installation.root)' "$$staging"; \
+	grep -Fq 'TransitionJournalStore::try_open_in_retained_cast(cast, &installation.root)' "$$staging"; \
+	if grep -nF 'TransitionJournalStore::open_in_retained_cast' "$$staging"; then \
+		printf '%s\n' 'reservation-owning staging may not block reopening the journal' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
 	if rg -n 'boot::synchronize|synchronize_boot|publish_(?:boot|output)|promote_(?:boot|receipt)|replace_(?:boot|output|receipt)|remove_(?:boot|output)|delete_(?:boot|output)' "$$staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
 	test "$$( grep -Fc 'fn stage_boot_publication_receipt_pair(' "$$head" )" = 1; \
 	awk 'previous == "    #[cfg(test)]" && $$0 == "    pub(crate) fn stage_boot_publication_receipt_pair(" { found = 1 } { previous = $$0 } END { exit(found ? 0 : 1) }' "$$head"; \
@@ -126,8 +138,10 @@ forge-boot-publication-receipt-state-test: forge-boot-publication-receipt-head-t
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)"/crates/forge/src/db/state/boot_publication_receipts/tests/*.rs \
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)"/crates/forge/src/db/state/migrations/2026-07-21-010000_boot_publication_receipts/*.sql \
 		"$$staging" \
+		"$$staging_handoff" \
+		"$$renderer" \
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging_tests.rs" \
-		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/crates/forge/src/client/boot/active_reblit_boot_sync_staging_tests/installed_chain.rs" \
+		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_sync_staging_tests/*.rs \
 		"$$schema" \
 		"$$state_mod" \
 		"$(BOOT_PUBLICATION_RECEIPT_STATE_TOP_DIR)/misc/make/boot-publication-receipt-state-tests.mk"; do \

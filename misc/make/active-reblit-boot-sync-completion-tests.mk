@@ -11,14 +11,15 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::receipt_promotion::completion::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 10; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 11; \
 	for name in \
-		completion_behavioral_scenario_inventory_is_exactly_twenty \
+		completion_behavioral_scenario_inventory_is_exactly_twenty_one \
 		deadline::inherited_completion_deadline_expires_without_journal_advance_or_token \
 		drift::final_return_revalidation_catches_late_drift_after_durable_completion \
 		drift::post_advance_namespace_database_journal_and_plan_drift_returns_no_completion_token \
 		drift::pre_advance_wrong_client_and_four_drift_axes_never_reach_boot_sync_complete \
 		reconciliation::completion_journal_faults_reconcile_only_exact_started_or_complete_without_token \
+		reconciliation::completion_reopens_never_wait_behind_a_writer_blocked_journal_contender \
 		reconciliation::completion_reconciliation_rejects_representative_wrong_generation_record \
 		success::cleaned_promoted_typestate_preserves_exact_authority \
 		success::chained_already_promoted_completion_preserves_pair_bodies_and_outputs \
@@ -64,13 +65,20 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	test -n "$$success_body"; \
 	test "$$( grep -Fc 'validate_completed_successor(' <<<"$$success_body" )" = 2; \
 	test "$$( grep -Fc 'drop(journal);' <<<"$$success_body" )" = 1; \
-	test "$$( grep -Fc 'TransitionJournalStore::open_in_retained_cast(' <<<"$$success_body" )" = 1; \
+	test "$$( grep -Fc 'TransitionJournalStore::try_open_in_retained_cast(' <<<"$$success_body" )" = 1; \
+	test "$$( grep -Fc 'TransitionJournalStore::try_open_in_retained_cast(' "$$staging" )" = 2; \
+	test "$$( grep -Fc 'before_completion_journal_reopen();' "$$staging" )" = 2; \
+	if grep -nF 'TransitionJournalStore::open_in_retained_cast' "$$staging"; then \
+		printf '%s\n' 'reservation-owning completion may not block reopening the journal' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
 	test "$$( grep -Fc '.has_reopened_record_binding(cast, &successor_binding, successor)' <<<"$$success_body" )" = 1; \
 	test "$$( grep -Fc '.record_binding(cast, successor)' <<<"$$success_body" )" = 1; \
 	test "$$( grep -Fc 'drop(successor_binding);' <<<"$$success_body" )" = 1; \
 	initial_validation_line="$$( grep -nF 'validate_completed_successor(' <<<"$$success_body" | head -n 1 | cut -d: -f1 )"; \
 	drop_store_line="$$( grep -nF 'drop(journal);' <<<"$$success_body" | cut -d: -f1 )"; \
-	reopen_line="$$( grep -nF 'TransitionJournalStore::open_in_retained_cast(' <<<"$$success_body" | cut -d: -f1 )"; \
+	reopen_line="$$( grep -nF 'TransitionJournalStore::try_open_in_retained_cast(' <<<"$$success_body" | cut -d: -f1 )"; \
 	old_inode_line="$$( grep -nF '.has_reopened_record_binding(cast, &successor_binding, successor)' <<<"$$success_body" | cut -d: -f1 )"; \
 	recapture_line="$$( grep -nF '.record_binding(cast, successor)' <<<"$$success_body" | cut -d: -f1 )"; \
 	drop_old_binding_line="$$( grep -nF 'drop(successor_binding);' <<<"$$success_body" | cut -d: -f1 )"; \

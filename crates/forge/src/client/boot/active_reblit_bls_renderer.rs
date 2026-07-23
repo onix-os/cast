@@ -224,6 +224,11 @@ impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
             && self.topology.is_bound_to_installation(installation)
     }
 
+    /// Exact global/head state authenticated by the retained render inputs.
+    pub(in crate::client) fn global_state(&self) -> crate::state::Id {
+        self.inputs.global_state()
+    }
+
     pub(in crate::client) fn input_deadline(&self) -> Instant {
         self.inputs.deadline()
     }

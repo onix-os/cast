@@ -15,7 +15,7 @@ use crate::{
         CanonicalBootPublicationReceipt,
     },
     client::{
-        Client,
+        Client, CoordinatorActiveStateReservation,
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_boot_publication_preflight::ActiveReblitBootSyncCompletionSeal,
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
@@ -63,8 +63,10 @@ pub(in crate::client) struct CompletedStagedActiveReblitBootSync<
     staging_outcome: BootPublicationReceiptStageOutcome,
     journal: TransitionJournalStore,
     database: Database,
-    // Deliberately last so its global lock outlives the journal and database.
+    // Both retained locks outlive the journal and database; the continuously
+    // held writer reservation is deliberately last.
     installation: Installation,
+    active_state_reservation: CoordinatorActiveStateReservation,
 }
 
 /// Fresh read-only correlation of one completed staging result with its exact
@@ -186,7 +188,10 @@ impl<'plan, 'inventory, Plan>
             journal,
             database,
             installation,
-            ..
+            active_state_reservation: _active_state_reservation,
+            plan: _,
+            inventory: _,
+            staging_outcome: _,
         } = self;
         drop(record_binding);
         drop(journal);
@@ -310,6 +315,7 @@ where
             journal,
             database,
             installation,
+            active_state_reservation,
             prepared_delta: _,
             classified_delta: _,
         } = self;
@@ -344,6 +350,7 @@ where
                         journal,
                         database,
                         installation,
+                        active_state_reservation,
                     })
                 }
                 Err(validation) => match reconcile_completion_journal(
@@ -489,7 +496,10 @@ fn finish_successful_completion_advance(
     let cast = installation
         .retained_mutable_cast_directory()
         .map_err(ActiveReblitBootSyncCompleteValidationError::Installation)?;
-    let reopened = TransitionJournalStore::open_in_retained_cast(
+    before_completion_journal_reopen();
+    // The inherited writer reservation remains held. Never block behind a
+    // journal contender which may itself be waiting for that writer.
+    let reopened = TransitionJournalStore::try_open_in_retained_cast(
         cast,
         &installation.root,
     )
@@ -581,7 +591,11 @@ fn reconcile_completion_journal(
     let cast = installation
         .retained_mutable_cast_directory()
         .map_err(ActiveReblitBootSyncCompletionReconciliationError::Installation)?;
-    let reopened = TransitionJournalStore::open_in_retained_cast(
+    before_completion_journal_reopen();
+    // The completed typestate still owns the writer reservation. A canonical
+    // contender must therefore produce a bounded reconciliation failure, not
+    // a writer-first/journal-first ABBA wait.
+    let reopened = TransitionJournalStore::try_open_in_retained_cast(
         cast,
         &installation.root,
     )
@@ -642,6 +656,33 @@ fn reconcile_completion_journal(
     }
     Ok(durable)
 }
+
+#[cfg(test)]
+std::thread_local! {
+    static BEFORE_COMPLETION_JOURNAL_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(in crate::client) fn arm_before_completion_journal_reopen(
+    callback: impl FnOnce() + 'static,
+) {
+    BEFORE_COMPLETION_JOURNAL_REOPEN.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(callback)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn before_completion_journal_reopen() {
+    BEFORE_COMPLETION_JOURNAL_REOPEN.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().take() {
+            callback();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn before_completion_journal_reopen() {}
 
 fn require_exact_started_record(
     record: &TransitionRecord,

@@ -46,7 +46,10 @@ pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[allow(unused_imports)] // contract-only until the next durable forward phase is implemented
 pub(crate) use root_abi_publication::RootLinksCompleteCoordinator;
 #[allow(unused_imports)] // contract-only until live lifecycle wiring consumes this suffix
-pub(crate) use system_triggers::SystemTriggersCompleteCoordinator;
+pub(crate) use system_triggers::{
+    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
+    SystemTriggersCompleteCoordinator,
+};
 #[cfg(test)]
 use transaction_isolation::TransactionIsolationAbiFailure;
 #[cfg(test)]

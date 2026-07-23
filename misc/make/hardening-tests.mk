@@ -369,6 +369,9 @@ forge-transition-journal-successor-test:
 	forge_root="crates/forge/src"; \
 	successors="$$forge_root/transition_journal/successors.rs"; \
 	completion="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence.rs"; \
+	startup_recovery="$$forge_root/client/startup_recovery/active_reblit_boot_sync_started_completion.rs"; \
+	startup_reconciliation="$$forge_root/client/startup_reconciliation/active_reblit_boot_sync_started_recovery_authority/post_advance.rs"; \
+	activation_namespace="$$forge_root/client/startup_reconciliation/activation_namespace/active_reblit_boot_sync_started_proof.rs"; \
 	for test in \
 		transition_journal::tests::production_forward_successor_inserts_a_state_id_only_at_allocation_completion \
 		transition_journal::tests::production_boot_sync_entry_requires_the_typed_receipt_successor \
@@ -394,9 +397,12 @@ forge-transition-journal-successor-test:
 		--glob '!**/*_test.rs' \
 		--glob '!**/test_support.rs' \
 		--glob '!**/*_test_support.rs' )"; \
-	test "$$( grep -c . <<<"$$typed_mentions" )" = 2; \
+	test "$$( grep -c . <<<"$$typed_mentions" )" = 5; \
 	grep -Fq "$$successors:" <<<"$$typed_mentions"; \
 	grep -Fq "$$completion:" <<<"$$typed_mentions"; \
+	grep -Fq "$$startup_recovery:" <<<"$$typed_mentions"; \
+	grep -Fq "$$startup_reconciliation:" <<<"$$typed_mentions"; \
+	grep -Fq "$$activation_namespace:" <<<"$$typed_mentions"; \
 	boot_complete_sources="$$( rg -l 'Phase[[:space:]]*::[[:space:]]*BootSyncComplete' "$$forge_root" \
 		--glob '*.rs' \
 		--glob '!**/tests/**' \

@@ -30,6 +30,58 @@ fn coordinator_ready_for_system_triggers_with_options(
 }
 
 #[test]
+fn journal_coordinator_active_reblit_boot_handoff_preserves_exact_source_and_writer() {
+    let (fixture, coordinator) = coordinator_ready_for_system_triggers_with_options(
+        CandidateKind::ActiveReblit,
+        true,
+        true,
+    );
+    let complete = coordinator
+        .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+        .unwrap();
+    let source = complete.record().clone();
+    assert_record_prefix(
+        &source,
+        Operation::ActiveReblit,
+        Phase::SystemTriggersComplete,
+        10,
+    );
+    assert!(source.options.run_boot_sync);
+    assert!(source.boot_publication_receipts.is_none());
+
+    let handoff = complete.into_active_reblit_boot_sync_handoff().unwrap();
+
+    assert_eq!(handoff.record(), &source);
+    assert!(handoff.retains_exact_source_for_test(
+        &fixture.installation,
+        &fixture.database,
+        fixture.candidate_state,
+    ));
+    assert_eq!(read_canonical(&fixture.installation.root), source);
+    handoff.assert_writer_reservation_held_until_drop_for_test();
+
+    for (candidate_kind, run_boot_sync) in [
+        (CandidateKind::NewState, true),
+        (CandidateKind::ActiveReblit, false),
+    ] {
+        let (fixture, coordinator) = coordinator_ready_for_system_triggers_with_options(
+            candidate_kind,
+            true,
+            run_boot_sync,
+        );
+        let complete = coordinator
+            .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+            .unwrap();
+        let source = complete.record().clone();
+        assert!(matches!(
+            complete.into_active_reblit_boot_sync_handoff(),
+            Err(ActiveReblitBootSyncHandoffFailure::SourceContract { .. })
+        ));
+        assert_eq!(read_canonical(&fixture.installation.root), source);
+    }
+}
+
+#[test]
 fn journal_coordinator_active_reblit_no_boot_commit_decision_is_exact() {
     let (fixture, coordinator) =
         coordinator_ready_for_system_triggers(CandidateKind::ActiveReblit, true);

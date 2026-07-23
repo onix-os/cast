@@ -37,7 +37,7 @@ use crate::{
 };
 
 use super::{
-    Client,
+    Client, CoordinatorActiveStateReservation,
     active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
     active_reblit_boot_publication_receipt::ActiveReblitBootPublicationReceiptError,
     active_reblit_boot_publication_preflight::ActiveReblitBootPublicationPreflightError,
@@ -72,8 +72,10 @@ pub(in crate::client) struct StagedActiveReblitBootSync<'plan, 'inventory, Plan>
     inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
     journal: TransitionJournalStore,
     database: Database,
-    // Deliberately last so its global lock outlives the journal and database.
+    // Both retained locks outlive the journal and database; the continuously
+    // held writer reservation is deliberately last.
     installation: Installation,
+    active_state_reservation: CoordinatorActiveStateReservation,
 }
 
 /// Fresh read-only correlation of one staged receipt with its exact client.
@@ -215,6 +217,7 @@ impl<'plan, 'inventory, Plan>
 impl Client {
     /// Derive and stage one complete bound receipt, then durably enter
     /// `BootSyncStarted` without performing a boot-publication effect.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::client) fn stage_active_reblit_boot_sync<
         'plan,
@@ -266,6 +269,7 @@ impl Client {
     }
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn stage_with_retained_stores<
     'plan,
@@ -306,9 +310,68 @@ fn stage_with_retained_stores<
     >,
     ActiveReblitBootSyncStagingError,
 > {
-    if !plan.is_bound_to_installation(installation) {
+    let active_state_reservation = CoordinatorActiveStateReservation::acquire()
+        .map_err(ActiveReblitBootSyncStagingError::FixtureWriterReservation)?;
+    stage_with_retained_stores_and_reservation(
+        active_state_reservation,
+        installation,
+        installation.clone(),
+        database.clone(),
+        plan,
+        inventory,
+        journal,
+        predecessor,
+        predecessor_binding,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stage_with_retained_stores_and_reservation<
+    'plan,
+    'inventory,
+    'input,
+    'topology_view,
+    'topology_authority,
+    'attempt,
+    'stone,
+    'roots,
+>(
+    active_state_reservation: CoordinatorActiveStateReservation,
+    plan_installation: &Installation,
+    retained_installation: Installation,
+    retained_database: Database,
+    plan: &'plan BoundActiveReblitBlsPublicationPlan<
+        'input,
+        'topology_view,
+        'topology_authority,
+        'attempt,
+        'stone,
+        'roots,
+    >,
+    inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
+    journal: TransitionJournalStore,
+    predecessor: TransitionRecord,
+    predecessor_binding: TransitionJournalRecordBinding,
+) -> Result<
+    StagedActiveReblitBootSync<
+        'plan,
+        'inventory,
+        BoundActiveReblitBlsPublicationPlan<
+            'input,
+            'topology_view,
+            'topology_authority,
+            'attempt,
+            'stone,
+            'roots,
+        >,
+    >,
+    ActiveReblitBootSyncStagingError,
+> {
+    if !plan.is_bound_to_installation(plan_installation) {
         return Err(ActiveReblitBootSyncStagingError::PlanInstallationMismatch);
     }
+    let installation = &retained_installation;
+    let database = &retained_database;
     require_mutable_namespace(installation)?;
     let cast = installation
         .retained_mutable_cast_directory()
@@ -420,8 +483,8 @@ fn stage_with_retained_stores<
                 pair,
             ) {
                 Ok(()) => Ok(StagedActiveReblitBootSync {
-                    installation: installation.clone(),
-                    database: database.clone(),
+                    installation: retained_installation,
+                    database: retained_database,
                     journal,
                     record: successor,
                     record_binding: successor_binding,
@@ -431,6 +494,7 @@ fn stage_with_retained_stores<
                     classified_delta,
                     plan,
                     inventory,
+                    active_state_reservation,
                 }),
                 Err(validation) => {
                     drop(successor_binding);
@@ -607,16 +671,18 @@ fn reconcile_journal(
     pair: BootPublicationReceiptPair,
 ) -> Result<DurableActiveReblitBootSyncRecord, ActiveReblitBootSyncReconciliationError> {
     // Opening another store while the first holds the journal lock would
-    // deadlock. Drop it first, then let canonical reopen clean an interrupted
-    // exchange residue before strict source-or-successor classification.
+    // deadlock. Drop it first, then use a nonblocking canonical reopen: the
+    // writer reservation remains held, so waiting for a journal contender
+    // which may itself be waiting for that writer would invert lock order.
     drop(journal);
+    after_old_journal_drop_before_reopen();
     installation
         .revalidate_mutable_namespace()
         .map_err(ActiveReblitBootSyncReconciliationError::Installation)?;
     let cast = installation
         .retained_mutable_cast_directory()
         .map_err(ActiveReblitBootSyncReconciliationError::Installation)?;
-    let reopened = TransitionJournalStore::open_in_retained_cast(cast, &installation.root)
+    let reopened = TransitionJournalStore::try_open_in_retained_cast(cast, &installation.root)
         .map_err(ActiveReblitBootSyncReconciliationError::Reopen)?;
     installation
         .revalidate_mutable_namespace()
@@ -698,11 +764,20 @@ fn after_receipt_stage_before_final_rederivation() {}
 std::thread_local! {
     static AFTER_SUCCESSFUL_ADVANCE_BEFORE_VALIDATION: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
+    static AFTER_OLD_JOURNAL_DROP_BEFORE_REOPEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
 fn arm_after_successful_advance_before_validation(callback: impl FnOnce() + 'static) {
     AFTER_SUCCESSFUL_ADVANCE_BEFORE_VALIDATION.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(callback)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn arm_after_old_journal_drop_before_reopen(callback: impl FnOnce() + 'static) {
+    AFTER_OLD_JOURNAL_DROP_BEFORE_REOPEN.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(callback)).is_none());
     });
 }
@@ -718,6 +793,18 @@ fn after_successful_advance_before_validation() {
 
 #[cfg(not(test))]
 fn after_successful_advance_before_validation() {}
+
+#[cfg(test)]
+fn after_old_journal_drop_before_reopen() {
+    AFTER_OLD_JOURNAL_DROP_BEFORE_REOPEN.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().take() {
+            callback();
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_old_journal_drop_before_reopen() {}
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootSyncReceiptStateError {
@@ -753,6 +840,9 @@ pub(in crate::client) enum ActiveReblitBootSyncFreshValidationError {
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootSyncStagingError {
+    #[cfg(test)]
+    #[error("reserve the cooperating writer for a direct staging fixture")]
+    FixtureWriterReservation(#[source] crate::client::Error),
     #[error("revalidate the retained mutable installation namespace")]
     Installation(#[source] installation::Error),
     #[error("revalidate the exact ActiveReblit pre-boot journal binding")]
@@ -837,6 +927,14 @@ pub(in crate::client) enum ActiveReblitBootSyncReconciliationError {
     ReceiptState(#[source] ActiveReblitBootSyncReceiptStateError),
 }
 
+#[path = "active_reblit_boot_sync_staging/coordinator_handoff.rs"]
+mod coordinator_handoff;
+pub(crate) use coordinator_handoff::CoordinatorActiveReblitBootSyncHandoff;
+#[cfg(test)]
+use coordinator_handoff::stage_active_reblit_boot_sync_from_handoff_for_test;
+#[allow(unused_imports)] // returned by the intentionally unwired coordinator entry
+pub(in crate::client) use coordinator_handoff::ActiveReblitCoordinatorBootSyncStagingError;
+
 #[path = "active_reblit_boot_sync_staging/immutable_publication_attempt.rs"]
 mod immutable_publication_attempt;
 
@@ -855,6 +953,8 @@ pub(in crate::client) use boot_sync_complete_persistence::{
     DurableActiveReblitBootSyncCompletionRecord,
     FreshCompletedStagedActiveReblitBootSync,
 };
+#[cfg(test)]
+pub(in crate::client) use boot_sync_complete_persistence::arm_before_completion_journal_reopen;
 
 #[cfg(test)]
 #[path = "active_reblit_boot_sync_staging_tests.rs"]

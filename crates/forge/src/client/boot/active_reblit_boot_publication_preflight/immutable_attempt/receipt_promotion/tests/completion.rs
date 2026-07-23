@@ -16,7 +16,9 @@ use crate::{
             ActiveReblitBootSyncCompletionReconciliationError,
             ActiveReblitBootSyncPromotedValidationError,
             DurableActiveReblitBootSyncCompletionRecord,
+            arm_before_completion_journal_reopen,
         },
+        CoordinatorActiveStateReservation,
     },
     db::state::BootPublicationReceiptPromotionError,
     linux_fs::descriptor_boot_namespace::BootNamespaceDestinationState,
@@ -159,17 +161,17 @@ mod reconciliation;
 #[path = "completion/drift.rs"]
 mod drift;
 
-const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 20;
+const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 21;
 
 #[test]
-fn completion_behavioral_scenario_inventory_is_exactly_twenty() {
+fn completion_behavioral_scenario_inventory_is_exactly_twenty_one() {
     let module_counts = [
         success::SCENARIO_COUNT,
         deadline::SCENARIO_COUNT,
         reconciliation::SCENARIO_COUNT,
         drift::SCENARIO_COUNT,
     ];
-    assert_eq!(module_counts, [3, 1, 6, 10]);
+    assert_eq!(module_counts, [3, 1, 7, 10]);
     assert_eq!(
         module_counts.into_iter().sum::<usize>(),
         EXPECTED_BEHAVIORAL_SCENARIO_COUNT,

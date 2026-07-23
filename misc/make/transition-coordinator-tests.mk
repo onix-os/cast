@@ -3,7 +3,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 110; \
+	timeout 10s test "$$count" = 111; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -96,6 +96,7 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_persistence_faults_leave_only_bound_predecessor_or_successor \
 		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_successor_inode_replacements_fail_stop_at_both_reopen_seams \
 		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_reopen_never_waits_behind_writer_first_contender \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_boot_handoff_preserves_exact_source_and_writer \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_decision_is_exact \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_rejects_other_routes_without_record_change \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_faults_classify_only_source_or_successor \
@@ -105,7 +106,9 @@ forge-transition-journal-coordinator-test:
 	done; \
 	trigger_contract="crates/forge/src/transition_identity/journal_coordinator/transaction_triggers.rs"; \
 	system_trigger_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers.rs"; \
+	boot_handoff_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers/boot_sync_handoff.rs"; \
 	no_boot_commit_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers/no_boot_commit_decision.rs"; \
+	boot_staging_handoff="crates/forge/src/client/boot/active_reblit_boot_sync_staging/coordinator_handoff.rs"; \
 	usr_exchange_contract="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_intent.rs"; \
 	usr_exchange_effect="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_effect.rs"; \
 	usr_exchange_authority="crates/forge/src/client/journal_usr_exchange_authority.rs"; \
@@ -189,6 +192,28 @@ forge-transition-journal-coordinator-test:
 		status="$$?"; test "$$status" = 1; \
 	fi; \
 	grep -Fqx 'mod no_boot_commit_decision;' "$$system_trigger_contract"; \
+	grep -Fqx 'mod boot_sync_handoff;' "$$system_trigger_contract"; \
+	grep -Fq 'fn into_active_reblit_boot_sync_handoff(' "$$boot_handoff_contract"; \
+	grep -Fq 'pub(crate) struct ActiveReblitBootSyncHandoffSeal {' "$$boot_handoff_contract"; \
+	test "$$( rg -F 'ActiveReblitBootSyncHandoffSeal { _private: () }' crates/forge/src --glob '*.rs' | wc -l )" = 1; \
+	grep -Fq '_seal: ActiveReblitBootSyncHandoffSeal,' "$$boot_staging_handoff"; \
+	grep -Fq 'record.options.run_boot_sync' "$$boot_handoff_contract"; \
+	grep -Fq 'authority.into_active_state_reservation()' "$$boot_handoff_contract"; \
+	grep -Fq 'record_binding,' "$$boot_handoff_contract"; \
+	grep -Fq 'fn stage_active_reblit_boot_sync_from_coordinator<' "$$boot_staging_handoff"; \
+	grep -Fq 'fn stage_active_reblit_boot_sync_from_handoff<' "$$boot_staging_handoff"; \
+	grep -Fq 'handoff.require_plan_state(plan.global_state())?;' "$$boot_staging_handoff"; \
+	grep -Fq 'stage_with_retained_stores_and_reservation(' "$$boot_staging_handoff"; \
+	if grep -nE '^pub.*fn stage_active_reblit_boot_sync_from_handoff<' "$$boot_staging_handoff"; then \
+		printf '%s\n' 'raw boot handoff consumption escaped the coordinator-only production entry' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
+	if rg -n 'forward_successor|advance_record_binding|ActiveStateReservation::acquire|lock_coordinator' "$$boot_handoff_contract"; then \
+		printf '%s\n' 'boot-staging handoff advances a phase or reacquires the writer lease' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
 	grep -Fq 'fn commit_active_reblit_without_boot(' "$$no_boot_commit_contract"; \
 	grep -Fq 'successor.phase != Phase::CommitDecided || successor.generation != 11' "$$no_boot_commit_contract"; \
 	test "$$( grep -Fc '.forward_successor(None)' "$$no_boot_commit_contract" )" = 1; \

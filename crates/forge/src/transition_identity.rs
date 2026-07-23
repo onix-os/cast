@@ -98,7 +98,10 @@ use fault_injection::{
 };
 #[allow(unused_imports)] // contract-only surface for the later live coordinator integration
 pub(crate) use journal_coordinator::{
-    NewStatePrevious, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError, StatefulTransitionRequest,
+    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
+    NewStatePrevious,
+    StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
+    StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
 };
 pub(crate) use legacy_boot_repair::{LegacyBootRepairAuthority, LegacyBootRepairAuthorityError};
 use namespace_helpers::*;

@@ -96,6 +96,17 @@ fn exact_boot_sync_journal(
     TransitionRecord,
     TransitionJournalRecordBinding,
 ) {
+    exact_boot_sync_journal_for_state(installation, None)
+}
+
+fn exact_boot_sync_journal_for_state(
+    installation: &Installation,
+    state: Option<state::Id>,
+) -> (
+    TransitionJournalStore,
+    TransitionRecord,
+    TransitionJournalRecordBinding,
+) {
     let cast = installation.retained_mutable_cast_directory().unwrap();
     let journal = TransitionJournalStore::open_in_retained_cast(
         cast,
@@ -103,6 +114,10 @@ fn exact_boot_sync_journal(
     )
     .unwrap();
     let mut predecessor = preparing_record();
+    if let Some(state) = state {
+        predecessor.candidate.id = Some(i32::from(state));
+        predecessor.previous.id = Some(i32::from(state));
+    }
     journal.create(&predecessor).unwrap();
     loop {
         match predecessor.forward_successor(None) {
@@ -957,3 +972,9 @@ fn bound_plan_drift_after_staging_never_reaches_boot_sync_started() {
 
 #[path = "active_reblit_boot_sync_staging_tests/installed_chain.rs"]
 mod installed_chain;
+
+#[path = "active_reblit_boot_sync_staging_tests/coordinator_handoff.rs"]
+mod coordinator_handoff;
+
+#[path = "active_reblit_boot_sync_staging_tests/reopen_contention.rs"]
+mod reopen_contention;
