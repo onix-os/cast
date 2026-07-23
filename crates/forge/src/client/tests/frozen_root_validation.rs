@@ -717,25 +717,118 @@ fn verify_reblits_and_preserves_the_existing_normalized_snapshot() {
         file: StonePayloadLayoutFile::Directory("share/verify-proof".into()),
     };
     client.layout_db.add(&package, &layout).unwrap();
+    let transition = state::TransitionId::parse("d".repeat(state::TransitionId::TEXT_LENGTH)).unwrap();
+    let original = generated_system_snapshot("active-package");
+    let expected_snapshot = original.encoded().to_owned();
+    let provenance = db::state::MetadataProvenance::from_outputs(
+        candidate_metadata::GENERIC_OS_RELEASE.as_bytes(),
+        expected_snapshot.as_bytes(),
+    );
     let state = client
         .state_db
-        .add(&[Selection::explicit(package)], Some("active"), None)
+        .add_with_transition(
+            &transition,
+            &[Selection::explicit(package)],
+            Some("active"),
+            None,
+        )
+        .unwrap();
+    client
+        .state_db
+        .insert_fresh_metadata_provenance_if_transition_matches(state.id, &transition, &provenance)
+        .unwrap();
+    client
+        .state_db
+        .clear_transition_if_matches(state.id, &transition)
         .unwrap();
     client.installation.active_state = Some(state.id);
     record_state_id(&client.installation.root, state.id).unwrap();
 
-    let original = generated_system_snapshot("active-package");
-    let expected = original.encoded().to_owned();
     record_system_snapshot(&client.installation.root, original).unwrap();
+    let expected_state = client.state_db.get(state.id).unwrap();
+    let expected_state_ids = client.state_db.list_ids().unwrap();
+    let old_live_usr = root_abi_inode(&client.installation.root.join("usr"));
+    let old_staging_wrapper = root_abi_inode(&client.installation.staging_dir());
     let restored_path = client.installation.root.join("usr/share/verify-proof");
     assert!(!restored_path.exists());
 
+    boot::reset_boot_synchronize_attempt_count();
     client.verify(true, false).unwrap();
 
     assert!(restored_path.is_dir());
+    assert_ne!(
+        root_abi_inode(&client.installation.root.join("usr")),
+        old_live_usr,
+        "verify did not exchange the repaired candidate into the live /usr name",
+    );
+    assert_eq!(
+        fs::read_to_string(client.installation.root.join("usr/.stateID")).unwrap(),
+        state.id.to_string(),
+    );
+    assert_eq!(client.state_db.get(state.id).unwrap(), expected_state);
+    assert_eq!(client.state_db.list_ids().unwrap(), expected_state_ids);
+    assert_eq!(
+        client.state_db.required_metadata_provenance(state.id).unwrap(),
+        provenance,
+    );
     assert_generated_snapshot(
         &system_model::snapshot_path(&client.installation.root),
-        &expected,
+        &expected_snapshot,
         "active-package",
     );
+    assert_root_abi_links(&client.installation.root);
+    assert_root_abi_links(&client.installation.isolation_dir());
+
+    let staging = client.installation.staging_dir();
+    assert_eq!(fs::read_dir(&staging).unwrap().count(), 0);
+    assert_eq!(
+        fs::symlink_metadata(&staging).unwrap().permissions().mode() & 0o7777,
+        0o700,
+    );
+    let quarantines = fs::read_dir(client.installation.state_quarantine_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(quarantines.len(), 1);
+    let quarantine = &quarantines[0];
+    assert_eq!(root_abi_inode(quarantine), old_staging_wrapper);
+    assert_eq!(
+        root_abi_inode(&quarantine.join("usr")),
+        old_live_usr,
+        "the exact displaced live /usr was not retained in quarantine",
+    );
+    let previous_token = recovery_tree_token(&quarantine.join("usr"));
+    assert_eq!(
+        quarantine.file_name().unwrap().to_string_lossy(),
+        format!(
+            "replaced-active-reblit-wrapper-{}-{}-0",
+            state.id, previous_token,
+        ),
+    );
+    assert_eq!(
+        fs::read_dir(quarantine)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>(),
+        [OsString::from("usr")],
+    );
+
+    assert_eq!(boot::boot_synchronize_attempt_count(), 0);
+    let mut journal_names = fs::read_dir(client.installation.root.join(".cast/journal"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    journal_names.sort();
+    assert_eq!(journal_names, [OsString::from("state-transition.lock")]);
+
+    let writer = CoordinatorActiveStateReservation::acquire().unwrap();
+    let cast = client.installation.retained_mutable_cast_directory().unwrap();
+    let fresh_journal = crate::transition_journal::TransitionJournalStore::try_open_in_retained_cast(
+        cast,
+        &client.installation.root,
+    )
+    .unwrap();
+    assert_eq!(fresh_journal.load_revalidated_retained_cast(cast).unwrap(), None);
+    drop(fresh_journal);
+    drop(writer);
 }

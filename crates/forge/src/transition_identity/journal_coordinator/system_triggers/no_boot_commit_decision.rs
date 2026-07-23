@@ -6,7 +6,12 @@
 use thiserror::Error;
 
 use crate::{
-    client::CoordinatorActiveStateReservation,
+    client::{
+        ActiveReblitNoBootTailError, CoordinatorActiveStateReservation,
+        FinalizedActiveReblitNoBoot, finish_active_reblit_no_boot,
+    },
+    db,
+    Installation,
     state::TransitionId,
     transition_identity::StatefulTreeIdentity,
     transition_journal::{Operation, Phase, TransitionJournalStore, TransitionRecord},
@@ -20,10 +25,17 @@ use super::super::{StatefulTransitionCoordinator, StatefulTransitionCoordinatorE
 
 const COMMIT_ACTIVE_REBLIT_WITHOUT_BOOT: &str = "commit active reblit without boot synchronization";
 
+/// Unforgeable token accepted only by the client-owned no-boot terminal tail.
+pub(crate) struct ActiveReblitNoBootTailSeal {
+    _private: (),
+}
+
 /// Continuously locked handoff after exact no-boot commit decision.
 /// Journal-first field order releases the journal before the writer lease.
 pub(in crate::transition_identity::journal_coordinator) struct ActiveReblitNoBootCommitDecisionHandoff {
     journal: TransitionJournalStore,
+    state_database: db::state::Database,
+    installation: Installation,
     record: TransitionRecord,
     _active_state_reservation: CoordinatorActiveStateReservation,
 }
@@ -59,6 +71,33 @@ pub(in crate::transition_identity::journal_coordinator) enum ActiveReblitNoBootC
 }
 
 impl SystemTriggersCompleteCoordinator {
+    /// Consume exact no-boot system-trigger completion through the existing
+    /// cleanup, terminal finalization, and clean-admission suffix.
+    pub(crate) fn complete_active_reblit_without_boot(
+        self,
+    ) -> Result<FinalizedActiveReblitNoBoot, ActiveReblitNoBootCompletionFailure> {
+        let handoff = self
+            .commit_active_reblit_without_boot()
+            .map_err(ActiveReblitNoBootCompletionFailureKind::CommitDecision)?;
+        let ActiveReblitNoBootCommitDecisionHandoff {
+            journal,
+            state_database,
+            installation,
+            record,
+            _active_state_reservation: active_state_reservation,
+        } = handoff;
+        finish_active_reblit_no_boot(
+            ActiveReblitNoBootTailSeal { _private: () },
+            installation,
+            state_database,
+            journal,
+            record,
+            active_state_reservation,
+        )
+        .map_err(ActiveReblitNoBootCompletionFailureKind::TerminalTail)
+        .map_err(Into::into)
+    }
+
     pub(in crate::transition_identity::journal_coordinator) fn commit_active_reblit_without_boot(
         self,
     ) -> Result<ActiveReblitNoBootCommitDecisionHandoff, ActiveReblitNoBootCommitDecisionFailure> {
@@ -133,19 +172,40 @@ impl SystemTriggersCompleteCoordinator {
             source,
         })?;
 
+        let installation = authority.installation().clone();
         let active_state_reservation = authority.into_active_state_reservation();
         drop(record_binding);
         drop(metadata);
         let _ = provenance;
         drop(readiness);
         let StatefulTransitionCoordinator { identity, record } = coordinator;
-        let StatefulTreeIdentity { journal, .. } = identity;
+        let StatefulTreeIdentity {
+            journal,
+            state_database,
+            ..
+        } = identity;
         Ok(ActiveReblitNoBootCommitDecisionHandoff {
             journal,
+            state_database,
+            installation,
             record,
             _active_state_reservation: active_state_reservation,
         })
     }
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub(crate) struct ActiveReblitNoBootCompletionFailure(
+    #[from] ActiveReblitNoBootCompletionFailureKind,
+);
+
+#[derive(Debug, Error)]
+enum ActiveReblitNoBootCompletionFailureKind {
+    #[error("persist exact no-boot ActiveReblit commit decision")]
+    CommitDecision(#[source] ActiveReblitNoBootCommitDecisionFailure),
+    #[error("complete exact no-boot ActiveReblit terminal tail")]
+    TerminalTail(#[source] ActiveReblitNoBootTailError),
 }
 
 fn exact_active_reblit_no_boot_source(record: &TransitionRecord) -> bool {

@@ -71,8 +71,8 @@ pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_comple
     Ok((journal, record))
 }
 
-/// Persist exact live generation-14 completion while returning the fresh
-/// generation-15 binding required by continuous coordinator ownership.
+/// Persist exact live cleanup completion while returning the fresh terminal
+/// binding required by continuous coordinator ownership.
 pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding(
     journal: TransitionJournalStore,
     authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,

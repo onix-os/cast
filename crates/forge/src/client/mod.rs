@@ -143,6 +143,7 @@ mod disposable_vm_gpt_topology_tests;
 #[path = "boot/disposable_vm_gpt_aggregate_publication_tests.rs"]
 mod disposable_vm_gpt_aggregate_publication_tests;
 mod active_state_authority;
+mod active_reblit_transition;
 #[cfg(test)]
 mod active_state_authority_tests;
 mod active_state_snapshot;
@@ -190,6 +191,10 @@ pub(in crate::client) use mutable_system_capabilities::{
     MutableSystemCapabilitiesTestSeal, arm_after_system_database_open,
 };
 pub(crate) use startup_reconciliation::ActiveReblitReplacementMutationAuthorityProvider;
+pub(crate) use startup_gate::{
+    ActiveReblitNoBootTailError, FinalizedActiveReblitNoBoot,
+    finish_active_reblit_no_boot,
+};
 #[cfg(test)]
 pub(crate) use startup_recovery_forward_origin_test_support::{
     assert_root_links_complete_restart_persists_rollback_decision,

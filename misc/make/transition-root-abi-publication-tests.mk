@@ -85,8 +85,10 @@ forge-transition-root-abi-publication-test:
 	fi; \
 	timeout 10s grep -Fq 'pub(crate) fn publish_root_abi(self)' "$$authority"; \
 	timeout 10s test "$$( timeout 10s grep -Fc 'let root_abi = root_abi.publish()?;' "$$authority" )" = 1; \
-	if callsites="$$( timeout 10s rg -n '\.publish_root_abi\(\)' crates/forge/src --glob '*.rs' --glob '!**/journal_coordinator/root_abi_publication.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; then \
-		timeout 10s printf '%s\n' 'RootLinksComplete gained a live callsite before startup dispatch exists:' "$$callsites" >&2; exit 1; \
+	forward_facade="crates/forge/src/transition_identity/journal_coordinator/active_reblit_forward.rs"; \
+	timeout 10s test "$$( timeout 10s grep -Fc '.publish_root_abi()' "$$forward_facade" )" = 1; \
+	if callsites="$$( timeout 10s rg -n '\.publish_root_abi\(\)' crates/forge/src --glob '*.rs' --glob '!**/journal_coordinator/root_abi_publication.rs' --glob '!**/journal_coordinator/active_reblit_forward.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_tests/**' )"; then \
+		timeout 10s printf '%s\n' 'RootLinksComplete gained a live callsite outside its sealed ActiveReblit facade:' "$$callsites" >&2; exit 1; \
 	else \
 		status="$$?"; timeout 10s test "$$status" = 1; \
 	fi; \

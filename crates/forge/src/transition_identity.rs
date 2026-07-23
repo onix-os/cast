@@ -98,8 +98,10 @@ use fault_injection::{
 };
 #[allow(unused_imports)] // contract-only surface for the later live coordinator integration
 pub(crate) use journal_coordinator::{
+    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
-    NewStatePrevious,
+    ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
+    NewStatePrevious, execute_active_reblit_forward,
     StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
     StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
 };

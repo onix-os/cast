@@ -18,11 +18,17 @@ mod active_reblit_commit_cleanup;
 mod active_reblit_commit_cleanup_complete;
 mod active_reblit_complete_finalization;
 mod default_system_intent;
+mod live_active_reblit_no_boot;
 #[cfg(test)]
 mod root_links_terminal_process_harness;
 mod usr_rollback_activate_archived;
 mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
+
+pub(crate) use live_active_reblit_no_boot::{
+    ActiveReblitNoBootTailError, FinalizedActiveReblitNoBoot,
+    finish_active_reblit_no_boot,
+};
 
 pub(in crate::client) use usr_rollback_activate_archived::{
     UsrRollbackActivateArchivedCompleteRouteSeal, UsrRollbackActivateArchivedFinalizationSeal,

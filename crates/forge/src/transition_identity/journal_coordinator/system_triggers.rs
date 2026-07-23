@@ -34,6 +34,9 @@ use super::{
 
 #[cfg(test)]
 pub(super) use no_boot_commit_decision::ActiveReblitNoBootCommitDecisionFailure;
+pub(crate) use no_boot_commit_decision::{
+    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
+};
 pub(crate) use boot_sync_handoff::{
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
 };

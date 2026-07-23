@@ -184,6 +184,31 @@ fn require_isolation_final_evidence(
     readiness.require_staged(&coordinator.identity)
 }
 
+pub(super) fn require_pre_journal_active_reblit_installation(
+    identity: &StatefulTreeIdentity,
+    installation: &Installation,
+    state: crate::state::Id,
+) -> Result<(), StatefulTransitionCoordinatorError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(IdentityError::from)
+        .map_err(StatefulTransitionCoordinatorError::Identity)?;
+    identity.require_known_id_absent(Operation::ActiveReblit, state)?;
+    identity
+        .candidate
+        .verify_named_read_only(&installation.staging_path("usr"))
+        .map_err(StatefulTransitionCoordinatorError::Identity)?;
+    identity
+        .previous
+        .verify_named_read_only(&installation.root.join("usr"))
+        .map_err(StatefulTransitionCoordinatorError::Identity)?;
+    identity.require_known_id_absent(Operation::ActiveReblit, state)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(IdentityError::from)
+        .map_err(StatefulTransitionCoordinatorError::Identity)
+}
+
 fn require_pre_exchange_installation(
     identity: &StatefulTreeIdentity,
     installation: &Installation,

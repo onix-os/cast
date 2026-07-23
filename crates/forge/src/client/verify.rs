@@ -292,7 +292,7 @@ pub fn verify(client: &Client, yes: bool, verbose: bool) -> Result<(), client::E
             state.selections.iter().map(|selection| &selection.package),
             active_authority,
         )?;
-        client.apply_stateful_candidate(candidate, &current_state, None, system_model)?;
+        client.apply_active_reblit_candidate(candidate, &current_state, system_model)?;
         println!(" {} state #{}", "»".green(), state.id);
     } else {
         drop(writer_snapshot.resume(&client.installation)?);

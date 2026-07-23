@@ -3,7 +3,7 @@ forge-transition-journal-coordinator-test:
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^transition_identity::journal_coordinator::tests::journal_coordinator_.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 111; \
+	timeout 10s test "$$count" = 112; \
 	for test in \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_reaches_candidate_prepared_through_exact_generations \
 		transition_identity::journal_coordinator::tests::journal_coordinator_new_state_previous_origins_and_options_are_exact \
@@ -98,6 +98,7 @@ forge-transition-journal-coordinator-test:
 		transition_identity::journal_coordinator::tests::journal_coordinator_system_trigger_reopen_never_waits_behind_writer_first_contender \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_boot_handoff_preserves_exact_source_and_writer \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_decision_is_exact \
+		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_tail_reaches_clean_terminal_state \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_rejects_other_routes_without_record_change \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_faults_classify_only_source_or_successor \
 		transition_identity::journal_coordinator::tests::journal_coordinator_active_reblit_no_boot_commit_binding_replacements_fail_stop \
@@ -108,6 +109,7 @@ forge-transition-journal-coordinator-test:
 	system_trigger_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers.rs"; \
 	boot_handoff_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers/boot_sync_handoff.rs"; \
 	no_boot_commit_contract="crates/forge/src/transition_identity/journal_coordinator/system_triggers/no_boot_commit_decision.rs"; \
+	no_boot_tail_contract="crates/forge/src/client/startup_gate/live_active_reblit_no_boot.rs"; \
 	boot_staging_handoff="crates/forge/src/client/boot/active_reblit_boot_sync_staging/coordinator_handoff.rs"; \
 	usr_exchange_contract="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_intent.rs"; \
 	usr_exchange_effect="crates/forge/src/transition_identity/journal_coordinator/usr_exchange_effect.rs"; \
@@ -215,10 +217,22 @@ forge-transition-journal-coordinator-test:
 		status="$$?"; test "$$status" = 1; \
 	fi; \
 	grep -Fq 'fn commit_active_reblit_without_boot(' "$$no_boot_commit_contract"; \
+	grep -Fq 'fn complete_active_reblit_without_boot(' "$$no_boot_commit_contract"; \
 	grep -Fq 'successor.phase != Phase::CommitDecided || successor.generation != 11' "$$no_boot_commit_contract"; \
 	test "$$( grep -Fc '.forward_successor(None)' "$$no_boot_commit_contract" )" = 1; \
 	grep -Fq 'advance_bound_system_trigger_record(' "$$no_boot_commit_contract"; \
 	grep -Fq 'authority.into_active_state_reservation()' "$$no_boot_commit_contract"; \
+	test "$$( rg -F 'ActiveReblitNoBootTailSeal { _private: () }' crates/forge/src --glob '*.rs' | wc -l )" = 1; \
+	grep -Fq 'finish_active_reblit_no_boot(' "$$no_boot_commit_contract"; \
+	grep -Fq 'ActiveReblitCommitCleanupAuthority::capture(' "$$no_boot_tail_contract"; \
+	grep -Fq 'ActiveReblitCommitCleanupApplyReconciliation::NotApplied' "$$no_boot_tail_contract"; \
+	grep -Fq 'ActiveReblitCommitCleanupApplyReconciliation::Ambiguous' "$$no_boot_tail_contract"; \
+	grep -Fq 'persist_active_reblit_commit_cleanup_complete_retaining_binding(journal, durable)' "$$no_boot_tail_contract"; \
+	grep -Fq 'ActiveReblitCommitCleanupCompleteAuthority::capture(' "$$no_boot_tail_contract"; \
+	grep -Fq 'persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding(' "$$no_boot_tail_contract"; \
+	grep -Fq 'ActiveReblitCompleteFinalizationAuthority::capture(' "$$no_boot_tail_contract"; \
+	grep -Fq 'let journal = finalize_active_reblit_complete(journal, finalization)' "$$no_boot_tail_contract"; \
+	grep -Fq 'CleanSystemStartup::admit_clean_after_terminal_finalization(' "$$no_boot_tail_contract"; \
 	grep -Fq 'fn into_reservation_after_applied_tree(self) -> ActiveStateReservation' "$$active_state_snapshot"; \
 	grep -Fq 'fn into_active_state_reservation(self) -> ActiveStateReservation' "$$active_state_authority"; \
 	grep -Fq 'pub(crate) fn into_active_state_reservation(self) -> ActiveStateReservation' "$$usr_exchange_authority"; \

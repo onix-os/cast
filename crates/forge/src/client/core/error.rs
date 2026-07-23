@@ -834,6 +834,11 @@ pub enum Error {
     FixedStagingCapabilityRequired { operation: &'static str },
     #[error("state {state} database record changed between the verify scan and its retained repair")]
     VerifyStateChanged { state: state::Id },
+    #[error("apply the selected active state through the durable ActiveReblit route")]
+    LiveActiveReblit {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("fixed-staging cooperating-writer coordinator is poisoned")]
     FixedStagingCoordinatorPoisoned,
     #[error(

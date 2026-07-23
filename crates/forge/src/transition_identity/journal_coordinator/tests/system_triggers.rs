@@ -113,6 +113,39 @@ fn journal_coordinator_active_reblit_no_boot_commit_decision_is_exact() {
 }
 
 #[test]
+fn journal_coordinator_active_reblit_no_boot_tail_reaches_clean_terminal_state() {
+    let (fixture, coordinator) =
+        coordinator_ready_for_system_triggers(CandidateKind::ActiveReblit, true);
+    let complete = coordinator
+        .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+        .unwrap();
+
+    let finalized = complete
+        .complete_active_reblit_without_boot()
+        .unwrap();
+
+    assert_record_prefix(
+        finalized.complete_record(),
+        Operation::ActiveReblit,
+        Phase::Complete,
+        13,
+    );
+    assert!(!finalized.complete_record().options.run_boot_sync);
+    assert!(finalized.complete_record().boot_publication_receipts.is_none());
+    assert_canonical_journal_absent(&fixture.installation.root);
+    assert_eq!(journal_names(&fixture.installation.root), ["state-transition.lock"]);
+
+    drop(finalized);
+    let cast = fixture.installation.retained_mutable_cast_directory().unwrap();
+    let reopened = TransitionJournalStore::try_open_in_retained_cast(
+        cast,
+        &fixture.installation.root,
+    )
+    .unwrap();
+    assert_eq!(reopened.load_revalidated_retained_cast(cast).unwrap(), None);
+}
+
+#[test]
 fn journal_coordinator_active_reblit_no_boot_commit_rejects_other_routes_without_record_change() {
     {
         let (fixture, coordinator) =

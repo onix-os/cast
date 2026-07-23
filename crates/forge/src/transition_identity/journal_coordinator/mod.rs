@@ -18,6 +18,7 @@
 //! cannot. Live wiring remains deferred until startup reconciliation consumes
 //! every record this contract may publish.
 
+mod active_reblit_forward;
 mod active_reblit_reservation;
 mod candidate_preparation;
 mod error;
@@ -34,6 +35,10 @@ mod tests;
 
 #[cfg(test)]
 use active_reblit_reservation::ActiveReblitReservationFailure;
+pub(crate) use active_reblit_forward::{
+    ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
+    execute_active_reblit_forward,
+};
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{
     PreparedActiveReblitReservationCoordinator, PreparedArchivedTransitionCoordinator,
@@ -48,6 +53,7 @@ pub(crate) use root_abi_publication::RootLinksCompleteCoordinator;
 #[allow(unused_imports)] // contract-only until live lifecycle wiring consumes this suffix
 pub(crate) use system_triggers::{
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
+    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
     SystemTriggersCompleteCoordinator,
 };
 #[cfg(test)]
