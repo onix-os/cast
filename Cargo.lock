@@ -4275,6 +4275,8 @@ dependencies = [
  "gluon",
  "gluon_codegen",
  "gluon_config",
+ "lua_config",
+ "serde",
  "thiserror 2.0.18",
 ]
 

@@ -14,6 +14,8 @@ fnmatch = { path = "../fnmatch" }
 gluon.workspace = true
 gluon_codegen.workspace = true
 gluon_config = { path = "../gluon_config" }
+lua_config = { path = "../lua_config" }
+serde = { workspace = true }
 
 thiserror.workspace = true
 

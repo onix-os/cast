@@ -26,10 +26,9 @@ lua-config-test:
 	fi
 
 # Phase L2+: differential Gluon/Lua domain parity — equal normalized Rust
-# values, intentionally distinct v2 identities.
+# values, intentionally distinct v2 identities. Grows one domain at a time.
 lua-domain-parity-test:
-	@echo 'lua-domain-parity-test: pending phase L2 (no Lua domain adapter registered yet)' >&2
-	@exit 1
+	@$(CARGO) test -p triggers --lib "lua::" -- --test-threads=1
 
 # Phase L8: release-built Lua execution parity. `make build` alone is not
 # execution.
