@@ -1,7 +1,10 @@
+use declarative_config::{DeclarationEvaluationError, DeclarationEvaluator};
 use gluon_config::{DiagnosticCategory, Evaluator, Source};
 use fnmatch::Pattern;
 use triggers::{
-    Collection, TRIGGER_ABI_VERSION, TriggerEvaluationError, evaluate_gluon, evaluate_gluon_with_inputs,
+    Collection, GluonTriggerConversionError, GluonTriggerEvaluator,
+    TRIGGER_ABI_VERSION, TriggerEvaluationError, evaluate_gluon,
+    evaluate_gluon_with_inputs,
     format::{Handler, PathKind, Trigger},
 };
 
@@ -268,7 +271,17 @@ fn fingerprint_is_deterministic_and_includes_the_versioned_abi() {
     let source = authored(
         r#"
 let abi_version: Int = cast.abi_version
-cast.trigger "fingerprint" "Fingerprint"
+let base = cast.trigger "fingerprint" "Fingerprint"
+{
+    paths = [cast.path
+        "/usr/share/typed-parity"
+        ["refresh"]
+        cast.optional.unset],
+    handlers = [cast.handler.named "refresh" (cast.handler.run
+        "/usr/bin/true"
+        ["--typed-parity"])],
+    .. base
+}
 "#,
     );
     let evaluator = Evaluator::default();
@@ -276,9 +289,21 @@ cast.trigger "fingerprint" "Fingerprint"
     let first = evaluate_gluon_with_inputs(&evaluator, &source, b"inputs-v1").unwrap();
     let repeated = evaluate_gluon_with_inputs(&evaluator, &source, b"inputs-v1").unwrap();
     let changed = evaluate_gluon_with_inputs(&evaluator, &source, b"inputs-v2").unwrap();
+    let legacy = evaluate_gluon(&source).unwrap();
+    let typed =
+        <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
+            &GluonTriggerEvaluator::default(),
+            &source,
+        )
+        .unwrap();
 
     assert_eq!(first.fingerprint, repeated.fingerprint);
     assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
+    assert_eq!(typed.identity, legacy.fingerprint);
+    assert_eq!(
+        normalized_trigger_value(&typed.value),
+        normalized_trigger_value(&legacy.trigger)
+    );
     assert_eq!(TRIGGER_ABI_VERSION, 1);
     assert_eq!(first.fingerprint.configuration_abi_version, TRIGGER_ABI_VERSION);
     assert_eq!(
@@ -290,4 +315,73 @@ cast.trigger "fingerprint" "Fingerprint"
             .collect::<Vec<_>>(),
         ["cast.trigger.v1"]
     );
+
+    let typed_evaluator = GluonTriggerEvaluator::default();
+    let engine_error =
+        <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
+            &typed_evaluator,
+            &authored(
+                r#"
+let base = cast.trigger "wrong-type" "Wrong type"
+{ description = 42, .. base }
+"#,
+            ),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        engine_error,
+        DeclarationEvaluationError::Evaluation(ref diagnostic)
+            if diagnostic.category == DiagnosticCategory::Type
+    ));
+
+    let conversion_error =
+        <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
+            &typed_evaluator,
+            &authored(
+                r#"
+let base = cast.trigger "broken-pattern" "Invalid pattern"
+{
+    paths = [cast.path "/usr/lib/(unterminated" [] cast.optional.unset],
+    .. base
+}
+"#,
+            ),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        conversion_error,
+        DeclarationEvaluationError::Conversion(
+            GluonTriggerConversionError::Trigger(ref error)
+        ) if error.field() == "paths[0].key"
+    ));
+
+    let missing_abi =
+        <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
+            &typed_evaluator,
+            &Source::new(
+                "manual-trigger.glu",
+                r#"
+type Optional a =
+    | Unset
+    | Set a
+
+{
+    name = "manual",
+    description = "Does not import the trigger ABI",
+    before = Unset,
+    after = Unset,
+    inhibitors = Unset,
+    paths = [],
+    handlers = [],
+}
+"#,
+            ),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        missing_abi,
+        DeclarationEvaluationError::Conversion(
+            GluonTriggerConversionError::MissingAbiImport
+        )
+    ));
 }

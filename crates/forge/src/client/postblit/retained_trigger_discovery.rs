@@ -2,31 +2,68 @@
 
 use std::{fs::File, io, os::fd::AsRawFd as _, path::Path};
 
-use config::GluonCodec;
-use gluon_config::Evaluator;
 use itertools::Itertools as _;
 use triggers::format::Trigger;
 
-use super::{Error, SystemTriggerCodec, TRIGGER_RELATIVE_TO_USR, TransactionTriggerCodec};
+use super::{
+    Error, TRIGGER_RELATIVE_TO_USR,
+    trigger_declaration::{self, SystemTrigger, TransactionTrigger},
+};
 
 pub(super) fn load_transaction(candidate_usr: &File, candidate_usr_path: &Path) -> Result<Vec<Trigger>, Error> {
-    load(candidate_usr, candidate_usr_path, &TransactionTriggerCodec, |trigger| {
-        trigger.0
+    let (trigger_root_path, trigger_root) = open_trigger_root(candidate_usr, candidate_usr_path)?;
+    let Some(trigger_root) = trigger_root else {
+        return Ok(Vec::new());
+    };
+    let evaluators = trigger_declaration::transaction_evaluators();
+    config::declaration::load_rooted_declarations(
+        &trigger_root_path,
+        &trigger_root,
+        &evaluators,
+    )
+    .map_err(|source| Error::RootedTriggerDeclarations {
+        source: Box::new(source),
+    })
+    .map(|loaded| {
+        loaded
+            .into_iter()
+            .map(|loaded| {
+                let TransactionTrigger(trigger) = loaded.value;
+                trigger
+            })
+            .collect_vec()
     })
 }
 
 pub(super) fn load_system(candidate_usr: &File, candidate_usr_path: &Path) -> Result<Vec<Trigger>, Error> {
-    load(candidate_usr, candidate_usr_path, &SystemTriggerCodec, |trigger| {
-        trigger.0
+    let (trigger_root_path, trigger_root) = open_trigger_root(candidate_usr, candidate_usr_path)?;
+    let Some(trigger_root) = trigger_root else {
+        return Ok(Vec::new());
+    };
+    let evaluators = trigger_declaration::system_evaluators();
+    config::declaration::load_rooted_declarations(
+        &trigger_root_path,
+        &trigger_root,
+        &evaluators,
+    )
+    .map_err(|source| Error::RootedTriggerDeclarations {
+        source: Box::new(source),
+    })
+    .map(|loaded| {
+        loaded
+            .into_iter()
+            .map(|loaded| {
+                let SystemTrigger(trigger) = loaded.value;
+                trigger
+            })
+            .collect_vec()
     })
 }
 
-fn load<C: GluonCodec>(
+fn open_trigger_root(
     candidate_usr: &File,
     candidate_usr_path: &Path,
-    codec: &C,
-    unwrap: impl Fn(C::Config) -> Trigger,
-) -> Result<Vec<Trigger>, Error> {
+) -> Result<(std::path::PathBuf, Option<File>), Error> {
     let trigger_root_path = candidate_usr_path.join(TRIGGER_RELATIVE_TO_USR);
     let trigger_root = match crate::linux_fs::openat2_file(
         candidate_usr.as_raw_fd(),
@@ -35,19 +72,16 @@ fn load<C: GluonCodec>(
         0,
         crate::linux_fs::controlled_resolution(),
     ) {
-        Ok(root) => root,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Ok(root) => Some(root),
+        Err(source) if source.kind() == io::ErrorKind::NotFound => None,
         Err(source) => {
-            return Err(Error::Config(Box::new(config::LoadGluonError::Enumerate {
-                path: trigger_root_path,
+            return Err(Error::OpenRetainedTriggerRoot {
+                path: trigger_root_path.clone(),
                 source,
-            })));
+            });
         }
     };
-
-    config::load_gluon_rooted(&trigger_root_path, &trigger_root, &Evaluator::default(), codec)
-        .map_err(|error| Error::Config(Box::new(error)))
-        .map(|loaded| loaded.into_iter().map(|loaded| unwrap(loaded.value)).collect_vec())
+    Ok((trigger_root_path, trigger_root))
 }
 
 #[cfg(test)]

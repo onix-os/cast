@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 dag = { path = "../dag" }
+declarative_config = { path = "../declarative_config" }
 fnmatch = { path = "../fnmatch" }
 gluon.workspace = true
 gluon_codegen.workspace = true

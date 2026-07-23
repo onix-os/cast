@@ -1,6 +1,13 @@
 //! Versioned restricted Gluon boundary for triggers.
 
-use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+};
+use gluon_config::{
+    Diagnostic, Evaluation as GluonEvaluation, EvaluationFingerprint,
+    Evaluator, GluonEngine, Source,
+};
 use thiserror::Error;
 
 use crate::{
@@ -25,6 +32,45 @@ pub enum TriggerEvaluationError {
     Conversion(#[from] TriggerConversionError),
     #[error("trigger source must explicitly import `cast.trigger.v1`")]
     MissingAbiImport,
+}
+
+/// Owned trigger conversion failures after Gluon has evaluated successfully.
+///
+/// Keeping these failures separate lets the language-neutral declaration
+/// loader distinguish engine diagnostics from an invalid owned trigger.
+#[derive(Debug, Error)]
+pub enum GluonTriggerConversionError {
+    #[error(transparent)]
+    Trigger(#[from] TriggerConversionError),
+    #[error("trigger source must explicitly import `cast.trigger.v1`")]
+    MissingAbiImport,
+}
+
+/// Stateful read-only adapter for the Gluon trigger declaration boundary.
+///
+/// The embedded ABI is installed once when the adapter is created. Rooting a
+/// clone for fragment evaluation therefore preserves the exact ABI catalog,
+/// limits, and language descriptor.
+#[derive(Debug, Clone)]
+pub struct GluonTriggerEvaluator {
+    engine: GluonEngine,
+}
+
+impl GluonTriggerEvaluator {
+    pub fn new(engine: GluonEngine) -> Result<Self, Diagnostic> {
+        let mut import_policy = engine.import_policy().clone();
+        import_policy.insert_embedded_module("cast.trigger.v1", GLUON_TRIGGER_ABI)?;
+        Ok(Self {
+            engine: engine.with_import_policy(import_policy),
+        })
+    }
+}
+
+impl Default for GluonTriggerEvaluator {
+    fn default() -> Self {
+        Self::new(GluonEngine::default())
+            .expect("the embedded cast.trigger.v1 ABI is a valid Gluon module")
+    }
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -145,6 +191,44 @@ where
     }
 }
 
+impl DeclarationEvaluator<Trigger> for GluonTriggerEvaluator {
+    type Identity = EvaluationFingerprint;
+    type Error = GluonTriggerConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<Trigger, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate::<GluonTriggerSpec>(source)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let evaluated = convert_evaluation(evaluation)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value: evaluated.trigger,
+            identity: evaluated.fingerprint,
+        })
+    }
+}
+
 pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedTrigger, TriggerEvaluationError> {
     evaluate_gluon_with(&Evaluator::default(), source)
 }
@@ -162,13 +246,26 @@ pub fn evaluate_gluon_with_inputs(
     import_policy.insert_embedded_module("cast.trigger.v1", GLUON_TRIGGER_ABI)?;
     let evaluator = evaluator.clone().with_import_policy(import_policy);
     let evaluation = evaluator.evaluate_with_inputs::<GluonTriggerSpec>(source, explicit_inputs)?;
+    convert_evaluation(evaluation).map_err(|error| match error {
+        GluonTriggerConversionError::Trigger(error) => {
+            TriggerEvaluationError::Conversion(error)
+        }
+        GluonTriggerConversionError::MissingAbiImport => {
+            TriggerEvaluationError::MissingAbiImport
+        }
+    })
+}
+
+fn convert_evaluation(
+    evaluation: GluonEvaluation<GluonTriggerSpec>,
+) -> Result<EvaluatedTrigger, GluonTriggerConversionError> {
     if !evaluation
         .fingerprint
         .imported_modules
         .iter()
         .any(|module| module.logical_name == "cast.trigger.v1")
     {
-        return Err(TriggerEvaluationError::MissingAbiImport);
+        return Err(GluonTriggerConversionError::MissingAbiImport);
     }
     let trigger = Trigger::try_from(TriggerSpec::from(evaluation.value))?;
 

@@ -12,6 +12,7 @@ mod retained_ephemeral;
 mod retained_transaction;
 mod retained_trigger_discovery;
 mod system_trigger_container;
+mod trigger_declaration;
 
 use std::{
     io,
@@ -21,14 +22,12 @@ use std::{
 };
 
 use crate::Installation;
-use config::{DecodedGluon, GluonCodec, GluonCodecError};
 use container::{
     Container, DevPolicy, ProcPolicy, PseudoFilesystemPolicy, RootFilesystemPolicy, SysPolicy, TmpPolicy, TmpfsLimits,
 };
-use gluon_config::{Evaluator, Source};
 use itertools::Itertools;
 use thiserror::Error;
-use triggers::format::{CompiledHandler, Handler, Trigger};
+use triggers::{GluonTriggerConversionError, format::{CompiledHandler, Handler}};
 
 use super::PendingFile;
 
@@ -50,70 +49,6 @@ const TRANSACTION_PSEUDO_FILESYSTEMS: PseudoFilesystemPolicy = PseudoFilesystemP
 };
 const TRANSACTION_ROOT_FILESYSTEM: RootFilesystemPolicy = RootFilesystemPolicy::ReadOnly;
 const TRIGGER_RELATIVE_TO_USR: &str = "share/cast/triggers";
-
-/// Transaction trigger wrapper
-/// These are loaded from `/usr/share/cast/triggers/tx.d/*.glu`
-#[derive(Debug)]
-struct TransactionTrigger(Trigger);
-
-impl config::Config for TransactionTrigger {
-    fn domain() -> String {
-        "tx".into()
-    }
-}
-
-/// System trigger wrapper
-/// These triggers are loaded from `/usr/share/cast/triggers/sys.d/*.glu`
-#[derive(Debug)]
-struct SystemTrigger(Trigger);
-
-impl config::Config for SystemTrigger {
-    fn domain() -> String {
-        "sys".into()
-    }
-}
-
-struct TransactionTriggerCodec;
-
-impl GluonCodec for TransactionTriggerCodec {
-    type Config = TransactionTrigger;
-
-    fn decode(&self, evaluator: &Evaluator, source: &Source) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
-        let evaluated = triggers::evaluate_gluon_with(evaluator, source).map_err(GluonCodecError::conversion)?;
-        Ok(DecodedGluon {
-            value: TransactionTrigger(evaluated.trigger),
-            fingerprint: evaluated.fingerprint,
-        })
-    }
-
-    fn encode(&self, _config: &Self::Config) -> Result<String, GluonCodecError> {
-        Err(GluonCodecError::conversion(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "packaged transaction triggers are read-only",
-        )))
-    }
-}
-
-struct SystemTriggerCodec;
-
-impl GluonCodec for SystemTriggerCodec {
-    type Config = SystemTrigger;
-
-    fn decode(&self, evaluator: &Evaluator, source: &Source) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
-        let evaluated = triggers::evaluate_gluon_with(evaluator, source).map_err(GluonCodecError::conversion)?;
-        Ok(DecodedGluon {
-            value: SystemTrigger(evaluated.trigger),
-            fingerprint: evaluated.fingerprint,
-        })
-    }
-
-    fn encode(&self, _config: &Self::Config) -> Result<String, GluonCodecError> {
-        Err(GluonCodecError::conversion(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "packaged system triggers are read-only",
-        )))
-    }
-}
 
 /// The trigger scope determines the environment that the trigger runs in
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -216,12 +151,17 @@ pub(super) fn triggers<'a>(
     let primary = (|| -> Result<Vec<TriggerRunner<'a>>, Error> {
         // Load appropriate triggers from their locations and convert back to a vec of Trigger
         let triggers = match scope {
-            TriggerScope::Transaction(..) => config::Manager::custom(&full_trigger_path)
-                .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
-                .map_err(|error| Error::Config(Box::new(error)))?
-                .into_iter()
-                .map(|loaded| loaded.value.0)
-                .collect_vec(),
+            TriggerScope::Transaction(..) => {
+                let evaluators = trigger_declaration::transaction_evaluators();
+                config::Manager::custom(&full_trigger_path)
+                    .load_declarations(&evaluators)
+                    .map_err(|source| Error::TriggerDeclarations {
+                        source: Box::new(source),
+                    })?
+                    .into_iter()
+                    .map(|loaded| loaded.value.0)
+                    .collect_vec()
+            }
             TriggerScope::RetainedTransaction {
                 candidate_usr,
                 candidate_usr_path,
@@ -534,8 +474,24 @@ fn trigger_command(run: &str, args: &[String]) -> std_process::Command {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("load Gluon trigger configuration")]
-    Config(#[source] Box<config::LoadGluonError>),
+    #[error("load packaged trigger declarations")]
+    TriggerDeclarations {
+        #[source]
+        source: Box<config::declaration::LoadManagedDeclarationError<GluonTriggerConversionError>>,
+    },
+
+    #[error("open retained trigger declaration root `{}`", path.display())]
+    OpenRetainedTriggerRoot {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+
+    #[error("load retained trigger declarations")]
+    RootedTriggerDeclarations {
+        #[source]
+        source: Box<config::declaration::LoadRootedDeclarationsError<GluonTriggerConversionError>>,
+    },
 
     #[error("container")]
     Container(#[from] container::Error),
@@ -706,8 +662,9 @@ let base = cast.trigger "depmod" "Update kernel module dependencies"
         )
         .unwrap();
 
+        let evaluators = trigger_declaration::transaction_evaluators();
         let loaded = config::Manager::custom(temporary.path())
-            .load_gluon(&Evaluator::default(), &TransactionTriggerCodec)
+            .load_declarations(&evaluators)
             .unwrap();
 
         assert_eq!(loaded.len(), 1);
