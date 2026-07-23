@@ -482,6 +482,44 @@ mod tests {
     }
 
     #[test]
+    fn the_shared_source_size_limit_is_enforced() {
+        use declarative_config::{DiagnosticCategory, LimitKind, Limits};
+
+        let engine = LuaEngine::new(Limits {
+            max_source_bytes: 8,
+            ..Limits::default()
+        });
+        let error = engine
+            .evaluate::<i64>(&Source::new("root.lua", "return 100000 + 1"))
+            .unwrap_err();
+        assert_eq!(error.category, DiagnosticCategory::Limit);
+        assert_eq!(error.limit, Some(LimitKind::SourceSize));
+    }
+
+    #[test]
+    fn the_shared_import_count_limit_is_enforced() {
+        use declarative_config::{AbiCatalog, DiagnosticCategory, LimitKind, Limits};
+
+        let mut catalog = AbiCatalog::new();
+        assert!(catalog.insert_source("cast.a", "cast.a", Source::new("cast.a", "return 1")));
+        assert!(catalog.insert_source("cast.b", "cast.b", Source::new("cast.b", "return 2")));
+        let engine = LuaEngine::new(Limits {
+            max_imports: 1,
+            ..Limits::default()
+        })
+        .with_abi_catalog(catalog);
+
+        let error = engine
+            .evaluate::<i64>(&Source::new(
+                "root.lua",
+                "local a = cast.import(\"cast.a\")\nlocal b = cast.import(\"cast.b\")\nreturn a + b",
+            ))
+            .unwrap_err();
+        assert_eq!(error.category, DiagnosticCategory::Limit);
+        assert_eq!(error.limit, Some(LimitKind::ImportCount));
+    }
+
+    #[test]
     fn lua_and_gluon_style_identities_differ_by_engine() {
         let engine = LuaEngine::default();
         let first = engine
