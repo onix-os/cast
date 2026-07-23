@@ -4,16 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-mod gluon;
-mod rooted_gluon;
-
 pub mod declaration;
-
-pub use self::gluon::{
-    DecodedGluon, DeleteGluonError, GENERATED_GLUON_MARKER, GluonCodec, GluonCodecError, GluonConversionError,
-    LoadGluonError, LoadedGluonConfig, SaveGluonError,
-};
-pub use self::rooted_gluon::load_gluon_rooted;
 
 pub trait Config {
     fn domain() -> String;
@@ -25,7 +16,7 @@ pub struct Manager {
 }
 
 impl Manager {
-    /// Load vendor and administrator `.glu` configuration relative to `root`.
+    /// Load vendor and administrator declarations relative to `root`.
     pub fn system(root: impl Into<PathBuf>, program: impl ToString) -> Self {
         Self {
             scope: Scope::System {
@@ -35,7 +26,7 @@ impl Manager {
         }
     }
 
-    /// Load system and user `.glu` configuration, writing generated fragments
+    /// Load system and user declarations, writing generated fragments
     /// beneath the user's configuration directory.
     pub fn user(program: impl ToString) -> Result<Self, CreateUserError> {
         Ok(Self {
@@ -47,7 +38,7 @@ impl Manager {
         })
     }
 
-    /// Load and save `.glu` fragments directly beneath `path`.
+    /// Load and save declaration fragments directly beneath `path`.
     pub fn custom(path: impl Into<PathBuf>) -> Self {
         Self {
             scope: Scope::Custom(path.into()),
@@ -216,10 +207,6 @@ impl Resolve<'_> {
             Resolve::User { config, program } => config.join(program),
             Resolve::Custom(dir) => dir.to_path_buf(),
         }
-    }
-
-    fn file(&self, domain: &str, extension: &str) -> PathBuf {
-        self.config_dir().join(format!("{domain}.{extension}"))
     }
 
     fn dir(&self, domain: &str) -> PathBuf {

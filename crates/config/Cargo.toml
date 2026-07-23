@@ -13,7 +13,6 @@ rust-version.workspace = true
 declarative_config = { path = "../declarative_config" }
 dirs.workspace = true
 fs-err.workspace = true
-gluon_config = { path = "../gluon_config" }
 libc.workspace = true
 
 [dev-dependencies]

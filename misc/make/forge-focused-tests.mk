@@ -1,17 +1,3 @@
-config-rooted-gluon-test:
-	@set -eu; \
-	listed="$$( $(CARGO) test -p config --lib -- --list )"; \
-	for test in \
-		rooted_gluon::tests::rooted_load_uses_the_retained_tree_after_public_path_substitution \
-		rooted_gluon::tests::rooted_load_rejects_nested_import_directory_substitution_during_decode; do \
-		printf '%s\n' "$$listed" | grep -Fqx "$$test: test"; \
-		$(CARGO) test -p config --lib "$$test" -- --exact --test-threads=1; \
-	done; \
-	chain_test=source::tests::descriptor_root_rejects_substitution_beneath_a_retained_import_directory; \
-	core_listed="$$( $(CARGO) test -p declarative_config --lib -- --list )"; \
-	printf '%s\n' "$$core_listed" | grep -Fqx "$$chain_test: test"; \
-	$(CARGO) test -p declarative_config --lib "$$chain_test" -- --exact --test-threads=1
-
 forge-active-state-snapshot-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \

@@ -22,7 +22,7 @@
 	mason-build-context-test mason-build-tuning-test mason-recipe-explanation-test \
 	mason-upstream-git-cache-test mason-build-root-test mason-profile-test \
 	mason-planner-bootstrap-test mason-policy-test \
-	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
+	config-declaration-store-test gitwrap-repository-fs-test gitwrap-all-test \
 	forge-repository-manager-test \
 	forge-security-fixture-test
 
@@ -850,12 +850,9 @@ mason-policy-test:
 	timeout 10s test "$$count" = 11; \
 	timeout 900s $(CARGO) test -p mason --lib "policy::tests::" -- --test-threads=1
 
-config-gluon-store-test:
-	@set -eu; \
-	listed="$$( $(CARGO) test -p config --lib -- --list )"; \
-	count="$$( grep -c '^gluon::tests::.*: test$$' <<<"$$listed" )"; \
-	test "$$count" = 30; \
-	$(CARGO) test -p config --lib "gluon::tests::" -- --test-threads=1
+config-declaration-store-test: config-declaration-storage-test \
+	config-declaration-manager-test config-rooted-declaration-loader-test \
+	config-fixed-root-declaration-loader-test
 
 gitwrap-repository-fs-test:
 	@set -eu; \
