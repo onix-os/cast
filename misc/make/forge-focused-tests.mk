@@ -92,6 +92,10 @@ forge-transition-identity-test:
 	done; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
+		transition_identity::candidate_metadata::tests::registered_alternate_collision_prevents_the_entire_pair_publication \
+		transition_identity::candidate_metadata::tests::existing_verification_rejects_a_registered_alternate_without_mutation \
+		transition_identity::candidate_metadata::tests::retained_pair_proof_rejects_a_later_registered_alternate \
+		transition_identity::candidate_metadata::tests::authority_bound_snapshot_refuses_authored_fixed_name_before_pair_publication \
 		transition_identity::candidate_metadata::tests::same_candidate_proof_accepts_exact_inode_and_rejects_same_layout_foreign_candidate_without_mutation \
 		transition_identity::candidate_metadata::tests::existing_metadata_verification_proves_independent_bytes_without_mutation \
 		transition_identity::candidate_metadata::tests::existing_metadata_verification_rejects_wrong_independent_bytes_without_mutation \
@@ -281,6 +285,7 @@ forge-stateful-candidate-metadata-test:
 	@set -eu; \
 	listed="$$( $(CARGO) test -p forge --lib -- --list )"; \
 	for test in \
+		client::candidate_metadata::tests::generated_snapshot_output_uses_exact_registered_authority_marker_and_name \
 		client::candidate_metadata::tests::valid_os_info_derives_exact_release_and_snapshot_bytes client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_lib_or_os_info_symlinks \
 		client::candidate_metadata::tests::invalid_os_info_derives_generic_release_and_exact_snapshot_bytes client::tests::stateful_candidate_metadata::stateful_candidate_metadata_never_follows_output_symlinks \
 		client::candidate_metadata::tests::non_utf8_os_info_derives_generic_release_and_exact_snapshot_bytes client::tests::stateful_candidate_metadata::stateful_candidate_metadata_preserves_existing_output_inodes \

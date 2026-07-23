@@ -148,6 +148,7 @@ pub(super) fn derive_outputs(
         .expect("an owned system model always has a canonical snapshot encoding");
     CandidateMetadataOutputs::from_policy(
         os_release.into_bytes(),
+        system_model::snapshot_authorities(),
         encoded.into_bytes(),
     )
 }
@@ -277,6 +278,42 @@ ID_LIKE=\"linux\"\n";
     #[test]
     fn missing_os_info_derives_generic_release_and_exact_snapshot_bytes() {
         assert_policy_outputs(None, GENERIC_OS_RELEASE.as_bytes());
+    }
+
+    #[test]
+    fn generated_snapshot_output_uses_exact_registered_authority_marker_and_name() {
+        let snapshot = snapshot();
+        let outputs = derive_outputs(None, &snapshot).unwrap();
+        let expected = system_model::snapshot_authorities();
+
+        assert_eq!(outputs.system_model_authorities(), &expected);
+        assert_eq!(
+            outputs.system_model_authority(),
+            expected.active_authority(),
+        );
+        assert_eq!(outputs.system_model_name(), c"system-model.glu");
+        assert_eq!(
+            outputs.system_model_authority().ownership_marker(),
+            system_model::gluon::GENERATED_GLUON_MARKER.as_bytes(),
+        );
+        assert!(
+            outputs
+                .system_model()
+                .starts_with(outputs.system_model_authority().ownership_marker())
+        );
+
+        let error = CandidateMetadataOutputs::from_policy(
+            GENERIC_OS_RELEASE.as_bytes(),
+            expected,
+            b"authored system declaration\n",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CandidateMetadataError::MissingGeneratedDeclarationMarker {
+                ref name,
+            } if name == "system-model.glu"
+        ));
     }
 
     #[test]

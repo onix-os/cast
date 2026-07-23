@@ -19,6 +19,7 @@ pub(crate) mod managed_directory;
 
 pub use generated_slot::{
     GeneratedDeclarationAuthority, GeneratedDeclarationSlot,
+    RegisteredGeneratedDeclarationAuthorities,
 };
 pub use evaluator_set::{
     ConfigDeclarationEvaluator, DeclarationEvaluatorSet,

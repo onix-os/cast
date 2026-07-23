@@ -10,6 +10,7 @@ use std::{
 use config::declaration::{
     LoadFixedRootDeclarationError, RootDeclarationDiscoveryError,
     RootDeclarationSlot, TypedDeclarationEvaluatorSet,
+    RegisteredGeneratedDeclarationAuthorities,
     load_fixed_root_declaration,
 };
 use declarative_config::{
@@ -265,6 +266,22 @@ pub(crate) fn encode_snapshot(
         &gluon::SystemSnapshotCodec::default(),
         model,
     )
+}
+
+/// Complete ownership and language policy for the generated snapshot slot.
+///
+/// Candidate publication consumes the neutral registered set while retaining
+/// its stronger paired `os-release` plus system-snapshot transaction. Even a
+/// singleton active language therefore carries the complete registration
+/// boundary into publication and proof.
+pub(crate) fn snapshot_authorities(
+) -> RegisteredGeneratedDeclarationAuthorities {
+    let active = gluon::SystemSnapshotCodec::default().generated_authority();
+    RegisteredGeneratedDeclarationAuthorities::new(
+        [active.clone()],
+        active,
+    )
+    .expect("the generated system snapshot authority set is valid")
 }
 
 /// Evaluate one generated snapshot through the registered typed codec.

@@ -1,5 +1,6 @@
 //! Versioned Gluon boundary for authored Cast system intent and snapshots.
 
+use config::declaration::GeneratedDeclarationAuthority;
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
@@ -66,6 +67,19 @@ impl SystemSnapshotCodec {
 
     pub(super) fn encode_normalized(value: &spec::SystemSpec) -> String {
         encoding::encode_generated(value)
+    }
+
+    /// Neutral ownership descriptor for the fixed generated system snapshot.
+    ///
+    /// The language descriptor selects the public extension while the
+    /// domain-specific marker proves that the bytes belong to Cast's system
+    /// snapshot slot rather than to an authored declaration.
+    pub(crate) fn generated_authority(&self) -> GeneratedDeclarationAuthority {
+        GeneratedDeclarationAuthority::new(
+            self.language_spec().clone(),
+            GENERATED_GLUON_MARKER,
+        )
+        .expect("the generated system snapshot authority is valid")
     }
 }
 
@@ -464,6 +478,34 @@ mod tests {
             encoded.find("\"alpha\"").unwrap()
                 < encoded.find("\"soname(libc.so.6)\"").unwrap()
         );
+    }
+
+    #[test]
+    fn generated_snapshot_authority_binds_exact_language_marker_and_public_name() {
+        let codec = SystemSnapshotCodec::default();
+        let authority = codec.generated_authority();
+        let language = <SystemSnapshotCodec as DeclarationEvaluator<
+            SystemModel,
+        >>::language_spec(&codec);
+        let encoded = encoding::encode_generated(
+            &spec::SystemSpec::default(),
+        );
+
+        assert_eq!(authority.language_spec(), language);
+        assert_eq!(authority.language_spec().language().as_str(), "gluon");
+        assert_eq!(authority.language_spec().extension(), "glu");
+        assert_eq!(
+            authority.ownership_marker(),
+            GENERATED_GLUON_MARKER.as_bytes(),
+        );
+        assert_eq!(
+            format!(
+                "system-model.{}",
+                authority.language_spec().extension(),
+            ),
+            "system-model.glu",
+        );
+        assert!(encoded.as_bytes().starts_with(authority.ownership_marker()));
     }
 
     #[test]

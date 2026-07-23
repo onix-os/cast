@@ -373,35 +373,23 @@ fn registered_slot_policy_validates_the_complete_authority_set() {
     let beta = authority("beta", "beta", BETA_MARKER);
 
     assert!(matches!(
-        GeneratedDeclarationSlot::with_registered_authorities(
-            directory.path(),
-            "system",
+        RegisteredGeneratedDeclarationAuthorities::new(
             std::iter::empty(),
             alpha.clone(),
-            1024,
-            ".fixture-tmp-",
         ),
         Err(GeneratedDeclarationSlotError::NoRegisteredAuthorities)
     ));
     assert!(matches!(
-        GeneratedDeclarationSlot::with_registered_authorities(
-            directory.path(),
-            "system",
+        RegisteredGeneratedDeclarationAuthorities::new(
             [alpha.clone(), alpha.clone()],
             alpha.clone(),
-            1024,
-            ".fixture-tmp-",
         ),
         Err(GeneratedDeclarationSlotError::DuplicateAuthorityExtension { .. })
     ));
     assert!(matches!(
-        GeneratedDeclarationSlot::with_registered_authorities(
-            directory.path(),
-            "system",
+        RegisteredGeneratedDeclarationAuthorities::new(
             [alpha.clone()],
             beta,
-            1024,
-            ".fixture-tmp-",
         ),
         Err(GeneratedDeclarationSlotError::ActiveAuthorityNotRegistered { .. })
     ));
@@ -411,15 +399,31 @@ fn registered_slot_policy_validates_the_complete_authority_set() {
     )
     .unwrap();
     assert!(matches!(
+        RegisteredGeneratedDeclarationAuthorities::new(
+            [alpha.clone()],
+            mismatched,
+        ),
+        Err(GeneratedDeclarationSlotError::ActiveAuthorityMismatch { .. })
+    ));
+
+    let oversized_duplicate = GeneratedDeclarationAuthority::new(
+        alpha.language_spec().clone(),
+        vec![b'x'; ALPHA_MARKER.len() + 1],
+    )
+    .unwrap();
+    assert!(matches!(
         GeneratedDeclarationSlot::with_registered_authorities(
             directory.path(),
             "system",
-            [alpha],
-            mismatched,
-            1024,
+            [alpha.clone(), oversized_duplicate],
+            alpha,
+            ALPHA_MARKER.len(),
             ".fixture-tmp-",
         ),
-        Err(GeneratedDeclarationSlotError::ActiveAuthorityMismatch { .. })
+        Err(GeneratedDeclarationSlotError::OwnershipMarkerTooLarge {
+            extension,
+            ..
+        }) if extension == "alpha"
     ));
 }
 

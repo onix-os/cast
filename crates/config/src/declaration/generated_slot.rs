@@ -65,6 +65,87 @@ impl GeneratedDeclarationAuthority {
     }
 }
 
+/// The complete registered authority policy for one generated declaration.
+///
+/// Registration is keyed by public extension. The active authority must be
+/// present as the exact same descriptor, not merely use a registered
+/// extension. Keeping the complete set alongside the active descriptor lets
+/// every consumer reject stale or conflicting alternate public names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegisteredGeneratedDeclarationAuthorities {
+    authorities: BTreeMap<String, GeneratedDeclarationAuthority>,
+    active_extension: String,
+}
+
+impl RegisteredGeneratedDeclarationAuthorities {
+    pub fn new(
+        registered_authorities: impl IntoIterator<
+            Item = GeneratedDeclarationAuthority,
+        >,
+        active_authority: GeneratedDeclarationAuthority,
+    ) -> Result<Self, GeneratedDeclarationSlotError> {
+        let mut authorities = BTreeMap::new();
+        for authority in registered_authorities {
+            let extension = authority.language_spec().extension().to_owned();
+            if authorities.insert(extension.clone(), authority).is_some() {
+                return Err(
+                    GeneratedDeclarationSlotError::DuplicateAuthorityExtension {
+                        extension,
+                    },
+                );
+            }
+        }
+        if authorities.is_empty() {
+            return Err(GeneratedDeclarationSlotError::NoRegisteredAuthorities);
+        }
+        let active_extension = active_authority
+            .language_spec()
+            .extension()
+            .to_owned();
+        match authorities.get(&active_extension) {
+            None => {
+                return Err(
+                    GeneratedDeclarationSlotError::ActiveAuthorityNotRegistered {
+                        extension: active_extension,
+                    },
+                );
+            }
+            Some(registered) if registered != &active_authority => {
+                return Err(
+                    GeneratedDeclarationSlotError::ActiveAuthorityMismatch {
+                        extension: active_extension,
+                    },
+                );
+            }
+            Some(_) => {}
+        }
+        Ok(Self {
+            authorities,
+            active_extension,
+        })
+    }
+
+    pub fn active_authority(&self) -> &GeneratedDeclarationAuthority {
+        self.authorities
+            .get(&self.active_extension)
+            .expect("active generated declaration authority was validated")
+    }
+
+    pub fn registered_authorities(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &GeneratedDeclarationAuthority> {
+        self.authorities.values()
+    }
+
+    pub fn alternate_authorities(
+        &self,
+    ) -> impl Iterator<Item = &GeneratedDeclarationAuthority> {
+        self.authorities.iter().filter_map(|(extension, authority)| {
+            (extension != &self.active_extension).then_some(authority)
+        })
+    }
+}
+
 /// Exclusive authority for one generated declaration path.
 ///
 /// Language selection and ownership are explicit. The marker is used only to
@@ -77,8 +158,7 @@ impl GeneratedDeclarationAuthority {
 pub struct GeneratedDeclarationSlot {
     directory: PathBuf,
     name: String,
-    authorities: BTreeMap<String, GeneratedDeclarationAuthority>,
-    active_extension: String,
+    authorities: RegisteredGeneratedDeclarationAuthorities,
     size_limit: usize,
     temporary_prefix: String,
     switch_residue_name: OsString,
@@ -113,9 +193,10 @@ impl GeneratedDeclarationSlot {
         if size_limit == 0 {
             return Err(GeneratedDeclarationSlotError::ZeroSizeLimit);
         }
-        let mut authorities = BTreeMap::new();
-        for authority in registered_authorities {
-            let extension = authority.language_spec().extension().to_owned();
+        let registered_authorities =
+            registered_authorities.into_iter().collect::<Vec<_>>();
+        for authority in &registered_authorities {
+            let extension = authority.language_spec().extension();
             let file_name_bytes = name
                 .len()
                 .saturating_add(1)
@@ -128,44 +209,17 @@ impl GeneratedDeclarationSlot {
             if authority.ownership_marker().len() > size_limit {
                 return Err(
                     GeneratedDeclarationSlotError::OwnershipMarkerTooLarge {
-                        extension,
+                        extension: extension.to_owned(),
                         size: authority.ownership_marker().len(),
                         limit: size_limit,
                     },
                 );
             }
-            if authorities.insert(extension.clone(), authority).is_some() {
-                return Err(
-                    GeneratedDeclarationSlotError::DuplicateAuthorityExtension {
-                        extension,
-                    },
-                );
-            }
         }
-        if authorities.is_empty() {
-            return Err(GeneratedDeclarationSlotError::NoRegisteredAuthorities);
-        }
-        let active_extension = active_authority
-            .language_spec()
-            .extension()
-            .to_owned();
-        match authorities.get(&active_extension) {
-            None => {
-                return Err(
-                    GeneratedDeclarationSlotError::ActiveAuthorityNotRegistered {
-                        extension: active_extension,
-                    },
-                );
-            }
-            Some(registered) if registered != &active_authority => {
-                return Err(
-                    GeneratedDeclarationSlotError::ActiveAuthorityMismatch {
-                        extension: active_extension,
-                    },
-                );
-            }
-            Some(_) => {}
-        }
+        let authorities = RegisteredGeneratedDeclarationAuthorities::new(
+            registered_authorities,
+            active_authority,
+        )?;
         let switch_residue_name = OsString::from(format!(
             ".{name}{SWITCH_RESIDUE_SUFFIX}",
         ));
@@ -176,7 +230,6 @@ impl GeneratedDeclarationSlot {
             directory: directory.into(),
             name,
             authorities,
-            active_extension,
             size_limit,
             temporary_prefix,
             switch_residue_name,
@@ -529,7 +582,7 @@ impl GeneratedDeclarationSlot {
     }
 
     fn file_name(&self) -> OsString {
-        OsString::from(format!("{}.{}", self.name, self.active_extension))
+        self.file_name_for(self.language_spec().extension())
     }
 
     fn file_name_for(&self, extension: &str) -> OsString {
@@ -538,8 +591,10 @@ impl GeneratedDeclarationSlot {
 
     fn public_file_names(&self) -> Vec<OsString> {
         self.authorities
-            .keys()
-            .map(|extension| self.file_name_for(extension))
+            .registered_authorities()
+            .map(|authority| {
+                self.file_name_for(authority.language_spec().extension())
+            })
             .collect()
     }
 
@@ -553,7 +608,7 @@ impl GeneratedDeclarationSlot {
 
     fn registered_markers(&self) -> Vec<&[u8]> {
         self.authorities
-            .values()
+            .registered_authorities()
             .map(GeneratedDeclarationAuthority::ownership_marker)
             .collect()
     }
@@ -563,7 +618,8 @@ impl GeneratedDeclarationSlot {
         directory: &ManagedDirectory,
     ) -> Result<Vec<ExistingAuthority>, InspectionFailure> {
         let mut candidates = Vec::new();
-        for (extension, authority) in &self.authorities {
+        for authority in self.authorities.registered_authorities() {
+            let extension = authority.language_spec().extension();
             let file_name = self.file_name_for(extension);
             let path = self.directory.join(&file_name);
             let existing = inspect_existing_declaration(
@@ -582,7 +638,7 @@ impl GeneratedDeclarationSlot {
                     path,
                     identity: existing.identity(),
                     generated: existing.is_generated(),
-                    active: extension == &self.active_extension,
+                    active: authority == self.active_authority(),
                     ownership_marker: authority.ownership_marker().to_vec(),
                 });
             }
@@ -650,9 +706,7 @@ impl GeneratedDeclarationSlot {
     }
 
     fn active_authority(&self) -> &GeneratedDeclarationAuthority {
-        self.authorities
-            .get(&self.active_extension)
-            .expect("active generated declaration authority was validated")
+        self.authorities.active_authority()
     }
 }
 

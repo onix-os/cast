@@ -21,6 +21,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use config::declaration::RegisteredGeneratedDeclarationAuthorities;
+#[cfg(test)]
+use config::declaration::GeneratedDeclarationAuthority;
 use thiserror::Error as ThisError;
 
 use crate::linux_fs::{
@@ -29,6 +32,7 @@ use crate::linux_fs::{
 };
 
 mod existing_verification;
+mod generated_declaration;
 mod private_directory;
 mod retained_inode;
 #[cfg(test)]
@@ -41,6 +45,7 @@ pub(crate) use existing_verification::arm_after_existing_release_retained;
 use retained_inode::{
     directory_witness, effective_user_id, file_type_name, metadata_io, published_witness, read_exact_at,
 };
+use generated_declaration::GeneratedDeclarationOutput;
 
 #[cfg(test)]
 pub(crate) fn arm_applied_private_directory_publication_error(after_parent_sync: impl FnOnce() + 'static) {
@@ -70,7 +75,6 @@ const LIB_NAME: &CStr = c"lib";
 const USR_NAME: &CStr = c"usr";
 const OS_INFO_NAME: &CStr = c"os-info.json";
 const OS_RELEASE_NAME: &CStr = c"os-release";
-const SYSTEM_SNAPSHOT_NAME: &CStr = c"system-model.glu";
 const TEMPORARY_FILE_MODE: u32 = 0o600;
 const CANONICAL_FILE_MODE: u32 = 0o644;
 const MAX_METADATA_BYTES: usize = 1024 * 1024;
@@ -116,10 +120,14 @@ pub(crate) enum CandidateMetadataError {
     InputTooLarge { path: PathBuf, limit: usize, actual: u64 },
     #[error("generated candidate metadata `{name}` exceeds the {limit}-byte limit (got {actual})")]
     OutputTooLarge {
-        name: &'static str,
+        name: String,
         limit: usize,
         actual: usize,
     },
+    #[error("generated declaration name `{name}` is not a valid filesystem component")]
+    InvalidGeneratedDeclarationName { name: String },
+    #[error("generated declaration `{name}` does not begin with its registered ownership marker")]
+    MissingGeneratedDeclarationMarker { name: String },
     #[error(
         "candidate metadata destination `{}` already exists as {kind} (uid={owner}, mode={mode:04o}, links={links}); refusing non-conditional replacement",
         path.display()
@@ -211,7 +219,7 @@ pub(crate) struct CandidateMetadataProof {
     release: PreparedFile,
     release_bytes: Vec<u8>,
     snapshot: PreparedFile,
-    snapshot_bytes: Vec<u8>,
+    snapshot_output: GeneratedDeclarationOutput,
 }
 
 /// Labeled, size-bounded output of one semantic metadata policy evaluation.
@@ -222,18 +230,21 @@ pub(crate) struct CandidateMetadataProof {
 #[derive(Debug)]
 pub(crate) struct CandidateMetadataOutputs {
     os_release: Vec<u8>,
-    system_model: Vec<u8>,
+    system_model: GeneratedDeclarationOutput,
 }
 
 impl CandidateMetadataOutputs {
     pub(crate) fn from_policy(
         os_release: impl Into<Vec<u8>>,
+        system_model_authorities: RegisteredGeneratedDeclarationAuthorities,
         system_model: impl Into<Vec<u8>>,
     ) -> Result<Self, CandidateMetadataError> {
         let os_release = os_release.into();
-        let system_model = system_model.into();
-        bounded_output("os-release", &os_release)?;
-        bounded_output("system-model.glu", &system_model)?;
+        bounded_output("os-release".to_owned(), &os_release)?;
+        let system_model = GeneratedDeclarationOutput::system_model(
+            system_model_authorities,
+            system_model,
+        )?;
         Ok(Self {
             os_release,
             system_model,
@@ -245,7 +256,24 @@ impl CandidateMetadataOutputs {
     }
 
     pub(crate) fn system_model(&self) -> &[u8] {
-        &self.system_model
+        self.system_model.bytes()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn system_model_authority(&self) -> &GeneratedDeclarationAuthority {
+        self.system_model.authority()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn system_model_authorities(
+        &self,
+    ) -> &RegisteredGeneratedDeclarationAuthorities {
+        self.system_model.authorities()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn system_model_name(&self) -> &CStr {
+        self.system_model.file_name()
     }
 }
 
@@ -319,23 +347,37 @@ impl CandidateMetadataPublication {
     ) -> Result<CandidateMetadataProof, CandidateMetadataError> {
         let CandidateMetadataOutputs {
             os_release,
-            system_model: snapshot,
+            system_model: snapshot_output,
         } = outputs;
         let Self { usr, usr_path, lib } = self;
+        snapshot_output.revalidate_authority()?;
+        let snapshot_name = snapshot_output.file_name();
+        let snapshot_path = snapshot_output.path_in(&lib.path);
+        let snapshot_bytes = snapshot_output.bytes();
 
         // Refuse every deterministic conflict before either canonical name is
         // published. A racing conflict after this point still cannot be
         // replaced because descriptor linking is no-replace.
         lib.require_named(&usr, LIB_NAME)?;
         lib.require_absent(OS_RELEASE_NAME)?;
-        lib.require_absent(SYSTEM_SNAPSHOT_NAME)?;
+        lib.require_absent(snapshot_name)?;
+        require_alternate_declarations_absent(&lib, &snapshot_output)?;
         let prepared_release = PreparedFile::new(&lib, &os_release, lib.path.join("os-release"))?;
-        let prepared_snapshot = PreparedFile::new(&lib, &snapshot, lib.path.join("system-model.glu"))?;
+        let prepared_snapshot = PreparedFile::new(&lib, snapshot_bytes, snapshot_path)?;
 
+        require_alternate_declarations_absent(&lib, &snapshot_output)?;
         publish(&usr, &lib, OS_RELEASE_NAME, &prepared_release, &os_release)?;
         lib.require_named(&usr, LIB_NAME)?;
         after_first_publication();
-        publish(&usr, &lib, SYSTEM_SNAPSHOT_NAME, &prepared_snapshot, &snapshot)?;
+        require_alternate_declarations_absent(&lib, &snapshot_output)?;
+        publish(
+            &usr,
+            &lib,
+            snapshot_name,
+            &prepared_snapshot,
+            snapshot_bytes,
+        )?;
+        require_alternate_declarations_absent(&lib, &snapshot_output)?;
         lib.require_named(&usr, LIB_NAME)?;
         lib.sync()?;
         usr.sync_all()
@@ -347,7 +389,7 @@ impl CandidateMetadataPublication {
             release: prepared_release,
             release_bytes: os_release,
             snapshot: prepared_snapshot,
-            snapshot_bytes: snapshot,
+            snapshot_output,
         };
         proof.revalidate()?;
         Ok(proof)
@@ -369,13 +411,14 @@ fn clone_candidate_usr(usr: &File, usr_path: &Path) -> Result<File, MetadataErro
 
 impl CandidateMetadataProof {
     pub(crate) fn revalidate(&self) -> Result<(), CandidateMetadataError> {
+        self.snapshot_output.revalidate_authority()?;
         require_published_pair(
             &self.usr,
             &self.lib,
             &self.release,
             &self.release_bytes,
             &self.snapshot,
-            &self.snapshot_bytes,
+            &self.snapshot_output,
         )
     }
 
@@ -387,7 +430,7 @@ impl CandidateMetadataProof {
     /// Callers must revalidate the proof immediately around digest comparison;
     /// these buffers never replace canonical descriptor reads.
     pub(super) fn policy_output_bytes(&self) -> (&[u8], &[u8]) {
-        (&self.release_bytes, &self.snapshot_bytes)
+        (&self.release_bytes, self.snapshot_output.bytes())
     }
 
     /// Prove that another authenticated candidate capability names the exact
@@ -427,9 +470,9 @@ fn directory_identity(file: &File, path: &Path) -> Result<(u64, u64), MetadataEr
     Ok((metadata.dev(), metadata.ino()))
 }
 
-fn bounded_output<'a>(name: &'static str, bytes: &'a [u8]) -> Result<&'a [u8], MetadataError> {
+fn bounded_output(name: String, bytes: &[u8]) -> Result<(), MetadataError> {
     if bytes.len() <= MAX_METADATA_BYTES {
-        Ok(bytes)
+        Ok(())
     } else {
         Err(MetadataError::OutputTooLarge {
             name,
@@ -560,16 +603,19 @@ fn require_published_pair(
     release: &PreparedFile,
     expected_release: &[u8],
     snapshot: &PreparedFile,
-    expected_snapshot: &[u8],
+    snapshot_output: &GeneratedDeclarationOutput,
 ) -> Result<(), MetadataError> {
     let release_path = directory.path.join("os-release");
-    let snapshot_path = directory.path.join("system-model.glu");
+    let snapshot_path = snapshot_output.path_in(&directory.path);
+    let snapshot_name = snapshot_output.file_name();
+    let expected_snapshot = snapshot_output.bytes();
 
     // Keep both anonymous-file capabilities alive through the complete pair
     // publication. Verify the pair in both orders between exact `lib` name
     // proofs so removing or replacing the first output while the second is
     // being published cannot be mistaken for a successful decoration.
     directory.require_named(parent, LIB_NAME)?;
+    require_alternate_declarations_absent(directory, snapshot_output)?;
     require_published(
         directory,
         OS_RELEASE_NAME,
@@ -578,22 +624,25 @@ fn require_published_pair(
         expected_release,
         &release_path,
     )?;
+    require_alternate_declarations_absent(directory, snapshot_output)?;
     require_published(
         directory,
-        SYSTEM_SNAPSHOT_NAME,
+        snapshot_name,
         &snapshot.file,
         snapshot.identity,
         expected_snapshot,
         &snapshot_path,
     )?;
+    require_alternate_declarations_absent(directory, snapshot_output)?;
     require_published(
         directory,
-        SYSTEM_SNAPSHOT_NAME,
+        snapshot_name,
         &snapshot.file,
         snapshot.identity,
         expected_snapshot,
         &snapshot_path,
     )?;
+    require_alternate_declarations_absent(directory, snapshot_output)?;
     require_published(
         directory,
         OS_RELEASE_NAME,
@@ -602,7 +651,18 @@ fn require_published_pair(
         expected_release,
         &release_path,
     )?;
+    require_alternate_declarations_absent(directory, snapshot_output)?;
     directory.require_named(parent, LIB_NAME)
+}
+
+fn require_alternate_declarations_absent(
+    directory: &RetainedDirectory,
+    output: &GeneratedDeclarationOutput,
+) -> Result<(), MetadataError> {
+    for name in output.alternate_file_names() {
+        directory.require_absent(name)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -623,7 +683,12 @@ pub(crate) fn arm_after_first_publication(hook: impl FnOnce() + 'static) {
 
 #[cfg(test)]
 pub(crate) fn arm_before_publication(name: &'static str, hook: impl FnOnce() + 'static) {
-    assert!(matches!(name, "os-release" | "system-model.glu"));
+    assert!(
+        name == "os-release"
+            || name
+                .strip_prefix("system-model.")
+                .is_some_and(|extension| !extension.is_empty()),
+    );
     BEFORE_PUBLICATION.with(|slot| {
         let previous = slot.borrow_mut().replace((name, Box::new(hook)));
         assert!(previous.is_none(), "metadata publication hook is already armed");
