@@ -14,6 +14,7 @@ pub use self::gluon::{
 };
 
 mod gluon;
+mod lua;
 mod validation;
 
 pub(crate) use validation::valid_package_name;
@@ -41,7 +42,7 @@ pub struct PackageSpec {
 }
 
 /// Package identity and user-facing source metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct MetaSpec {
     pub pname: String,
     pub version: String,
@@ -152,7 +153,8 @@ pub struct HooksSpec {
 }
 
 /// One repository-owned environment layer selected by a pure builder module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BuilderEnvironmentSpec {
     CMake,
     Meson,
@@ -238,13 +240,13 @@ pub struct OutputSpec {
 }
 
 /// A symbolic package name supplied to a package factory.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct PackageRef {
     pub name: String,
 }
 
 /// A named output of a symbolic package.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct OutputRef {
     pub package: PackageRef,
     pub output: String,
