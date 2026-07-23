@@ -172,6 +172,31 @@ mod tests {
     }
 
     #[test]
+    fn repeated_evaluation_is_deterministic() {
+        // Determinism is structural: the sandbox exposes no clock, randomness,
+        // or nondeterministic `pairs`/`next` iteration (see the forbidden-global
+        // proof), so the same source always produces the same value. Fresh
+        // runtimes stand in for fresh processes here.
+        let source = r#"
+            local base = { channel = "stable", priority = 10 }
+            return { channel = base.channel, priority = base.priority + 5 }
+        "#;
+        let first: (String, i64) = {
+            let lua = empty_runtime().unwrap();
+            let table: mlua::Table = eval_sandboxed(&lua, source).unwrap();
+            (table.get("channel").unwrap(), table.get("priority").unwrap())
+        };
+        for _ in 0..8 {
+            let lua = empty_runtime().unwrap();
+            let table: mlua::Table = eval_sandboxed(&lua, source).unwrap();
+            let again: (String, i64) =
+                (table.get("channel").unwrap(), table.get("priority").unwrap());
+            assert_eq!(again, first, "evaluation of the same source drifted");
+        }
+        assert_eq!(first, ("stable".to_owned(), 15));
+    }
+
+    #[test]
     fn deep_recursion_is_contained_not_a_host_crash() {
         let lua = empty_runtime().unwrap();
         // Adversarial recursion (which the Cast profile forbids) must fault as a
