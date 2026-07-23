@@ -2,6 +2,7 @@
 
 include misc/make/hardening-tests.mk
 include misc/make/declaration-tests.mk
+include misc/make/lua-tests.mk
 include misc/make/boot-publication-receipt-head-tests.mk
 include misc/make/boot-publication-receipt-state-tests.mk misc/make/boot-publication-receipt-promotion-tests.mk misc/make/boot-publication-installed-receipt-tests.mk misc/make/boot-publication-promoted-receipt-chain-tests.mk
 include misc/make/transition-journal-bound-delete-tests.mk

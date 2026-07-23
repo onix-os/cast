@@ -24,6 +24,7 @@ write_lines() {
 write_lines 1000 "${repository}/src/within limit.rs"
 write_lines 1001 "${repository}/src/too long.rs"
 write_lines 1002 "${repository}/docs/too long too.md"
+write_lines 1003 "${repository}/src/too long.lua"
 write_lines 1200 "${repository}/Cargo.lock"
 write_lines 1200 "${repository}/fixture.stone"
 write_lines 1200 "${repository}/fixture.tar.gz"
@@ -36,6 +37,7 @@ if bash "${checker}" --repo-root "${repository}" >"${output}" 2>&1; then
 fi
 grep -F '1001  src/too long.rs' "${output}" >/dev/null
 grep -F '1002  docs/too long too.md' "${output}" >/dev/null
+grep -F '1003  src/too long.lua' "${output}" >/dev/null
 if grep -E 'Cargo\.lock|fixture\.(stone|tar\.gz)|stone\.index' "${output}" >/dev/null; then
     echo 'LOC checker reported an excluded generated or binary fixture' >&2
     exit 1
@@ -43,6 +45,7 @@ fi
 
 write_lines 1000 "${repository}/src/too long.rs"
 write_lines 1000 "${repository}/docs/too long too.md"
+write_lines 1000 "${repository}/src/too long.lua"
 bash "${checker}" --repo-root "${repository}" >"${output}"
 grep -F 'are at most 1000 lines' "${output}" >/dev/null
 
