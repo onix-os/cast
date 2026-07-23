@@ -160,18 +160,21 @@ mod deadline;
 mod reconciliation;
 #[path = "completion/drift.rs"]
 mod drift;
+#[path = "completion/commit_decision.rs"]
+mod commit_decision;
 
-const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 21;
+const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 32;
 
 #[test]
-fn completion_behavioral_scenario_inventory_is_exactly_twenty_one() {
+fn completion_behavioral_scenario_inventory_is_exactly_thirty_two() {
     let module_counts = [
         success::SCENARIO_COUNT,
         deadline::SCENARIO_COUNT,
         reconciliation::SCENARIO_COUNT,
         drift::SCENARIO_COUNT,
+        commit_decision::SCENARIO_COUNT,
     ];
-    assert_eq!(module_counts, [3, 1, 7, 10]);
+    assert_eq!(module_counts, [3, 1, 7, 10, 11]);
     assert_eq!(
         module_counts.into_iter().sum::<usize>(),
         EXPECTED_BEHAVIORAL_SCENARIO_COUNT,

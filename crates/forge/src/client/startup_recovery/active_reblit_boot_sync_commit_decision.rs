@@ -13,6 +13,10 @@
 use thiserror::Error;
 
 use crate::{
+    client::active_reblit_boot_publication_preflight::{
+        ActiveReblitBootCommitDecisionFinalValidation,
+        ActiveReblitBootPostCompletionValidationError,
+    },
     installation,
     transition_journal::{CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
@@ -21,7 +25,9 @@ use super::super::startup_reconciliation::{
     ActiveReblitBootSyncCompleteAuthority, ActiveReblitBootSyncCompleteAuthorityError,
     ActiveReblitBootSyncCompletePostAdvanceAuthority, ActiveReblitBootSyncCompleteRecordAdvanceError,
 };
-use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
+use super::canonical_journal_reopen::{
+    CanonicalJournalReopenError, try_reopen_canonical_journal,
+};
 
 /// Which exact canonical record survived an uncertain or rejected advance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,6 +60,45 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_and_reo
     journal: TransitionJournalStore,
     authority: ActiveReblitBootSyncCompleteAuthority<'_>,
 ) -> Result<(TransitionJournalStore, TransitionRecord), ActiveReblitBootSyncCommitDecisionPersistenceError> {
+    let (journal, record, binding) =
+        persist_active_reblit_boot_sync_commit_decision_inner(journal, authority, None)?;
+    drop(binding);
+    Ok((journal, record))
+}
+
+/// Common persistence boundary for callers which must retain the fresh
+/// successor binding with the reopened journal.
+pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_retaining_binding(
+    journal: TransitionJournalStore,
+    authority: ActiveReblitBootSyncCompleteAuthority<'_>,
+    final_validation: ActiveReblitBootCommitDecisionFinalValidation<'_>,
+) -> Result<
+    (
+        TransitionJournalStore,
+        TransitionRecord,
+        TransitionJournalRecordBinding,
+    ),
+    ActiveReblitBootSyncCommitDecisionPersistenceError,
+> {
+    persist_active_reblit_boot_sync_commit_decision_inner(
+        journal,
+        authority,
+        Some(final_validation),
+    )
+}
+
+fn persist_active_reblit_boot_sync_commit_decision_inner(
+    journal: TransitionJournalStore,
+    authority: ActiveReblitBootSyncCompleteAuthority<'_>,
+    final_validation: Option<ActiveReblitBootCommitDecisionFinalValidation<'_>>,
+) -> Result<
+    (
+        TransitionJournalStore,
+        TransitionRecord,
+        TransitionJournalRecordBinding,
+    ),
+    ActiveReblitBootSyncCommitDecisionPersistenceError,
+> {
     authority
         .revalidate(&journal)
         .map_err(ActiveReblitBootSyncCommitDecisionPersistenceError::Authority)?;
@@ -76,7 +121,15 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_and_reo
 
     before_active_reblit_boot_sync_commit_decision_final_revalidation();
     let installation = authority.installation().clone();
-    let advance = match authority.advance_record_binding(&journal, &successor) {
+    let advance_result = match final_validation {
+        Some(final_validation) => authority.advance_record_binding_after_final_validation(
+            &journal,
+            &successor,
+            final_validation,
+        ),
+        None => authority.advance_record_binding(&journal, &successor),
+    };
+    let advance = match advance_result {
         Ok((successor_binding, post_advance_authority)) => {
             before_active_reblit_boot_sync_commit_decision_same_store_validation();
             let same_store_validation = post_advance_authority.revalidate_successor_same_store(
@@ -102,6 +155,14 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_and_reo
             drop(journal);
             return Err(ActiveReblitBootSyncCommitDecisionPersistenceError::BoundAdvanceUnexpectedSuccessor);
         }
+        Err(ActiveReblitBootSyncCompleteRecordAdvanceError::FinalTerminalValidation(source)) => {
+            drop(journal);
+            return Err(
+                ActiveReblitBootSyncCommitDecisionPersistenceError::FinalTerminalValidation(
+                    source,
+                ),
+            );
+        }
         Err(ActiveReblitBootSyncCompleteRecordAdvanceError::Installation(source)) => {
             drop(journal);
             return Err(ActiveReblitBootSyncCommitDecisionPersistenceError::Installation(source));
@@ -120,7 +181,7 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_and_reo
     if let ActiveReblitBootSyncCommitDecisionAdvanceOutcome::Published { .. } = &advance {
         after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen();
     }
-    let reopened = reopen_canonical_journal(&installation)
+    let reopened = try_reopen_canonical_journal(&installation)
         .map_err(ActiveReblitBootSyncCommitDecisionReopenError::from);
 
     match advance {
@@ -182,11 +243,11 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_and_reo
                             &fresh_binding,
                             &successor,
                         );
-                        drop(fresh_binding);
                         drop(post_advance_authority);
                         match final_validation {
-                            Ok(()) => Ok((reopened, successor)),
+                            Ok(()) => Ok((reopened, successor, fresh_binding)),
                             Err(source) => {
+                                drop(fresh_binding);
                                 drop(reopened);
                                 Err(
                                     ActiveReblitBootSyncCommitDecisionPersistenceError::PostAdvanceValidation {
@@ -493,6 +554,11 @@ pub(in crate::client) enum ActiveReblitBootSyncCommitDecisionPersistenceError {
     },
     #[error("the bound advance rejected the derived exact ActiveReblit CommitDecided successor")]
     BoundAdvanceUnexpectedSuccessor,
+    #[error("repeat exact terminal output validation at the bound journal advance")]
+    FinalTerminalValidation(
+        #[source]
+        ActiveReblitBootPostCompletionValidationError,
+    ),
     #[error("revalidate retained installation before the exact ActiveReblit CommitDecided advance")]
     Installation(#[source] installation::Error),
     #[error("ActiveReblit commit-decision journal advance failed after reopening exact durable {durable:?} record")]

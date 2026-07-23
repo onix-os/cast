@@ -684,6 +684,14 @@ fn before_completion_journal_reopen() {
 #[cfg(not(test))]
 fn before_completion_journal_reopen() {}
 
+#[path = "boot_sync_complete_persistence/commit_decision_handoff.rs"]
+mod commit_decision_handoff;
+pub(in crate::client) use commit_decision_handoff::{
+    CommittedStagedActiveReblitBootSync,
+    CommittedStagedActiveReblitBootSyncValidationError,
+    CompletedStagedActiveReblitCommitDecisionError,
+};
+
 fn require_exact_started_record(
     record: &TransitionRecord,
     receipt: &CanonicalBootPublicationReceipt,

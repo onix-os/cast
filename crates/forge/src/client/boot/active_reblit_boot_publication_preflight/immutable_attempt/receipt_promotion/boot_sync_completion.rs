@@ -617,3 +617,16 @@ fn before_final_completion_validation() {
 
 #[cfg(not(test))]
 fn before_final_completion_validation() {}
+
+#[path = "boot_sync_completion/commit_decision.rs"]
+mod commit_decision;
+pub(in crate::client) use commit_decision::{
+    ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation,
+    ActiveReblitBootCommitDecisionHandoff,
+};
+#[cfg(test)]
+pub(in crate::client) use commit_decision::{
+    arm_after_active_reblit_commit_decision_terminal_validation,
+    assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed,
+};

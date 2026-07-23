@@ -931,7 +931,7 @@ pub(in crate::client) enum ActiveReblitBootSyncReconciliationError {
 mod coordinator_handoff;
 pub(crate) use coordinator_handoff::CoordinatorActiveReblitBootSyncHandoff;
 #[cfg(test)]
-use coordinator_handoff::stage_active_reblit_boot_sync_from_handoff_for_test;
+pub(in crate::client) use coordinator_handoff::stage_active_reblit_boot_sync_from_handoff_for_test;
 #[allow(unused_imports)] // returned by the intentionally unwired coordinator entry
 pub(in crate::client) use coordinator_handoff::ActiveReblitCoordinatorBootSyncStagingError;
 
@@ -949,6 +949,9 @@ pub(in crate::client) use boot_sync_complete_persistence::{
     ActiveReblitBootSyncCompletePersistenceError,
     ActiveReblitBootSyncCompleteValidationError,
     ActiveReblitBootSyncCompletionReconciliationError,
+    CommittedStagedActiveReblitBootSync,
+    CommittedStagedActiveReblitBootSyncValidationError,
+    CompletedStagedActiveReblitCommitDecisionError,
     CompletedStagedActiveReblitBootSync,
     DurableActiveReblitBootSyncCompletionRecord,
     FreshCompletedStagedActiveReblitBootSync,

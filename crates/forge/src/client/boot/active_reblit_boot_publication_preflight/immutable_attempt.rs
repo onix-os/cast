@@ -107,6 +107,12 @@ pub(in crate::client) struct ActiveReblitBootSyncCompletionSeal {
     _private: (),
 }
 
+/// Unforgeable proof that the completed publication's exact terminal evidence
+/// was repeated immediately before commit-decision coordination.
+pub(in crate::client) struct ActiveReblitBootSyncCommitDecisionSeal {
+    _private: (),
+}
+
 /// Terminal exact-output evidence which still owns the original staged
 /// `BootSyncStarted` authority.
 ///
@@ -670,6 +676,10 @@ mod tests;
 #[path = "immutable_attempt/receipt_promotion.rs"]
 mod receipt_promotion;
 pub(in crate::client) use receipt_promotion::{
+    ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation,
+    ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootPostCompletionValidationError,
     ActiveReblitBootPromotedCleanupError,
     ActiveReblitBootSyncCompletionError,
     ActiveReblitBootReceiptPromotionError,

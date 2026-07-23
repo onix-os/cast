@@ -128,6 +128,7 @@ pub(super) use active_reblit_boot_sync_commit_decision::{
     ActiveReblitBootSyncCommitDecisionPersistenceError,
     persist_active_reblit_boot_sync_commit_decision_and_reopen,
 };
+pub(in crate::client) use active_reblit_boot_sync_commit_decision::persist_active_reblit_boot_sync_commit_decision_retaining_binding;
 
 pub(super) use active_reblit_boot_sync_started_completion::{
     ActiveReblitBootSyncStartedCompletionPersistenceError,

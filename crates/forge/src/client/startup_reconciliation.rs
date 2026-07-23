@@ -76,7 +76,10 @@ pub(in crate::client) use active_reblit_boot_sync_complete_authority::{
     ActiveReblitBootSyncCompleteRecordAdvanceError,
 };
 #[cfg(test)]
-pub(in crate::client) use active_reblit_boot_sync_complete_authority::arm_between_active_reblit_boot_sync_complete_database_captures;
+pub(in crate::client) use active_reblit_boot_sync_complete_authority::{
+    arm_after_active_reblit_boot_commit_decision_bound_terminal_validation,
+    arm_between_active_reblit_boot_sync_complete_database_captures,
+};
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
 #[allow(unused_imports)] // exported for the specialized cleanup path and focused contracts

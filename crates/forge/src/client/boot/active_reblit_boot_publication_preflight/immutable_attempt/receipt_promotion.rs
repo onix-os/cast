@@ -678,12 +678,16 @@ pub(in crate::client) use promoted_cleanup::ActiveReblitBootPromotedCleanupError
 #[path = "receipt_promotion/boot_sync_completion.rs"]
 mod boot_sync_completion;
 pub(in crate::client) use boot_sync_completion::{
+    ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation,
+    ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootPostCompletionValidationError,
     ActiveReblitBootSyncCompletionError,
     CompletedExactActiveReblitBootPublication,
 };
 #[cfg(test)]
 pub(super) use boot_sync_completion::{
-    ActiveReblitBootPostCompletionValidationError,
+    arm_after_active_reblit_commit_decision_terminal_validation,
     arm_after_boot_sync_complete_persistence,
     arm_after_initial_completion_handoff,
     arm_before_completion_deadline,
@@ -692,4 +696,5 @@ pub(super) use boot_sync_completion::{
     assert_after_initial_completion_handoff_hook_consumed,
     assert_before_completion_deadline_hook_consumed,
     assert_before_final_completion_validation_hook_consumed,
+    assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed,
 };

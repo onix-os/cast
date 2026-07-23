@@ -64,6 +64,7 @@ pub(in crate::client) use assessment_seal::{
 pub(in crate::client) use immutable_attempt::{
     ActiveReblitBootPublicationEffectSeal,
     ActiveReblitBootPromotedCleanupSeal,
+    ActiveReblitBootSyncCommitDecisionSeal,
     ActiveReblitBootSyncCompletionSeal,
     ActiveReblitBootImmutablePublicationAttemptError,
     StagedExactActiveReblitBootPublication,
@@ -72,6 +73,10 @@ pub(in crate::client) use immutable_attempt::{
 #[allow(unused_imports)] // completed authority is retained for commit coordination
 pub(in crate::client) use immutable_attempt::{
     ActiveReblitBootPromotedCleanupError,
+    ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation,
+    ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootPostCompletionValidationError,
     ActiveReblitBootSyncCompletionError,
     ActiveReblitBootReceiptPromotionError,
     CleanedPromotedExactActiveReblitBootPublication,
