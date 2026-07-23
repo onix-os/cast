@@ -1,6 +1,10 @@
 //! Focused installed-receipt and `CommitCleanupComplete` dispatch contracts.
 
-use std::{fs, os::unix::fs::PermissionsExt as _};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt as _,
+    time::{Duration, Instant},
+};
 
 use crate::{
     client::{
@@ -29,7 +33,7 @@ use crate::{
     },
     db,
     transition_journal::{
-        Phase, TransitionJournalStore, TransitionRecord,
+        Phase, TransitionJournalStore, TransitionRecord, encode,
         arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
         arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
         arm_next_update_first_directory_sync_fault, assert_displaced_unlink_fault_consumed,
@@ -40,8 +44,11 @@ use crate::{
 };
 
 use super::{
+    super::test_fixture::stage_test_boot_publication_receipts,
     boot_sync_complete_support::{open_boot_sync_complete_journal, same_byte_different_inode_hook},
-    commit_cleanup_effect::{CleanupLayout, commit_decided_fixture},
+    commit_cleanup_effect::{
+        CleanupLayout, commit_decided_fixture, no_boot_commit_decided_fixture,
+    },
     support::{
         BootRepairFixture, Epoch, assert_pending_phase, enter_boot,
     },
@@ -64,6 +71,101 @@ fn completed_cleanup_current_and_historical_reaches_complete_once() {
         assert_eq!(installed_receipt_state(&fixture), receipt_before);
         assert_installed_receipt_promoted(&fixture);
     }
+}
+
+#[test]
+fn system_triggered_no_boot_cleanup_reaches_exact_complete_without_receipt_mutation() {
+    for epoch in Epoch::ALL {
+        for install_unrelated_receipt in [false, true] {
+            let fixture = no_boot_commit_cleanup_complete_fixture(
+                epoch,
+                install_unrelated_receipt,
+            );
+            let source = fixture.fixture.source.clone();
+            let successor = exact_complete(&source);
+            let database_before = fixture.fixture.database_snapshot();
+            let receipt_chain_before = fixture
+                .fixture
+                .database
+                .load_current_exact_promoted_boot_publication_receipt_chain()
+                .unwrap();
+
+            let first = enter_boot(&fixture);
+
+            assert_pending_phase(&first, Phase::Complete);
+            assert_eq!(source.generation, 12);
+            assert_eq!(successor.generation, 13);
+            assert_eq!(successor.boot_publication_receipts, None);
+            assert_eq!(fixture.fixture.canonical_record(), successor);
+            assert_eq!(fixture.fixture.database_snapshot(), database_before);
+            assert_eq!(
+                fixture
+                    .fixture
+                    .database
+                    .load_current_exact_promoted_boot_publication_receipt_chain()
+                    .unwrap(),
+                receipt_chain_before,
+            );
+        }
+    }
+
+    let mut trigger_disabled = no_boot_commit_cleanup_complete_fixture(Epoch::Current, false);
+    trigger_disabled.fixture.source.options.run_system_triggers = false;
+    fs::write(
+        trigger_disabled
+            .fixture
+            .installation
+            .root
+            .join(".cast/journal/state-transition"),
+        encode(&trigger_disabled.fixture.source).unwrap(),
+    )
+    .unwrap();
+
+    let pending = enter_boot(&trigger_disabled);
+
+    assert_pending_phase(&pending, Phase::CommitCleanupComplete);
+    assert_eq!(
+        trigger_disabled.fixture.canonical_record(),
+        trigger_disabled.fixture.source,
+    );
+
+    let same_transition_receipt =
+        no_boot_commit_cleanup_complete_fixture(Epoch::Current, false);
+    install_current_transition_receipt(&same_transition_receipt);
+    let source = same_transition_receipt.fixture.source.clone();
+    let database_before = same_transition_receipt.fixture.database_snapshot();
+    let namespace_before = same_transition_receipt.fixture.namespace_snapshot();
+    let receipt_chain_before = same_transition_receipt
+        .fixture
+        .database
+        .load_current_exact_promoted_boot_publication_receipt_chain()
+        .unwrap();
+
+    let error = enter_boot(&same_transition_receipt);
+
+    assert!(matches!(
+        error,
+        startup_gate::Error::ActiveReblitCommitCleanupCompleteDispatch(
+            active_reblit_commit_cleanup_complete::Error::Authority(_),
+        )
+    ));
+    assert_eq!(same_transition_receipt.fixture.canonical_record(), source);
+    assert_eq!(
+        same_transition_receipt.fixture.database_snapshot(),
+        database_before,
+    );
+    assert_eq!(
+        same_transition_receipt.fixture.namespace_snapshot(),
+        namespace_before,
+    );
+    assert_eq!(
+        same_transition_receipt
+            .fixture
+            .database
+            .load_current_exact_promoted_boot_publication_receipt_chain()
+            .unwrap(),
+        receipt_chain_before,
+    );
 }
 
 #[test]
@@ -323,6 +425,63 @@ pub(super) fn commit_cleanup_complete_fixture(epoch: Epoch) -> BootRepairFixture
     assert_eq!(fixture.fixture.canonical_record(), successor);
     fixture.fixture.source = successor;
     fixture
+}
+
+pub(super) fn no_boot_commit_cleanup_complete_fixture(
+    epoch: Epoch,
+    install_unrelated_receipt: bool,
+) -> BootRepairFixture {
+    let mut fixture = no_boot_commit_decided_fixture(
+        epoch,
+        CleanupLayout::Finish,
+        install_unrelated_receipt,
+    );
+    let successor = fixture.fixture.source.forward_successor(None).unwrap();
+    assert_eq!(successor.phase, Phase::CommitCleanupComplete);
+    assert_eq!(successor.generation, 12);
+
+    let first = enter_boot(&fixture);
+
+    assert_pending_phase(&first, Phase::CommitCleanupComplete);
+    assert_eq!(fixture.fixture.canonical_record(), successor);
+    fixture.fixture.source = successor;
+    fixture
+}
+
+pub(super) fn install_current_transition_receipt(fixture: &BootRepairFixture) {
+    stage_test_boot_publication_receipts(
+        &fixture.fixture.database,
+        &fixture.fixture.source.transition_id,
+        false,
+    );
+    let receipt_state = fixture
+        .fixture
+        .database
+        .boot_publication_receipt_state()
+        .unwrap();
+    let pending = receipt_state
+        .pending()
+        .expect("same-transition receipt was staged");
+    fixture
+        .fixture
+        .database
+        .promote_boot_publication_receipt(
+            pending,
+            Instant::now() + Duration::from_secs(30),
+        )
+        .unwrap();
+    let db::state::CurrentExactPromotedBootPublicationReceiptChain::Installed(installed) = fixture
+        .fixture
+        .database
+        .load_current_exact_promoted_boot_publication_receipt_chain()
+        .unwrap()
+    else {
+        panic!("same-transition receipt was not installed");
+    };
+    assert_eq!(
+        installed.installed_receipt().body().transition_id(),
+        &fixture.fixture.source.transition_id,
+    );
 }
 
 #[derive(Debug, Eq, PartialEq)]

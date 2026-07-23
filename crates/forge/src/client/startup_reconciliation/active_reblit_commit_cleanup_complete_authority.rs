@@ -1,5 +1,6 @@
 //! Exact read-only startup authority for advancing a completed ActiveReblit
-//! cleanup record to `Complete` while retaining the installed receipt head.
+//! cleanup record to `Complete` while retaining stable receipt-chain evidence,
+//! which may be empty for the exact no-boot route.
 
 use crate::{
     Installation, State, db, state,
@@ -42,7 +43,6 @@ pub(in crate::client) struct ActiveReblitCommitCleanupCompletePostAdvanceAuthori
     installation: Installation,
     state_db: db::state::Database,
     completed_record: TransitionRecord,
-    receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
     database: ActiveReblitCommitCleanupCompleteDatabaseEvidence,
     active_state: ActiveStateSnapshot,
     namespace: ActiveReblitCommitCleanupFinishNamespaceProof,
@@ -53,7 +53,6 @@ struct ActiveReblitCommitCleanupCompleteEvidence<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
-    receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
     database: ActiveReblitCommitCleanupCompleteDatabaseEvidence,
     active_state: ActiveStateSnapshot,
     namespace: ActiveReblitCommitCleanupFinishNamespaceProof,
@@ -63,9 +62,28 @@ struct ActiveReblitCommitCleanupCompleteEvidence<'reservation> {
 
 #[derive(Debug, Eq, PartialEq)]
 struct ActiveReblitCommitCleanupCompleteDatabaseEvidence {
-    receipt: db::state::BootPublicationReceiptState,
+    route: ActiveReblitCommitCleanupCompleteRouteEvidence,
     context: DatabaseEvidence,
     state: State,
+}
+
+/// Disjoint route evidence retained across the sole bound advance. The no-boot
+/// route treats the current installed receipt chain as inert equality evidence
+/// only; it grants no receipt correlation or mutation authority.
+#[derive(Debug, Eq, PartialEq)]
+enum ActiveReblitCommitCleanupCompleteRouteEvidence {
+    ReceiptBacked {
+        pair: crate::boot_publication::BootPublicationReceiptPair,
+        receipt: db::state::BootPublicationReceiptState,
+    },
+    NoBoot {
+        inert_receipt_chain: db::state::CurrentExactPromotedBootPublicationReceiptChain,
+    },
+}
+
+enum ActiveReblitCommitCleanupCompleteRoutePlan {
+    ReceiptBacked(crate::boot_publication::BootPublicationReceiptPair),
+    NoBoot,
 }
 
 enum ActiveReblitCommitCleanupCompleteDatabaseInspection {
@@ -100,17 +118,13 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
         )?;
         installation.revalidate_mutable_namespace()?;
 
-        let receipt_pair = match record
+        let receipt_correlation = record
             .boot_publication_receipt_correlation()
-            .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::Record)?
-        {
-            Some(pair)
-                if record.rollback.is_none()
-                    && record.options.run_boot_sync
-                    && same_nonempty_candidate_and_previous(record) => pair,
-            _ => return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred),
+            .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::Record)?;
+        let Some(route_plan) = exact_route_plan(record, receipt_correlation) else {
+            return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred);
         };
-        let database_before = match inspect_current_database(record, receipt_pair, state_db)? {
+        let database_before = match inspect_current_database_for_plan(record, &route_plan, state_db)? {
             ActiveReblitCommitCleanupCompleteDatabaseInspection::Exact(database) => database,
             ActiveReblitCommitCleanupCompleteDatabaseInspection::Incompatible => {
                 return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred);
@@ -150,10 +164,12 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
         };
         let database_after = require_exact_database(
             &database_before,
-            inspect_current_database(record, receipt_pair, state_db)?,
+            inspect_current_database(record, &database_before.route, state_db)?,
         )?;
         require_exact_active_state(record, installation, &active_state)?;
-        if database_before != database_after || !record_plan_is_exact(record, receipt_pair) {
+        if database_before != database_after
+            || !record_plan_is_exact(record, &database_after.route)
+        {
             return Err(
                 ActiveReblitCommitCleanupCompleteAuthorityErrorKind::RouteEvidenceChanged.into(),
             );
@@ -170,7 +186,6 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
             installation: installation.clone(),
             state_db: state_db.clone(),
             record: record.clone(),
-            receipt_pair,
             database: database_after,
             active_state,
             namespace,
@@ -197,7 +212,7 @@ impl ActiveReblitCommitCleanupCompleteEvidence<'_> {
         self.installation.revalidate_mutable_namespace()?;
         let before = require_exact_database(
             &self.database,
-            inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
+            inspect_current_database(&self.record, &self.database.route, &self.state_db)?,
         )?;
         require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
         self.namespace.revalidate(
@@ -208,10 +223,10 @@ impl ActiveReblitCommitCleanupCompleteEvidence<'_> {
         )?;
         let after = require_exact_database(
             &self.database,
-            inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
+            inspect_current_database(&self.record, &self.database.route, &self.state_db)?,
         )?;
         require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
-        if before != after || !record_plan_is_exact(&self.record, self.receipt_pair) {
+        if before != after || !record_plan_is_exact(&self.record, &self.database.route) {
             return Err(
                 ActiveReblitCommitCleanupCompleteAuthorityErrorKind::RouteEvidenceChanged.into(),
             );
@@ -253,7 +268,7 @@ impl<'reservation> ActiveReblitCommitCleanupCompleteAuthority<'reservation> {
         if !exact_complete_successor(
             &self.evidence.record,
             &successor,
-            self.evidence.receipt_pair,
+            &self.evidence.database.route,
         )? {
             return Err(
                 ActiveReblitCommitCleanupCompleteRecordAdvanceError::UnexpectedSuccessor,
@@ -263,7 +278,6 @@ impl<'reservation> ActiveReblitCommitCleanupCompleteAuthority<'reservation> {
             installation,
             state_db,
             record,
-            receipt_pair,
             database,
             active_state,
             namespace,
@@ -287,7 +301,6 @@ impl<'reservation> ActiveReblitCommitCleanupCompleteAuthority<'reservation> {
                 installation,
                 state_db,
                 completed_record: record,
-                receipt_pair,
                 database,
                 active_state,
                 namespace,
@@ -327,7 +340,7 @@ impl ActiveReblitCommitCleanupCompletePostAdvanceAuthority<'_> {
         if !exact_complete_successor(
             &self.completed_record,
             successor,
-            self.receipt_pair,
+            &self.database.route,
         )
         .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::Record)?
         {
@@ -338,7 +351,7 @@ impl ActiveReblitCommitCleanupCompletePostAdvanceAuthority<'_> {
         self.installation.revalidate_mutable_namespace()?;
         let before = require_exact_database(
             &self.database,
-            inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
+            inspect_current_database(successor, &self.database.route, &self.state_db)?,
         )?;
         require_exact_active_state(successor, &self.installation, &self.active_state)?;
         self.namespace.revalidate_completed_namespace(
@@ -347,7 +360,7 @@ impl ActiveReblitCommitCleanupCompletePostAdvanceAuthority<'_> {
         )?;
         let after = require_exact_database(
             &self.database,
-            inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
+            inspect_current_database(successor, &self.database.route, &self.state_db)?,
         )?;
         require_exact_active_state(successor, &self.installation, &self.active_state)?;
         if before != after {
@@ -369,6 +382,42 @@ enum BindingMode {
 
 fn inspect_current_database(
     record: &TransitionRecord,
+    route: &ActiveReblitCommitCleanupCompleteRouteEvidence,
+    state_db: &db::state::Database,
+) -> Result<
+    ActiveReblitCommitCleanupCompleteDatabaseInspection,
+    ActiveReblitCommitCleanupCompleteAuthorityError,
+> {
+    match route {
+        ActiveReblitCommitCleanupCompleteRouteEvidence::ReceiptBacked { pair, .. } => {
+            inspect_receipt_backed_database(record, *pair, state_db)
+        }
+        ActiveReblitCommitCleanupCompleteRouteEvidence::NoBoot { .. } => {
+            inspect_no_boot_database(record, state_db)
+        }
+    }
+}
+
+fn inspect_current_database_for_plan(
+    record: &TransitionRecord,
+    route: &ActiveReblitCommitCleanupCompleteRoutePlan,
+    state_db: &db::state::Database,
+) -> Result<
+    ActiveReblitCommitCleanupCompleteDatabaseInspection,
+    ActiveReblitCommitCleanupCompleteAuthorityError,
+> {
+    match route {
+        ActiveReblitCommitCleanupCompleteRoutePlan::ReceiptBacked(pair) => {
+            inspect_receipt_backed_database(record, *pair, state_db)
+        }
+        ActiveReblitCommitCleanupCompleteRoutePlan::NoBoot => {
+            inspect_no_boot_database(record, state_db)
+        }
+    }
+}
+
+fn inspect_receipt_backed_database(
+    record: &TransitionRecord,
     pair: crate::boot_publication::BootPublicationReceiptPair,
     state_db: &db::state::Database,
 ) -> Result<
@@ -379,20 +428,9 @@ fn inspect_current_database(
         Some(receipt) => receipt,
         None => return Ok(ActiveReblitCommitCleanupCompleteDatabaseInspection::Incompatible),
     };
-    let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
-    let context = inspect_database(record, state_db, in_flight)?;
-    if !existing_state_context_is_exact(record, &context) {
+    let Some((context, state)) = inspect_context_and_state(record, state_db)? else {
         return Ok(ActiveReblitCommitCleanupCompleteDatabaseInspection::Incompatible);
-    }
-    let state_id = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state"));
-    let state = state_db
-        .get(state_id)
-        .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::StateDatabase)?;
-    if state.id != state_id {
-        return Err(
-            ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
-        );
-    }
+    };
     let receipt_after = match load_exact_promoted_receipt(state_db, record, pair)? {
         Some(receipt) => receipt,
         None => {
@@ -408,11 +446,93 @@ fn inspect_current_database(
     }
     Ok(ActiveReblitCommitCleanupCompleteDatabaseInspection::Exact(
         ActiveReblitCommitCleanupCompleteDatabaseEvidence {
-            receipt: receipt_after,
+            route: ActiveReblitCommitCleanupCompleteRouteEvidence::ReceiptBacked {
+                pair,
+                receipt: receipt_after,
+            },
             context,
             state,
         },
     ))
+}
+
+fn inspect_no_boot_database(
+    record: &TransitionRecord,
+    state_db: &db::state::Database,
+) -> Result<
+    ActiveReblitCommitCleanupCompleteDatabaseInspection,
+    ActiveReblitCommitCleanupCompleteAuthorityError,
+> {
+    let receipt_chain_before = load_inert_no_boot_receipt_chain(record, state_db)?;
+    let Some((context, state)) = inspect_context_and_state(record, state_db)? else {
+        return Ok(ActiveReblitCommitCleanupCompleteDatabaseInspection::Incompatible);
+    };
+    let receipt_chain_after = load_inert_no_boot_receipt_chain(record, state_db)?;
+    if receipt_chain_before != receipt_chain_after {
+        return Err(
+            ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
+        );
+    }
+    Ok(ActiveReblitCommitCleanupCompleteDatabaseInspection::Exact(
+        ActiveReblitCommitCleanupCompleteDatabaseEvidence {
+            route: ActiveReblitCommitCleanupCompleteRouteEvidence::NoBoot {
+                inert_receipt_chain: receipt_chain_after,
+            },
+            context,
+            state,
+        },
+    ))
+}
+
+fn load_inert_no_boot_receipt_chain(
+    record: &TransitionRecord,
+    state_db: &db::state::Database,
+) -> Result<
+    db::state::CurrentExactPromotedBootPublicationReceiptChain,
+    ActiveReblitCommitCleanupCompleteAuthorityError,
+> {
+    let chain = state_db
+        .load_current_exact_promoted_boot_publication_receipt_chain()
+        .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::ReceiptChain)?;
+    if matches!(
+        &chain,
+        db::state::CurrentExactPromotedBootPublicationReceiptChain::Installed(installed)
+            if installed.installed_receipt().body().transition_id() == &record.transition_id
+    ) {
+        return Err(
+            ActiveReblitCommitCleanupCompleteAuthorityErrorKind::ReceiptChainMatchesNoBootTransition
+                .into(),
+        );
+    }
+    Ok(chain)
+}
+
+fn inspect_context_and_state(
+    record: &TransitionRecord,
+    state_db: &db::state::Database,
+) -> Result<Option<(DatabaseEvidence, State)>, ActiveReblitCommitCleanupCompleteAuthorityError> {
+    let in_flight = state_db
+        .audit_in_flight_transition()
+        .map_err(InspectionError::from)?;
+    let context = inspect_database(record, state_db, in_flight)?;
+    if !existing_state_context_is_exact(record, &context) {
+        return Ok(None);
+    }
+    let state_id = state::Id::from(
+        record
+            .candidate
+            .id
+            .expect("checked exact ActiveReblit state"),
+    );
+    let state = state_db
+        .get(state_id)
+        .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::StateDatabase)?;
+    if state.id != state_id {
+        return Err(
+            ActiveReblitCommitCleanupCompleteAuthorityErrorKind::DatabaseEvidenceChanged.into(),
+        );
+    }
+    Ok(Some((context, state)))
 }
 
 fn load_exact_promoted_receipt(
@@ -527,33 +647,86 @@ fn same_nonempty_candidate_and_previous(record: &TransitionRecord) -> bool {
     record.candidate.id.is_some() && record.candidate.id == record.previous.id
 }
 
+fn exact_route_plan(
+    record: &TransitionRecord,
+    receipt_correlation: Option<crate::boot_publication::BootPublicationReceiptPair>,
+) -> Option<ActiveReblitCommitCleanupCompleteRoutePlan> {
+    if record.operation != Operation::ActiveReblit
+        || record.phase != Phase::CommitCleanupComplete
+        || record.rollback.is_some()
+        || !same_nonempty_candidate_and_previous(record)
+    {
+        return None;
+    }
+    match (
+        record.generation,
+        record.options.run_boot_sync,
+        receipt_correlation,
+    ) {
+        (_, true, Some(pair)) => {
+            Some(ActiveReblitCommitCleanupCompleteRoutePlan::ReceiptBacked(pair))
+        }
+        (12, false, None)
+            if record.options.run_system_triggers && !record.options.archive_previous =>
+        {
+            Some(ActiveReblitCommitCleanupCompleteRoutePlan::NoBoot)
+        }
+        _ => None,
+    }
+}
+
 fn record_plan_is_exact(
     record: &TransitionRecord,
-    pair: crate::boot_publication::BootPublicationReceiptPair,
+    route: &ActiveReblitCommitCleanupCompleteRouteEvidence,
 ) -> bool {
-    record.operation == Operation::ActiveReblit
+    let common = record.operation == Operation::ActiveReblit
         && record.phase == Phase::CommitCleanupComplete
         && record.rollback.is_none()
-        && record.options.run_boot_sync
-        && same_nonempty_candidate_and_previous(record)
-        && record.boot_publication_receipts == Some(pair)
+        && same_nonempty_candidate_and_previous(record);
+    common
+        && match route {
+            ActiveReblitCommitCleanupCompleteRouteEvidence::ReceiptBacked { pair, .. } => {
+                record.options.run_boot_sync
+                    && record.boot_publication_receipts == Some(*pair)
+            }
+            ActiveReblitCommitCleanupCompleteRouteEvidence::NoBoot { .. } => {
+                record.generation == 12
+                    && record.options.run_system_triggers
+                    && !record.options.run_boot_sync
+                    && !record.options.archive_previous
+                    && record.boot_publication_receipts.is_none()
+            }
+        }
 }
 
 fn exact_complete_successor(
     source: &TransitionRecord,
     successor: &TransitionRecord,
-    pair: crate::boot_publication::BootPublicationReceiptPair,
+    route: &ActiveReblitCommitCleanupCompleteRouteEvidence,
 ) -> Result<bool, CodecError> {
     let source_pair = source.boot_publication_receipt_correlation()?;
     let successor_pair = successor.boot_publication_receipt_correlation()?;
-    Ok(record_plan_is_exact(source, pair)
+    let successor_route_is_exact = match route {
+        ActiveReblitCommitCleanupCompleteRouteEvidence::ReceiptBacked { pair, .. } => {
+            successor.options.run_boot_sync
+                && source_pair == Some(*pair)
+                && successor_pair == Some(*pair)
+        }
+        ActiveReblitCommitCleanupCompleteRouteEvidence::NoBoot { .. } => {
+            successor.generation == 13
+                && successor.options.run_system_triggers
+                && !successor.options.run_boot_sync
+                && !successor.options.archive_previous
+                && source_pair.is_none()
+                && successor_pair.is_none()
+        }
+    };
+    Ok(record_plan_is_exact(source, route)
         && successor.operation == Operation::ActiveReblit
         && successor.phase == Phase::Complete
         && successor.rollback.is_none()
-        && successor.options.run_boot_sync
         && same_nonempty_candidate_and_previous(successor)
-        && source_pair == Some(pair)
-        && successor_pair == Some(pair)
+        && successor_route_is_exact
         && successor.generation == source.generation.checked_add(1).unwrap_or(0)
         && successor.format == source.format
         && successor.version == source.version
@@ -627,6 +800,10 @@ enum ActiveReblitCommitCleanupCompleteAuthorityErrorKind {
     ReceiptState(#[source] db::state::BootPublicationReceiptStateError),
     #[error("authenticate exact promoted boot-publication receipt correlation")]
     ReceiptCorrelation(#[source] db::state::ExactPromotedBootPublicationReceiptStateError),
+    #[error("load current exact promoted boot-publication receipt chain as inert evidence")]
+    ReceiptChain(#[source] db::state::CurrentExactPromotedBootPublicationReceiptChainError),
+    #[error("the no-boot transition unexpectedly owns the installed receipt chain")]
+    ReceiptChainMatchesNoBootTransition,
     #[error("inspect exact cleared ActiveReblit database and provenance")]
     Inspection(#[source] InspectionError),
     #[error("load complete selected ActiveReblit state")]

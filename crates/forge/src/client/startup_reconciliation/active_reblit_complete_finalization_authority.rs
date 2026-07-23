@@ -1,10 +1,11 @@
 //! Sealed authority for exact forward ActiveReblit `Complete` finalization.
 //!
 //! This is deliberately separate from rollback finalization. Admission binds
-//! the exact v3 terminal record before retaining its installed receipt chain,
-//! cleared existing-state database context, full selected state, active-state
-//! selection, and completed cleanup namespace. Its only mutation surface is
-//! one record-bound terminal deletion on the same locked journal store.
+//! the exact v3 terminal record before retaining its current exact receipt-chain
+//! state (which may be empty), cleared existing-state database context, full
+//! selected state, active-state selection, and completed cleanup namespace. Its
+//! only mutation surface is one record-bound terminal deletion on the same
+//! locked journal store.
 
 use crate::{
     Installation, State, db, state,
@@ -55,7 +56,6 @@ struct ActiveReblitCompleteFinalizationEvidence<'reservation> {
     installation: Installation,
     state_db: db::state::Database,
     record: TransitionRecord,
-    receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
     database: ActiveReblitCompleteFinalizationDatabaseEvidence,
     active_state: ActiveStateSnapshot,
     namespace: ActiveReblitCommitCleanupFinishNamespaceProof,
@@ -64,9 +64,28 @@ struct ActiveReblitCompleteFinalizationEvidence<'reservation> {
 
 #[derive(Debug, Eq, PartialEq)]
 struct ActiveReblitCompleteFinalizationDatabaseEvidence {
-    receipt: db::state::BootPublicationReceiptState,
+    route: ActiveReblitCompleteFinalizationRouteEvidence,
     context: DatabaseEvidence,
     state: State,
+}
+
+/// Disjoint exact terminal-route evidence. A no-boot record retains the
+/// current receipt chain only as inert equality evidence and never receives
+/// authority to correlate or mutate it.
+#[derive(Debug, Eq, PartialEq)]
+enum ActiveReblitCompleteFinalizationRouteEvidence {
+    ReceiptBacked {
+        pair: crate::boot_publication::BootPublicationReceiptPair,
+        receipt: db::state::BootPublicationReceiptState,
+    },
+    NoBoot {
+        inert_receipt_chain: db::state::CurrentExactPromotedBootPublicationReceiptChain,
+    },
+}
+
+enum ActiveReblitCompleteFinalizationRoutePlan {
+    ReceiptBacked(crate::boot_publication::BootPublicationReceiptPair),
+    NoBoot,
 }
 
 enum ActiveReblitCompleteFinalizationDatabaseInspection {
@@ -100,11 +119,13 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
         )?;
         installation.revalidate_mutable_namespace()?;
 
-        let receipt_pair = match exact_receipt_pair(record)? {
-            Some(pair) => pair,
-            None => return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred),
+        let receipt_correlation = record
+            .boot_publication_receipt_correlation()
+            .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::Record)?;
+        let Some(route_plan) = exact_route_plan(record, receipt_correlation) else {
+            return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred);
         };
-        let database_before = match inspect_current_database(record, receipt_pair, state_db)? {
+        let database_before = match inspect_current_database_for_plan(record, &route_plan, state_db)? {
             ActiveReblitCompleteFinalizationDatabaseInspection::Exact(database) => database,
             ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible => {
                 return Ok(ActiveReblitCompleteFinalizationAdmission::Deferred);
@@ -144,10 +165,12 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
         };
         let database_after = require_exact_database(
             &database_before,
-            inspect_current_database(record, receipt_pair, state_db)?,
+            inspect_current_database(record, &database_before.route, state_db)?,
         )?;
         require_exact_active_state(record, installation, &active_state)?;
-        if database_before != database_after || !record_plan_is_exact(record, receipt_pair) {
+        if database_before != database_after
+            || !record_plan_is_exact(record, &database_after.route)
+        {
             return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::EvidenceChanged.into());
         }
         require_exact_record_binding(
@@ -163,7 +186,6 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
                 installation: installation.clone(),
                 state_db: state_db.clone(),
                 record: record.clone(),
-                receipt_pair,
                 database: database_after,
                 active_state,
                 namespace,
@@ -196,7 +218,7 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
             &self.evidence.database,
             inspect_current_database(
                 &self.evidence.record,
-                self.evidence.receipt_pair,
+                &self.evidence.database.route,
                 &self.evidence.state_db,
             )?,
         )?;
@@ -215,7 +237,7 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
             &self.evidence.database,
             inspect_current_database(
                 &self.evidence.record,
-                self.evidence.receipt_pair,
+                &self.evidence.database.route,
                 &self.evidence.state_db,
             )?,
         )?;
@@ -225,7 +247,7 @@ impl<'reservation> ActiveReblitCompleteFinalizationAuthority<'reservation> {
             &self.evidence.active_state,
         )?;
         if database_before != database_after
-            || !record_plan_is_exact(&self.evidence.record, self.evidence.receipt_pair)
+            || !record_plan_is_exact(&self.evidence.record, &self.evidence.database.route)
         {
             return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::EvidenceChanged.into());
         }
@@ -283,7 +305,7 @@ impl ActiveReblitCompleteFinalizationAfterDeleteAuthority<'_> {
             &self.evidence.database,
             inspect_current_database(
                 &self.evidence.record,
-                self.evidence.receipt_pair,
+                &self.evidence.database.route,
                 &self.evidence.state_db,
             )?,
         )?;
@@ -304,7 +326,7 @@ impl ActiveReblitCompleteFinalizationAfterDeleteAuthority<'_> {
             &self.evidence.database,
             inspect_current_database(
                 &self.evidence.record,
-                self.evidence.receipt_pair,
+                &self.evidence.database.route,
                 &self.evidence.state_db,
             )?,
         )?;
@@ -314,7 +336,7 @@ impl ActiveReblitCompleteFinalizationAfterDeleteAuthority<'_> {
             &self.evidence.active_state,
         )?;
         if database_before != database_after
-            || !record_plan_is_exact(&self.evidence.record, self.evidence.receipt_pair)
+            || !record_plan_is_exact(&self.evidence.record, &self.evidence.database.route)
         {
             return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::EvidenceChanged.into());
         }
@@ -326,19 +348,43 @@ impl ActiveReblitCompleteFinalizationAfterDeleteAuthority<'_> {
     }
 }
 
-fn exact_receipt_pair(
+fn inspect_current_database(
     record: &TransitionRecord,
+    route: &ActiveReblitCompleteFinalizationRouteEvidence,
+    state_db: &db::state::Database,
 ) -> Result<
-    Option<crate::boot_publication::BootPublicationReceiptPair>,
+    ActiveReblitCompleteFinalizationDatabaseInspection,
     ActiveReblitCompleteFinalizationAuthorityError,
 > {
-    let pair = record
-        .boot_publication_receipt_correlation()
-        .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::Record)?;
-    Ok(pair.filter(|pair| record_plan_is_exact(record, *pair)))
+    match route {
+        ActiveReblitCompleteFinalizationRouteEvidence::ReceiptBacked { pair, .. } => {
+            inspect_receipt_backed_database(record, *pair, state_db)
+        }
+        ActiveReblitCompleteFinalizationRouteEvidence::NoBoot { .. } => {
+            inspect_no_boot_database(record, state_db)
+        }
+    }
 }
 
-fn inspect_current_database(
+fn inspect_current_database_for_plan(
+    record: &TransitionRecord,
+    route: &ActiveReblitCompleteFinalizationRoutePlan,
+    state_db: &db::state::Database,
+) -> Result<
+    ActiveReblitCompleteFinalizationDatabaseInspection,
+    ActiveReblitCompleteFinalizationAuthorityError,
+> {
+    match route {
+        ActiveReblitCompleteFinalizationRoutePlan::ReceiptBacked(pair) => {
+            inspect_receipt_backed_database(record, *pair, state_db)
+        }
+        ActiveReblitCompleteFinalizationRoutePlan::NoBoot => {
+            inspect_no_boot_database(record, state_db)
+        }
+    }
+}
+
+fn inspect_receipt_backed_database(
     record: &TransitionRecord,
     pair: crate::boot_publication::BootPublicationReceiptPair,
     state_db: &db::state::Database,
@@ -350,18 +396,9 @@ fn inspect_current_database(
         Some(receipt) => receipt,
         None => return Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible),
     };
-    let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
-    let context = inspect_database(record, state_db, in_flight)?;
-    if !existing_state_context_is_exact(record, &context) {
+    let Some((context, state)) = inspect_context_and_state(record, state_db)? else {
         return Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible);
-    }
-    let state_id = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state"));
-    let state = state_db
-        .get(state_id)
-        .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::StateDatabase)?;
-    if state.id != state_id {
-        return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::DatabaseChanged.into());
-    }
+    };
     let receipt_after = match load_exact_promoted_receipt(state_db, record, pair)? {
         Some(receipt) => receipt,
         None => {
@@ -373,11 +410,89 @@ fn inspect_current_database(
     }
     Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Exact(
         ActiveReblitCompleteFinalizationDatabaseEvidence {
-            receipt: receipt_after,
+            route: ActiveReblitCompleteFinalizationRouteEvidence::ReceiptBacked {
+                pair,
+                receipt: receipt_after,
+            },
             context,
             state,
         },
     ))
+}
+
+fn inspect_no_boot_database(
+    record: &TransitionRecord,
+    state_db: &db::state::Database,
+) -> Result<
+    ActiveReblitCompleteFinalizationDatabaseInspection,
+    ActiveReblitCompleteFinalizationAuthorityError,
+> {
+    let receipt_chain_before = load_inert_no_boot_receipt_chain(record, state_db)?;
+    let Some((context, state)) = inspect_context_and_state(record, state_db)? else {
+        return Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible);
+    };
+    let receipt_chain_after = load_inert_no_boot_receipt_chain(record, state_db)?;
+    if receipt_chain_before != receipt_chain_after {
+        return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::DatabaseChanged.into());
+    }
+    Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Exact(
+        ActiveReblitCompleteFinalizationDatabaseEvidence {
+            route: ActiveReblitCompleteFinalizationRouteEvidence::NoBoot {
+                inert_receipt_chain: receipt_chain_after,
+            },
+            context,
+            state,
+        },
+    ))
+}
+
+fn load_inert_no_boot_receipt_chain(
+    record: &TransitionRecord,
+    state_db: &db::state::Database,
+) -> Result<
+    db::state::CurrentExactPromotedBootPublicationReceiptChain,
+    ActiveReblitCompleteFinalizationAuthorityError,
+> {
+    let chain = state_db
+        .load_current_exact_promoted_boot_publication_receipt_chain()
+        .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptChain)?;
+    if matches!(
+        &chain,
+        db::state::CurrentExactPromotedBootPublicationReceiptChain::Installed(installed)
+            if installed.installed_receipt().body().transition_id() == &record.transition_id
+    ) {
+        return Err(
+            ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptChainMatchesNoBootTransition
+                .into(),
+        );
+    }
+    Ok(chain)
+}
+
+fn inspect_context_and_state(
+    record: &TransitionRecord,
+    state_db: &db::state::Database,
+) -> Result<Option<(DatabaseEvidence, State)>, ActiveReblitCompleteFinalizationAuthorityError> {
+    let in_flight = state_db
+        .audit_in_flight_transition()
+        .map_err(InspectionError::from)?;
+    let context = inspect_database(record, state_db, in_flight)?;
+    if !existing_state_context_is_exact(record, &context) {
+        return Ok(None);
+    }
+    let state_id = state::Id::from(
+        record
+            .candidate
+            .id
+            .expect("checked exact ActiveReblit state"),
+    );
+    let state = state_db
+        .get(state_id)
+        .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::StateDatabase)?;
+    if state.id != state_id {
+        return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::DatabaseChanged.into());
+    }
+    Ok(Some((context, state)))
 }
 
 fn load_exact_promoted_receipt(
@@ -484,17 +599,60 @@ fn require_exact_active_state(
     Ok(())
 }
 
+fn same_nonempty_candidate_and_previous(record: &TransitionRecord) -> bool {
+    record.candidate.id.is_some() && record.candidate.id == record.previous.id
+}
+
+fn exact_route_plan(
+    record: &TransitionRecord,
+    receipt_correlation: Option<crate::boot_publication::BootPublicationReceiptPair>,
+) -> Option<ActiveReblitCompleteFinalizationRoutePlan> {
+    if record.operation != Operation::ActiveReblit
+        || record.phase != Phase::Complete
+        || record.rollback.is_some()
+        || !same_nonempty_candidate_and_previous(record)
+    {
+        return None;
+    }
+    match (
+        record.generation,
+        record.options.run_boot_sync,
+        receipt_correlation,
+    ) {
+        (_, true, Some(pair)) => {
+            Some(ActiveReblitCompleteFinalizationRoutePlan::ReceiptBacked(pair))
+        }
+        (13, false, None)
+            if record.options.run_system_triggers && !record.options.archive_previous =>
+        {
+            Some(ActiveReblitCompleteFinalizationRoutePlan::NoBoot)
+        }
+        _ => None,
+    }
+}
+
 fn record_plan_is_exact(
     record: &TransitionRecord,
-    pair: crate::boot_publication::BootPublicationReceiptPair,
+    route: &ActiveReblitCompleteFinalizationRouteEvidence,
 ) -> bool {
-    record.operation == Operation::ActiveReblit
+    let common = record.operation == Operation::ActiveReblit
         && record.phase == Phase::Complete
         && record.rollback.is_none()
-        && record.options.run_boot_sync
-        && record.candidate.id.is_some()
-        && record.candidate.id == record.previous.id
-        && record.boot_publication_receipts == Some(pair)
+        && same_nonempty_candidate_and_previous(record);
+    common
+        && match route {
+            ActiveReblitCompleteFinalizationRouteEvidence::ReceiptBacked { pair, .. } => {
+                record.options.run_boot_sync
+                    && record.boot_publication_receipts == Some(*pair)
+            }
+            ActiveReblitCompleteFinalizationRouteEvidence::NoBoot { .. } => {
+                record.generation == 13
+                    && record.options.run_system_triggers
+                    && !record.options.run_boot_sync
+                    && !record.options.archive_previous
+                    && record.boot_publication_receipts.is_none()
+            }
+        }
 }
 
 fn require_exact_record_binding(
@@ -531,6 +689,10 @@ enum ActiveReblitCompleteFinalizationAuthorityErrorKind {
     ReceiptState(#[source] db::state::BootPublicationReceiptStateError),
     #[error("authenticate exact installed boot-publication receipt correlation")]
     ReceiptCorrelation(#[source] db::state::ExactPromotedBootPublicationReceiptStateError),
+    #[error("load current exact promoted boot-publication receipt chain as inert evidence")]
+    ReceiptChain(#[source] db::state::CurrentExactPromotedBootPublicationReceiptChainError),
+    #[error("the no-boot transition unexpectedly owns the installed receipt chain")]
+    ReceiptChainMatchesNoBootTransition,
     #[error("inspect exact cleared ActiveReblit database and provenance")]
     Inspection(#[source] InspectionError),
     #[error("load complete selected ActiveReblit state")]
