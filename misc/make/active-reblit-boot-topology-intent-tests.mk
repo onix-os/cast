@@ -68,10 +68,13 @@ forge-active-reblit-boot-topology-intent-test: host-storage-safety-test
 	timeout 10s grep -Fq 'mount_point_hint' "$$module"; \
 	timeout 10s grep -Fq 'limits.max_imports = 1' "$$gluon"; \
 	timeout 10s grep -Fq 'limits.max_explicit_input_bytes = 0' "$$gluon"; \
+	timeout 10s grep -Fq 'GluonBootTopologyIntentEvaluator' "$$gluon"; \
+	timeout 10s grep -Fq 'impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>' "$$gluon"; \
 	timeout 10s grep -Fq 'controlled_resolution()' "$$filesystem"; \
 	timeout 10s grep -Fq 'descriptor_mount_id' "$$filesystem"; \
 	if timeout 10s rg -n 'cast\.boot_topology\.v1|BOOT_TOPOLOGY_ABI_VERSION: u32 = 1|esp_partuuid|xbootldr_partuuid' "$$module" "$$gluon" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -q 'blsforme|SourceRoot|(^|[^[:alnum:]_])config::|system_model|read_dir\(|\.exists\(|canonicalize\(|create_dir|create_dir_all|mount\(|umount\(|std::fs::write|fs::write' "$$module" "$$filesystem" "$$gluon" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -q 'blsforme|(^|[^[:alnum:]_])config::|system_model|read_dir\(|\.exists\(|canonicalize\(|create_dir|create_dir_all|mount\(|umount\(|std::fs::write|fs::write' "$$module" "$$filesystem" "$$gluon" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -q 'SourceRoot' "$$module" "$$filesystem" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	tests=crates/forge/src/client/boot/active_reblit_boot_topology_intent_tests; \
 	if timeout 10s rg -n 'File::open\("/(?:proc|sys|dev)|read_to_string\("/(?:proc|sys|dev)|std::process|process::Command|Command::new|nix::mount|libc::mount|/dev/disk|/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)|"/(?:boot|efi|esp)(?:/|")' "$$tests.rs" "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	timeout 10s grep -Fq 'pub(super) const ESP_MOUNT_POINT: &str = "/synthetic/esp-root";' "$$tests/support.rs"; \

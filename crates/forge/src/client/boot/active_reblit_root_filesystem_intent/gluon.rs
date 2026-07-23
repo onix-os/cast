@@ -1,8 +1,17 @@
 //! Restricted Gluon boundary for machine-local root-filesystem intent.
 
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    rc::Rc,
+    time::Duration,
+};
 
-use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy, Limits, Source};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
+    SourceRoot,
+};
+use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy};
 
 use super::{
     ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue, normalization,
@@ -21,45 +30,97 @@ struct GluonRootFilesystemIntent {
     root: String,
 }
 
-pub(super) struct EvaluatedRootFilesystemIntent {
-    pub(super) value: RootFilesystemIntentValue,
-    pub(super) fingerprint: EvaluationFingerprint,
+/// Stateful Gluon adapter for the closed root-filesystem declaration.
+///
+/// The shared same-thread budget keeps normalization work and every deadline
+/// checkpoint in the existing ActiveReblit authority. The adapter never opens
+/// the fixed path; its caller supplies bytes read from the retained inode.
+pub(super) struct GluonRootFilesystemIntentEvaluator<'budget> {
+    engine: GluonEngine,
+    budget: Rc<RefCell<&'budget mut RootFilesystemIntentBudget>>,
 }
 
-pub(super) fn evaluate(
-    source_text: &str,
-    budget: &mut RootFilesystemIntentBudget,
-) -> Result<EvaluatedRootFilesystemIntent, ActiveReblitRootFilesystemIntentError> {
-    budget.require_deadline()?;
-    let remaining = budget.remaining_duration()?;
-    let mut limits = Limits::default();
-    limits.max_source_bytes = budget.policy.max_source_bytes;
-    limits.max_explicit_input_bytes = 0;
-    limits.max_imported_file_bytes = ROOT_FILESYSTEM_ABI.len();
-    limits.max_imports = 1;
-    limits.max_import_graph_bytes = budget
-        .policy
-        .max_source_bytes
-        .checked_add(ROOT_FILESYSTEM_ABI.len())
-        .ok_or(ActiveReblitRootFilesystemIntentError::EvaluationContract {
-            reason: "source and embedded ABI byte bound overflowed",
-        })?;
-    limits.timeout = remaining.min(MAX_EVALUATION_TIME);
+impl<'budget> GluonRootFilesystemIntentEvaluator<'budget> {
+    pub(super) fn new(
+        budget: &'budget mut RootFilesystemIntentBudget,
+    ) -> Result<Self, ActiveReblitRootFilesystemIntentError> {
+        budget.require_deadline()?;
+        let remaining = budget.remaining_duration()?;
+        let mut limits = Limits::default();
+        limits.max_source_bytes = budget.policy.max_source_bytes;
+        limits.max_explicit_input_bytes = 0;
+        limits.max_imported_file_bytes = ROOT_FILESYSTEM_ABI.len();
+        limits.max_imports = 1;
+        limits.max_import_graph_bytes = budget
+            .policy
+            .max_source_bytes
+            .checked_add(ROOT_FILESYSTEM_ABI.len())
+            .ok_or(ActiveReblitRootFilesystemIntentError::EvaluationContract {
+                reason: "source and embedded ABI byte bound overflowed",
+            })?;
+        limits.timeout = remaining.min(MAX_EVALUATION_TIME);
 
-    let mut imports = ImportPolicy::new();
-    imports.insert_embedded_module(ROOT_FILESYSTEM_ABI_NAME, ROOT_FILESYSTEM_ABI)?;
-    let engine = GluonEngine::new(limits).with_import_policy(imports);
-    let source = Source::new(SOURCE_LOGICAL_NAME, source_text);
-    let evaluation = engine.evaluate::<GluonRootFilesystemIntent>(&source)?;
-    budget.require_deadline()?;
-    require_fingerprint_contract(&evaluation.fingerprint)?;
+        let mut imports = ImportPolicy::new();
+        imports.insert_embedded_module(ROOT_FILESYSTEM_ABI_NAME, ROOT_FILESYSTEM_ABI)?;
+        Ok(Self {
+            engine: GluonEngine::new(limits).with_import_policy(imports),
+            budget: Rc::new(RefCell::new(budget)),
+        })
+    }
+}
 
-    let value = normalization::materialize_root_argument(evaluation.value.root, budget)?;
-    budget.require_deadline()?;
-    Ok(EvaluatedRootFilesystemIntent {
-        value,
-        fingerprint: evaluation.fingerprint,
-    })
+impl DeclarationEvaluator<RootFilesystemIntentValue>
+    for GluonRootFilesystemIntentEvaluator<'_>
+{
+    type Identity = EvaluationFingerprint;
+    type Error = ActiveReblitRootFilesystemIntentError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+            budget: Rc::clone(&self.budget),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<RootFilesystemIntentValue, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate::<GluonRootFilesystemIntent>(source)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let mut budget = self.budget.borrow_mut();
+        budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_fingerprint_contract(&evaluation.fingerprint)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+
+        let value = normalization::materialize_root_argument(
+            evaluation.value.root,
+            &mut budget,
+        )
+        .map_err(DeclarationEvaluationError::Conversion)?;
+        budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value,
+            identity: evaluation.fingerprint,
+        })
+    }
 }
 
 fn require_fingerprint_contract(

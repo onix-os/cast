@@ -58,13 +58,16 @@ forge-active-reblit-root-filesystem-intent-test: host-storage-safety-test
 	timeout 10s test "$$( timeout 10s grep -Ec '^[[:space:]]+[a-z_]+: String,' "$$abi" )" = 1; \
 	timeout 10s grep -Fq 'limits.max_imports = 1' "$$gluon"; \
 	timeout 10s grep -Fq 'limits.max_explicit_input_bytes = 0' "$$gluon"; \
+	timeout 10s grep -Fq 'GluonRootFilesystemIntentEvaluator' "$$gluon"; \
+	timeout 10s grep -Fq 'impl DeclarationEvaluator<RootFilesystemIntentValue>' "$$gluon"; \
 	timeout 10s grep -Fq 'argument.push_str("root=")' "$$normalization"; \
 	timeout 10s grep -Fq 'controlled_resolution()' "$$filesystem"; \
 	timeout 10s grep -Fq 'descriptor_mount_id_until(descriptor, budget.deadline)' "$$filesystem"; \
 	timeout 10s grep -Fq 'read_to_end_bounded_until(' "$$filesystem"; \
 	timeout 10s grep -Fq 'O_NOATIME' "$$filesystem"; \
 	if timeout 10s rg -q 'impl Clone for PreparedActiveReblitRootFilesystemIntent|impl Copy for PreparedActiveReblitRootFilesystemIntent' "$$module"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
-	if timeout 10s rg -q 'active_reblit_(publication_plan|boot_topology_intent|mounted_boot_topology|local_boot_policy|package_cmdline_inputs)|system_model|/proc/cmdline|/etc/fstab|blkid|udev|blsforme|SourceRoot|read_dir\(|\.exists\(|canonicalize\(|create_dir|create_dir_all|mount\(|umount\(|std::fs::write|fs::write|std::process|process::Command|Command::new' "$$module" "$$core" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -q 'active_reblit_(publication_plan|boot_topology_intent|mounted_boot_topology|local_boot_policy|package_cmdline_inputs)|system_model|/proc/cmdline|/etc/fstab|blkid|udev|blsforme|read_dir\(|\.exists\(|canonicalize\(|create_dir|create_dir_all|mount\(|umount\(|std::fs::write|fs::write|std::process|process::Command|Command::new' "$$module" "$$core" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
+	if timeout 10s rg -q 'SourceRoot' "$$module" "$$filesystem" "$$normalization" "$$abi"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	tests=crates/forge/src/client/boot/active_reblit_root_filesystem_intent_tests; \
 	if timeout 10s rg -n 'File::open\("/(?:proc|sys|dev)|read_to_string\("/(?:proc|sys|dev)|std::process|process::Command|Command::new|nix::mount|libc::mount|/dev/disk|/dev/(?:sd|hd|vd|xvd|nvme|mmcblk|loop|md|dm-|nbd|zram)|"/(?:boot|efi|esp)(?:/|")' "$$tests.rs" "$$tests"; then exit 1; else status="$$?"; timeout 10s test "$$status" = 1; fi; \
 	for file in \

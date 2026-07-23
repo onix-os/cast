@@ -28,6 +28,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, Source,
+};
 use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
 use thiserror::Error;
 
@@ -35,7 +39,7 @@ use crate::{Installation, installation};
 
 use self::{
     filesystem::{RetainedBootTopologySource, capture_source, revalidate_source},
-    gluon::EvaluatedBootTopologyIntent,
+    gluon::GluonBootTopologyIntentEvaluator,
 };
 
 #[path = "active_reblit_boot_topology_intent/filesystem.rs"]
@@ -225,7 +229,7 @@ impl PreparedActiveReblitBootTopologyIntent {
                 path: budget.source_path.clone(),
                 source,
             })?;
-        let evaluated = gluon::evaluate(source_text, budget)?;
+        let evaluated = evaluate_declaration(source_text, budget)?;
         self.require_exact_evaluation(&evaluated)?;
 
         before_terminal_rebind();
@@ -246,9 +250,12 @@ impl PreparedActiveReblitBootTopologyIntent {
 
     fn require_exact_evaluation(
         &self,
-        evaluated: &EvaluatedBootTopologyIntent,
+        evaluated: &DeclarationEvaluation<
+            ActiveReblitBootTopologyIntentValue,
+            EvaluationFingerprint,
+        >,
     ) -> Result<(), ActiveReblitBootTopologyIntentError> {
-        if evaluated.value == self.value && evaluated.fingerprint == self.fingerprint {
+        if evaluated.value == self.value && evaluated.identity == self.fingerprint {
             Ok(())
         } else {
             Err(ActiveReblitBootTopologyIntentError::Changed {
@@ -460,12 +467,12 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = gluon::evaluate(&source_text, budget)?;
+    let evaluated = evaluate_declaration(&source_text, budget)?;
     let prepared = PreparedActiveReblitBootTopologyIntent {
         source,
         source_text,
         value: evaluated.value,
-        fingerprint: evaluated.fingerprint,
+        fingerprint: evaluated.identity,
         #[cfg(test)]
         preparation_work: 0,
     };
@@ -477,6 +484,26 @@ where
         ..prepared
     };
     Ok(prepared)
+}
+
+fn evaluate_declaration(
+    source_text: &str,
+    budget: &BootTopologyIntentBudget,
+) -> Result<
+    DeclarationEvaluation<
+        ActiveReblitBootTopologyIntentValue,
+        EvaluationFingerprint,
+    >,
+    ActiveReblitBootTopologyIntentError,
+> {
+    let evaluator = GluonBootTopologyIntentEvaluator::new(budget)?;
+    let source = Source::new(gluon::SOURCE_LOGICAL_NAME, source_text);
+    evaluator.evaluate(&source).map_err(|error| match error {
+        DeclarationEvaluationError::Evaluation(source) => {
+            ActiveReblitBootTopologyIntentError::Evaluation(source)
+        }
+        DeclarationEvaluationError::Conversion(source) => source,
+    })
 }
 
 fn revalidate_installation_root(

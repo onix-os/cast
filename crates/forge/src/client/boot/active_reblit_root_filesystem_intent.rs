@@ -14,6 +14,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, Source,
+};
 use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
 use thiserror::Error;
 
@@ -21,7 +25,7 @@ use crate::{Installation, installation};
 
 use self::{
     filesystem::{RetainedRootFilesystemSource, capture_source, revalidate_source},
-    gluon::EvaluatedRootFilesystemIntent,
+    gluon::GluonRootFilesystemIntentEvaluator,
 };
 
 #[path = "active_reblit_root_filesystem_intent/filesystem.rs"]
@@ -166,7 +170,7 @@ impl PreparedActiveReblitRootFilesystemIntent {
                 path: budget.source_path.clone(),
                 source,
             })?;
-        let evaluated = gluon::evaluate(source_text, budget)?;
+        let evaluated = evaluate_declaration(source_text, budget)?;
         self.require_exact_evaluation(&evaluated)?;
 
         before_terminal_rebind();
@@ -187,9 +191,12 @@ impl PreparedActiveReblitRootFilesystemIntent {
 
     fn require_exact_evaluation(
         &self,
-        evaluated: &EvaluatedRootFilesystemIntent,
+        evaluated: &DeclarationEvaluation<
+            RootFilesystemIntentValue,
+            EvaluationFingerprint,
+        >,
     ) -> Result<(), ActiveReblitRootFilesystemIntentError> {
-        if evaluated.value == self.value && evaluated.fingerprint == self.fingerprint {
+        if evaluated.value == self.value && evaluated.identity == self.fingerprint {
             Ok(())
         } else {
             Err(ActiveReblitRootFilesystemIntentError::Changed {
@@ -412,12 +419,12 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = gluon::evaluate(&source_text, budget)?;
+    let evaluated = evaluate_declaration(&source_text, budget)?;
     let prepared = PreparedActiveReblitRootFilesystemIntent {
         source,
         source_text,
         value: evaluated.value,
-        fingerprint: evaluated.fingerprint,
+        fingerprint: evaluated.identity,
         #[cfg(test)]
         preparation_work: 0,
     };
@@ -430,6 +437,23 @@ where
     };
     budget.require_deadline()?;
     Ok(prepared)
+}
+
+fn evaluate_declaration(
+    source_text: &str,
+    budget: &mut RootFilesystemIntentBudget,
+) -> Result<
+    DeclarationEvaluation<RootFilesystemIntentValue, EvaluationFingerprint>,
+    ActiveReblitRootFilesystemIntentError,
+> {
+    let evaluator = GluonRootFilesystemIntentEvaluator::new(budget)?;
+    let source = Source::new(gluon::SOURCE_LOGICAL_NAME, source_text);
+    evaluator.evaluate(&source).map_err(|error| match error {
+        DeclarationEvaluationError::Evaluation(source) => {
+            ActiveReblitRootFilesystemIntentError::Evaluation(source)
+        }
+        DeclarationEvaluationError::Conversion(source) => source,
+    })
 }
 
 fn revalidate_installation_root(

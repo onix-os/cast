@@ -2,7 +2,12 @@
 
 use std::time::Duration;
 
-use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy, Limits, Source};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
+    SourceRoot,
+};
+use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy};
 
 use super::{
     ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
@@ -40,45 +45,97 @@ struct GluonPartitionSelector {
     mount_point: String,
 }
 
-pub(super) struct EvaluatedBootTopologyIntent {
-    pub(super) value: ActiveReblitBootTopologyIntentValue,
-    pub(super) fingerprint: EvaluationFingerprint,
+/// Stateful Gluon adapter for the closed boot-topology declaration.
+///
+/// The adapter borrows the caller-owned absolute budget so the neutral typed
+/// evaluation boundary cannot replace ActiveReblit's deadline with a fresh
+/// relative timeout. Descriptor retention and source revalidation remain in
+/// the fixed-path loader which owns that stronger authority.
+pub(super) struct GluonBootTopologyIntentEvaluator<'budget> {
+    engine: GluonEngine,
+    budget: &'budget BootTopologyIntentBudget,
 }
 
-pub(super) fn evaluate(
-    source_text: &str,
-    budget: &BootTopologyIntentBudget,
-) -> Result<EvaluatedBootTopologyIntent, ActiveReblitBootTopologyIntentError> {
-    budget.require_deadline()?;
-    let remaining = budget.remaining_duration()?;
-    let mut limits = Limits::default();
-    limits.max_source_bytes = budget.policy.max_source_bytes;
-    limits.max_explicit_input_bytes = 0;
-    limits.max_imported_file_bytes = BOOT_TOPOLOGY_ABI.len();
-    limits.max_imports = 1;
-    limits.max_import_graph_bytes = budget
-        .policy
-        .max_source_bytes
-        .checked_add(BOOT_TOPOLOGY_ABI.len())
-        .ok_or(ActiveReblitBootTopologyIntentError::EvaluationContract {
-            reason: "source and embedded ABI byte bound overflowed",
-        })?;
-    limits.timeout = remaining.min(MAX_EVALUATION_TIME);
+impl<'budget> GluonBootTopologyIntentEvaluator<'budget> {
+    pub(super) fn new(
+        budget: &'budget BootTopologyIntentBudget,
+    ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+        budget.require_deadline()?;
+        let remaining = budget.remaining_duration()?;
+        let mut limits = Limits::default();
+        limits.max_source_bytes = budget.policy.max_source_bytes;
+        limits.max_explicit_input_bytes = 0;
+        limits.max_imported_file_bytes = BOOT_TOPOLOGY_ABI.len();
+        limits.max_imports = 1;
+        limits.max_import_graph_bytes = budget
+            .policy
+            .max_source_bytes
+            .checked_add(BOOT_TOPOLOGY_ABI.len())
+            .ok_or(ActiveReblitBootTopologyIntentError::EvaluationContract {
+                reason: "source and embedded ABI byte bound overflowed",
+            })?;
+        limits.timeout = remaining.min(MAX_EVALUATION_TIME);
 
-    let mut imports = ImportPolicy::new();
-    imports.insert_embedded_module(BOOT_TOPOLOGY_ABI_NAME, BOOT_TOPOLOGY_ABI)?;
-    let engine = GluonEngine::new(limits).with_import_policy(imports);
-    let source = Source::new(SOURCE_LOGICAL_NAME, source_text);
-    let evaluation = engine.evaluate::<GluonBootTopologyIntent>(&source)?;
-    budget.require_deadline()?;
-    require_fingerprint_contract(&evaluation.fingerprint)?;
+        let mut imports = ImportPolicy::new();
+        imports.insert_embedded_module(BOOT_TOPOLOGY_ABI_NAME, BOOT_TOPOLOGY_ABI)?;
+        Ok(Self {
+            engine: GluonEngine::new(limits).with_import_policy(imports),
+            budget,
+        })
+    }
+}
 
-    let value = ActiveReblitBootTopologyIntentValue::try_from(evaluation.value)?;
-    budget.require_deadline()?;
-    Ok(EvaluatedBootTopologyIntent {
-        value,
-        fingerprint: evaluation.fingerprint,
-    })
+impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
+    for GluonBootTopologyIntentEvaluator<'_>
+{
+    type Identity = EvaluationFingerprint;
+    type Error = ActiveReblitBootTopologyIntentError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+            budget: self.budget,
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<
+        DeclarationEvaluation<
+            ActiveReblitBootTopologyIntentValue,
+            Self::Identity,
+        >,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate::<GluonBootTopologyIntent>(source)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        self.budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_fingerprint_contract(&evaluation.fingerprint)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+
+        let value = ActiveReblitBootTopologyIntentValue::try_from(evaluation.value)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        self.budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value,
+            identity: evaluation.fingerprint,
+        })
+    }
 }
 
 fn require_fingerprint_contract(
