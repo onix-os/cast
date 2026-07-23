@@ -22,6 +22,7 @@ delegated-fixture-test-support = ["gitwrap/fixture-test-support"]
 [dependencies]
 config = { path = "../../crates/config" }
 container = { path = "../../crates/container" }
+declarative_config = { path = "../../crates/declarative_config" }
 gitwrap = { path = "../../crates/gitwrap" }
 gluon_config = { path = "../../crates/gluon_config" }
 forge = { path = "../forge" }

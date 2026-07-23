@@ -51,7 +51,7 @@ fn repository_value(id: &repository::Id, repository: &Repository) -> RepositoryV
 
 #[test]
 fn generated_profile_fragment_has_exact_normalized_owned_value() {
-    let decoded = ProfileCodec
+    let decoded = ProfileCodec::default()
         .decode(
             &Evaluator::default(),
             &GluonSource::new(

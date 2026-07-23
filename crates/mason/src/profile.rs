@@ -8,10 +8,20 @@ use std::{
     fmt::{self, Write as _},
 };
 
-use config::{Config, DecodedGluon, GluonCodec, GluonCodecError};
+use config::{
+    Config, DecodedGluon, GluonCodec, GluonCodecError,
+    declaration::ConfigDeclarationEvaluator,
+};
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+};
 use derive_more::{Debug, Display};
 use forge::{Repository, repository};
-use gluon_config::{Evaluator, Source as GluonSource};
+use gluon_config::{
+    EvaluationFingerprint, Evaluator, GluonEngine, ImportPolicy,
+    Source as GluonSource,
+};
 use stone_recipe::derivation::ProfileFragmentProvenance;
 use thiserror::Error;
 
@@ -135,9 +145,30 @@ impl Config for Map {
     }
 }
 
-/// Stateless profile configuration codec used by [`config::Manager`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ProfileCodec;
+/// Stateful profile declaration adapter with its ABI fixed at construction.
+#[derive(Debug, Clone)]
+pub struct ProfileCodec {
+    engine: GluonEngine,
+}
+
+impl Default for ProfileCodec {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
+}
+
+impl ProfileCodec {
+    pub fn new(limits: Limits) -> Self {
+        let mut import_policy = ImportPolicy::new();
+        import_policy
+            .insert_embedded_module("cast.profile.v1", GLUON_PROFILE_ABI)
+            .expect("the embedded profile ABI is a valid, unique module");
+
+        Self {
+            engine: GluonEngine::new(limits).with_import_policy(import_policy),
+        }
+    }
+}
 
 /// Semantic profile conversion failure with a stable field path.
 #[derive(Debug)]
@@ -382,11 +413,61 @@ impl GluonCodec for ProfileCodec {
     }
 
     fn encode(&self, config: &Self::Config) -> Result<String, GluonCodecError> {
+        <Self as DeclarationCodec<Map>>::encode(self, config)
+            .map_err(GluonCodecError::conversion)
+    }
+}
+
+impl DeclarationEvaluator<Map> for ProfileCodec {
+    type Identity = EvaluationFingerprint;
+    type Error = ProfileConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate(
+        &self,
+        source: &GluonSource,
+    ) -> Result<
+        DeclarationEvaluation<Map, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate::<Vec<GluonProfileSpec>>(source)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let profiles = evaluation.value.into_iter().map(Into::into).collect();
+        let value = decode_specs(profiles)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+
+        Ok(DeclarationEvaluation {
+            value,
+            identity: evaluation.fingerprint,
+        })
+    }
+}
+
+impl ConfigDeclarationEvaluator for ProfileCodec {
+    type Config = Map;
+}
+
+impl DeclarationCodec<Map> for ProfileCodec {
+    fn encode(&self, config: &Map) -> Result<String, Self::Error> {
         let specs = config
             .iter()
             .map(profile_to_spec)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(GluonCodecError::conversion)?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(encode_specs(&specs))
     }
 }
@@ -590,7 +671,9 @@ pub struct Manager<'a> {
 
 impl<'a> Manager<'a> {
     pub fn new(env: &'a Env) -> Result<Manager<'a>, Error> {
-        let loaded = env.config.load_gluon(&Evaluator::default(), &ProfileCodec)?;
+        let loaded = env
+            .config
+            .load_gluon(&Evaluator::default(), &ProfileCodec::default())?;
         let fragments = loaded
             .iter()
             .map(|loaded| ProfileFragmentProvenance {
@@ -646,7 +729,9 @@ impl<'a> Manager<'a> {
 
     pub fn save_profile(&mut self, id: Id, profile: Profile) -> Result<(), Error> {
         let map = Map::with([(id.clone(), profile)]);
-        self.env.config.save_gluon(id, &map, &ProfileCodec)?;
+        self.env
+            .config
+            .save_gluon(id, &map, &ProfileCodec::default())?;
 
         // Saving changes both the resolved profile map and the ordered
         // evaluation provenance used by planning. Reload them atomically so a

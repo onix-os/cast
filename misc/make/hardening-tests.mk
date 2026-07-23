@@ -817,7 +817,7 @@ mason-profile-test:
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^profile::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 9; \
+	timeout 10s test "$$count" = 10; \
 	timeout 900s $(CARGO) test -p mason --lib "profile::tests::" -- --test-threads=1
 
 mason-planner-bootstrap-test:

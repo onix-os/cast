@@ -64,7 +64,7 @@ fn conversion_error(source: String) -> (PathBuf, String) {
     let path = temporary.path().join("profile.d/invalid.glu");
     write(&path, &source);
     let error = config::Manager::custom(temporary.path())
-        .load_gluon(&Evaluator::default(), &ProfileCodec)
+        .load_gluon(&Evaluator::default(), &ProfileCodec::default())
         .expect_err("profile should be invalid");
     let LoadGluonError::Conversion {
         path: error_path,
@@ -183,7 +183,18 @@ fn active_root_indexes_must_match_the_selected_build_architecture() {
 
 #[test]
 fn invalid_url_version_and_priority_report_exact_fields() {
-    let (path, error) = conversion_error(single_profile(r#"cast.repository.direct "broken" "not a url""#));
+    let invalid_url = single_profile(r#"cast.repository.direct "broken" "not a url""#);
+    let typed_error = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &ProfileCodec::default(),
+        &GluonSource::new("invalid.glu", invalid_url.clone()),
+    )
+    .expect_err("invalid domain value must remain a conversion error");
+    assert!(matches!(
+        typed_error,
+        DeclarationEvaluationError::Conversion(_)
+    ));
+
+    let (path, error) = conversion_error(invalid_url);
     assert!(path.ends_with("profile.d/invalid.glu"));
     assert!(error.contains("profiles[0].repositories[0].source.uri"));
 
@@ -211,6 +222,16 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
     write(&path, "let value = in value");
     let env = environment(temporary.path());
 
+    let typed_error = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &ProfileCodec::default(),
+        &GluonSource::new("profile.d/malformed.glu", "let value = in value"),
+    )
+    .expect_err("malformed source must remain an evaluation error");
+    assert!(matches!(
+        typed_error,
+        DeclarationEvaluationError::Evaluation(_)
+    ));
+
     let error = match Manager::new(&env) {
         Ok(_) => panic!("malformed profile should fail"),
         Err(error) => error,
@@ -233,39 +254,47 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
 #[test]
 fn generated_save_is_deterministic_standalone_and_loadable() {
     let evaluator = Evaluator::default();
-    let decoded = ProfileCodec
-        .decode(
-            &evaluator,
-            &GluonSource::new(
-                "authored.glu",
-                authored(
-                    r#"cast.profiles [
+    let codec = ProfileCodec::default();
+    let source = GluonSource::new(
+        "authored.glu",
+        authored(
+            r#"cast.profiles [
     cast.profile "z-profile" [
         cast.repository.root "z-root" "https://packages.example.test" "stream/volatile",
         cast.repository.direct "a-direct" "file:///var/cache/local.index",
     ],
     cast.profile "a-profile" [],
 ]"#,
-                ),
-            ),
-        )
-        .unwrap();
-    let first = ProfileCodec.encode(&decoded.value).unwrap();
-    let repeated = ProfileCodec.encode(&decoded.value).unwrap();
+        ),
+    );
+    let decoded = codec.decode(&evaluator, &source).unwrap();
+    let typed = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(&codec, &source).unwrap();
+    assert_eq!(typed.identity, decoded.fingerprint);
+
+    let first = GluonCodec::encode(&codec, &decoded.value).unwrap();
+    let repeated = GluonCodec::encode(&codec, &decoded.value).unwrap();
+    assert_eq!(
+        first,
+        <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap()
+    );
     assert_eq!(first, repeated);
     assert!(first.find("id = \"a-profile\"").unwrap() < first.find("id = \"z-profile\"").unwrap());
     assert!(first.find("id = \"a-direct\"").unwrap() < first.find("id = \"z-root\"").unwrap());
 
     let temporary = tempfile::tempdir().unwrap();
     let manager = config::Manager::custom(temporary.path());
-    let path = manager.save_gluon("generated", &decoded.value, &ProfileCodec).unwrap();
+    let path = manager
+        .save_gluon("generated", &decoded.value, &ProfileCodec::default())
+        .unwrap();
     let generated = fs::read_to_string(path).unwrap();
     assert_eq!(
         generated.as_bytes(),
         include_bytes!("../../../../tests/fixtures/gluon/goldens/profile-fragment.glu")
     );
 
-    let loaded = manager.load_gluon(&evaluator, &ProfileCodec).unwrap();
+    let loaded = manager
+        .load_gluon(&evaluator, &ProfileCodec::default())
+        .unwrap();
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].value.get(&Id::new("a-profile")).is_some());
     assert!(loaded[0].value.get(&Id::new("z-profile")).is_some());
@@ -278,10 +307,12 @@ fn generated_save_refuses_to_overwrite_an_authored_fragment() {
     let source = authored("cast.profiles [cast.profile \"owned\" []]");
     write(&path, &source);
     let manager = config::Manager::custom(temporary.path());
-    let loaded = manager.load_gluon(&Evaluator::default(), &ProfileCodec).unwrap();
+    let loaded = manager
+        .load_gluon(&Evaluator::default(), &ProfileCodec::default())
+        .unwrap();
 
     let error = manager
-        .save_gluon("owned", &loaded[0].value, &ProfileCodec)
+        .save_gluon("owned", &loaded[0].value, &ProfileCodec::default())
         .expect_err("authored fragment must be protected");
     assert!(matches!(error, SaveGluonError::AuthoredFragment { path: ref error_path } if error_path == &path));
     assert_eq!(fs::read_to_string(path).unwrap(), source);
@@ -360,7 +391,7 @@ fn saving_a_profile_refreshes_values_and_provenance_together() {
 
 #[test]
 fn repository_owned_default_profile_is_valid_gluon() {
-    let decoded = ProfileCodec
+    let decoded = ProfileCodec::default()
         .decode(
             &Evaluator::default(),
             &GluonSource::new(
