@@ -1,134 +1,84 @@
-SHELL := bash
+PROJECT_NAME := $(shell awk -F'"' '/^\[package\]/{package=1; next} package && /^name = /{print $$2; exit}' bin/cast/Cargo.toml)
+PROJECT_CAP  := $(shell echo $(PROJECT_NAME) | tr '[:lower:]' '[:upper:]')
+CURRENT_VERSION := $(shell awk -F'"' '/^\[workspace.package\]/{package=1; next} package && /^version = /{print $$2; exit}' Cargo.toml)
+LATEST_TAG   ?= $(shell git describe --tags --abbrev=0 2>/dev/null)
+TOP_DIR      := $(CURDIR)
+BUILD_DIR    := $(TOP_DIR)/target
 
-TOP_DIR := $(CURDIR)
-CARGO ?= cargo
-MODE ?= onboarding
-PREFIX ?= $(HOME)/.local
-BIN_DIR ?= $(PREFIX)/bin
-DATA_DIR ?= $(PREFIX)/share
-CONFIG_DIR ?= $(HOME)/.config
-LICENSE_DIR ?= $(TOP_DIR)/target/license-list-data
-EXAMPLE ?= read
-STONE ?= $(TOP_DIR)/tests/fixtures/bash-completion-2.11-1-1-x86_64.stone
-REQUIRE_EXECUTION ?= 0
-FIXTURE ?= all
-EXECUTION_FIXTURE_NAMES := autotools autotools-options cargo cargo-features cargo-vendored cmake custom daemon-generated desktop-integration external-test-vectors factory-override font-family generated-config generated-shell gettext-localization go-module header-only-library hooks-patch meson multiple-sources pgo-workload plugin-output post-install-smoke-test python-module relation-policy split system-integration-assets userspace-profile
-VALID_EXECUTION_FIXTURES := all $(EXECUTION_FIXTURE_NAMES)
-# Capture the literal command-line value once. A recursive make variable such
-# as '$$(shell ...)' must never be re-expanded into a bootstrap shell recipe.
-FIXTURE_SELECTION := $(strip $(value FIXTURE))
-VALID_FIXTURE_SELECTION := $(if $(word 2,$(FIXTURE_SELECTION)),,$(filter $(VALID_EXECUTION_FIXTURES),$(FIXTURE_SELECTION)))
-EXECUTION_REQUIREMENT := $(strip $(value REQUIRE_EXECUTION))
-VALID_EXECUTION_REQUIREMENT := $(if $(word 2,$(EXECUTION_REQUIREMENT)),,$(filter 0 1,$(EXECUTION_REQUIREMENT)))
-BOOTSTRAP_TMP_DIR := $(TOP_DIR)/target/bootstrap-fixtures/tmp
-BOOTSTRAP_PACKAGE_STORE := $(TOP_DIR)/target/bootstrap-fixtures/packages
+ifeq ($(PROJECT_NAME),)
+$(error Error: project name not found in bin/cast/Cargo.toml)
+endif
 
-.DEFAULT_GOAL := cast
+$(info ------------------------------------------)
+$(info Project: $(PROJECT_NAME))
+$(info Version: $(CURRENT_VERSION))
+$(info ------------------------------------------)
 
-include misc/make/tests.mk
-include misc/make/help.mk
+.PHONY: build b compile c run r test t verify help h clean release
 
-.PHONY: build cast get-started licenses fix lint test check fmt clean \
-	binary-layout product-names config-formats config-formats-test \
-	make-shell-portability-test source-loc source-loc-test migrate migrate-redo libstone
+SHELL := /bin/bash
+
 
 build:
-	@$(CARGO) build --workspace
+	@cargo build --release
 
-cast:
-	@$(CARGO) build --profile $(MODE) -p cast
+b: build
 
-get-started: cast licenses
-	@set -eu; \
-	echo; \
-	echo "Installing cast to $(BIN_DIR)..."; \
-	install -d "$(BIN_DIR)"; \
-	install -m 755 "$(TOP_DIR)/target/$(MODE)/cast" "$(BIN_DIR)/cast"; \
-	rm -rf "$(DATA_DIR)/cast"; \
-	install -d "$(DATA_DIR)/cast/licenses" "$(CONFIG_DIR)/cast"; \
-	cp -R "$(TOP_DIR)/crates/mason/data/policy" "$(DATA_DIR)/cast/"; \
-	cp "$(LICENSE_DIR)/text/"* "$(DATA_DIR)/cast/licenses/"; \
-	cp -R "$(TOP_DIR)/crates/mason/data/profile.d" "$(CONFIG_DIR)/cast/"; \
-	echo; \
-	echo "Installed files:"; \
-	ls -hlF "$(BIN_DIR)/cast" "$(DATA_DIR)/cast" "$(CONFIG_DIR)/cast"; \
-	echo; \
-	case ":$$PATH:" in \
-		*:"$(BIN_DIR)":*) echo "$(BIN_DIR) is already in PATH." ;; \
-		*) echo "$(BIN_DIR) is not in PATH yet; add it before running the tools." ;; \
-	esac; \
-	echo; \
-	echo "Cast documentation lives at https://github.com/onix-os/os-tools"
+compile:
+	@cargo clean
+	@make build
 
-licenses:
-	@"$(TOP_DIR)/misc/scripts/fetch-licenses.sh" "$(LICENSE_DIR)"
+c: compile
 
-fix:
-	@echo "Applying clippy fixes..."
-	@$(CARGO) clippy --fix --allow-dirty --allow-staged --workspace -- --no-deps
-	@echo "Applying cargo fmt..."
-	@$(CARGO) fmt --all
-	@echo "Fixing typos..."
-	@typos -w --exclude target/license-list-data/
+ARGS ?=
+DIR ?= $(TOP_DIR)
 
-lint: binary-layout product-names config-formats
-	@echo "Running clippy..."
-	@$(CARGO) clippy --workspace -- --no-deps
-	@echo "Running clippy on the feature-gated harness-free cache-clean proof..."
-	@$(CARGO) clippy -p mason --features cache-clean-test-support \
-		--test cache_clean -- --no-deps
-	@echo "Running clippy on the feature-gated harness-free Mason fixture..."
-	@$(CARGO) clippy -p mason --features delegated-fixture-test-support \
-		--test delegated_execution_fixture -- --no-deps
-	@echo "Running cargo fmt..."
-	@$(CARGO) fmt --all -- --check
-	@echo "Checking for typos..."
-	@typos --exclude target/license-list-data/
+run:
+	@cd $(DIR) && cargo run --manifest-path $(TOP_DIR)/Cargo.toml -p cast -- $(ARGS)
 
-config-formats:
-	@"$(TOP_DIR)/misc/scripts/check-config-formats.sh"
+r: run
 
-config-formats-test:
-	@"$(TOP_DIR)/misc/scripts/test-check-config-formats.sh"
+TEST_ARGS ?=
 
-binary-layout:
-	@"$(TOP_DIR)/misc/scripts/check-binary-layout.sh"
+test:
+	@cargo test --workspace $(TEST_ARGS) -- --test-threads=1
 
-product-names:
-	@"$(TOP_DIR)/misc/scripts/check-product-names.sh"
+t: test
 
-make-shell-portability-test:
-	@timeout 120s "$(TOP_DIR)/misc/scripts/test-make-shell-portability.sh"
+verify: build test
 
-source-loc:
-	@timeout 120s "$(SHELL)" "$(TOP_DIR)/misc/scripts/check-source-loc.sh"
+help:
+	@echo
+	@echo "Usage: make [target]"
+	@echo
+	@echo "Available targets:"
+	@echo "  build        Build project"
+	@echo "  compile      Configure and generate build files"
+	@echo "  run          Run the main executable"
+	@echo "  test         Run tests"
+	@echo "  verify       Build and test the complete workspace"
+	@echo "  release      Create a new release (TYPE=patch|minor|major)"
+	@echo
 
-source-loc-test:
-	@timeout 120s "$(SHELL)" "$(TOP_DIR)/misc/scripts/test-check-source-loc.sh"
-
-# Container activation uses fork-like namespace creation. Keep each libtest
-# process to one active test worker; production single-task behavior is proved
-# separately by harness-free container and delegated Mason integration targets.
-test: host-storage-safety-test lint config-formats-test examples-gate-test delegated-fixture-runner-test cache-clean-test execution-capability-preflight-test mason-generated-routing-test mason-elf-debug-route-test
-	@echo "Running tests in all packages..."
-	@$(CARGO) test --all --no-fail-fast -- --test-threads=1
-
-include misc/make/forge-focused-tests.mk
-include misc/make/examples.mk
-include misc/make/execution-fixtures.mk
-
-check: host-storage-safety-test make-shell-portability-test
-	@$(CARGO) check --workspace --all-targets
-	@$(CARGO) check -p mason --features cache-clean-test-support \
-		--test cache_clean
-	@$(CARGO) check -p mason --features delegated-fixture-test-support \
-		--test delegated_execution_fixture
-
-fmt:
-	@$(CARGO) fmt --all
+h : help
 
 clean:
-	@$(CARGO) clean
+	@echo "Cleaning build directory..."
+	@rm -rf $(BUILD_DIR)
+	@echo "Build directory cleaned."
 
-include misc/make/database.mk
-include misc/make/libstone.mk
+TYPE ?= patch
+HAS_REL := $(shell command -v git-rel 2>/dev/null)
+
+release:
+	@if [ -z "$(HAS_REL)" ]; then \
+		echo "git-rel is not installed. Please install it first."; \
+		exit 1; \
+	fi
+	@if [ -z "$(TYPE)" ]; then \
+		echo "Release type not specified. Use 'make release TYPE=[patch|minor|major|m.m.p]'"; \
+		exit 1; \
+	fi
+	@git rel $(TYPE)
+
+include misc/make/project.mk
