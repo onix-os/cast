@@ -71,13 +71,40 @@ through production parity. If dual support is chosen instead (Endpoint B), both
 dependency trees, threat surfaces, ABI implementations, and test matrices become
 permanent.
 
-## Not yet done (stops here for review)
+## Encoding constraint: empty sequences under tagged variants
 
-Per the plan's first implementation batch, work stops before creating the
-production `crates/lua_config` adapter. Still open:
+Lua cannot distinguish an empty array from an empty map — both are written `{}`
+— and mlua's serializer resolves an empty table to a map. When such a table is
+buffered through `serde`'s internally-tagged enum machinery (which reads the
+whole value via `deserialize_any` before dispatching on the tag), a field typed
+`Vec<_>` then sees a map and fails with `invalid type: map, expected a
+sequence`. This only bites *empty* sequences that sit inside a `#[serde(tag =
+"kind")]` variant (for example a trigger handler with no arguments); non-empty
+sequences and top-level `Vec` fields decode normally.
+
+Authored fragments therefore currently avoid empty sequences inside tagged
+variants. Lifting this before the Phase L7 corpus import — by giving the tagged
+domain DTOs an explicit empty-list encoding, or by switching those variants to a
+form that decodes the content type directly rather than through `deserialize_any`
+— is tracked as adapter follow-up work.
+
+## Implemented so far
+
+- Phase L0 engine spike (`crates/lua_engine_spike`) and this selection record.
+- Phase L1 isolated `crates/lua_config` adapter (parser profile, capability
+  allowlist, value-tree bounds, host-latched limits, tagged option encoding).
+- Phase L2–L4 domain adapters with differential Gluon/Lua parity tests:
+  `triggers::lua`, `mason::profile::lua`, `forge::repository::lua`.
+- Phase L3 loader registration: `.lua` triggers dispatch by extension through
+  the shared config layer alongside `.glu`.
+
+## Still open
 
 - register the Lua ABI/runtime source roots in semantic implementation
   fingerprints once the ABI tree exists;
 - a documented selected-engine call-depth bound;
+- the remaining domains (system model, packages, builders, boot topology,
+  root filesystem), canonical `.lua` emitters, the full authored corpus, the
+  installed-state migration bridge, and Endpoint finish;
 - musl-target release execution and dependency/license audit
   (`make lua-release-test`, `make lua-dependency-audit`).
