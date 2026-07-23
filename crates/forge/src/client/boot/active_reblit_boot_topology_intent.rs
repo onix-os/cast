@@ -521,7 +521,7 @@ where
 /// source's extension. Both engines reach the identical validated intent value
 /// through the shared assembly; the conversion error type is shared.
 enum BootTopologyIntentEvaluator<'budget> {
-    Gluon(gluon::GluonBootTopologyIntentEvaluator<'budget>),
+    Gluon(GluonBootTopologyIntentEvaluator<'budget>),
     Lua(lua::LuaBootTopologyIntentEvaluator<'budget>),
 }
 
