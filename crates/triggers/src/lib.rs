@@ -10,6 +10,7 @@ use thiserror::Error;
 pub mod format;
 pub mod gluon;
 pub mod lua;
+pub mod registry;
 pub mod spec;
 
 pub use self::gluon::{
