@@ -25,6 +25,10 @@ pub(super) const SOURCE_LOGICAL_NAME: &str = "etc/cast/root-filesystem.glu";
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const MAX_EVALUATION_TIME: Duration = Duration::from_secs(2);
 
+pub(super) fn language_spec() -> LanguageSpec {
+    GluonEngine::default().language_spec().clone()
+}
+
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonRootFilesystemIntent {
     root: String,
