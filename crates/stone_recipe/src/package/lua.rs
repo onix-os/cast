@@ -11,15 +11,16 @@
 // exercised by the tests below until the top-level evaluator lands.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use lua_config::LuaOption;
+use declarative_config::{Diagnostic, Source};
+use lua_config::{LuaEngine, LuaOption};
 use serde::Deserialize;
 
-use crate::{PathSpec, UpstreamSpec};
+use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 
 use super::{
-    BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, OutputRef,
-    OutputSpec, PackageRef, PhaseSpec, PhasesSpec, ProfileSpec, ProgramSpec, StepSpec,
-    SupportedHooksSpec,
+    BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, MetaSpec,
+    OutputRef, OutputSpec, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec, ProgramSpec,
+    StepSpec, SupportedHooksSpec,
 };
 
 /// Convert an optional Lua DTO into an optional domain value.
@@ -335,12 +336,63 @@ impl From<LuaUpstreamSpec> for UpstreamSpec {
     }
 }
 
+/// The Lua encoding of a complete [`PackageSpec`]. Pure fields (`meta`,
+/// `options`, `tuning`, `architectures`, `emul32`, `mold`) decode directly; the
+/// rest use the sub-spec DTOs above.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaPackageSpec {
+    pub meta: MetaSpec,
+    pub builder: LuaBuilderSpec,
+    pub hooks: LuaHooksSpec,
+    pub native_build_inputs: Vec<LuaDependencySpec>,
+    pub build_inputs: Vec<LuaDependencySpec>,
+    pub check_inputs: Vec<LuaDependencySpec>,
+    pub outputs: Vec<LuaOutputSpec>,
+    pub options: OptionsSpec,
+    pub profiles: Vec<LuaProfileSpec>,
+    pub sources: Vec<LuaUpstreamSpec>,
+    pub architectures: Vec<String>,
+    pub tuning: Vec<NamedTuningSpec>,
+    pub emul32: bool,
+    pub mold: bool,
+}
+
+impl From<LuaPackageSpec> for PackageSpec {
+    fn from(package: LuaPackageSpec) -> Self {
+        Self {
+            meta: package.meta,
+            builder: package.builder.into(),
+            hooks: package.hooks.into(),
+            native_build_inputs: dependency_vec(package.native_build_inputs),
+            build_inputs: dependency_vec(package.build_inputs),
+            check_inputs: dependency_vec(package.check_inputs),
+            outputs: package.outputs.into_iter().map(Into::into).collect(),
+            options: package.options,
+            profiles: package.profiles.into_iter().map(Into::into).collect(),
+            sources: package.sources.into_iter().map(Into::into).collect(),
+            architectures: package.architectures,
+            tuning: package.tuning,
+            emul32: package.emul32,
+            mold: package.mold,
+        }
+    }
+}
+
+/// Stateless Lua adapter for the package recipe declaration.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct LuaPackageEvaluator {
+    engine: LuaEngine,
+}
+
+impl LuaPackageEvaluator {
+    /// Decode a complete authored package recipe.
+    pub(crate) fn evaluate(&self, source: &Source) -> Result<PackageSpec, Diagnostic> {
+        Ok(self.engine.evaluate_as::<LuaPackageSpec>(source)?.value.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use declarative_config::Source;
-    use lua_config::LuaEngine;
-
-    use super::super::MetaSpec;
     use super::*;
 
     fn decode<T: serde::de::DeserializeOwned>(source: &str) -> T {
@@ -348,6 +400,73 @@ mod tests {
             .evaluate_as::<T>(&Source::new("package.lua", source))
             .expect("lua value decodes")
             .value
+    }
+
+    fn empty_phases() -> String {
+        "{ setup = { steps = {} }, build = { steps = {} }, install = { steps = {} }, \
+         check = { steps = {} }, workload = { steps = {} } }"
+            .to_owned()
+    }
+    fn empty_hooks() -> String {
+        "{ pre_setup = {}, post_setup = {}, pre_build = {}, post_build = {}, pre_check = {}, \
+         post_check = {}, pre_install = {}, post_install = {}, pre_workload = {}, post_workload = {} }"
+            .to_owned()
+    }
+    fn builder() -> String {
+        format!(
+            "{{ required_tools = {{}}, environment = {{ \"cmake\" }}, phases = {}, \
+             supported_hooks = {{ setup = true, build = true, check = true, install = true, workload = true }} }}",
+            empty_phases()
+        )
+    }
+    fn options() -> String {
+        "{ toolchain = \"llvm\", cspgo = false, samplepgo = false, debug = false, strip = true, \
+         networking = false, compressman = true, lastrip = false }"
+            .to_owned()
+    }
+
+    fn complete_recipe_source() -> String {
+        let output = r#"{ name = "out", include_in_manifest = true, summary = { kind = "none" },
+            description = { kind = "none" }, provides_exclude = {}, runtime_inputs = {},
+            runtime_exclude = {}, paths = {}, conflicts = {} }"#;
+        format!(
+            "return {{\n\
+             meta = {{ pname = \"hello\", version = \"1.0\", release = 1, homepage = \"https://x\", license = {{ \"MIT\" }} }},\n\
+             builder = {b},\n\
+             hooks = {h},\n\
+             native_build_inputs = {{}},\n\
+             build_inputs = {{ {{ kind = \"binary\", value = \"cc\" }} }},\n\
+             check_inputs = {{}},\n\
+             outputs = {{ {output} }},\n\
+             options = {o},\n\
+             profiles = {{}},\n\
+             sources = {{ {{ kind = \"git\", url = \"https://x/g.git\", git_ref = \"main\", clone_dir = {{ kind = \"none\" }} }} }},\n\
+             architectures = {{ \"x86_64\" }},\n\
+             tuning = {{ {{ key = \"lto\", value = {{ kind = \"enable\" }} }} }},\n\
+             emul32 = false,\n\
+             mold = true,\n\
+             }}",
+            b = builder(),
+            h = empty_hooks(),
+            o = options(),
+        )
+    }
+
+    #[test]
+    fn a_complete_package_recipe_decodes_across_every_field() {
+        let source = complete_recipe_source();
+        let package = LuaPackageEvaluator::default()
+            .evaluate(&Source::new("package.lua", &source))
+            .expect("complete recipe decodes");
+
+        assert_eq!(package.meta.pname, "hello");
+        assert_eq!(package.build_inputs, vec![DependencySpec::Binary("cc".to_owned())]);
+        assert_eq!(package.outputs.len(), 1);
+        assert_eq!(package.options.toolchain, crate::ToolchainSpec::Llvm);
+        assert!(matches!(package.sources[0], UpstreamSpec::Git { .. }));
+        assert_eq!(package.architectures, vec!["x86_64".to_owned()]);
+        assert_eq!(package.tuning[0].key, "lto");
+        assert!(package.mold);
     }
 
     #[test]

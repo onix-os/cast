@@ -156,6 +156,7 @@ pub struct HooksSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuilderEnvironmentSpec {
+    #[serde(rename = "cmake")]
     CMake,
     Meson,
     Cargo,
