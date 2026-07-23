@@ -306,3 +306,45 @@ authority are deferred here.
   `/tmp` allocation can prevent the sandbox or LOC gate from starting even when
   the home filesystem has ample capacity; cleanup must never remove unrelated
   user data automatically.
+
+## Declaration evaluator budget rule (Phase 7 part a)
+
+The agnostic-config plan's authoritative evaluator policy asks that "each root or
+fragment receives one budget starting immediately before its descriptor-rooted
+open/read and ending after typed decode." The concrete part of that rule that is
+still open is deferred here; the other two parts are already satisfied:
+
+- **Import cycle rejection (done):** `declarative_config::prepare_module_graph`
+  rejects import cycles with a stable import diagnostic before any runtime is
+  created (`feat(config): reject configuration import cycles`).
+- **Per-fragment budgets (already held):** each discovered fragment is evaluated
+  through its own `DeclarationEvaluator::evaluate` call, so shadowed fragments
+  already retain separate budgets and are still evaluated.
+- **One budget spanning read -> decode (deferred):** `declarative_config`'s
+  `evaluate_file` already starts the deadline immediately before its
+  descriptor-rooted read, so direct file evaluation spans read through decode
+  under a single budget. The generic storage loaders
+  (`config::declaration::fixed_root_loader` and the fragment set) instead read
+  through `SourceRoot::load` and then call the typed adapter's `evaluate`, which
+  starts a fresh deadline. The bounded read therefore sits just outside the
+  evaluation budget.
+
+**Why this does not block closure:** `SourceRoot::load` reads a single
+descriptor-rooted file bounded by `max_source_bytes`, so the read cannot hang and
+the practical budget is effectively one deadline already. No valid evaluation
+identity depends on this (the deadline is not hashed), so it is a hardening
+refinement, not a correctness gap.
+
+**What it would take:** thread one caller-established `EvaluationDeadline` from
+the storage loaders through the typed boundary — e.g. an `evaluate_within(source,
+deadline)` method on `DeclarationEvaluator`/`EngineAdapter` with a default that
+delegates to `evaluate`, overridden by the Gluon adapters to reuse the passed
+deadline via the existing internal `evaluate_with_inputs_until`. That touches the
+trait and roughly twelve domain adapters, so it is a deliberate, self-contained
+follow-up rather than an extraction-adjacent change.
+
+**Optional companion:** if a literal `EVALUATOR_POLICY_VERSION` increment is ever
+wanted to signal the cycle-rejection policy numerically, bump it together with
+this change so derivation caches invalidate exactly once. Cycle rejection is
+currently carried as part of the initial neutral evaluator policy, so no bump has
+been spent on it.
