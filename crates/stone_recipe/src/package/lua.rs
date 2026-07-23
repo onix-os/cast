@@ -13,7 +13,10 @@
 
 use serde::Deserialize;
 
-use super::{DependencySpec, OutputRef, PackageRef};
+use super::{
+    BuiltProgramSpec, DependencySpec, OutputRef, PackageRef, PhaseSpec, PhasesSpec, ProgramSpec,
+    StepSpec,
+};
 
 /// The Lua encoding of a [`DependencySpec`]. The domain enum's tuple variants
 /// become struct variants so the uniform `{ kind = … }` tag applies; the two
@@ -56,6 +59,124 @@ pub(crate) fn dependency_vec(values: Vec<LuaDependencySpec>) -> Vec<DependencySp
     values.into_iter().map(Into::into).collect()
 }
 
+/// The Lua encoding of a [`ProgramSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaProgramSpec {
+    pub path: String,
+    pub requirement: LuaDependencySpec,
+}
+
+impl From<LuaProgramSpec> for ProgramSpec {
+    fn from(program: LuaProgramSpec) -> Self {
+        Self {
+            path: program.path,
+            requirement: program.requirement.into(),
+        }
+    }
+}
+
+fn program_vec(values: Vec<LuaProgramSpec>) -> Vec<ProgramSpec> {
+    values.into_iter().map(Into::into).collect()
+}
+
+/// The Lua encoding of a [`StepSpec`]. The builder-specific variants are plain
+/// data; `run`/`run_built`/`shell` carry the program DTOs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum LuaStepSpec {
+    Run { program: LuaProgramSpec, args: Vec<String> },
+    RunBuilt { program: BuiltProgramSpec, args: Vec<String> },
+    Shell { interpreter: LuaProgramSpec, declared_programs: Vec<LuaProgramSpec>, script: String },
+    #[serde(rename = "cmake_configure")]
+    CMakeConfigure { flags: Vec<String> },
+    #[serde(rename = "cmake_build")]
+    CMakeBuild,
+    #[serde(rename = "cmake_install")]
+    CMakeInstall,
+    #[serde(rename = "cmake_test")]
+    CMakeTest,
+    MesonSetup { flags: Vec<String> },
+    MesonBuild,
+    MesonInstall,
+    MesonTest,
+    CargoBuild { features: Vec<String> },
+    CargoInstall { binaries: Vec<String> },
+    CargoTest { features: Vec<String> },
+    AutotoolsConfigure { flags: Vec<String> },
+    AutotoolsBuild,
+    AutotoolsInstall,
+    AutotoolsTest,
+}
+
+impl From<LuaStepSpec> for StepSpec {
+    fn from(step: LuaStepSpec) -> Self {
+        match step {
+            LuaStepSpec::Run { program, args } => Self::Run { program: program.into(), args },
+            LuaStepSpec::RunBuilt { program, args } => Self::RunBuilt { program, args },
+            LuaStepSpec::Shell { interpreter, declared_programs, script } => Self::Shell {
+                interpreter: interpreter.into(),
+                declared_programs: program_vec(declared_programs),
+                script,
+            },
+            LuaStepSpec::CMakeConfigure { flags } => Self::CMakeConfigure { flags },
+            LuaStepSpec::CMakeBuild => Self::CMakeBuild,
+            LuaStepSpec::CMakeInstall => Self::CMakeInstall,
+            LuaStepSpec::CMakeTest => Self::CMakeTest,
+            LuaStepSpec::MesonSetup { flags } => Self::MesonSetup { flags },
+            LuaStepSpec::MesonBuild => Self::MesonBuild,
+            LuaStepSpec::MesonInstall => Self::MesonInstall,
+            LuaStepSpec::MesonTest => Self::MesonTest,
+            LuaStepSpec::CargoBuild { features } => Self::CargoBuild { features },
+            LuaStepSpec::CargoInstall { binaries } => Self::CargoInstall { binaries },
+            LuaStepSpec::CargoTest { features } => Self::CargoTest { features },
+            LuaStepSpec::AutotoolsConfigure { flags } => Self::AutotoolsConfigure { flags },
+            LuaStepSpec::AutotoolsBuild => Self::AutotoolsBuild,
+            LuaStepSpec::AutotoolsInstall => Self::AutotoolsInstall,
+            LuaStepSpec::AutotoolsTest => Self::AutotoolsTest,
+        }
+    }
+}
+
+pub(crate) fn step_vec(values: Vec<LuaStepSpec>) -> Vec<StepSpec> {
+    values.into_iter().map(Into::into).collect()
+}
+
+/// The Lua encoding of a [`PhaseSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaPhaseSpec {
+    pub steps: Vec<LuaStepSpec>,
+}
+
+impl From<LuaPhaseSpec> for PhaseSpec {
+    fn from(phase: LuaPhaseSpec) -> Self {
+        Self {
+            steps: step_vec(phase.steps),
+        }
+    }
+}
+
+/// The Lua encoding of a [`PhasesSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaPhasesSpec {
+    pub setup: LuaPhaseSpec,
+    pub build: LuaPhaseSpec,
+    pub install: LuaPhaseSpec,
+    pub check: LuaPhaseSpec,
+    pub workload: LuaPhaseSpec,
+}
+
+impl From<LuaPhasesSpec> for PhasesSpec {
+    fn from(phases: LuaPhasesSpec) -> Self {
+        Self {
+            setup: phases.setup.into(),
+            build: phases.build.into(),
+            install: phases.install.into(),
+            check: phases.check.into(),
+            workload: phases.workload.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::Source;
@@ -79,6 +200,38 @@ mod tests {
         assert_eq!(meta.pname, "hello");
         assert_eq!(meta.release, 1);
         assert_eq!(meta.license, vec!["MIT".to_owned()]);
+    }
+
+    #[test]
+    fn step_variants_decode_including_programs_and_builder_steps() {
+        let run: StepSpec = decode::<LuaStepSpec>(
+            r#"return { kind = "run", program = { path = "/bin/cc", requirement = { kind = "binary", value = "cc" } }, args = { "-c" } }"#,
+        )
+        .into();
+        assert!(matches!(run, StepSpec::Run { program, args } if program.path == "/bin/cc" && args == ["-c"]));
+
+        let cmake: StepSpec = decode::<LuaStepSpec>(r#"return { kind = "cmake_build" }"#).into();
+        assert_eq!(cmake, StepSpec::CMakeBuild);
+
+        let cargo: StepSpec =
+            decode::<LuaStepSpec>(r#"return { kind = "cargo_install", binaries = { "hello" } }"#).into();
+        assert_eq!(cargo, StepSpec::CargoInstall { binaries: vec!["hello".to_owned()] });
+    }
+
+    #[test]
+    fn phases_decode_with_empty_and_populated_step_lists() {
+        let source = r#"
+return {
+    setup = { steps = {} },
+    build = { steps = { { kind = "cmake_build" } } },
+    install = { steps = {} },
+    check = { steps = {} },
+    workload = { steps = {} },
+}
+"#;
+        let phases: PhasesSpec = decode::<LuaPhasesSpec>(source).into();
+        assert!(phases.setup.steps.is_empty());
+        assert_eq!(phases.build.steps, vec![StepSpec::CMakeBuild]);
     }
 
     #[test]

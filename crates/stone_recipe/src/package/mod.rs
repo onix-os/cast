@@ -163,7 +163,7 @@ pub enum BuilderEnvironmentSpec {
 }
 
 /// Hook phases accepted by one structural builder contract.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct SupportedHooksSpec {
     pub setup: bool,
     pub build: bool,
@@ -284,7 +284,7 @@ pub struct ProgramSpec {
 ///
 /// Scripts use [`StepSpec::Shell`]; a descriptor-executed shebang is rejected
 /// without falling back to its mutable public pathname.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct BuiltProgramSpec {
     pub path: String,
 }
