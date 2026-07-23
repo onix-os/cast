@@ -1,12 +1,17 @@
 use std::path::Path;
 
-use declarative_config::DeclarationInputEvaluator;
-use gluon_config::{DiagnosticCategory, GluonEngine, Source, SourceRoot};
+#[path = "package_v3/adapter.rs"]
+mod adapter;
+
+use adapter::{
+    PackageDeclarationError, evaluate_default_package, evaluate_package,
+    evaluate_package_with_inputs, rooted_package_evaluator,
+};
+use declarative_config::{DeclarationEvaluationError, DeclarationInputEvaluator, Source, SourceRoot};
+use gluon_config::DiagnosticCategory;
 use stone_recipe::package::{
     BuilderEnvironmentSpec, BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec, PACKAGE_ABI_VERSION,
-    GluonPackageEvaluator, PackageConversionError, PackageEvaluationError,
-    ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,
-    evaluate_gluon_with, evaluate_gluon_with_inputs,
+    GluonPackageEvaluator, PackageConversionError, ProgramSpec, StepSpec, SupportedHooksSpec,
 };
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
@@ -28,13 +33,13 @@ fn binary_program(name: &str) -> ProgramSpec {
 }
 
 fn assert_dependency_role_conversion_error(
-    error: PackageEvaluationError,
+    error: PackageDeclarationError,
     expected_field: &str,
     expected_role: DependencyRole,
     expected_kind: DependencyKind,
 ) {
     let diagnostic = error.to_string();
-    let PackageEvaluationError::Conversion(PackageConversionError::UnsupportedDependencyRole {
+    let DeclarationEvaluationError::Conversion(PackageConversionError::UnsupportedDependencyRole {
         field,
         role,
         kind,
@@ -64,10 +69,10 @@ fn retired_package_and_builder_abis_are_not_compatibility_aliases() {
         "cast.builders.autotools.v1",
         "boulder.package.v2",
     ] {
-        let error = evaluate_gluon(&Source::new("stone.glu", format!("import! {module}"))).unwrap_err();
+        let error = evaluate_default_package(&Source::new("stone.glu", format!("import! {module}"))).unwrap_err();
         assert!(matches!(
             error,
-            PackageEvaluationError::Evaluation(ref diagnostic)
+            DeclarationEvaluationError::Evaluation(ref diagnostic)
                 if diagnostic.category == DiagnosticCategory::Import
                     && diagnostic.message.contains(module)
         ));
@@ -76,11 +81,11 @@ fn retired_package_and_builder_abis_are_not_compatibility_aliases() {
 
 #[test]
 fn frozen_package_abi_has_no_cargo_fetch_escape_hatch() {
-    let error = evaluate_gluon(&authored("b.step.cargo_fetch")).unwrap_err();
+    let error = evaluate_default_package(&authored("b.step.cargo_fetch")).unwrap_err();
 
     assert!(matches!(
         error,
-        PackageEvaluationError::Evaluation(ref diagnostic)
+        DeclarationEvaluationError::Evaluation(ref diagnostic)
             if diagnostic.category == DiagnosticCategory::Type
                 && diagnostic.message.contains("cargo_fetch")
     ));
@@ -93,28 +98,28 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     let source = source_root
         .load(Path::new("package_v3_stone.glu"), 1024 * 1024)
         .unwrap();
-    let evaluator = GluonEngine::default().with_source_root(source_root);
+    let evaluator = rooted_package_evaluator(source_root);
 
-    let evaluated = evaluate_gluon_with(&evaluator, &source).unwrap();
+    let evaluated = evaluate_package(&evaluator, &source).unwrap();
 
-    assert_eq!(evaluated.package.meta.pname, "factory-hello");
-    assert_eq!(evaluated.package.outputs.len(), 10);
-    assert_eq!(evaluated.package.outputs[9].name, "dev");
+    assert_eq!(evaluated.value.meta.pname, "factory-hello");
+    assert_eq!(evaluated.value.outputs.len(), 10);
+    assert_eq!(evaluated.value.outputs[9].name, "dev");
     assert!(matches!(
-        evaluated.package.build_inputs[0],
+        evaluated.value.build_inputs[0],
         DependencySpec::Package(ref package) if package.name == "zlib"
     ));
     assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
+        dependency_names(evaluated.value.builder.required_tools()),
         ["binary(sh)", "binary(ninja)"]
     );
-    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
-    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
+    assert_eq!(evaluated.value.builder.environment, [BuilderEnvironmentSpec::CMake]);
+    assert_eq!(evaluated.value.builder.supported_hooks, SupportedHooksSpec::all());
     assert_eq!(
-        dependency_names(&evaluated.package.build_inputs),
+        dependency_names(&evaluated.value.build_inputs),
         ["zlib", "pkgconfig(libressl)"]
     );
-    let phases = evaluated.package.phases();
+    let phases = evaluated.value.phases();
     assert_eq!(
         phases.setup.steps,
         [StepSpec::CMakeConfigure {
@@ -136,7 +141,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     );
     assert_eq!(
         evaluated
-            .package
+            .value
             .outputs
             .iter()
             .map(|output| output.name.as_str())
@@ -156,7 +161,7 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
     );
     assert_eq!(
         evaluated
-            .package
+            .value
             .outputs
             .iter()
             .map(|output| (output.name.as_str(), output.include_in_manifest))
@@ -175,18 +180,18 @@ fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
         ]
     );
     assert_eq!(
-        dependency_names(&evaluated.package.outputs[0].runtime_inputs),
+        dependency_names(&evaluated.value.outputs[0].runtime_inputs),
         ["soname(libtls.so.28)"]
     );
     assert_eq!(
-        dependency_names(&evaluated.package.outputs[9].runtime_inputs),
+        dependency_names(&evaluated.value.outputs[9].runtime_inputs),
         ["factory-hello"]
     );
-    assert_eq!(evaluated.package.architectures, ["x86_64"]);
+    assert_eq!(evaluated.value.architectures, ["x86_64"]);
     assert_eq!(PACKAGE_ABI_VERSION, 3);
     assert!(
         evaluated
-            .fingerprint
+            .identity
             .imported_modules
             .iter()
             .any(|module| module.logical_name == "cast.package.v3")
@@ -208,9 +213,9 @@ let root = b.output "out"
 "#,
     );
 
-    let evaluated = evaluate_gluon(&source).unwrap();
-    assert_eq!(evaluated.package.outputs.len(), 1);
-    assert!(evaluated.package.outputs[0].include_in_manifest);
+    let evaluated = evaluate_default_package(&source).unwrap();
+    assert_eq!(evaluated.value.outputs.len(), 1);
+    assert!(evaluated.value.outputs[0].include_in_manifest);
 }
 
 #[test]
@@ -242,9 +247,9 @@ let scripts = b.scripts {
 "#,
     );
 
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_default_package(&source).unwrap();
     assert_eq!(
-        evaluated.package.builder.phases.build.steps,
+        evaluated.value.builder.phases.build.steps,
         [
             StepSpec::Run {
                 program: ProgramSpec {
@@ -306,10 +311,10 @@ let scripts = b.scripts {{
 }}
 "#
         ));
-        let error = evaluate_gluon(&source).unwrap_err();
+        let error = evaluate_default_package(&source).unwrap_err();
         assert!(matches!(
             error,
-            PackageEvaluationError::Conversion(PackageConversionError::InvalidText { ref field, .. })
+            DeclarationEvaluationError::Conversion(PackageConversionError::InvalidText { ref field, .. })
                 if field == "builder.phases.check.steps[0].program.path"
         ));
     }
@@ -356,12 +361,12 @@ let scripts = b.scripts {{
 "#
         ));
 
-        let error = evaluate_gluon(&source).unwrap_err();
-        assert!(matches!(error, PackageEvaluationError::Conversion(_)));
+        let error = evaluate_default_package(&source).unwrap_err();
+        assert!(matches!(error, DeclarationEvaluationError::Conversion(_)));
         assert_eq!(
             match &error {
-                PackageEvaluationError::Conversion(error) => error.field(),
-                PackageEvaluationError::Evaluation(_) => unreachable!(),
+                DeclarationEvaluationError::Conversion(error) => error.field(),
+                DeclarationEvaluationError::Evaluation(_) => unreachable!(),
             },
             expected_field
         );
@@ -387,8 +392,8 @@ b.override_attrs patch base
 "#,
     );
 
-    let evaluated = evaluate_gluon(&source).unwrap();
-    assert!(evaluated.package.architectures.is_empty());
+    let evaluated = evaluate_default_package(&source).unwrap();
+    assert!(evaluated.value.architectures.is_empty());
 }
 
 #[test]
@@ -406,10 +411,10 @@ make { wrong = b.dep.binary "cmake" }
 "#,
     );
 
-    let error = evaluate_gluon(&source).unwrap_err();
+    let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
         error,
-        PackageEvaluationError::Evaluation(ref error)
+        DeclarationEvaluationError::Evaluation(ref error)
             if error.category == DiagnosticCategory::Type
     ));
 }
@@ -453,9 +458,9 @@ let root = {
 "#,
     );
 
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_default_package(&source).unwrap();
     assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
+        dependency_names(evaluated.value.builder.required_tools()),
         [
             "tool-package",
             "tool-suite-tools",
@@ -464,7 +469,7 @@ let root = {
         ]
     );
     assert_eq!(
-        dependency_names(&evaluated.package.outputs[0].runtime_inputs),
+        dependency_names(&evaluated.value.outputs[0].runtime_inputs),
         [
             "runtime-package",
             "runtime-suite-runtime",
@@ -476,7 +481,7 @@ let root = {
         ]
     );
     assert_eq!(
-        evaluated.package.outputs[0].conflicts[0]
+        evaluated.value.outputs[0].conflicts[0]
             .provider()
             .unwrap()
             .to_name(),
@@ -525,7 +530,7 @@ let base = b.mk_package (b.meta {{
 "#
         ));
 
-        assert_dependency_role_conversion_error(evaluate_gluon(&source).unwrap_err(), field, role, kind);
+        assert_dependency_role_conversion_error(evaluate_default_package(&source).unwrap_err(), field, role, kind);
     }
 }
 
@@ -559,8 +564,8 @@ let selected = b.profile_with {
 "#,
     );
 
-    let evaluated = evaluate_gluon(&source).unwrap();
-    let selected = evaluated.package.profile("emul32/x86_64").unwrap();
+    let evaluated = evaluate_default_package(&source).unwrap();
+    let selected = evaluated.value.profile("emul32/x86_64").unwrap();
     assert_eq!(
         dependency_names(selected.builder.required_tools()),
         [
@@ -603,7 +608,7 @@ let selected = b.profile_with {{
         ));
 
         assert_dependency_role_conversion_error(
-            evaluate_gluon(&source).unwrap_err(),
+            evaluate_default_package(&source).unwrap_err(),
             "profiles[0].builder.required_tools[0]",
             DependencyRole::BuilderTool,
             kind,
@@ -629,10 +634,10 @@ let root = {
 "#,
     );
 
-    let error = evaluate_gluon(&source).unwrap_err();
+    let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
         error,
-        PackageEvaluationError::Conversion(
+        DeclarationEvaluationError::Conversion(
             PackageConversionError::MissingOutputReference { ref field, .. }
         ) if field == "outputs[0].runtime_inputs[0]"
     ));
@@ -649,10 +654,10 @@ b.mk_package (b.meta {
 "#,
     );
 
-    let error = evaluate_gluon(&source).unwrap_err();
+    let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
         error,
-        PackageEvaluationError::Conversion(ref error)
+        DeclarationEvaluationError::Conversion(ref error)
             if error.field() == "meta.version"
     ));
 }
@@ -708,8 +713,8 @@ let base = b.mk_package (b.meta {{
 "#
         ));
 
-        let error = evaluate_gluon(&source).unwrap_err();
-        let PackageEvaluationError::Conversion(conversion) = &error else {
+        let error = evaluate_default_package(&source).unwrap_err();
+        let DeclarationEvaluationError::Conversion(conversion) = &error else {
             panic!("malformed source reached the wrong diagnostic layer: {error}")
         };
         assert_eq!(conversion.field(), expected_field);
@@ -735,10 +740,10 @@ b.mk_package (b.meta {{
 "#
         ));
 
-        let error = evaluate_gluon(&source).unwrap_err();
+        let error = evaluate_default_package(&source).unwrap_err();
         assert!(matches!(
             error,
-            PackageEvaluationError::Conversion(ref error) if error.field() == field
+            DeclarationEvaluationError::Conversion(ref error) if error.field() == field
         ));
     }
 }
@@ -758,10 +763,10 @@ let base = b.mk_package (b.meta {
 "#,
     );
 
-    let error = evaluate_gluon(&unsafe_profile).unwrap_err();
+    let error = evaluate_default_package(&unsafe_profile).unwrap_err();
     assert!(matches!(
         error,
-        PackageEvaluationError::Conversion(PackageConversionError::InvalidProfileName {
+        DeclarationEvaluationError::Conversion(PackageConversionError::InvalidProfileName {
             index: 0,
             ref name,
         }) if name == "emul32/../x86_64"
@@ -780,10 +785,10 @@ let base = b.mk_package (b.meta {
 "#,
     );
 
-    let error = evaluate_gluon(&duplicate_profiles).unwrap_err();
+    let error = evaluate_default_package(&duplicate_profiles).unwrap_err();
     assert!(matches!(
         error,
-        PackageEvaluationError::Conversion(PackageConversionError::DuplicateProfileName {
+        DeclarationEvaluationError::Conversion(PackageConversionError::DuplicateProfileName {
             first_index: 0,
             duplicate_index: 2,
             ref name,
@@ -809,11 +814,11 @@ let base = b.mk_package (b.meta {
 "#,
     );
 
-    let error = evaluate_gluon(&source).unwrap_err();
+    let error = evaluate_default_package(&source).unwrap_err();
 
     assert!(matches!(
         error,
-        PackageEvaluationError::Conversion(PackageConversionError::FrozenBuildNetworkingUnsupported)
+        DeclarationEvaluationError::Conversion(PackageConversionError::FrozenBuildNetworkingUnsupported)
     ));
     assert!(error.to_string().contains("locked sources"));
 }
@@ -836,10 +841,10 @@ let base = b.mk_package (b.meta {
 "#,
     );
 
-    let error = evaluate_gluon(&source).unwrap_err();
+    let error = evaluate_default_package(&source).unwrap_err();
     assert!(matches!(
         error,
-        PackageEvaluationError::Conversion(
+        DeclarationEvaluationError::Conversion(
             PackageConversionError::UnsupportedSpecialPathRule { ref field }
         ) if field == "outputs[0].paths[0]"
     ));
@@ -857,11 +862,11 @@ b.mk_package (b.meta {
 })
 "#,
     );
-    let evaluator = GluonEngine::default();
+    let evaluator = GluonPackageEvaluator::default();
 
-    let first = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
-    let repeated = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
-    let changed = evaluate_gluon_with_inputs(&evaluator, &source, b"lock-v2").unwrap();
+    let first = evaluate_package_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
+    let repeated = evaluate_package_with_inputs(&evaluator, &source, b"lock-v1").unwrap();
+    let changed = evaluate_package_with_inputs(&evaluator, &source, b"lock-v2").unwrap();
     let typed = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
         &GluonPackageEvaluator::default(),
         &source,
@@ -869,11 +874,11 @@ b.mk_package (b.meta {
     )
     .unwrap();
 
-    assert_eq!(first.package, repeated.package);
-    assert_eq!(first.fingerprint, repeated.fingerprint);
-    assert_eq!(typed.value, first.package);
-    assert_eq!(typed.identity, first.fingerprint);
-    assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
+    assert_eq!(first.value, repeated.value);
+    assert_eq!(first.identity, repeated.identity);
+    assert_eq!(typed.value, first.value);
+    assert_eq!(typed.identity, first.identity);
+    assert_ne!(first.identity.sha256, changed.identity.sha256);
 }
 
 include!("package_v3/normalized_value.rs");

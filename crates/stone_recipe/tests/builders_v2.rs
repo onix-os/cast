@@ -1,7 +1,18 @@
-use gluon_config::Source;
+use declarative_config::{DeclarationEvaluationError, DeclarationEvaluator, Evaluation, Source};
+use gluon_config::EvaluationFingerprint;
 use stone_recipe::package::{
-    BuilderEnvironmentSpec, DependencySpec, ProgramSpec, StepSpec, SupportedHooksSpec, evaluate_gluon,
+    BuilderEnvironmentSpec, DependencySpec, GluonPackageEvaluator, PackageConversionError,
+    PackageSpec, ProgramSpec, StepSpec, SupportedHooksSpec,
 };
+
+fn evaluate_package(
+    source: &Source,
+) -> Result<
+    Evaluation<PackageSpec, EvaluationFingerprint>,
+    DeclarationEvaluationError<PackageConversionError>,
+> {
+    DeclarationEvaluator::<PackageSpec>::evaluate(&GluonPackageEvaluator::default(), source)
+}
 
 fn dependency_names(dependencies: &[DependencySpec]) -> Vec<String> {
     dependencies
@@ -53,10 +64,10 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
             run_tests = b.boolean.false,
         }"#,
     );
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_package(&source).unwrap();
 
     assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
+        dependency_names(evaluated.value.builder.required_tools()),
         [
             "binary(cmake)",
             "binary(sh)",
@@ -64,9 +75,9 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
             "binary(pkgconf)",
         ]
     );
-    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::Meson]);
-    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
-    let phases = evaluated.package.phases();
+    assert_eq!(evaluated.value.builder.environment, [BuilderEnvironmentSpec::Meson]);
+    assert_eq!(evaluated.value.builder.supported_hooks, SupportedHooksSpec::all());
+    let phases = evaluated.value.phases();
     assert_eq!(
         phases.setup.steps,
         [StepSpec::MesonSetup {
@@ -78,7 +89,7 @@ fn meson_builder_returns_tools_environment_phases_and_hooks() {
     assert!(phases.check.is_empty());
     assert!(
         evaluated
-            .fingerprint
+            .identity
             .imported_modules
             .iter()
             .any(|module| module.logical_name == "cast.builders.meson.v2")
@@ -94,15 +105,15 @@ fn cmake_builder_returns_tools_environment_phases_and_hooks() {
             run_tests = b.boolean.true,
         }"#,
     );
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_package(&source).unwrap();
 
     assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
+        dependency_names(evaluated.value.builder.required_tools()),
         ["binary(sh)", "binary(ninja)"]
     );
-    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::CMake]);
-    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
-    let phases = evaluated.package.phases();
+    assert_eq!(evaluated.value.builder.environment, [BuilderEnvironmentSpec::CMake]);
+    assert_eq!(evaluated.value.builder.supported_hooks, SupportedHooksSpec::all());
+    let phases = evaluated.value.phases();
     assert_eq!(
         phases.setup.steps,
         [StepSpec::CMakeConfigure {
@@ -124,12 +135,12 @@ fn cargo_builder_declares_features_binaries_environment_and_checks() {
             run_tests = b.boolean.true,
         }"#,
     );
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_package(&source).unwrap();
 
-    assert!(evaluated.package.builder.required_tools().is_empty());
-    assert_eq!(evaluated.package.builder.environment, [BuilderEnvironmentSpec::Cargo]);
-    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
-    let phases = evaluated.package.phases();
+    assert!(evaluated.value.builder.required_tools().is_empty());
+    assert_eq!(evaluated.value.builder.environment, [BuilderEnvironmentSpec::Cargo]);
+    assert_eq!(evaluated.value.builder.supported_hooks, SupportedHooksSpec::all());
+    let phases = evaluated.value.phases();
     assert_eq!(
         phases.build.steps,
         [StepSpec::CargoBuild {
@@ -154,10 +165,10 @@ fn autotools_builder_declares_structural_phase_contract() {
             .. builder.defaults
         }"#,
     );
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_package(&source).unwrap();
 
     assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
+        dependency_names(evaluated.value.builder.required_tools()),
         [
             "binary(autoconf)",
             "binary(automake)",
@@ -168,11 +179,11 @@ fn autotools_builder_declares_structural_phase_contract() {
         ]
     );
     assert_eq!(
-        evaluated.package.builder.environment,
+        evaluated.value.builder.environment,
         [BuilderEnvironmentSpec::Autotools]
     );
-    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
-    let phases = evaluated.package.phases();
+    assert_eq!(evaluated.value.builder.supported_hooks, SupportedHooksSpec::all());
+    let phases = evaluated.value.phases();
     assert_eq!(
         phases.setup.steps,
         [StepSpec::AutotoolsConfigure {
@@ -221,15 +232,15 @@ let scripts = b.scripts {
 }
 "#,
     );
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_package(&source).unwrap();
 
     assert_eq!(
-        dependency_names(evaluated.package.builder.required_tools()),
+        dependency_names(evaluated.value.builder.required_tools()),
         ["binary(zig)"]
     );
-    assert!(evaluated.package.builder.environment.is_empty());
-    assert_eq!(evaluated.package.builder.supported_hooks, SupportedHooksSpec::all());
-    let phases = evaluated.package.phases();
+    assert!(evaluated.value.builder.environment.is_empty());
+    assert_eq!(evaluated.value.builder.supported_hooks, SupportedHooksSpec::all());
+    let phases = evaluated.value.phases();
     assert_eq!(
         phases.build.steps,
         [

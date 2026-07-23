@@ -6,7 +6,7 @@ use stone_recipe::{OptionsSpec, ToolchainSpec};
 
 #[test]
 fn normalized_package_root_matches_the_complete_owned_value() {
-    let evaluated = evaluate_gluon(&authored(
+    let evaluated = evaluate_default_package(&authored(
         r#"
 {
     meta = b.meta {
@@ -115,5 +115,5 @@ fn normalized_package_root_matches_the_complete_owned_value() {
         mold: true,
     };
 
-    assert_eq!(evaluated.package, expected);
+    assert_eq!(evaluated.value, expected);
 }

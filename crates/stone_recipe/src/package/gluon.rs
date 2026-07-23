@@ -6,7 +6,6 @@ use declarative_config::{
     LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{Diagnostic, EvaluationFingerprint, GluonEngine, Source};
-use thiserror::Error;
 
 use super::{
     BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec,
@@ -45,22 +44,6 @@ type Ordering =
 
 { Bool, Option, Result, Ordering }
 "#;
-
-/// A normalized package-v3 value returned by restricted Gluon evaluation.
-#[derive(Debug, Clone)]
-pub struct EvaluatedPackage {
-    pub package: PackageSpec,
-    pub fingerprint: EvaluationFingerprint,
-}
-
-/// Failure to evaluate or validate a package factory result.
-#[derive(Debug, Error)]
-pub enum PackageEvaluationError {
-    #[error(transparent)]
-    Evaluation(#[from] Diagnostic),
-    #[error(transparent)]
-    Conversion(#[from] PackageConversionError),
-}
 
 /// Stateful Gluon package adapter with every package ABI fixed at construction.
 ///
@@ -734,45 +717,4 @@ impl From<GluonNamedTuningSpec> for NamedTuningSpec {
             value: spec.value.into(),
         }
     }
-}
-
-/// Evaluate a v3 package with the restricted default evaluator.
-pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    evaluate_gluon_with(&GluonEngine::default(), source)
-}
-
-/// Evaluate a v3 package with caller-selected limits and source root.
-pub fn evaluate_gluon_with(
-    evaluator: &GluonEngine,
-    source: &Source,
-) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    evaluate_gluon_with_inputs(evaluator, source, &[])
-}
-
-/// Evaluate a v3 package and bind lock bytes into its fingerprint.
-pub fn evaluate_gluon_with_inputs(
-    evaluator: &GluonEngine,
-    source: &Source,
-    explicit_inputs: &[u8],
-) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    let evaluator = GluonPackageEvaluator::from_engine(evaluator.clone())?;
-    let evaluation =
-        <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
-            &evaluator,
-            source,
-            explicit_inputs,
-        )
-        .map_err(|error| match error {
-            DeclarationEvaluationError::Evaluation(error) => {
-                PackageEvaluationError::Evaluation(error)
-            }
-            DeclarationEvaluationError::Conversion(error) => {
-                PackageEvaluationError::Conversion(error)
-            }
-        })?;
-
-    Ok(EvaluatedPackage {
-        package: evaluation.value,
-        fingerprint: evaluation.identity,
-    })
 }

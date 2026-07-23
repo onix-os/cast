@@ -45,7 +45,8 @@ impl Recipe {
     /// Desired recipe value invariants are checked here
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, declaration, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
+        let (source, declaration, source_lock, fingerprint) =
+            load_recipe_declaration(&path, SourceLockPolicy::RequireCurrent)?;
 
         Self::from_loaded(path, source, declaration, source_lock, fingerprint, None)
     }
@@ -54,7 +55,8 @@ impl Recipe {
     /// environment, Git metadata, or clock fallback participates.
     pub(crate) fn load_at(path: impl AsRef<Path>, build_time: DateTime<Utc>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, declaration, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::RequireCurrent)?;
+        let (source, declaration, source_lock, fingerprint) =
+            load_recipe_declaration(&path, SourceLockPolicy::RequireCurrent)?;
         Self::from_loaded(path, source, declaration, source_lock, fingerprint, Some(build_time))
     }
 
@@ -64,7 +66,8 @@ impl Recipe {
     /// state must not prevent Cast from evaluating the authoritative source.
     pub(crate) fn load_authored(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = resolve_path(path)?;
-        let (source, declaration, source_lock, fingerprint) = load_gluon(&path, SourceLockPolicy::Ignore)?;
+        let (source, declaration, source_lock, fingerprint) =
+            load_recipe_declaration(&path, SourceLockPolicy::Ignore)?;
 
         Self::from_loaded(path, source, declaration, source_lock, fingerprint, None)
     }
@@ -160,7 +163,7 @@ enum SourceLockPolicy {
     Ignore,
 }
 
-fn load_gluon(
+fn load_recipe_declaration(
     path: &Path,
     source_lock_policy: SourceLockPolicy,
 ) -> Result<(String, PackageSpec, Option<SourceLock>, EvaluationFingerprint), Error> {
@@ -303,16 +306,16 @@ fn map_recipe_load_error(
     match error {
         LoadFixedRootDeclarationError::Read { source, .. }
         | LoadFixedRootDeclarationError::RetainSourceRoot { source, .. } => {
-            Error::LoadGluonSource(source)
+            Error::LoadRecipeSource(source)
         }
         LoadFixedRootDeclarationError::Evaluation { source, .. } => {
-            Error::EvaluateGluon(
-                stone_recipe::package::PackageEvaluationError::Evaluation(source),
+            Error::EvaluateRecipe(
+                DeclarationEvaluationError::Evaluation(source),
             )
         }
         LoadFixedRootDeclarationError::Conversion { source, .. } => {
-            Error::EvaluateGluon(
-                stone_recipe::package::PackageEvaluationError::Conversion(source),
+            Error::EvaluateRecipe(
+                DeclarationEvaluationError::Conversion(source),
             )
         }
         error => Error::LoadRecipeDeclaration(Box::new(error)),
@@ -343,7 +346,7 @@ pub enum Error {
         source: RootDeclarationSlotError,
     },
     #[error("load Gluon recipe source")]
-    LoadGluonSource(#[source] gluon_config::Diagnostic),
+    LoadRecipeSource(#[source] gluon_config::Diagnostic),
     #[error("load recipe declaration")]
     LoadRecipeDeclaration(
         #[source]
@@ -368,7 +371,7 @@ pub enum Error {
         source: Box<source_lock::ValidationError>,
     },
     #[error("evaluate Gluon recipe")]
-    EvaluateGluon(#[from] stone_recipe::package::PackageEvaluationError),
+    EvaluateRecipe(#[from] DeclarationEvaluationError<PackageConversionError>),
 }
 
 #[cfg(test)]
@@ -617,7 +620,7 @@ cast.mk_package (cast.meta {
         .unwrap();
 
         let error = Recipe::load(root.path()).unwrap_err();
-        let Error::EvaluateGluon(stone_recipe::package::PackageEvaluationError::Evaluation(diagnostic)) = error else {
+        let Error::EvaluateRecipe(DeclarationEvaluationError::Evaluation(diagnostic)) = error else {
             panic!("unexpected error: {error}");
         };
 
@@ -638,7 +641,7 @@ cast.mk_package (cast.meta {
         let error = Recipe::load(root.path()).unwrap_err();
         assert!(matches!(
             error,
-            Error::EvaluateGluon(stone_recipe::package::PackageEvaluationError::Evaluation(_))
+            Error::EvaluateRecipe(DeclarationEvaluationError::Evaluation(_))
         ));
     }
 

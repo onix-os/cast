@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use declarative_config::{DeclarationEvaluator, Source};
 use forge::package::{Flags, Meta, Name};
-use gluon_config::Source;
 use stone_recipe::UpstreamSpec;
 use stone_recipe::derivation::{JobPlan, LockedOutput, LockedOutputRef};
+use stone_recipe::package::GluonPackageEvaluator;
 
 use super::*;
 
@@ -90,7 +91,9 @@ let unrelated = cast.profile_with {
 }
 "#,
     );
-    stone_recipe::package::evaluate_gluon(&source).unwrap().package
+    DeclarationEvaluator::<PackageSpec>::evaluate(&GluonPackageEvaluator::default(), &source)
+        .unwrap()
+        .value
 }
 
 fn cmake_package_builder() -> stone_recipe::package::BuilderSpec {
@@ -105,7 +108,10 @@ let base = cast.mk_package (cast.meta {
 { builder = cmake.default, .. base }
 "#,
     );
-    stone_recipe::package::evaluate_gluon(&source).unwrap().package.builder
+    DeclarationEvaluator::<PackageSpec>::evaluate(&GluonPackageEvaluator::default(), &source)
+        .unwrap()
+        .value
+        .builder
 }
 
 fn repository_policy() -> BuildPolicySpec {

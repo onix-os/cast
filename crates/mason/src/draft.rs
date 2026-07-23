@@ -2,11 +2,14 @@
 
 use std::{io, path::PathBuf};
 
-use gluon_config::Source as GluonSource;
+use declarative_config::{DeclarationEvaluationError, DeclarationEvaluator, Source};
 use itertools::Itertools;
 use licenses::match_licences;
 use stone::relation::{Dependency, Kind};
-use stone_recipe::{UpstreamSpec, package::evaluate_gluon};
+use stone_recipe::{
+    UpstreamSpec,
+    package::{GluonPackageEvaluator, PackageConversionError, PackageSpec},
+};
 use thiserror::Error;
 use url::Url;
 
@@ -63,7 +66,11 @@ impl Drafter {
         let build_system = require_detected_build_system(build.detected_system)?;
 
         let stone = encode_package_v3(&metadata, build_system, build.dependencies, licenses)?;
-        evaluate_gluon(&GluonSource::new("stone.glu", stone.clone())).map_err(Error::GeneratedDraft)?;
+        DeclarationEvaluator::<PackageSpec>::evaluate(
+            &GluonPackageEvaluator::default(),
+            &Source::new("stone.glu", stone.clone()),
+        )
+        .map_err(Error::GeneratedDraft)?;
 
         Ok(Draft { stone })
     }
@@ -249,7 +256,7 @@ pub enum Error {
     #[error("io")]
     Io(#[from] io::Error),
     #[error("generated draft failed its bounded Gluon evaluation")]
-    GeneratedDraft(#[source] stone_recipe::package::PackageEvaluationError),
+    GeneratedDraft(#[source] DeclarationEvaluationError<PackageConversionError>),
     #[error("draft manifest contains {actual} regular files; limit is {limit}")]
     TooManyDraftFiles { actual: usize, limit: usize },
     #[error("detected build system {system} has no typed draft builder")]
@@ -261,9 +268,6 @@ pub enum Error {
 #[cfg(test)]
 mod test {
     use std::collections::BTreeSet;
-
-    use gluon_config::Source as GluonSource;
-    use stone_recipe::package::evaluate_gluon;
 
     use super::*;
 
@@ -305,12 +309,16 @@ mod test {
             include_bytes!("../../../tests/fixtures/gluon/goldens/drafted-stone.glu")
         );
 
-        let evaluated = evaluate_gluon(&GluonSource::new("stone.glu", source.clone())).unwrap();
+        let evaluated = DeclarationEvaluator::<PackageSpec>::evaluate(
+            &GluonPackageEvaluator::default(),
+            &Source::new("stone.glu", source.clone()),
+        )
+        .unwrap();
 
-        assert_eq!(evaluated.package.meta.pname, "example");
-        assert_eq!(evaluated.package.meta.version, "1.2.3");
-        assert_eq!(evaluated.package.sources.len(), 1);
-        assert!(!evaluated.package.options.networking);
+        assert_eq!(evaluated.value.meta.pname, "example");
+        assert_eq!(evaluated.value.meta.version, "1.2.3");
+        assert_eq!(evaluated.value.sources.len(), 1);
+        assert!(!evaluated.value.options.networking);
     }
 
     #[test]

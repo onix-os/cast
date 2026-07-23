@@ -8,9 +8,9 @@ use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 
 pub use self::gluon::{
-    EvaluatedPackage, GluonPackageEvaluator, GLUON_AUTOTOOLS_BUILDER_ABI, GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
-    GLUON_MESON_BUILDER_ABI, GLUON_PACKAGE_ABI, PACKAGE_ABI_VERSION, PackageEvaluationError, evaluate_gluon,
-    evaluate_gluon_with, evaluate_gluon_with_inputs,
+    GluonPackageEvaluator, GLUON_AUTOTOOLS_BUILDER_ABI,
+    GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
+    GLUON_MESON_BUILDER_ABI, GLUON_PACKAGE_ABI, PACKAGE_ABI_VERSION,
 };
 
 mod gluon;
