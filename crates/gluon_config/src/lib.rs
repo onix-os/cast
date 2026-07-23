@@ -7,14 +7,12 @@
 mod decoder;
 mod diagnostic;
 mod engine;
-mod evaluator;
 mod fingerprint;
 mod import;
 mod runtime;
 
 pub use declarative_config::{Diagnostic, DiagnosticCategory, LimitKind, Limits, Source, SourceRoot, SourceSpan};
 pub use engine::{Evaluation, GLUON_GENERATED_MARKER, GluonEngine};
-pub use evaluator::Evaluator;
 pub use fingerprint::{EvaluationFingerprint, EvaluationFingerprintValidationError, ModuleFingerprint};
 pub use import::ImportPolicy;
 

@@ -5,37 +5,27 @@ use declarative_config::{
     Evaluation as DeclarationEvaluation,
 };
 use gluon_config::{
-    Diagnostic, EvaluationFingerprint, Evaluator, GluonEngine, ImportPolicy,
-    Limits, Source,
+    EvaluationFingerprint, GluonEngine, ImportPolicy, Limits, Source,
 };
 
-fn assert_same_diagnostic(left: &Diagnostic, right: &Diagnostic) {
-    assert_eq!(left.category, right.category);
-    assert_eq!(left.limit, right.limit);
-    assert_eq!(left.source_name, right.source_name);
-    assert_eq!(left.span, right.span);
-    assert_eq!(left.message, right.message);
-}
-
 #[test]
-fn gluon_engine_and_compatibility_facade_return_the_same_v1_result() {
+fn gluon_engine_returns_a_deterministic_valid_v1_result() {
     let policy = ImportPolicy::new()
         .with_embedded_module("fixture.answer", "41")
         .unwrap();
     let source = Source::new("root.glu", "import! fixture.answer");
-    let engine = GluonEngine::default().with_import_policy(policy.clone());
-    let evaluator = Evaluator::default().with_import_policy(policy);
+    let engine = GluonEngine::default().with_import_policy(policy);
 
-    let direct = engine
+    let first = engine
         .evaluate_with_inputs::<i64>(&source, b"adapter-input-v1")
         .unwrap();
-    let compatible = evaluator
+    let repeated = engine
         .evaluate_with_inputs::<i64>(&source, b"adapter-input-v1")
         .unwrap();
 
-    assert_eq!(direct, compatible);
-    assert_eq!(direct.value, 41);
-    assert_eq!(direct.fingerprint.validate(), Ok(()));
+    assert_eq!(first, repeated);
+    assert_eq!(first.value, 41);
+    assert_eq!(first.fingerprint.validate(), Ok(()));
 }
 
 #[test]
@@ -73,15 +63,6 @@ fn typed_input_role_matches_the_inherent_gluon_v1_pipeline() {
     )
     .unwrap();
     assert_ne!(typed.identity.sha256, changed.identity.sha256);
-}
-
-#[test]
-fn gluon_engine_and_compatibility_facade_preserve_diagnostics() {
-    let source = Source::new("invalid.glu", "import! fixture.missing");
-    let direct = GluonEngine::default().evaluate::<i64>(&source).unwrap_err();
-    let compatible = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
-
-    assert_same_diagnostic(&direct, &compatible);
 }
 
 #[test]
