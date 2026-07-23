@@ -251,6 +251,12 @@ authority are deferred here.
 
 ## Maintenance
 
+- Restore workspace rustfmt cleanliness before treating the aggregate
+  `make test` gate as green. On merged `develop` at `6c324985`, `make check`
+  passed, but `make test` stopped in its `lint` prerequisite because
+  `cargo fmt --all -- --check` reported existing drift across Mason planner and
+  Stone recipe files; the test body was not entered. Do not hide that result or
+  perform an unrequested repository-wide format rewrite.
 - Resolve the existing Forge compiler warnings reported by the current Make
   gates, including unused Linux boot imports and variables plus dormant
   coordinator and test-support paths. Warning cleanup is not a blocker for the
