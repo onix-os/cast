@@ -24,7 +24,7 @@ use crate::Env;
 
 mod gluon;
 
-pub use gluon::{GLUON_PROFILE_ABI, PROFILE_ABI_VERSION, ProfileCodec};
+pub use gluon::ProfileCodec;
 
 /// A unique [`Profile`] identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Display)]
