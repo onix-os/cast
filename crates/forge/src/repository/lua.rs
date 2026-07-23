@@ -17,8 +17,10 @@ use super::Map;
 use crate::repository::RepositoryConversionError;
 use crate::system_model::spec::{RepositorySourceSpec, RepositorySpec};
 
+/// The Lua encoding of a [`RepositorySpec`]. Shared with the system-model
+/// adapter, which embeds the same repository records.
 #[derive(Debug, Clone, Deserialize)]
-struct LuaRepositorySpec {
+pub(crate) struct LuaRepositorySpec {
     id: String,
     description: LuaOption<String>,
     source: LuaRepositorySourceSpec,
@@ -28,7 +30,7 @@ struct LuaRepositorySpec {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum LuaRepositorySourceSpec {
+pub(crate) enum LuaRepositorySourceSpec {
     DirectIndex {
         uri: String,
     },

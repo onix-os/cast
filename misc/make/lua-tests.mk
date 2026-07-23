@@ -31,6 +31,7 @@ lua-domain-parity-test:
 	@$(CARGO) test -p triggers --lib "lua::" -- --test-threads=1
 	@$(CARGO) test -p mason --lib "profile::lua::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "repository::lua::" -- --test-threads=1
+	@$(CARGO) test -p forge --lib "system_model::lua::" -- --test-threads=1
 
 # Phase L8: release-built Lua execution parity. `make build` alone is not
 # execution.
