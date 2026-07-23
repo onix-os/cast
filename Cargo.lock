@@ -4231,7 +4231,7 @@ dependencies = [
 
 [[package]]
 name = "vfs"
-version = "0.1.0"
+version = "0.26.6"
 dependencies = [
  "astr",
  "derive_more",
