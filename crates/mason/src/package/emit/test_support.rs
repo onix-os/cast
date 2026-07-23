@@ -38,7 +38,7 @@ pub(crate) fn set_test_compiler_cache(plan: &mut stone_recipe::derivation::Deriv
 
 #[cfg(test)]
 fn test_evaluation(logical_name: &str, source: &str, explicit_inputs: &[u8]) -> gluon_config::EvaluationFingerprint {
-    gluon_config::Evaluator::default()
+    gluon_config::GluonEngine::default()
         .evaluate_with_inputs::<i64>(&gluon_config::Source::new(logical_name, source), explicit_inputs)
         .expect("test provenance must be a real restricted evaluation")
         .fingerprint

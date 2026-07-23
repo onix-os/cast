@@ -2,7 +2,7 @@ use std::{env, path::Path, process::Command, time::Duration};
 
 use fs_err as fs;
 use gluon_config::{
-    Diagnostic, DiagnosticCategory, Evaluator, ImportPolicy, LimitKind, Limits, Source, SourceRoot, SourceSpan,
+    Diagnostic, DiagnosticCategory, GluonEngine, ImportPolicy, LimitKind, Limits, Source, SourceRoot, SourceSpan,
 };
 
 #[derive(Debug, PartialEq, Eq, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -14,7 +14,7 @@ struct LiteralRecord {
 #[test]
 fn evaluates_a_typed_record_literal() {
     let source = Source::new("literal.glu", r#"{ name = "declarative", generation = 1 }"#);
-    let evaluation = Evaluator::default().evaluate::<LiteralRecord>(&source).unwrap();
+    let evaluation = GluonEngine::default().evaluate::<LiteralRecord>(&source).unwrap();
 
     assert_eq!(
         evaluation.value,
@@ -31,7 +31,7 @@ fn evaluates_a_typed_record_literal() {
 
 #[test]
 fn root_logical_name_participates_in_the_evaluation_identity() {
-    let evaluator = Evaluator::default();
+    let evaluator = GluonEngine::default();
     let first = evaluator.evaluate::<i64>(&Source::new("first.glu", "42")).unwrap();
     let renamed = evaluator.evaluate::<i64>(&Source::new("renamed.glu", "42")).unwrap();
 
@@ -52,12 +52,12 @@ fn pure_array_primitives_are_explicit_and_fingerprinted() {
         r#"let array = import! std.array.prim
 array.append ["one"] ["two"]"#,
     );
-    let denied = Evaluator::default().evaluate::<Vec<String>>(&source).unwrap_err();
+    let denied = GluonEngine::default().evaluate::<Vec<String>>(&source).unwrap_err();
     assert_eq!(denied.category, DiagnosticCategory::Import);
 
     let mut policy = ImportPolicy::new();
     policy.enable_array_primitives();
-    let evaluated = Evaluator::default()
+    let evaluated = GluonEngine::default()
         .with_import_policy(policy)
         .evaluate::<Vec<String>>(&source)
         .unwrap();
@@ -81,7 +81,7 @@ array.append ["one"] ["two"]"#,
     );
     let mut builtin_only = ImportPolicy::new();
     builtin_only.enable_array_primitives();
-    let expected = Evaluator::default()
+    let expected = GluonEngine::default()
         .with_import_policy(builtin_only)
         .evaluate::<Vec<String>>(&source)
         .unwrap();
@@ -99,7 +99,7 @@ array.append ["one"] ["two"]"#,
         .unwrap();
 
     for policy in [source_then_builtin, builtin_then_source] {
-        let evaluated = Evaluator::default()
+        let evaluated = GluonEngine::default()
             .with_import_policy(policy)
             .evaluate::<Vec<String>>(&source)
             .unwrap();
@@ -118,7 +118,7 @@ second.append ["one"] ["two"]"#,
     );
     let mut policy = ImportPolicy::new();
     policy.enable_array_primitives();
-    let evaluated = Evaluator::new(Limits {
+    let evaluated = GluonEngine::new(Limits {
         max_imports: 1,
         ..Limits::default()
     })
@@ -132,7 +132,7 @@ second.append ["one"] ["two"]"#,
 
 #[test]
 fn fingerprints_source_and_explicit_inputs() {
-    let evaluator = Evaluator::default();
+    let evaluator = GluonEngine::default();
     let source = Source::new("literal.glu", "42");
     let first = evaluator.evaluate_with_inputs::<i64>(&source, b"first").unwrap();
     let repeated = evaluator.evaluate_with_inputs::<i64>(&source, b"first").unwrap();
@@ -148,7 +148,7 @@ fn explicit_evaluation_inputs_are_bounded_before_fingerprinting() {
         max_explicit_input_bytes: 2,
         ..Limits::default()
     };
-    let evaluator = Evaluator::new(limits);
+    let evaluator = GluonEngine::new(limits);
     let source = Source::new("explicit-inputs.glu", "42");
 
     assert_eq!(evaluator.evaluate_with_inputs::<i64>(&source, b"12").unwrap().value, 42);
@@ -164,7 +164,7 @@ fn source_root_loads_only_contained_root_files() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("config.glu"), r#""rooted""#).unwrap();
     let root = SourceRoot::new(directory.path()).unwrap();
-    let evaluator = Evaluator::default().with_source_root(root);
+    let evaluator = GluonEngine::default().with_source_root(root);
 
     assert_eq!(evaluator.evaluate_file::<String>("config.glu").unwrap().value, "rooted");
     assert!(evaluator.evaluate_file::<String>("../config.glu").is_err());
@@ -182,7 +182,7 @@ fn host_and_nondeterministic_modules_are_denied() {
         "std.time",
     ] {
         let source = Source::new(format!("deny-{module}.glu"), format!("let _ = import! {module} in 0"));
-        let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
+        let error = GluonEngine::default().evaluate::<i64>(&source).unwrap_err();
         assert_eq!(error.category, DiagnosticCategory::Import, "{module}: {error}");
         assert!(error.message.contains(module), "{module}: {error}");
     }
@@ -191,7 +191,7 @@ fn host_and_nondeterministic_modules_are_denied() {
 #[test]
 fn arbitrary_and_ambient_imports_are_closed() {
     let source = Source::new("ambient.glu", "let _ = import! local.module in 0");
-    let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
+    let error = GluonEngine::default().evaluate::<i64>(&source).unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Import);
     assert!(error.message.contains("local.module"));
@@ -204,7 +204,7 @@ fn recursive_evaluation_is_interrupted_by_the_watchdog() {
         ..Limits::default()
     };
     let source = Source::new("recursive.glu", "rec let loop value = loop value\nloop 0");
-    let error = Evaluator::new(limits).evaluate::<i64>(&source).unwrap_err();
+    let error = GluonEngine::new(limits).evaluate::<i64>(&source).unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Limit);
     assert_eq!(error.limit, Some(LimitKind::Time));
@@ -220,7 +220,7 @@ fn zero_timeout_wins_before_import_discovery_and_parsing() {
     // before the old run_expr-only watchdog was even started.
     let source = Source::new("malformed.glu", "let x = in import! \"missing.glu\"");
 
-    let error = Evaluator::new(limits).evaluate::<i64>(&source).unwrap_err();
+    let error = GluonEngine::new(limits).evaluate::<i64>(&source).unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Limit);
     assert_eq!(error.limit, Some(LimitKind::Time));
@@ -235,7 +235,7 @@ fn evaluate_file_uses_one_deadline_for_loading_and_evaluation() {
         timeout: Duration::ZERO,
         ..Limits::default()
     };
-    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+    let evaluator = GluonEngine::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
 
     let error = evaluator.evaluate_file::<i64>("config.glu").unwrap_err();
 
@@ -251,7 +251,7 @@ fn memory_exhaustion_is_a_structured_limit_error() {
         ..Limits::default()
     };
     let source = Source::new("memory.glu", "[1, 2, 3, 4]");
-    let error = Evaluator::new(limits).evaluate::<Vec<i64>>(&source).unwrap_err();
+    let error = GluonEngine::new(limits).evaluate::<Vec<i64>>(&source).unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Limit);
     assert_eq!(error.limit, Some(LimitKind::Memory));
@@ -260,7 +260,7 @@ fn memory_exhaustion_is_a_structured_limit_error() {
 #[test]
 fn malformed_programs_have_a_source_span() {
     let source = Source::new("malformed.glu", "let x = in x");
-    let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
+    let error = GluonEngine::default().evaluate::<i64>(&source).unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Parse);
     assert_eq!(error.source_name.as_deref(), Some("malformed.glu"));
@@ -270,7 +270,7 @@ fn malformed_programs_have_a_source_span() {
 #[test]
 fn ill_typed_programs_have_a_source_span() {
     let source = Source::new("ill-typed.glu", r#""not an integer""#);
-    let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
+    let error = GluonEngine::default().evaluate::<i64>(&source).unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Type);
     assert_eq!(error.source_name.as_deref(), Some("ill-typed.glu"));
@@ -283,7 +283,7 @@ fn source_size_is_checked_before_evaluation() {
         max_source_bytes: 2,
         ..Limits::default()
     };
-    let error = Evaluator::new(limits)
+    let error = GluonEngine::new(limits)
         .evaluate::<i64>(&Source::new("large.glu", "123"))
         .unwrap_err();
 
@@ -335,7 +335,7 @@ fn evaluates_an_explicit_embedded_module() {
     let policy = ImportPolicy::new().with_embedded_module("cast.answer", "42").unwrap();
     let source = Source::new("root.glu", "let answer = import! cast.answer\nanswer");
 
-    let evaluation = Evaluator::default()
+    let evaluation = GluonEngine::default()
         .with_import_policy(policy)
         .evaluate::<i64>(&source)
         .unwrap();
@@ -355,7 +355,7 @@ fn embedded_module_size_is_bounded_before_evaluation() {
 
     let exact = ImportPolicy::new().with_embedded_module("cast.answer", "42").unwrap();
     assert_eq!(
-        Evaluator::new(limits)
+        GluonEngine::new(limits)
             .with_import_policy(exact)
             .evaluate::<i64>(&source)
             .unwrap()
@@ -364,7 +364,7 @@ fn embedded_module_size_is_bounded_before_evaluation() {
     );
 
     let oversized = ImportPolicy::new().with_embedded_module("cast.answer", "420").unwrap();
-    let error = Evaluator::new(limits)
+    let error = GluonEngine::new(limits)
         .with_import_policy(oversized)
         .evaluate::<i64>(&source)
         .unwrap_err();
@@ -378,7 +378,7 @@ fn duplicate_embedded_module_is_rejected_without_replacing_the_first() {
     let mut policy = ImportPolicy::new();
     policy.insert_embedded_module("cast.value", "41").unwrap();
     let error = policy.insert_embedded_module("cast.value", "42").unwrap_err();
-    let evaluation = Evaluator::default()
+    let evaluation = GluonEngine::default()
         .with_import_policy(policy)
         .evaluate::<i64>(&Source::new("root.glu", "import! cast.value"))
         .unwrap();
@@ -414,7 +414,7 @@ fn parent_traversal_and_absolute_imports_are_rejected() {
 
 #[test]
 fn graph_policy_rejections_precede_relative_path_normalization() {
-    let missing_root = Evaluator::default()
+    let missing_root = GluonEngine::default()
         .evaluate::<i64>(&Source::new("root.glu", "import! \"../invalid.glu\""))
         .unwrap_err();
     assert!(missing_root.message.contains("explicit SourceRoot"));
@@ -424,7 +424,7 @@ fn graph_policy_rejections_precede_relative_path_normalization() {
     let policy = ImportPolicy::new()
         .with_embedded_module("cast.parent", "import! \"../invalid.glu\"")
         .unwrap();
-    let embedded = Evaluator::default()
+    let embedded = GluonEngine::default()
         .with_source_root(SourceRoot::new(directory.path()).unwrap())
         .with_import_policy(policy)
         .evaluate::<i64>(&Source::new("root.glu", "import! cast.parent"))
@@ -439,7 +439,7 @@ fn graph_policy_rejections_precede_relative_path_normalization() {
 fn earlier_import_limit_wins_over_a_later_invalid_import_shape() {
     let directory = tempfile::tempdir().unwrap();
     fs::write(directory.path().join("large.glu"), "123").unwrap();
-    let evaluator = Evaluator::new(Limits {
+    let evaluator = GluonEngine::new(Limits {
         max_imported_file_bytes: 2,
         ..Limits::default()
     })
@@ -485,7 +485,7 @@ fn ambient_current_directory_is_not_an_import_root() {
         .join("answer.glu");
     let source = Source::new("root.glu", format!("import! {:?}", portable_path(&relative)));
 
-    let error = Evaluator::default().evaluate::<i64>(&source).unwrap_err();
+    let error = GluonEngine::default().evaluate::<i64>(&source).unwrap_err();
 
     assert_eq!(error.category, DiagnosticCategory::Import);
     assert!(error.message.contains("explicit SourceRoot"));
@@ -500,7 +500,7 @@ fn gluon_path_does_not_affect_import_resolution() {
     // never reads it, so concurrent evaluator tests are unaffected.
     unsafe { env::set_var("GLUON_PATH", directory.path()) };
 
-    let result = Evaluator::default().evaluate::<i64>(&Source::new("root.glu", "import! \"ambient.glu\""));
+    let result = GluonEngine::default().evaluate::<i64>(&Source::new("root.glu", "import! \"ambient.glu\""));
 
     // SAFETY: Restore the process environment to its pre-test value.
     unsafe {
@@ -522,7 +522,7 @@ fn imported_file_size_is_bounded() {
         max_imported_file_bytes: 2,
         ..Limits::default()
     };
-    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+    let evaluator = GluonEngine::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
 
     let error = evaluator
         .evaluate::<i64>(&Source::new("root.glu", "import! \"large.glu\""))
@@ -541,7 +541,7 @@ fn import_count_is_bounded() {
         max_imports: 1,
         ..Limits::default()
     };
-    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+    let evaluator = GluonEngine::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
     let source = Source::new(
         "root.glu",
         "let one = import! \"one.glu\"\nlet two = import! \"two.glu\"\none + two",
@@ -562,7 +562,7 @@ fn total_import_graph_size_is_bounded() {
         max_import_graph_bytes: root_text.len() + 1,
         ..Limits::default()
     };
-    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+    let evaluator = GluonEngine::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
 
     let error = evaluator
         .evaluate::<i64>(&Source::new("root.glu", root_text))
@@ -628,8 +628,8 @@ fn symlink_imports_are_rejected_instead_of_becoming_aliases() {
     assert!(error.message.contains("cannot be loaded"));
 }
 
-fn rooted_evaluator(path: &Path) -> Evaluator {
-    Evaluator::default().with_source_root(SourceRoot::new(path).unwrap())
+fn rooted_evaluator(path: &Path) -> GluonEngine {
+    GluonEngine::default().with_source_root(SourceRoot::new(path).unwrap())
 }
 
 fn portable_path(path: &Path) -> String {
@@ -733,7 +733,7 @@ fn fingerprint_v1_process_probe() {
     let policy = ImportPolicy::new()
         .with_embedded_module("cast.answer", "41")
         .unwrap();
-    let evaluation = Evaluator::default()
+    let evaluation = GluonEngine::default()
         .with_import_policy(policy)
         .evaluate_with_inputs::<i64>(
             &Source::new("process-root.glu", "import! cast.answer"),
@@ -764,7 +764,7 @@ fn current_import_cycles_are_deduplicated_before_gluon_rejects_them() {
         max_imports: 2,
         ..Limits::default()
     };
-    let evaluator = Evaluator::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
+    let evaluator = GluonEngine::new(limits).with_source_root(SourceRoot::new(directory.path()).unwrap());
     let error = evaluator
         .evaluate::<i64>(&Source::new("cycle_root.glu", "import! \"cycle_a.glu\""))
         .unwrap_err();
@@ -778,13 +778,13 @@ fn current_import_cycles_are_deduplicated_before_gluon_rejects_them() {
 
 #[test]
 fn diagnostic_envelope_matrix_is_frozen() {
-    let parse = Evaluator::default()
+    let parse = GluonEngine::default()
         .evaluate::<i64>(&Source::new("parse.glu", "let x = in x"))
         .unwrap_err();
-    let type_error = Evaluator::default()
+    let type_error = GluonEngine::default()
         .evaluate::<i64>(&Source::new("type.glu", "\"not an integer\""))
         .unwrap_err();
-    let import = Evaluator::default()
+    let import = GluonEngine::default()
         .evaluate::<i64>(&Source::new("import.glu", "import! local.missing"))
         .unwrap_err();
 
@@ -793,16 +793,16 @@ fn diagnostic_envelope_matrix_is_frozen() {
         .evaluate_file::<i64>("missing.glu")
         .unwrap_err();
 
-    let source_limit = Evaluator::new(Limits {
+    let source_limit = GluonEngine::new(Limits {
         max_source_bytes: 2,
         ..Limits::default()
     })
     .evaluate::<i64>(&Source::new("limit.glu", "123"))
     .unwrap_err();
-    let runtime = Evaluator::default()
+    let runtime = GluonEngine::default()
         .evaluate::<i64>(&Source::new("runtime.glu", "1 #Int/ 0"))
         .unwrap_err();
-    let internal = Evaluator::default()
+    let internal = GluonEngine::default()
         .evaluate_file::<i64>("missing-root.glu")
         .unwrap_err();
 

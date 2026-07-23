@@ -8,7 +8,7 @@ use std::{
 
 use forge::package::Meta;
 use fs_err as fs;
-use gluon_config::{DiagnosticCategory, Evaluator, ImportPolicy, LimitKind, Limits, SourceRoot};
+use gluon_config::{DiagnosticCategory, GluonEngine, ImportPolicy, LimitKind, Limits, SourceRoot};
 use sha2::{Digest, Sha256};
 use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType};
 use url::Url;
@@ -233,7 +233,7 @@ fn package_store() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/bootstrap-fixtures/packages"))
 }
 
-fn bootstrap_closure_evaluator(source_root: SourceRoot) -> Evaluator {
+fn bootstrap_closure_evaluator(source_root: SourceRoot) -> GluonEngine {
     let mut import_policy = ImportPolicy::new();
     import_policy.enable_array_primitives();
     let limits = Limits {
@@ -243,7 +243,7 @@ fn bootstrap_closure_evaluator(source_root: SourceRoot) -> Evaluator {
         max_import_graph_bytes: MAX_BOOTSTRAP_GLUON_IMPORT_GRAPH_BYTES,
         ..Limits::default()
     };
-    Evaluator::new(limits)
+    GluonEngine::new(limits)
         .with_source_root(source_root)
         .with_import_policy(import_policy)
 }
