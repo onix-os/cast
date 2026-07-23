@@ -1092,6 +1092,139 @@ return {
         assert_eq!(group.choices[0].name, "balanced");
     }
 
+    // A complete policy is a large authored surface; rather than hand-write
+    // ~250 lines of Lua, these Rust helpers assemble a minimal-but-complete
+    // source (the profile forbids Lua-side helper functions, so the repetition
+    // is generated here instead).
+    fn lit(value: &str) -> String {
+        format!(r#"{{ kind = "literal", value = "{value}" }}"#)
+    }
+    fn program() -> String {
+        r#"{ path = "/bin/tool", requirement = { kind = "package", value = "t" } }"#.to_owned()
+    }
+    fn command() -> String {
+        format!("{{ program = {}, args = {{}} }}", program())
+    }
+    fn builder_command() -> String {
+        format!(
+            "{{ program = {}, args = {{}}, environment = {{}}, working_dir = {} }}",
+            program(),
+            lit("/work")
+        )
+    }
+    fn flags() -> String {
+        "{ c = {}, cxx = {}, f = {}, d = {}, rust = {}, vala = {}, go = {}, ld = {} }".to_owned()
+    }
+    fn toolchain_flags() -> String {
+        format!("{{ common = {f}, gnu = {f}, llvm = {f} }}", f = flags())
+    }
+    fn compiler_tools() -> String {
+        let roles = [
+            "cc", "cxx", "objc", "objcxx", "cpp", "objcpp", "objcxxcpp", "ar", "ld", "objcopy",
+            "nm", "ranlib", "strip",
+        ];
+        let body = roles.iter().map(|r| format!("{r} = {}", command())).collect::<Vec<_>>().join(", ");
+        format!("{{ {body} }}")
+    }
+    fn tool() -> String {
+        r#"{ kind = "package", value = "t" }"#.to_owned()
+    }
+    fn standard_builder() -> String {
+        format!(
+            "{{ environment = {{}}, setup = {c}, build = {c}, install = {c}, check = {c} }}",
+            c = builder_command()
+        )
+    }
+    fn stage() -> String {
+        format!("{{ flags = {}, finish = {{ kind = \"none\" }} }}", toolchain_flags())
+    }
+
+    fn complete_policy_source() -> String {
+        let layout_fields = [
+            "prefix", "bindir", "sbindir", "includedir", "libdir", "libexecdir", "datadir",
+            "vendordir", "docdir", "infodir", "localedir", "mandir", "sysconfdir", "localstatedir",
+            "sharedstatedir", "runstatedir", "sysusersdir", "tmpfilesdir", "udevrulesdir",
+            "bash_completions_dir", "fish_completions_dir", "elvish_completions_dir",
+            "zsh_completions_dir",
+        ];
+        let layout = layout_fields
+            .iter()
+            .map(|f| format!("{f} = {}", lit(&format!("/{f}"))))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let toolchains = format!("{{ llvm = {t}, gnu = {t} }}", t = compiler_tools());
+        let toolchain_inputs = "{ llvm = {}, gnu = {} }";
+        let sandbox = r#"{
+            hostname = "builder",
+            credentials = "isolated_root",
+            filesystems = { tmp = "empty", sys = "none", dev = "minimal" },
+            guest_root = "/mason", artifacts_dir = "/a", build_dir = "/b", source_dir = "/s",
+            recipe_dir = "/r", package_dir = "/p", install_dir = "/i"
+        }"#;
+        let build_root = format!(
+            "{{ base = {{}}, toolchains = {ti}, emul32 = {{ base = {{}}, toolchains = {ti} }}, \
+             analyzer_tools = {{ pkg_config = {t}, python = {t}, \
+             llvm = {{ objcopy = {t}, strip = {t} }}, gnu = {{ objcopy = {t}, strip = {t} }} }}, \
+             compiler_cache = {{ ccache = {p}, sccache = {p}, ccache_dir = \"/c\", sccache_dir = \"/c\", \
+             go_cache_dir = \"/c\", go_mod_cache_dir = \"/c\", cargo_cache_dir = \"/c\", zig_cache_dir = \"/c\" }}, \
+             mold = {{ linker = {cmd}, flags = {f} }} }}",
+            ti = toolchain_inputs,
+            t = tool(),
+            p = program(),
+            cmd = command(),
+            f = flags(),
+        );
+        let sources = format!(
+            "{{ git = {{ create_directory = {c}, copy = {c} }} }}",
+            c = builder_command()
+        );
+        let builders = format!(
+            "{{ cmake = {b}, meson = {b}, cargo = {b}, autotools = {b} }}",
+            b = standard_builder()
+        );
+        let pgo = format!(
+            "{{ shell_interpreter = {p}, merge_program = {p}, merge_args = {{}}, copy_program = {p}, \
+             remove_program = {p}, sample = {tf}, stage_one = {s}, stage_two = {s}, use_profile = {s} }}",
+            p = program(),
+            tf = toolchain_flags(),
+            s = stage(),
+        );
+        format!(
+            "return {{\n\
+             build_subdir = \"build\",\n\
+             layout = {{ {layout} }},\n\
+             toolchains = {toolchains},\n\
+             targets = {{}},\n\
+             retired_targets = {{}},\n\
+             sandbox = {sandbox},\n\
+             build_root = {build_root},\n\
+             sources = {sources},\n\
+             tuning = {{ flags = {{}}, groups = {{}}, default_groups = {{}} }},\n\
+             environment = {{}},\n\
+             builders = {builders},\n\
+             analyzers = {{}},\n\
+             pgo = {pgo},\n\
+             }}"
+        )
+    }
+
+    #[test]
+    fn a_complete_build_policy_decodes_across_every_top_level_field() {
+        let source = complete_policy_source();
+        let policy = LuaBuildPolicyEvaluator::default()
+            .evaluate(&Source::new("build-policy.lua", &source))
+            .expect("complete policy decodes");
+
+        assert_eq!(policy.build_subdir, "build");
+        assert_eq!(policy.layout.prefix, TextSpec::Literal("/prefix".to_owned()));
+        assert_eq!(policy.toolchains.llvm.cc.program.path, "/bin/tool");
+        assert_eq!(policy.sandbox.hostname, "builder");
+        assert_eq!(policy.build_root.compiler_cache.ccache_dir, "/c");
+        assert_eq!(policy.builders.cmake.setup.program.path, "/bin/tool");
+        assert_eq!(policy.pgo.shell_interpreter.path, "/bin/tool");
+        assert!(policy.targets.is_empty());
+    }
+
     #[test]
     fn an_all_keep_build_policy_patch_decodes_to_the_default_overlay() {
         let source = r#"
