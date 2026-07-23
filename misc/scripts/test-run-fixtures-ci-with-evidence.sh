@@ -162,8 +162,9 @@ EOF
 chmod 755 "$hostile_bash_bin/bash"
 
 grep -Fq 'CAST_FIXTURE_EVIDENCE_DIR="$${CAST_FIXTURE_EVIDENCE_DIR:-$(TOP_DIR)/target/fixture-evidence}"' \
-    "$root/Makefile"
-if grep -Fq 'FIXTURE_EVIDENCE_DIR ?=' "$root/Makefile"; then
+    "$root/misc/make/execution-fixtures.mk"
+if grep -Fq 'FIXTURE_EVIDENCE_DIR ?=' "$root/Makefile" \
+    || grep -R -Fq --include='*.mk' 'FIXTURE_EVIDENCE_DIR ?=' "$root/misc/make"; then
     printf '%s\n' 'fixture evidence must not cross a Make-expanded path variable' >&2
     exit 1
 fi
