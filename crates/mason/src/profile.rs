@@ -9,7 +9,7 @@ use std::{
 };
 
 use config::{
-    Config, DecodedGluon, GluonCodec, GluonCodecError,
+    Config,
     declaration::{
         ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
         LoadManagedDeclarationError, SaveManagedDeclarationError,
@@ -22,8 +22,7 @@ use declarative_config::{
 use derive_more::{Debug, Display};
 use forge::{Repository, repository};
 use gluon_config::{
-    EvaluationFingerprint, Evaluator, GluonEngine, ImportPolicy,
-    Source as GluonSource,
+    EvaluationFingerprint, GluonEngine, ImportPolicy, Source as GluonSource,
 };
 use stone_recipe::derivation::ProfileFragmentProvenance;
 use thiserror::Error;
@@ -393,31 +392,6 @@ impl From<RepositorySpec> for forge::system_model::spec::RepositorySpec {
             priority: value.priority,
             enabled: value.enabled,
         }
-    }
-}
-
-impl GluonCodec for ProfileCodec {
-    type Config = Map;
-
-    fn decode(
-        &self,
-        evaluator: &Evaluator,
-        source: &GluonSource,
-    ) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
-        let mut policy = evaluator.import_policy().clone();
-        policy.insert_embedded_module("cast.profile.v1", GLUON_PROFILE_ABI)?;
-        let evaluator = evaluator.clone().with_import_policy(policy);
-        let evaluation = evaluator.evaluate::<Vec<GluonProfileSpec>>(source)?;
-        let fingerprint = evaluation.fingerprint;
-        let profiles = evaluation.value.into_iter().map(Into::into).collect();
-        let value = decode_specs(profiles).map_err(GluonCodecError::conversion)?;
-
-        Ok(DecodedGluon { value, fingerprint })
-    }
-
-    fn encode(&self, config: &Self::Config) -> Result<String, GluonCodecError> {
-        <Self as DeclarationCodec<Map>>::encode(self, config)
-            .map_err(GluonCodecError::conversion)
     }
 }
 

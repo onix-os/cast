@@ -6,17 +6,13 @@
 
 use std::{error::Error, fmt, fmt::Write as _};
 
-use config::{
-    DecodedGluon, GluonCodec, GluonCodecError,
-    declaration::ConfigDeclarationEvaluator,
-};
+use config::declaration::ConfigDeclarationEvaluator;
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{
-    EvaluationFingerprint, Evaluator, GluonEngine, ImportPolicy,
-    Source as GluonSource,
+    EvaluationFingerprint, GluonEngine, ImportPolicy, Source as GluonSource,
 };
 
 use super::{Map, Repository, Source};
@@ -229,31 +225,6 @@ impl From<GluonRepositorySourceSpec> for RepositorySourceSpec {
     }
 }
 
-impl GluonCodec for RepositoryCodec {
-    type Config = Map;
-
-    fn decode(
-        &self,
-        evaluator: &Evaluator,
-        source: &GluonSource,
-    ) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
-        let mut policy = evaluator.import_policy().clone();
-        policy.insert_embedded_module("cast.repository.v1", GLUON_REPOSITORY_ABI)?;
-        let evaluator = evaluator.clone().with_import_policy(policy);
-        let evaluation = evaluator.evaluate::<Vec<GluonRepositorySpec>>(source)?;
-        let fingerprint = evaluation.fingerprint;
-        let value = decode_specs(evaluation.value.into_iter().map(Into::into).collect())
-            .map_err(GluonCodecError::conversion)?;
-
-        Ok(DecodedGluon { value, fingerprint })
-    }
-
-    fn encode(&self, config: &Self::Config) -> Result<String, GluonCodecError> {
-        <Self as DeclarationCodec<Map>>::encode(self, config)
-            .map_err(GluonCodecError::conversion)
-    }
-}
-
 impl DeclarationEvaluator<Map> for RepositoryCodec {
     type Identity = EvaluationFingerprint;
     type Error = RepositoryConversionError;
@@ -442,7 +413,7 @@ mod tests {
         },
     };
     use fs_err as fs;
-    use gluon_config::{DiagnosticCategory, Evaluator};
+    use gluon_config::DiagnosticCategory;
 
     use super::*;
 
@@ -516,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_and_legacy_adapters_generate_the_same_deterministic_fragment() {
+    fn typed_adapter_generates_the_same_deterministic_fragment() {
         let source = GluonSource::new(
             "authored.glu",
             authored(
@@ -526,25 +497,20 @@ mod tests {
 ]"#,
             ),
         );
-        let evaluator = Evaluator::default();
         let codec = RepositoryCodec::default();
-        let decoded = codec.decode(&evaluator, &source).unwrap();
         let typed = <RepositoryCodec as DeclarationEvaluator<Map>>::evaluate(
             &codec, &source,
         )
         .unwrap();
-        assert_eq!(typed.identity, decoded.fingerprint);
 
-        let first = GluonCodec::encode(&codec, &decoded.value).unwrap();
-        let repeated = GluonCodec::encode(&codec, &decoded.value).unwrap();
-        let typed_encoded = DeclarationCodec::encode(&codec, &typed.value).unwrap();
+        let first = DeclarationCodec::encode(&codec, &typed.value).unwrap();
+        let repeated = DeclarationCodec::encode(&codec, &typed.value).unwrap();
         assert_eq!(first, repeated);
-        assert_eq!(typed_encoded, first);
         assert!(first.find("id = \"a-direct\"").unwrap() < first.find("id = \"z-root\"").unwrap());
         let typed_generated = format!(
             "{}{}",
             codec.language_spec().generated_marker(),
-            typed_encoded,
+            first,
         );
         assert_eq!(
             typed_generated.as_bytes(),

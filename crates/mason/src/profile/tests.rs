@@ -258,7 +258,6 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
 
 #[test]
 fn generated_save_is_deterministic_standalone_and_loadable() {
-    let evaluator = Evaluator::default();
     let codec = ProfileCodec::default();
     let source = GluonSource::new(
         "authored.glu",
@@ -272,16 +271,10 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
 ]"#,
         ),
     );
-    let decoded = codec.decode(&evaluator, &source).unwrap();
     let typed = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(&codec, &source).unwrap();
-    assert_eq!(typed.identity, decoded.fingerprint);
 
-    let first = GluonCodec::encode(&codec, &decoded.value).unwrap();
-    let repeated = GluonCodec::encode(&codec, &decoded.value).unwrap();
-    assert_eq!(
-        first,
-        <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap()
-    );
+    let first = <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
+    let repeated = <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
     assert_eq!(first, repeated);
     assert!(first.find("id = \"a-profile\"").unwrap() < first.find("id = \"z-profile\"").unwrap());
     assert!(first.find("id = \"a-direct\"").unwrap() < first.find("id = \"z-root\"").unwrap());
