@@ -5,6 +5,15 @@ use std::{error::Error, fmt, io, path::PathBuf};
 pub enum GeneratedDeclarationSlotError {
     InvalidName { name: String },
     InvalidOwnershipMarker,
+    NoRegisteredAuthorities,
+    DuplicateAuthorityExtension { extension: String },
+    ActiveAuthorityNotRegistered { extension: String },
+    ActiveAuthorityMismatch { extension: String },
+    OwnershipMarkerTooLarge {
+        extension: String,
+        size: usize,
+        limit: usize,
+    },
     InvalidTemporaryPrefix { prefix: String },
     ZeroSizeLimit,
 }
@@ -18,6 +27,29 @@ impl fmt::Display for GeneratedDeclarationSlotError {
             Self::InvalidOwnershipMarker => {
                 formatter.write_str("generated declaration ownership marker must not be empty")
             }
+            Self::NoRegisteredAuthorities => {
+                formatter.write_str("generated declaration must register at least one authority")
+            }
+            Self::DuplicateAuthorityExtension { extension } => write!(
+                formatter,
+                "generated declaration extension {extension:?} has multiple authorities",
+            ),
+            Self::ActiveAuthorityNotRegistered { extension } => write!(
+                formatter,
+                "active generated declaration extension {extension:?} is not registered",
+            ),
+            Self::ActiveAuthorityMismatch { extension } => write!(
+                formatter,
+                "active generated declaration authority for extension {extension:?} differs from its registration",
+            ),
+            Self::OwnershipMarkerTooLarge {
+                extension,
+                size,
+                limit,
+            } => write!(
+                formatter,
+                "generated declaration marker for extension {extension:?} is {size} bytes; limit is {limit} bytes",
+            ),
             Self::InvalidTemporaryPrefix { prefix } => {
                 write!(formatter, "invalid generated declaration temporary prefix {prefix:?}")
             }

@@ -17,7 +17,9 @@ mod storage_error;
 pub(crate) mod atomic_persistence;
 pub(crate) mod managed_directory;
 
-pub use generated_slot::GeneratedDeclarationSlot;
+pub use generated_slot::{
+    GeneratedDeclarationAuthority, GeneratedDeclarationSlot,
+};
 pub use evaluator_set::{
     ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
     DeclarationEvaluatorSetError, TypedDeclarationEvaluatorSet,

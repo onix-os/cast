@@ -283,6 +283,22 @@ pub(crate) fn inspect_existing_declaration(
     limit: usize,
     marker: &[u8],
 ) -> io::Result<Option<ExistingDeclaration>> {
+    inspect_existing_declaration_markers(directory, name, limit, &[marker])
+}
+
+/// Inspect one retained-directory entry against every ownership marker that
+/// can legitimately own it.
+///
+/// Public declaration paths have one marker selected by their extension. A
+/// hidden authority-switch residue has no extension, so recovery must accept
+/// the marker of any registered authority without reading the file more than
+/// once or weakening the exact-inode snapshot.
+pub(crate) fn inspect_existing_declaration_markers(
+    directory: &ManagedDirectory,
+    name: &OsStr,
+    limit: usize,
+    markers: &[&[u8]],
+) -> io::Result<Option<ExistingDeclaration>> {
     let mut file = match directory.open_at(
         name,
         libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY,
@@ -324,7 +340,7 @@ pub(crate) fn inspect_existing_declaration(
     }
     Ok(Some(ExistingDeclaration {
         identity: final_snapshot,
-        generated: bytes.starts_with(marker),
+        generated: markers.iter().any(|marker| bytes.starts_with(marker)),
     }))
 }
 

@@ -1,13 +1,25 @@
-use std::{ffi::OsString, io, path::{Component, Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    ffi::OsString,
+    io,
+    path::{Component, Path, PathBuf},
+};
 
 use declarative_config::LanguageSpec;
 use fs_err as fs;
 
 use super::{
     atomic_persistence::{
-        AtomicWrite, ExpectedTarget, require_same_generated_declaration,
+        AtomicAuthoritySwitch, AtomicWrite, AuthoritySwitchOrigin,
+        AuthoritySwitchPhase, ExpectedTarget,
+        atomic_authority_switch_with_hook,
+        require_same_generated_declaration,
+        require_same_generated_declaration_markers,
     },
-    managed_directory::{ManagedDirectory, inspect_existing_declaration},
+    managed_directory::{
+        FileSnapshot, ManagedDirectory, inspect_existing_declaration,
+        inspect_existing_declaration_markers,
+    },
     storage_error::{
         DeleteDeclarationError, GeneratedDeclarationSlotError,
         SaveDeclarationError,
@@ -16,23 +28,66 @@ use super::{
 
 const MAX_FILE_NAME_BYTES: usize = 255;
 const TEMPORARY_RANDOM_HEX_BYTES: usize = 32;
+const SWITCH_RESIDUE_SUFFIX: &str = ".generated-switch";
+
+/// One language's right to own a generated logical declaration.
+///
+/// The language descriptor selects the public extension and adapter identity.
+/// The marker is domain-specific: it proves that this logical slot, rather
+/// than merely the language runtime, generated the existing bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedDeclarationAuthority {
+    language: LanguageSpec,
+    ownership_marker: Vec<u8>,
+}
+
+impl GeneratedDeclarationAuthority {
+    pub fn new(
+        language: LanguageSpec,
+        ownership_marker: impl Into<Vec<u8>>,
+    ) -> Result<Self, GeneratedDeclarationSlotError> {
+        let ownership_marker = ownership_marker.into();
+        if ownership_marker.is_empty() {
+            return Err(GeneratedDeclarationSlotError::InvalidOwnershipMarker);
+        }
+        Ok(Self {
+            language,
+            ownership_marker,
+        })
+    }
+
+    pub fn language_spec(&self) -> &LanguageSpec {
+        &self.language
+    }
+
+    pub fn ownership_marker(&self) -> &[u8] {
+        &self.ownership_marker
+    }
+}
 
 /// Exclusive authority for one generated declaration path.
 ///
 /// Language selection and ownership are explicit. The marker is used only to
 /// distinguish generated content from authored content; it never detects a
-/// language or selects an evaluator.
+/// language or selects an evaluator. Markers are a cooperative ownership
+/// assertion, not cryptographic authentication; restart recovery applies the
+/// exact registered domain marker to the hidden switch residue as well as to
+/// each public extension.
 #[derive(Debug, Clone)]
 pub struct GeneratedDeclarationSlot {
     directory: PathBuf,
     name: String,
-    language: LanguageSpec,
-    ownership_marker: Vec<u8>,
+    authorities: BTreeMap<String, GeneratedDeclarationAuthority>,
+    active_extension: String,
     size_limit: usize,
     temporary_prefix: String,
+    switch_residue_name: OsString,
 }
 
 impl GeneratedDeclarationSlot {
+    /// Singleton convenience retained while existing Gluon-only callers move
+    /// to [`Self::with_registered_authorities`]. The registered constructor is
+    /// the authoritative implementation.
     pub fn new(
         directory: impl Into<PathBuf>,
         name: impl Into<String>,
@@ -41,17 +96,33 @@ impl GeneratedDeclarationSlot {
         size_limit: usize,
         temporary_prefix: impl Into<String>,
     ) -> Result<Self, GeneratedDeclarationSlotError> {
+        let active = GeneratedDeclarationAuthority::new(
+            language,
+            ownership_marker,
+        )?;
+        Self::with_registered_authorities(
+            directory,
+            name,
+            [active.clone()],
+            active,
+            size_limit,
+            temporary_prefix,
+        )
+    }
+
+    pub fn with_registered_authorities(
+        directory: impl Into<PathBuf>,
+        name: impl Into<String>,
+        registered_authorities: impl IntoIterator<
+            Item = GeneratedDeclarationAuthority,
+        >,
+        active_authority: GeneratedDeclarationAuthority,
+        size_limit: usize,
+        temporary_prefix: impl Into<String>,
+    ) -> Result<Self, GeneratedDeclarationSlotError> {
         let name = name.into();
-        let file_name_bytes = name
-            .len()
-            .saturating_add(1)
-            .saturating_add(language.extension().len());
-        if !is_safe_component(&name) || file_name_bytes > MAX_FILE_NAME_BYTES {
+        if !is_safe_component(&name) {
             return Err(GeneratedDeclarationSlotError::InvalidName { name });
-        }
-        let ownership_marker = ownership_marker.into();
-        if ownership_marker.is_empty() {
-            return Err(GeneratedDeclarationSlotError::InvalidOwnershipMarker);
         }
         let temporary_prefix = temporary_prefix.into();
         if !is_safe_component(&temporary_prefix)
@@ -67,18 +138,78 @@ impl GeneratedDeclarationSlot {
         if size_limit == 0 {
             return Err(GeneratedDeclarationSlotError::ZeroSizeLimit);
         }
+        let mut authorities = BTreeMap::new();
+        for authority in registered_authorities {
+            let extension = authority.language_spec().extension().to_owned();
+            let file_name_bytes = name
+                .len()
+                .saturating_add(1)
+                .saturating_add(extension.len());
+            if file_name_bytes > MAX_FILE_NAME_BYTES {
+                return Err(GeneratedDeclarationSlotError::InvalidName {
+                    name,
+                });
+            }
+            if authority.ownership_marker().len() > size_limit {
+                return Err(
+                    GeneratedDeclarationSlotError::OwnershipMarkerTooLarge {
+                        extension,
+                        size: authority.ownership_marker().len(),
+                        limit: size_limit,
+                    },
+                );
+            }
+            if authorities.insert(extension.clone(), authority).is_some() {
+                return Err(
+                    GeneratedDeclarationSlotError::DuplicateAuthorityExtension {
+                        extension,
+                    },
+                );
+            }
+        }
+        if authorities.is_empty() {
+            return Err(GeneratedDeclarationSlotError::NoRegisteredAuthorities);
+        }
+        let active_extension = active_authority
+            .language_spec()
+            .extension()
+            .to_owned();
+        match authorities.get(&active_extension) {
+            None => {
+                return Err(
+                    GeneratedDeclarationSlotError::ActiveAuthorityNotRegistered {
+                        extension: active_extension,
+                    },
+                );
+            }
+            Some(registered) if registered != &active_authority => {
+                return Err(
+                    GeneratedDeclarationSlotError::ActiveAuthorityMismatch {
+                        extension: active_extension,
+                    },
+                );
+            }
+            Some(_) => {}
+        }
+        let switch_residue_name = OsString::from(format!(
+            ".{name}{SWITCH_RESIDUE_SUFFIX}",
+        ));
+        if switch_residue_name.len() > MAX_FILE_NAME_BYTES {
+            return Err(GeneratedDeclarationSlotError::InvalidName { name });
+        }
         Ok(Self {
             directory: directory.into(),
             name,
-            language,
-            ownership_marker,
+            authorities,
+            active_extension,
             size_limit,
             temporary_prefix,
+            switch_residue_name,
         })
     }
 
     pub fn language_spec(&self) -> &LanguageSpec {
-        &self.language
+        self.active_authority().language_spec()
     }
 
     pub fn path(&self) -> PathBuf {
@@ -86,20 +217,48 @@ impl GeneratedDeclarationSlot {
     }
 
     pub fn ownership_marker(&self) -> &[u8] {
-        &self.ownership_marker
+        self.active_authority().ownership_marker()
     }
 
     pub fn save(&self, bytes: &[u8]) -> Result<PathBuf, SaveDeclarationError> {
-        self.save_with_hook(bytes, |_| {})
+        self.save_with_phase_hook(bytes, |_| Ok(()))
     }
 
+    #[cfg(test)]
     pub(crate) fn save_with_hook(
         &self,
         bytes: &[u8],
         before_commit: impl FnOnce(&Path),
     ) -> Result<PathBuf, SaveDeclarationError> {
+        let mut before_commit = Some(before_commit);
+        self.save_internal(bytes, |phase, hook_path| {
+            if phase == AuthoritySwitchPhase::BeforeCommit {
+                if let Some(before_commit) = before_commit.take() {
+                    before_commit(hook_path);
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn save_with_phase_hook(
+        &self,
+        bytes: &[u8],
+        mut phase_hook: impl FnMut(AuthoritySwitchPhase) -> io::Result<()>,
+    ) -> Result<PathBuf, SaveDeclarationError> {
+        self.save_internal(bytes, |phase, _| phase_hook(phase))
+    }
+
+    fn save_internal(
+        &self,
+        bytes: &[u8],
+        mut phase_hook: impl FnMut(
+            AuthoritySwitchPhase,
+            &Path,
+        ) -> io::Result<()>,
+    ) -> Result<PathBuf, SaveDeclarationError> {
         let path = self.path();
-        if !bytes.starts_with(&self.ownership_marker) {
+        if !bytes.starts_with(self.ownership_marker()) {
             return Err(SaveDeclarationError::MissingOwnershipMarker { path });
         }
         if bytes.len() > self.size_limit {
@@ -126,38 +285,152 @@ impl GeneratedDeclarationSlot {
                 source,
             }
         })?;
-        let file_name = self.file_name();
-        let expected = match inspect_existing_declaration(
-            &directory,
-            &file_name,
-            self.size_limit,
-            &self.ownership_marker,
-        )
-        .map_err(|source| SaveDeclarationError::ReadExisting {
-            path: path.clone(),
-            source,
-        })? {
-            None => ExpectedTarget::Missing,
-            Some(existing) if existing.is_generated() => {
-                ExpectedTarget::Generated(existing.identity())
+        let mut public = self
+            .inspect_public_candidates(&directory)
+            .map_err(|failure| SaveDeclarationError::ReadExisting {
+                path: failure.path,
+                source: failure.source,
+            })?;
+        if public.len() > 1 {
+            return Err(SaveDeclarationError::ReadExisting {
+                path: self.logical_path(),
+                source: collision_error(&public),
+            });
+        }
+        let candidate = public.pop();
+        let mut residue = self
+            .inspect_residue(&directory)
+            .map_err(|failure| SaveDeclarationError::ReadExisting {
+                path: failure.path,
+                source: failure.source,
+            })?;
+        if let Some(candidate) = &candidate {
+            if !candidate.generated {
+                return Err(SaveDeclarationError::AuthoredDeclaration {
+                    path: candidate.path.clone(),
+                });
             }
-            Some(_) => {
-                return Err(SaveDeclarationError::AuthoredDeclaration { path });
+        }
+        if let Some(existing_residue) = residue {
+            if !existing_residue.generated {
+                return Err(SaveDeclarationError::AuthoredDeclaration {
+                    path: self.switch_residue_path(),
+                });
             }
-        };
-        super::atomic_persistence::atomic_write_with_hook(
-            AtomicWrite {
-                directory: &directory,
-                file_name: &file_name,
-                path: &path,
-                bytes,
-                expected,
-                size_limit: self.size_limit,
-                ownership_marker: &self.ownership_marker,
-                temporary_prefix: &self.temporary_prefix,
-            },
-            before_commit,
-        )?;
+            if candidate.is_some() {
+                self.cleanup_residue_for_save(&directory, existing_residue)?;
+                residue = None;
+            }
+        }
+
+        let public_file_names = self.public_file_names();
+        match (candidate, residue) {
+            (Some(candidate), None) if candidate.active => {
+                let absent_file_names = public_file_names
+                    .iter()
+                    .filter(|name| **name != candidate.file_name)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                super::atomic_persistence::atomic_write_with_hook(
+                    AtomicWrite {
+                        directory: &directory,
+                        file_name: &candidate.file_name,
+                        path: &candidate.path,
+                        bytes,
+                        expected: ExpectedTarget::Generated(candidate.identity),
+                        size_limit: self.size_limit,
+                        ownership_marker: self.ownership_marker(),
+                        temporary_prefix: &self.temporary_prefix,
+                        absent_file_names: &absent_file_names,
+                    },
+                    |temporary_path| {
+                        phase_hook(
+                            AuthoritySwitchPhase::BeforeCommit,
+                            temporary_path,
+                        )
+                    },
+                )?;
+            }
+            (Some(candidate), None) => {
+                let markers = self.registered_markers();
+                let residue_path = self.switch_residue_path();
+                atomic_authority_switch_with_hook(
+                    AtomicAuthoritySwitch {
+                        directory: &directory,
+                        active_file_name: &self.file_name(),
+                        active_path: &path,
+                        bytes,
+                        active_ownership_marker: self.ownership_marker(),
+                        origin: AuthoritySwitchOrigin::Public {
+                            file_name: &candidate.file_name,
+                            path: &candidate.path,
+                            identity: candidate.identity,
+                            ownership_marker: &candidate.ownership_marker,
+                        },
+                        residue_name: &self.switch_residue_name,
+                        residue_path: &residue_path,
+                        public_file_names: &public_file_names,
+                        size_limit: self.size_limit,
+                        registered_markers: &markers,
+                        temporary_prefix: &self.temporary_prefix,
+                    },
+                    |phase| phase_hook(phase, &path),
+                )?;
+            }
+            (None, Some(residue)) => {
+                let markers = self.registered_markers();
+                let residue_path = self.switch_residue_path();
+                atomic_authority_switch_with_hook(
+                    AtomicAuthoritySwitch {
+                        directory: &directory,
+                        active_file_name: &self.file_name(),
+                        active_path: &path,
+                        bytes,
+                        active_ownership_marker: self.ownership_marker(),
+                        origin: AuthoritySwitchOrigin::Retired {
+                            identity: residue.identity,
+                        },
+                        residue_name: &self.switch_residue_name,
+                        residue_path: &residue_path,
+                        public_file_names: &public_file_names,
+                        size_limit: self.size_limit,
+                        registered_markers: &markers,
+                        temporary_prefix: &self.temporary_prefix,
+                    },
+                    |phase| phase_hook(phase, &path),
+                )?;
+            }
+            (None, None) => {
+                let file_name = self.file_name();
+                let absent_file_names = public_file_names
+                    .iter()
+                    .filter(|name| **name != file_name)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                super::atomic_persistence::atomic_write_with_hook(
+                    AtomicWrite {
+                        directory: &directory,
+                        file_name: &file_name,
+                        path: &path,
+                        bytes,
+                        expected: ExpectedTarget::Missing,
+                        size_limit: self.size_limit,
+                        ownership_marker: self.ownership_marker(),
+                        temporary_prefix: &self.temporary_prefix,
+                        absent_file_names: &absent_file_names,
+                    },
+                    |temporary_path| {
+                        phase_hook(
+                            AuthoritySwitchPhase::BeforeCommit,
+                            temporary_path,
+                        )
+                    },
+                )?;
+            }
+            (Some(_), Some(_)) => {
+                unreachable!("a public candidate causes residue recovery first")
+            }
+        }
         Ok(path)
     }
 
@@ -183,23 +456,42 @@ impl GeneratedDeclarationSlot {
                 source,
             }
         })?;
-        let file_name = self.file_name();
-        let existing = match inspect_existing_declaration(
-            &directory,
-            &file_name,
-            self.size_limit,
-            &self.ownership_marker,
-        )
-        .map_err(|source| DeleteDeclarationError::ReadExisting {
-            path: path.clone(),
-            source,
-        })? {
-            None => return Ok(()),
-            Some(existing) if existing.is_generated() => existing,
-            Some(_) => {
-                return Err(DeleteDeclarationError::AuthoredDeclaration { path });
+        let mut public = self
+            .inspect_public_candidates(&directory)
+            .map_err(|failure| DeleteDeclarationError::ReadExisting {
+                path: failure.path,
+                source: failure.source,
+            })?;
+        if public.len() > 1 {
+            return Err(DeleteDeclarationError::ReadExisting {
+                path: self.logical_path(),
+                source: collision_error(&public),
+            });
+        }
+        let candidate = public.pop();
+        let residue = self
+            .inspect_residue(&directory)
+            .map_err(|failure| DeleteDeclarationError::ReadExisting {
+                path: failure.path,
+                source: failure.source,
+            })?;
+        if candidate.is_none() && residue.is_none() {
+            return Ok(());
+        }
+        if let Some(candidate) = &candidate {
+            if !candidate.generated {
+                return Err(DeleteDeclarationError::AuthoredDeclaration {
+                    path: candidate.path.clone(),
+                });
             }
-        };
+        }
+        if let Some(residue) = residue {
+            if !residue.generated {
+                return Err(DeleteDeclarationError::AuthoredDeclaration {
+                    path: self.switch_residue_path(),
+                });
+            }
+        }
         before_remove();
         directory.verify_path().map_err(|source| {
             DeleteDeclarationError::ReadExisting {
@@ -207,23 +499,46 @@ impl GeneratedDeclarationSlot {
                 source,
             }
         })?;
-        require_same_generated_declaration(
-            &directory,
-            &file_name,
-            existing.identity(),
-            self.size_limit,
-            &self.ownership_marker,
-        )
-        .map_err(|source| DeleteDeclarationError::ReadExisting {
-            path: path.clone(),
-            source,
-        })?;
-        directory
-            .unlink(&file_name)
-            .map_err(|source| DeleteDeclarationError::Remove {
-                path: path.clone(),
+        if let Some(residue) = residue {
+            let markers = self.registered_markers();
+            let residue_path = self.switch_residue_path();
+            require_same_generated_declaration_markers(
+                &directory,
+                &self.switch_residue_name,
+                residue.identity,
+                self.size_limit,
+                &markers,
+            )
+            .map_err(|source| DeleteDeclarationError::ReadExisting {
+                path: residue_path.clone(),
                 source,
             })?;
+            directory.unlink(&self.switch_residue_name).map_err(|source| {
+                DeleteDeclarationError::Remove {
+                    path: residue_path,
+                    source,
+                }
+            })?;
+        }
+        if let Some(candidate) = candidate {
+            require_same_generated_declaration(
+                &directory,
+                &candidate.file_name,
+                candidate.identity,
+                self.size_limit,
+                &candidate.ownership_marker,
+            )
+            .map_err(|source| DeleteDeclarationError::ReadExisting {
+                path: candidate.path.clone(),
+                source,
+            })?;
+            directory.unlink(&candidate.file_name).map_err(|source| {
+                DeleteDeclarationError::Remove {
+                    path: candidate.path,
+                    source,
+                }
+            })?;
+        }
         directory
             .sync()
             .map_err(|source| DeleteDeclarationError::SyncDirectory {
@@ -239,8 +554,165 @@ impl GeneratedDeclarationSlot {
     }
 
     fn file_name(&self) -> OsString {
-        OsString::from(format!("{}.{}", self.name, self.language.extension()))
+        OsString::from(format!("{}.{}", self.name, self.active_extension))
     }
+
+    fn file_name_for(&self, extension: &str) -> OsString {
+        OsString::from(format!("{}.{}", self.name, extension))
+    }
+
+    fn public_file_names(&self) -> Vec<OsString> {
+        self.authorities
+            .keys()
+            .map(|extension| self.file_name_for(extension))
+            .collect()
+    }
+
+    fn logical_path(&self) -> PathBuf {
+        self.directory.join(&self.name)
+    }
+
+    fn switch_residue_path(&self) -> PathBuf {
+        self.directory.join(&self.switch_residue_name)
+    }
+
+    fn registered_markers(&self) -> Vec<&[u8]> {
+        self.authorities
+            .values()
+            .map(GeneratedDeclarationAuthority::ownership_marker)
+            .collect()
+    }
+
+    fn inspect_public_candidates(
+        &self,
+        directory: &ManagedDirectory,
+    ) -> Result<Vec<ExistingAuthority>, InspectionFailure> {
+        let mut candidates = Vec::new();
+        for (extension, authority) in &self.authorities {
+            let file_name = self.file_name_for(extension);
+            let path = self.directory.join(&file_name);
+            let existing = inspect_existing_declaration(
+                directory,
+                &file_name,
+                self.size_limit,
+                authority.ownership_marker(),
+            )
+            .map_err(|source| InspectionFailure {
+                path: path.clone(),
+                source,
+            })?;
+            if let Some(existing) = existing {
+                candidates.push(ExistingAuthority {
+                    file_name,
+                    path,
+                    identity: existing.identity(),
+                    generated: existing.is_generated(),
+                    active: extension == &self.active_extension,
+                    ownership_marker: authority.ownership_marker().to_vec(),
+                });
+            }
+        }
+        Ok(candidates)
+    }
+
+    fn inspect_residue(
+        &self,
+        directory: &ManagedDirectory,
+    ) -> Result<Option<ExistingResidue>, InspectionFailure> {
+        let path = self.switch_residue_path();
+        let markers = self.registered_markers();
+        inspect_existing_declaration_markers(
+            directory,
+            &self.switch_residue_name,
+            self.size_limit,
+            &markers,
+        )
+        .map(|existing| {
+            existing.map(|existing| ExistingResidue {
+                identity: existing.identity(),
+                generated: existing.is_generated(),
+            })
+        })
+        .map_err(|source| InspectionFailure { path, source })
+    }
+
+    fn cleanup_residue_for_save(
+        &self,
+        directory: &ManagedDirectory,
+        residue: ExistingResidue,
+    ) -> Result<(), SaveDeclarationError> {
+        let path = self.switch_residue_path();
+        let markers = self.registered_markers();
+        require_same_generated_declaration_markers(
+            directory,
+            &self.switch_residue_name,
+            residue.identity,
+            self.size_limit,
+            &markers,
+        )
+        .map_err(|source| SaveDeclarationError::ReadExisting {
+            path: path.clone(),
+            source,
+        })?;
+        directory.unlink(&self.switch_residue_name).map_err(|source| {
+            SaveDeclarationError::CleanupTemporary {
+                path: path.clone(),
+                source,
+            }
+        })?;
+        directory.sync().map_err(|source| {
+            SaveDeclarationError::SyncDirectory {
+                path: self.directory.clone(),
+                source,
+            }
+        })?;
+        directory.verify_path().map_err(|source| {
+            SaveDeclarationError::SyncDirectory {
+                path: self.directory.clone(),
+                source,
+            }
+        })
+    }
+
+    fn active_authority(&self) -> &GeneratedDeclarationAuthority {
+        self.authorities
+            .get(&self.active_extension)
+            .expect("active generated declaration authority was validated")
+    }
+}
+
+#[derive(Debug)]
+struct ExistingAuthority {
+    file_name: OsString,
+    path: PathBuf,
+    identity: FileSnapshot,
+    generated: bool,
+    active: bool,
+    ownership_marker: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExistingResidue {
+    identity: FileSnapshot,
+    generated: bool,
+}
+
+#[derive(Debug)]
+struct InspectionFailure {
+    path: PathBuf,
+    source: io::Error,
+}
+
+fn collision_error(candidates: &[ExistingAuthority]) -> io::Error {
+    let paths = candidates
+        .iter()
+        .map(|candidate| candidate.path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("multiple registered generated declaration candidates: {paths}"),
+    )
 }
 
 fn is_safe_component(value: &str) -> bool {
@@ -258,192 +730,4 @@ fn is_safe_component(value: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use declarative_config::{EngineId, LanguageId};
-
-    use super::*;
-
-    fn language(extension: &str) -> LanguageSpec {
-        LanguageSpec::new(
-            LanguageId::new("fixture").unwrap(),
-            EngineId::new("fixture-engine", "1").unwrap(),
-            extension,
-            "fixture-v1",
-            "# language default marker\n",
-        )
-        .unwrap()
-    }
-
-    fn slot(
-        directory: &Path,
-        name: &str,
-        marker: &str,
-    ) -> GeneratedDeclarationSlot {
-        GeneratedDeclarationSlot::new(
-            directory,
-            name,
-            language("decl"),
-            marker,
-            1024,
-            ".fixture-tmp-",
-        )
-        .unwrap()
-    }
-
-    fn temporary_names(directory: &Path) -> Vec<OsString> {
-        let mut names = fs::read_dir(directory)
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|entry| entry.file_name())
-            .filter(|name| {
-                name.to_string_lossy().starts_with(".fixture-tmp-")
-            })
-            .collect::<Vec<_>>();
-        names.sort();
-        names
-    }
-
-    #[test]
-    fn slot_preserves_exact_bytes_and_uses_explicit_language_extension() {
-        let temporary = tempfile::tempdir().unwrap();
-        let slot = slot(temporary.path(), "system", "# owned by system slot\n");
-        let bytes = b"# owned by system slot\nvalue-without-final-newline";
-
-        let path = slot.save(bytes).unwrap();
-
-        assert_eq!(path, temporary.path().join("system.decl"));
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-        assert_eq!(slot.language_spec().extension(), "decl");
-        assert_eq!(slot.ownership_marker(), b"# owned by system slot\n");
-
-        slot.delete().unwrap();
-        assert!(!path.exists());
-    }
-
-    #[test]
-    fn ownership_marker_is_slot_specific_not_a_language_detector() {
-        let temporary = tempfile::tempdir().unwrap();
-        let first = slot(temporary.path(), "snapshot", "# snapshot owner\n");
-        let competing = slot(temporary.path(), "snapshot", "# other owner\n");
-        first.save(b"# snapshot owner\nvalue").unwrap();
-
-        let error = competing.save(b"# other owner\nreplacement").unwrap_err();
-
-        assert!(matches!(
-            error,
-            SaveDeclarationError::AuthoredDeclaration { .. }
-        ));
-        assert_eq!(
-            fs::read(first.path()).unwrap(),
-            b"# snapshot owner\nvalue"
-        );
-    }
-
-    #[test]
-    fn authored_files_and_unmarked_generated_bytes_are_rejected() {
-        let temporary = tempfile::tempdir().unwrap();
-        let slot = slot(temporary.path(), "profile", "# generated profile\n");
-        fs::write(slot.path(), "authored value\n").unwrap();
-
-        assert!(matches!(
-            slot.save(b"# generated profile\nreplacement"),
-            Err(SaveDeclarationError::AuthoredDeclaration { .. })
-        ));
-        assert!(matches!(
-            slot.delete(),
-            Err(DeleteDeclarationError::AuthoredDeclaration { .. })
-        ));
-
-        fs::remove_file(slot.path()).unwrap();
-        assert!(matches!(
-            slot.save(b"missing marker"),
-            Err(SaveDeclarationError::MissingOwnershipMarker { .. })
-        ));
-    }
-
-    #[test]
-    fn absent_target_race_does_not_replace_new_authored_content() {
-        let temporary = tempfile::tempdir().unwrap();
-        let slot = slot(temporary.path(), "race", "# generated race\n");
-        let path = slot.path();
-
-        let error = slot
-            .save_with_hook(b"# generated race\nmanaged", |_| {
-                fs::write(&path, "authored during save\n").unwrap();
-            })
-            .unwrap_err();
-
-        assert!(matches!(error, SaveDeclarationError::Rename { .. }));
-        assert_eq!(fs::read_to_string(path).unwrap(), "authored during save\n");
-        assert!(temporary_names(temporary.path()).is_empty());
-    }
-
-    #[test]
-    fn replacement_race_revalidates_the_generated_target() {
-        let temporary = tempfile::tempdir().unwrap();
-        let slot = slot(temporary.path(), "race", "# generated race\n");
-        let path = slot.save(b"# generated race\nold").unwrap();
-
-        let error = slot
-            .save_with_hook(b"# generated race\nnew", |_| {
-                fs::remove_file(&path).unwrap();
-                fs::write(&path, "authored replacement\n").unwrap();
-            })
-            .unwrap_err();
-
-        assert!(matches!(error, SaveDeclarationError::ReadExisting { .. }));
-        assert_eq!(fs::read_to_string(path).unwrap(), "authored replacement\n");
-        assert!(temporary_names(temporary.path()).is_empty());
-    }
-
-    #[test]
-    fn slot_policy_rejects_unsafe_names_prefixes_markers_and_limits() {
-        let directory = tempfile::tempdir().unwrap();
-        for name in ["", ".", "..", "nested/name", "nested\\name"] {
-            assert!(matches!(
-                GeneratedDeclarationSlot::new(
-                    directory.path(),
-                    name,
-                    language("decl"),
-                    "# marker\n",
-                    1,
-                    ".tmp-",
-                ),
-                Err(GeneratedDeclarationSlotError::InvalidName { .. })
-            ));
-        }
-        assert!(matches!(
-            GeneratedDeclarationSlot::new(
-                directory.path(),
-                "safe",
-                language("decl"),
-                Vec::new(),
-                1,
-                ".tmp-",
-            ),
-            Err(GeneratedDeclarationSlotError::InvalidOwnershipMarker)
-        ));
-        assert!(matches!(
-            GeneratedDeclarationSlot::new(
-                directory.path(),
-                "safe",
-                language("decl"),
-                "# marker\n",
-                0,
-                ".tmp-",
-            ),
-            Err(GeneratedDeclarationSlotError::ZeroSizeLimit)
-        ));
-        assert!(matches!(
-            GeneratedDeclarationSlot::new(
-                directory.path(),
-                "safe",
-                language("decl"),
-                "# marker\n",
-                1,
-                "../tmp-",
-            ),
-            Err(GeneratedDeclarationSlotError::InvalidTemporaryPrefix { .. })
-        ));
-    }
-}
+mod tests;
