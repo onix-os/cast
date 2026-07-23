@@ -170,10 +170,10 @@ fn begin_common_revalidation(
     evidence.installation.revalidate_mutable_namespace()?;
     let database = require_exact_database(
         &evidence.database,
-        inspect_current_database(&evidence.record, evidence.receipt_pair, &evidence.state_db)?,
+        inspect_current_database(&evidence.record, &evidence.database.route, &evidence.state_db)?,
     )?;
     require_exact_active_state(&evidence.record, &evidence.installation, &evidence.active_state)?;
-    if !record_plan_is_exact(&evidence.record, evidence.receipt_pair) {
+    if !record_plan_is_exact(&evidence.record, &evidence.database.route) {
         return Err(super::ActiveReblitCommitCleanupAuthorityErrorKind::RouteEvidenceChanged.into());
     }
     Ok(database)
@@ -186,10 +186,12 @@ fn finish_common_revalidation(
 ) -> Result<(), ActiveReblitCommitCleanupAuthorityError> {
     let database_after = require_exact_database(
         &evidence.database,
-        inspect_current_database(&evidence.record, evidence.receipt_pair, &evidence.state_db)?,
+        inspect_current_database(&evidence.record, &evidence.database.route, &evidence.state_db)?,
     )?;
     require_exact_active_state(&evidence.record, &evidence.installation, &evidence.active_state)?;
-    if database_before != database_after || !record_plan_is_exact(&evidence.record, evidence.receipt_pair) {
+    if database_before != database_after
+        || !record_plan_is_exact(&evidence.record, &evidence.database.route)
+    {
         return Err(super::ActiveReblitCommitCleanupAuthorityErrorKind::RouteEvidenceChanged.into());
     }
     require_exact_record_binding(

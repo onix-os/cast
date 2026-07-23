@@ -13,8 +13,8 @@ use super::{ActiveReblitCommitCleanupDurableAuthority, ActiveReblitCommitCleanup
 use super::super::{
     ActiveReblitCommitCleanupAuthorityError, ActiveReblitCommitCleanupAuthorityErrorKind,
     ActiveReblitCommitCleanupCommonEvidence, ActiveReblitCommitCleanupDatabaseEvidence,
-    inspect_current_database, record_plan_is_exact, require_exact_active_state,
-    require_exact_database,
+    ActiveReblitCommitCleanupRouteEvidence, inspect_current_database, record_plan_is_exact,
+    require_exact_active_state, require_exact_database,
 };
 use crate::client::startup_reconciliation::activation_namespace::DurableActiveReblitCommitCleanupNamespace;
 
@@ -24,7 +24,6 @@ pub(in crate::client) struct ActiveReblitCommitCleanupPostAdvanceAuthority<'rese
     installation: Installation,
     state_db: db::state::Database,
     completed_record: TransitionRecord,
-    receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
     database: ActiveReblitCommitCleanupDatabaseEvidence,
     active_state: ActiveStateSnapshot,
     namespace: DurableActiveReblitCommitCleanupNamespace,
@@ -57,7 +56,7 @@ impl<'reservation> ActiveReblitCommitCleanupDurableAuthority<'reservation> {
         if !exact_cleanup_complete_successor(
             &self.evidence.record,
             successor,
-            self.evidence.receipt_pair,
+            &self.evidence.database.route,
         )? {
             return Err(ActiveReblitCommitCleanupRecordAdvanceError::UnexpectedSuccessor);
         }
@@ -67,7 +66,6 @@ impl<'reservation> ActiveReblitCommitCleanupDurableAuthority<'reservation> {
             installation,
             state_db,
             record,
-            receipt_pair,
             database,
             active_state,
             journal_record_binding,
@@ -83,7 +81,6 @@ impl<'reservation> ActiveReblitCommitCleanupDurableAuthority<'reservation> {
                 installation,
                 state_db,
                 completed_record: record,
-                receipt_pair,
                 database,
                 active_state,
                 namespace,
@@ -139,7 +136,7 @@ impl ActiveReblitCommitCleanupPostAdvanceAuthority<'_> {
         let exact = exact_cleanup_complete_successor(
             &self.completed_record,
             successor,
-            self.receipt_pair,
+            &self.database.route,
         )
         .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::Record)
         .map_err(ActiveReblitCommitCleanupAuthorityError::from)?;
@@ -154,14 +151,14 @@ impl ActiveReblitCommitCleanupPostAdvanceAuthority<'_> {
             .map_err(ActiveReblitCommitCleanupAuthorityError::from)?;
         let database_before = require_exact_database(
             &self.database,
-            inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
+            inspect_current_database(successor, &self.database.route, &self.state_db)?,
         )?;
         require_exact_active_state(successor, &self.installation, &self.active_state)?;
         self.namespace
             .revalidate(&self.installation, &self.completed_record)?;
         let database_after = require_exact_database(
             &self.database,
-            inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
+            inspect_current_database(successor, &self.database.route, &self.state_db)?,
         )?;
         require_exact_active_state(successor, &self.installation, &self.active_state)?;
         if database_before != database_after {
@@ -193,19 +190,27 @@ enum SuccessorBindingMode {
 fn exact_cleanup_complete_successor(
     completed: &TransitionRecord,
     successor: &TransitionRecord,
-    receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
+    route: &ActiveReblitCommitCleanupRouteEvidence,
 ) -> Result<bool, CodecError> {
     let completed_pair = completed.boot_publication_receipt_correlation()?;
     let successor_pair = successor.boot_publication_receipt_correlation()?;
-    Ok(record_plan_is_exact(completed, receipt_pair)
+    let route_is_preserved = match route {
+        ActiveReblitCommitCleanupRouteEvidence::PromotedBoot { pair, .. } => {
+            completed_pair == Some(*pair) && successor_pair == Some(*pair)
+        }
+        ActiveReblitCommitCleanupRouteEvidence::NoBoot { .. } => {
+            completed_pair.is_none()
+                && successor_pair.is_none()
+                && successor.generation == 12
+        }
+    };
+    Ok(record_plan_is_exact(completed, route)
         && successor.operation == Operation::ActiveReblit
         && successor.phase == Phase::CommitCleanupComplete
         && successor.rollback.is_none()
-        && successor.options.run_boot_sync
         && successor.candidate.id.is_some()
         && successor.candidate.id == successor.previous.id
-        && completed_pair == Some(receipt_pair)
-        && successor_pair == Some(receipt_pair)
+        && route_is_preserved
         && successor.generation == completed.generation.checked_add(1).unwrap_or(0)
         && successor.format == completed.format
         && successor.version == completed.version

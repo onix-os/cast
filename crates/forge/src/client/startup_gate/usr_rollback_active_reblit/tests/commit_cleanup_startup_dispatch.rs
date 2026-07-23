@@ -42,7 +42,7 @@ use super::{
     },
     commit_cleanup_effect::{
         CleanupLayout, capture_apply_pending, capture_finish_pending,
-        commit_decided_fixture,
+        commit_decided_fixture, no_boot_commit_decided_fixture,
     },
     support::{Epoch, assert_pending_phase, enter_boot},
 };
@@ -51,34 +51,63 @@ use super::{
 fn startup_cleanup_current_and_historical_apply_and_finish_persist_once() {
     for epoch in Epoch::ALL {
         for layout in [CleanupLayout::Apply, CleanupLayout::Finish] {
-            let fixture = commit_decided_fixture(epoch, layout);
-            let source = fixture.fixture.source.clone();
-            let successor = exact_cleanup_complete(&source);
-            let database_before = fixture.fixture.database_snapshot();
-            let receipt_before = exact_promoted_receipt_state(&fixture);
-            let root_abi_before = root_abi_snapshot(&fixture.fixture.installation.root);
-            reset_active_reblit_commit_cleanup_exchange_attempt_count();
+            for no_boot in [false, true] {
+                let fixture = if no_boot {
+                    no_boot_commit_decided_fixture(epoch, layout, true)
+                } else {
+                    commit_decided_fixture(epoch, layout)
+                };
+                let source = fixture.fixture.source.clone();
+                let successor = exact_cleanup_complete(&source);
+                let database_before = fixture.fixture.database_snapshot();
+                let receipt_before = fixture
+                    .fixture
+                    .database
+                    .load_current_exact_promoted_boot_publication_receipt_chain()
+                    .unwrap();
+                let root_abi_before = root_abi_snapshot(&fixture.fixture.installation.root);
+                reset_active_reblit_commit_cleanup_exchange_attempt_count();
 
-            let first = enter_boot(&fixture);
+                let first = enter_boot(&fixture);
 
-            assert_pending_phase(&first, Phase::CommitCleanupComplete);
-            assert_eq!(fixture.fixture.canonical_record(), successor);
-            assert_eq!(successor.generation, source.generation + 1);
-            assert_eq!(successor.rollback, None);
-            assert_eq!(fixture.fixture.database_snapshot(), database_before);
-            assert_eq!(exact_promoted_receipt_state(&fixture), receipt_before);
-            assert_eq!(root_abi_snapshot(&fixture.fixture.installation.root), root_abi_before);
-            let expected_attempts = usize::from(matches!(layout, CleanupLayout::Apply));
-            assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
+                assert_pending_phase(&first, Phase::CommitCleanupComplete);
+                assert_eq!(fixture.fixture.canonical_record(), successor);
+                assert_eq!(successor.generation, source.generation + 1);
+                assert_eq!(successor.rollback, None);
+                if no_boot {
+                    assert_eq!(source.generation, 11);
+                    assert_eq!(successor.generation, 12);
+                    assert_eq!(successor.boot_publication_receipts, None);
+                }
+                assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                assert_eq!(
+                    fixture
+                        .fixture
+                        .database
+                        .load_current_exact_promoted_boot_publication_receipt_chain()
+                        .unwrap(),
+                    receipt_before
+                );
+                assert_eq!(root_abi_snapshot(&fixture.fixture.installation.root), root_abi_before);
+                let expected_attempts = usize::from(matches!(layout, CleanupLayout::Apply));
+                assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
 
-            let second = enter_boot(&fixture);
+                let second = dispatch_cleanup_once(&fixture);
 
-            assert_pending_phase(&second, Phase::CommitCleanupComplete);
-            assert_eq!(fixture.fixture.canonical_record(), successor);
-            assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
-            assert_eq!(fixture.fixture.database_snapshot(), database_before);
-            assert_eq!(exact_promoted_receipt_state(&fixture), receipt_before);
-            assert_eq!(root_abi_snapshot(&fixture.fixture.installation.root), root_abi_before);
+                assert_eq!(second, successor);
+                assert_eq!(fixture.fixture.canonical_record(), successor);
+                assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
+                assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                assert_eq!(
+                    fixture
+                        .fixture
+                        .database
+                        .load_current_exact_promoted_boot_publication_receipt_chain()
+                        .unwrap(),
+                    receipt_before
+                );
+                assert_eq!(root_abi_snapshot(&fixture.fixture.installation.root), root_abi_before);
+            }
         }
     }
 }
@@ -142,9 +171,9 @@ fn startup_cleanup_all_five_journal_faults_classify_and_converge_without_second_
         );
         assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), 1);
 
-        let second = enter_boot(&fixture);
+        let second = dispatch_cleanup_once(&fixture);
 
-        assert_pending_phase(&second, Phase::CommitCleanupComplete);
+        assert_eq!(second, successor);
         assert_eq!(fixture.fixture.canonical_record(), successor);
         assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), 1);
         assert_eq!(fixture.fixture.database_snapshot(), database_before);
@@ -308,6 +337,32 @@ fn durable_cleanup<'reservation>(
         CleanupLayout::Finish => capture_finish_pending(fixture, journal, reservation),
     };
     pending.complete(journal).unwrap()
+}
+
+fn dispatch_cleanup_once(
+    fixture: &super::support::BootRepairFixture,
+) -> TransitionRecord {
+    let journal = open_boot_sync_complete_journal(fixture);
+    let record = journal
+        .load()
+        .unwrap()
+        .expect("cleanup retry requires a retained record");
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    match active_reblit_commit_cleanup::dispatch(
+        &fixture.fixture.installation,
+        &fixture.fixture.database,
+        &reservation,
+        journal,
+        record,
+    )
+    .unwrap()
+    {
+        active_reblit_commit_cleanup::Dispatch::Handled { journal, record }
+        | active_reblit_commit_cleanup::Dispatch::Unhandled { journal, record } => {
+            drop(journal);
+            record
+        }
+    }
 }
 
 fn exact_cleanup_complete(source: &TransitionRecord) -> TransitionRecord {

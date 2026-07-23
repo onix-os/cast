@@ -20,6 +20,7 @@ use super::{
         BootSyncCompleteReadOnlySnapshot, boot_sync_complete_fixture, open_boot_sync_complete_journal,
         same_byte_different_inode_hook,
     },
+    commit_cleanup_effect::{CleanupLayout as SharedCleanupLayout, no_boot_commit_decided_fixture},
     support::{BootRepairFixture, Epoch},
 };
 
@@ -87,6 +88,78 @@ fn exact_apply_and_finish_authorities_are_read_only_and_consumable() {
             assert_eq!(fixture.fixture.canonical_record(), fixture.fixture.source);
         }
     }
+}
+
+#[test]
+fn exact_system_triggered_no_boot_authorities_preserve_unrelated_receipts() {
+    for epoch in Epoch::ALL {
+        for layout in [SharedCleanupLayout::Apply, SharedCleanupLayout::Finish] {
+            for installed_receipt in [false, true] {
+                let fixture = no_boot_commit_decided_fixture(epoch, layout, installed_receipt);
+                let database_before = fixture.fixture.database_snapshot();
+                let receipt_chain_before = fixture
+                    .fixture
+                    .database
+                    .load_current_exact_promoted_boot_publication_receipt_chain()
+                    .unwrap();
+                let journal = open_boot_sync_complete_journal(&fixture);
+                let reservation = ActiveStateReservation::acquire().unwrap();
+                let admission = ActiveReblitCommitCleanupAuthority::capture(
+                    &fixture.fixture.installation,
+                    &journal,
+                    &fixture.fixture.database,
+                    &reservation,
+                    &fixture.fixture.source,
+                )
+                .unwrap();
+                match (layout, admission) {
+                    (
+                        SharedCleanupLayout::Apply,
+                        ActiveReblitCommitCleanupAdmission::Apply(authority),
+                    ) => authority.revalidate(&journal).unwrap(),
+                    (
+                        SharedCleanupLayout::Finish,
+                        ActiveReblitCommitCleanupAdmission::Finish(authority),
+                    ) => authority.revalidate(&journal).unwrap(),
+                    _ => panic!("exact no-boot cleanup layout admitted the wrong typestate"),
+                }
+                assert_eq!(fixture.fixture.source.generation, 11);
+                assert!(!fixture.fixture.source.options.run_boot_sync);
+                assert_eq!(fixture.fixture.source.boot_publication_receipts, None);
+                assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                assert_eq!(
+                    fixture
+                        .fixture
+                        .database
+                        .load_current_exact_promoted_boot_publication_receipt_chain()
+                        .unwrap(),
+                    receipt_chain_before
+                );
+            }
+        }
+    }
+
+    let fixture = no_boot_commit_decided_fixture(
+        Epoch::Current,
+        SharedCleanupLayout::Apply,
+        true,
+    );
+    let mut trigger_disabled = fixture.fixture.source.clone();
+    trigger_disabled.options.run_system_triggers = false;
+    trigger_disabled.generation = 9;
+    let journal = open_boot_sync_complete_journal(&fixture);
+    let reservation = ActiveStateReservation::acquire().unwrap();
+    assert!(matches!(
+        ActiveReblitCommitCleanupAuthority::capture(
+            &fixture.fixture.installation,
+            &journal,
+            &fixture.fixture.database,
+            &reservation,
+            &trigger_disabled,
+        )
+        .unwrap(),
+        ActiveReblitCommitCleanupAdmission::Deferred
+    ));
 }
 
 #[test]

@@ -1,6 +1,10 @@
 //! Focused one-shot effect, durability, and re-entry contracts.
 
-use std::{fs, os::unix::fs::{MetadataExt as _, PermissionsExt as _}};
+use std::{
+    fs,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+    time::{Duration, Instant},
+};
 
 use crate::client::{
     active_state_snapshot::ActiveStateReservation,
@@ -18,9 +22,13 @@ use crate::client::{
         take_active_reblit_commit_cleanup_durability_events,
     },
 };
-use crate::transition_journal::{Phase, TransitionJournalStore};
+use crate::state::TransitionId;
+use crate::transition_journal::{
+    Operation, Phase, TransitionJournalStore, encode,
+};
 
 use super::{
+    super::test_fixture::{Fixture, OperationKind, stage_test_boot_publication_receipts},
     boot_sync_complete_support::{boot_sync_complete_fixture, open_boot_sync_complete_journal},
     support::{BootRepairFixture, Epoch},
 };
@@ -39,6 +47,59 @@ pub(super) fn commit_decided_fixture(epoch: Epoch, layout: CleanupLayout) -> Boo
     journal.advance(&fixture.fixture.source, &decided).unwrap();
     drop(journal);
     fixture.fixture.source = decided;
+    if matches!(layout, CleanupLayout::Finish) {
+        exchange_cleanup_wrappers(&fixture);
+    }
+    fixture
+}
+
+pub(super) fn no_boot_commit_decided_fixture(
+    epoch: Epoch,
+    layout: CleanupLayout,
+    install_unrelated_receipt: bool,
+) -> BootRepairFixture {
+    let historical = epoch == Epoch::Historical;
+    let mut fixture = BootRepairFixture {
+        fixture: Fixture::system_trigger(
+            OperationKind::ActiveReblit,
+            Phase::SystemTriggersComplete,
+            true,
+            historical,
+        ),
+    };
+    assert_eq!(fixture.fixture.source.operation, Operation::ActiveReblit);
+    assert_eq!(fixture.fixture.source.generation, 10);
+    fixture.fixture.source.options.run_boot_sync = false;
+    fs::write(
+        fixture
+            .fixture
+            .installation
+            .root
+            .join(".cast/journal/state-transition"),
+        encode(&fixture.fixture.source).unwrap(),
+    )
+    .unwrap();
+    let decided = fixture.fixture.source.forward_successor(None).unwrap();
+    assert_eq!(decided.phase, Phase::CommitDecided);
+    assert_eq!(decided.generation, 11);
+    assert_eq!(decided.boot_publication_receipts, None);
+    let journal = open_boot_sync_complete_journal(&fixture);
+    journal.advance(&fixture.fixture.source, &decided).unwrap();
+    drop(journal);
+    fixture.fixture.source = decided;
+
+    if install_unrelated_receipt {
+        let unrelated = TransitionId::parse("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee").unwrap();
+        stage_test_boot_publication_receipts(&fixture.fixture.database, &unrelated, historical);
+        let receipt_state = fixture.fixture.database.boot_publication_receipt_state().unwrap();
+        let pending = receipt_state.pending().expect("unrelated receipt was staged");
+        fixture
+            .fixture
+            .database
+            .promote_boot_publication_receipt(pending, Instant::now() + Duration::from_secs(30))
+            .unwrap();
+    }
+
     if matches!(layout, CleanupLayout::Finish) {
         exchange_cleanup_wrappers(&fixture);
     }
@@ -200,26 +261,32 @@ fn single_exchange_report_is_never_the_semantic_outcome() {
 fn apply_and_finish_use_the_same_exact_durability_suffix() {
     for epoch in Epoch::ALL {
         for layout in [CleanupLayout::Apply, CleanupLayout::Finish] {
-            let fixture = commit_decided_fixture(epoch, layout);
-            let database_before = fixture.fixture.database_snapshot();
-            let receipt_before = fixture.fixture.database.boot_publication_receipt_state().unwrap();
-            let journal = open_boot_sync_complete_journal(&fixture);
-            let reservation = ActiveStateReservation::acquire().unwrap();
-            reset_active_reblit_commit_cleanup_exchange_attempt_count();
-            reset_active_reblit_commit_cleanup_durability_events();
-            let pending = match layout {
-                CleanupLayout::Apply => capture_apply_pending(&fixture, &journal, &reservation),
-                CleanupLayout::Finish => capture_finish_pending(&fixture, &journal, &reservation),
-            };
-            let expected_attempts = usize::from(matches!(layout, CleanupLayout::Apply));
-            assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
-            let durable = pending.complete(&journal).unwrap();
-            durable.revalidate(&journal).unwrap();
-            assert_exact_suffix(&fixture, take_active_reblit_commit_cleanup_durability_events());
-            assert_eq!(fixture.fixture.database_snapshot(), database_before);
-            assert_eq!(fixture.fixture.database.boot_publication_receipt_state().unwrap(), receipt_before);
-            assert_eq!(fixture.fixture.canonical_record(), fixture.fixture.source);
-            assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
+            for no_boot in [false, true] {
+                let fixture = if no_boot {
+                    no_boot_commit_decided_fixture(epoch, layout, true)
+                } else {
+                    commit_decided_fixture(epoch, layout)
+                };
+                let database_before = fixture.fixture.database_snapshot();
+                let receipt_before = fixture.fixture.database.boot_publication_receipt_state().unwrap();
+                let journal = open_boot_sync_complete_journal(&fixture);
+                let reservation = ActiveStateReservation::acquire().unwrap();
+                reset_active_reblit_commit_cleanup_exchange_attempt_count();
+                reset_active_reblit_commit_cleanup_durability_events();
+                let pending = match layout {
+                    CleanupLayout::Apply => capture_apply_pending(&fixture, &journal, &reservation),
+                    CleanupLayout::Finish => capture_finish_pending(&fixture, &journal, &reservation),
+                };
+                let expected_attempts = usize::from(matches!(layout, CleanupLayout::Apply));
+                assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
+                let durable = pending.complete(&journal).unwrap();
+                durable.revalidate(&journal).unwrap();
+                assert_exact_suffix(&fixture, take_active_reblit_commit_cleanup_durability_events());
+                assert_eq!(fixture.fixture.database_snapshot(), database_before);
+                assert_eq!(fixture.fixture.database.boot_publication_receipt_state().unwrap(), receipt_before);
+                assert_eq!(fixture.fixture.canonical_record(), fixture.fixture.source);
+                assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
+            }
         }
     }
 }
