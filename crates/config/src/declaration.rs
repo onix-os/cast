@@ -2,6 +2,8 @@
 
 mod generated_slot;
 mod evaluator_set;
+mod fixed_root_load_error;
+mod fixed_root_loader;
 mod fragment_set;
 mod loaded;
 mod manager;
@@ -20,6 +22,11 @@ pub use evaluator_set::{
     ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
     DeclarationEvaluatorSetError, TypedDeclarationEvaluatorSet,
 };
+pub use fixed_root_load_error::{
+    FixedRootAuthorityError, FixedRootRevalidationPhase,
+    LoadFixedRootDeclarationError,
+};
+pub use fixed_root_loader::load_fixed_root_declaration;
 pub use fragment_set::{
     DiscoveredFragmentDeclaration, FragmentDeclarationLimits,
     FragmentDeclarationSet, FragmentDeclarationSetError,
