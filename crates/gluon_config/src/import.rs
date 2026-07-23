@@ -6,8 +6,7 @@ use std::{
 
 use async_trait::async_trait;
 use declarative_config::{
-    AbiCatalog, EvaluationDeadline, ImportRequest, ModuleView, NormalizedRelative, PreparedGraph,
-    prepare_module_graph,
+    AbiCatalog, ImportRequest, ModuleView, NormalizedRelative, PreparedGraph,
 };
 use gluon::{
     Error, ModuleCompiler, RootedThread, Thread, ThreadExt,
@@ -21,10 +20,7 @@ use gluon::{
     import::{DefaultImporter, Importer},
 };
 
-use crate::{
-    Diagnostic, GLUON_VERSION, Limits, ModuleFingerprint, Source, SourceRoot,
-    diagnostic::from_gluon,
-};
+use crate::{Diagnostic, GLUON_VERSION, Source, diagnostic::from_gluon};
 
 const FORBIDDEN_MODULE_PREFIXES: &[&str] = &[
     "std.fs",
@@ -116,6 +112,10 @@ impl ImportPolicy {
             .catalog
             .insert_external(module, identity, module, fingerprint_source);
     }
+
+    pub(crate) fn catalog(&self) -> &AbiCatalog {
+        &self.catalog
+    }
 }
 
 #[derive(Debug)]
@@ -130,6 +130,10 @@ impl PreparedImports {
         }
     }
 
+    pub(crate) fn from_graph(graph: PreparedGraph) -> Self {
+        Self { graph }
+    }
+
     pub(crate) fn allowed_modules(&self) -> BTreeSet<String> {
         self.graph.allowed_modules().map(str::to_owned).collect()
     }
@@ -138,38 +142,9 @@ impl PreparedImports {
         self.graph.source_modules()
     }
 
-    pub(crate) fn fingerprints(&self) -> Vec<ModuleFingerprint> {
-        self.graph
-            .fingerprints()
-            .map(|fingerprint| ModuleFingerprint {
-                logical_name: fingerprint.logical_name.clone(),
-                sha256: fingerprint.sha256.clone(),
-            })
-            .collect()
-    }
 }
 
-pub(crate) fn prepare_imports(
-    parser_vm: &RootedThread,
-    policy: &ImportPolicy,
-    source_root: Option<&SourceRoot>,
-    limits: Limits,
-    root_source: &Source,
-    deadline: EvaluationDeadline,
-) -> Result<PreparedImports, Diagnostic> {
-    let graph = prepare_module_graph(
-        &policy.catalog,
-        source_root,
-        limits,
-        root_source,
-        deadline,
-        |module| discover_imports(parser_vm, module),
-        |requested| normalize_relative_import(policy, requested),
-    )?;
-    Ok(PreparedImports { graph })
-}
-
-fn discover_imports(
+pub(crate) fn discover_imports(
     parser_vm: &RootedThread,
     module: ModuleView<'_>,
 ) -> Result<Vec<ImportRequest>, Diagnostic> {
@@ -196,7 +171,7 @@ fn normalize_request(request: RawImportRequest) -> ImportRequest {
     }
 }
 
-fn normalize_relative_import(
+pub(crate) fn normalize_relative_import(
     policy: &ImportPolicy,
     raw_path: &str,
 ) -> Result<NormalizedRelative, String> {
