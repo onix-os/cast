@@ -18,7 +18,7 @@ use std::{
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Diagnostic,
-    LanguageSpec, Source, SourceRoot,
+    EvaluationDeadline, LanguageSpec, Source, SourceRoot,
 };
 use fs_err as fs;
 
@@ -117,6 +117,10 @@ where
         }
     })?;
 
+    // One budget spans the descriptor-rooted read and typed decode: the
+    // deadline starts immediately before the read and is handed to
+    // `evaluate_within`, so a slow read leaves less time for evaluation.
+    let deadline = EvaluationDeadline::start(evaluator.limits().timeout);
     let read = authority.source_root.load(
         declaration.relative_path(),
         evaluator.limits().max_source_bytes,
@@ -132,7 +136,7 @@ where
     );
 
     let rooted = evaluator.with_source_root(authority.source_root.clone());
-    let result = rooted.evaluate(&source);
+    let result = rooted.evaluate_within(&source, deadline);
     // Authority wins over an evaluator failure so errors cannot bypass the
     // final retained-directory and slot checks.
     authority.revalidate(FixedRootRevalidationPhase::AfterEvaluation)?;
@@ -195,6 +199,16 @@ where
         });
     }
 
+    // One budget spans candidate selection reads and typed decode: start the
+    // deadline before the first descriptor-rooted read and hand it to
+    // `evaluate_within` once a candidate is chosen.
+    let deadline = EvaluationDeadline::start(
+        evaluators
+            .get(required_language)
+            .expect("the required language is registered")
+            .limits()
+            .timeout,
+    );
     let mut candidates = Vec::new();
     let mut required_absence = None;
     for language in evaluators.languages().iter() {
@@ -263,7 +277,7 @@ where
         candidate.source.text().to_owned(),
     );
     let rooted = evaluator.with_source_root(source_root.clone());
-    let result = rooted.evaluate(&source);
+    let result = rooted.evaluate_within(&source, deadline);
     // The pinned SourceRoot remains authoritative even when evaluation fails.
     source_root.verify_retained_directories().map_err(|source| {
         LoadFixedRootDeclarationError::Revalidation {

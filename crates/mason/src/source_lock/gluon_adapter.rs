@@ -4,7 +4,7 @@ use std::{cmp::Ordering, fmt::Write as _};
 
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
+    EvaluationDeadline, Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
 use gluon_config::{EvaluationIdentity, GluonEngine};
@@ -152,16 +152,17 @@ impl DeclarationEvaluator<SourceLock> for GluonSourceLockCodec {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<SourceLock, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = self
             .engine
-            .evaluate::<GluonSourceLock>(source)
+            .evaluate_within::<GluonSourceLock>(source, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let lock = SourceLock::try_from(evaluation.value)
             .map_err(DeclarationEvaluationError::Conversion)?;

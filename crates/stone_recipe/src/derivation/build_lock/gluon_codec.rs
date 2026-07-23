@@ -2,7 +2,8 @@ use std::fmt::Write as _;
 
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+    EvaluationDeadline, Evaluation as DeclarationEvaluation, LanguageSpec,
+    Limits, SourceRoot,
 };
 use gluon_config::{EvaluationIdentity, GluonEngine, Source};
 
@@ -176,16 +177,17 @@ impl DeclarationEvaluator<BuildLock> for GluonBuildLockCodec {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildLock, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = self
             .engine
-            .evaluate::<GluonBuildLock>(source)
+            .evaluate_within::<GluonBuildLock>(source, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let mut lock = BuildLock::try_from(evaluation.value)
             .map_err(DeclarationEvaluationError::Conversion)?;

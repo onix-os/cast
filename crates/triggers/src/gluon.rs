@@ -2,8 +2,8 @@
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
-    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
-    LanguageSpec, Limits, SourceRoot,
+    DeclarationInputEvaluator, EvaluationDeadline,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{
     Diagnostic, Evaluation as GluonEvaluation, EvaluationIdentity,
@@ -194,33 +194,40 @@ impl DeclarationEvaluator<Trigger> for GluonTriggerEvaluator {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<Trigger, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        <Self as DeclarationInputEvaluator<Trigger>>::evaluate_with_inputs(
+        <Self as DeclarationInputEvaluator<Trigger>>::evaluate_with_inputs_within(
             self,
             source,
             &[],
+            deadline,
         )
     }
 }
 
 impl DeclarationInputEvaluator<Trigger> for GluonTriggerEvaluator {
-    fn evaluate_with_inputs(
+    fn evaluate_with_inputs_within(
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<Trigger, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = self
             .engine
-            .evaluate_with_inputs::<GluonTriggerSpec>(source, explicit_inputs)
+            .evaluate_with_inputs_within::<GluonTriggerSpec>(
+                source,
+                explicit_inputs,
+                deadline,
+            )
             .map_err(DeclarationEvaluationError::Evaluation)?;
         convert_evaluation(evaluation)
             .map_err(DeclarationEvaluationError::Conversion)

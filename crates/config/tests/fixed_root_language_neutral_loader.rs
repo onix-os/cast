@@ -11,7 +11,7 @@ use config::declaration::{
     load_required_fixed_root_declaration_from_source_root,
 };
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Diagnostic, EngineId,
+    DeclarationEvaluationError, DeclarationEvaluator, Diagnostic, EvaluationDeadline, EngineId,
     Evaluation, LanguageId, LanguageSpec, LimitKind, Limits, Source,
     SourceRoot,
 };
@@ -114,9 +114,10 @@ impl DeclarationEvaluator<FixtureValue> for FixtureAdapter {
         rooted
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        _deadline: EvaluationDeadline,
     ) -> Result<
         Evaluation<FixtureValue, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,

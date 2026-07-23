@@ -8,7 +8,7 @@ use config::declaration::{
     load_required_fixed_root_declaration_from_source_root,
 };
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
@@ -101,14 +101,15 @@ impl DeclarationEvaluator<PolicyRootDeclaration> for PolicyRootDeclarationEvalua
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<PolicyRootDeclaration, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        let evaluation = self.evaluator.evaluate(source)?;
+        let evaluation = self.evaluator.evaluate_within(source, deadline)?;
         let source_root = self
             .source_root
             .clone()

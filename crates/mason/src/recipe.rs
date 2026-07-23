@@ -14,7 +14,8 @@ use config::declaration::{
 };
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
-    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    DeclarationInputEvaluator, EvaluationDeadline,
+    Evaluation as DeclarationEvaluation,
     LanguageSpec, Limits, Source, SourceRoot,
 };
 use fs_err as fs;
@@ -296,17 +297,19 @@ impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<RecipeDeclaration, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        let evaluation = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs(
+        let evaluation = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs_within(
             &self.package,
             source,
             &self.explicit_inputs,
+            deadline,
         )?;
         Ok(DeclarationEvaluation {
             value: RecipeDeclaration {

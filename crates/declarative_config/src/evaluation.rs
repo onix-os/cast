@@ -29,13 +29,32 @@ pub trait DeclarationEvaluator<T> {
     where
         Self: Sized;
 
+    /// Evaluate `source` under one caller-established budget.
+    ///
+    /// This is the primitive evaluation entry point. Storage loaders start the
+    /// deadline immediately before their descriptor-rooted read and pass it in
+    /// here so the read, evaluation, and typed decode all share a single
+    /// budget; a shadowed fragment still receives its own deadline.
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        Evaluation<T, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    >;
+
+    /// Evaluate `source` under a fresh budget. Callers that already own the
+    /// source use this; it starts one deadline spanning evaluation and decode.
     fn evaluate(
         &self,
         source: &Source,
     ) -> Result<
         Evaluation<T, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
-    >;
+    > {
+        self.evaluate_within(source, EvaluationDeadline::start(self.limits().timeout))
+    }
 }
 
 /// A typed declaration boundary whose identity explicitly commits to
@@ -45,6 +64,18 @@ pub trait DeclarationEvaluator<T> {
 /// only [`DeclarationEvaluator`] and cannot accidentally acquire an ignored
 /// input parameter.
 pub trait DeclarationInputEvaluator<T>: DeclarationEvaluator<T> {
+    /// Evaluate with explicit inputs under one caller-established budget.
+    fn evaluate_with_inputs_within(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        Evaluation<T, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    >;
+
+    /// Evaluate with explicit inputs under a fresh budget.
     fn evaluate_with_inputs(
         &self,
         source: &Source,
@@ -52,7 +83,13 @@ pub trait DeclarationInputEvaluator<T>: DeclarationEvaluator<T> {
     ) -> Result<
         Evaluation<T, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
-    >;
+    > {
+        self.evaluate_with_inputs_within(
+            source,
+            explicit_inputs,
+            EvaluationDeadline::start(self.limits().timeout),
+        )
+    }
 }
 
 /// A writable declaration boundary adds canonical encoding without forcing
@@ -183,6 +220,37 @@ where
     D: TypedDecoder<E::Runtime>,
 {
     let deadline = EvaluationDeadline::start(engine.limits().timeout);
+    evaluate_with_inputs_until(engine, source, explicit_inputs, deadline, decoder)
+}
+
+/// Evaluate `source` under a caller-established `deadline`. The budget already
+/// covers any read the caller performed before this call, so the read,
+/// evaluation, and typed decode share one deadline.
+pub fn evaluate_within<E, D>(
+    engine: &E,
+    source: &Source,
+    deadline: EvaluationDeadline,
+    decoder: D,
+) -> Result<Evaluation<D::Output, E::Identity>, Diagnostic>
+where
+    E: EngineAdapter,
+    D: TypedDecoder<E::Runtime>,
+{
+    evaluate_with_inputs_until(engine, source, &[], deadline, decoder)
+}
+
+/// Evaluate with explicit inputs under a caller-established `deadline`.
+pub fn evaluate_with_inputs_within<E, D>(
+    engine: &E,
+    source: &Source,
+    explicit_inputs: &[u8],
+    deadline: EvaluationDeadline,
+    decoder: D,
+) -> Result<Evaluation<D::Output, E::Identity>, Diagnostic>
+where
+    E: EngineAdapter,
+    D: TypedDecoder<E::Runtime>,
+{
     evaluate_with_inputs_until(engine, source, explicit_inputs, deadline, decoder)
 }
 

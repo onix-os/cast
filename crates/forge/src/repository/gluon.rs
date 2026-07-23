@@ -9,7 +9,7 @@ use std::{error::Error, fmt, fmt::Write as _};
 use config::declaration::ConfigDeclarationEvaluator;
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+    EvaluationDeadline, Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{
     EvaluationIdentity, GluonEngine, ImportPolicy, Source as GluonSource,
@@ -243,16 +243,17 @@ impl DeclarationEvaluator<Map> for RepositoryCodec {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &GluonSource,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<Map, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = self
             .engine
-            .evaluate::<Vec<GluonRepositorySpec>>(source)
+            .evaluate_within::<Vec<GluonRepositorySpec>>(source, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let value = decode_specs(
             evaluation.value.into_iter().map(Into::into).collect(),

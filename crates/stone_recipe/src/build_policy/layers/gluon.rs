@@ -2,7 +2,8 @@
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
-    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    DeclarationInputEvaluator, EvaluationDeadline,
+    Evaluation as DeclarationEvaluation,
     LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
@@ -53,13 +54,18 @@ impl GluonBuildPolicyRootEvaluator {
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildPolicyRootSpec, EvaluationIdentity>,
         DeclarationEvaluationError<BuildPolicyRootConversionError>,
     > {
         let evaluation = self
             .engine
-            .evaluate_with_inputs::<GluonBuildPolicyRootSpec>(source, explicit_inputs)
+            .evaluate_with_inputs_within::<GluonBuildPolicyRootSpec>(
+                source,
+                explicit_inputs,
+                deadline,
+            )
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let root: BuildPolicyRootSpec = evaluation.value.into();
         root.validate()
@@ -153,28 +159,30 @@ impl DeclarationEvaluator<BuildPolicyRootSpec>
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildPolicyRootSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_root(source, &[])
+        self.evaluate_root(source, &[], deadline)
     }
 }
 
 impl DeclarationInputEvaluator<BuildPolicyRootSpec>
     for GluonBuildPolicyRootEvaluator
 {
-    fn evaluate_with_inputs(
+    fn evaluate_with_inputs_within(
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildPolicyRootSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_root(source, explicit_inputs)
+        self.evaluate_root(source, explicit_inputs, deadline)
     }
 }

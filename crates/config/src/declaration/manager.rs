@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, fmt, path::PathBuf};
 
 use declarative_config::{
-    DeclarationCodec, DeclarationEvaluationError, LanguageSpec,
+    DeclarationCodec, DeclarationEvaluationError, EvaluationDeadline,
+    LanguageSpec,
 };
 
 use super::{
@@ -67,6 +68,8 @@ impl Manager {
                 DeclarationRevalidationPhase::BeforeRead,
                 true,
             )?;
+            // Each fragment receives its own budget spanning read through decode.
+            let deadline = EvaluationDeadline::start(evaluator.limits().timeout);
             let source = fragment
                 .source_root()
                 .load(
@@ -89,7 +92,7 @@ impl Manager {
             )?;
 
             let rooted = evaluator.with_source_root(fragment.source_root().clone());
-            let result = rooted.evaluate(&source);
+            let result = rooted.evaluate_within(&source, deadline);
             revalidate(
                 fragment,
                 DeclarationRevalidationPhase::AfterEvaluation,

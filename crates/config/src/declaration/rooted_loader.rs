@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, os::fd::AsRawFd, path::Path};
 
-use declarative_config::DeclarationEvaluationError;
+use declarative_config::{DeclarationEvaluationError, EvaluationDeadline};
 
 use super::{
     ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
@@ -62,6 +62,8 @@ where
             RootedDeclarationRevalidationPhase::BeforeRead,
             false,
         )?;
+        // Each fragment receives its own budget spanning read through decode.
+        let deadline = EvaluationDeadline::start(evaluator.limits().timeout);
         let read = fragment.source_root().load(
             fragment.relative_path(),
             evaluator.limits().max_source_bytes,
@@ -82,7 +84,7 @@ where
             false,
         )?;
         let rooted = evaluator.with_source_root(fragment.source_root().clone());
-        let result = rooted.evaluate(&source);
+        let result = rooted.evaluate_within(&source, deadline);
         // This check deliberately runs before inspecting `result`, so an
         // evaluator error cannot bypass retained-directory revalidation.
         revalidate(

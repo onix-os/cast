@@ -4,7 +4,7 @@ use std::{error::Error, fmt};
 
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    DeclarationInputEvaluator, EngineId, Evaluation, LanguageId, LanguageSpec,
+    DeclarationInputEvaluator, EvaluationDeadline, EngineId, Evaluation, LanguageId, LanguageSpec,
     Limits, Source, SourceRoot,
 };
 
@@ -82,9 +82,10 @@ impl DeclarationEvaluator<TriggerDeclaration> for TriggerEvaluator {
         Self::new()
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        _deadline: EvaluationDeadline,
     ) -> Result<
         Evaluation<TriggerDeclaration, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
@@ -133,9 +134,10 @@ impl DeclarationEvaluator<ProfileFragment> for ProfileCodec {
         Self::new()
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        _deadline: EvaluationDeadline,
     ) -> Result<
         Evaluation<ProfileFragment, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
@@ -190,9 +192,10 @@ impl DeclarationEvaluator<InputSensitiveDeclaration> for InputSensitiveEvaluator
         Self::new()
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        _deadline: EvaluationDeadline,
     ) -> Result<
         Evaluation<InputSensitiveDeclaration, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
@@ -208,10 +211,11 @@ impl DeclarationEvaluator<InputSensitiveDeclaration> for InputSensitiveEvaluator
 impl DeclarationInputEvaluator<InputSensitiveDeclaration>
     for InputSensitiveEvaluator
 {
-    fn evaluate_with_inputs(
+    fn evaluate_with_inputs_within(
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        _deadline: EvaluationDeadline,
     ) -> Result<
         Evaluation<InputSensitiveDeclaration, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,

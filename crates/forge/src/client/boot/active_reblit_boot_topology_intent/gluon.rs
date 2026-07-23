@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
@@ -110,9 +110,10 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<
             ActiveReblitBootTopologyIntentValue,
@@ -122,7 +123,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
     > {
         let evaluation = self
             .engine
-            .evaluate::<GluonBootTopologyIntent>(source)
+            .evaluate_within::<GluonBootTopologyIntent>(source, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
         self.budget
             .require_deadline()

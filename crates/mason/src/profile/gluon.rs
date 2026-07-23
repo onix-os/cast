@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 use config::declaration::ConfigDeclarationEvaluator;
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
+    EvaluationDeadline, Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
 use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
@@ -194,16 +194,17 @@ impl DeclarationEvaluator<Map> for ProfileCodec {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<Map, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = self
             .engine
-            .evaluate::<Vec<GluonProfileSpec>>(source)
+            .evaluate_within::<Vec<GluonProfileSpec>>(source, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let profiles = evaluation.value.into_iter().map(Into::into).collect();
         let value = decode_specs(profiles)

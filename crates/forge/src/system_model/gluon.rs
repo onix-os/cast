@@ -3,7 +3,7 @@
 use config::declaration::GeneratedDeclarationAuthority;
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+    EvaluationDeadline, Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, ImportPolicy, Source};
 
@@ -216,15 +216,16 @@ impl DeclarationEvaluator<SystemIntentDeclaration> for SystemIntentEvaluator {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<SystemIntentDeclaration, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let authored_source = source.text().to_owned();
-        let evaluated = evaluate_spec(&self.engine, source)?;
+        let evaluated = evaluate_spec(&self.engine, source, deadline)?;
         let parts = spec::into_domain(evaluated.value)
             .map_err(DeclarationEvaluationError::Conversion)?;
         let model = SystemModel::regenerate(parts)?;
@@ -257,15 +258,16 @@ impl DeclarationEvaluator<SystemModel> for SystemSnapshotCodec {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<SystemModel, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let source_text = source.text().to_owned();
-        let evaluated = evaluate_spec(&self.engine, source)?;
+        let evaluated = evaluate_spec(&self.engine, source, deadline)?;
         let parts = spec::into_domain(evaluated.value)
             .map_err(DeclarationEvaluationError::Conversion)?;
         let identity = evaluated.identity;
@@ -305,12 +307,13 @@ fn configured_engine(evaluator: GluonEngine) -> Result<GluonEngine, Diagnostic> 
 fn evaluate_spec(
     evaluator: &GluonEngine,
     source: &Source,
+    deadline: EvaluationDeadline,
 ) -> Result<
     DeclarationEvaluation<spec::SystemSpec, EvaluationIdentity>,
     DeclarationEvaluationError<spec::ConversionError>,
 > {
     let evaluation = evaluator
-        .evaluate::<GluonSystemSpec>(source)
+        .evaluate_within::<GluonSystemSpec>(source, deadline)
         .map_err(DeclarationEvaluationError::Evaluation)?;
 
     Ok(DeclarationEvaluation {

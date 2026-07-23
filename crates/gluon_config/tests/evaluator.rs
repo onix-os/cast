@@ -246,6 +246,24 @@ fn evaluate_file_uses_one_deadline_for_loading_and_evaluation() {
 }
 
 #[test]
+fn evaluate_within_honors_the_caller_supplied_budget() {
+    use declarative_config::EvaluationDeadline;
+
+    // The engine's own timeout is generous, but a storage loader starts the
+    // deadline before its descriptor-rooted read and hands it in. An already
+    // spent budget (as after a slow read) must win over the engine default.
+    let engine = GluonEngine::default();
+    let source = Source::new("root.glu", "42");
+    let spent = EvaluationDeadline::start(Duration::ZERO);
+
+    let error = engine.evaluate_within::<i64>(&source, spent).unwrap_err();
+
+    assert_eq!(error.category, DiagnosticCategory::Limit);
+    assert_eq!(error.limit, Some(LimitKind::Time));
+    assert_eq!(error.source_name.as_deref(), Some("root.glu"));
+}
+
+#[test]
 fn memory_exhaustion_is_a_structured_limit_error() {
     let limits = Limits {
         memory_bytes: 10,

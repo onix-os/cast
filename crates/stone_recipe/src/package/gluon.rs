@@ -2,7 +2,8 @@
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
-    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    DeclarationInputEvaluator, EvaluationDeadline,
+    Evaluation as DeclarationEvaluation,
     LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
@@ -86,13 +87,18 @@ impl GluonPackageEvaluator {
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
         DeclarationEvaluationError<PackageConversionError>,
     > {
         let evaluation = self
             .engine
-            .evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)
+            .evaluate_with_inputs_within::<GluonPackageSpec>(
+                source,
+                explicit_inputs,
+                deadline,
+            )
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let package = PackageSpec::from(evaluation.value);
         package
@@ -124,27 +130,29 @@ impl DeclarationEvaluator<PackageSpec> for GluonPackageEvaluator {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<PackageSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_package(source, &[])
+        self.evaluate_package(source, &[], deadline)
     }
 }
 
 impl DeclarationInputEvaluator<PackageSpec> for GluonPackageEvaluator {
-    fn evaluate_with_inputs(
+    fn evaluate_with_inputs_within(
         &self,
         source: &Source,
         explicit_inputs: &[u8],
-    ) -> Result<
+        deadline: EvaluationDeadline,
+        ) -> Result<
         DeclarationEvaluation<PackageSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_package(source, explicit_inputs)
+        self.evaluate_package(source, explicit_inputs, deadline)
     }
 }
 

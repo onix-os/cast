@@ -4,7 +4,8 @@ use config::declaration::{
     ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
 };
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Evaluation,
+    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
+    Evaluation,
     LanguageSpec, Limits, Source, SourceRoot,
 };
 use gluon_config::EvaluationIdentity;
@@ -82,17 +83,19 @@ macro_rules! trigger_evaluator {
                 }
             }
 
-            fn evaluate(
+            fn evaluate_within(
                 &self,
                 source: &Source,
+                deadline: EvaluationDeadline,
             ) -> Result<
                 Evaluation<$config, Self::Identity>,
                 DeclarationEvaluationError<Self::Error>,
             > {
                 let evaluation =
-                    <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
+                    <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate_within(
                         &self.trigger,
                         source,
+                        deadline,
                     )?;
                 Ok(Evaluation {
                     value: <$config>::from(evaluation.value),

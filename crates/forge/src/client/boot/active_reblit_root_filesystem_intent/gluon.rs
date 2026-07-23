@@ -7,7 +7,7 @@ use std::{
 };
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
     Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
     SourceRoot,
 };
@@ -94,16 +94,17 @@ impl DeclarationEvaluator<RootFilesystemIntentValue>
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<RootFilesystemIntentValue, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = self
             .engine
-            .evaluate::<GluonRootFilesystemIntent>(source)
+            .evaluate_within::<GluonRootFilesystemIntent>(source, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let mut budget = self.budget.borrow_mut();
         budget

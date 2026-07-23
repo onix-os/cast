@@ -8,6 +8,8 @@ use declarative_config::{
     NormalizedRelative, PreparedGraph, Source, SourceRoot, TypedDecoder,
     evaluate as evaluate_declaration, evaluate_file as evaluate_declaration_file,
     evaluate_with_inputs as evaluate_declaration_with_inputs,
+    evaluate_with_inputs_within as evaluate_declaration_with_inputs_within,
+    evaluate_within as evaluate_declaration_within,
 };
 use gluon::{
     RootedThread, ThreadExt,
@@ -107,6 +109,21 @@ impl GluonEngine {
         evaluate_declaration(self, source, GluonGetable::new()).map(Into::into)
     }
 
+    /// Evaluate under one caller-established budget that already covers the
+    /// read the caller performed before this call.
+    pub fn evaluate_within<T>(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<T>, Diagnostic>
+    where
+        T: VmType + Send,
+        for<'vm, 'value> T: Getable<'vm, 'value>,
+    {
+        evaluate_declaration_within(self, source, deadline, GluonGetable::new())
+            .map(Into::into)
+    }
+
     pub fn evaluate_with_inputs<T>(
         &self,
         source: &Source,
@@ -120,6 +137,27 @@ impl GluonEngine {
             self,
             source,
             explicit_inputs,
+            GluonGetable::new(),
+        )
+        .map(Into::into)
+    }
+
+    /// Evaluate with explicit inputs under one caller-established budget.
+    pub fn evaluate_with_inputs_within<T>(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<T>, Diagnostic>
+    where
+        T: VmType + Send,
+        for<'vm, 'value> T: Getable<'vm, 'value>,
+    {
+        evaluate_declaration_with_inputs_within(
+            self,
+            source,
+            explicit_inputs,
+            deadline,
             GluonGetable::new(),
         )
         .map(Into::into)
@@ -271,14 +309,15 @@ where
         self.clone().with_source_root(source_root)
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         CoreEvaluation<T, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        evaluate_declaration(self, source, GluonGetable::new())
+        evaluate_declaration_within(self, source, deadline, GluonGetable::new())
             .map_err(DeclarationEvaluationError::Evaluation)
     }
 }
@@ -288,23 +327,22 @@ where
     T: VmType + Send,
     for<'vm, 'value> T: Getable<'vm, 'value>,
 {
-    fn evaluate_with_inputs(
+    fn evaluate_with_inputs_within(
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
     ) -> Result<
         CoreEvaluation<T, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        let evaluation = GluonEngine::evaluate_with_inputs::<T>(
+        evaluate_declaration_with_inputs_within(
             self,
             source,
             explicit_inputs,
+            deadline,
+            GluonGetable::new(),
         )
-        .map_err(DeclarationEvaluationError::Evaluation)?;
-        Ok(CoreEvaluation {
-            value: evaluation.value,
-            identity: evaluation.identity,
-        })
+        .map_err(DeclarationEvaluationError::Evaluation)
     }
 }

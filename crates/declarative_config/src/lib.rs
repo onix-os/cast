@@ -17,7 +17,8 @@ pub use diagnostic::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
 pub use evaluation::{
     DeclarationCodec, DeclarationEvaluator, DeclarationInputEvaluator,
     EngineAdapter, Evaluation, IdentityInputs, TypedDecoder, evaluate,
-    evaluate_file, evaluate_with_inputs,
+    evaluate_file, evaluate_with_inputs, evaluate_with_inputs_within,
+    evaluate_within,
 };
 pub use identity::{
     EvaluationIdentity, EvaluationIdentityValidationError, IdentityDependency,

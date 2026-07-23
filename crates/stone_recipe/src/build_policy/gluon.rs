@@ -2,7 +2,8 @@
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
-    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    DeclarationInputEvaluator, EvaluationDeadline,
+    Evaluation as DeclarationEvaluation,
     LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
@@ -86,13 +87,18 @@ impl GluonBuildPolicyEvaluator {
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildPolicySpec, EvaluationIdentity>,
         DeclarationEvaluationError<BuildPolicyConversionError>,
     > {
         let evaluation = self
             .engine
-            .evaluate_with_inputs::<GluonBuildPolicySpec>(source, explicit_inputs)
+            .evaluate_with_inputs_within::<GluonBuildPolicySpec>(
+                source,
+                explicit_inputs,
+                deadline,
+            )
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let policy: BuildPolicySpec = evaluation.value.into();
         policy
@@ -108,13 +114,18 @@ impl GluonBuildPolicyEvaluator {
         &self,
         source: &Source,
         explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildPolicyPatchSpec, EvaluationIdentity>,
         DeclarationEvaluationError<BuildPolicyConversionError>,
     > {
         let evaluation = self
             .engine
-            .evaluate_with_inputs::<GluonBuildPolicyPatchSpec>(source, explicit_inputs)
+            .evaluate_with_inputs_within::<GluonBuildPolicyPatchSpec>(
+                source,
+                explicit_inputs,
+                deadline,
+            )
             .map_err(DeclarationEvaluationError::Evaluation)?;
         Ok(DeclarationEvaluation {
             value: evaluation.value.into(),
@@ -641,27 +652,29 @@ impl DeclarationEvaluator<BuildPolicySpec> for GluonBuildPolicyEvaluator {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildPolicySpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_policy(source, &[])
+        self.evaluate_policy(source, &[], deadline)
     }
 }
 
 impl DeclarationInputEvaluator<BuildPolicySpec> for GluonBuildPolicyEvaluator {
-    fn evaluate_with_inputs(
+    fn evaluate_with_inputs_within(
         &self,
         source: &Source,
         explicit_inputs: &[u8],
-    ) -> Result<
+        deadline: EvaluationDeadline,
+        ) -> Result<
         DeclarationEvaluation<BuildPolicySpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_policy(source, explicit_inputs)
+        self.evaluate_policy(source, explicit_inputs, deadline)
     }
 }
 
@@ -683,28 +696,30 @@ impl DeclarationEvaluator<BuildPolicyPatchSpec> for GluonBuildPolicyEvaluator {
         }
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        deadline: EvaluationDeadline,
     ) -> Result<
         DeclarationEvaluation<BuildPolicyPatchSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_patch(source, &[])
+        self.evaluate_patch(source, &[], deadline)
     }
 }
 
 impl DeclarationInputEvaluator<BuildPolicyPatchSpec>
     for GluonBuildPolicyEvaluator
 {
-    fn evaluate_with_inputs(
+    fn evaluate_with_inputs_within(
         &self,
         source: &Source,
         explicit_inputs: &[u8],
-    ) -> Result<
+        deadline: EvaluationDeadline,
+        ) -> Result<
         DeclarationEvaluation<BuildPolicyPatchSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_patch(source, explicit_inputs)
+        self.evaluate_patch(source, explicit_inputs, deadline)
     }
 }

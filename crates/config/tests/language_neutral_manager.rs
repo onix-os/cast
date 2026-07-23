@@ -18,7 +18,8 @@ use config::{
 };
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    Diagnostic, DiagnosticCategory, EngineId, Evaluation, LanguageId,
+    Diagnostic, DiagnosticCategory, EvaluationDeadline,
+    EngineId, Evaluation, LanguageId,
     LanguageSpec, LimitKind, Limits, Source, SourceRoot,
 };
 use fs_err as fs;
@@ -135,9 +136,10 @@ impl DeclarationEvaluator<FixtureConfig> for FixtureAdapter {
         rooted
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         source: &Source,
+        _deadline: EvaluationDeadline,
     ) -> Result<
         Evaluation<FixtureConfig, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
@@ -243,9 +245,10 @@ impl DeclarationEvaluator<DetachedValue> for DetachedAdapter {
         self.clone()
     }
 
-    fn evaluate(
+    fn evaluate_within(
         &self,
         _source: &Source,
+        _deadline: EvaluationDeadline,
     ) -> Result<
         Evaluation<DetachedValue, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
