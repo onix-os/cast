@@ -86,8 +86,10 @@ After this plan:
 
 ### Known baseline validation issue
 
-At this baseline, `make source-loc` fails on the pre-existing 2,374-line `CHANGELOG.md`. Resolve
-that already-requested repository cleanup separately before implementation and do not mix it into
+At this baseline, `make source-loc` fails on the pre-existing 2,374-line `CHANGELOG.md`. It also
+wraps the LOC script in `timeout`, and the script/test currently time-limit Git and ordinary helper
+commands, contradicting the user's rule that only execution of the built application/evaluator may
+be bounded. Resolve both baseline issues separately before implementation and do not mix them into
 a declaration-core commit. Every file added or touched by this plan must remain below 1,000 lines
 from its first commit.
 
@@ -194,6 +196,13 @@ The engine adapter owns syntax discovery. For Gluon, its AST visitor extracts `i
 and enforces Gluon namespaces/extensions. The core resolves the returned requests; it never parses
 Gluon syntax itself.
 
+Embedded modules come from an adapter/domain-supplied `AbiCatalog`, not a core hardcoded map. Each
+entry binds `AbiId`, language/profile, exact immutable source bytes/hash, and any engine-specific
+primitive/capability requirements. A generic import policy allowlists ABI IDs; the active adapter
+provides only sources for its own language. During P0, `gluon_config` builds this catalog from the
+current embedded modules and primitive policy. Lua later supplies a separate catalog for the same
+semantic ABI IDs without changing core resolution.
+
 ### 4.3 Evaluation adapter
 
 Use an associated/concrete engine type and typed callback boundary; do not force all VM values into
@@ -241,7 +250,23 @@ declaration/gluon.rs implements the typed Gluon conversion/codec
 Lua will later add `declaration/lua.rs` beside the Gluon adapter and target the same shared wire and
 semantic types.
 
-### 4.5 Diagnostics
+### 4.5 Discovery and generated-authority contracts
+
+The generic config layer must expose all three discovery shapes before Lua begins:
+
+- `RootDeclarationSlot`: one fixed logical basename such as `stone`, `system`, `boot-topology`, or
+  `root-filesystem`, resolved across registered language extensions with collision detection;
+- `FragmentDeclarationSet`: ordered vendor/admin/user directories, same-layer logical-stem
+  collision detection, validation of every discovered fragment, and whole-fragment shadowing;
+- `GeneratedDeclarationSlot`: one active codec/path/marker per logical output, retained-directory
+  save/delete/update, authored-file protection, and transactional authority switching.
+
+Trigger `tx.d`/`sys.d` directories use the fragment shape even though their domain is read-only.
+Recipe locks and system snapshots use generated slots. The contracts are parameterized by opaque
+`LanguageSpec` values and have no Gluon/Lua branch. During P0 only Gluon is registered, so only
+`.glu` is public.
+
+### 4.6 Diagnostics
 
 The shared diagnostic envelope owns stable categories:
 
@@ -258,7 +283,7 @@ causal context. Gluon-specific error traversal/rendering remains in `gluon_confi
 diagnostic text and category tests are characterization evidence; change them only in a separate
 reviewed diagnostic commit.
 
-### 4.6 Evaluation identity v2
+### 4.7 Evaluation identity v2
 
 The neutral identity contains:
 
@@ -304,7 +329,7 @@ to drift ahead of its only reference implementation: Gluon must stay green after
 
 ### Phase 0 — Freeze the Gluon baseline and prove the type boundary
 
-1. Resolve the pre-existing repository LOC blocker separately.
+1. Resolve the pre-existing repository LOC and non-runtime-timeout blockers separately.
 2. Inventory current public `gluon_config`, `config`, and domain evaluation APIs.
 3. Record golden Gluon evidence for source-root errors, limits, import graphs, diagnostic
    categories, fingerprint v1 bytes, generated files, and all 12 normalized root values.
@@ -361,7 +386,9 @@ unchanged; no consumer needs to know the implementation moved.
 2. Keep Gluon's AST visitor, `import!` recognition, forbidden namespaces, optional primitive
    policy, and `.glu` normalization in `gluon_config`.
 3. Make the Gluon extractor return typed `ImportRequest` values to the shared resolver.
-4. Preserve current reachable-module deduplication, including current cycle behavior, and prove
+4. Make each current domain/import policy supply a Gluon `AbiCatalog`; remove embedded-source
+   lookup from generic resolution without changing the accepted ABI set or primitive exposure.
+5. Preserve current reachable-module deduplication, including current cycle behavior, and prove
    identical prepared graphs and fingerprint-v1 module ordering for all fixtures. Do not add cycle
    rejection during extraction; that requires a later explicit evaluator-policy version.
 
@@ -380,15 +407,19 @@ outside `SourceRoot`.
 3. Preserve the current `gluon_config::Evaluator` API temporarily as a thin wrapper.
 4. Migrate direct callers to the adapter in small groups, then remove the wrapper after the last
    caller. Do not retain parallel old/new evaluator implementations.
+5. Add a test-only `SyntheticEngine` with a distinct opaque language/engine descriptor, prepared
+   source type, tiny literal-import parser, deterministic interruption signal, native error type,
+   and typed decoder. Run it through the shared source/graph/deadline/diagnostic/evaluation pipeline.
+   It is not Lua, has no production registration, and writes no tracked declarations.
 
 **Commit examples:** `refactor(gluon): implement declaration engine adapter`, then one caller-group
 commit at a time.
 
 **Exit:** every Gluon evaluation passes through the shared pipeline and produces identical v1
 identity, diagnostics, and domain values. `gluon_config` contains no duplicate loader/deadline/graph
-implementation.
+implementation, and the second-engine seam is proven without Lua.
 
-### Phase 5 — Generalize configuration storage and persistence
+### Phase 5 — Generalize all discovery, storage, and generated authority
 
 1. Rename internal `GluonCodec`/`DecodedGluon`/`load_gluon` concepts to typed declaration terms.
 2. Move fragment collection and atomic persistence into behavior-named declaration modules.
@@ -403,6 +434,12 @@ implementation.
    extension dispatch, no fallback, same-layer same-stem collision, cross-layer shadowing while
    every discovered fragment is still validated, and one generated authority per logical slot.
    These adapters must never be registered in production or create tracked declaration files.
+8. Migrate every non-fragment discovery path to the P0 contracts before Lua begins:
+   - recipe roots and generated source/build lock slots;
+   - rooted transaction/system trigger directories;
+   - fixed system, boot-topology, and root-filesystem intent slots;
+   - generated system snapshots.
+   Only Gluon is registered, so public paths remain unchanged.
 
 Suggested final paths:
 
@@ -454,7 +491,7 @@ stores, and CLI orchestration do not import Gluon VM types.
 
 Do this only after the equivalence checkpoint in Phases 1–6 is green.
 
-1. Add the v2 schema from section 4.6 beside the exact v1 type and validator.
+1. Add the v2 schema from section 4.7 beside the exact v1 type and validator.
 2. Make Gluon produce both identities in a characterization window; prove v1 remains byte-identical
    while v2 is deterministic and includes the Gluon language/engine descriptors.
 3. Migrate derivation provenance, locks, package metadata, CLI explanations, triggers, and exact
@@ -466,10 +503,14 @@ Do this only after the equivalence checkpoint in Phases 1–6 is green.
    retained source graphs to produce v2; never fabricate missing engine/policy fields.
 6. Preserve immutable historical generations and prove rollback selection/export does not rewrite
    them or require their declaration identity to masquerade as v2.
-7. If standardizing deadline coverage or adding explicit cycle rejection is desirable, make it a
-   separately reviewed evaluator-policy bump here with before/after tests; otherwise preserve the
-   characterized Gluon semantics.
-8. Document expected cache/derivation invalidation before activation.
+7. Activate one shared evaluator-policy rule before completion:
+   - each root or fragment receives one budget starting immediately before its descriptor-rooted
+     open/read and ending after typed decode;
+   - shadowed fragments retain separate budgets and are still evaluated;
+   - graph preparation rejects import cycles with a stable import diagnostic before VM execution.
+   Treat both changes from characterized Gluon behavior as an explicit policy-version bump with
+   before/after tests; do not hide them inside extraction commits.
+8. Document expected cache/derivation and evaluator-policy invalidation before activation.
 
 **Commit examples:** `feat(config): add engine-neutral evaluation identity`, then consumer-specific
 migration commits, then `refactor(config): make gluon identity v2 authoritative`.
@@ -499,7 +540,8 @@ declaration-language file-format change.
 Required focused targets, defined in `misc/make/declaration-tests.mk` and imported by the root
 Makefile:
 
-- `make declarative-config-test` — shared source, limits, deadline, graph, diagnostics, and identity;
+- `make declarative-config-test` — shared source, limits, deadline, graph, diagnostics, identity,
+  and the test-only synthetic engine;
 - `make gluon-adapter-test` — Gluon AST/import, VM, limits, diagnostics, v1/v2, typed extraction;
 - `make declaration-regression-test` — all 12 domains plus config storage through Gluon;
 - existing domain-specific hardening/example gates;
@@ -528,19 +570,30 @@ Rust models/plans or use established non-destructive fixtures.
 
 This plan is complete only when:
 
+- the known repository LOC and non-runtime-timeout baseline blockers are resolved before the first
+  implementation phase;
 - `crates/declarative_config` has no Gluon/Lua/domain dependency;
 - there is exactly one source loader, deadline implementation, graph resolver, generic diagnostic
   envelope, and v2 identity implementation;
+- the generic resolver consumes adapter/domain-supplied `AbiCatalog` entries and contains no
+  embedded Gluon source or primitive map;
 - all production Gluon evaluation enters through `GluonEngine` and typed domain adapters;
+- the test-only `SyntheticEngine` proves distinct prepared state, import extraction, interruption,
+  native diagnostics, and typed decoding through the unchanged shared pipeline without production
+  registration;
 - all 12 domain shapes expose engine-neutral entry points and shared semantic validation;
 - `config::Manager` operates on declaration evaluator/codec contracts while registering only
-  Gluon and accepting only `.glu`;
+  Gluon and accepting only `.glu`; recipe roots/locks, trigger directories, fixed system/boot/root
+  slots, fragment sets, and generated snapshots all use the neutral discovery/authority contracts;
 - `crates/config/Cargo.toml` has no `gluon_config`, `gluon`, or `gluon_codegen` dependency;
 - all 218 tracked Gluon declarations remain valid and no Lua source/dependency exists;
 - canonical generated `.glu` bytes remain unchanged except for explicitly documented identity-v2
   fields where the persisted schema requires them;
 - v1 equivalence was proved before v2 activation, and full-versus-scalar legacy evidence is handled
   according to its real containing schema without fabricated v2 fields;
+- the authoritative evaluator policy gives each root/fragment one budget from immediately before
+  descriptor-rooted read through typed decode, gives every shadowed fragment its own budget, and
+  rejects import cycles before VM execution under an explicit tested policy-version bump;
 - no general planner, transaction layer, or shared config store imports a Gluon VM type;
 - temporary compatibility paths are removed;
 - `.stone`, transaction, atomic update, rollback, trigger, USR merge, and OS/local separation
@@ -596,7 +649,8 @@ Stop and report evidence if:
 ## 11. First implementation batch
 
 1. Confirm a clean `develop` tree and record the exact commit.
-2. Resolve the known repository LOC blocker outside the declaration commit.
+2. Resolve the known repository LOC and non-runtime-timeout blockers outside the declaration
+   commit.
 3. Add Gluon baseline goldens and the three focused Make targets.
 4. Commit the baseline evidence.
 5. Prototype the four adapter/result type signatures in tests only.
