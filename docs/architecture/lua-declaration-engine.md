@@ -131,13 +131,24 @@ serde-derive additions:
 1. **Scale.** `build_policy/mod.rs` alone defines ~44 spec types; the package
    recipe is comparable. Every transitively referenced type must derive
    `Deserialize` with a matching tagged encoding.
-2. **Tuple-variant patches.** The build-policy patch uses `ValuePatch<T>` =
-   `Keep | Set(T)` and `ArrayPatch<T>` = `Keep | Replace(Vec<T>) | …` — tuple
-   variants. Serde's internally-tagged `#[serde(tag = "kind")]` encoding (used by
-   every other Lua enum here) does **not** support tuple variants, so these
-   cannot gain the uniform tagged encoding by a derive alone. They need either a
-   dedicated `lua_config::LuaPatch`-style DTO with `From` conversions, or the
-   domain enums reshaped to struct variants (`Set { value: T }`).
+2. **Tuple variants throughout.** Serde's internally-tagged `#[serde(tag =
+   "kind")]` encoding (used by every Lua enum adapted so far — build-lock's
+   origins, the layer operations) does **not** support tuple/newtype variants.
+   The build policy is full of them, in both the patch and the core spec:
+   `ValuePatch<T>` = `Keep | Set(T)`, `ArrayPatch<T>` = `Keep | Replace(Vec<T>)`
+   `| …`, `TextSpec` = `Literal(String) | Context(_) | Concat(Vec<Self>)`,
+   `BuildToolSpec` = `Package(String) | Binary(String) | …`. None of these can
+   gain the uniform tagged encoding from a derive. Each needs a dedicated Lua DTO
+   (a struct-variant mirror such as `Set { value: T }` / `literal { value }`)
+   with `From` conversions into the domain enum — a parallel DTO tree, not a
+   derive. `lua_config::LuaPatch` covers the `ValuePatch` shape; the rest are new.
+
+This is the crucial difference from the build lock, whose enums were all
+struct/unit variants and so needed only derives. Because tuple variants pervade
+the build policy (and, by the same `From`-based shape, likely the package
+recipe), those two domains require a hand-written DTO tree with matching tagged
+encodings — the multi-day work the estimate reflects, and the reason they were
+not adaptable this session by the cheap serde-derive route.
 
 The verification cost is also real: an all-`Keep` patch decodes without
 exercising any nested type's encoding, so a meaningful parity test must author
