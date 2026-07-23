@@ -9,6 +9,7 @@ use std::collections::BTreeSet;
 use thiserror::Error;
 
 mod gluon;
+mod lua;
 
 pub use self::gluon::{
     BUILD_POLICY_LAYERS_ABI_VERSION, GLUON_BUILD_POLICY_LAYERS_ABI,

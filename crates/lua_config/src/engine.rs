@@ -17,6 +17,7 @@ use declarative_config::{
     Evaluation, IdentityInputs, ImportRequest, LanguageSpec, Limits, ModuleView,
     NormalizedRelative, PreparedGraph, Source, SourceRoot, TypedDecoder,
     evaluate as evaluate_declaration, evaluate_within as evaluate_declaration_within,
+    evaluate_with_inputs_within as evaluate_declaration_with_inputs_within,
 };
 use mlua::{FromLua, HookTriggers, Lua, LuaOptions, StdLib, Table, Value, VmState};
 
@@ -74,6 +75,28 @@ impl LuaEngine {
         T: serde::de::DeserializeOwned,
     {
         evaluate_declaration_within(self, source, deadline, LuaSerdeDecoder::new())
+    }
+
+    /// Deserialize the root value into `T` while binding `explicit_inputs` into
+    /// the evaluation identity, under one caller-established budget. Domain
+    /// adapters that admit external inputs (hashed into provenance) use this so
+    /// the Lua identity commits to the same inputs the Gluon adapter does.
+    pub fn evaluate_with_inputs_within_as<T>(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<T, EvaluationIdentity>, Diagnostic>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        evaluate_declaration_with_inputs_within(
+            self,
+            source,
+            explicit_inputs,
+            deadline,
+            LuaSerdeDecoder::new(),
+        )
     }
 }
 
