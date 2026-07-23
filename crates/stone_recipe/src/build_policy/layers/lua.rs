@@ -90,6 +90,9 @@ pub struct LuaBuildPolicyRootEvaluator {
 }
 
 impl LuaBuildPolicyRootEvaluator {
+    // Reached only through the trait impls below, which stone_recipe's own build
+    // does not call outside tests; the forge loader and tests exercise it.
+    #[cfg_attr(not(test), allow(dead_code))]
     fn evaluate_root(
         &self,
         source: &Source,
