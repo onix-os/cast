@@ -442,9 +442,10 @@ mod tests {
             .save_gluon("generated", &decoded.value, &RepositoryCodec)
             .unwrap();
         let generated = fs::read_to_string(&path).unwrap();
-        assert!(generated.starts_with(config::GENERATED_GLUON_MARKER));
-        assert!(generated.contains("type RepositorySpec ="));
-        assert!(!generated.contains("import!"));
+        assert_eq!(
+            generated.as_bytes(),
+            include_bytes!("../../../../tests/fixtures/gluon/goldens/repository-fragment.glu")
+        );
 
         let loaded = manager.load_gluon(&Evaluator::default(), &RepositoryCodec).unwrap();
         assert_eq!(loaded.len(), 1);

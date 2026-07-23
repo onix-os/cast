@@ -257,9 +257,10 @@ fn generated_save_is_deterministic_standalone_and_loadable() {
     let manager = config::Manager::custom(temporary.path());
     let path = manager.save_gluon("generated", &decoded.value, &ProfileCodec).unwrap();
     let generated = fs::read_to_string(path).unwrap();
-    assert!(generated.starts_with(config::GENERATED_GLUON_MARKER));
-    assert!(generated.contains("type ProfileSpec ="));
-    assert!(!generated.contains("import!"));
+    assert_eq!(
+        generated.as_bytes(),
+        include_bytes!("../../../../tests/fixtures/gluon/goldens/profile-fragment.glu")
+    );
 
     let loaded = manager.load_gluon(&evaluator, &ProfileCodec).unwrap();
     assert_eq!(loaded.len(), 1);

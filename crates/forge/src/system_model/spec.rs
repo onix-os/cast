@@ -571,6 +571,10 @@ mod tests {
                 arch: Some(repository::DEFAULT_ARCH.to_owned()),
             }
         );
+        assert_eq!(
+            encode_generated_gluon(&normalized).as_bytes(),
+            include_bytes!("../../../../tests/fixtures/gluon/goldens/system-snapshot.glu")
+        );
     }
 
     #[test]

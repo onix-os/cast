@@ -1,0 +1,26 @@
+let b = import! cast.package.v3
+let builder = import! cast.builders.cargo.v2
+let base = b.mk_package (b.meta {
+    pname = "example",
+    version = "1.2.3",
+    release = 1,
+    homepage = "https://example.com",
+    license = ["MPL-2.0"],
+})
+let root = {
+    summary = b.optional.set "UPDATE SUMMARY",
+    description = b.optional.set "UPDATE DESCRIPTION",
+    .. b.output "out"
+}
+{
+    builder = builder.builder {
+        run_tests = b.boolean.true,
+        .. builder.defaults
+    },
+    build_inputs = [],
+    sources = [
+        b.source.archive "https://example.com/example-1.2.3.tar.xz" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    outputs = [root],
+    .. base
+}

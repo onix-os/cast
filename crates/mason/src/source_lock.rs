@@ -654,6 +654,10 @@ type SourceLock = {
             [0, 1]
         );
         assert_eq!(encode_source_lock(&decoded), encoded);
+
+        let golden = include_bytes!("../../../tests/fixtures/gluon/execution/packages/daemon-generated/sources.lock.glu");
+        let decoded = decode_source_lock(SOURCE_LOCK_FILE_NAME, golden).unwrap();
+        assert_eq!(encode_source_lock(&decoded).as_bytes(), golden);
     }
 
     #[test]

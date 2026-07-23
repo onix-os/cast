@@ -300,16 +300,16 @@ mod test {
         )
         .unwrap();
 
+        assert_eq!(
+            source.as_bytes(),
+            include_bytes!("../../../tests/fixtures/gluon/goldens/drafted-stone.glu")
+        );
+
         let evaluated = evaluate_gluon(&GluonSource::new("stone.glu", source.clone())).unwrap();
 
-        assert!(source.contains("cast.package.v3"));
-        assert!(source.contains("cast.builders.cargo.v2"));
-        assert!(source.contains("UPDATE SUMMARY"));
-        assert!(!source.contains("cargo_fetch"));
         assert_eq!(evaluated.package.meta.pname, "example");
         assert_eq!(evaluated.package.meta.version, "1.2.3");
         assert_eq!(evaluated.package.sources.len(), 1);
-        assert!(!source.contains("networking ="));
         assert!(!evaluated.package.options.networking);
     }
 

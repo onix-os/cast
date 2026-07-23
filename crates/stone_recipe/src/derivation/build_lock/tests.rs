@@ -8,13 +8,11 @@ fn generated_gluon_round_trips_through_restricted_evaluator() {
     let encoded = encode_build_lock(&expected);
     let decoded = decode_build_lock(BUILD_LOCK_FILE_NAME, encoded.as_bytes()).unwrap();
 
+    assert_eq!(
+        encoded.as_bytes(),
+        include_bytes!("../../../../../tests/fixtures/gluon/goldens/build-lock.glu")
+    );
     assert_eq!(decoded, expected);
-    assert!(encoded.starts_with(GENERATED_GLUON_MARKER));
-    assert!(encoded.contains("schema_version = 6,"));
-    assert!(encoded.contains("BuilderToolOrigin { selection = PackageSelection, index = 0 }"));
-    assert!(!encoded.contains("base_state"));
-    assert!(encoded.contains("    policy = {\n        name = \"aerynos\","));
-    assert!(encoded.contains("    target = {\n        name = \"x86_64\","));
 }
 
 #[test]
