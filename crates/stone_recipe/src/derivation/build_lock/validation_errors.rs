@@ -1,17 +1,4 @@
-use std::str;
-
-use gluon_config::Diagnostic;
 use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum BuildLockDecodeError {
-    #[error("build lock is not UTF-8")]
-    Utf8(#[from] str::Utf8Error),
-    #[error("evaluate build lock")]
-    Evaluation(#[source] Box<Diagnostic>),
-    #[error(transparent)]
-    Validation(#[from] BuildLockValidationError),
-}
 
 #[derive(Debug, Error)]
 pub enum BuildLockValidationError {

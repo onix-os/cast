@@ -786,7 +786,7 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
         let first_lock_bytes = fs::read(&first.lock_path).unwrap();
         assert_eq!(
             first_lock_bytes,
-            encode_build_lock(&first.plan.build_lock).into_bytes(),
+            canonical_build_lock(&first.plan.build_lock).into_bytes(),
             "{}: the on-disk build lock must be the canonical encoding of the frozen lock",
             example.name
         );

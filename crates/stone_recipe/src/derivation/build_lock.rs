@@ -8,8 +8,8 @@ use super::CanonicalEncoder;
 
 use self::closure_validation::{detect_dependency_cycles, require_nonempty, require_reachable_packages};
 pub use self::{
-    gluon_codec::{GluonBuildLockCodec, decode_build_lock, encode_build_lock},
-    validation_errors::{BuildLockDecodeError, BuildLockValidationError},
+    gluon_codec::GluonBuildLockCodec,
+    validation_errors::BuildLockValidationError,
 };
 
 mod closure_validation;

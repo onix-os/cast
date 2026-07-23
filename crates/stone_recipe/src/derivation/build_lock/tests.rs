@@ -1,12 +1,26 @@
 use super::*;
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    Source,
+};
+
+fn encode(lock: &BuildLock) -> String {
+    GluonBuildLockCodec::default().encode(lock).unwrap()
+}
+
+fn decode(source: &str) -> Result<BuildLock, DeclarationEvaluationError<BuildLockValidationError>> {
+    GluonBuildLockCodec::default()
+        .evaluate(&Source::new(BUILD_LOCK_FILE_NAME, source))
+        .map(|evaluation| evaluation.value)
+}
 
 #[test]
 fn generated_gluon_round_trips_through_restricted_evaluator() {
     let mut expected = sample_lock();
     expected.normalize();
     expected.validate().unwrap();
-    let encoded = encode_build_lock(&expected);
-    let decoded = decode_build_lock(BUILD_LOCK_FILE_NAME, encoded.as_bytes()).unwrap();
+    let encoded = encode(&expected);
+    let decoded = decode(&encoded).unwrap();
 
     assert_eq!(
         encoded.as_bytes(),
@@ -67,8 +81,8 @@ fn every_typed_input_origin_round_trips_through_generated_gluon() {
     ];
     expected.normalize();
 
-    let encoded = encode_build_lock(&expected);
-    let decoded = decode_build_lock(BUILD_LOCK_FILE_NAME, encoded.as_bytes()).unwrap();
+    let encoded = encode(&expected);
+    let decoded = decode(&encoded).unwrap();
 
     assert_eq!(decoded, expected);
     for constructor in [
@@ -96,7 +110,7 @@ fn construction_order_does_not_change_encoding_or_digest() {
     reordered.packages[0].outputs.reverse();
     reordered.packages[0].dependencies.reverse();
 
-    assert_eq!(encode_build_lock(&first), encode_build_lock(&reordered));
+    assert_eq!(encode(&first), encode(&reordered));
     assert_eq!(first.canonical_bytes(), reordered.canonical_bytes());
     assert_eq!(first.digest(), reordered.digest());
 }
@@ -105,7 +119,7 @@ fn construction_order_does_not_change_encoding_or_digest() {
 fn string_encoding_is_unambiguous_and_round_trips() {
     let mut lock = sample_lock();
     lock.profile.name = "quote \" slash \\ newline\n".to_owned();
-    let decoded = decode_build_lock(BUILD_LOCK_FILE_NAME, encode_build_lock(&lock).as_bytes()).unwrap();
+    let decoded = decode(&encode(&lock)).unwrap();
 
     assert_eq!(decoded.profile.name, lock.profile.name);
 }
@@ -284,22 +298,22 @@ fn validation_rejects_dependency_cycles_with_the_closing_edge() {
 
 #[test]
 fn decoder_rejects_unsupported_schema() {
-    let encoded = encode_build_lock(&sample_lock()).replacen("schema_version = 6", "schema_version = 7", 1);
-    let error = decode_build_lock(BUILD_LOCK_FILE_NAME, encoded.as_bytes()).unwrap_err();
+    let encoded = encode(&sample_lock()).replacen("schema_version = 6", "schema_version = 7", 1);
+    let error = decode(&encoded).unwrap_err();
 
     assert!(matches!(
         error,
-        BuildLockDecodeError::Validation(BuildLockValidationError::UnsupportedSchema { found: 7, .. })
+        DeclarationEvaluationError::Conversion(BuildLockValidationError::UnsupportedSchema { found: 7, .. })
     ));
 }
 
 #[test]
 fn decoder_rejects_pre_toolchain_command_schema_five() {
-    let encoded = encode_build_lock(&sample_lock()).replacen("schema_version = 6", "schema_version = 5", 1);
-    let error = decode_build_lock(BUILD_LOCK_FILE_NAME, encoded.as_bytes()).unwrap_err();
+    let encoded = encode(&sample_lock()).replacen("schema_version = 6", "schema_version = 5", 1);
+    let error = decode(&encoded).unwrap_err();
 
     assert!(matches!(
         error,
-        BuildLockDecodeError::Validation(BuildLockValidationError::UnsupportedSchema { found: 5, .. })
+        DeclarationEvaluationError::Conversion(BuildLockValidationError::UnsupportedSchema { found: 5, .. })
     ));
 }

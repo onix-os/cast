@@ -15,8 +15,9 @@ use url::Url;
 
 use super::{
     EXECUTION_FIXTURES, Env, HEADER_ONLY_CHECK_SCRIPT, HEADER_ONLY_INSTALL_SCRIPT, Planned, Publication, Request,
-    SOURCE_DATE_EPOCH, TARGET, WriteOutcome, container_capability_unavailable, copy_package_directory,
-    encode_build_lock, error_chain, execute_and_publish, execution_capability_required, plan_for_build, profile,
+    SOURCE_DATE_EPOCH, TARGET, WriteOutcome, canonical_build_lock,
+    container_capability_unavailable, copy_package_directory, error_chain,
+    execute_and_publish, execution_capability_required, plan_for_build, profile,
 };
 
 #[path = "bootstrap/bundle.rs"]

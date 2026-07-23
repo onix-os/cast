@@ -1,4 +1,4 @@
-use std::{fmt::Write as _, str};
+use std::fmt::Write as _;
 
 use declarative_config::{
     DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
@@ -7,7 +7,7 @@ use declarative_config::{
 use gluon_config::{EvaluationFingerprint, GluonEngine, Source};
 
 use super::{
-    AnalyzerRole, BuildLock, BuildLockDecodeError, BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole,
+    AnalyzerRole, BuildLock, BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole,
     BUILD_LOCK_GENERATED_GLUON_MARKER, InputOrigin, JobExecutableRole, JobStepSection, LockedIdentity, LockedOutput,
     LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection, Platform, RepositorySnapshot,
     STANDALONE_GLUON_TYPES,
@@ -76,28 +76,12 @@ impl DeclarationEvaluator<BuildLock> for GluonBuildLockCodec {
 
 impl DeclarationCodec<BuildLock> for GluonBuildLockCodec {
     fn encode(&self, lock: &BuildLock) -> Result<String, Self::Error> {
-        Ok(encode_build_lock(lock))
+        Ok(encode_canonical_build_lock(lock))
     }
 }
 
-/// Decode a standalone generated lock using the restricted Gluon evaluator.
-pub fn decode_build_lock(logical_name: &str, bytes: &[u8]) -> Result<BuildLock, BuildLockDecodeError> {
-    let source = str::from_utf8(bytes)?;
-    let evaluation = GluonBuildLockCodec::default()
-        .evaluate(&Source::new(logical_name, source))
-        .map_err(|error| match error {
-            DeclarationEvaluationError::Evaluation(error) => {
-                BuildLockDecodeError::Evaluation(Box::new(error))
-            }
-            DeclarationEvaluationError::Conversion(error) => {
-                BuildLockDecodeError::Validation(error)
-            }
-        })?;
-    Ok(evaluation.value)
-}
-
 /// Encode a canonical, import-free `build.lock.glu` value.
-pub fn encode_build_lock(lock: &BuildLock) -> String {
+fn encode_canonical_build_lock(lock: &BuildLock) -> String {
     let mut lock = lock.clone();
     lock.normalize();
 

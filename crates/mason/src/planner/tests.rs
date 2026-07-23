@@ -12,6 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use declarative_config::DeclarationCodec;
 use forge::{
     Provider,
     package::{Meta, Name},
@@ -22,8 +23,8 @@ use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
 use stone_recipe::{
     TuningSpec, UpstreamSpec,
     derivation::{
-        DerivationPlan, FilesystemPolicy, InputOrigin, NetworkMode, OutputRelation, PackageInputSelection,
-        encode_build_lock,
+        BuildLock, DerivationPlan, FilesystemPolicy, GluonBuildLockCodec,
+        InputOrigin, NetworkMode, OutputRelation, PackageInputSelection,
     },
     package::{DependencySpec, PackageSpec, StepSpec},
 };
@@ -51,6 +52,10 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+fn canonical_build_lock(lock: &BuildLock) -> String {
+    GluonBuildLockCodec::default().encode(lock).unwrap()
+}
 const PACKAGE_EXAMPLES: [&str; 64] = [
     "autotools",
     "backend-choice-factory",

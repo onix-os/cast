@@ -1,13 +1,15 @@
 //! Generated build-lock lifecycle.
 
-use std::{io, path::{Path, PathBuf}};
+use std::{io, path::{Path, PathBuf}, str};
 
-use declarative_config::{DeclarationCodec, DeclarationEvaluator};
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    Source,
+};
 use stone_recipe::derivation::{
     BUILD_LOCK_FILE_NAME, BUILD_LOCK_GENERATED_GLUON_MARKER, BuildLock,
-    BuildLockDecodeError, BuildLockValidationError, GluonBuildLockCodec,
-    LockedIdentity, Platform, RequestedInput, decode_build_lock,
-    encode_build_lock,
+    BuildLockValidationError, GluonBuildLockCodec, LockedIdentity, Platform,
+    RequestedInput,
 };
 use thiserror::Error;
 
@@ -40,7 +42,14 @@ pub fn load(path: &Path, request_fingerprint: &str) -> Result<Status, Error> {
             });
         }
     };
-    let lock = decode_build_lock(BUILD_LOCK_FILE_NAME, &bytes).map_err(|source| Error::Decode {
+    let text = str::from_utf8(&bytes).map_err(|source| Error::Utf8 {
+        path: path.to_owned(),
+        source,
+    })?;
+    let lock = GluonBuildLockCodec::default()
+        .evaluate(&Source::new(BUILD_LOCK_FILE_NAME, text))
+        .map(|evaluation| evaluation.value)
+        .map_err(|source| Error::Decode {
         path: path.to_owned(),
         source: Box::new(source),
     })?;
@@ -255,11 +264,17 @@ pub enum Error {
         #[source]
         source: Box<generated_lock::ReadError>,
     },
+    #[error("generated build lock {path:?} is not UTF-8")]
+    Utf8 {
+        path: PathBuf,
+        #[source]
+        source: str::Utf8Error,
+    },
     #[error("decode generated build lock {path:?}")]
     Decode {
         path: PathBuf,
         #[source]
-        source: Box<BuildLockDecodeError>,
+        source: Box<DeclarationEvaluationError<BuildLockValidationError>>,
     },
     #[error("write generated build lock {path:?}")]
     Write {
@@ -282,6 +297,10 @@ mod tests {
     };
 
     use super::*;
+
+    fn canonical_build_lock(lock: &BuildLock) -> String {
+        GluonBuildLockCodec::default().encode(lock).unwrap()
+    }
 
     fn platform() -> Platform {
         Platform {
@@ -439,7 +458,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
         let target = root.path().join("target");
         let expected = lock("request");
-        let encoded = encode_build_lock(&expected);
+        let encoded = canonical_build_lock(&expected);
         fs::write(&target, &encoded).unwrap();
         symlink(&target, &path).unwrap();
 

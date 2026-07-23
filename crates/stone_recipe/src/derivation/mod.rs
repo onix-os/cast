@@ -15,10 +15,10 @@ use crate::build_policy::{
 
 pub use self::build_lock::{
     AnalyzerRole, BUILD_LOCK_FILE_NAME, BUILD_LOCK_GENERATED_GLUON_MARKER,
-    BUILD_LOCK_SCHEMA_VERSION, BuildLock, BuildLockDecodeError,
+    BUILD_LOCK_SCHEMA_VERSION, BuildLock,
     BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole, InputOrigin, JobExecutableRole,
     GluonBuildLockCodec, JobStepSection, LockedIdentity, LockedOutput, LockedOutputRef, LockedPackage, LockedRequest, PackageInputSelection,
-    Platform, RepositorySnapshot, RequestedInput, decode_build_lock, encode_build_lock, requested_inputs_digest,
+    Platform, RepositorySnapshot, RequestedInput, requested_inputs_digest,
 };
 pub use self::provenance::{
     DerivationProvenance, PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance,
