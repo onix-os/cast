@@ -2526,6 +2526,7 @@ dependencies = [
  "hex",
  "humansize",
  "itertools 0.14.0",
+ "lua_config",
  "mailparse",
  "nix 0.27.1",
  "path-clean",

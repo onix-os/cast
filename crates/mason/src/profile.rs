@@ -24,6 +24,7 @@ use thiserror::Error;
 use crate::Env;
 
 mod gluon;
+mod lua;
 
 pub use gluon::ProfileCodec;
 

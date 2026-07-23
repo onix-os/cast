@@ -25,6 +25,7 @@ container = { path = "../../crates/container" }
 declarative_config = { path = "../../crates/declarative_config" }
 gitwrap = { path = "../../crates/gitwrap" }
 gluon_config = { path = "../../crates/gluon_config" }
+lua_config = { path = "../../crates/lua_config" }
 forge = { path = "../forge" }
 tools_buildinfo = { path = "../../crates/tools_buildinfo" }
 stone = { path = "../../crates/stone" }

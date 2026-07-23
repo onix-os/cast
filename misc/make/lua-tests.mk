@@ -29,6 +29,7 @@ lua-config-test:
 # values, intentionally distinct v2 identities. Grows one domain at a time.
 lua-domain-parity-test:
 	@$(CARGO) test -p triggers --lib "lua::" -- --test-threads=1
+	@$(CARGO) test -p mason --lib "profile::lua::" -- --test-threads=1
 
 # Phase L8: release-built Lua execution parity. `make build` alone is not
 # execution.
