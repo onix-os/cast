@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use gluon_config::{EvaluationFingerprint, Evaluator, ImportPolicy, Limits, Source};
+use gluon_config::{EvaluationFingerprint, GluonEngine, ImportPolicy, Limits, Source};
 
 use super::{
     ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
@@ -67,9 +67,9 @@ pub(super) fn evaluate(
 
     let mut imports = ImportPolicy::new();
     imports.insert_embedded_module(BOOT_TOPOLOGY_ABI_NAME, BOOT_TOPOLOGY_ABI)?;
-    let evaluator = Evaluator::new(limits).with_import_policy(imports);
+    let engine = GluonEngine::new(limits).with_import_policy(imports);
     let source = Source::new(SOURCE_LOGICAL_NAME, source_text);
-    let evaluation = evaluator.evaluate::<GluonBootTopologyIntent>(&source)?;
+    let evaluation = engine.evaluate::<GluonBootTopologyIntent>(&source)?;
     budget.require_deadline()?;
     require_fingerprint_contract(&evaluation.fingerprint)?;
 
