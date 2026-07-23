@@ -201,6 +201,14 @@ where
             source.logical_name(),
             source.text(),
         )?;
+        // Bound and cycle-check the value tree before any domain decoding sees
+        // it: reject floats, functions, cycles, sparse/mixed tables, and
+        // oversized values first.
+        crate::value::validate_value_tree(
+            &value,
+            source.logical_name(),
+            &crate::value::ValueLimits::default(),
+        )?;
         T::from_lua(value, &runtime.lua).map_err(|error| {
             Diagnostic::new(
                 DiagnosticCategory::Type,
@@ -405,6 +413,16 @@ mod tests {
             .evaluate::<bool>(&Source::new("root.lua", "return true"))
             .unwrap();
         assert!(flag.value);
+    }
+
+    #[test]
+    fn a_root_returning_a_float_is_rejected_before_decoding() {
+        let engine = LuaEngine::default();
+        let error = engine
+            .evaluate::<i64>(&Source::new("root.lua", "return 1.5"))
+            .unwrap_err();
+        assert_eq!(error.category, declarative_config::DiagnosticCategory::Type);
+        assert!(error.message.contains("float"));
     }
 
     #[test]

@@ -14,9 +14,11 @@ use declarative_config::{
 
 mod engine;
 mod imports;
+mod value;
 
 pub use engine::{LuaPrepared, LuaRuntime, LuaValueDecoder, PreparedLuaModule};
 pub use imports::discover_imports;
+pub use value::{ValueLimits, validate_value_tree};
 
 /// The exact vendored Lua release whose behavior this engine commits to.
 pub const LUA_VERSION: &str = "5.4.7";
