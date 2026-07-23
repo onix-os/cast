@@ -35,7 +35,8 @@ const REOPEN_CONTENTION_SCENARIO_COUNT: usize = 1;
 pub(super) const SCENARIO_COUNT: usize = SUCCESS_SCENARIO_COUNT
     + REJECTION_SCENARIO_COUNT
     + UNCERTAIN_STORAGE_SCENARIO_COUNT
-    + REOPEN_CONTENTION_SCENARIO_COUNT;
+    + REOPEN_CONTENTION_SCENARIO_COUNT
+    + complete::SCENARIO_COUNT;
 
 const ABBA_CHILD_ENV: &str = "FORGE_ACTIVE_REBLIT_COMMIT_CLEANUP_ABBA_CHILD";
 const ABBA_EXACT_TEST: &str = concat!(
@@ -349,3 +350,6 @@ fn commit_cleanup_reopen_never_waits_behind_writer_blocked_journal_contender() {
         }
     );
 }
+
+#[path = "commit_cleanup/complete.rs"]
+mod complete;

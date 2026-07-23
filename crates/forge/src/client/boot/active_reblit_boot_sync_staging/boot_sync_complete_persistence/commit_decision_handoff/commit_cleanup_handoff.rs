@@ -249,6 +249,14 @@ fn exact_live_options(record: &TransitionRecord) -> bool {
         && record.options.run_boot_sync
 }
 
+#[path = "commit_cleanup_handoff/complete_handoff.rs"]
+mod complete_handoff;
+pub(in crate::client) use complete_handoff::{
+    CommitCleanupCompleteStagedActiveReblitCompleteError,
+    CompleteStagedActiveReblitBootSync,
+    CompleteStagedActiveReblitBootSyncValidationError,
+};
+
 #[derive(Debug, Error)]
 pub(in crate::client) enum CommittedStagedActiveReblitCommitCleanupError {
     #[error("revalidate exact retained CommitDecided staging handoff")]

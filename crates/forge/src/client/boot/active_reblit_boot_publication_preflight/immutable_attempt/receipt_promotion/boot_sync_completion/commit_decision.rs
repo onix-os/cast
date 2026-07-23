@@ -324,6 +324,9 @@ where
 #[path = "commit_decision/commit_cleanup.rs"]
 mod commit_cleanup;
 pub(in crate::client) use commit_cleanup::{
+    ActiveReblitBootCompleteError,
+    ActiveReblitBootCompleteHandoff,
+    ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,

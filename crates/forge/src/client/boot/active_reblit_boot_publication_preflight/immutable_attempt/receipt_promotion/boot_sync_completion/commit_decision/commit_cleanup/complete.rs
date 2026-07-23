@@ -1,4 +1,4 @@
-//! Terminal-evidence wrapper for live ActiveReblit commit cleanup.
+//! Terminal-evidence wrapper for live ActiveReblit `Complete` roll-forward.
 
 use thiserror::Error;
 
@@ -7,11 +7,11 @@ use crate::{
     client::{
         Client,
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
-        active_reblit_boot_publication_preflight::ActiveReblitCommitCleanupSeal,
+        active_reblit_boot_publication_preflight::ActiveReblitCommitCleanupCompleteSeal,
         active_reblit_boot_sync_staging::{
-            CommitCleanupCompleteStagedActiveReblitBootSync,
-            CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
-            CommittedStagedActiveReblitCommitCleanupError,
+            CommitCleanupCompleteStagedActiveReblitCompleteError,
+            CompleteStagedActiveReblitBootSync,
+            CompleteStagedActiveReblitBootSyncValidationError,
         },
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
     },
@@ -22,20 +22,19 @@ use crate::{
 };
 
 use super::{
+    ActiveReblitBootCommitCleanupCompleteHandoff,
+    ActiveReblitBootCommitCleanupPostAdvanceError,
     ActiveReblitBootTerminalEvidenceValidationError,
-    ActiveReblitBootCommitDecisionHandoff,
-    ActiveReblitBootCommitDecisionPostAdvanceError,
     ValidatedActiveReblitBootPublicationEffect,
-    validate_committed_terminal_sandwich,
+    validate_cleanup_complete_terminal_sandwich,
     validate_exact_terminal_evidence_snapshot,
 };
 
-/// Exact durable `CommitCleanupComplete` handoff retaining the writer
-/// reservation, original plan, desired inventory, promoted receipt, and all
-/// terminal publication evidence. It intentionally implements neither
-/// `Clone` nor `Copy` and exposes no raw-parts escape hatch.
-#[must_use = "cleanup-complete authority must enter finalization or be deliberately discarded"]
-pub(in crate::client) struct ActiveReblitBootCommitCleanupCompleteHandoff<
+/// Exact durable generation-15 `Complete` handoff retaining the writer
+/// reservation, original plan and inventory, promoted receipt, and terminal
+/// publication evidence. It grants no finalization or journal deletion.
+#[must_use = "Complete authority must enter later finalization or be deliberately discarded"]
+pub(in crate::client) struct ActiveReblitBootCompleteHandoff<
     'plan,
     'inventory,
     'input,
@@ -45,7 +44,7 @@ pub(in crate::client) struct ActiveReblitBootCommitCleanupCompleteHandoff<
     'stone,
     'roots,
 > {
-    cleaned: CommitCleanupCompleteStagedActiveReblitBootSync<
+    completed: CompleteStagedActiveReblitBootSync<
         'plan,
         'inventory,
         BoundActiveReblitBlsPublicationPlan<
@@ -66,12 +65,12 @@ pub(in crate::client) struct ActiveReblitBootCommitCleanupCompleteHandoff<
 }
 
 impl std::fmt::Debug
-    for ActiveReblitBootCommitCleanupCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_>
+    for ActiveReblitBootCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_>
 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("ActiveReblitBootCommitCleanupCompleteHandoff")
-            .field("record", self.cleaned.record())
+            .debug_struct("ActiveReblitBootCompleteHandoff")
+            .field("record", self.completed.record())
             .field("receipt_fingerprint", &self.receipt_fingerprint())
             .field("database_outcome", &self.database_outcome)
             .field("publication_count", &self.publication_count)
@@ -79,15 +78,15 @@ impl std::fmt::Debug
     }
 }
 
-impl ActiveReblitBootCommitCleanupCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
+impl ActiveReblitBootCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
     pub(in crate::client) const fn record(&self) -> &TransitionRecord {
-        self.cleaned.record()
+        self.completed.record()
     }
 
     pub(in crate::client) const fn receipt_fingerprint(
         &self,
     ) -> BootPublicationReceiptFingerprint {
-        self.cleaned.receipt_fingerprint()
+        self.completed.receipt_fingerprint()
     }
 
     pub(in crate::client) const fn database_outcome(
@@ -115,13 +114,13 @@ impl ActiveReblitBootCommitCleanupCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_
     pub(in crate::client) const fn inventory(
         &self,
     ) -> &PreparedActiveReblitDesiredPublicationInventory {
-        self.cleaned.inventory()
+        self.completed.inventory()
     }
 
     pub(in crate::client) const fn staging_outcome(
         &self,
     ) -> BootPublicationReceiptStageOutcome {
-        self.cleaned.staging_outcome()
+        self.completed.staging_outcome()
     }
 
     pub(in crate::client) fn evidence(
@@ -141,7 +140,7 @@ impl<
         'stone,
         'roots,
     >
-    ActiveReblitBootCommitDecisionHandoff<
+    ActiveReblitBootCommitCleanupCompleteHandoff<
         'plan,
         'inventory,
         'input,
@@ -154,13 +153,13 @@ impl<
 where
     'input: 'plan,
 {
-    /// Consume the exact generation-13 handoff through Apply cleanup and the
-    /// sole durable generation-14 successor. This does not enter finalization.
-    pub(in crate::client) fn persist_commit_cleanup_complete(
+    /// Consume exact generation-14 authority through the sole journal-only
+    /// generation-15 successor. This does not enter finalization.
+    pub(in crate::client) fn persist_complete(
         self,
         client: &Client,
     ) -> Result<
-        ActiveReblitBootCommitCleanupCompleteHandoff<
+        ActiveReblitBootCompleteHandoff<
             'plan,
             'inventory,
             'input,
@@ -170,33 +169,20 @@ where
             'stone,
             'roots,
         >,
-        ActiveReblitBootCommitCleanupError,
+        ActiveReblitBootCompleteError,
     > {
-        self.committed
+        self.cleaned
             .revalidate_against(client)
             .map_err(|source| {
-                ActiveReblitBootCommitCleanupError::PreCleanup(
-                    ActiveReblitBootCommitDecisionPostAdvanceError::CommittedEvidence(source),
+                ActiveReblitBootCompleteError::PreAdvance(
+                    ActiveReblitBootCommitCleanupPostAdvanceError::CleanupCompleteEvidence(source),
                 )
             })?;
-        let retained_plan = self.committed.plan();
-        validate_committed_terminal_sandwich(&self, client, retained_plan)
-            .map_err(ActiveReblitBootCommitCleanupError::PreCleanup)?;
+        let retained_plan = self.cleaned.plan();
+        validate_cleanup_complete_terminal_sandwich(&self, client, retained_plan)
+            .map_err(ActiveReblitBootCompleteError::PreAdvance)?;
 
-        let ActiveReblitBootCommitDecisionHandoff {
-            committed,
-            database_outcome,
-            publication_count,
-            published_count,
-            already_exact_count,
-            replaced_count,
-            evidence,
-        } = self;
-        let seal = ActiveReblitCommitCleanupSeal { _private: () };
-        let cleaned = committed
-            .persist_commit_cleanup_complete(client, seal)
-            .map_err(ActiveReblitBootCommitCleanupError::Persistence)?;
-        let handoff = ActiveReblitBootCommitCleanupCompleteHandoff {
+        let ActiveReblitBootCommitCleanupCompleteHandoff {
             cleaned,
             database_outcome,
             publication_count,
@@ -204,14 +190,27 @@ where
             already_exact_count,
             replaced_count,
             evidence,
+        } = self;
+        let seal = ActiveReblitCommitCleanupCompleteSeal { _private: () };
+        let completed = cleaned
+            .persist_complete(client, seal)
+            .map_err(ActiveReblitBootCompleteError::Persistence)?;
+        let handoff = ActiveReblitBootCompleteHandoff {
+            completed,
+            database_outcome,
+            publication_count,
+            published_count,
+            already_exact_count,
+            replaced_count,
+            evidence,
         };
-        validate_cleanup_complete_terminal_sandwich(&handoff, client, retained_plan)
-            .map_err(ActiveReblitBootCommitCleanupError::PostCleanup)?;
+        validate_complete_terminal_sandwich(&handoff, client, retained_plan)
+            .map_err(ActiveReblitBootCompleteError::PostAdvance)?;
         Ok(handoff)
     }
 }
 
-fn validate_cleanup_complete_terminal_sandwich<
+fn validate_complete_terminal_sandwich<
     'plan,
     'inventory,
     'input,
@@ -221,7 +220,7 @@ fn validate_cleanup_complete_terminal_sandwich<
     'stone,
     'roots,
 >(
-    handoff: &ActiveReblitBootCommitCleanupCompleteHandoff<
+    handoff: &ActiveReblitBootCompleteHandoff<
         'plan,
         'inventory,
         'input,
@@ -240,16 +239,16 @@ fn validate_cleanup_complete_terminal_sandwich<
         'stone,
         'roots,
     >,
-) -> Result<(), ActiveReblitBootCommitCleanupPostAdvanceError>
+) -> Result<(), ActiveReblitBootCompletePostAdvanceError>
 where
     'input: 'plan,
 {
     handoff
-        .cleaned
+        .completed
         .revalidate_against(client)
-        .map_err(ActiveReblitBootCommitCleanupPostAdvanceError::CleanupCompleteEvidence)?;
-    if !std::ptr::eq(handoff.cleaned.plan(), retained_plan) {
-        return Err(ActiveReblitBootCommitCleanupPostAdvanceError::PlanMismatch);
+        .map_err(ActiveReblitBootCompletePostAdvanceError::CompleteEvidence)?;
+    if !std::ptr::eq(handoff.completed.plan(), retained_plan) {
+        return Err(ActiveReblitBootCompletePostAdvanceError::PlanMismatch);
     }
     validate_exact_terminal_evidence_snapshot(
         retained_plan,
@@ -259,42 +258,31 @@ where
         handoff.already_exact_count,
         handoff.replaced_count,
         &handoff.evidence,
-        "post-commit-cleanup handoff",
+        "post-Complete handoff",
     )
-    .map_err(ActiveReblitBootCommitCleanupPostAdvanceError::TerminalEvidence)?;
+    .map_err(ActiveReblitBootCompletePostAdvanceError::TerminalEvidence)?;
     handoff
-        .cleaned
+        .completed
         .revalidate_against(client)
-        .map_err(ActiveReblitBootCommitCleanupPostAdvanceError::CleanupCompleteEvidence)
+        .map_err(ActiveReblitBootCompletePostAdvanceError::CompleteEvidence)
 }
 
 #[derive(Debug, Error)]
-pub(in crate::client) enum ActiveReblitBootCommitCleanupError {
-    #[error("revalidate exact committed terminal handoff immediately before cleanup")]
-    PreCleanup(#[source] ActiveReblitBootCommitDecisionPostAdvanceError),
-    #[error("perform exact ActiveReblit Apply cleanup and persist CommitCleanupComplete")]
-    Persistence(#[source] CommittedStagedActiveReblitCommitCleanupError),
-    #[error("revalidate exact cleanup-complete terminal handoff; durable journal is CommitCleanupComplete")]
-    PostCleanup(#[source] ActiveReblitBootCommitCleanupPostAdvanceError),
+pub(in crate::client) enum ActiveReblitBootCompleteError {
+    #[error("revalidate exact cleanup-complete terminal handoff before Complete")]
+    PreAdvance(#[source] ActiveReblitBootCommitCleanupPostAdvanceError),
+    #[error("persist exact ActiveReblit CommitCleanupComplete to Complete handoff")]
+    Persistence(#[source] CommitCleanupCompleteStagedActiveReblitCompleteError),
+    #[error("revalidate exact Complete terminal handoff; durable journal is Complete")]
+    PostAdvance(#[source] ActiveReblitBootCompletePostAdvanceError),
 }
 
 #[derive(Debug, Error)]
-pub(in crate::client) enum ActiveReblitBootCommitCleanupPostAdvanceError {
-    #[error("revalidate retained cleanup-complete staging evidence")]
-    CleanupCompleteEvidence(
-        #[source]
-        CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
-    ),
-    #[error("the cleanup-complete authority returned a different retained plan")]
+pub(in crate::client) enum ActiveReblitBootCompletePostAdvanceError {
+    #[error("revalidate retained Complete staging evidence")]
+    CompleteEvidence(#[source] CompleteStagedActiveReblitBootSyncValidationError),
+    #[error("the Complete staging authority returned a different retained plan")]
     PlanMismatch,
     #[error("revalidate exact terminal output and topology evidence")]
     TerminalEvidence(#[source] ActiveReblitBootTerminalEvidenceValidationError),
 }
-
-#[path = "commit_cleanup/complete.rs"]
-mod complete;
-pub(in crate::client) use complete::{
-    ActiveReblitBootCompleteError,
-    ActiveReblitBootCompleteHandoff,
-    ActiveReblitBootCompletePostAdvanceError,
-};

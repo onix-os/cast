@@ -621,6 +621,9 @@ fn before_final_completion_validation() {}
 #[path = "boot_sync_completion/commit_decision.rs"]
 mod commit_decision;
 pub(in crate::client) use commit_decision::{
+    ActiveReblitBootCompleteError,
+    ActiveReblitBootCompleteHandoff,
+    ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,

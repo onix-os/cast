@@ -145,6 +145,7 @@ pub(super) use active_reblit_commit_cleanup_complete_to_complete::{
     ActiveReblitCommitCleanupCompletePersistenceError,
     persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen,
 };
+pub(in crate::client) use active_reblit_commit_cleanup_complete_to_complete::persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding;
 
 pub(super) use active_reblit_complete_finalization::{
     ActiveReblitCompleteFinalizationError, finalize_active_reblit_complete,

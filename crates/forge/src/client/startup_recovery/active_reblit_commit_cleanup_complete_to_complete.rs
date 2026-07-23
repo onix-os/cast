@@ -11,7 +11,9 @@ use crate::{
     },
 };
 
-use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
+use super::canonical_journal_reopen::{
+    CanonicalJournalReopenError, reopen_canonical_journal, try_reopen_canonical_journal,
+};
 use super::super::startup_reconciliation::{
     ActiveReblitCommitCleanupCompleteAuthorityError,
     ActiveReblitCommitCleanupCompleteAuthority,
@@ -46,11 +48,59 @@ enum AdvanceOutcome<'reservation> {
     },
 }
 
+#[derive(Clone, Copy)]
+enum CanonicalReopenMode {
+    StartupBlocking,
+    RetainedNonBlocking,
+}
+
 pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(
     journal: TransitionJournalStore,
     authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
 ) -> Result<
     (TransitionJournalStore, TransitionRecord),
+    ActiveReblitCommitCleanupCompletePersistenceError,
+> {
+    let (journal, record, binding) =
+        persist_active_reblit_commit_cleanup_complete_to_complete_inner(
+            journal,
+            authority,
+            CanonicalReopenMode::StartupBlocking,
+        )?;
+    drop(binding);
+    Ok((journal, record))
+}
+
+/// Persist exact live generation-14 completion while returning the fresh
+/// generation-15 binding required by continuous coordinator ownership.
+pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding(
+    journal: TransitionJournalStore,
+    authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
+) -> Result<
+    (
+        TransitionJournalStore,
+        TransitionRecord,
+        TransitionJournalRecordBinding,
+    ),
+    ActiveReblitCommitCleanupCompletePersistenceError,
+> {
+    persist_active_reblit_commit_cleanup_complete_to_complete_inner(
+        journal,
+        authority,
+        CanonicalReopenMode::RetainedNonBlocking,
+    )
+}
+
+fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
+    journal: TransitionJournalStore,
+    authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
+    reopen_mode: CanonicalReopenMode,
+) -> Result<
+    (
+        TransitionJournalStore,
+        TransitionRecord,
+        TransitionJournalRecordBinding,
+    ),
     ActiveReblitCommitCleanupCompletePersistenceError,
 > {
     let source_record = authority.record().clone();
@@ -104,7 +154,10 @@ pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_comple
     if matches!(advance, AdvanceOutcome::Published { .. }) {
         after_active_reblit_commit_cleanup_complete_same_store_before_reopen();
     }
-    let reopened = reopen_canonical_journal(&installation)
+    let reopened = match reopen_mode {
+        CanonicalReopenMode::StartupBlocking => reopen_canonical_journal(&installation),
+        CanonicalReopenMode::RetainedNonBlocking => try_reopen_canonical_journal(&installation),
+    }
         .map_err(ActiveReblitCommitCleanupCompleteReopenError::from);
 
     match advance {
@@ -174,11 +227,11 @@ pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_comple
                     &fresh_binding,
                     &successor,
                 );
-                drop(fresh_binding);
                 drop(post_advance);
                 match validation {
-                    Ok(()) => Ok((reopened, successor)),
+                    Ok(()) => Ok((reopened, successor, fresh_binding)),
                     Err(source) => {
+                        drop(fresh_binding);
                         drop(reopened);
                         Err(
                             ActiveReblitCommitCleanupCompletePersistenceError::PostAdvanceValidation {

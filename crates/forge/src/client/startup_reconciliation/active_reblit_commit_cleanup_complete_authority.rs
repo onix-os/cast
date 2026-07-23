@@ -2,6 +2,8 @@
 //! cleanup record to `Complete` while retaining stable receipt-chain evidence,
 //! which may be empty for the exact no-boot route.
 
+mod retained_binding;
+
 use crate::{
     Installation, State, db, state,
     transition_journal::{
@@ -91,6 +93,13 @@ enum ActiveReblitCommitCleanupCompleteDatabaseInspection {
     Incompatible,
 }
 
+enum ActiveReblitCommitCleanupCompleteCapture<'reservation> {
+    NotApplicable,
+    Deferred,
+    Apply,
+    Ready(ActiveReblitCommitCleanupCompleteAuthority<'reservation>),
+}
+
 impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
     pub(in crate::client) fn capture<'reservation>(
         _seal: &ActiveReblitCommitCleanupCompleteSeal,
@@ -103,31 +112,72 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
         ActiveReblitCommitCleanupCompleteAdmission<'reservation>,
         ActiveReblitCommitCleanupCompleteAuthorityError,
     > {
+        let captured = Self::capture_with_record_binding(
+            installation,
+            journal,
+            state_db,
+            active_state_reservation,
+            record,
+            || {
+                installation.revalidate_mutable_namespace()?;
+                let binding = journal.record_binding(
+                    installation.retained_mutable_cast_directory()?,
+                    record,
+                )?;
+                installation.revalidate_mutable_namespace()?;
+                Ok(binding)
+            },
+        )?;
+        Ok(match captured {
+            ActiveReblitCommitCleanupCompleteCapture::NotApplicable => {
+                ActiveReblitCommitCleanupCompleteAdmission::NotApplicable
+            }
+            ActiveReblitCommitCleanupCompleteCapture::Deferred
+            | ActiveReblitCommitCleanupCompleteCapture::Apply => {
+                ActiveReblitCommitCleanupCompleteAdmission::Deferred
+            }
+            ActiveReblitCommitCleanupCompleteCapture::Ready(authority) => {
+                ActiveReblitCommitCleanupCompleteAdmission::Ready(authority)
+            }
+        })
+    }
+
+    fn capture_with_record_binding<'reservation>(
+        installation: &Installation,
+        journal: &TransitionJournalStore,
+        state_db: &db::state::Database,
+        active_state_reservation: &'reservation ActiveStateReservation,
+        record: &TransitionRecord,
+        capture_binding: impl FnOnce() -> Result<
+            TransitionJournalRecordBinding,
+            ActiveReblitCommitCleanupCompleteAuthorityError,
+        >,
+    ) -> Result<
+        ActiveReblitCommitCleanupCompleteCapture<'reservation>,
+        ActiveReblitCommitCleanupCompleteAuthorityError,
+    > {
         if record.operation != Operation::ActiveReblit
             || record.phase != Phase::CommitCleanupComplete
         {
-            return Ok(ActiveReblitCommitCleanupCompleteAdmission::NotApplicable);
+            return Ok(ActiveReblitCommitCleanupCompleteCapture::NotApplicable);
         }
 
         // Bind the non-clone source inode before inspecting any mutable
         // database, active-selection, or namespace evidence.
-        installation.revalidate_mutable_namespace()?;
-        let journal_record_binding = journal.record_binding(
-            installation.retained_mutable_cast_directory()?,
-            record,
-        )?;
+        let journal_record_binding = capture_binding()?;
+        require_exact_record_binding(installation, journal, &journal_record_binding, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let receipt_correlation = record
             .boot_publication_receipt_correlation()
             .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::Record)?;
         let Some(route_plan) = exact_route_plan(record, receipt_correlation) else {
-            return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred);
+            return Ok(ActiveReblitCommitCleanupCompleteCapture::Deferred);
         };
         let database_before = match inspect_current_database_for_plan(record, &route_plan, state_db)? {
             ActiveReblitCommitCleanupCompleteDatabaseInspection::Exact(database) => database,
             ActiveReblitCommitCleanupCompleteDatabaseInspection::Incompatible => {
-                return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred);
+                return Ok(ActiveReblitCommitCleanupCompleteCapture::Deferred);
             }
         };
         let active_state = match capture_exact_active_state(
@@ -136,7 +186,7 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
             active_state_reservation,
         )? {
             Some(active_state) => active_state,
-            None => return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred),
+            None => return Ok(ActiveReblitCommitCleanupCompleteCapture::Deferred),
         };
         let inspection = match ActiveReblitCommitCleanupNamespaceInspection::begin(
             installation,
@@ -146,7 +196,7 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
         ) {
             Ok(inspection) => inspection,
             Err(source) if active_reblit_commit_cleanup_namespace_error_is_mismatch(&source) => {
-                return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred);
+                return Ok(ActiveReblitCommitCleanupCompleteCapture::Deferred);
             }
             Err(source) => return Err(source.into()),
         };
@@ -159,7 +209,7 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
         )? {
             ActiveReblitCommitCleanupNamespaceProof::Finish(namespace) => namespace,
             ActiveReblitCommitCleanupNamespaceProof::Apply(_) => {
-                return Ok(ActiveReblitCommitCleanupCompleteAdmission::Deferred);
+                return Ok(ActiveReblitCommitCleanupCompleteCapture::Apply);
             }
         };
         let database_after = require_exact_database(
@@ -192,7 +242,7 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
             journal_record_binding,
             _active_state_reservation: active_state_reservation,
         };
-        Ok(ActiveReblitCommitCleanupCompleteAdmission::Ready(
+        Ok(ActiveReblitCommitCleanupCompleteCapture::Ready(
             ActiveReblitCommitCleanupCompleteAuthority { evidence },
         ))
     }
@@ -820,6 +870,8 @@ enum ActiveReblitCommitCleanupCompleteAuthorityErrorKind {
     RouteEvidenceChanged,
     #[error("the retained successor is not exact ActiveReblit Complete")]
     UnexpectedSuccessor,
+    #[error("the retained live CommitCleanupComplete binding is not the exact generation-14 Finish route")]
+    RetainedCommitCleanupCompleteRejected,
     #[error("revalidate retained mutable installation namespace")]
     Installation(#[source] crate::installation::Error),
     #[error("read or bind retained transition journal")]

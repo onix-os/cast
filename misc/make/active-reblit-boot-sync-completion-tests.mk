@@ -10,14 +10,35 @@ forge-active-reblit-boot-commit-decision-test:
 
 ACTIVE_REBLIT_BOOT_COMMIT_CLEANUP_FILTER ?= client::active_reblit_boot_publication_preflight::immutable_attempt::tests::receipt_promotion::completion::commit_cleanup::
 
-forge-active-reblit-boot-commit-cleanup-test: forge-startup-active-reblit-commit-cleanup-authority-test forge-startup-active-reblit-commit-cleanup-effect-test forge-startup-active-reblit-commit-cleanup-dispatch-test
+forge-active-reblit-boot-commit-cleanup-test: forge-startup-active-reblit-commit-cleanup-authority-test forge-startup-active-reblit-commit-cleanup-effect-test forge-startup-active-reblit-commit-cleanup-dispatch-test forge-startup-active-reblit-commit-cleanup-complete-test
 	@set -euo pipefail; \
 	forge_root="$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/crates/forge/src"; \
+	attempt="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt.rs"; \
 	cleanup_outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion/commit_decision/commit_cleanup.rs"; \
+	complete_outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion/commit_decision/commit_cleanup/complete.rs"; \
 	cleanup_staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence/commit_decision_handoff/commit_cleanup_handoff.rs"; \
+	complete_staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence/commit_decision_handoff/commit_cleanup_handoff/complete_handoff.rs"; \
 	cleanup_authority="$$forge_root/client/startup_reconciliation/active_reblit_commit_cleanup_authority.rs"; \
 	cleanup_persistence="$$forge_root/client/startup_recovery/active_reblit_commit_cleanup_complete.rs"; \
-	if rg --pcre2 -n '[.](?:publish_from_staged_authority|publish_preflighted_immutable_leaf|publish_immutable_boot_file_until|replace_exact_boot_file_until|cleanup_replaced_boot_file_sidecar_until|cleanup_restored_boot_file_sidecar_until|cleanup_authenticated_stale_boot_file_until|stage_boot_publication_receipt|promote_boot_publication_receipt|clear_boot_publication_receipt|delete_boot_publication_receipt|delete_record_binding(?:_until)?)\(|(?:postblit::triggers|execute_trigger_directly|before_ephemeral_system_triggers|after_ephemeral_system_triggers)\(|system_trigger_container::|finalize_active_reblit|ActiveReblitCompleteFinalization|Phase::Complete\b|remove_(?:file|dir)|unlinkat|renameat|Command::new|(?:nix::|libc::)(?:mount|umount)' "$$cleanup_outer" "$$cleanup_staging" "$$cleanup_authority" "$$cleanup_persistence"; then \
+	complete_authority="$$forge_root/client/startup_reconciliation/active_reblit_commit_cleanup_complete_authority.rs"; \
+	complete_retained_authority="$$forge_root/client/startup_reconciliation/active_reblit_commit_cleanup_complete_authority/retained_binding.rs"; \
+	complete_persistence="$$forge_root/client/startup_recovery/active_reblit_commit_cleanup_complete_to_complete.rs"; \
+	complete_seal_mints="$$( rg -n -F 'ActiveReblitCommitCleanupCompleteSeal { _private: () }' "$$forge_root" --glob '*.rs' --glob '!**/tests/**' --glob '!**/tests.rs' --glob '!**/*_tests.rs' --glob '!**/*_test.rs' )"; \
+	test "$$( grep -c . <<<"$$complete_seal_mints" )" = 1; \
+	grep -Fq "$$complete_outer:" <<<"$$complete_seal_mints"; \
+	if rg --pcre2 -U -n '#\[derive\([^]]*(?:Clone|Copy)[^]]*\)\]\s*pub\(in crate::client\) struct (?:ActiveReblitCommitCleanupCompleteSeal|ActiveReblitBootCompleteHandoff|CompleteStagedActiveReblitBootSync)|impl(?:<[^>]+>)?\s+(?:Clone|Copy)\s+for\s+(?:ActiveReblitCommitCleanupCompleteSeal|ActiveReblitBootCompleteHandoff|CompleteStagedActiveReblitBootSync)' "$$attempt" "$$complete_outer" "$$complete_staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	if rg -n 'pub(?:\(in crate::client\))? (?:const )?fn (?:new|from_parts|into_parts)\(' "$$complete_outer" "$$complete_staging"; then exit 1; else status="$$?"; test "$$status" = 1; fi; \
+	test "$$( grep -Fc 'pub(in crate::client) fn capture_retained_binding' "$$complete_retained_authority" )" = 1; \
+	grep -Fq 'record.generation != 14' "$$complete_retained_authority"; \
+	grep -Fq 'ActiveReblitCommitCleanupCompleteCapture::Apply => Err(' "$$complete_retained_authority"; \
+	grep -Fq 'CanonicalReopenMode::RetainedNonBlocking => try_reopen_canonical_journal(&installation)' "$$complete_persistence"; \
+	test "$$( grep -Fc 'authority.advance_to_complete(&journal)' "$$complete_persistence" )" = 1; \
+	if rg -n 'advance_record_binding_until|advance_to_complete_until|ActiveReblitBootCommitDecisionFinalValidation|input_deadline\(' "$$complete_outer" "$$complete_staging" "$$complete_retained_authority" "$$complete_persistence"; then \
+		printf '%s\n' 'live Complete roll-forward may not add callback, deadline, or until-based advance authority' >&2; exit 1; \
+	else \
+		status="$$?"; test "$$status" = 1; \
+	fi; \
+	if rg --pcre2 -n '[.](?:publish_from_staged_authority|publish_preflighted_immutable_leaf|publish_immutable_boot_file_until|replace_exact_boot_file_until|cleanup_replaced_boot_file_sidecar_until|cleanup_restored_boot_file_sidecar_until|cleanup_authenticated_stale_boot_file_until|stage_boot_publication_receipt|promote_boot_publication_receipt|clear_boot_publication_receipt|delete_boot_publication_receipt|delete_record_binding(?:_until)?)\(|(?:postblit::triggers|execute_trigger_directly|before_ephemeral_system_triggers|after_ephemeral_system_triggers)\(|system_trigger_container::|finalize_active_reblit|ActiveReblitCompleteFinalization|remove_(?:file|dir)|unlinkat|renameat|Command::new|(?:nix::|libc::)(?:mount|umount)' "$$cleanup_outer" "$$complete_outer" "$$cleanup_staging" "$$complete_staging" "$$cleanup_authority" "$$complete_authority" "$$complete_retained_authority" "$$cleanup_persistence" "$$complete_persistence"; then \
 		printf '%s\n' 'live commit cleanup contains an unrelated boot, receipt, journal-delete, trigger, finalization, command, or mount effect' >&2; exit 1; \
 	else \
 		status="$$?"; test "$$status" = 1; \
@@ -32,9 +53,13 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	$(CARGO) test --manifest-path "$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/Cargo.toml" -p forge --lib -- --list | tee "$$listed" >/dev/null; \
 	test -s "$$listed"; \
 	prefix='client::active_reblit_boot_publication_preflight::immutable_attempt::tests::receipt_promotion::completion::'; \
-	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 20; \
+	test "$$( grep -Ec "^$$prefix.*: test$$" "$$listed" )" = 24; \
 	for name in \
-		completion_behavioral_scenario_inventory_is_exactly_thirty_six \
+		completion_behavioral_scenario_inventory_is_exactly_forty \
+		commit_cleanup::complete::complete_reopen_never_waits_behind_writer_blocked_journal_contender \
+		commit_cleanup::complete::exact_cleanup_complete_rolls_forward_once_and_preserves_all_authority \
+		commit_cleanup::complete::same_bytes_new_inode_rejects_complete_without_any_effect \
+		commit_cleanup::complete::uncertain_complete_advance_returns_no_handoff \
 		commit_cleanup::commit_cleanup_reopen_never_waits_behind_writer_blocked_journal_contender \
 		commit_cleanup::exact_commit_decision_applies_cleanup_once_and_retains_writer_authority \
 		commit_cleanup::replaced_binding_and_uncertain_advance_return_no_cleanup_handoff \
@@ -62,16 +87,21 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 	outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion.rs"; \
 	commit_outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion/commit_decision.rs"; \
 	cleanup_outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion/commit_decision/commit_cleanup.rs"; \
+	complete_outer="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/boot_sync_completion/commit_decision/commit_cleanup/complete.rs"; \
 	terminal="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/terminal_evidence.rs"; \
 	evidence="$$forge_root/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/effect_evidence.rs"; \
 	staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence.rs"; \
 	commit_staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence/commit_decision_handoff.rs"; \
 	cleanup_staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence/commit_decision_handoff/commit_cleanup_handoff.rs"; \
+	complete_staging="$$forge_root/client/boot/active_reblit_boot_sync_staging/boot_sync_complete_persistence/commit_decision_handoff/commit_cleanup_handoff/complete_handoff.rs"; \
 	staging_parent="$$forge_root/client/boot/active_reblit_boot_sync_staging.rs"; \
 	commit_persistence="$$forge_root/client/startup_recovery/active_reblit_boot_sync_commit_decision.rs"; \
 	commit_authority="$$forge_root/client/startup_reconciliation/active_reblit_boot_sync_complete_authority.rs"; \
 	cleanup_authority="$$forge_root/client/startup_reconciliation/active_reblit_commit_cleanup_authority.rs"; \
 	cleanup_persistence="$$forge_root/client/startup_recovery/active_reblit_commit_cleanup_complete.rs"; \
+	complete_authority="$$forge_root/client/startup_reconciliation/active_reblit_commit_cleanup_complete_authority.rs"; \
+	complete_retained_authority="$$forge_root/client/startup_reconciliation/active_reblit_commit_cleanup_complete_authority/retained_binding.rs"; \
+	complete_persistence="$$forge_root/client/startup_recovery/active_reblit_commit_cleanup_complete_to_complete.rs"; \
 	canonical_reopen="$$forge_root/client/startup_recovery/canonical_journal_reopen.rs"; \
 	seal_mints="$$( rg -n -F 'ActiveReblitBootSyncCompletionSeal { _private: () }' "$$forge_root" \
 		--glob '*.rs' \
@@ -178,19 +208,25 @@ forge-active-reblit-boot-sync-completion-test: forge-active-reblit-boot-terminal
 		"$$outer" \
 		"$$commit_outer" \
 		"$$cleanup_outer" \
+		"$$complete_outer" \
 		"$$terminal" \
 		"$$evidence" \
 		"$$staging" \
 		"$$commit_staging" \
 		"$$cleanup_staging" \
+		"$$complete_staging" \
 		"$$staging_parent" \
 		"$$commit_persistence" \
 		"$$commit_authority" \
 		"$$cleanup_authority" \
 		"$$cleanup_persistence" \
+		"$$complete_authority" \
+		"$$complete_retained_authority" \
+		"$$complete_persistence" \
 		"$$canonical_reopen" \
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion.rs \
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion/*.rs \
+		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)"/crates/forge/src/client/boot/active_reblit_boot_publication_preflight/immutable_attempt/receipt_promotion/tests/completion/*/*.rs \
 		"$(ACTIVE_REBLIT_BOOT_SYNC_COMPLETION_TOP_DIR)/misc/make/active-reblit-boot-sync-completion-tests.mk"; do \
 		test "$$( wc -l < "$$file" )" -le 1000; \
 	done; \

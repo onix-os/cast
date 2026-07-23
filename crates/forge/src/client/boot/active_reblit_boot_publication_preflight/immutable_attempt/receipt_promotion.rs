@@ -678,6 +678,9 @@ pub(in crate::client) use promoted_cleanup::ActiveReblitBootPromotedCleanupError
 #[path = "receipt_promotion/boot_sync_completion.rs"]
 mod boot_sync_completion;
 pub(in crate::client) use boot_sync_completion::{
+    ActiveReblitBootCompleteError,
+    ActiveReblitBootCompleteHandoff,
+    ActiveReblitBootCompletePostAdvanceError,
     ActiveReblitBootCommitCleanupCompleteHandoff,
     ActiveReblitBootCommitCleanupError,
     ActiveReblitBootCommitCleanupPostAdvanceError,
