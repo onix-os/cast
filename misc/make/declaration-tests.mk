@@ -1,4 +1,8 @@
-.PHONY: declarative-config-test gluon-adapter-test declaration-regression-test
+.PHONY: config-declaration-storage-test declarative-config-test gluon-adapter-test declaration-regression-test
+
+# Language-neutral fixed/generated declaration-slot contracts and persistence.
+config-declaration-storage-test:
+	@$(CARGO) test -p config --lib "declaration::" -- --test-threads=1
 
 # Shared declaration-core tests plus the typed adapter-boundary proof.
 declarative-config-test:

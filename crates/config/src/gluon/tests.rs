@@ -1,13 +1,19 @@
 use std::{
     cell::Cell,
-    os::unix::fs::symlink,
+    ffi::{CString, OsString},
+    os::unix::{ffi::OsStrExt as _, fs::symlink},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
+use fs_err::os::unix::fs::OpenOptionsExt as _;
+
 use super::*;
-use crate::Scope;
+use crate::{
+    Scope,
+    declaration::managed_directory::inspect_existing_declaration,
+};
 use gluon_config::{DiagnosticCategory, LimitKind, Limits};
 
 impl Config for String {
@@ -366,7 +372,7 @@ fn an_open_collection_descriptor_cannot_be_redirected() {
     let outside = temporary.path().join("outside");
     write(collection.join("inside.txt"), "inside");
     write(outside.join("outside.txt"), "outside");
-    let directory = FragmentDirectory::open(&collection).unwrap();
+    let directory = ManagedDirectory::open(&collection).unwrap();
 
     fs::rename(&collection, &held).unwrap();
     symlink(&outside, &collection).unwrap();
@@ -635,7 +641,7 @@ fn generated_output_accepts_n_bytes_and_rejects_n_plus_one() {
 #[test]
 fn existing_fragment_inspection_accepts_n_bytes_and_rejects_n_plus_one() {
     let temporary = tempfile::tempdir().unwrap();
-    let directory = FragmentDirectory::open(temporary.path()).unwrap();
+    let directory = ManagedDirectory::open(temporary.path()).unwrap();
     let name = OsStr::new("bounded.glu");
     let path = temporary.path().join(name);
     let limit = 64;
@@ -644,15 +650,15 @@ fn existing_fragment_inspection_accepts_n_bytes_and_rejects_n_plus_one() {
     fs::write(&path, &content).unwrap();
 
     assert!(
-        inspect_existing_fragment(&directory, name, limit)
+        inspect_existing_declaration(&directory, name, limit, GENERATED_GLUON_MARKER.as_bytes())
             .unwrap()
             .unwrap()
-            .generated
+            .is_generated()
     );
 
     content.push(b'x');
     fs::write(path, content).unwrap();
-    let error = inspect_existing_fragment(&directory, name, limit).unwrap_err();
+    let error = inspect_existing_declaration(&directory, name, limit, GENERATED_GLUON_MARKER.as_bytes()).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
     assert!(error.to_string().contains("65 bytes; limit is 64 bytes"));
 }
@@ -706,25 +712,19 @@ fn save_and_delete_reject_a_fifo_without_blocking() {
 #[test]
 fn a_failed_atomic_commit_removes_its_unpredictable_staging_file() {
     let temporary = tempfile::tempdir().unwrap();
-    let directory = FragmentDirectory::open(temporary.path()).unwrap();
-    let name = OsStr::new("target.glu");
-    let target = temporary.path().join(name);
+    let slot = generated_gluon_slot(temporary.path().to_owned(), "target".to_owned());
+    let target = slot.path();
 
-    let error = atomic_write_with_hook(
-        &directory,
-        name,
-        &target,
-        GENERATED_GLUON_MARKER.as_bytes(),
-        ExpectedTarget::Missing,
-        |temporary_path| {
+    let error = slot
+        .save_with_hook(GENERATED_GLUON_MARKER.as_bytes(), |temporary_path| {
             let temporary_name = temporary_path.file_name().unwrap().to_string_lossy();
             let random = temporary_name.strip_prefix(TEMPORARY_PREFIX).unwrap();
-            assert_eq!(random.len(), TEMPORARY_RANDOM_BYTES * 2);
+            assert_eq!(random.len(), 32);
             assert!(random.bytes().all(|byte| byte.is_ascii_hexdigit()));
             fs::create_dir(&target).unwrap();
-        },
-    )
-    .unwrap_err();
+        })
+        .map_err(map_save_error)
+        .unwrap_err();
 
     assert!(matches!(error, SaveGluonError::Rename { .. }));
     assert!(target.is_dir());
@@ -737,53 +737,37 @@ fn replacing_a_managed_directory_cannot_redirect_an_atomic_save() {
     let managed = temporary.path().join("managed");
     let held = temporary.path().join("held");
     fs::create_dir(&managed).unwrap();
-    let directory = FragmentDirectory::open(&managed).unwrap();
-    let name = OsStr::new("target.glu");
-    let target = managed.join(name);
+    let slot = generated_gluon_slot(managed.clone(), "target".to_owned());
 
-    let error = atomic_write_with_hook(
-        &directory,
-        name,
-        &target,
-        GENERATED_GLUON_MARKER.as_bytes(),
-        ExpectedTarget::Missing,
-        |_| {
+    let error = slot
+        .save_with_hook(GENERATED_GLUON_MARKER.as_bytes(), |_| {
             fs::rename(&managed, &held).unwrap();
             fs::create_dir(&managed).unwrap();
-        },
-    )
-    .unwrap_err();
+        })
+        .map_err(map_save_error)
+        .unwrap_err();
 
     assert!(matches!(error, SaveGluonError::ReadExisting { .. }));
     assert!(fs::read_dir(&managed).unwrap().next().is_none());
-    assert!(!held.join(name).exists());
+    assert!(!held.join("target.glu").exists());
     assert_no_temporary_fragments(&held);
 }
 
 #[test]
 fn generated_marker_rechecks_fail_closed_when_the_target_is_replaced() {
     let temporary = tempfile::tempdir().unwrap();
-    let directory = FragmentDirectory::open(temporary.path()).unwrap();
-    let name = OsStr::new("race.glu");
-    let target = temporary.path().join(name);
+    let slot = generated_gluon_slot(temporary.path().to_owned(), "race".to_owned());
+    let target = slot.path();
     fs::write(&target, format!("{GENERATED_GLUON_MARKER}\"old\"\n")).unwrap();
-    let expected = inspect_existing_fragment(&directory, name, MAX_GENERATED_GLUON_BYTES)
-        .unwrap()
-        .unwrap()
-        .identity;
 
-    let error = atomic_write_with_hook(
-        &directory,
-        name,
-        &target,
-        format!("{GENERATED_GLUON_MARKER}\"new\"\n").as_bytes(),
-        ExpectedTarget::Generated(expected),
-        |_| {
+    let generated = format!("{GENERATED_GLUON_MARKER}\"new\"\n");
+    let error = slot
+        .save_with_hook(generated.as_bytes(), |_| {
             fs::remove_file(&target).unwrap();
             fs::write(&target, "\"authored replacement\"\n").unwrap();
-        },
-    )
-    .unwrap_err();
+        })
+        .map_err(map_save_error)
+        .unwrap_err();
 
     assert!(matches!(error, SaveGluonError::ReadExisting { .. }));
     assert_eq!(fs::read_to_string(&target).unwrap(), "\"authored replacement\"\n");

@@ -7,6 +7,8 @@ use std::{
 mod gluon;
 mod rooted_gluon;
 
+pub mod declaration;
+
 pub use self::gluon::{
     DecodedGluon, DeleteGluonError, GENERATED_GLUON_MARKER, GluonCodec, GluonCodecError, GluonConversionError,
     LoadGluonError, LoadedGluonConfig, SaveGluonError,

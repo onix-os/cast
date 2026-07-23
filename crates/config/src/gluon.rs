@@ -1,23 +1,25 @@
 use std::{
     collections::BTreeMap,
     error::Error,
-    ffi::{CStr, CString, OsStr, OsString},
+    ffi::OsStr,
     fmt,
     fs::Metadata,
-    io::{self, Read as _, Write as _},
-    os::{
-        fd::{AsRawFd as _, FromRawFd as _, OwnedFd},
-        unix::{
-            ffi::{OsStrExt as _, OsStringExt as _},
-            fs::MetadataExt as _,
-        },
-    },
+    io,
     path::{Component, Path, PathBuf},
 };
 
 use fs_err as fs;
-use fs_err::os::unix::fs::OpenOptionsExt as _;
-use gluon_config::{Evaluation, EvaluationFingerprint, Evaluator, Source, SourceRoot};
+use gluon_config::{
+    Evaluation, EvaluationFingerprint, Evaluator, GluonEngine, Source,
+    SourceRoot,
+};
+
+use crate::declaration::{
+    DeleteDeclarationError, GeneratedDeclarationSlot, SaveDeclarationError,
+    managed_directory::{
+        BoundedDirectoryEntries, FileSnapshot, ManagedDirectory,
+    },
+};
 
 use super::{Config, Entry, Manager, Resolve};
 
@@ -36,8 +38,6 @@ pub(super) const MAX_GLUON_FRAGMENT_NAME_BYTES: usize = 251;
 /// Authored fragments use the (possibly stricter) limit of their evaluator.
 const MAX_GENERATED_GLUON_BYTES: usize = 1024 * 1024;
 
-const TEMPORARY_RANDOM_BYTES: usize = 16;
-const TEMPORARY_CREATE_ATTEMPTS: usize = 100;
 const TEMPORARY_PREFIX: &str = ".gluon-tmp-";
 
 pub type GluonConversionError = Box<dyn Error + Send + Sync + 'static>;
@@ -426,37 +426,11 @@ impl Manager {
             generated.push('\n');
         }
 
-        let domain = C::Config::domain();
-        let dir = self.scope.save_dir(&domain);
-        fs::create_dir_all(&dir).map_err(|source| SaveGluonError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
-        let directory = FragmentDirectory::open(&dir).map_err(|source| SaveGluonError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
-        directory.verify_path().map_err(|source| SaveGluonError::CreateDir {
-            path: dir.clone(),
-            source,
-        })?;
-        let file_name = OsString::from(format!("{name}.glu"));
-        let path = dir.join(&file_name);
-        let expected =
-            match inspect_existing_fragment(&directory, &file_name, MAX_GENERATED_GLUON_BYTES).map_err(|source| {
-                SaveGluonError::ReadExisting {
-                    path: path.clone(),
-                    source,
-                }
-            })? {
-                None => ExpectedTarget::Missing,
-                Some(existing) if existing.generated => ExpectedTarget::Generated(existing.identity),
-                Some(_) => {
-                    return Err(SaveGluonError::AuthoredFragment { path });
-                }
-            };
-        atomic_write(&directory, &file_name, &path, generated.as_bytes(), expected)?;
-        Ok(path)
+        let slot = generated_gluon_slot(
+            self.scope.save_dir(&C::Config::domain()),
+            name,
+        );
+        slot.save(generated.as_bytes()).map_err(map_save_error)
     }
 
     /// Delete only the named generated Gluon fragment, leaving unrelated
@@ -474,65 +448,91 @@ impl Manager {
         if !is_safe_fragment_name(&name) {
             return Err(DeleteGluonError::InvalidName { name });
         }
-        let dir = self.scope.save_dir(&T::domain());
-        let file_name = OsString::from(format!("{name}.glu"));
-        let path = dir.join(&file_name);
-        let directory = match FragmentDirectory::open(&dir) {
-            Ok(directory) => directory,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(source) => {
-                return Err(DeleteGluonError::ReadExisting { path, source });
+        let slot = generated_gluon_slot(
+            self.scope.save_dir(&T::domain()),
+            name,
+        );
+        slot.delete_with_hook(before_remove).map_err(map_delete_error)
+    }
+}
+
+fn generated_gluon_slot(
+    directory: PathBuf,
+    name: String,
+) -> GeneratedDeclarationSlot {
+    GeneratedDeclarationSlot::new(
+        directory,
+        name,
+        GluonEngine::default().language_spec().clone(),
+        GENERATED_GLUON_MARKER,
+        MAX_GENERATED_GLUON_BYTES,
+        TEMPORARY_PREFIX,
+    )
+    .expect("validated Gluon fragment policy produces a valid declaration slot")
+}
+
+fn map_save_error(error: SaveDeclarationError) -> SaveGluonError {
+    match error {
+        SaveDeclarationError::CreateDirectory { path, source } => {
+            SaveGluonError::CreateDir { path, source }
+        }
+        SaveDeclarationError::MissingOwnershipMarker { path } => {
+            SaveGluonError::WriteTemporary {
+                path,
+                source: io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "generated Gluon fragment lacks its ownership marker",
+                ),
             }
-        };
-        directory
-            .verify_path()
-            .map_err(|source| DeleteGluonError::ReadExisting {
-                path: path.clone(),
-                source,
-            })?;
-        let existing =
-            match inspect_existing_fragment(&directory, &file_name, MAX_GENERATED_GLUON_BYTES).map_err(|source| {
-                DeleteGluonError::ReadExisting {
-                    path: path.clone(),
-                    source,
-                }
-            })? {
-                None => return Ok(()),
-                Some(existing) if existing.generated => existing,
-                Some(_) => return Err(DeleteGluonError::AuthoredFragment { path }),
-            };
-        before_remove();
-        directory
-            .verify_path()
-            .map_err(|source| DeleteGluonError::ReadExisting {
-                path: path.clone(),
-                source,
-            })?;
-        require_same_generated_fragment(&directory, &file_name, existing.identity).map_err(|source| {
-            DeleteGluonError::ReadExisting {
-                path: path.clone(),
-                source,
-            }
-        })?;
-        directory
-            .unlink(&file_name)
-            .map_err(|source| DeleteGluonError::Remove {
-                path: path.clone(),
-                source,
-            })?;
-        directory.sync().map_err(|source| DeleteGluonError::SyncDirectory {
-            path: dir.clone(),
-            source,
-        })?;
-        directory
-            .verify_path()
-            .map_err(|source| DeleteGluonError::SyncDirectory { path: dir, source })
+        }
+        SaveDeclarationError::ReadExisting { path, source } => {
+            SaveGluonError::ReadExisting { path, source }
+        }
+        SaveDeclarationError::AuthoredDeclaration { path } => {
+            SaveGluonError::AuthoredFragment { path }
+        }
+        SaveDeclarationError::CreateTemporary { path, source } => {
+            SaveGluonError::CreateTemporary { path, source }
+        }
+        SaveDeclarationError::WriteTemporary { path, source } => {
+            SaveGluonError::WriteTemporary { path, source }
+        }
+        SaveDeclarationError::SyncTemporary { path, source } => {
+            SaveGluonError::SyncTemporary { path, source }
+        }
+        SaveDeclarationError::CleanupTemporary { path, source } => {
+            SaveGluonError::CleanupTemporary { path, source }
+        }
+        SaveDeclarationError::GeneratedTooLarge { size, limit } => {
+            SaveGluonError::GeneratedTooLarge { size, limit }
+        }
+        SaveDeclarationError::Rename { from, to, source } => {
+            SaveGluonError::Rename { from, to, source }
+        }
+        SaveDeclarationError::SyncDirectory { path, source } => {
+            SaveGluonError::SyncDirectory { path, source }
+        }
+    }
+}
+
+fn map_delete_error(error: DeleteDeclarationError) -> DeleteGluonError {
+    match error {
+        DeleteDeclarationError::ReadExisting { path, source } => {
+            DeleteGluonError::ReadExisting { path, source }
+        }
+        DeleteDeclarationError::AuthoredDeclaration { path } => {
+            DeleteGluonError::AuthoredFragment { path }
+        }
+        DeleteDeclarationError::Remove { path, source } => {
+            DeleteGluonError::Remove { path, source }
+        }
+        DeleteDeclarationError::SyncDirectory { path, source } => {
+            DeleteGluonError::SyncDirectory { path, source }
+        }
     }
 }
 
 include!("gluon/fragment_collection.rs");
-
-include!("gluon/atomic_persistence.rs");
 
 #[cfg(test)]
 mod tests;
