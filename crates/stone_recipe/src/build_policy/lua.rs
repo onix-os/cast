@@ -18,8 +18,8 @@ use lua_config::LuaPatch;
 use serde::Deserialize;
 
 use super::{
-    ArrayPatch, BuildToolSpec, CompilerFlagsSpec, ContextValue, InstallLayoutSpec, TextSpec,
-    ValuePatch,
+    ArrayPatch, BuildCommandSpec, BuildProgramSpec, BuildToolSpec, CompilerFlagsSpec,
+    CompilerToolsSpec, ContextValue, InstallLayoutSpec, TextSpec, ToolchainsSpec, ValuePatch,
 };
 
 /// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
@@ -197,6 +197,93 @@ impl From<LuaInstallLayoutSpec> for InstallLayoutSpec {
     }
 }
 
+/// The Lua encoding of a [`BuildProgramSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaBuildProgramSpec {
+    pub path: String,
+    pub requirement: LuaBuildToolSpec,
+}
+
+impl From<LuaBuildProgramSpec> for BuildProgramSpec {
+    fn from(program: LuaBuildProgramSpec) -> Self {
+        Self {
+            path: program.path,
+            requirement: program.requirement.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`BuildCommandSpec`].
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaBuildCommandSpec {
+    pub program: LuaBuildProgramSpec,
+    pub args: Vec<String>,
+}
+
+impl From<LuaBuildCommandSpec> for BuildCommandSpec {
+    fn from(command: LuaBuildCommandSpec) -> Self {
+        Self {
+            program: command.program.into(),
+            args: command.args,
+        }
+    }
+}
+
+/// The Lua encoding of a [`CompilerToolsSpec`] — one build command per toolchain
+/// executable role.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaCompilerToolsSpec {
+    pub cc: LuaBuildCommandSpec,
+    pub cxx: LuaBuildCommandSpec,
+    pub objc: LuaBuildCommandSpec,
+    pub objcxx: LuaBuildCommandSpec,
+    pub cpp: LuaBuildCommandSpec,
+    pub objcpp: LuaBuildCommandSpec,
+    pub objcxxcpp: LuaBuildCommandSpec,
+    pub ar: LuaBuildCommandSpec,
+    pub ld: LuaBuildCommandSpec,
+    pub objcopy: LuaBuildCommandSpec,
+    pub nm: LuaBuildCommandSpec,
+    pub ranlib: LuaBuildCommandSpec,
+    pub strip: LuaBuildCommandSpec,
+}
+
+impl From<LuaCompilerToolsSpec> for CompilerToolsSpec {
+    fn from(tools: LuaCompilerToolsSpec) -> Self {
+        Self {
+            cc: tools.cc.into(),
+            cxx: tools.cxx.into(),
+            objc: tools.objc.into(),
+            objcxx: tools.objcxx.into(),
+            cpp: tools.cpp.into(),
+            objcpp: tools.objcpp.into(),
+            objcxxcpp: tools.objcxxcpp.into(),
+            ar: tools.ar.into(),
+            ld: tools.ld.into(),
+            objcopy: tools.objcopy.into(),
+            nm: tools.nm.into(),
+            ranlib: tools.ranlib.into(),
+            strip: tools.strip.into(),
+        }
+    }
+}
+
+/// The Lua encoding of a [`ToolchainsSpec`] — the LLVM and GNU tool tables.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaToolchainsSpec {
+    pub llvm: LuaCompilerToolsSpec,
+    pub gnu: LuaCompilerToolsSpec,
+}
+
+impl From<LuaToolchainsSpec> for ToolchainsSpec {
+    fn from(toolchains: LuaToolchainsSpec) -> Self {
+        Self {
+            llvm: toolchains.llvm.into(),
+            gnu: toolchains.gnu.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::Source;
@@ -300,6 +387,23 @@ return {
         assert_eq!(flags.c, vec![TextSpec::Literal("-Wall".to_owned())]);
         assert!(flags.cxx.is_empty());
         assert_eq!(flags.ld, vec![TextSpec::Context(ContextValue::LdFlags)]);
+    }
+
+    #[test]
+    fn a_build_command_decodes_program_requirement_and_args() {
+        let source = r#"
+return {
+    program = {
+        path = "/usr/bin/cc",
+        requirement = { kind = "package", value = "llvm" },
+    },
+    args = { "-fPIC", "-O2" },
+}
+"#;
+        let command: BuildCommandSpec = decode::<LuaBuildCommandSpec>(source).into();
+        assert_eq!(command.program.path, "/usr/bin/cc");
+        assert_eq!(command.program.requirement, BuildToolSpec::Package("llvm".to_owned()));
+        assert_eq!(command.args, vec!["-fPIC".to_owned(), "-O2".to_owned()]);
     }
 
     fn literal_layout_field(name: &str) -> String {
