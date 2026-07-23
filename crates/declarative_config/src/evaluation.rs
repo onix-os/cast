@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{error::Error, path::Path};
 
 use crate::{
     AbiCatalog, Diagnostic, EvaluationDeadline, ImportRequest, LanguageSpec, LimitKind, Limits,
@@ -10,6 +10,25 @@ use crate::{
 pub struct Evaluation<T, I> {
     pub value: T,
     pub identity: I,
+}
+
+/// A typed, read-only declaration boundary for one owned domain value.
+pub trait DeclarationEvaluator<T> {
+    type Identity;
+    type Error: Error + Send + Sync + 'static;
+
+    fn language_spec(&self) -> &LanguageSpec;
+
+    fn evaluate(
+        &self,
+        source: &Source,
+    ) -> Result<Evaluation<T, Self::Identity>, Self::Error>;
+}
+
+/// A writable declaration boundary adds canonical encoding without forcing
+/// read-only domains to implement a fake serializer.
+pub trait DeclarationCodec<T>: DeclarationEvaluator<T> {
+    fn encode(&self, value: &T) -> Result<String, Self::Error>;
 }
 
 /// Exact, borrowed identity material prepared by the shared pipeline.

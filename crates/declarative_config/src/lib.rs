@@ -12,8 +12,8 @@ mod source;
 pub use deadline::EvaluationDeadline;
 pub use diagnostic::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
 pub use evaluation::{
-    EngineAdapter, Evaluation, IdentityInputs, TypedDecoder, evaluate, evaluate_file,
-    evaluate_with_inputs,
+    DeclarationCodec, DeclarationEvaluator, EngineAdapter, Evaluation, IdentityInputs,
+    TypedDecoder, evaluate, evaluate_file, evaluate_with_inputs,
 };
 pub use language::{
     AbiId, DescriptorError, EngineId, EvaluatorPolicyId, LanguageId, LanguageSpec,

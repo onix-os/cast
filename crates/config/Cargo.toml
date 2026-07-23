@@ -16,6 +16,7 @@ gluon_config = { path = "../gluon_config" }
 libc.workspace = true
 
 [dev-dependencies]
+declarative_config = { path = "../declarative_config" }
 tempfile.workspace = true
 
 [lints]
