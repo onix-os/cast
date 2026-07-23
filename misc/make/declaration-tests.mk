@@ -1,8 +1,12 @@
-.PHONY: config-declaration-manager-test config-declaration-storage-test declarative-config-test gluon-adapter-test declaration-regression-test
+.PHONY: config-declaration-manager-test config-rooted-declaration-loader-test config-declaration-storage-test declarative-config-test gluon-adapter-test declaration-regression-test
 
 # Language-neutral typed manager dispatch, precedence, and persistence.
 config-declaration-manager-test:
 	@$(CARGO) test -p config --test language_neutral_manager -- --test-threads=1
+
+# Language-neutral descriptor-rooted dispatch, bounds, and revalidation.
+config-rooted-declaration-loader-test:
+	@$(CARGO) test -p config --test rooted_language_neutral_loader -- --test-threads=1
 
 # Language-neutral fixed/generated declaration-slot contracts and persistence.
 config-declaration-storage-test:
@@ -20,7 +24,7 @@ gluon-adapter-test:
 # Existing storage plus all twelve Gluon declaration roots stay green while the
 # boundary moves. The boot-related filters run evaluator tests backed only by
 # synthetic temporary trees; they do not mount, publish, or mutate host disks.
-declaration-regression-test: declarative-config-test gluon-adapter-test config-declaration-manager-test
+declaration-regression-test: declarative-config-test gluon-adapter-test config-declaration-manager-test config-rooted-declaration-loader-test
 	@$(CARGO) test -p config --lib -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test package_v3 -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test build_policy -- --test-threads=1
