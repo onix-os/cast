@@ -21,6 +21,7 @@ use gluon::{
 use crate::{
     Diagnostic, EvaluationFingerprint, ImportPolicy, LimitKind, Limits, Source, SourceRoot,
     deadline::EvaluationDeadline,
+    diagnostic::from_gluon,
     import::{PreparedImports, RestrictedImporter, prepare_imports},
 };
 
@@ -230,7 +231,7 @@ impl Evaluator {
 
         match result {
             Ok(Ok((value, _))) => Ok(Evaluation { value, fingerprint }),
-            Ok(Err(error)) => Err(Diagnostic::from_gluon(error, false)),
+            Ok(Err(error)) => Err(from_gluon(error, false)),
             Err(_) => Err(Diagnostic::internal(format!(
                 "Gluon panicked while evaluating {source_name}"
             ))),

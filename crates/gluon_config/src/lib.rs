@@ -12,7 +12,7 @@ mod import;
 mod limits;
 mod source;
 
-pub use diagnostic::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
+pub use declarative_config::{Diagnostic, DiagnosticCategory, LimitKind, SourceSpan};
 pub use evaluator::{Evaluation, Evaluator};
 pub use fingerprint::{EvaluationFingerprint, EvaluationFingerprintValidationError, ModuleFingerprint};
 pub use import::ImportPolicy;

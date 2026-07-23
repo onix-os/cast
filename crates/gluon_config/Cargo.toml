@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+declarative_config = { path = "../declarative_config" }
 fs-err = { version = "3.3.0", default-features = false }
 gluon.workspace = true
 libc.workspace = true

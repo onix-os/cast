@@ -1,7 +1,8 @@
 .PHONY: declarative-config-test gluon-adapter-test declaration-regression-test
 
-# Test-only proof of the engine-neutral, typed declaration boundary.
+# Shared declaration-core tests plus the typed adapter-boundary proof.
 declarative-config-test:
+	@$(CARGO) test -p declarative_config -- --test-threads=1
 	@$(CARGO) test -p config --test declaration_adapter_contract -- --test-threads=1
 
 # Characterization gate for the current Gluon parser, loader, evaluator, and identity.

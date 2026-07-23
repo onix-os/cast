@@ -17,7 +17,11 @@ use gluon::{
     import::{DefaultImporter, Importer},
 };
 
-use crate::{Diagnostic, LimitKind, Limits, ModuleFingerprint, Source, SourceRoot, deadline::EvaluationDeadline};
+use crate::{
+    Diagnostic, LimitKind, Limits, ModuleFingerprint, Source, SourceRoot,
+    deadline::EvaluationDeadline,
+    diagnostic::from_gluon,
+};
 
 const FORBIDDEN_MODULE_PREFIXES: &[&str] = &[
     "std.fs",
@@ -459,7 +463,7 @@ fn collect_imports(parser_vm: &RootedThread, source: &Source) -> Result<Vec<Impo
             source.logical_name(),
             source.text(),
         )
-        .map_err(|error| Diagnostic::from_gluon(Error::Parse(error), false))?;
+        .map_err(|error| from_gluon(Error::Parse(error), false))?;
     let mut collector = ImportCollector::default();
     collector.visit_expr(expression.expr());
     Ok(collector.imports)
