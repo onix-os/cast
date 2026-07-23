@@ -13,6 +13,7 @@ pub use self::gluon::{
 
 mod gluon;
 pub mod layers;
+mod lua;
 mod validation;
 
 pub use validation::{
@@ -23,7 +24,8 @@ pub use validation::{
 pub const SUPPORTED_ARTIFACT_ARCHITECTURES: &[&str] = &["x86_64", "x86", "aarch64", "riscv64"];
 
 /// A value supplied explicitly by the planner when policy is resolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextValue {
     PackageName,
     PackageVersion,
