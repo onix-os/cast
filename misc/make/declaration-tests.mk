@@ -1,4 +1,4 @@
-.PHONY: config-declaration-manager-test config-rooted-declaration-loader-test config-fixed-root-declaration-loader-test config-declaration-storage-test declarative-config-test gluon-adapter-test declaration-regression-test
+.PHONY: config-declaration-manager-test config-rooted-declaration-loader-test config-fixed-root-declaration-loader-test config-declaration-storage-test declarative-config-test gluon-adapter-test trigger-declaration-test declaration-regression-test
 
 # Language-neutral typed manager dispatch, precedence, and persistence.
 config-declaration-manager-test:
@@ -25,10 +25,14 @@ declarative-config-test:
 gluon-adapter-test:
 	@$(CARGO) test -p gluon_config -- --test-threads=1
 
+# Typed read-only trigger adapter and restricted Gluon ABI behavior.
+trigger-declaration-test:
+	@$(CARGO) test -p triggers --test gluon -- --test-threads=1
+
 # Existing storage plus all twelve Gluon declaration roots stay green while the
 # boundary moves. The boot-related filters run evaluator tests backed only by
 # synthetic temporary trees; they do not mount, publish, or mutate host disks.
-declaration-regression-test: declarative-config-test gluon-adapter-test config-declaration-manager-test config-rooted-declaration-loader-test config-fixed-root-declaration-loader-test
+declaration-regression-test: declarative-config-test gluon-adapter-test trigger-declaration-test config-declaration-manager-test config-rooted-declaration-loader-test config-fixed-root-declaration-loader-test
 	@$(CARGO) test -p config --lib -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test package_v3 -- --test-threads=1
 	@$(CARGO) test -p stone_recipe --test build_policy -- --test-threads=1
@@ -41,4 +45,3 @@ declaration-regression-test: declarative-config-test gluon-adapter-test config-d
 	@$(CARGO) test -p forge --lib "system_model::gluon::tests::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "client::active_reblit_boot_topology_intent::tests::evaluation::" -- --test-threads=1
 	@$(CARGO) test -p forge --lib "client::active_reblit_root_filesystem_intent::tests::evaluation::" -- --test-threads=1
-	@$(CARGO) test -p triggers --test gluon -- --test-threads=1

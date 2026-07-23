@@ -153,6 +153,7 @@ help:
 	@echo "  config-fixed-root-declaration-loader-test  Run fixed-slot typed declaration tests"
 	@echo "  config-declaration-storage-test  Run language-neutral declaration slot and persistence tests"
 	@echo "  config-declaration-store-test  Run all language-neutral declaration store tests"
+	@echo "  trigger-declaration-test  Run the typed read-only trigger declaration tests"
 	@echo "  gitwrap-repository-fs-test  Run repository filesystem identity, quota, and mirror tests"
 	@timeout 10s echo "  gitwrap-fixture-bundle-test  Run the exact bounded offline Git bundle tests"
 	@echo "  gitwrap-all-test  Run every direct Gitwrap runtime and repository test"

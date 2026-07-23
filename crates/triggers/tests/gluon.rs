@@ -1,10 +1,12 @@
-use declarative_config::{DeclarationEvaluationError, DeclarationEvaluator};
-use gluon_config::{DiagnosticCategory, Evaluator, Source};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, Evaluation,
+};
+use gluon_config::{DiagnosticCategory, EvaluationFingerprint, Source};
 use fnmatch::Pattern;
 use triggers::{
     Collection, GluonTriggerConversionError, GluonTriggerEvaluator,
-    TRIGGER_ABI_VERSION, TriggerEvaluationError, evaluate_gluon,
-    evaluate_gluon_with_inputs,
+    TRIGGER_ABI_VERSION,
     format::{Handler, PathKind, Trigger},
 };
 
@@ -81,13 +83,39 @@ fn authored(body: &str) -> Source {
     Source::new("trigger.glu", format!("let cast = import! cast.trigger.v1\n{body}"))
 }
 
+fn evaluate_trigger(
+    source: &Source,
+) -> Result<
+    Evaluation<Trigger, EvaluationFingerprint>,
+    DeclarationEvaluationError<GluonTriggerConversionError>,
+> {
+    <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
+        &GluonTriggerEvaluator::default(),
+        source,
+    )
+}
+
+fn evaluate_trigger_with_inputs(
+    source: &Source,
+    explicit_inputs: &[u8],
+) -> Result<
+    Evaluation<Trigger, EvaluationFingerprint>,
+    DeclarationEvaluationError<GluonTriggerConversionError>,
+> {
+    <GluonTriggerEvaluator as DeclarationInputEvaluator<Trigger>>::evaluate_with_inputs(
+        &GluonTriggerEvaluator::default(),
+        source,
+        explicit_inputs,
+    )
+}
+
 #[test]
 fn retired_moss_trigger_abi_is_not_a_compatibility_alias() {
-    let error = evaluate_gluon(&Source::new("retired-trigger.glu", "import! moss.trigger.v1")).unwrap_err();
+    let error = evaluate_trigger(&Source::new("retired-trigger.glu", "import! moss.trigger.v1")).unwrap_err();
 
     assert!(matches!(
         error,
-        TriggerEvaluationError::Evaluation(ref diagnostic)
+        DeclarationEvaluationError::Evaluation(ref diagnostic)
             if diagnostic.category == DiagnosticCategory::Import
                 && diagnostic.message.contains("moss.trigger.v1")
     ));
@@ -99,10 +127,10 @@ fn documented_trigger_example_remains_loadable() {
         "docs/examples/gluon/trigger.glu",
         include_str!("../../../docs/examples/gluon/trigger.glu"),
     );
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_trigger(&source).unwrap();
 
-    assert_eq!(evaluated.trigger.name, "refresh-example");
-    Collection::new([&evaluated.trigger]).unwrap();
+    assert_eq!(evaluated.value.name, "refresh-example");
+    Collection::new([&evaluated.value]).unwrap();
 }
 
 #[test]
@@ -138,8 +166,8 @@ let base = cast.trigger "kernel" "Maintain kernel metadata"
 "#,
     );
 
-    let evaluated = evaluate_gluon(&source).unwrap();
-    let trigger = &evaluated.trigger;
+    let evaluated = evaluate_trigger(&source).unwrap();
+    let trigger = &evaluated.value;
 
     assert_eq!(
         normalized_trigger_value(trigger),
@@ -198,9 +226,9 @@ let base = cast.trigger "broken" "References an absent handler"
 }
 "#,
     );
-    let evaluated = evaluate_gluon(&source).unwrap();
+    let evaluated = evaluate_trigger(&source).unwrap();
 
-    let error = match Collection::new([&evaluated.trigger]) {
+    let error = match Collection::new([&evaluated.value]) {
         Ok(_) => panic!("missing handler reference should fail"),
         Err(error) => error,
     };
@@ -220,10 +248,12 @@ let base = cast.trigger "broken-pattern" "Invalid pattern"
 "#,
     );
 
-    let error = evaluate_gluon(&source).unwrap_err();
+    let error = evaluate_trigger(&source).unwrap_err();
     assert!(matches!(
         error,
-        TriggerEvaluationError::Conversion(ref error)
+        DeclarationEvaluationError::Conversion(
+            GluonTriggerConversionError::Trigger(ref error)
+        )
             if error.field() == "paths[0].key"
     ));
 }
@@ -240,10 +270,10 @@ let base = cast.trigger "unknown-field" "Unknown field"
 { unexpected = "value", .. base }
 "#,
     ] {
-        let error = evaluate_gluon(&authored(body)).unwrap_err();
+        let error = evaluate_trigger(&authored(body)).unwrap_err();
         assert!(matches!(
             error,
-            TriggerEvaluationError::Evaluation(ref error)
+            DeclarationEvaluationError::Evaluation(ref error)
                 if error.category == DiagnosticCategory::Type
         ));
     }
@@ -258,10 +288,10 @@ cast.trigger "forbidden" "Forbidden host effect"
 "#,
     );
 
-    let error = evaluate_gluon(&source).unwrap_err();
+    let error = evaluate_trigger(&source).unwrap_err();
     assert!(matches!(
         error,
-        TriggerEvaluationError::Evaluation(ref error)
+        DeclarationEvaluationError::Evaluation(ref error)
             if error.category == DiagnosticCategory::Import
     ));
 }
@@ -284,31 +314,22 @@ let base = cast.trigger "fingerprint" "Fingerprint"
 }
 "#,
     );
-    let evaluator = Evaluator::default();
+    let first = evaluate_trigger_with_inputs(&source, b"inputs-v1").unwrap();
+    let repeated = evaluate_trigger_with_inputs(&source, b"inputs-v1").unwrap();
+    let changed = evaluate_trigger_with_inputs(&source, b"inputs-v2").unwrap();
+    let typed = evaluate_trigger(&source).unwrap();
 
-    let first = evaluate_gluon_with_inputs(&evaluator, &source, b"inputs-v1").unwrap();
-    let repeated = evaluate_gluon_with_inputs(&evaluator, &source, b"inputs-v1").unwrap();
-    let changed = evaluate_gluon_with_inputs(&evaluator, &source, b"inputs-v2").unwrap();
-    let legacy = evaluate_gluon(&source).unwrap();
-    let typed =
-        <GluonTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(
-            &GluonTriggerEvaluator::default(),
-            &source,
-        )
-        .unwrap();
-
-    assert_eq!(first.fingerprint, repeated.fingerprint);
-    assert_ne!(first.fingerprint.sha256, changed.fingerprint.sha256);
-    assert_eq!(typed.identity, legacy.fingerprint);
+    assert_eq!(first.identity, repeated.identity);
+    assert_ne!(first.identity.sha256, changed.identity.sha256);
     assert_eq!(
         normalized_trigger_value(&typed.value),
-        normalized_trigger_value(&legacy.trigger)
+        normalized_trigger_value(&first.value)
     );
     assert_eq!(TRIGGER_ABI_VERSION, 1);
-    assert_eq!(first.fingerprint.configuration_abi_version, TRIGGER_ABI_VERSION);
+    assert_eq!(first.identity.configuration_abi_version, TRIGGER_ABI_VERSION);
     assert_eq!(
         first
-            .fingerprint
+            .identity
             .imported_modules
             .iter()
             .map(|module| module.logical_name.as_str())

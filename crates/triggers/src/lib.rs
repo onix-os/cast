@@ -12,9 +12,8 @@ pub mod gluon;
 pub mod spec;
 
 pub use self::gluon::{
-    EvaluatedTrigger, GLUON_TRIGGER_ABI, GluonTriggerConversionError,
-    GluonTriggerEvaluator, TRIGGER_ABI_VERSION, TriggerEvaluationError,
-    evaluate_gluon, evaluate_gluon_with, evaluate_gluon_with_inputs,
+    GLUON_TRIGGER_ABI, GluonTriggerConversionError, GluonTriggerEvaluator,
+    TRIGGER_ABI_VERSION,
 };
 pub use self::spec::{
     HandlerSpec, InhibitorsSpec, KeyValueSpec, PathDefinitionSpec, PathKindSpec, TriggerConversionError, TriggerSpec,

@@ -2,11 +2,12 @@
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+    DeclarationInputEvaluator, Evaluation as DeclarationEvaluation,
+    LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{
     Diagnostic, Evaluation as GluonEvaluation, EvaluationFingerprint,
-    Evaluator, GluonEngine, Source,
+    GluonEngine, Source,
 };
 use thiserror::Error;
 
@@ -17,22 +18,6 @@ use crate::{
 
 pub const TRIGGER_ABI_VERSION: u32 = 1;
 pub const GLUON_TRIGGER_ABI: &str = include_str!("../gluon/trigger.glu");
-
-#[derive(Debug)]
-pub struct EvaluatedTrigger {
-    pub trigger: Trigger,
-    pub fingerprint: EvaluationFingerprint,
-}
-
-#[derive(Debug, Error)]
-pub enum TriggerEvaluationError {
-    #[error(transparent)]
-    Evaluation(#[from] Diagnostic),
-    #[error(transparent)]
-    Conversion(#[from] TriggerConversionError),
-    #[error("trigger source must explicitly import `cast.trigger.v1`")]
-    MissingAbiImport,
-}
 
 /// Owned trigger conversion failures after Gluon has evaluated successfully.
 ///
@@ -216,49 +201,38 @@ impl DeclarationEvaluator<Trigger> for GluonTriggerEvaluator {
         DeclarationEvaluation<Trigger, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        let evaluation = self
-            .engine
-            .evaluate::<GluonTriggerSpec>(source)
-            .map_err(DeclarationEvaluationError::Evaluation)?;
-        let evaluated = convert_evaluation(evaluation)
-            .map_err(DeclarationEvaluationError::Conversion)?;
-        Ok(DeclarationEvaluation {
-            value: evaluated.trigger,
-            identity: evaluated.fingerprint,
-        })
+        <Self as DeclarationInputEvaluator<Trigger>>::evaluate_with_inputs(
+            self,
+            source,
+            &[],
+        )
     }
 }
 
-pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedTrigger, TriggerEvaluationError> {
-    evaluate_gluon_with(&Evaluator::default(), source)
-}
-
-pub fn evaluate_gluon_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedTrigger, TriggerEvaluationError> {
-    evaluate_gluon_with_inputs(evaluator, source, &[])
-}
-
-pub fn evaluate_gluon_with_inputs(
-    evaluator: &Evaluator,
-    source: &Source,
-    explicit_inputs: &[u8],
-) -> Result<EvaluatedTrigger, TriggerEvaluationError> {
-    let mut import_policy = evaluator.import_policy().clone();
-    import_policy.insert_embedded_module("cast.trigger.v1", GLUON_TRIGGER_ABI)?;
-    let evaluator = evaluator.clone().with_import_policy(import_policy);
-    let evaluation = evaluator.evaluate_with_inputs::<GluonTriggerSpec>(source, explicit_inputs)?;
-    convert_evaluation(evaluation).map_err(|error| match error {
-        GluonTriggerConversionError::Trigger(error) => {
-            TriggerEvaluationError::Conversion(error)
-        }
-        GluonTriggerConversionError::MissingAbiImport => {
-            TriggerEvaluationError::MissingAbiImport
-        }
-    })
+impl DeclarationInputEvaluator<Trigger> for GluonTriggerEvaluator {
+    fn evaluate_with_inputs(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+    ) -> Result<
+        DeclarationEvaluation<Trigger, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs::<GluonTriggerSpec>(source, explicit_inputs)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        convert_evaluation(evaluation)
+            .map_err(DeclarationEvaluationError::Conversion)
+    }
 }
 
 fn convert_evaluation(
     evaluation: GluonEvaluation<GluonTriggerSpec>,
-) -> Result<EvaluatedTrigger, GluonTriggerConversionError> {
+) -> Result<
+    DeclarationEvaluation<Trigger, EvaluationFingerprint>,
+    GluonTriggerConversionError,
+> {
     if !evaluation
         .fingerprint
         .imported_modules
@@ -269,8 +243,8 @@ fn convert_evaluation(
     }
     let trigger = Trigger::try_from(TriggerSpec::from(evaluation.value))?;
 
-    Ok(EvaluatedTrigger {
-        trigger,
-        fingerprint: evaluation.fingerprint,
+    Ok(DeclarationEvaluation {
+        value: trigger,
+        identity: evaluation.fingerprint,
     })
 }
