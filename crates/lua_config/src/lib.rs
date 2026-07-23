@@ -12,8 +12,10 @@ use declarative_config::{
     Limits, SourceRoot,
 };
 
+mod engine;
 mod imports;
 
+pub use engine::{LuaPrepared, LuaRuntime, LuaValueDecoder, PreparedLuaModule};
 pub use imports::discover_imports;
 
 /// The exact vendored Lua release whose behavior this engine commits to.
