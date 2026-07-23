@@ -2439,6 +2439,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lua_config"
+version = "0.27.0"
+dependencies = [
+ "declarative_config",
+ "full_moon",
+ "mlua",
+ "tempfile",
+]
+
+[[package]]
 name = "lua_engine_spike"
 version = "0.27.0"
 dependencies = [
