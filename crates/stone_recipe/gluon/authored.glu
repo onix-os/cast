@@ -265,6 +265,11 @@ let output: String -> OutputSpec = \name -> {
     conflicts = [],
 }
 
+// A typed identity on OutputSpec. Naming the type lets a recipe pin an
+// otherwise-polymorphic output value (e.g. a policy function's argument) to the
+// output record shape, so `{ .. output }` record updates infer cleanly.
+let output_with: OutputSpec -> OutputSpec = \value -> value
+
 let package_ref = \name -> { name }
 let output_ref = \package output -> { package, output }
 let named = \key value -> { key, value }
@@ -339,7 +344,7 @@ let some_hooks: HooksSpec -> Optional HooksSpec = \value -> Set value
     options = \value -> value,
     profile = \value -> value,
     output,
-    output_with = \value -> value,
+    output_with,
     named,
     package_ref,
     output_ref,
