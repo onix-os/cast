@@ -287,6 +287,60 @@ pub(crate) fn migration_coverage(
     Ok(DeclarationMigrationCoverage { covered, missing })
 }
 
+/// Operator readiness gate for removing the legacy Gluon authority: a stronger
+/// precondition than catalog coverage. A slot is *ready* only when it has a
+/// committed row *and* that row's blob resolves and revalidates its content
+/// address on disk. This separates "a row claims the slot is migrated" from
+/// "the migrated bytes are actually durable and intact" — a committed row whose
+/// blob is missing or corrupt is [`unresolved`](Self::unresolved), never ready.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeclarationMigrationReadiness {
+    /// Slots with a committed row whose blob resolved and revalidated.
+    pub ready: Vec<(i32, String)>,
+    /// Slots with no committed row.
+    pub missing: Vec<(i32, String)>,
+    /// Slots with a committed row whose blob failed to resolve or revalidate.
+    pub unresolved: Vec<(i32, String)>,
+}
+
+impl DeclarationMigrationReadiness {
+    /// True only when every required slot is migrated *and* its blob resolves —
+    /// the condition under which dropping the Gluon authority is safe.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.missing.is_empty() && self.unresolved.is_empty()
+    }
+}
+
+/// Verify that every required slot is not merely cataloged but backed by a
+/// resolvable, content-valid blob. A catalog-covered slot whose blob is missing
+/// or fails its content-address check is reported as `unresolved` rather than
+/// aborting the scan, so an operator sees every problem in one pass. Any blob
+/// read failure fails closed (the slot is not ready); only a genuine catalog
+/// query error propagates.
+pub(crate) fn verify_migration_readiness(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    required: &[(i32, String)],
+) -> Result<DeclarationMigrationReadiness, BridgeError> {
+    let mut ready = Vec::new();
+    let mut missing = Vec::new();
+    let mut unresolved = Vec::new();
+    for (state_id, logical_slot) in required {
+        match database.declaration_migration(*state_id, logical_slot)? {
+            None => missing.push((*state_id, logical_slot.clone())),
+            Some(row) => match blobs.read(&hex::encode(&row.migrated_blob_sha256)) {
+                Ok(_) => ready.push((*state_id, logical_slot.clone())),
+                Err(_) => unresolved.push((*state_id, logical_slot.clone())),
+            },
+        }
+    }
+    Ok(DeclarationMigrationReadiness {
+        ready,
+        missing,
+        unresolved,
+    })
+}
+
 /// Deferred, retained-authority garbage collection: remove every blob that no
 /// committed catalog row references, and keep every blob that one does. This
 /// runs only after the catalog is the sole selection authority, so a crash that
@@ -457,6 +511,38 @@ mod tests {
             migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap(),
             DeclarationMigrationCommit::AlreadyPresent
         );
+    }
+
+    #[test]
+    fn readiness_requires_a_resolvable_blob_not_merely_a_catalog_row() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        let converted = b"return { ready = true }\n";
+        // Matches the slot `request` records.
+        let required = vec![(state_id, "etc/cast/system.glu".to_owned())];
+
+        // Before migration the slot is missing and not ready.
+        let before = verify_migration_readiness(&database, &blobs, &required).unwrap();
+        assert_eq!(before.missing, required);
+        assert!(before.ready.is_empty() && before.unresolved.is_empty());
+        assert!(!before.is_ready());
+
+        // After migration the slot has a committed row and a resolvable blob.
+        migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap();
+        let ready = verify_migration_readiness(&database, &blobs, &required).unwrap();
+        assert_eq!(ready.ready, required);
+        assert!(ready.is_ready());
+
+        // Corrupt the committed blob: catalog coverage still reports the slot
+        // complete, but the stronger readiness gate reports it unresolved and
+        // refuses to declare the state ready to drop its Gluon authority.
+        fs::write(blobs.blob_path(&content_address(converted)), b"tampered\n").unwrap();
+        assert!(migration_coverage(&database, &required).unwrap().is_complete());
+        let after = verify_migration_readiness(&database, &blobs, &required).unwrap();
+        assert_eq!(after.unresolved, required);
+        assert!(after.ready.is_empty() && after.missing.is_empty());
+        assert!(!after.is_ready());
     }
 
     #[test]
