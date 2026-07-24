@@ -124,3 +124,55 @@ return {
 **Exit:** either language can be deleted and the other still authors, checks,
 evaluates, plans, and freezes every corpus package to identical `PackageSpec`
 and derivation IDs. No authoring logic lives in a config language.
+
+## Progress (2026-07)
+
+- **Slice 1 — done** (`de24c664`). `BuilderRequest` + `lower_builder` in
+  `package/builder_lowering.rs`; golden parity tests vs the `.glu` builders.
+- **Slice 2 — done** (`677fb5bc`, `79a08ad5`). `AuthoredPackage` + `lower` +
+  `default_output_set` in `package/authored.rs`; byte-parity test proves the
+  shared Rust defaults reproduce `cast.package.v3` exactly.
+- **Slice 3 — decode path + proof done** (`338e96ad`). `GluonAuthoredPackage` +
+  `GluonBuilderRequest` DTOs + `From` + `GluonPackageEvaluator::evaluate_authored`
+  + the `cast.authored.v1` types-only prelude. *Not yet:* making `evaluate_authored`
+  the default engine path, rewriting the Gluon corpus to minimal form, deleting
+  `package.glu` + `builders/*.glu`.
+- **Slice 4 — decode path + proof done** (`b26e026d`). `LuaAuthoredPackage` +
+  `LuaBuilderRequest` (serde `#[serde(default)]` → true minimal authoring) +
+  `LuaPackageEvaluator::evaluate_authored`. *Not yet:* default-path switch +
+  corpus regen.
+- **Slice 5 — done.** Both independence proofs pass: a hand-authored *minimal*
+  recipe in each language decodes through the shared `lower` to the exact
+  `PackageSpec` of the equivalent `AuthoredPackage`
+  (`a_minimal_authored_lua_recipe_lowers_through_shared_rust`,
+  `a_minimal_authored_gluon_recipe_lowers_through_shared_rust`). Neither recipe
+  imports `cast.package.v3`; authoring logic is entirely in shared Rust.
+- **Slice 6 — not started.** ABI-version/provenance bump + authoring-guide docs.
+
+## Activation progress (2026-07, in flight)
+
+- **Full `cast.authored.v1` prelude** shipped (`gluon/authored.glu`): the
+  type+constructor layer lifted from `package.glu` with NO logic; `Custom` builder
+  restored to `GluonBuilderRequest`. Rich + minimal authored proofs pass for both
+  languages.
+- **Entire 64-package Gluon corpus migrated to authored form** — 62 via a parallel
+  workflow (verified against a per-package `PackageSpec`-equality oracle) + 2 hand
+  exemplars. Every package produces the byte-identical `PackageSpec` as its legacy
+  recipe.
+- **Corpus is the default path.** `GluonPackageEvaluator` now dispatches
+  try-authored-first, fall-back-to-legacy (`evaluate_dispatched`). Migrated corpus
+  runs through the shared authored layer; the legacy `cast.package.v3` path remains
+  only as a bridge for not-yet-migrated recipes. Workspace green (modulo 3
+  pre-existing flaky `mason` git-fixture tests, flaky on baseline too).
+
+**Remaining to delete the legacy ABI:** migrate the still-legacy Gluon recipes —
+6 top-level `docs/examples/gluon/*.glu` package examples, 3 `tests/fixtures/*.glu`,
+~13 Rust files with inline `import! cast.package.v3` recipes. Of these,
+`stone_recipe/tests/package_v3.rs` (21 tests) and `tests/builders_v2.rs` assert
+`package.glu`/`cast.builders.*` SEMANTICS that cease to exist — delete or rewrite
+(judgment). `mason/src/draft.rs` (production recipe drafter) must emit authored
+form. Then delete `package.glu` + `builders/*.glu` + the `GluonPackageSpec` legacy
+DTOs + `evaluate_package`/`evaluate_dispatched` (authored-only), bump
+`PACKAGE_ABI_VERSION`, drop imported-ABI-module fingerprints from provenance. The
+`@generated` Lua corpus needs no hand edits (identical `PackageSpec` → identical
+emitted Lua).
