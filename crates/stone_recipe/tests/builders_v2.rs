@@ -81,6 +81,88 @@ fn shared_rust_lowering_reproduces_gluon_package_v3_defaults() {
     assert_eq!(rust.hooks, gluon.hooks, "default hooks parity");
 }
 
+/// A hand-authored, minimal Gluon recipe — no `import! cast.package.v3`, no
+/// expanded builder, no output/option/hook tables — decodes through the shared
+/// [`lower`] into a complete [`PackageSpec`]. Gluon records are structurally
+/// typed, so the recipe names every field and selects Rust defaults with
+/// `unset`; the builder is named by kind via the `cast.authored.v1` prelude.
+/// This is the Gluon half of the independence proof: authoring runs entirely in
+/// shared Rust, with no `package.glu` logic involved.
+#[test]
+fn a_minimal_authored_gluon_recipe_lowers_through_shared_rust() {
+    let source = Source::new(
+        "stone.glu",
+        r#"let a = import! cast.authored.v1
+{
+    meta = {
+        pname = "hello",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/hello",
+        license = ["MIT"],
+    },
+    builder = a.cmake { flags = ["-DBUILD_TESTS=ON"], run_tests = a.true },
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.unset,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
+"#,
+    );
+
+    let package = GluonPackageEvaluator::default()
+        .evaluate_authored(&source)
+        .expect("minimal authored recipe lowers");
+
+    // The builder request lowered to typed cmake steps, checks on by default.
+    assert_eq!(
+        package.builder.phases.setup.steps,
+        vec![StepSpec::CMakeConfigure { flags: vec!["-DBUILD_TESTS=ON".to_owned()] }]
+    );
+    assert_eq!(package.builder.phases.check.steps, vec![StepSpec::CMakeTest]);
+    // Every `unset` optional took the shared package-ABI default.
+    assert_eq!(package.outputs.len(), 9);
+    assert_eq!(package.outputs[0].name, "out");
+    assert_eq!(package.hooks, HooksSpec::default());
+
+    // The engine path is exactly the shared lowering of the equivalent
+    // language-agnostic authored package — the Gluon record is pure syntax.
+    let equivalent = lower(AuthoredPackage {
+        meta: MetaSpec {
+            pname: "hello".to_owned(),
+            version: "1.0.0".to_owned(),
+            release: 1,
+            homepage: "https://example.invalid/hello".to_owned(),
+            license: vec!["MIT".to_owned()],
+        },
+        builder: BuilderRequest::Cmake {
+            flags: vec!["-DBUILD_TESTS=ON".to_owned()],
+            run_tests: true,
+        },
+        sources: Vec::new(),
+        native_build_inputs: Vec::new(),
+        build_inputs: Vec::new(),
+        check_inputs: Vec::new(),
+        outputs: None,
+        options: None,
+        profiles: Vec::new(),
+        architectures: Vec::new(),
+        tuning: Vec::new(),
+        emul32: false,
+        mold: false,
+        hooks: HooksSpec::default(),
+    });
+    assert_eq!(package, equivalent);
+}
+
 fn package(builder_import: &str, body: &str) -> Source {
     Source::new(
         "stone.glu",
