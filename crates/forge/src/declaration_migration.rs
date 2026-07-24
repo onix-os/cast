@@ -175,6 +175,8 @@ pub(crate) enum BridgeError {
         "committed declaration migration for slot {logical_slot:?} no longer matches the original source hash"
     )]
     OriginalSourceDrift { logical_slot: String },
+    #[error("enumerate generated Gluon authorities beneath a mutable store root")]
+    Enumeration(#[source] io::Error),
 }
 
 /// Migrate one state-owned slot: make the converted blob durable *first*
@@ -377,6 +379,53 @@ pub(crate) fn finalize_declaration_migration(
     Ok(DeclarationMigrationFinalization {
         readiness,
         collected_blobs,
+    })
+}
+
+/// The plan's single aggregate migration-completion report: state-catalog
+/// readiness for every required state-owned slot, and rooted enumeration proving
+/// every registered mutable generated store has surrendered its `.glu`
+/// authority. It is not a standalone marker file and makes no claim to discover
+/// arbitrary trees elsewhere on disk — its scope is exactly the state slots and
+/// store roots handed to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MigrationCompletionReport {
+    pub state_readiness: DeclarationMigrationReadiness,
+    pub remaining_generated_gluon_authorities: Vec<PathBuf>,
+}
+
+impl MigrationCompletionReport {
+    /// Complete only when every required state slot is migrated and resolvable
+    /// *and* no generated `.glu` authority remains in the enumerated stores.
+    /// This is the precondition a Lua-only release checks before refusing or
+    /// permitting upgrade.
+    pub(crate) fn is_complete(&self) -> bool {
+        self.state_readiness.is_ready() && self.remaining_generated_gluon_authorities.is_empty()
+    }
+}
+
+/// Assemble the aggregate completion report over the required state-owned slots
+/// and the registered mutable generated-store roots. Blob-resolution failures
+/// surface as unresolved slots (via readiness); a store root that cannot be
+/// enumerated fails closed with [`BridgeError::Enumeration`].
+pub(crate) fn migration_completion_report(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    required_state_slots: &[(i32, String)],
+    mutable_store_roots: &[PathBuf],
+) -> Result<MigrationCompletionReport, BridgeError> {
+    let state_readiness = verify_migration_readiness(database, blobs, required_state_slots)?;
+
+    let mut remaining_generated_gluon_authorities = Vec::new();
+    for root in mutable_store_roots {
+        remaining_generated_gluon_authorities
+            .extend(generated_gluon_authorities(root).map_err(BridgeError::Enumeration)?);
+    }
+    remaining_generated_gluon_authorities.sort();
+
+    Ok(MigrationCompletionReport {
+        state_readiness,
+        remaining_generated_gluon_authorities,
     })
 }
 
@@ -613,6 +662,38 @@ mod tests {
             resolve_migrated_blob(&database, &blobs, state_id, "etc/cast/system.glu").unwrap(),
             Some(converted.to_vec())
         );
+    }
+
+    #[test]
+    fn the_completion_report_requires_migrated_states_and_surrendered_store_authorities() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        let required = vec![(state_id, "etc/cast/system.glu".to_owned())];
+
+        // A mutable store root still holding a generated `.glu` authority.
+        let store = tempfile::tempdir().unwrap();
+        let fragments = store.path().join("repo.d");
+        fs::create_dir_all(&fragments).unwrap();
+        let generated_glu = fragments.join("main.glu");
+        fs::write(&generated_glu, format!("{GLUON_GENERATED_MARKER}[]\n")).unwrap();
+        let roots = vec![store.path().to_path_buf()];
+
+        // Nothing migrated yet and a generated `.glu` remains: not complete, and
+        // the report names both gaps.
+        let before = migration_completion_report(&database, &blobs, &required, &roots).unwrap();
+        assert!(!before.is_complete());
+        assert_eq!(before.state_readiness.missing, required);
+        assert_eq!(before.remaining_generated_gluon_authorities, vec![generated_glu.clone()]);
+
+        // Migrate the state slot and surrender the store's `.glu` authority.
+        migrate_declaration(&database, &blobs, request(state_id, b"return {}\n")).unwrap();
+        fs::remove_file(&generated_glu).unwrap();
+
+        let after = migration_completion_report(&database, &blobs, &required, &roots).unwrap();
+        assert!(after.is_complete());
+        assert_eq!(after.state_readiness.ready, required);
+        assert!(after.remaining_generated_gluon_authorities.is_empty());
     }
 
     #[test]
