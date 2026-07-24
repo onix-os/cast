@@ -86,6 +86,70 @@ fn archive_previous_tree_advances_new_state_through_previous_archived() {
     assert!(archived.record().options.archive_previous);
 }
 
+/// Physical foundation for the (not-yet-built) `PreviousRestore` rollback
+/// dispatcher: once the predecessor is archived, the transition journal is
+/// retained at `PreviousArchived`, so the *legacy* restore correctly refuses to
+/// move the tree (a present journal signals an unreconciled crash), while the
+/// recovery-sealed restore is permitted to perform exactly the compensating
+/// move the dispatcher will drive. Everything above the physical move — record
+/// admission, namespace proof, journal advance — is the deferred dispatcher.
+#[test]
+fn recovery_sealed_restore_reverses_the_archive_while_the_journal_is_retained() {
+    let (fixture, identity, authority) =
+        fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let previous = NewStatePrevious::Active(fixture.previous_state);
+
+    let (complete, _allocated) = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        previous,
+        &[],
+        "new-state restore-primitive slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+    .expect("new-state forward prefix reaches system-triggers complete");
+
+    let archived = complete
+        .archive_previous_tree()
+        .expect("archive_previous advances through PreviousArchived");
+
+    let installation = archived.installation();
+    let identity = archived.tree_identity();
+    let previous_id = archived
+        .record()
+        .previous
+        .id
+        .map(crate::state::Id::from)
+        .expect("archived record has a predecessor");
+
+    // The journal is present at PreviousArchived, so the legacy (no-journal)
+    // restore refuses before moving anything.
+    let legacy = identity.restore_previous(installation, previous_id);
+    let legacy = legacy.expect_err("legacy restore must refuse a present journal");
+    assert_eq!(
+        legacy.outcome(),
+        crate::transition_identity::RetainedPreviousMoveOutcome::NotApplied,
+        "legacy restore refuses at the journal guard, before any move",
+    );
+
+    // The recovery seal permits the compensating move despite the retained
+    // journal — the exact physical step the PreviousRestore dispatcher performs.
+    let seal = crate::transition_identity::PreviousRestoreRecoverySeal::for_recovery();
+    identity
+        .restore_previous_with_journal(installation, previous_id, &seal)
+        .expect("recovery-sealed restore reverses the archive");
+}
+
 #[test]
 fn new_state_previous_archived_hands_off_into_boot_with_candidate_state() {
     let (fixture, identity, authority) =

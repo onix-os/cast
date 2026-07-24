@@ -287,6 +287,16 @@ impl PreviousArchivedCoordinator {
     pub(crate) fn record(&self) -> &TransitionRecord {
         &self.coordinator.record
     }
+
+    #[cfg(test)]
+    pub(crate) fn tree_identity(&self) -> &crate::transition_identity::StatefulTreeIdentity {
+        &self.coordinator.identity
+    }
+
+    #[cfg(test)]
+    pub(crate) fn installation(&self) -> &crate::Installation {
+        self.authority.installation()
+    }
 }
 
 fn exact_new_state_boot_source(record: &TransitionRecord) -> bool {

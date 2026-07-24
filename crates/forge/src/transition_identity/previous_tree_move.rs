@@ -1,5 +1,28 @@
 use super::*;
 
+/// Proof that a physical previous-tree restore is being driven by the startup
+/// crash-recovery path, which legitimately runs with the transition journal
+/// present (the journal is exactly what selected this recovery). Unlike the
+/// forward [`journal_coordinator::PreviousArchiveEffectSeal`] — minted inside
+/// the coordinator that owns the durable record — the recovery seal is minted
+/// by the `PreviousRestore` rollback dispatcher, which lives in the `client`
+/// layer above this module; the guard therefore cannot name that module and the
+/// mint is `pub(crate)` rather than module-private. It must only ever be created
+/// by that dispatcher after it has proven the exact `PreviousRestoreIntent`
+/// record and namespace.
+#[derive(Clone, Copy)]
+pub(crate) struct PreviousRestoreRecoverySeal {
+    _private: (),
+}
+
+impl PreviousRestoreRecoverySeal {
+    /// Mint the recovery seal. ONLY the `PreviousRestore` rollback dispatcher may
+    /// call this, and only after admitting the exact durable record.
+    pub(crate) fn for_recovery() -> Self {
+        Self { _private: () }
+    }
+}
+
 /// Journal expectation for a previous-tree move. Legacy entry points require
 /// the transition journal to be absent (a present journal signals an
 /// unreconciled crash); a journal-coordinated caller instead proves, with an
@@ -9,6 +32,7 @@ use super::*;
 enum ArchiveJournalGuard<'authority> {
     LegacyNoJournal,
     Coordinator(&'authority journal_coordinator::PreviousArchiveEffectSeal),
+    Recovery(&'authority PreviousRestoreRecoverySeal),
 }
 
 impl ArchiveJournalGuard<'_> {
@@ -16,6 +40,10 @@ impl ArchiveJournalGuard<'_> {
         match self {
             Self::LegacyNoJournal => identity.require_no_journal(),
             Self::Coordinator(seal) => {
+                let _seal = seal;
+                Ok(())
+            }
+            Self::Recovery(seal) => {
                 let _seal = seal;
                 Ok(())
             }
@@ -84,6 +112,25 @@ impl StatefulTreeIdentity {
         )
     }
 
+    /// Recovery-only restore. The seal proves the caller is the `PreviousRestore`
+    /// rollback dispatcher reconciling a crashed archive; the transition journal
+    /// is legitimately present (it selected this recovery) and stays retained
+    /// across the compensating move rather than blocking it, exactly mirroring
+    /// the forward [`Self::archive_previous_with_journal`].
+    pub(crate) fn restore_previous_with_journal(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        seal: &PreviousRestoreRecoverySeal,
+    ) -> Result<(), RetainedPreviousMoveFailure> {
+        self.move_previous(
+            installation,
+            state,
+            RetainedPreviousMoveDirection::Restore,
+            ArchiveJournalGuard::Recovery(seal),
+        )
+    }
+
     /// Resume only the idempotent durability suffix of an archive already
     /// proven to have moved the exact previous tree.
     pub(crate) fn finish_applied_previous_archive(
@@ -138,7 +185,7 @@ impl StatefulTreeIdentity {
         require_previous_attempt_name(attempt, state, &name)?;
         guard.require(self)?;
         self.revalidate_previous_move_base(installation, attempt)?;
-        self.finish_previous_slot_retirement(installation, attempt)?;
+        self.finish_previous_slot_retirement(installation, attempt, guard)?;
         *retained = None;
         Ok(())
     }
@@ -479,7 +526,7 @@ impl StatefulTreeIdentity {
         }
         self.require_previous_move_layout(attempt, direction.after())?;
         if direction == RetainedPreviousMoveDirection::Restore {
-            self.finish_previous_slot_retirement(installation, attempt)?;
+            self.finish_previous_slot_retirement(installation, attempt, guard)?;
         }
         Ok(())
     }
@@ -586,6 +633,7 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         attempt: &RetainedPreviousArchiveAttempt,
+        guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), Error> {
         self.revalidate_previous_move_base(installation, attempt)?;
         self.require_previous_move_layout(attempt, RetainedPreviousMoveLayout::Staged)?;
@@ -625,13 +673,14 @@ impl StatefulTreeIdentity {
             RetainedPreviousSlotLocation::Parked => {}
         }
 
-        self.finish_parked_previous_slot_retirement(installation, attempt)
+        self.finish_parked_previous_slot_retirement(installation, attempt, guard)
     }
 
     fn finish_parked_previous_slot_retirement(
         &self,
         installation: &Installation,
         attempt: &RetainedPreviousArchiveAttempt,
+        guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), Error> {
         self.require_previous_slot_location(attempt, RetainedPreviousSlotLocation::Parked)?;
         retained_previous_move_checkpoint(RetainedPreviousMoveFaultPoint::RootsAfterSlotRetireSync)?;
@@ -639,7 +688,7 @@ impl StatefulTreeIdentity {
             .roots
             .sync("sync roots directory after previous-state slot retirement")?;
         retained_previous_move_checkpoint(RetainedPreviousMoveFaultPoint::FinalSlotRetirementRevalidation)?;
-        self.require_no_journal()?;
+        guard.require(self)?;
         self.revalidate_previous_move_base(installation, attempt)?;
         self.require_previous_move_layout(attempt, RetainedPreviousMoveLayout::Staged)?;
         self.require_previous_slot_location(attempt, RetainedPreviousSlotLocation::Parked)
