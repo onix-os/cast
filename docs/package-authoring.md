@@ -585,8 +585,8 @@ Target-specific profiles are entries in `profiles`, each a `name`, `builder`,
 fully lowered `BuilderSpec`, not the top-level `BuilderRequest` — `ProfileSpec`
 passes through `lower` untouched, so a profile that wants the same expansion
 `a.builder.cmake { .. }` gets at the top level has to author that step graph
-by hand (or through a small local helper), the way
-`cast.builders.cmake.v2` used to for the legacy ABI:
+by hand (or through a small local helper), the way the legacy
+`cast.builders.cmake.v2` module used to:
 
 ```gluon
 let cmake_profile_builder = \flags run_tests ->
