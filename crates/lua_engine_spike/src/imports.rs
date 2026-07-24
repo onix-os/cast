@@ -124,14 +124,14 @@ mod tests {
     #[test]
     fn extracts_embedded_and_relative_literal_imports_in_order() {
         let source = r#"
-            local pkg = cast.import("cast.package.v3")
+            local pkg = cast.import("cast.authored.v1")
             local helper = cast.import("./helper.lua")
             return { pkg = pkg, helper = helper }
         "#;
         assert_eq!(
             extract_imports(source),
             Ok(vec![
-                "cast.package.v3".to_owned(),
+                "cast.authored.v1".to_owned(),
                 "./helper.lua".to_owned(),
             ])
         );
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn rejects_a_computed_import_argument() {
         let source = r#"
-            local name = "cast.package.v3"
+            local name = "cast.authored.v1"
             return cast.import(name)
         "#;
         assert_eq!(extract_imports(source), Err(ImportError::ComputedImport));
