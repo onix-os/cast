@@ -22,7 +22,7 @@ use fs_err as fs;
 use gluon_config::EvaluationIdentity;
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{
-    BuilderSpec, GluonPackageEvaluator, HooksSpec, PackageConversionError,
+    BuilderSpec, GluonPackageEvaluator, HooksSpec, LuaPackageEvaluator, PackageConversionError,
     PackageSpec, PhasesSpec, ProfileSpec,
 };
 use thiserror::Error;
@@ -173,14 +173,20 @@ fn load_recipe_declaration(
     source_lock_policy: SourceLockPolicy,
 ) -> Result<(String, PackageSpec, Option<SourceLock>, EvaluationIdentity), Error> {
     let parent = path.parent().ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
-    let package = GluonPackageEvaluator::default();
-    let language =
-        <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(
-            &package,
-        );
-    if path.extension().and_then(|extension| extension.to_str())
-        != Some(language.extension())
-    {
+    // The recipe language is selected by the file's extension (`stone.glu` or
+    // `stone.lua`); an unregistered extension is a hard missing-recipe error.
+    let extension = path.extension().and_then(|extension| extension.to_str());
+    let registered_extensions = RecipeDeclarationEvaluator::registered(Arc::from(Vec::new()))
+        .iter()
+        .map(|evaluator| {
+            <RecipeDeclarationEvaluator as DeclarationEvaluator<RecipeDeclaration>>::language_spec(
+                evaluator,
+            )
+            .extension()
+            .to_owned()
+        })
+        .collect::<Vec<_>>();
+    if !registered_extensions.iter().any(|registered| Some(registered.as_str()) == extension) {
         return Err(Error::MissingRecipe(path.to_owned()));
     }
     let file_name = path
@@ -235,12 +241,10 @@ fn load_recipe_declaration(
             source,
         }
     })?;
-    let evaluator = RecipeDeclarationEvaluator {
-        package,
-        explicit_inputs: Arc::from(explicit_inputs),
-    };
-    let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
-        .expect("the recipe registers one unique Gluon language");
+    let evaluators = TypedDeclarationEvaluatorSet::new(
+        RecipeDeclarationEvaluator::registered(Arc::from(explicit_inputs)),
+    )
+    .expect("the recipe languages register distinct extensions");
     let evaluated = load_fixed_root_declaration(parent, &slot, &evaluators)
         .map_err(map_recipe_load_error)?
         .ok_or_else(|| Error::MissingRecipe(path.to_owned()))?;
@@ -265,10 +269,22 @@ struct RecipeDeclaration {
     package: PackageSpec,
 }
 
+/// One registered recipe declaration language (`stone.glu` or `stone.lua`),
+/// selected by the recipe file's extension. Both engines reach the same
+/// [`PackageSpec`] and bind the source lock as explicit inputs.
 #[derive(Debug, Clone)]
-struct RecipeDeclarationEvaluator {
-    package: GluonPackageEvaluator,
-    explicit_inputs: Arc<[u8]>,
+enum RecipeDeclarationEvaluator {
+    Gluon(GluonPackageEvaluator, Arc<[u8]>),
+    Lua(LuaPackageEvaluator, Arc<[u8]>),
+}
+
+impl RecipeDeclarationEvaluator {
+    fn registered(explicit_inputs: Arc<[u8]>) -> [Self; 2] {
+        [
+            Self::Gluon(GluonPackageEvaluator::default(), explicit_inputs.clone()),
+            Self::Lua(LuaPackageEvaluator::default(), explicit_inputs),
+        ]
+    }
 }
 
 impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
@@ -276,24 +292,43 @@ impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
     type Error = PackageConversionError;
 
     fn language_spec(&self) -> &LanguageSpec {
-        <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(
-            &self.package,
-        )
+        match self {
+            Self::Gluon(package, _) => {
+                <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(package)
+            }
+            Self::Lua(package, _) => {
+                <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(package)
+            }
+        }
     }
 
     fn limits(&self) -> Limits {
-        <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::limits(
-            &self.package,
-        )
+        match self {
+            Self::Gluon(package, _) => {
+                <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::limits(package)
+            }
+            Self::Lua(package, _) => {
+                <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::limits(package)
+            }
+        }
     }
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
-        Self {
-            package: <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::with_source_root(
-                &self.package,
-                source_root,
+        match self {
+            Self::Gluon(package, inputs) => Self::Gluon(
+                <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::with_source_root(
+                    package,
+                    source_root,
+                ),
+                inputs.clone(),
             ),
-            explicit_inputs: self.explicit_inputs.clone(),
+            Self::Lua(package, inputs) => Self::Lua(
+                <LuaPackageEvaluator as DeclarationEvaluator<PackageSpec>>::with_source_root(
+                    package,
+                    source_root,
+                ),
+                inputs.clone(),
+            ),
         }
     }
 
@@ -305,12 +340,18 @@ impl DeclarationEvaluator<RecipeDeclaration> for RecipeDeclarationEvaluator {
         DeclarationEvaluation<RecipeDeclaration, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        let evaluation = <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs_within(
-            &self.package,
-            source,
-            &self.explicit_inputs,
-            deadline,
-        )?;
+        let evaluation = match self {
+            Self::Gluon(package, inputs) => {
+                <GluonPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs_within(
+                    package, source, inputs, deadline,
+                )?
+            }
+            Self::Lua(package, inputs) => {
+                <LuaPackageEvaluator as DeclarationInputEvaluator<PackageSpec>>::evaluate_with_inputs_within(
+                    package, source, inputs, deadline,
+                )?
+            }
+        };
         Ok(DeclarationEvaluation {
             value: RecipeDeclaration {
                 source: source.text().to_owned(),
@@ -364,13 +405,17 @@ pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
 }
 
 fn registered_recipe_languages() -> RegisteredLanguages {
-    let evaluator = GluonPackageEvaluator::default();
-    let language =
-        <GluonPackageEvaluator as DeclarationEvaluator<PackageSpec>>::language_spec(
-            &evaluator,
-        );
-    RegisteredLanguages::new([language.clone()])
-        .expect("the one production recipe language is unique")
+    let languages = RecipeDeclarationEvaluator::registered(Arc::from(Vec::new()))
+        .iter()
+        .map(|evaluator| {
+            <RecipeDeclarationEvaluator as DeclarationEvaluator<RecipeDeclaration>>::language_spec(
+                evaluator,
+            )
+            .clone()
+        })
+        .collect::<Vec<_>>();
+    RegisteredLanguages::new(languages)
+        .expect("the recipe languages register distinct extensions")
 }
 
 fn discover_recipe_root(
@@ -484,6 +529,21 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
         Recipe::load(root.path()).unwrap()
+    }
+
+    #[test]
+    fn a_stone_lua_recipe_is_discovered_by_extension() {
+        // The recipe loader now registers both languages; a directory holding a
+        // `stone.lua` resolves to it (the `.lua` recipe dispatch), while an
+        // unregistered extension is not discovered.
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.lua"), "return {}\n").unwrap();
+        let resolved = resolve_path(root.path()).unwrap();
+        assert!(resolved.ends_with("stone.lua"));
+
+        let unknown = tempfile::tempdir().unwrap();
+        fs::write(unknown.path().join("stone.toml"), "").unwrap();
+        assert!(matches!(resolve_path(unknown.path()), Err(Error::MissingRecipe(_))));
     }
 
     fn target(name: &str) -> TargetPolicySpec {

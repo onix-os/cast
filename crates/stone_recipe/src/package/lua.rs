@@ -421,7 +421,7 @@ pub(crate) fn authorize_recipe_migration(
 
 /// Stateless Lua adapter for the package recipe declaration.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LuaPackageEvaluator {
+pub struct LuaPackageEvaluator {
     engine: LuaEngine,
 }
 

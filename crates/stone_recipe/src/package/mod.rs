@@ -15,6 +15,8 @@ pub use self::gluon::{
 
 mod gluon;
 mod lua;
+
+pub use lua::LuaPackageEvaluator;
 mod validation;
 
 pub(crate) use validation::valid_package_name;
