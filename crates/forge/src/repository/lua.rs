@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 
 use config::declaration::ConfigDeclarationEvaluator;
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
-    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator, Evaluation,
+    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
 use lua_config::{
     GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_optional_bool, lua_optional_integer,
@@ -131,6 +131,15 @@ impl DeclarationEvaluator<Map> for LuaRepositoryCodec {
 
 impl ConfigDeclarationEvaluator for LuaRepositoryCodec {
     type Config = Map;
+}
+
+impl DeclarationCodec<Map> for LuaRepositoryCodec {
+    /// Emit the canonical generated-marked Lua source for a repository map. This
+    /// is what the generated-slot authority switch writes when it converts a
+    /// repository store from `.glu` to `.lua` authority.
+    fn encode(&self, config: &Map) -> Result<String, Self::Error> {
+        encode_lua_specs(config)
+    }
 }
 
 /// One registered repository declaration language (`.glu` or `.lua`), selected
@@ -341,5 +350,18 @@ let cast = import! cast.repository.v1
 
         let round_tripped = lua_map(&emitted);
         assert_eq!(format!("{original:?}"), format!("{round_tripped:?}"));
+    }
+
+    #[test]
+    fn the_lua_codec_encodes_a_valid_generated_slot_authority() {
+        use declarative_config::DeclarationCodec;
+
+        // The generated-slot authority switch calls `DeclarationCodec::encode`
+        // to write the new `.lua` authority; it must be generated-marked and
+        // re-decode to the same map.
+        let map = gluon_map(GLUON_ROOT_INDEX);
+        let encoded = LuaRepositoryCodec::default().encode(&map).expect("codec emits lua");
+        assert!(encoded.starts_with(GENERATED_LUA_MARKER));
+        assert_eq!(format!("{:?}", lua_map(&encoded)), format!("{map:?}"));
     }
 }
