@@ -220,6 +220,39 @@ pub(crate) fn resolve_migrated_blob(
     Ok(Some(blobs.read(&hex::encode(&row.migrated_blob_sha256))?))
 }
 
+/// Aggregate coverage of the required state-owned declaration slots: which have
+/// a committed catalog row and which remain unmigrated. A future Lua-only
+/// release refuses upgrade unless coverage is complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeclarationMigrationCoverage {
+    pub covered: Vec<(i32, String)>,
+    pub missing: Vec<(i32, String)>,
+}
+
+impl DeclarationMigrationCoverage {
+    /// True when every required state-owned slot has a committed row.
+    pub(crate) fn is_complete(&self) -> bool {
+        self.missing.is_empty()
+    }
+}
+
+/// Report catalog coverage of every required `(state_id, logical_slot)` pair.
+pub(crate) fn migration_coverage(
+    database: &Database,
+    required: &[(i32, String)],
+) -> Result<DeclarationMigrationCoverage, BridgeError> {
+    let mut covered = Vec::new();
+    let mut missing = Vec::new();
+    for (state_id, logical_slot) in required {
+        if database.declaration_migration(*state_id, logical_slot)?.is_some() {
+            covered.push((*state_id, logical_slot.clone()));
+        } else {
+            missing.push((*state_id, logical_slot.clone()));
+        }
+    }
+    Ok(DeclarationMigrationCoverage { covered, missing })
+}
+
 /// Deferred, retained-authority garbage collection: remove every blob that no
 /// committed catalog row references, and keep every blob that one does. This
 /// runs only after the catalog is the sole selection authority, so a crash that
@@ -390,6 +423,45 @@ mod tests {
             migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap(),
             DeclarationMigrationCommit::AlreadyPresent
         );
+    }
+
+    #[test]
+    fn a_failed_catalog_commit_leaves_no_row_and_orphans_the_blob() {
+        // Simulate a crash during the exclusive commit: the blob is made durable
+        // first, then a catalog CHECK violation (an invalid state-tree marker)
+        // aborts the transaction. The exclusive transaction is atomic, so no row
+        // is written; the durable blob is left as unreachable residue.
+        let (_dir, blobs) = store();
+        let database = database();
+        let sid = state_id(&database);
+        let converted = b"return { half_written = false }\n";
+        let mut request = request(sid, converted);
+        request.state_tree_marker = vec![1u8; 8]; // not 32 bytes: fails the CHECK
+
+        assert!(migrate_declaration(&database, &blobs, request).is_err());
+        assert_eq!(
+            resolve_migrated_blob(&database, &blobs, sid, "etc/cast/system.glu").unwrap(),
+            None
+        );
+        assert!(blobs.read(&content_address(converted)).is_ok());
+    }
+
+    #[test]
+    fn coverage_reports_covered_and_missing_state_slots() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let sid = state_id(&database);
+        migrate_declaration(&database, &blobs, request(sid, b"a")).unwrap();
+
+        let required = vec![
+            (sid, "etc/cast/system.glu".to_owned()),
+            (sid, "usr/lib/system-model.glu".to_owned()),
+        ];
+        let coverage = migration_coverage(&database, &required).unwrap();
+
+        assert!(!coverage.is_complete());
+        assert_eq!(coverage.covered, vec![(sid, "etc/cast/system.glu".to_owned())]);
+        assert_eq!(coverage.missing, vec![(sid, "usr/lib/system-model.glu".to_owned())]);
     }
 
     #[test]
