@@ -820,8 +820,7 @@ impl LuaPackageEvaluator {
     /// table decodes into the language-agnostic [`AuthoredPackage`] and the
     /// shared [`lower`] fills the package-ABI defaults and lowers the builder
     /// request into typed steps — no authoring logic runs in Lua.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn evaluate_authored(&self, source: &Source) -> Result<PackageSpec, Diagnostic> {
+    pub fn evaluate_authored(&self, source: &Source) -> Result<PackageSpec, Diagnostic> {
         let authored: AuthoredPackage =
             self.engine.evaluate_as::<LuaAuthoredPackage>(source)?.value.into();
         Ok(lower(authored))
