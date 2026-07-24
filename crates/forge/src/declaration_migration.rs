@@ -341,6 +341,45 @@ pub(crate) fn verify_migration_readiness(
     })
 }
 
+/// The outcome of an operator finalize: the readiness assessment, and the
+/// residue blob addresses reclaimed (empty unless the migration was ready).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeclarationMigrationFinalization {
+    pub readiness: DeclarationMigrationReadiness,
+    pub collected_blobs: Vec<String>,
+}
+
+impl DeclarationMigrationFinalization {
+    /// True when the migration was ready and its residue was reclaimed.
+    pub(crate) fn is_finalized(&self) -> bool {
+        self.readiness.is_ready()
+    }
+}
+
+/// Operator finalize: verify every required slot is ready, and *only* when the
+/// whole set is ready reclaim the unreferenced residue blobs. This is
+/// deliberately fail-closed — an incomplete or broken migration (a missing or
+/// unresolved slot) reclaims nothing and reports every problem, so residue is
+/// never garbage-collected while the migration is still in flight or degraded.
+/// Garbage collection only ever removes blobs no committed row references, so
+/// running it here can never drop a blob a ready slot depends on.
+pub(crate) fn finalize_declaration_migration(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    required: &[(i32, String)],
+) -> Result<DeclarationMigrationFinalization, BridgeError> {
+    let readiness = verify_migration_readiness(database, blobs, required)?;
+    let collected_blobs = if readiness.is_ready() {
+        collect_unreferenced_blobs(database, blobs)?
+    } else {
+        Vec::new()
+    };
+    Ok(DeclarationMigrationFinalization {
+        readiness,
+        collected_blobs,
+    })
+}
+
 /// Deferred, retained-authority garbage collection: remove every blob that no
 /// committed catalog row references, and keep every blob that one does. This
 /// runs only after the catalog is the sole selection authority, so a crash that
@@ -543,6 +582,62 @@ mod tests {
         assert_eq!(after.unresolved, required);
         assert!(after.ready.is_empty() && after.missing.is_empty());
         assert!(!after.is_ready());
+    }
+
+    #[test]
+    fn finalize_reclaims_residue_only_when_every_required_slot_is_ready() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        let required = vec![(state_id, "etc/cast/system.glu".to_owned())];
+
+        // A crash-residue blob with no committed row.
+        let orphan = blobs.write(b"orphan residue\n").unwrap();
+
+        // Not yet migrated: not ready, so finalize reclaims nothing and the
+        // residue is preserved — GC never runs while the migration is in flight.
+        let pending = finalize_declaration_migration(&database, &blobs, &required).unwrap();
+        assert!(!pending.is_finalized());
+        assert!(pending.collected_blobs.is_empty());
+        assert!(blobs.read(&orphan).is_ok());
+
+        // After migrating the slot the set is ready; finalize reclaims the
+        // residue orphan but keeps the blob the committed row references.
+        let converted = b"return { finalized = true }\n";
+        migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap();
+        let finalized = finalize_declaration_migration(&database, &blobs, &required).unwrap();
+        assert!(finalized.is_finalized());
+        assert_eq!(finalized.collected_blobs, vec![orphan.clone()]);
+        assert!(blobs.read(&orphan).is_err());
+        assert_eq!(
+            resolve_migrated_blob(&database, &blobs, state_id, "etc/cast/system.glu").unwrap(),
+            Some(converted.to_vec())
+        );
+    }
+
+    #[test]
+    fn finalize_is_fail_closed_when_a_required_slot_is_unmigrated() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        let migrated_slot = "etc/cast/system.glu".to_owned();
+        let unmigrated_slot = "etc/cast/other.glu".to_owned();
+        let required = vec![
+            (state_id, migrated_slot.clone()),
+            (state_id, unmigrated_slot.clone()),
+        ];
+
+        let orphan = blobs.write(b"orphan residue\n").unwrap();
+        migrate_declaration(&database, &blobs, request(state_id, b"return {}\n")).unwrap();
+
+        // One slot remains unmigrated, so finalize reclaims nothing, reports the
+        // gap, and preserves the residue.
+        let finalization = finalize_declaration_migration(&database, &blobs, &required).unwrap();
+        assert!(!finalization.is_finalized());
+        assert_eq!(finalization.readiness.ready, vec![(state_id, migrated_slot)]);
+        assert_eq!(finalization.readiness.missing, vec![(state_id, unmigrated_slot)]);
+        assert!(finalization.collected_blobs.is_empty());
+        assert!(blobs.read(&orphan).is_ok());
     }
 
     #[test]
