@@ -19,7 +19,9 @@ use crate::{
         ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
         SystemTriggersCompleteCoordinator,
     },
-    transition_journal::{TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        Operation, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::{
@@ -54,6 +56,24 @@ pub(in crate::client) enum ActiveReblitCoordinatorBootSyncStagingError {
     PlanActiveStateMismatch,
     #[error("stage exact ActiveReblit boot synchronization")]
     Staging(#[from] ActiveReblitBootSyncStagingError),
+}
+
+/// The booted state is always the record's candidate. How it relates to the
+/// predecessor depends on the operation: ActiveReblit repairs a state in place
+/// (`candidate == previous`), whereas NewState boots a fresh candidate whose
+/// real predecessor was archived to a distinct slot (`candidate != previous`).
+fn boot_previous_matches_operation(record: &TransitionRecord, boot_state: Option<i32>) -> bool {
+    match record.operation {
+        Operation::ActiveReblit => record.previous.id == boot_state,
+        Operation::NewState => {
+            record.options.archive_previous
+                && record.previous.id.is_some()
+                && record.previous.id != record.candidate.id
+        }
+        Operation::ActivateArchived => {
+            record.previous.id.is_some() && record.previous.id != record.candidate.id
+        }
+    }
 }
 
 impl CoordinatorActiveReblitBootSyncHandoff {
@@ -115,9 +135,9 @@ impl CoordinatorActiveReblitBootSyncHandoff {
                 ActiveReblitCoordinatorBootSyncStagingError::ClientCapabilityMismatch,
             );
         }
-        let active_state = Some(i32::from(self.active_reblit.id));
-        if active_state != self.record.candidate.id
-            || active_state != self.record.previous.id
+        let boot_state = Some(i32::from(self.active_reblit.id));
+        if boot_state != self.record.candidate.id
+            || !boot_previous_matches_operation(&self.record, boot_state)
         {
             return Err(ActiveReblitCoordinatorBootSyncStagingError::ActiveStateMismatch);
         }
@@ -131,7 +151,7 @@ impl CoordinatorActiveReblitBootSyncHandoff {
         let plan_state_record_id = Some(i32::from(plan_state));
         if plan_state != self.active_reblit.id
             || self.record.candidate.id != plan_state_record_id
-            || self.record.previous.id != plan_state_record_id
+            || !boot_previous_matches_operation(&self.record, plan_state_record_id)
         {
             return Err(
                 ActiveReblitCoordinatorBootSyncStagingError::PlanActiveStateMismatch,
