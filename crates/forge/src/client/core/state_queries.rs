@@ -45,7 +45,7 @@ impl Client {
     /// selected; any drift fails closed rather than falling back.
     fn resolve_migrated_system_model(
         &self,
-        path: &std::path::Path,
+        path: &Path,
         state: &State,
     ) -> Result<Option<SystemModel>, Error> {
         let state_id = i32::from(state.id);
@@ -68,11 +68,11 @@ impl Client {
                 source,
             }
         })?;
-        let usr = path.parent().and_then(std::path::Path::parent).ok_or_else(|| {
+        let usr = path.parent().and_then(Path::parent).ok_or_else(|| {
             Error::ReadSystemSnapshotForMigration {
                 path: path.to_path_buf(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
+                source: io::Error::new(
+                    io::ErrorKind::InvalidInput,
                     "snapshot path has no /usr parent directory",
                 ),
             }

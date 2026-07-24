@@ -876,9 +876,9 @@ pub enum Error {
     QueryDeclarationMigration(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("read the system snapshot {path:?} for migration revalidation")]
     ReadSystemSnapshotForMigration {
-        path: std::path::PathBuf,
+        path: PathBuf,
         #[source]
-        source: std::io::Error,
+        source: io::Error,
     },
     #[error("open the state /usr tree marker for migration revalidation")]
     OpenTreeMarkerForMigration(#[source] Box<dyn std::error::Error + Send + Sync>),
