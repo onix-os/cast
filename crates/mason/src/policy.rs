@@ -12,8 +12,8 @@ use declarative_config::{
 };
 use gluon_config::Diagnostic;
 use stone_recipe::build_policy::{
-    BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
-    GluonBuildPolicyEvaluator, TargetPolicySpec,
+    BuildPolicyConversionError, BuildPolicyEvaluator, BuildPolicyPatchSpec, BuildPolicySpec,
+    GluonBuildPolicyEvaluator, LuaBuildPolicyEvaluator, TargetPolicySpec,
     layers::{
         BuildPolicyOperation, BuildPolicyRootConversionError,
         BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
@@ -51,11 +51,6 @@ impl BuildPolicy {
                 &GluonBuildPolicyRootEvaluator::default(),
                 source_root.clone(),
             );
-        let policy_evaluator =
-            <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
-                &GluonBuildPolicyEvaluator::default(),
-                source_root.clone(),
-            );
         let mut layers = Vec::with_capacity(manifest.layers.len());
         let mut state = None;
         let mut operation_order = 0;
@@ -65,7 +60,6 @@ impl BuildPolicy {
             for (entry_index, entry) in layer.entries.iter().enumerate() {
                 transitions.push(apply_entry(
                     &source_root,
-                    &policy_evaluator,
                     &manifest.name,
                     &layer.name,
                     layer_index,
@@ -137,9 +131,25 @@ impl BuildPolicy {
     }
 }
 
+/// Select the layer language by a layer file's extension, source-rooted so its
+/// (currently unused for `.lua`) imports resolve beneath the policy directory.
+/// A `.lua` layer decodes through the Lua adapter; anything else is Gluon.
+fn build_policy_evaluator_for(origin: &str, source_root: &SourceRoot) -> BuildPolicyEvaluator {
+    let evaluator = if Path::new(origin).extension().and_then(|extension| extension.to_str())
+        == Some("lua")
+    {
+        BuildPolicyEvaluator::Lua(LuaBuildPolicyEvaluator::default())
+    } else {
+        BuildPolicyEvaluator::Gluon(GluonBuildPolicyEvaluator::default())
+    };
+    <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
+        &evaluator,
+        source_root.clone(),
+    )
+}
+
 fn apply_entry(
     source_root: &SourceRoot,
-    evaluator: &GluonBuildPolicyEvaluator,
     policy: &str,
     layer: &str,
     layer_index: usize,
@@ -149,6 +159,7 @@ fn apply_entry(
     origin: &str,
     state: &mut Option<BuildPolicySpec>,
 ) -> Result<PolicyTransitionProvenance, Error> {
+    let evaluator = build_policy_evaluator_for(origin, source_root);
     match operation {
         BuildPolicyOperation::Add if state.is_some() => {
             return Err(Error::InvalidTransition {
@@ -181,10 +192,8 @@ fn apply_entry(
     let source = source_root
         .load(
             origin,
-            <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(
-                evaluator,
-            )
-            .max_source_bytes,
+            <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(&evaluator)
+                .max_source_bytes,
         )
         .map_err(|source| Error::LoadEntry {
             policy: policy.to_owned(),
@@ -201,8 +210,8 @@ fn apply_entry(
     let fingerprint = match operation {
         BuildPolicyOperation::Add | BuildPolicyOperation::Replace => {
             let evaluated =
-                <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate(
-                    evaluator,
+                <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate(
+                    &evaluator,
                     &source,
                 )
                 .map_err(|source| Error::EvaluateEntry {
@@ -220,8 +229,8 @@ fn apply_entry(
         }
         BuildPolicyOperation::Modify => {
             let evaluated =
-                <GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::evaluate(
-                    evaluator,
+                <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::evaluate(
+                    &evaluator,
                     &source,
                 )
                 .map_err(|source| Error::EvaluateEntry {
@@ -404,6 +413,23 @@ mod tests {
             .evaluate(&declarative_config::Source::new("policy.lua", &emitted))
             .expect("emitted repository policy re-decodes");
         assert_eq!(policy.spec, redecoded);
+    }
+
+    /// One-shot: emit the shipped policy's `default.lua` from the currently
+    /// composed spec, verifying it re-decodes to the same policy before writing.
+    #[test]
+    #[ignore = "one-shot shipped-data conversion tool"]
+    fn generate_lua_policy_default() {
+        let policy_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/policy");
+        let policy = BuildPolicy::load_from(&policy_dir).expect("current policy loads");
+
+        let lua = stone_recipe::build_policy::encode_lua_policy(&policy.spec);
+        let redecoded = stone_recipe::build_policy::LuaBuildPolicyEvaluator::default()
+            .evaluate(&declarative_config::Source::new("default.lua", &lua))
+            .expect("emitted default.lua re-decodes");
+        assert_eq!(policy.spec, redecoded);
+
+        fs::write(policy_dir.join("default.lua"), lua).unwrap();
     }
 
     fn assert_same_diagnostic(actual: &Diagnostic, expected: &Diagnostic) {
