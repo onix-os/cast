@@ -19,7 +19,7 @@ use declarative_config::{
 use std::fmt::Write as _;
 
 use super::PackageConversionError;
-use lua_config::{GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_option, lua_string};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_option, lua_string, pretty_lua};
 use serde::Deserialize;
 
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
@@ -426,7 +426,7 @@ pub fn encode_lua_recipe(package: &PackageSpec) -> String {
         package.emul32,
         package.mold,
     );
-    output
+    pretty_lua(&output)
 }
 
 fn seq<T>(items: &[T], encode: impl Fn(&T) -> String) -> String {

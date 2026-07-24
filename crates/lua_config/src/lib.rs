@@ -20,7 +20,10 @@ mod profile;
 mod value;
 
 pub use decode::{LuaOption, LuaPatch};
-pub use emit::{lua_option, lua_optional_bool, lua_optional_integer, lua_optional_string, lua_string};
+pub use emit::{
+    lua_option, lua_optional_bool, lua_optional_integer, lua_optional_string, lua_string,
+    pretty_lua,
+};
 pub use engine::{
     LuaPrepared, LuaRuntime, LuaSerdeDecoder, LuaValueDecoder, PreparedLuaModule,
 };
