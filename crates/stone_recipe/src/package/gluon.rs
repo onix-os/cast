@@ -172,10 +172,23 @@ impl GluonPackageEvaluator {
         // decode cleanly and falls back to the legacy path. Text sniffing is
         // deliberately avoided: an ABI name can appear in a comment, and a
         // factory entry reaches its ABI only through a transitive import.
+        //
+        // Only an `Evaluation` failure (the Gluon-level decode itself did not
+        // match the authored shape) is ambiguous enough to justify a second
+        // attempt against the legacy shape. A `Conversion` failure means the
+        // authored decode succeeded and the language-agnostic `PackageSpec`
+        // domain validation rejected it — that is the authored recipe's real,
+        // final answer, and must not be masked by retrying against a legacy
+        // shape it was never written against.
         let probe = EvaluationDeadline::start(self.engine.limits().timeout);
         match self.evaluate_authored_package(source, explicit_inputs, probe) {
             Ok(evaluation) => Ok(evaluation),
-            Err(_) => self.evaluate_package(source, explicit_inputs, deadline),
+            Err(DeclarationEvaluationError::Conversion(error)) => {
+                Err(DeclarationEvaluationError::Conversion(error))
+            }
+            Err(DeclarationEvaluationError::Evaluation(_)) => {
+                self.evaluate_package(source, explicit_inputs, deadline)
+            }
         }
     }
 
