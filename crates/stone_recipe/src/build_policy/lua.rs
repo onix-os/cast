@@ -15,7 +15,7 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 use declarative_config::{Diagnostic, Source};
-use lua_config::{LuaEngine, LuaOption, LuaPatch};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, LuaOption, LuaPatch, lua_option, lua_string};
 use serde::Deserialize;
 
 use super::{
@@ -26,9 +26,11 @@ use super::{
     EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec,
     MoldPolicySpec, NamedTuningChoiceSpec, NamedTuningFlagSpec, NamedTuningGroupSpec, PgoFinishSpec,
     PgoPolicySpec, PgoStagePolicySpec, PlatformPolicySpec, RetiredTargetPolicySpec,
-    SandboxPolicySpec, SourcePreparationPolicySpec, StandardBuilderPolicySpec, TargetEmulationSpec,
-    TargetPolicySpec, TextSpec, ToolchainFlagsSpec, ToolchainInputPolicySpec, ToolchainsSpec,
-    TuningGroupSpec, TuningOptionSpec, TuningPolicySpec, ValuePatch,
+    SandboxCredentialPolicySpec, SandboxDevPolicySpec, SandboxFilesystemPolicySpec,
+    SandboxPolicySpec, SandboxSysPolicySpec, SandboxTmpPolicySpec, SourcePreparationPolicySpec,
+    StandardBuilderPolicySpec, TargetEmulationSpec, TargetPolicySpec, TextSpec, ToolchainFlagsSpec,
+    ToolchainInputPolicySpec, ToolchainsSpec, TuningGroupSpec, TuningOptionSpec, TuningPolicySpec,
+    ValuePatch,
 };
 
 /// Map a `Vec` of Lua DTOs to a `Vec` of their domain values.
@@ -839,9 +841,616 @@ impl LuaBuildPolicyEvaluator {
     }
 }
 
+// ---- Emitter (write path) ------------------------------------------------
+//
+// Produces the same tagged Lua encoding the decoders above accept, so an
+// emitted policy re-decodes to an equal [`BuildPolicySpec`]. This is the build
+// policy's write path — what a generated-slot authority switch writes when it
+// converts a `policy.glu` fragment to `policy.lua`.
+
+/// Emit a complete [`BuildPolicySpec`] as generated-marked Lua source.
+pub(crate) fn encode_lua_policy(policy: &BuildPolicySpec) -> String {
+    format!(
+        "{marker}return {{\n\
+         build_subdir = {build_subdir},\n\
+         layout = {layout},\n\
+         toolchains = {toolchains},\n\
+         targets = {targets},\n\
+         retired_targets = {retired_targets},\n\
+         sandbox = {sandbox},\n\
+         build_root = {build_root},\n\
+         sources = {sources},\n\
+         tuning = {tuning},\n\
+         environment = {environment},\n\
+         builders = {builders},\n\
+         analyzers = {analyzers},\n\
+         pgo = {pgo},\n\
+         }}\n",
+        marker = GENERATED_LUA_MARKER,
+        build_subdir = lua_string(&policy.build_subdir),
+        layout = install_layout(&policy.layout),
+        toolchains = toolchains(&policy.toolchains),
+        targets = seq(&policy.targets, target_policy),
+        retired_targets = seq(&policy.retired_targets, retired_target),
+        sandbox = sandbox_policy(&policy.sandbox),
+        build_root = build_root(&policy.build_root),
+        sources = source_prep(&policy.sources),
+        tuning = tuning_policy(&policy.tuning),
+        environment = seq(&policy.environment, environment_binding),
+        builders = builders(&policy.builders),
+        analyzers = seq(&policy.analyzers, |kind| lua_string(&serde_snake_case(kind.as_str()))),
+        pgo = pgo_policy(&policy.pgo),
+    )
+}
+
+/// Emit a slice as a Lua array table using a per-element encoder.
+fn seq<T>(items: &[T], encode: impl Fn(&T) -> String) -> String {
+    let body = items.iter().map(encode).collect::<Vec<_>>().join(", ");
+    format!("{{ {body} }}")
+}
+
+/// Emit a slice of strings as a Lua array table of string literals.
+fn string_seq(items: &[String]) -> String {
+    seq(items, |value| lua_string(value))
+}
+
+/// Serde's `snake_case` rename applied to a PascalCase variant name, so an
+/// emitted enum tag re-decodes through the same `rename_all` the DTOs derive.
+fn serde_snake_case(name: &str) -> String {
+    let mut snake = String::with_capacity(name.len() + 4);
+    for (index, character) in name.char_indices() {
+        if index > 0 && character.is_ascii_uppercase() {
+            snake.push('_');
+        }
+        snake.push(character.to_ascii_lowercase());
+    }
+    snake
+}
+
+/// Emit a [`ContextValue`] as its snake_case name string literal.
+fn context_value(value: ContextValue) -> String {
+    lua_string(&serde_snake_case(context_value_name(value)))
+}
+
+/// The exact PascalCase identifier of each [`ContextValue`] variant, used only
+/// as input to [`serde_snake_case`] so the emitted tag matches the decoder.
+fn context_value_name(value: ContextValue) -> &'static str {
+    match value {
+        ContextValue::PackageName => "PackageName",
+        ContextValue::PackageVersion => "PackageVersion",
+        ContextValue::PackageRelease => "PackageRelease",
+        ContextValue::SourceDir => "SourceDir",
+        ContextValue::InstallRoot => "InstallRoot",
+        ContextValue::BuildRoot => "BuildRoot",
+        ContextValue::WorkDir => "WorkDir",
+        ContextValue::BuilderDir => "BuilderDir",
+        ContextValue::PgoDir => "PgoDir",
+        ContextValue::Jobs => "Jobs",
+        ContextValue::SourceDateEpoch => "SourceDateEpoch",
+        ContextValue::PgoStage => "PgoStage",
+        ContextValue::TargetTriple => "TargetTriple",
+        ContextValue::BuildPlatform => "BuildPlatform",
+        ContextValue::HostPlatform => "HostPlatform",
+        ContextValue::LibSuffix => "LibSuffix",
+        ContextValue::Prefix => "Prefix",
+        ContextValue::BinDir => "BinDir",
+        ContextValue::SbinDir => "SbinDir",
+        ContextValue::IncludeDir => "IncludeDir",
+        ContextValue::LibDir => "LibDir",
+        ContextValue::LibexecDir => "LibexecDir",
+        ContextValue::DataDir => "DataDir",
+        ContextValue::VendorDir => "VendorDir",
+        ContextValue::DocDir => "DocDir",
+        ContextValue::InfoDir => "InfoDir",
+        ContextValue::LocaleDir => "LocaleDir",
+        ContextValue::ManDir => "ManDir",
+        ContextValue::SysconfDir => "SysconfDir",
+        ContextValue::LocalStateDir => "LocalStateDir",
+        ContextValue::SharedStateDir => "SharedStateDir",
+        ContextValue::RunStateDir => "RunStateDir",
+        ContextValue::CFlags => "CFlags",
+        ContextValue::CxxFlags => "CxxFlags",
+        ContextValue::FFlags => "FFlags",
+        ContextValue::DFlags => "DFlags",
+        ContextValue::RustFlags => "RustFlags",
+        ContextValue::ValaFlags => "ValaFlags",
+        ContextValue::GoFlags => "GoFlags",
+        ContextValue::LdFlags => "LdFlags",
+        ContextValue::Cc => "Cc",
+        ContextValue::Cxx => "Cxx",
+        ContextValue::Objc => "Objc",
+        ContextValue::Objcxx => "Objcxx",
+        ContextValue::Cpp => "Cpp",
+        ContextValue::Objcpp => "Objcpp",
+        ContextValue::Objcxxcpp => "Objcxxcpp",
+        ContextValue::Ar => "Ar",
+        ContextValue::Ld => "Ld",
+        ContextValue::Objcopy => "Objcopy",
+        ContextValue::Nm => "Nm",
+        ContextValue::Ranlib => "Ranlib",
+        ContextValue::Strip => "Strip",
+        ContextValue::CcacheDir => "CcacheDir",
+        ContextValue::SccacheDir => "SccacheDir",
+        ContextValue::GoCacheDir => "GoCacheDir",
+        ContextValue::GoModCacheDir => "GoModCacheDir",
+        ContextValue::CargoCacheDir => "CargoCacheDir",
+        ContextValue::ZigCacheDir => "ZigCacheDir",
+        ContextValue::RustcWrapper => "RustcWrapper",
+        ContextValue::SourcePath => "SourcePath",
+        ContextValue::SourceDestination => "SourceDestination",
+    }
+}
+
+/// Emit a [`TextSpec`] as its tagged `{ kind = … }` encoding.
+fn text_spec(text: &TextSpec) -> String {
+    match text {
+        TextSpec::Literal(value) => {
+            format!(r#"{{ kind = "literal", value = {} }}"#, lua_string(value))
+        }
+        TextSpec::Context(value) => {
+            format!(r#"{{ kind = "context", value = {} }}"#, context_value(*value))
+        }
+        TextSpec::Concat(values) => {
+            format!(r#"{{ kind = "concat", values = {} }}"#, seq(values, text_spec))
+        }
+    }
+}
+
+/// Emit a [`BuildToolSpec`] as its tagged capability encoding.
+fn build_tool(tool: &BuildToolSpec) -> String {
+    let (kind, value) = match tool {
+        BuildToolSpec::Package(value) => ("package", value),
+        BuildToolSpec::Binary(value) => ("binary", value),
+        BuildToolSpec::SystemBinary(value) => ("system_binary", value),
+    };
+    format!(r#"{{ kind = "{kind}", value = {} }}"#, lua_string(value))
+}
+
+/// Emit an [`EnvironmentCondition`] as its snake_case name string literal.
+fn environment_condition(condition: EnvironmentCondition) -> String {
+    let name = match condition {
+        EnvironmentCondition::Always => "always",
+        EnvironmentCondition::CompilerCacheEnabled => "compiler_cache_enabled",
+        EnvironmentCondition::CompilerCacheDisabled => "compiler_cache_disabled",
+    };
+    lua_string(name)
+}
+
+/// Emit an [`EnvironmentBindingSpec`].
+fn environment_binding(binding: &EnvironmentBindingSpec) -> String {
+    format!(
+        "{{ name = {}, value = {}, condition = {} }}",
+        lua_string(&binding.name),
+        text_spec(&binding.value),
+        environment_condition(binding.condition),
+    )
+}
+
+/// Emit a [`CompilerFlagsSpec`] — eight ordered flag lists of text specs.
+fn compiler_flags(flags: &CompilerFlagsSpec) -> String {
+    format!(
+        "{{ c = {}, cxx = {}, f = {}, d = {}, rust = {}, vala = {}, go = {}, ld = {} }}",
+        seq(&flags.c, text_spec),
+        seq(&flags.cxx, text_spec),
+        seq(&flags.f, text_spec),
+        seq(&flags.d, text_spec),
+        seq(&flags.rust, text_spec),
+        seq(&flags.vala, text_spec),
+        seq(&flags.go, text_spec),
+        seq(&flags.ld, text_spec),
+    )
+}
+
+/// Emit a [`ToolchainFlagsSpec`] — common/GNU/LLVM flag sets.
+fn toolchain_flags(flags: &ToolchainFlagsSpec) -> String {
+    format!(
+        "{{ common = {}, gnu = {}, llvm = {} }}",
+        compiler_flags(&flags.common),
+        compiler_flags(&flags.gnu),
+        compiler_flags(&flags.llvm),
+    )
+}
+
+/// Emit an [`InstallLayoutSpec`] — every install directory locator.
+fn install_layout(layout: &InstallLayoutSpec) -> String {
+    format!(
+        "{{ prefix = {}, bindir = {}, sbindir = {}, includedir = {}, libdir = {}, \
+         libexecdir = {}, datadir = {}, vendordir = {}, docdir = {}, infodir = {}, \
+         localedir = {}, mandir = {}, sysconfdir = {}, localstatedir = {}, sharedstatedir = {}, \
+         runstatedir = {}, sysusersdir = {}, tmpfilesdir = {}, udevrulesdir = {}, \
+         bash_completions_dir = {}, fish_completions_dir = {}, elvish_completions_dir = {}, \
+         zsh_completions_dir = {} }}",
+        text_spec(&layout.prefix),
+        text_spec(&layout.bindir),
+        text_spec(&layout.sbindir),
+        text_spec(&layout.includedir),
+        text_spec(&layout.libdir),
+        text_spec(&layout.libexecdir),
+        text_spec(&layout.datadir),
+        text_spec(&layout.vendordir),
+        text_spec(&layout.docdir),
+        text_spec(&layout.infodir),
+        text_spec(&layout.localedir),
+        text_spec(&layout.mandir),
+        text_spec(&layout.sysconfdir),
+        text_spec(&layout.localstatedir),
+        text_spec(&layout.sharedstatedir),
+        text_spec(&layout.runstatedir),
+        text_spec(&layout.sysusersdir),
+        text_spec(&layout.tmpfilesdir),
+        text_spec(&layout.udevrulesdir),
+        text_spec(&layout.bash_completions_dir),
+        text_spec(&layout.fish_completions_dir),
+        text_spec(&layout.elvish_completions_dir),
+        text_spec(&layout.zsh_completions_dir),
+    )
+}
+
+/// Emit a [`BuildProgramSpec`].
+fn build_program(program: &BuildProgramSpec) -> String {
+    format!(
+        "{{ path = {}, requirement = {} }}",
+        lua_string(&program.path),
+        build_tool(&program.requirement),
+    )
+}
+
+/// Emit a [`BuildCommandSpec`].
+fn build_command(command: &BuildCommandSpec) -> String {
+    format!(
+        "{{ program = {}, args = {} }}",
+        build_program(&command.program),
+        string_seq(&command.args),
+    )
+}
+
+/// Emit a [`CompilerToolsSpec`] — one build command per toolchain role.
+fn compiler_tools(tools: &CompilerToolsSpec) -> String {
+    format!(
+        "{{ cc = {}, cxx = {}, objc = {}, objcxx = {}, cpp = {}, objcpp = {}, objcxxcpp = {}, \
+         ar = {}, ld = {}, objcopy = {}, nm = {}, ranlib = {}, strip = {} }}",
+        build_command(&tools.cc),
+        build_command(&tools.cxx),
+        build_command(&tools.objc),
+        build_command(&tools.objcxx),
+        build_command(&tools.cpp),
+        build_command(&tools.objcpp),
+        build_command(&tools.objcxxcpp),
+        build_command(&tools.ar),
+        build_command(&tools.ld),
+        build_command(&tools.objcopy),
+        build_command(&tools.nm),
+        build_command(&tools.ranlib),
+        build_command(&tools.strip),
+    )
+}
+
+/// Emit a [`ToolchainsSpec`] — the LLVM and GNU tool tables.
+fn toolchains(spec: &ToolchainsSpec) -> String {
+    format!(
+        "{{ llvm = {}, gnu = {} }}",
+        compiler_tools(&spec.llvm),
+        compiler_tools(&spec.gnu),
+    )
+}
+
+/// Emit a [`PlatformPolicySpec`] as pure data.
+fn platform(platform: &PlatformPolicySpec) -> String {
+    format!(
+        "{{ architecture = {}, vendor = {}, operating_system = {}, abi = {} }}",
+        lua_string(&platform.architecture),
+        lua_string(&platform.vendor),
+        lua_string(&platform.operating_system),
+        lua_string(&platform.abi),
+    )
+}
+
+/// Emit a [`TargetEmulationSpec`] as its tagged encoding.
+fn target_emulation(emulation: &TargetEmulationSpec) -> String {
+    match emulation {
+        TargetEmulationSpec::Native => r#"{ kind = "native" }"#.to_owned(),
+        TargetEmulationSpec::Emul32 { host_architecture } => format!(
+            r#"{{ kind = "emul32", host_architecture = {} }}"#,
+            lua_string(host_architecture),
+        ),
+    }
+}
+
+/// Emit a [`TargetPolicySpec`].
+fn target_policy(target: &TargetPolicySpec) -> String {
+    format!(
+        "{{ name = {}, target_triple = {}, build_triple = {}, host_triple = {}, lib_suffix = {}, \
+         artifact_architecture = {}, emulation = {}, build_platform = {}, host_platform = {}, \
+         target_platform = {}, architecture_flags = {}, environment = {} }}",
+        lua_string(&target.name),
+        lua_string(&target.target_triple),
+        lua_string(&target.build_triple),
+        lua_string(&target.host_triple),
+        lua_string(&target.lib_suffix),
+        lua_string(&target.artifact_architecture),
+        target_emulation(&target.emulation),
+        platform(&target.build_platform),
+        platform(&target.host_platform),
+        platform(&target.target_platform),
+        toolchain_flags(&target.architecture_flags),
+        seq(&target.environment, environment_binding),
+    )
+}
+
+/// Emit a [`RetiredTargetPolicySpec`].
+fn retired_target(target: &RetiredTargetPolicySpec) -> String {
+    format!(
+        "{{ name = {}, reason = {} }}",
+        lua_string(&target.name),
+        lua_string(&target.reason),
+    )
+}
+
+/// Emit a [`SandboxCredentialPolicySpec`] as its snake_case name.
+fn sandbox_credentials(credentials: SandboxCredentialPolicySpec) -> String {
+    let name = match credentials {
+        SandboxCredentialPolicySpec::IsolatedRoot => "isolated_root",
+    };
+    lua_string(name)
+}
+
+/// Emit a [`SandboxFilesystemPolicySpec`] as its three named modes.
+fn sandbox_filesystems(filesystems: SandboxFilesystemPolicySpec) -> String {
+    let tmp = match filesystems.tmp {
+        SandboxTmpPolicySpec::Empty => "empty",
+    };
+    let sys = match filesystems.sys {
+        SandboxSysPolicySpec::None => "none",
+    };
+    let dev = match filesystems.dev {
+        SandboxDevPolicySpec::None => "none",
+        SandboxDevPolicySpec::Minimal => "minimal",
+    };
+    format!(
+        "{{ tmp = {}, sys = {}, dev = {} }}",
+        lua_string(tmp),
+        lua_string(sys),
+        lua_string(dev),
+    )
+}
+
+/// Emit a [`SandboxPolicySpec`] as pure data.
+fn sandbox_policy(sandbox: &SandboxPolicySpec) -> String {
+    format!(
+        "{{ hostname = {}, credentials = {}, filesystems = {}, guest_root = {}, artifacts_dir = {}, \
+         build_dir = {}, source_dir = {}, recipe_dir = {}, package_dir = {}, install_dir = {} }}",
+        lua_string(&sandbox.hostname),
+        sandbox_credentials(sandbox.credentials),
+        sandbox_filesystems(sandbox.filesystems),
+        lua_string(&sandbox.guest_root),
+        lua_string(&sandbox.artifacts_dir),
+        lua_string(&sandbox.build_dir),
+        lua_string(&sandbox.source_dir),
+        lua_string(&sandbox.recipe_dir),
+        lua_string(&sandbox.package_dir),
+        lua_string(&sandbox.install_dir),
+    )
+}
+
+/// Emit a [`ToolchainInputPolicySpec`].
+fn toolchain_input(inputs: &ToolchainInputPolicySpec) -> String {
+    format!(
+        "{{ llvm = {}, gnu = {} }}",
+        seq(&inputs.llvm, build_tool),
+        seq(&inputs.gnu, build_tool),
+    )
+}
+
+/// Emit an [`Emul32InputPolicySpec`].
+fn emul32_input(inputs: &Emul32InputPolicySpec) -> String {
+    format!(
+        "{{ base = {}, toolchains = {} }}",
+        seq(&inputs.base, build_tool),
+        toolchain_input(&inputs.toolchains),
+    )
+}
+
+/// Emit an [`AnalyzerToolchainPolicySpec`].
+fn analyzer_toolchain(tools: &AnalyzerToolchainPolicySpec) -> String {
+    format!(
+        "{{ objcopy = {}, strip = {} }}",
+        build_tool(&tools.objcopy),
+        build_tool(&tools.strip),
+    )
+}
+
+/// Emit an [`AnalyzerToolsPolicySpec`].
+fn analyzer_tools(tools: &AnalyzerToolsPolicySpec) -> String {
+    format!(
+        "{{ pkg_config = {}, python = {}, llvm = {}, gnu = {} }}",
+        build_tool(&tools.pkg_config),
+        build_tool(&tools.python),
+        analyzer_toolchain(&tools.llvm),
+        analyzer_toolchain(&tools.gnu),
+    )
+}
+
+/// Emit a [`CompilerCachePolicySpec`].
+fn compiler_cache(cache: &CompilerCachePolicySpec) -> String {
+    format!(
+        "{{ ccache = {}, sccache = {}, ccache_dir = {}, sccache_dir = {}, go_cache_dir = {}, \
+         go_mod_cache_dir = {}, cargo_cache_dir = {}, zig_cache_dir = {} }}",
+        build_program(&cache.ccache),
+        build_program(&cache.sccache),
+        lua_string(&cache.ccache_dir),
+        lua_string(&cache.sccache_dir),
+        lua_string(&cache.go_cache_dir),
+        lua_string(&cache.go_mod_cache_dir),
+        lua_string(&cache.cargo_cache_dir),
+        lua_string(&cache.zig_cache_dir),
+    )
+}
+
+/// Emit a [`MoldPolicySpec`].
+fn mold(mold: &MoldPolicySpec) -> String {
+    format!(
+        "{{ linker = {}, flags = {} }}",
+        build_command(&mold.linker),
+        compiler_flags(&mold.flags),
+    )
+}
+
+/// Emit a [`BuildRootPolicySpec`].
+fn build_root(root: &BuildRootPolicySpec) -> String {
+    format!(
+        "{{ base = {}, toolchains = {}, emul32 = {}, analyzer_tools = {}, compiler_cache = {}, mold = {} }}",
+        seq(&root.base, build_tool),
+        toolchain_input(&root.toolchains),
+        emul32_input(&root.emul32),
+        analyzer_tools(&root.analyzer_tools),
+        compiler_cache(&root.compiler_cache),
+        mold(&root.mold),
+    )
+}
+
+/// Emit a [`BuilderCommandSpec`].
+fn builder_command(command: &BuilderCommandSpec) -> String {
+    format!(
+        "{{ program = {}, args = {}, environment = {}, working_dir = {} }}",
+        build_program(&command.program),
+        seq(&command.args, text_spec),
+        seq(&command.environment, environment_binding),
+        text_spec(&command.working_dir),
+    )
+}
+
+/// Emit a [`GitPreparationPolicySpec`].
+fn git_prep(git: &GitPreparationPolicySpec) -> String {
+    format!(
+        "{{ create_directory = {}, copy = {} }}",
+        builder_command(&git.create_directory),
+        builder_command(&git.copy),
+    )
+}
+
+/// Emit a [`SourcePreparationPolicySpec`].
+fn source_prep(sources: &SourcePreparationPolicySpec) -> String {
+    format!("{{ git = {} }}", git_prep(&sources.git))
+}
+
+/// Emit a [`StandardBuilderPolicySpec`].
+fn standard_builder(builder: &StandardBuilderPolicySpec) -> String {
+    format!(
+        "{{ environment = {}, setup = {}, build = {}, install = {}, check = {} }}",
+        seq(&builder.environment, environment_binding),
+        builder_command(&builder.setup),
+        builder_command(&builder.build),
+        builder_command(&builder.install),
+        builder_command(&builder.check),
+    )
+}
+
+/// Emit a [`BuildersPolicySpec`] — the four standard builders.
+fn builders(builders: &BuildersPolicySpec) -> String {
+    format!(
+        "{{ cmake = {}, meson = {}, cargo = {}, autotools = {} }}",
+        standard_builder(&builders.cmake),
+        standard_builder(&builders.meson),
+        standard_builder(&builders.cargo),
+        standard_builder(&builders.autotools),
+    )
+}
+
+/// Emit a [`PgoFinishSpec`].
+fn pgo_finish(finish: &PgoFinishSpec) -> String {
+    format!(
+        "{{ output = {}, inputs = {}, copy_to = {}, remove_output_first = {} }}",
+        text_spec(&finish.output),
+        seq(&finish.inputs, text_spec),
+        lua_option(finish.copy_to.as_ref().map(text_spec)),
+        finish.remove_output_first,
+    )
+}
+
+/// Emit a [`PgoStagePolicySpec`].
+fn pgo_stage(stage: &PgoStagePolicySpec) -> String {
+    format!(
+        "{{ flags = {}, finish = {} }}",
+        toolchain_flags(&stage.flags),
+        lua_option(stage.finish.as_ref().map(pgo_finish)),
+    )
+}
+
+/// Emit a [`PgoPolicySpec`].
+fn pgo_policy(pgo: &PgoPolicySpec) -> String {
+    format!(
+        "{{ shell_interpreter = {}, merge_program = {}, merge_args = {}, copy_program = {}, \
+         remove_program = {}, sample = {}, stage_one = {}, stage_two = {}, use_profile = {} }}",
+        build_program(&pgo.shell_interpreter),
+        build_program(&pgo.merge_program),
+        seq(&pgo.merge_args, text_spec),
+        build_program(&pgo.copy_program),
+        build_program(&pgo.remove_program),
+        toolchain_flags(&pgo.sample),
+        pgo_stage(&pgo.stage_one),
+        pgo_stage(&pgo.stage_two),
+        pgo_stage(&pgo.use_profile),
+    )
+}
+
+/// Emit a [`TuningOptionSpec`].
+fn tuning_option(option: &TuningOptionSpec) -> String {
+    format!(
+        "{{ enabled = {}, disabled = {} }}",
+        string_seq(&option.enabled),
+        string_seq(&option.disabled),
+    )
+}
+
+/// Emit a [`NamedTuningChoiceSpec`].
+fn named_tuning_choice(choice: &NamedTuningChoiceSpec) -> String {
+    format!(
+        "{{ name = {}, value = {} }}",
+        lua_string(&choice.name),
+        tuning_option(&choice.value),
+    )
+}
+
+/// Emit a [`TuningGroupSpec`].
+fn tuning_group(group: &TuningGroupSpec) -> String {
+    format!(
+        "{{ base = {}, default = {}, choices = {} }}",
+        tuning_option(&group.base),
+        lua_option(group.default.as_deref().map(lua_string)),
+        seq(&group.choices, named_tuning_choice),
+    )
+}
+
+/// Emit a [`NamedTuningGroupSpec`].
+fn named_tuning_group(group: &NamedTuningGroupSpec) -> String {
+    format!(
+        "{{ name = {}, value = {} }}",
+        lua_string(&group.name),
+        tuning_group(&group.value),
+    )
+}
+
+/// Emit a [`NamedTuningFlagSpec`].
+fn named_tuning_flag(flag: &NamedTuningFlagSpec) -> String {
+    format!(
+        "{{ name = {}, value = {} }}",
+        lua_string(&flag.name),
+        toolchain_flags(&flag.value),
+    )
+}
+
+/// Emit a [`TuningPolicySpec`].
+fn tuning_policy(tuning: &TuningPolicySpec) -> String {
+    format!(
+        "{{ flags = {}, groups = {}, default_groups = {} }}",
+        seq(&tuning.flags, named_tuning_flag),
+        seq(&tuning.groups, named_tuning_group),
+        string_seq(&tuning.default_groups),
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::super::SandboxDevPolicySpec;
     use super::*;
 
     fn decode<T: serde::de::DeserializeOwned>(source: &str) -> T {
@@ -1278,8 +1887,8 @@ return {
 
     #[test]
     fn an_analyzer_kind_decodes_from_its_snake_case_name() {
-        let kind: super::super::AnalyzerKind = decode(r#"return "pkg_config""#);
-        assert_eq!(kind, super::super::AnalyzerKind::PkgConfig);
+        let kind: AnalyzerKind = decode(r#"return "pkg_config""#);
+        assert_eq!(kind, AnalyzerKind::PkgConfig);
     }
 
     fn literal_layout_field(name: &str) -> String {
@@ -1301,5 +1910,104 @@ return {
         let layout: InstallLayoutSpec = decode::<LuaInstallLayoutSpec>(&source).into();
         assert_eq!(layout.prefix, TextSpec::Literal("/prefix".to_owned()));
         assert_eq!(layout.zsh_completions_dir, TextSpec::Literal("/zsh_completions_dir".to_owned()));
+    }
+
+    /// A minimal-but-complete policy re-decodes to itself, exercising the
+    /// structural spine of every top-level field through the emitter.
+    #[test]
+    fn a_complete_build_policy_round_trips_through_the_emitter() {
+        let evaluator = LuaBuildPolicyEvaluator::default();
+        let source = complete_policy_source();
+        let policy = evaluator
+            .evaluate(&Source::new("build-policy.lua", &source))
+            .expect("complete policy decodes");
+
+        let emitted = encode_lua_policy(&policy);
+        assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+
+        let redecoded = evaluator
+            .evaluate(&Source::new("build-policy.lua", &emitted))
+            .expect("emitted policy re-decodes");
+        assert_eq!(policy, redecoded);
+    }
+
+    /// A richer authored source exercises the encoder paths the minimal policy
+    /// leaves empty: context/concat text, non-native emulation-free targets with
+    /// per-target flags and bindings, retired targets, populated tuning groups
+    /// with a default choice, a PGO finish with an optional copy, and every
+    /// analyzer name (including the multi-capital `c_make`).
+    fn rich_policy_source() -> String {
+        let target = r#"{
+            name = "native", target_triple = "x86_64-linux-gnu",
+            build_triple = "x86_64-linux-gnu", host_triple = "x86_64-linux-gnu",
+            lib_suffix = "64", artifact_architecture = "x86_64",
+            emulation = { kind = "native" },
+            build_platform = { architecture = "x86_64", vendor = "unknown", operating_system = "linux", abi = "gnu" },
+            host_platform = { architecture = "x86_64", vendor = "unknown", operating_system = "linux", abi = "gnu" },
+            target_platform = { architecture = "x86_64", vendor = "unknown", operating_system = "linux", abi = "gnu" },
+            architecture_flags = {
+                common = { c = { { kind = "context", value = "c_flags" } }, cxx = {}, f = {}, d = {}, rust = {}, vala = {}, go = {}, ld = {} },
+                gnu = { c = {}, cxx = {}, f = {}, d = {}, rust = {}, vala = {}, go = {}, ld = {} },
+                llvm = { c = {}, cxx = {}, f = {}, d = {}, rust = {}, vala = {}, go = {}, ld = {} }
+            },
+            environment = { { name = "CFLAGS", value = { kind = "context", value = "c_flags" }, condition = "compiler_cache_enabled" } }
+        }"#;
+        let tuning = r#"{
+            flags = {},
+            groups = { { name = "opt", value = {
+                base = { enabled = { "o2" }, disabled = {} },
+                default = { kind = "some", value = "balanced" },
+                choices = { { name = "balanced", value = { enabled = { "o2" }, disabled = { "o3" } } } }
+            } } },
+            default_groups = { "opt" }
+        }"#;
+        let environment =
+            r#"{ { name = "PATH", value = { kind = "literal", value = "/usr/bin" }, condition = "always" } }"#;
+        let libdir_concat = r#"libdir = { kind = "concat", values = { { kind = "literal", value = "/usr/lib" }, { kind = "context", value = "lib_suffix" } } }"#;
+        let finish = r#"finish = { kind = "some", value = { output = { kind = "literal", value = "merged.profdata" }, inputs = { { kind = "literal", value = "a.profraw" } }, copy_to = { kind = "some", value = { kind = "literal", value = "final.profdata" } }, remove_output_first = true } }"#;
+
+        complete_policy_source()
+            // Anchor on the leading newline so this does not also match the
+            // `targets = {}` tail inside `retired_targets = {}`.
+            .replace("\ntargets = {},\n", &format!("\ntargets = {{ {target} }},\n"))
+            .replace(
+                "retired_targets = {},\n",
+                "retired_targets = { { name = \"old\", reason = \"removed\" } },\n",
+            )
+            .replace("tuning = { flags = {}, groups = {}, default_groups = {} },", &format!("tuning = {tuning},"))
+            .replace("environment = {},\n", &format!("environment = {environment},\n"))
+            .replace(
+                "analyzers = {},\n",
+                "analyzers = { \"elf\", \"binary\", \"c_make\", \"pkg_config\" },\n",
+            )
+            .replace(r#"libdir = { kind = "literal", value = "/libdir" }"#, libdir_concat)
+            .replacen(r#"finish = { kind = "none" }"#, finish, 1)
+    }
+
+    #[test]
+    fn a_rich_build_policy_round_trips_through_the_emitter() {
+        let evaluator = LuaBuildPolicyEvaluator::default();
+        let source = rich_policy_source();
+        let policy = evaluator
+            .evaluate(&Source::new("build-policy.lua", &source))
+            .expect("rich policy decodes");
+
+        // The richer source must actually reach the paths the minimal one skips.
+        assert_eq!(policy.targets.len(), 1);
+        assert_eq!(policy.retired_targets.len(), 1);
+        assert_eq!(policy.analyzers, vec![
+            AnalyzerKind::Elf,
+            AnalyzerKind::Binary,
+            AnalyzerKind::CMake,
+            AnalyzerKind::PkgConfig,
+        ]);
+        assert!(matches!(policy.layout.libdir, TextSpec::Concat(_)));
+        assert!(policy.pgo.stage_one.finish.is_some());
+
+        let emitted = encode_lua_policy(&policy);
+        let redecoded = evaluator
+            .evaluate(&Source::new("build-policy.lua", &emitted))
+            .expect("emitted rich policy re-decodes");
+        assert_eq!(policy, redecoded);
     }
 }
