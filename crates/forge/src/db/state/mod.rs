@@ -425,6 +425,7 @@ impl Database {
                 // Keep deletion explicit even on SQLite connections whose
                 // foreign-key pragma is not enabled.
                 metadata_provenance::delete_metadata_provenance(tx, chunk)?;
+                declaration_migrations::delete_declaration_migrations(tx, chunk)?;
             }
 
             Ok(())

@@ -9,8 +9,9 @@
 //! module owns only the catalog authority, never blob or filesystem authority.
 
 use diesel::prelude::*;
+use diesel::SqliteConnection;
 
-use super::{Database, schema::declaration_migrations};
+use super::{Database, Error, schema::declaration_migrations};
 
 /// The catalog schema version stamped into every committed row.
 pub(crate) const CATALOG_SCHEMA_VERSION: i32 = 1;
@@ -105,6 +106,21 @@ impl Database {
                 .map_err(DeclarationMigrationError::from)
         })
     }
+}
+
+/// Transactionally remove the catalog rows of pruned states. Called from the
+/// state-prune transaction so pruning a state cascades its catalog authority;
+/// the content-addressed blobs it referenced become unreachable residue,
+/// removed only by a later retained-authority garbage-collection pass.
+pub(super) fn delete_declaration_migrations(
+    tx: &mut SqliteConnection,
+    states: &[i32],
+) -> Result<(), Error> {
+    diesel::delete(
+        declaration_migrations::table.filter(declaration_migrations::state_id.eq_any(states)),
+    )
+    .execute(tx)?;
+    Ok(())
 }
 
 #[cfg(test)]

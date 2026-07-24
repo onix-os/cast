@@ -358,6 +358,28 @@ mod tests {
     }
 
     #[test]
+    fn pruning_a_state_cascades_its_catalog_row_and_leaves_an_orphan_blob() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let sid = state_id(&database);
+        let converted = b"return { emul32 = false }\n";
+        migrate_declaration(&database, &blobs, request(sid, converted)).unwrap();
+        let address = content_address(converted);
+
+        // Prune the state transactionally.
+        database.remove(&crate::state::Id::from(sid)).unwrap();
+
+        // The catalog authority is cascaded away — the slot is unmigrated again.
+        assert_eq!(
+            resolve_migrated_blob(&database, &blobs, sid, "etc/cast/system.glu").unwrap(),
+            None
+        );
+        // The content-addressed blob survives as unreachable residue; a later
+        // retained-authority GC pass removes it, never the prune transaction.
+        assert!(blobs.read(&address).is_ok());
+    }
+
+    #[test]
     fn revalidated_resolution_fails_closed_on_state_tree_or_source_drift() {
         let (_dir, blobs) = store();
         let database = database();
