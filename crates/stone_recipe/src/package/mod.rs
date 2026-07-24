@@ -1,8 +1,11 @@
-//! Typed package declarations for the `cast.package.v3` Gluon ABI.
+//! Typed package declarations for the language-agnostic `cast.authored.v1` ABI.
 //!
-//! A package factory is evaluated completely inside Gluon and produces one
-//! concrete [`PackageSpec`]. This module deliberately contains values only:
-//! Rust never receives or retains a Gluon closure or a second recipe model.
+//! A recipe — in Gluon or Lua — is decoded into the minimal [`AuthoredPackage`]
+//! and lowered by shared Rust ([`lower`]) into one concrete [`PackageSpec`].
+//! Authoring defaults and builder lowering live in Rust, not in a config
+//! language, so either language can author a complete package on its own. This
+//! module deliberately contains values only: Rust never receives or retains a
+//! config-language closure or a second recipe model.
 
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};

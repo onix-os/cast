@@ -165,14 +165,31 @@ and derivation IDs. No authoring logic lives in a config language.
   only as a bridge for not-yet-migrated recipes. Workspace green (modulo 3
   pre-existing flaky `mason` git-fixture tests, flaky on baseline too).
 
-**Remaining to delete the legacy ABI:** migrate the still-legacy Gluon recipes —
-6 top-level `docs/examples/gluon/*.glu` package examples, 3 `tests/fixtures/*.glu`,
-~13 Rust files with inline `import! cast.package.v3` recipes. Of these,
-`stone_recipe/tests/package_v3.rs` (21 tests) and `tests/builders_v2.rs` assert
-`package.glu`/`cast.builders.*` SEMANTICS that cease to exist — delete or rewrite
-(judgment). `mason/src/draft.rs` (production recipe drafter) must emit authored
-form. Then delete `package.glu` + `builders/*.glu` + the `GluonPackageSpec` legacy
-DTOs + `evaluate_package`/`evaluate_dispatched` (authored-only), bump
-`PACKAGE_ABI_VERSION`, drop imported-ABI-module fingerprints from provenance. The
-`@generated` Lua corpus needs no hand edits (identical `PackageSpec` → identical
-emitted Lua).
+## COMPLETE (2026-07-25) — legacy ABI deleted
+
+- **All legacy recipes migrated** (each verified against a `PackageSpec` oracle):
+  64 docs package recipes, **33 `tests/fixtures/gluon` recipes**,
+  `stone_recipe/tests/{package_v3,builders_v2}.rs`, `composed-stone`+`package_policy`,
+  `authored-source.glu`, and **10 `mason` inline-recipe files** (identity/module-list
+  assertions shifted `cast.package.v3` → `cast.authored.v1`, the intended provenance
+  change).
+- **`mason/src/draft.rs`** production emitter rewritten to authored form; its
+  `drafted-stone.glu` golden regenerated.
+- **`package.glu` (725 lines) + `builders/*.glu` DELETED**, plus the `gluon.rs`
+  legacy decoder: `GluonPackageSpec` + its `From`, `evaluate_package`, the five
+  embedded-module registrations, and the dispatch bridge (trait methods now call
+  `evaluate_authored_package` directly). Shared `Gluon*` sub-DTOs kept — reused by
+  `GluonAuthoredPackage`. `PACKAGE_ABI_VERSION` + `GLUON_*_ABI` consts deleted (unused).
+- Added along the way: `outputs.with_root` overlay lifted to shared Rust
+  (`default_output_set_with_root`), a typed `output_with` for policy composition,
+  and a real dispatch-correctness fix (authored `Conversion`/validation errors were
+  being masked by the legacy fallback).
+- **Kept as stable identifiers** (NOT renamed, to avoid needless derivation-ID
+  churn): the builder-kind labels `"cast.builders.cmake.v2"` etc. in
+  `mason/src/planner/identity.rs`; `package_v3.rs`’s retired-alias rejection list.
+- `@generated` Lua corpus unchanged (identical `PackageSpec` → identical emitted Lua).
+
+**Exit criteria met:** no authoring logic lives in a config language; either Gluon
+or Lua can author, check, evaluate, plan, and freeze every package to identical
+`PackageSpec`. `stone_recipe` + `mason` green (modulo 3 pre-existing flaky `mason`
+git-fixture tests + the offline-fixture test, all flaky on baseline).
