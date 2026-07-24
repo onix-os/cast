@@ -51,7 +51,7 @@ pub enum Subcommand {
     Check {
         #[arg(
             default_value = "./stone.glu",
-            help = "Path to a stone.glu recipe file or recipe directory"
+            help = "Path to a stone.glu or stone.lua recipe file or recipe directory"
         )]
         recipe: PathBuf,
     },
@@ -63,7 +63,7 @@ pub enum Subcommand {
     Eval {
         #[arg(
             default_value = "./stone.glu",
-            help = "Path to a package-v3 stone.glu file or recipe directory"
+            help = "Path to a package-v3 stone.glu or stone.lua file or recipe directory"
         )]
         recipe: PathBuf,
     },
