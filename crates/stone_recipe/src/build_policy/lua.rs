@@ -14,7 +14,10 @@
 // evaluator that consumes them lands.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use declarative_config::{Diagnostic, Source};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Diagnostic, Evaluation as DeclarationEvaluation,
+    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+};
 use lua_config::{
     GENERATED_LUA_MARKER, LuaEngine, LuaOption, LuaPatch, lua_option, lua_string, pretty_lua,
 };
@@ -22,7 +25,8 @@ use serde::Deserialize;
 
 use super::{
     AnalyzerKind, AnalyzerToolchainPolicySpec, AnalyzerToolsPolicySpec, ArrayPatch,
-    BuildCommandSpec, BuildPolicyPatchSpec, BuildPolicySpec, BuildProgramSpec, BuildRootPolicySpec,
+    BuildCommandSpec, BuildPolicyConversionError, BuildPolicyPatchSpec, BuildPolicySpec,
+    BuildProgramSpec, BuildRootPolicySpec,
     BuildToolSpec, BuilderCommandSpec, BuildersPolicySpec, CompilerCachePolicySpec,
     CompilerFlagsSpec, CompilerToolsSpec, ContextValue, Emul32InputPolicySpec,
     EnvironmentBindingSpec, EnvironmentCondition, GitPreparationPolicySpec, InstallLayoutSpec,
@@ -840,6 +844,210 @@ impl LuaBuildPolicyEvaluator {
     /// Decode a sparse build-policy patch overlay.
     pub(crate) fn evaluate_patch(&self, source: &Source) -> Result<BuildPolicyPatchSpec, Diagnostic> {
         Ok(self.engine.evaluate_as::<LuaBuildPolicyPatchSpec>(source)?.value.into())
+    }
+}
+
+impl DeclarationEvaluator<BuildPolicySpec> for LuaBuildPolicyEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = BuildPolicyConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicySpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_within_as::<LuaBuildPolicySpec>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let policy: BuildPolicySpec = evaluation.value.into();
+        policy.validate().map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value: policy,
+            identity: evaluation.identity,
+        })
+    }
+}
+
+impl DeclarationEvaluator<BuildPolicyPatchSpec> for LuaBuildPolicyEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = BuildPolicyConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyPatchSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_within_as::<LuaBuildPolicyPatchSpec>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        Ok(DeclarationEvaluation {
+            value: evaluation.value.into(),
+            identity: evaluation.identity,
+        })
+    }
+}
+
+/// One registered build-policy layer language (`.glu` or `.lua`), selected by a
+/// layer file's extension. Both engines reach the same validated
+/// [`BuildPolicySpec`]/[`BuildPolicyPatchSpec`] with a shared conversion error,
+/// so the composition loader stays language-neutral.
+#[derive(Debug, Clone)]
+pub enum BuildPolicyEvaluator {
+    Gluon(super::GluonBuildPolicyEvaluator),
+    Lua(LuaBuildPolicyEvaluator),
+}
+
+impl BuildPolicyEvaluator {
+    /// The registered layer languages, `.glu` first, sharing a conversion error.
+    pub fn registered() -> [Self; 2] {
+        [
+            Self::Gluon(super::GluonBuildPolicyEvaluator::default()),
+            Self::Lua(LuaBuildPolicyEvaluator::default()),
+        ]
+    }
+}
+
+impl DeclarationEvaluator<BuildPolicySpec> for BuildPolicyEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = BuildPolicyConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        match self {
+            Self::Gluon(evaluator) => {
+                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::language_spec(evaluator)
+            }
+            Self::Lua(evaluator) => {
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::language_spec(evaluator)
+            }
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        match self {
+            Self::Gluon(evaluator) => {
+                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(evaluator)
+            }
+            Self::Lua(evaluator) => {
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(evaluator)
+            }
+        }
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        match self {
+            Self::Gluon(evaluator) => Self::Gluon(
+                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(evaluator, source_root),
+            ),
+            Self::Lua(evaluator) => Self::Lua(
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(evaluator, source_root),
+            ),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicySpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        match self {
+            Self::Gluon(evaluator) => evaluator.evaluate_within(source, deadline),
+            Self::Lua(evaluator) => {
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate_within(evaluator, source, deadline)
+            }
+        }
+    }
+}
+
+impl DeclarationEvaluator<BuildPolicyPatchSpec> for BuildPolicyEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = BuildPolicyConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        match self {
+            Self::Gluon(evaluator) => {
+                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::language_spec(evaluator)
+            }
+            Self::Lua(evaluator) => {
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::language_spec(evaluator)
+            }
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        match self {
+            Self::Gluon(evaluator) => {
+                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::limits(evaluator)
+            }
+            Self::Lua(evaluator) => {
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::limits(evaluator)
+            }
+        }
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        match self {
+            Self::Gluon(evaluator) => Self::Gluon(
+                <super::GluonBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::with_source_root(evaluator, source_root),
+            ),
+            Self::Lua(evaluator) => Self::Lua(
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::with_source_root(evaluator, source_root),
+            ),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<BuildPolicyPatchSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        match self {
+            Self::Gluon(evaluator) => evaluator.evaluate_within(source, deadline),
+            Self::Lua(evaluator) => {
+                <LuaBuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::evaluate_within(evaluator, source, deadline)
+            }
+        }
     }
 }
 
