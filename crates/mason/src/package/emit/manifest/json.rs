@@ -116,14 +116,29 @@ mod tests {
     use crate::Recipe;
     use crate::source_lock::{GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock};
 
-    const RECIPE_SOURCE: &str = r#"let cast = import! cast.package.v3
-cast.mk_package (cast.meta {
-    pname = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = "https://example.invalid",
-    license = ["MPL-2.0"],
-})
+    const RECIPE_SOURCE: &str = r#"let a = import! cast.authored.v1
+{
+    meta = {
+        pname = "example",
+        version = "1.2.3",
+        release = 1,
+        homepage = "https://example.invalid",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
 "#;
 
     #[test]

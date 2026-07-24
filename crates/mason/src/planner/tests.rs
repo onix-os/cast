@@ -304,30 +304,41 @@ pub(super) fn run_delegated_execution_fixture() -> DelegatedExecutionOutcome {
     bootstrap::run_delegated_execution_fixture()
 }
 
-const RECIPE: &str = r#"let b = import! cast.package.v3
+const RECIPE: &str = r#"let a = import! cast.authored.v1
 
-let scripts = b.scripts {
-    build = b.phase [b.step.shell "printf planner-hermetic > build.log"],
-    .. b.defaults.scripts
+let scripts = a.scripts {
+    build = a.phase [a.step.shell "printf planner-hermetic > build.log"],
+    .. a.empty.scripts
 }
 
 let root = {
-    summary = b.optional.set "Hermetic planner fixture",
-    description = b.optional.set "Hermetic planner fixture",
-    runtime_inputs = [b.dep.binary "planner-runtime"],
-    .. b.output "out"
+    summary = a.optional.set "Hermetic planner fixture",
+    description = a.optional.set "Hermetic planner fixture",
+    runtime_inputs = [a.dep.binary "planner-runtime"],
+    .. a.output "out"
 }
 
 {
-    builder = b.builder.shell scripts [],
-    outputs = b.outputs.with_root "planner-hermetic" root,
-    .. b.mk_package (b.meta {
+    meta = {
         pname = "planner-hermetic",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid/planner-hermetic",
         license = ["MPL-2.0"],
-    })
+    },
+    builder = a.builder.shell scripts [],
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.with_root root,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }
 "#;
 

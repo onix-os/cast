@@ -526,20 +526,31 @@ mod tests {
 
     fn gluon_two_git_recipe(first_url: &str, second_url: &str) -> String {
         format!(
-            r#"let cast = import! cast.package.v3
-let base = cast.mk_package (cast.meta {{
-    pname = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = "https://example.com",
-    license = ["MPL-2.0"],
-}})
+            r#"let a = import! cast.authored.v1
 {{
+    meta = {{
+        pname = "example",
+        version = "1.2.3",
+        release = 1,
+        homepage = "https://example.com",
+        license = ["MPL-2.0"],
+    }},
+    builder = a.builder.custom a.empty.builder,
     sources = [
-        cast.source.git "{first_url}" "main",
-        cast.source.git "{second_url}" "stable",
+        a.source.git "{first_url}" "main",
+        a.source.git "{second_url}" "stable",
     ],
-    .. base
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }}"#
         )
     }

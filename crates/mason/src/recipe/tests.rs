@@ -23,7 +23,23 @@
     }
 
     fn gluon_recipe(source: &str) -> String {
-        format!("let cast = import! cast.package.v3\ncast.mk_package (cast.meta {source})")
+        format!(
+            "let a = import! cast.authored.v1\n{{\n    \
+             meta = {source},\n    \
+             builder = a.builder.custom a.empty.builder,\n    \
+             sources = [],\n    \
+             native_build_inputs = [],\n    \
+             build_inputs = [],\n    \
+             check_inputs = [],\n    \
+             outputs = a.outputs.default,\n    \
+             options = a.unset,\n    \
+             profiles = [],\n    \
+             architectures = [],\n    \
+             tuning = [],\n    \
+             emul32 = a.false,\n    \
+             mold = a.false,\n    \
+             hooks = a.unset,\n}}"
+        )
     }
 
     fn synthetic_language(name: &str, extension: &str) -> LanguageSpec {
@@ -124,8 +140,9 @@
 
     /// One-shot: convert the complete top-level recipe examples (the canonical
     /// `stone` and the layered `composed-stone`) to verified Lua. The remaining
-    /// top-level `cast.package.v3` files are illustrative fragments, not complete
-    /// recipes, and are handled as doc prose rather than mechanically converted.
+    /// top-level files are other domain ABIs (repository, trigger, system,
+    /// boot topology), not package recipes, and are handled as doc prose
+    /// rather than mechanically converted.
     #[test]
     #[ignore = "one-shot corpus conversion tool"]
     fn generate_top_level_lua_recipe_examples() {
@@ -245,14 +262,25 @@
 
     fn gluon_recipe_with_upstreams() -> String {
         format!(
-            r#"let cast = import! cast.package.v3
-let base = cast.mk_package (cast.meta {SOURCE_SPEC})
+            r#"let a = import! cast.authored.v1
 {{
+    meta = {SOURCE_SPEC},
+    builder = a.builder.custom a.empty.builder,
     sources = [
-        cast.source.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
-        cast.source.git "{GIT_URL}" "{GIT_REF}",
+        a.source.archive "{ARCHIVE_URL}" "{ARCHIVE_HASH}",
+        a.source.git "{GIT_URL}" "{GIT_REF}",
     ],
-    .. base
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }}"#
         )
     }
@@ -426,7 +454,7 @@ let base = cast.mk_package (cast.meta {SOURCE_SPEC})
             fingerprint
                 .modules
                 .iter()
-                .any(|module| module.logical_name == "cast.package.v3")
+                .any(|module| module.logical_name == "cast.authored.v1")
         );
     }
 
@@ -450,9 +478,24 @@ let base = cast.mk_package (cast.meta {SOURCE_SPEC})
         fs::write(
             root.path().join("stone.glu"),
             r#"
-let cast = import! cast.package.v3
+let a = import! cast.authored.v1
 let source = import! "source.glu"
-cast.mk_package (cast.meta source)
+{
+    meta = source,
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
 "#,
         )
         .unwrap();
@@ -474,9 +517,8 @@ cast.mk_package (cast.meta source)
         assert_eq!(
             modules,
             [
-                "cast.package.v3",
+                "cast.authored.v1",
                 "source.glu",
-                "std.array.prim",
                 "std.string.prim",
                 "std.types",
             ]
@@ -489,14 +531,29 @@ cast.mk_package (cast.meta source)
         fs::write(
             root.path().join("stone.glu"),
             r#"
-let cast = import! cast.package.v3
-cast.mk_package (cast.meta {
-    pname = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = 42,
-    license = ["MPL-2.0"],
-})
+let a = import! cast.authored.v1
+{
+    meta = {
+        pname = "example",
+        version = "1.2.3",
+        release = 1,
+        homepage = 42,
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
 "#,
         )
         .unwrap();
