@@ -17,6 +17,8 @@ const MAX_STATE_DATABASE_TEXT_FIELD_BYTES: usize = 64 * 1024;
 mod exact_archived_removal;
 mod boot_publication_receipt_head;
 mod boot_publication_receipts;
+#[allow(dead_code)] // L8 catalog substrate; consumed by the migration-bridge slice
+mod declaration_migrations;
 #[allow(dead_code)] // exact fresh removal remains sealed from startup dispatch
 mod exact_fresh_transition_removal;
 #[allow(dead_code)] // consumed by the ActiveReblit frozen-boot wiring slice
