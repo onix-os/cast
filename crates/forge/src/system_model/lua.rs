@@ -23,6 +23,7 @@ use super::{SYSTEM_SNAPSHOT_PATH, SystemModel, spec};
 use crate::db::state::{Database, DeclarationMigrationCommit};
 use crate::declaration_migration::{
     BridgeError, DeclarationMigrationBlobStore, DeclarationMigrationRequest, migrate_declaration,
+    resolve_migrated_blob_revalidated,
 };
 use crate::repository::lua::{LuaRepositorySpec, encode_repository_record};
 
@@ -247,6 +248,62 @@ pub(crate) fn migrate_state_system_declaration(
     migrate_declaration(database, blobs, request).map_err(SystemDeclarationMigrationError::Bridge)
 }
 
+/// Failure resolving a state's system-model slot through the migration catalog.
+#[derive(Debug, thiserror::Error)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum SystemSnapshotResolutionError {
+    #[error("resolve the migrated system snapshot blob")]
+    Bridge(#[source] BridgeError),
+    #[error("the migrated system snapshot blob is not UTF-8")]
+    Utf8(#[source] std::str::Utf8Error),
+    #[error("evaluate the migrated Lua system snapshot")]
+    Evaluate(#[source] DeclarationEvaluationError<spec::ConversionError>),
+}
+
+/// Bridge-era reader resolution for a state's system-model slot: return the
+/// migrated Lua [`SystemModel`] when — and only when — a committed catalog row
+/// exists *and* revalidates against the live state's `/usr` tree marker and the
+/// exact original snapshot bytes.
+///
+/// This is the fail-closed core of the reader hook, kept independent of the live
+/// read paths: `Ok(None)` means no migration is committed, so the caller reads
+/// the legacy `.glu` unchanged; `Ok(Some(model))` is the verified Lua snapshot;
+/// an `Err` means a committed row drifted from the tree marker or original
+/// source — the caller must fail, never silently fall back. `original_snapshot`
+/// is the legacy `.glu` text the reader would otherwise load; its SHA-256 is
+/// compared to the catalog row so a swapped-out original is rejected.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn resolve_migrated_system_snapshot(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    state_id: i32,
+    logical_slot: &str,
+    original_snapshot: &str,
+    state_tree_marker: &[u8],
+) -> Result<Option<SystemModel>, SystemSnapshotResolutionError> {
+    let expected_original_sha256 = Sha256::digest(original_snapshot.as_bytes()).to_vec();
+
+    let Some(blob) = resolve_migrated_blob_revalidated(
+        database,
+        blobs,
+        state_id,
+        logical_slot,
+        state_tree_marker,
+        &expected_original_sha256,
+    )
+    .map_err(SystemSnapshotResolutionError::Bridge)?
+    else {
+        return Ok(None);
+    };
+
+    let text = std::str::from_utf8(&blob).map_err(SystemSnapshotResolutionError::Utf8)?;
+    let model = LuaSystemEvaluator::default()
+        .evaluate(&Source::new(logical_slot, text))
+        .map_err(SystemSnapshotResolutionError::Evaluate)?
+        .value;
+    Ok(Some(model))
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::{DeclarationEvaluator, Source};
@@ -448,5 +505,74 @@ return {
         )
         .expect("re-migration is idempotent");
         assert_eq!(again, DeclarationMigrationCommit::AlreadyPresent);
+    }
+
+    #[test]
+    fn the_reader_hook_resolves_a_migrated_snapshot_and_fails_closed_on_drift() {
+        let state_root = tempfile::tempdir().unwrap();
+        let blobs_dir = tempfile::tempdir().unwrap();
+        let blobs = DeclarationMigrationBlobStore::new(blobs_dir.path());
+        let database = Database::new(":memory:").unwrap();
+        let state_id = i32::from(database.add(&[], None, None).unwrap().id);
+
+        let snapshot = state_root.path().join(SYSTEM_SNAPSHOT_PATH);
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        std::fs::write(&snapshot, GLUON_SYSTEM).unwrap();
+
+        let marker = vec![5u8; 32];
+        migrate_state_system_declaration(&database, &blobs, state_id, state_root.path(), &marker)
+            .expect("snapshot migrates");
+
+        // A committed row that revalidates resolves to the migrated model.
+        let resolved = resolve_migrated_system_snapshot(
+            &database,
+            &blobs,
+            state_id,
+            SYSTEM_SNAPSHOT_PATH,
+            GLUON_SYSTEM,
+            &marker,
+        )
+        .expect("resolution succeeds")
+        .expect("a committed row resolves");
+        assert_eq!(
+            spec::SystemSpec::try_from(&resolved).unwrap(),
+            spec::SystemSpec::try_from(&gluon_model(GLUON_SYSTEM)).unwrap(),
+        );
+
+        // A drifted tree marker fails closed rather than selecting the blob.
+        let wrong_marker = vec![6u8; 32];
+        assert!(resolve_migrated_system_snapshot(
+            &database,
+            &blobs,
+            state_id,
+            SYSTEM_SNAPSHOT_PATH,
+            GLUON_SYSTEM,
+            &wrong_marker,
+        )
+        .is_err());
+
+        // A swapped-out original source fails closed.
+        assert!(resolve_migrated_system_snapshot(
+            &database,
+            &blobs,
+            state_id,
+            SYSTEM_SNAPSHOT_PATH,
+            "return { disable_warning = true }\n",
+            &marker,
+        )
+        .is_err());
+
+        // A state with no committed row yields None — the caller reads legacy.
+        let other_state = i32::from(database.add(&[], None, None).unwrap().id);
+        assert!(resolve_migrated_system_snapshot(
+            &database,
+            &blobs,
+            other_state,
+            SYSTEM_SNAPSHOT_PATH,
+            GLUON_SYSTEM,
+            &marker,
+        )
+        .expect("resolution succeeds")
+        .is_none());
     }
 }
