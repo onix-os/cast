@@ -97,6 +97,36 @@ impl DeclarationMigrationBlobStore {
         Ok(sha256)
     }
 
+    /// Enumerate the content addresses of every stored blob (its `<sha256>.lua`
+    /// filename with the extension stripped). Returns an empty list when the
+    /// blob directory does not yet exist.
+    pub(crate) fn addresses(&self) -> Result<Vec<String>, BlobStoreError> {
+        let dir = self.blobs_dir();
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut addresses = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                if let Some(address) = name.strip_suffix(".lua") {
+                    addresses.push(address.to_owned());
+                }
+            }
+        }
+        Ok(addresses)
+    }
+
+    /// Remove one blob by content address. Used only by the retained-authority
+    /// garbage-collection pass after it has proven no committed row references
+    /// the blob.
+    pub(crate) fn remove(&self, sha256: &str) -> Result<(), BlobStoreError> {
+        fs::remove_file(self.blob_path(sha256))?;
+        Ok(())
+    }
+
     /// Read one blob by content address, revalidating that the reopened bytes
     /// still hash to the requested name. A mismatch fails closed.
     pub(crate) fn read(&self, sha256: &str) -> Result<Vec<u8>, BlobStoreError> {
@@ -188,6 +218,31 @@ pub(crate) fn resolve_migrated_blob(
         return Ok(None);
     };
     Ok(Some(blobs.read(&hex::encode(&row.migrated_blob_sha256))?))
+}
+
+/// Deferred, retained-authority garbage collection: remove every blob that no
+/// committed catalog row references, and keep every blob that one does. This
+/// runs only after the catalog is the sole selection authority, so a crash that
+/// left an unreachable blob is cleaned up here — but a blob still referenced by
+/// a committed row is never removed. Returns the addresses collected.
+pub(crate) fn collect_unreferenced_blobs(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+) -> Result<Vec<String>, BridgeError> {
+    let referenced: std::collections::HashSet<String> = database
+        .referenced_migration_blobs()?
+        .iter()
+        .map(hex::encode)
+        .collect();
+
+    let mut collected = Vec::new();
+    for address in blobs.addresses()? {
+        if !referenced.contains(&address) {
+            blobs.remove(&address)?;
+            collected.push(address);
+        }
+    }
+    Ok(collected)
 }
 
 /// Bridge-era selection: resolve a slot's Lua blob only after revalidating that
@@ -334,6 +389,31 @@ mod tests {
         assert_eq!(
             migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap(),
             DeclarationMigrationCommit::AlreadyPresent
+        );
+    }
+
+    #[test]
+    fn garbage_collection_removes_only_unreferenced_blobs() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let sid = state_id(&database);
+        let referenced = b"return { referenced = true }\n";
+        migrate_declaration(&database, &blobs, request(sid, referenced)).unwrap();
+        let referenced_address = content_address(referenced);
+
+        // An orphan blob with no committed row (e.g. left by a crash before the
+        // catalog commit).
+        let orphan_address = blobs.write(b"orphan\n").unwrap();
+
+        let collected = collect_unreferenced_blobs(&database, &blobs).unwrap();
+
+        assert_eq!(collected, vec![orphan_address.clone()]);
+        // The referenced blob survives and still resolves; the orphan is gone.
+        assert!(blobs.read(&referenced_address).is_ok());
+        assert!(matches!(blobs.read(&orphan_address), Err(BlobStoreError::Io(_))));
+        assert_eq!(
+            resolve_migrated_blob(&database, &blobs, sid, "etc/cast/system.glu").unwrap(),
+            Some(referenced.to_vec())
         );
     }
 

@@ -91,6 +91,19 @@ impl Database {
         })
     }
 
+    /// Every distinct blob content address referenced by a committed catalog
+    /// row. The garbage-collection pass keeps exactly these blobs and removes
+    /// the rest as unreachable residue.
+    pub(crate) fn referenced_migration_blobs(&self) -> Result<Vec<Vec<u8>>, DeclarationMigrationError> {
+        self.conn.exec(|conn| {
+            declaration_migrations::table
+                .select(declaration_migrations::migrated_blob_sha256)
+                .distinct()
+                .load::<Vec<u8>>(conn)
+                .map_err(DeclarationMigrationError::from)
+        })
+    }
+
     /// Load the committed catalog row for a state-owned slot, if one exists.
     pub(crate) fn declaration_migration(
         &self,
