@@ -16,11 +16,13 @@ use declarative_config::{
     Evaluation, EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
 
+use std::fmt::Write as _;
+
 use super::PackageConversionError;
-use lua_config::{LuaEngine, LuaOption};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_option, lua_string};
 use serde::Deserialize;
 
-use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
+use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
 use super::{
     BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, MetaSpec,
@@ -383,6 +385,257 @@ impl From<LuaPackageSpec> for PackageSpec {
     }
 }
 
+/// Emit a package recipe as canonical, generated-marked Lua source that
+/// re-decodes through [`LuaPackageEvaluator`] into the same [`PackageSpec`].
+/// This is the recipe write path — what the bridge writes when it regenerates a
+/// migrated recipe's `stone.lua`, and what pairs a `stone.glu` example with its
+/// verified `.lua` form.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn encode_lua_recipe(package: &PackageSpec) -> String {
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    let _ = write!(
+        output,
+        "return {{\n\
+         meta = {},\n\
+         builder = {},\n\
+         hooks = {},\n\
+         native_build_inputs = {},\n\
+         build_inputs = {},\n\
+         check_inputs = {},\n\
+         outputs = {},\n\
+         options = {},\n\
+         profiles = {},\n\
+         sources = {},\n\
+         architectures = {},\n\
+         tuning = {},\n\
+         emul32 = {},\n\
+         mold = {},\n\
+         }}\n",
+        meta(&package.meta),
+        builder(&package.builder),
+        hooks(&package.hooks),
+        seq(&package.native_build_inputs, dependency),
+        seq(&package.build_inputs, dependency),
+        seq(&package.check_inputs, dependency),
+        seq(&package.outputs, output_spec),
+        options(&package.options),
+        seq(&package.profiles, profile),
+        seq(&package.sources, upstream),
+        seq(&package.architectures, |a| lua_string(a)),
+        seq(&package.tuning, named_tuning),
+        package.emul32,
+        package.mold,
+    );
+    output
+}
+
+fn seq<T>(items: &[T], encode: impl Fn(&T) -> String) -> String {
+    format!("{{ {} }}", items.iter().map(encode).collect::<Vec<_>>().join(", "))
+}
+
+fn meta(m: &MetaSpec) -> String {
+    format!(
+        "{{ pname = {}, version = {}, release = {}, homepage = {}, license = {} }}",
+        lua_string(&m.pname),
+        lua_string(&m.version),
+        m.release,
+        lua_string(&m.homepage),
+        seq(&m.license, |l| lua_string(l)),
+    )
+}
+
+fn dependency(d: &DependencySpec) -> String {
+    match d {
+        DependencySpec::Package(p) => format!(r#"{{ kind = "package", value = {} }}"#, package_ref(p)),
+        DependencySpec::Output(o) => format!(r#"{{ kind = "output", value = {} }}"#, output_ref(o)),
+        DependencySpec::Binary(v) => format!(r#"{{ kind = "binary", value = {} }}"#, lua_string(v)),
+        DependencySpec::SystemBinary(v) => format!(r#"{{ kind = "system_binary", value = {} }}"#, lua_string(v)),
+        DependencySpec::PkgConfig(v) => format!(r#"{{ kind = "pkg_config", value = {} }}"#, lua_string(v)),
+        DependencySpec::PkgConfig32(v) => format!(r#"{{ kind = "pkg_config32", value = {} }}"#, lua_string(v)),
+        DependencySpec::Soname(v) => format!(r#"{{ kind = "soname", value = {} }}"#, lua_string(v)),
+        DependencySpec::CMake(v) => format!(r#"{{ kind = "cmake", value = {} }}"#, lua_string(v)),
+        DependencySpec::Python(v) => format!(r#"{{ kind = "python", value = {} }}"#, lua_string(v)),
+        DependencySpec::Interpreter(v) => format!(r#"{{ kind = "interpreter", value = {} }}"#, lua_string(v)),
+    }
+}
+
+fn package_ref(p: &PackageRef) -> String {
+    format!("{{ name = {} }}", lua_string(&p.name))
+}
+
+fn output_ref(o: &OutputRef) -> String {
+    format!("{{ package = {}, output = {} }}", package_ref(&o.package), lua_string(&o.output))
+}
+
+fn program(p: &ProgramSpec) -> String {
+    format!("{{ path = {}, requirement = {} }}", lua_string(&p.path), dependency(&p.requirement))
+}
+
+fn built_program(p: &BuiltProgramSpec) -> String {
+    format!("{{ path = {} }}", lua_string(&p.path))
+}
+
+fn step(s: &StepSpec) -> String {
+    let strings = |items: &[String]| seq(items, |i| lua_string(i));
+    match s {
+        StepSpec::Run { program: p, args } => {
+            format!(r#"{{ kind = "run", program = {}, args = {} }}"#, program(p), strings(args))
+        }
+        StepSpec::RunBuilt { program: p, args } => {
+            format!(r#"{{ kind = "run_built", program = {}, args = {} }}"#, built_program(p), strings(args))
+        }
+        StepSpec::Shell { interpreter, declared_programs, script } => format!(
+            r#"{{ kind = "shell", interpreter = {}, declared_programs = {}, script = {} }}"#,
+            program(interpreter),
+            seq(declared_programs, program),
+            lua_string(script),
+        ),
+        StepSpec::CMakeConfigure { flags } => format!(r#"{{ kind = "cmake_configure", flags = {} }}"#, strings(flags)),
+        StepSpec::CMakeBuild => r#"{ kind = "cmake_build" }"#.to_owned(),
+        StepSpec::CMakeInstall => r#"{ kind = "cmake_install" }"#.to_owned(),
+        StepSpec::CMakeTest => r#"{ kind = "cmake_test" }"#.to_owned(),
+        StepSpec::MesonSetup { flags } => format!(r#"{{ kind = "meson_setup", flags = {} }}"#, strings(flags)),
+        StepSpec::MesonBuild => r#"{ kind = "meson_build" }"#.to_owned(),
+        StepSpec::MesonInstall => r#"{ kind = "meson_install" }"#.to_owned(),
+        StepSpec::MesonTest => r#"{ kind = "meson_test" }"#.to_owned(),
+        StepSpec::CargoBuild { features } => format!(r#"{{ kind = "cargo_build", features = {} }}"#, strings(features)),
+        StepSpec::CargoInstall { binaries } => format!(r#"{{ kind = "cargo_install", binaries = {} }}"#, strings(binaries)),
+        StepSpec::CargoTest { features } => format!(r#"{{ kind = "cargo_test", features = {} }}"#, strings(features)),
+        StepSpec::AutotoolsConfigure { flags } => format!(r#"{{ kind = "autotools_configure", flags = {} }}"#, strings(flags)),
+        StepSpec::AutotoolsBuild => r#"{ kind = "autotools_build" }"#.to_owned(),
+        StepSpec::AutotoolsInstall => r#"{ kind = "autotools_install" }"#.to_owned(),
+        StepSpec::AutotoolsTest => r#"{ kind = "autotools_test" }"#.to_owned(),
+    }
+}
+
+fn phase(p: &PhaseSpec) -> String {
+    format!("{{ steps = {} }}", seq(&p.steps, step))
+}
+
+fn phases(p: &PhasesSpec) -> String {
+    format!(
+        "{{ setup = {}, build = {}, install = {}, check = {}, workload = {} }}",
+        phase(&p.setup), phase(&p.build), phase(&p.install), phase(&p.check), phase(&p.workload),
+    )
+}
+
+fn hooks(h: &HooksSpec) -> String {
+    format!(
+        "{{ pre_setup = {}, post_setup = {}, pre_build = {}, post_build = {}, pre_check = {}, post_check = {}, pre_install = {}, post_install = {}, pre_workload = {}, post_workload = {} }}",
+        seq(&h.pre_setup, step), seq(&h.post_setup, step), seq(&h.pre_build, step), seq(&h.post_build, step),
+        seq(&h.pre_check, step), seq(&h.post_check, step), seq(&h.pre_install, step), seq(&h.post_install, step),
+        seq(&h.pre_workload, step), seq(&h.post_workload, step),
+    )
+}
+
+fn builder_environment(e: &BuilderEnvironmentSpec) -> &'static str {
+    match e {
+        BuilderEnvironmentSpec::CMake => r#""cmake""#,
+        BuilderEnvironmentSpec::Meson => r#""meson""#,
+        BuilderEnvironmentSpec::Cargo => r#""cargo""#,
+        BuilderEnvironmentSpec::Autotools => r#""autotools""#,
+    }
+}
+
+fn supported_hooks(s: &SupportedHooksSpec) -> String {
+    format!(
+        "{{ setup = {}, build = {}, check = {}, install = {}, workload = {} }}",
+        s.setup, s.build, s.check, s.install, s.workload,
+    )
+}
+
+fn builder(b: &BuilderSpec) -> String {
+    format!(
+        "{{ required_tools = {}, environment = {}, phases = {}, supported_hooks = {} }}",
+        seq(&b.required_tools, dependency),
+        seq(&b.environment, |e| builder_environment(e).to_owned()),
+        phases(&b.phases),
+        supported_hooks(&b.supported_hooks),
+    )
+}
+
+fn path_spec(p: &PathSpec) -> String {
+    match p {
+        PathSpec::Any { path } => format!(r#"{{ kind = "any", path = {} }}"#, lua_string(path)),
+        PathSpec::Exe { path } => format!(r#"{{ kind = "exe", path = {} }}"#, lua_string(path)),
+        PathSpec::Symlink { path } => format!(r#"{{ kind = "symlink", path = {} }}"#, lua_string(path)),
+        PathSpec::Special { path } => format!(r#"{{ kind = "special", path = {} }}"#, lua_string(path)),
+    }
+}
+
+fn output_spec(o: &OutputSpec) -> String {
+    format!(
+        "{{ name = {}, include_in_manifest = {}, summary = {}, description = {}, provides_exclude = {}, runtime_inputs = {}, runtime_exclude = {}, paths = {}, conflicts = {} }}",
+        lua_string(&o.name),
+        o.include_in_manifest,
+        lua_option(o.summary.as_deref().map(lua_string)),
+        lua_option(o.description.as_deref().map(lua_string)),
+        seq(&o.provides_exclude, |s| lua_string(s)),
+        seq(&o.runtime_inputs, dependency),
+        seq(&o.runtime_exclude, |s| lua_string(s)),
+        seq(&o.paths, path_spec),
+        seq(&o.conflicts, dependency),
+    )
+}
+
+fn profile(p: &ProfileSpec) -> String {
+    format!(
+        "{{ name = {}, builder = {}, hooks = {}, native_build_inputs = {}, build_inputs = {}, check_inputs = {} }}",
+        lua_string(&p.name),
+        builder(&p.builder),
+        hooks(&p.hooks),
+        seq(&p.native_build_inputs, dependency),
+        seq(&p.build_inputs, dependency),
+        seq(&p.check_inputs, dependency),
+    )
+}
+
+fn toolchain(t: &ToolchainSpec) -> &'static str {
+    match t {
+        ToolchainSpec::Llvm => r#""llvm""#,
+        ToolchainSpec::Gnu => r#""gnu""#,
+    }
+}
+
+fn options(o: &OptionsSpec) -> String {
+    format!(
+        "{{ toolchain = {}, cspgo = {}, samplepgo = {}, debug = {}, strip = {}, networking = {}, compressman = {}, lastrip = {} }}",
+        toolchain(&o.toolchain),
+        o.cspgo, o.samplepgo, o.debug, o.strip, o.networking, o.compressman, o.lastrip,
+    )
+}
+
+fn tuning(t: &TuningSpec) -> String {
+    match t {
+        TuningSpec::Enable => r#"{ kind = "enable" }"#.to_owned(),
+        TuningSpec::Disable => r#"{ kind = "disable" }"#.to_owned(),
+        TuningSpec::Config { value } => format!(r#"{{ kind = "config", value = {} }}"#, lua_string(value)),
+    }
+}
+
+fn named_tuning(t: &NamedTuningSpec) -> String {
+    format!("{{ key = {}, value = {} }}", lua_string(&t.key), tuning(&t.value))
+}
+
+fn upstream(u: &UpstreamSpec) -> String {
+    match u {
+        UpstreamSpec::Archive { url, hash, rename, strip_dirs, unpack, unpack_dir } => format!(
+            r#"{{ kind = "archive", url = {}, hash = {}, rename = {}, strip_dirs = {}, unpack = {unpack}, unpack_dir = {} }}"#,
+            lua_string(url),
+            lua_string(hash),
+            lua_option(rename.as_deref().map(lua_string)),
+            lua_option(strip_dirs.map(|v| v.to_string())),
+            lua_option(unpack_dir.as_deref().map(lua_string)),
+        ),
+        UpstreamSpec::Git { url, git_ref, clone_dir } => format!(
+            r#"{{ kind = "git", url = {}, git_ref = {}, clone_dir = {} }}"#,
+            lua_string(url),
+            lua_string(git_ref),
+            lua_option(clone_dir.as_deref().map(lua_string)),
+        ),
+    }
+}
+
 /// Semantic equivalence of an authored recipe and a proposed Lua replacement:
 /// two recipes are equivalent iff they normalize to the same [`PackageSpec`].
 /// The recipe-migration bridge proves this before regenerating a recipe's
@@ -606,6 +859,20 @@ mod tests {
             authorize_recipe_migration(&authored, &divergent),
             RecipeMigrationDecision::Rejected
         );
+    }
+
+    #[test]
+    fn an_emitted_recipe_re_decodes_to_the_same_package() {
+        let original = LuaPackageEvaluator::default()
+            .evaluate(&Source::new("package.lua", &complete_recipe_source()))
+            .expect("recipe decodes");
+        let emitted = encode_lua_recipe(&original);
+        assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+
+        let round_tripped = LuaPackageEvaluator::default()
+            .evaluate(&Source::new("package.lua", &emitted))
+            .expect("emitted recipe re-decodes");
+        assert_eq!(round_tripped, original);
     }
 
     #[test]
