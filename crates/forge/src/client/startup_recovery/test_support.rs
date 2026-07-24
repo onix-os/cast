@@ -180,6 +180,17 @@ impl Fixture {
         fixture
     }
 
+    /// A crashed archive_previous record durably at `PreviousArchived`: the
+    /// predecessor was archived to its state slot but boot never began. Only
+    /// NewState (and future ActivateArchived) reach this phase.
+    pub(super) fn previous_archived(kind: OperationKind) -> Self {
+        let fixture = Self::with_forward_source(kind, Phase::PreviousArchived, true, false);
+        install_root_abi(&fixture.installation.root);
+        assert_eq!(fixture.source.phase, Phase::PreviousArchived);
+        assert!(fixture.source.options.archive_previous);
+        fixture
+    }
+
     pub(super) fn system_trigger(
         kind: OperationKind,
         phase: Phase,

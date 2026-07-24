@@ -48,6 +48,21 @@ fn startup_usr_rollback_decision_admitted_matrix_persists_exact_plan() {
 }
 
 #[test]
+fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
+    // A NewState crash durably at PreviousArchived is not yet auto-recovered:
+    // no dispatcher admits the archive phases, so startup halts fail-safe with
+    // the record intact (RecoveryPending) rather than bricking or panicking.
+    // This pins the exact boundary the predecessor-restore rollback suffix will
+    // close; the prefix phases already auto-roll-back (see the terminal-outcome
+    // matrix test above).
+    let fixture = Fixture::previous_archived(OperationKind::NewState);
+    assert!(!usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+    let error = fixture.enter();
+    let pending = pending(&error);
+    assert_eq!(pending.phase(), Phase::PreviousArchived);
+}
+
+#[test]
 fn startup_usr_rollback_decision_exchanged_pre_remains_incompatible() {
     for kind in OperationKind::ALL {
         for source in [SourceCase::ExchangedPre, SourceCase::RootLinksCompletePre] {
