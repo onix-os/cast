@@ -149,7 +149,7 @@ fn default_output_set(pname: &str) -> Vec<OutputSpec> {
         include_in_manifest: false,
         summary: Some(format!("Debugging symbols for {pname}")),
         description: Some(format!(
-            "Install this package if you need debugging information + symbols\nfor the {pname} package"
+            "Install this package if you need debugging information + symbols\nfor the {pname} package."
         )),
         paths: vec![any("/usr/lib/debug")],
         ..output("dbginfo")

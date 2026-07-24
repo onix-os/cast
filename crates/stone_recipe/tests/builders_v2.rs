@@ -1,8 +1,9 @@
 use declarative_config::{DeclarationEvaluationError, DeclarationEvaluator, Evaluation, Source};
 use gluon_config::EvaluationIdentity;
 use stone_recipe::package::{
-    BuilderEnvironmentSpec, DependencySpec, GluonPackageEvaluator, PackageConversionError,
-    PackageSpec, ProgramSpec, StepSpec, SupportedHooksSpec,
+    AuthoredPackage, BuilderEnvironmentSpec, BuilderRequest, DependencySpec, GluonPackageEvaluator,
+    HooksSpec, MetaSpec, PackageConversionError, PackageSpec, ProgramSpec, StepSpec,
+    SupportedHooksSpec, lower,
 };
 
 fn evaluate_package(
@@ -34,6 +35,50 @@ fn shell(script: &str, declared_programs: Vec<ProgramSpec>) -> StepSpec {
         declared_programs,
         script: script.to_owned(),
     }
+}
+
+/// The shared Rust authoring layer must reproduce the `cast.package.v3` Gluon
+/// ABI exactly: an authored recipe using the default outputs and the default
+/// cmake builder must lower, in Rust, to the same `PackageSpec` the Gluon module
+/// produces. This proves the lift-to-Rust defaults/lowering are faithful and
+/// that authoring no longer depends on a config language.
+#[test]
+fn shared_rust_lowering_reproduces_gluon_package_v3_defaults() {
+    let gluon = evaluate_package(&package("cast.builders.cmake.v2", "builder.default"))
+        .unwrap()
+        .value;
+
+    let authored = AuthoredPackage {
+        meta: MetaSpec {
+            pname: "example".to_owned(),
+            version: "1.0.0".to_owned(),
+            release: 1,
+            homepage: "https://example.com".to_owned(),
+            license: vec!["MPL-2.0".to_owned()],
+        },
+        builder: BuilderRequest::Cmake {
+            flags: Vec::new(),
+            run_tests: true,
+        },
+        sources: Vec::new(),
+        native_build_inputs: Vec::new(),
+        build_inputs: Vec::new(),
+        check_inputs: Vec::new(),
+        outputs: None,
+        options: None,
+        profiles: Vec::new(),
+        architectures: Vec::new(),
+        tuning: Vec::new(),
+        emul32: false,
+        mold: false,
+        hooks: HooksSpec::default(),
+    };
+    let rust = lower(authored);
+
+    assert_eq!(rust.outputs, gluon.outputs, "default output-set parity");
+    assert_eq!(rust.builder, gluon.builder, "cmake builder lowering parity");
+    assert_eq!(rust.options, gluon.options, "default options parity");
+    assert_eq!(rust.hooks, gluon.hooks, "default hooks parity");
 }
 
 fn package(builder_import: &str, body: &str) -> Source {
