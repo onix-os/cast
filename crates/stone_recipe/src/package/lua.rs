@@ -25,9 +25,9 @@ use serde::Deserialize;
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
 use super::{
-    BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, MetaSpec,
-    OutputRef, OutputSpec, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec, ProgramSpec,
-    StepSpec, SupportedHooksSpec,
+    AuthoredPackage, BuilderEnvironmentSpec, BuilderRequest, BuilderSpec, BuiltProgramSpec,
+    DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec, PackageRef, PackageSpec, PhaseSpec,
+    PhasesSpec, ProfileSpec, ProgramSpec, StepSpec, SupportedHooksSpec, lower,
 };
 
 /// Convert an optional Lua DTO into an optional domain value.
@@ -385,6 +385,137 @@ impl From<LuaPackageSpec> for PackageSpec {
     }
 }
 
+/// The default value for a builder request's `run_tests` flag. Authored recipes
+/// omit `run_tests` to run the standard build system's checks; only a recipe
+/// that explicitly wants them skipped writes `run_tests = false`.
+fn default_run_tests() -> bool {
+    true
+}
+
+/// The Lua encoding of a [`BuilderRequest`] — the minimal authoring surface for
+/// a builder. The uniform `{ kind = … }` tag selects the build system; every
+/// per-builder field defaults so a recipe writes only what it overrides
+/// (`{ kind = "cmake" }` is a complete, checked cmake build).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum LuaBuilderRequest {
+    Cmake {
+        #[serde(default)]
+        flags: Vec<String>,
+        #[serde(default = "default_run_tests")]
+        run_tests: bool,
+    },
+    Meson {
+        #[serde(default)]
+        flags: Vec<String>,
+        #[serde(default = "default_run_tests")]
+        run_tests: bool,
+    },
+    Cargo {
+        #[serde(default)]
+        features: Vec<String>,
+        #[serde(default)]
+        binaries: Vec<String>,
+        #[serde(default = "default_run_tests")]
+        run_tests: bool,
+    },
+    Autotools {
+        #[serde(default)]
+        flags: Vec<String>,
+        #[serde(default = "default_run_tests")]
+        run_tests: bool,
+    },
+    /// The explicit escape hatch: an author supplies a complete builder as data.
+    Custom { spec: LuaBuilderSpec },
+}
+
+impl From<LuaBuilderRequest> for BuilderRequest {
+    fn from(request: LuaBuilderRequest) -> Self {
+        match request {
+            LuaBuilderRequest::Cmake { flags, run_tests } => {
+                BuilderRequest::Cmake { flags, run_tests }
+            }
+            LuaBuilderRequest::Meson { flags, run_tests } => {
+                BuilderRequest::Meson { flags, run_tests }
+            }
+            LuaBuilderRequest::Cargo {
+                features,
+                binaries,
+                run_tests,
+            } => BuilderRequest::Cargo {
+                features,
+                binaries,
+                run_tests,
+            },
+            LuaBuilderRequest::Autotools { flags, run_tests } => {
+                BuilderRequest::Autotools { flags, run_tests }
+            }
+            LuaBuilderRequest::Custom { spec } => BuilderRequest::Custom(Box::new(spec.into())),
+        }
+    }
+}
+
+/// The Lua encoding of an [`AuthoredPackage`] — the minimal, language-agnostic
+/// authoring surface. Every field except `meta` and `builder` has a serde
+/// default, so a Lua recipe omits every list/optional it does not set and Rust
+/// fills the package-ABI defaults through [`lower`]. This is the Lua half of the
+/// proof that authoring lives in shared Rust, not in a config language.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LuaAuthoredPackage {
+    pub meta: MetaSpec,
+    pub builder: LuaBuilderRequest,
+    #[serde(default)]
+    pub sources: Vec<LuaUpstreamSpec>,
+    #[serde(default)]
+    pub native_build_inputs: Vec<LuaDependencySpec>,
+    #[serde(default)]
+    pub build_inputs: Vec<LuaDependencySpec>,
+    #[serde(default)]
+    pub check_inputs: Vec<LuaDependencySpec>,
+    /// Absent selects the deterministic default split-output set.
+    #[serde(default)]
+    pub outputs: Option<Vec<LuaOutputSpec>>,
+    /// Absent selects [`OptionsSpec::default`].
+    #[serde(default)]
+    pub options: Option<OptionsSpec>,
+    #[serde(default)]
+    pub profiles: Vec<LuaProfileSpec>,
+    #[serde(default)]
+    pub architectures: Vec<String>,
+    #[serde(default)]
+    pub tuning: Vec<NamedTuningSpec>,
+    #[serde(default)]
+    pub emul32: bool,
+    #[serde(default)]
+    pub mold: bool,
+    /// Absent selects the empty hook set.
+    #[serde(default)]
+    pub hooks: Option<LuaHooksSpec>,
+}
+
+impl From<LuaAuthoredPackage> for AuthoredPackage {
+    fn from(package: LuaAuthoredPackage) -> Self {
+        Self {
+            meta: package.meta,
+            builder: package.builder.into(),
+            sources: package.sources.into_iter().map(Into::into).collect(),
+            native_build_inputs: dependency_vec(package.native_build_inputs),
+            build_inputs: dependency_vec(package.build_inputs),
+            check_inputs: dependency_vec(package.check_inputs),
+            outputs: package
+                .outputs
+                .map(|outputs| outputs.into_iter().map(Into::into).collect()),
+            options: package.options,
+            profiles: package.profiles.into_iter().map(Into::into).collect(),
+            architectures: package.architectures,
+            tuning: package.tuning,
+            emul32: package.emul32,
+            mold: package.mold,
+            hooks: package.hooks.map(Into::into).unwrap_or_default(),
+        }
+    }
+}
+
 /// Emit a package recipe as canonical, generated-marked Lua source that
 /// re-decodes through [`LuaPackageEvaluator`] into the same [`PackageSpec`].
 /// This is the recipe write path — what the bridge writes when it regenerates a
@@ -682,6 +813,18 @@ impl LuaPackageEvaluator {
     /// Decode a complete authored package recipe.
     pub(crate) fn evaluate(&self, source: &Source) -> Result<PackageSpec, Diagnostic> {
         Ok(self.engine.evaluate_as::<LuaPackageSpec>(source)?.value.into())
+    }
+
+    /// Decode a *minimal-form* authored recipe: a Lua table that omits every
+    /// defaulted output/option/profile/hook and names its builder by kind. The
+    /// table decodes into the language-agnostic [`AuthoredPackage`] and the
+    /// shared [`lower`] fills the package-ABI defaults and lowers the builder
+    /// request into typed steps — no authoring logic runs in Lua.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn evaluate_authored(&self, source: &Source) -> Result<PackageSpec, Diagnostic> {
+        let authored: AuthoredPackage =
+            self.engine.evaluate_as::<LuaAuthoredPackage>(source)?.value.into();
+        Ok(lower(authored))
     }
 }
 

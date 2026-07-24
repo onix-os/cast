@@ -254,3 +254,73 @@ return {
             })
         );
     }
+
+    /// A hand-authored, minimal Lua recipe — no generated marker, no expanded
+    /// builder, no output/option/hook tables — decodes through the shared
+    /// [`lower`] into a complete [`PackageSpec`]: the default split-output set,
+    /// the lowered cmake builder, and the default options. This proves Lua can
+    /// author a full package on its own, with all authoring logic in shared Rust
+    /// and none in a config language.
+    #[test]
+    fn a_minimal_authored_lua_recipe_lowers_through_shared_rust() {
+        let source = r#"
+return {
+    meta = {
+        pname = "hello",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/hello",
+        license = { "MIT" },
+    },
+    builder = { kind = "cmake", flags = { "-DBUILD_TESTS=ON" } },
+    build_inputs = { { kind = "package", value = { name = "zlib" } } },
+}
+"#;
+        let package = LuaPackageEvaluator::default()
+            .evaluate_authored(&Source::new("stone.lua", source))
+            .expect("minimal authored recipe lowers");
+
+        // Identity and the one dependency the recipe declared survive.
+        assert_eq!(package.meta.pname, "hello");
+        assert_eq!(
+            package.build_inputs,
+            vec![DependencySpec::Package(PackageRef { name: "zlib".to_owned() })]
+        );
+
+        // The builder request lowered to typed cmake steps, with checks on by
+        // default (the recipe omitted `run_tests`).
+        assert_eq!(
+            package.builder.phases.setup.steps,
+            vec![StepSpec::CMakeConfigure { flags: vec!["-DBUILD_TESTS=ON".to_owned()] }]
+        );
+        assert_eq!(package.builder.phases.check.steps, vec![StepSpec::CMakeTest]);
+
+        // Every omitted optional took the shared package-ABI default.
+        assert_eq!(package.outputs.len(), 9);
+        assert_eq!(package.outputs[0].name, "out");
+        assert_eq!(package.options.toolchain, ToolchainSpec::Llvm);
+        assert_eq!(package.hooks, HooksSpec::default());
+
+        // The engine path is exactly the shared lowering of the equivalent
+        // language-agnostic authored package — the Lua table is pure syntax.
+        let equivalent = lower(AuthoredPackage {
+            meta: package.meta.clone(),
+            builder: BuilderRequest::Cmake {
+                flags: vec!["-DBUILD_TESTS=ON".to_owned()],
+                run_tests: true,
+            },
+            sources: Vec::new(),
+            native_build_inputs: Vec::new(),
+            build_inputs: vec![DependencySpec::Package(PackageRef { name: "zlib".to_owned() })],
+            check_inputs: Vec::new(),
+            outputs: None,
+            options: None,
+            profiles: Vec::new(),
+            architectures: Vec::new(),
+            tuning: Vec::new(),
+            emul32: false,
+            mold: false,
+            hooks: HooksSpec::default(),
+        });
+        assert_eq!(package, equivalent);
+    }
