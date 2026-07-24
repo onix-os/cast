@@ -14,7 +14,7 @@ pub use self::gluon::{
 };
 
 mod authored;
-pub use authored::{AuthoredPackage, lower};
+pub use authored::{AuthoredPackage, default_output_set_with_root, lower};
 mod builder_lowering;
 pub use builder_lowering::{BuilderRequest, lower_builder};
 mod gluon;

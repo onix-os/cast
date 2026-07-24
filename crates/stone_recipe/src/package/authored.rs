@@ -93,6 +93,39 @@ fn output(name: &str) -> OutputSpec {
     }
 }
 
+/// Overlay an authored root output onto the default root, mirroring the former
+/// `overlay_output` in `package.glu`: an authored optional wins when set, and the
+/// authored list fields prepend the default ones.
+fn overlay_root(authored: OutputSpec, default: OutputSpec) -> OutputSpec {
+    let mut runtime_inputs = authored.runtime_inputs;
+    runtime_inputs.extend(default.runtime_inputs);
+    let mut runtime_exclude = authored.runtime_exclude;
+    runtime_exclude.extend(default.runtime_exclude);
+    let mut paths = authored.paths;
+    paths.extend(default.paths);
+    OutputSpec {
+        name: authored.name,
+        include_in_manifest: authored.include_in_manifest,
+        summary: authored.summary.or(default.summary),
+        description: authored.description.or(default.description),
+        provides_exclude: authored.provides_exclude,
+        runtime_inputs,
+        runtime_exclude,
+        paths,
+        conflicts: authored.conflicts,
+    }
+}
+
+/// The default split-output set with an authored root output overlaid onto the
+/// default `out` output (mirrors the former `outputs.with_root` in
+/// `package.glu`). The remaining eight defaults are unchanged.
+pub fn default_output_set_with_root(pname: &str, root: OutputSpec) -> Vec<OutputSpec> {
+    let mut outputs = default_output_set(pname);
+    let default_root = outputs.remove(0);
+    outputs.insert(0, overlay_root(root, default_root));
+    outputs
+}
+
 /// The deterministic `cast.package.v3` default split-output set. Changing this
 /// incompatibly requires a new package ABI version (mirrors the former
 /// `default_outputs` in `package.glu`).

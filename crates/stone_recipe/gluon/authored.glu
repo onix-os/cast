@@ -200,6 +200,7 @@ type NamedTuningSpec = {
 type OutputsChoice =
     | DefaultOutputs
     | ExplicitOutputs (Array OutputSpec)
+    | WithRoot OutputSpec
 
 // The minimal builder authoring request. The four standard build systems carry
 // only their flags/features; `Custom` is the explicit data escape hatch — a
@@ -347,10 +348,13 @@ let some_hooks: HooksSpec -> Optional HooksSpec = \value -> Set value
         scripts = empty_scripts,
         builder = empty_custom_builder,
     },
-    // The authored output-set choice: default (Rust fills it) or explicit.
+    // The authored output-set choice: default (Rust fills it), explicit (a
+    // complete authored list), or with_root (a custom root overlaid onto the
+    // default split-output set — the overlay is applied by shared Rust).
     outputs = {
         default = DefaultOutputs,
         explicit = \values -> ExplicitOutputs values,
+        with_root = \root -> WithRoot root,
     },
     // Monomorphic optional overrides for the authored record (see `some_*`).
     // (`with` is a reserved word in Gluon, so this namespace is `some`.)

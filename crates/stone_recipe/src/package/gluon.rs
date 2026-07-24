@@ -11,7 +11,7 @@ use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
 use super::{
     AuthoredPackage, BuilderEnvironmentSpec, BuilderRequest, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec,
     MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec,
-    ProgramSpec, StepSpec, SupportedHooksSpec, lower,
+    ProgramSpec, StepSpec, SupportedHooksSpec, default_output_set_with_root, lower,
 };
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
@@ -578,14 +578,21 @@ impl From<GluonBuilderRequest> for BuilderRequest {
 enum GluonOutputsChoice {
     DefaultOutputs,
     ExplicitOutputs(Vec<GluonOutputSpec>),
+    WithRoot(GluonOutputSpec),
 }
 
-impl From<GluonOutputsChoice> for Option<Vec<OutputSpec>> {
-    fn from(choice: GluonOutputsChoice) -> Self {
-        match choice {
+impl GluonOutputsChoice {
+    /// Resolve the authored output choice into the explicit list, or `None` for
+    /// the default split-output set. `WithRoot` overlays an authored root onto
+    /// the default set, which requires the package name.
+    fn resolve(self, pname: &str) -> Option<Vec<OutputSpec>> {
+        match self {
             GluonOutputsChoice::DefaultOutputs => None,
             GluonOutputsChoice::ExplicitOutputs(outputs) => {
                 Some(outputs.into_iter().map(Into::into).collect())
+            }
+            GluonOutputsChoice::WithRoot(root) => {
+                Some(default_output_set_with_root(pname, root.into()))
             }
         }
     }
@@ -616,6 +623,7 @@ struct GluonAuthoredPackage {
 
 impl From<GluonAuthoredPackage> for AuthoredPackage {
     fn from(package: GluonAuthoredPackage) -> Self {
+        let outputs = package.outputs.resolve(&package.meta.pname);
         Self {
             meta: package.meta.into(),
             builder: package.builder.into(),
@@ -623,7 +631,7 @@ impl From<GluonAuthoredPackage> for AuthoredPackage {
             native_build_inputs: package.native_build_inputs.into_iter().map(Into::into).collect(),
             build_inputs: package.build_inputs.into_iter().map(Into::into).collect(),
             check_inputs: package.check_inputs.into_iter().map(Into::into).collect(),
-            outputs: package.outputs.into(),
+            outputs,
             options: Option::<GluonOptionsSpec>::from(package.options).map(Into::into),
             profiles: package.profiles.into_iter().map(Into::into).collect(),
             architectures: package.architectures,
