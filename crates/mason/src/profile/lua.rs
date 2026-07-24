@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 
 use config::declaration::ConfigDeclarationEvaluator;
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
-    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator, Evaluation,
+    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
 use lua_config::{
     GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_optional_bool, lua_optional_integer,
@@ -147,6 +147,15 @@ impl DeclarationEvaluator<Map> for LuaProfileCodec {
 
 impl ConfigDeclarationEvaluator for LuaProfileCodec {
     type Config = Map;
+}
+
+impl DeclarationCodec<Map> for LuaProfileCodec {
+    /// Emit the canonical generated-marked Lua source for a profile map — what
+    /// the generated-slot authority switch writes when it converts a profile
+    /// store from `.glu` to `.lua` authority.
+    fn encode(&self, config: &Map) -> Result<String, Self::Error> {
+        encode_lua_specs(config)
+    }
 }
 
 /// One registered profile declaration language (`.glu` or `.lua`), selected by
@@ -428,5 +437,15 @@ return {
             format!("{:?}", lua_map(SHIPPED_PROFILE_LUA)),
             format!("{:?}", gluon_map(SHIPPED_PROFILE_GLUON)),
         );
+    }
+
+    #[test]
+    fn the_lua_codec_encodes_a_valid_generated_slot_authority() {
+        use declarative_config::DeclarationCodec;
+
+        let map = gluon_map(GLUON_PROFILE_ROOT_INDEX);
+        let encoded = LuaProfileCodec::default().encode(&map).expect("codec emits lua");
+        assert!(encoded.starts_with(GENERATED_LUA_MARKER));
+        assert_eq!(format!("{:?}", lua_map(&encoded)), format!("{map:?}"));
     }
 }
