@@ -101,12 +101,12 @@ fn a_minimal_authored_gluon_recipe_lowers_through_shared_rust() {
         homepage = "https://example.invalid/hello",
         license = ["MIT"],
     },
-    builder = a.cmake { flags = ["-DBUILD_TESTS=ON"], run_tests = a.true },
+    builder = a.builder.cmake { flags = ["-DBUILD_TESTS=ON"], run_tests = a.true },
     sources = [],
     native_build_inputs = [],
     build_inputs = [],
     check_inputs = [],
-    outputs = a.unset,
+    outputs = a.outputs.default,
     options = a.unset,
     profiles = [],
     architectures = [],
@@ -161,6 +161,88 @@ fn a_minimal_authored_gluon_recipe_lowers_through_shared_rust() {
         hooks: HooksSpec::default(),
     });
     assert_eq!(package, equivalent);
+}
+
+/// A richer authored Gluon recipe — a custom shell builder, a dependency, a
+/// source, a build hook, and an explicit output override — decodes through the
+/// shared `lower`. This proves the `cast.authored.v1` prelude expresses the
+/// corpus's real feature surface (not just the trivial default case) with no
+/// `package.glu` involvement: the `Custom` builder passes through untouched, the
+/// authored outputs replace the default set, and hooks stay distinct from the
+/// builder phases.
+#[test]
+fn a_rich_authored_gluon_recipe_lowers_custom_builder_deps_and_hooks() {
+    let source = Source::new(
+        "stone.glu",
+        r#"let a = import! cast.authored.v1
+let scripts = a.scripts {
+    setup = a.phase [],
+    build = a.phase [a.step.shell "zig build"],
+    install = a.phase [a.step.shell "zig build install"],
+    check = a.phase [],
+    workload = a.phase [],
+}
+{
+    meta = {
+        pname = "hello",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/hello",
+        license = ["MIT"],
+    },
+    builder = a.builder.shell scripts [a.dep.binary "zig"],
+    sources = [a.source.archive "https://example.invalid/hello-1.0.0.tar.gz" "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"],
+    native_build_inputs = [],
+    build_inputs = [a.dep.package "zlib"],
+    check_inputs = [],
+    outputs = a.outputs.explicit [a.output "out"],
+    options = a.unset,
+    profiles = [],
+    architectures = ["x86_64"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.true,
+    hooks = a.some.hooks (a.hooks {
+        pre_build = [a.step.run (a.program.binary "prepare") []],
+        .. a.empty.hooks
+    }),
+}
+"#,
+    );
+
+    let package = GluonPackageEvaluator::default()
+        .evaluate_authored(&source)
+        .expect("rich authored recipe lowers");
+
+    // Custom builder passed through: no environment, its exact tools + steps.
+    assert!(package.builder.environment.is_empty());
+    assert_eq!(
+        dependency_names(package.builder.required_tools()),
+        ["binary(zig)"]
+    );
+    assert_eq!(
+        package.builder.phases.build.steps,
+        [shell("zig build", Vec::new())]
+    );
+    // The authored dependency and source survive.
+    assert_eq!(
+        package.build_inputs,
+        [DependencySpec::Package(stone_recipe::package::PackageRef { name: "zlib".to_owned() })]
+    );
+    assert_eq!(package.sources.len(), 1);
+    // The explicit output override replaces the 9-output default set.
+    assert_eq!(package.outputs.len(), 1);
+    assert_eq!(package.outputs[0].name, "out");
+    // Hooks stay distinct from builder phases.
+    assert_eq!(
+        package.hooks.pre_build,
+        [StepSpec::Run {
+            program: binary_program("prepare"),
+            args: Vec::new(),
+        }]
+    );
+    assert_eq!(package.architectures, ["x86_64"]);
+    assert!(package.mold);
 }
 
 fn package(builder_import: &str, body: &str) -> Source {

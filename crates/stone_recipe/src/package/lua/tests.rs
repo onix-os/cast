@@ -324,3 +324,52 @@ return {
         });
         assert_eq!(package, equivalent);
     }
+
+    /// The Lua half of the rich-authoring proof: a `custom` builder (the data
+    /// escape hatch), a dependency, and an explicit output override decode
+    /// through the shared `lower`. This confirms the Lua `Custom` builder-request
+    /// path and that authored outputs replace the default set — symmetric to the
+    /// Gluon `a_rich_authored_gluon_recipe...` proof.
+    #[test]
+    fn an_authored_lua_recipe_with_a_custom_builder_lowers_through_shared_rust() {
+        let source = r#"
+return {
+    meta = { pname = "hello", version = "1.0.0", release = 1, homepage = "https://x", license = { "MIT" } },
+    builder = { kind = "custom", spec = {
+        required_tools = { { kind = "binary", value = "zig" } },
+        environment = {},
+        phases = {
+            setup = { steps = {} },
+            build = { steps = { { kind = "run",
+                program = { path = "/usr/bin/zig", requirement = { kind = "binary", value = "zig" } },
+                args = { "build" } } } },
+            install = { steps = {} },
+            check = { steps = {} },
+            workload = { steps = {} },
+        },
+        supported_hooks = { setup = true, build = true, check = true, install = true, workload = true },
+    } },
+    build_inputs = { { kind = "package", value = { name = "zlib" } } },
+    outputs = { { name = "out", include_in_manifest = true, summary = { kind = "none" },
+        description = { kind = "none" }, provides_exclude = {}, runtime_inputs = {},
+        runtime_exclude = {}, paths = {}, conflicts = {} } },
+}
+"#;
+        let package = LuaPackageEvaluator::default()
+            .evaluate_authored(&Source::new("stone.lua", source))
+            .expect("custom authored recipe lowers");
+
+        // The custom builder passed through untouched: no environment, its tools.
+        assert!(package.builder.environment.is_empty());
+        assert_eq!(
+            package.builder.required_tools(),
+            [DependencySpec::Binary("zig".to_owned())]
+        );
+        // The authored dependency survives; the explicit output replaces defaults.
+        assert_eq!(
+            package.build_inputs,
+            vec![DependencySpec::Package(PackageRef { name: "zlib".to_owned() })]
+        );
+        assert_eq!(package.outputs.len(), 1);
+        assert_eq!(package.outputs[0].name, "out");
+    }

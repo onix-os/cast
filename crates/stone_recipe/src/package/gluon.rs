@@ -29,34 +29,13 @@ pub const GLUON_AUTOTOOLS_BUILDER_ABI: &str = include_str!("../../gluon/builders
 /// The types-only authoring prelude exposed as `cast.authored.v1`.
 ///
 /// This is *not* an ABI: it carries no defaults and no builder logic — only the
-/// handful of ADT constructors (`Bool`, `Optional`, and the standard
-/// `BuilderRequest` kinds) an author needs to write the minimal
-/// [`AuthoredPackage`] record that the shared Rust [`lower`] then completes.
-/// Because Gluon records are structurally typed (no field may be omitted), a
-/// Gluon recipe names every field explicitly and selects a Rust default with
-/// `unset`; the shared lowering — not this module — owns the actual defaults.
-const GLUON_AUTHORED_PRELUDE: &str = r#"type Bool = | False | True
-type Optional a = | Unset | Set a
-type BuilderRequest =
-    | Cmake { flags : Array String, run_tests : Bool }
-    | Meson { flags : Array String, run_tests : Bool }
-    | Cargo { features : Array String, binaries : Array String, run_tests : Bool }
-    | Autotools { flags : Array String, run_tests : Bool }
-
-{
-    Bool,
-    Optional,
-    BuilderRequest,
-    true = True,
-    false = False,
-    unset = Unset,
-    set = \value -> Set value,
-    cmake = \config -> Cmake config,
-    meson = \config -> Meson config,
-    cargo = \config -> Cargo config,
-    autotools = \config -> Autotools config,
-}
-"#;
+/// type + constructor layer (deps, sources, steps, programs, paths, tuning, the
+/// `BuilderRequest` kinds, and the `Custom` builder escape hatch) an author needs
+/// to write the minimal [`AuthoredPackage`] record that the shared Rust [`lower`]
+/// then completes. Because Gluon records are structurally typed (no field may be
+/// omitted), a Gluon recipe names every field explicitly and selects a Rust
+/// default with `unset`; the shared lowering — not this module — owns defaults.
+pub const GLUON_AUTHORED_PRELUDE: &str = include_str!("../../gluon/authored.glu");
 
 const GLUON_PURE_TYPES: &str = r#"type Bool =
     | False
@@ -513,6 +492,7 @@ enum GluonBuilderRequest {
         run_tests: GluonBool,
     },
     Autotools { flags: Vec<String>, run_tests: GluonBool },
+    Custom(GluonBuilderSpec),
 }
 
 impl From<GluonBuilderRequest> for BuilderRequest {
@@ -539,6 +519,28 @@ impl From<GluonBuilderRequest> for BuilderRequest {
                 flags,
                 run_tests: run_tests.into(),
             },
+            GluonBuilderRequest::Custom(spec) => BuilderRequest::Custom(Box::new(spec.into())),
+        }
+    }
+}
+
+/// The Gluon encoding of the authored output-set choice. A dedicated type
+/// (rather than [`GluonOptional`]) is required because [`GluonOutputSpec`]
+/// carries its own optional fields, and nesting `Optional` within `Optional`
+/// defeats Gluon's unifier. `DefaultOutputs` selects the shared default set.
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonOutputsChoice {
+    DefaultOutputs,
+    ExplicitOutputs(Vec<GluonOutputSpec>),
+}
+
+impl From<GluonOutputsChoice> for Option<Vec<OutputSpec>> {
+    fn from(choice: GluonOutputsChoice) -> Self {
+        match choice {
+            GluonOutputsChoice::DefaultOutputs => None,
+            GluonOutputsChoice::ExplicitOutputs(outputs) => {
+                Some(outputs.into_iter().map(Into::into).collect())
+            }
         }
     }
 }
@@ -556,7 +558,7 @@ struct GluonAuthoredPackage {
     native_build_inputs: Vec<GluonDependencySpec>,
     build_inputs: Vec<GluonDependencySpec>,
     check_inputs: Vec<GluonDependencySpec>,
-    outputs: GluonOptional<Vec<GluonOutputSpec>>,
+    outputs: GluonOutputsChoice,
     options: GluonOptional<GluonOptionsSpec>,
     profiles: Vec<GluonProfileSpec>,
     architectures: Vec<String>,
@@ -575,8 +577,7 @@ impl From<GluonAuthoredPackage> for AuthoredPackage {
             native_build_inputs: package.native_build_inputs.into_iter().map(Into::into).collect(),
             build_inputs: package.build_inputs.into_iter().map(Into::into).collect(),
             check_inputs: package.check_inputs.into_iter().map(Into::into).collect(),
-            outputs: Option::from(package.outputs)
-                .map(|outputs: Vec<GluonOutputSpec>| outputs.into_iter().map(Into::into).collect()),
+            outputs: package.outputs.into(),
             options: Option::<GluonOptionsSpec>::from(package.options).map(Into::into),
             profiles: package.profiles.into_iter().map(Into::into).collect(),
             architectures: package.architectures,
