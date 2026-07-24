@@ -174,6 +174,12 @@ fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
                     )
                     | (
                         Operation::NewState,
+                        Phase::RollbackDecided,
+                        ForwardPhase::PreviousArchived,
+                        15,
+                    )
+                    | (
+                        Operation::NewState,
                         Phase::UsrRestored,
                         ForwardPhase::SystemTriggersStarted,
                         14,
@@ -235,7 +241,19 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
         return false;
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
-    if rollback.previous_archive != RollbackAction::NotRequired
+    // NewState may have archived its predecessor before crashing; that plan
+    // restores it (Pending) as the first rollback action. Every other operation
+    // archives nothing, so its predecessor rollback stays NotRequired.
+    let previous_archive_is_exact = match record.operation {
+        Operation::NewState => matches!(
+            rollback.previous_archive,
+            RollbackAction::NotRequired | RollbackAction::Pending
+        ),
+        Operation::ActivateArchived | Operation::ActiveReblit => {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
+    };
+    if !previous_archive_is_exact
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
             != if boot_source {

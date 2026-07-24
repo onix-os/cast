@@ -73,11 +73,15 @@ fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
             break;
         }
     }
-    // Decision layer complete: startup admits the archive rollback and persists
-    // RollbackDecided with a plan that restores the archived predecessor. The
-    // resume route + predecessor-restore dispatcher land next; until then it
-    // holds fail-safe at RollbackDecided (record + plan intact) — never a brick.
+    // Startup admits the archive rollback and routes it to restore the archived
+    // predecessor first: RollbackDecided → PreviousRestoreIntent. The
+    // predecessor-restore dispatcher lands next; until then it holds fail-safe at
+    // PreviousRestoreIntent (record + plan intact) — never a brick.
     assert_eq!(phases.first(), Some(&Phase::RollbackDecided), "phases={phases:?}");
+    assert!(
+        phases.contains(&Phase::PreviousRestoreIntent),
+        "recovery did not route to the predecessor restore intent: {phases:?}"
+    );
     let plan = fixture
         .canonical_record()
         .rollback

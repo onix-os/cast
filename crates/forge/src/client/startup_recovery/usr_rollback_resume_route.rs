@@ -52,7 +52,9 @@ pub(in crate::client) fn persist_usr_rollback_resume_route_and_reopen(
         Ok(successor)
             if matches!(
                 successor.phase,
-                Phase::ReverseExchangeIntent | Phase::CandidatePreserveIntent
+                Phase::PreviousRestoreIntent
+                    | Phase::ReverseExchangeIntent
+                    | Phase::CandidatePreserveIntent
             ) =>
         {
             successor
