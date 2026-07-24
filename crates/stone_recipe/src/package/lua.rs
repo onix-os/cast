@@ -401,14 +401,14 @@ pub(crate) fn recipe_is_equivalent_replacement(
 /// decision proceeds to regenerate the recipe's source/build-lock pair through
 /// that directory's retained generated-slot authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RecipeMigrationDecision {
+pub enum RecipeMigrationDecision {
     Authorized,
     Rejected,
 }
 
 /// Authorize (or reject) migrating a recipe to an operator-supplied Lua
 /// replacement, gated on exact semantic equivalence with the authored recipe.
-pub(crate) fn authorize_recipe_migration(
+pub fn authorize_recipe_migration(
     authored: &PackageSpec,
     replacement: &PackageSpec,
 ) -> RecipeMigrationDecision {

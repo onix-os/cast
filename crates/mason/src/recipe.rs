@@ -23,7 +23,7 @@ use gluon_config::EvaluationIdentity;
 use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{
     BuilderSpec, GluonPackageEvaluator, HooksSpec, LuaPackageEvaluator, PackageConversionError,
-    PackageSpec, PhasesSpec, ProfileSpec,
+    PackageSpec, PhasesSpec, ProfileSpec, RecipeMigrationDecision, authorize_recipe_migration,
 };
 use thiserror::Error;
 
@@ -75,6 +75,16 @@ impl Recipe {
             load_recipe_declaration(&path, SourceLockPolicy::Ignore)?;
 
         Self::from_loaded(path, source, declaration, source_lock, fingerprint, None)
+    }
+
+    /// Authorize migrating this authored recipe to an operator-supplied Lua
+    /// replacement recipe. The bridge migrates a recipe tree only when the
+    /// operator provides its exact root and a Lua replacement whose normalized
+    /// package value matches the authored recipe; a mismatch is rejected rather
+    /// than silently converted. Only an authorized replacement proceeds to
+    /// regenerate the source/build-lock pair.
+    pub fn authorize_lua_replacement(&self, replacement: &Recipe) -> RecipeMigrationDecision {
+        authorize_recipe_migration(&self.declaration, &replacement.declaration)
     }
 
     fn from_loaded(
@@ -529,6 +539,28 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
         Recipe::load(root.path()).unwrap()
+    }
+
+    fn recipe_from(source: &str) -> Recipe {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("stone.glu"), gluon_recipe(source)).unwrap();
+        Recipe::load(root.path()).unwrap()
+    }
+
+    #[test]
+    fn a_recipe_authorizes_only_an_equivalent_replacement() {
+        let authored = recipe_from(SOURCE_SPEC);
+        let equivalent = recipe_from(SOURCE_SPEC);
+        assert_eq!(
+            authored.authorize_lua_replacement(&equivalent),
+            RecipeMigrationDecision::Authorized
+        );
+
+        let divergent = recipe_from(&SOURCE_SPEC.replace("example", "renamed"));
+        assert_eq!(
+            authored.authorize_lua_replacement(&divergent),
+            RecipeMigrationDecision::Rejected
+        );
     }
 
     #[test]
