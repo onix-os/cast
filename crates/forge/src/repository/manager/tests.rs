@@ -368,6 +368,51 @@ return {
 }
 
 #[test]
+fn a_repository_store_switches_generated_authority_from_gluon_to_lua() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let config_directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(config_directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = config::Manager::custom(config_directory.path());
+
+    let uri = Url::parse("file:///var/cache/main.index").unwrap();
+    let map = repository::Map::with([(repository::Id::new("main"), direct_repository(uri))]);
+    let evaluators = DeclarationEvaluatorSet::new(repository::RepositoryEvaluator::registered())
+        .expect("both repository languages register");
+    let [gluon, lua] = repository::RepositoryEvaluator::registered();
+    let gluon_language = <repository::RepositoryEvaluator as declarative_config::DeclarationEvaluator<
+        repository::Map,
+    >>::language_spec(&gluon)
+    .clone();
+    let lua_language = <repository::RepositoryEvaluator as declarative_config::DeclarationEvaluator<
+        repository::Map,
+    >>::language_spec(&lua)
+    .clone();
+
+    // Establish a generated Gluon authority for the store.
+    let glu_path = config
+        .save_declaration("main", &map, &evaluators, &gluon_language)
+        .expect("save generated gluon authority");
+    assert!(glu_path.to_str().unwrap().ends_with("main.glu"));
+    assert!(glu_path.exists());
+
+    // Transactionally switch the store's generated authority to Lua.
+    let lua_path = config
+        .save_declaration("main", &map, &evaluators, &lua_language)
+        .expect("switch generated authority to lua");
+    assert!(lua_path.to_str().unwrap().ends_with("main.lua"));
+
+    // Single authority: the `.glu` is gone and rooted enumeration proves no
+    // generated Gluon authority remains in the store.
+    assert!(!glu_path.exists());
+    assert!(
+        crate::declaration_migration::generated_gluon_authorities(config_directory.path())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn config_manager_admits_only_registered_declaration_languages() {
     // Only the registered language set (`glu`, `lua`) is dispatched. Serialized
     // configuration formats — YAML, KDL, JSON — are never an authored surface;

@@ -208,6 +208,15 @@ impl RepositoryEvaluator {
     }
 }
 
+impl DeclarationCodec<Map> for RepositoryEvaluator {
+    fn encode(&self, config: &Map) -> Result<String, Self::Error> {
+        match self {
+            Self::Gluon(codec) => codec.encode(config),
+            Self::Lua(codec) => codec.encode(config),
+        }
+    }
+}
+
 /// Emit a repository [`Map`] as canonical, generated-marked Lua source that
 /// re-decodes through [`decode_lua_specs`] into the same map. The specs are
 /// derived by the shared `repository_to_spec`, so the Lua and Gluon emitters
