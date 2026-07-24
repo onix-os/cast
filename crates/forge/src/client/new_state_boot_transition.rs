@@ -15,18 +15,23 @@ use std::{
 use thiserror::Error as ThisError;
 
 use crate::{
-    State,
-    transition_identity::{PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator},
+    State, SystemModel,
+    state::{self, Selection},
+    transition_identity::{
+        NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator,
+        execute_new_state_forward,
+    },
 };
 
 use super::{
-    Client,
+    Client, JournalUsrExchangeAuthorityPreflight, candidate_metadata, fixed_staging,
     active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
-    active_reblit_boot_inputs::PreparedActiveReblitStoneBootInputs,
+    active_reblit_boot_inputs::{ActiveReblitStoneBootInputsOutcome, PreparedActiveReblitStoneBootInputs},
     active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
     active_reblit_local_boot_policy::PreparedActiveReblitLocalBootPolicy,
     active_reblit_mounted_boot_topology::PreparedActiveReblitMountedBootTopology,
     active_reblit_root_filesystem_intent::PreparedActiveReblitRootFilesystemIntent,
+    postblit::{self, TriggerScope},
 };
 
 const BOOT_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(120);
@@ -53,6 +58,122 @@ impl LiveNewStateBootError {
 #[derive(Debug, ThisError)]
 #[error("the monotonic NewState boot deadline overflowed")]
 struct DeadlineOverflow;
+
+#[derive(Debug, ThisError)]
+#[error("the new state carries no bootable payload for the coordinated boot route")]
+struct NewStateBootNotApplicable;
+
+impl Client {
+    /// Coordinated durable NewState apply for the archive-previous case: create
+    /// a fresh state over the active one, archiving the predecessor as a boot
+    /// rollback anchor. Composes the durable prefix (Slice 1), predecessor
+    /// archive (Slice 2), and boot publication (Slice 3). Not yet the default —
+    /// `new_state` keeps the legacy path until the crash matrix passes.
+    #[allow(dead_code)]
+    pub(in crate::client) fn apply_new_state_candidate(
+        &self,
+        candidate: fixed_staging::StatefulCandidate,
+        previous: state::Id,
+        selections: &[Selection],
+        summary: &str,
+        system_snapshot: SystemModel,
+    ) -> Result<State, LiveNewStateBootError> {
+        let fixed_staging::StatefulCandidate {
+            tree,
+            staging: _staging,
+            candidate_usr,
+            local_etc,
+            active_state,
+        } = candidate;
+
+        let preflight =
+            JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, None)
+                .map_err(|source| {
+                    LiveNewStateBootError::at("pre-journal client authority", source)
+                })?;
+        let candidate_path = self.installation.staging_path("usr");
+        let (identity, authority) = preflight
+            .prepare_unallocated_candidate(&self.state_db, &candidate_path)
+            .map_err(|source| {
+                LiveNewStateBootError::at("unallocated candidate identity", source)
+            })?;
+
+        let (coordinator, allocated) = execute_new_state_forward(
+            identity,
+            authority,
+            &self.state_db,
+            NewStatePrevious::Active(previous),
+            selections,
+            summary,
+            true,
+            |os_info| candidate_metadata::derive_outputs(os_info, &system_snapshot),
+            |view| {
+                let (candidate_usr, candidate_usr_path) = view.retained_candidate_usr();
+                let (installation, isolation_root) = view.retained_isolation_root();
+                Client::apply_triggers(
+                    TriggerScope::RetainedTransaction {
+                        kind: postblit::RetainedTransactionKind::Stateful,
+                        installation,
+                        isolation_root,
+                        local_etc: &local_etc,
+                        candidate_usr,
+                        candidate_usr_path,
+                    },
+                    &tree,
+                )
+            },
+            |view| {
+                let (installation, retained_usr, isolation_root) = view.retained_view();
+                let live_usr_path = installation.root.join("usr");
+                Client::apply_triggers(
+                    TriggerScope::System {
+                        installation,
+                        isolation_root,
+                        local_etc: &local_etc,
+                        retained_usr,
+                        live_usr_path: &live_usr_path,
+                    },
+                    &tree,
+                )
+            },
+        )
+        .map_err(|source| {
+            LiveNewStateBootError::at("journal-coordinated forward prefix", source)
+        })?;
+
+        let archived = coordinator
+            .archive_previous_tree()
+            .map_err(|source| LiveNewStateBootError::at("predecessor archive", source))?;
+
+        // The candidate state exists only after the forward prefix allocated its
+        // row, so boot applicability is captured here rather than pre-journal.
+        let boot_candidate = self
+            .state_db
+            .get(allocated)
+            .map_err(|source| LiveNewStateBootError::at("candidate state load", source))?;
+        let input_deadline = deadline_after(BOOT_PUBLICATION_TIMEOUT, "boot input deadline")?;
+        let stone = match PreparedActiveReblitStoneBootInputs::prepare_until(
+            &self.installation,
+            &self.state_db,
+            &self.layout_db,
+            &boot_candidate,
+            input_deadline,
+        )
+        .map_err(|source| LiveNewStateBootError::at("boot applicability", source))?
+        {
+            ActiveReblitStoneBootInputsOutcome::Ready(stone) => stone,
+            ActiveReblitStoneBootInputsOutcome::NotApplicable(_) => {
+                return Err(LiveNewStateBootError::at(
+                    "boot applicability",
+                    NewStateBootNotApplicable,
+                ));
+            }
+        };
+
+        self.complete_new_state_boot(archived, &candidate_usr, &boot_candidate, stone)?;
+        Ok(boot_candidate)
+    }
+}
 
 impl Client {
     /// Publish boot entries for the freshly created NewState candidate and drive
