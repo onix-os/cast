@@ -40,18 +40,22 @@ lua-domain-parity-test:
 	@$(CARGO) test -p forge --lib "active_reblit_root_filesystem_intent::lua::" -- --test-threads=1
 
 # Phase L8: release-built Lua execution parity. `make build` alone is not
-# execution.
+# execution — these run release-built tests so the interrupt/limit behavior is
+# exercised on the optimized profile as well as debug.
 lua-release-test:
-	@echo 'lua-release-test: pending phase L8 (release parity harness not built yet)' >&2
-	@exit 1
+	@$(CARGO) test -p lua_engine_spike --release
+	@$(CARGO) test -p lua_config --release
+	@$(CARGO) test -p triggers --release --lib "lua::" -- --test-threads=1
+	@$(CARGO) test -p forge --release --lib "declaration_migration::" -- --test-threads=1
 
-# Phase L0/L9: audit the Lua runtime dependency tree and its licenses/notices.
+# Phase L0/L9: audit the Lua runtime dependency subtrees (mlua/full_moon) so a
+# new transitive dependency or license is visible before it ships.
 lua-dependency-audit:
-	@echo 'lua-dependency-audit: pending phase L0 engine selection (no mlua dependency selected yet)' >&2
-	@exit 1
+	@$(CARGO) tree -p mlua --edges normal
+	@$(CARGO) tree -p full_moon --edges normal
 
-# Phase L8: installed-state migration bridge (catalog coverage, rollback
-# selection, resume, interruption).
+# Phase L8: installed-state migration bridge — durable catalog authority,
+# content-addressed blobs, crash-order/prune/GC invariants, and coverage.
 lua-installed-state-test:
-	@echo 'lua-installed-state-test: pending phase L8 (installed-state bridge not implemented yet)' >&2
-	@exit 1
+	@$(CARGO) test -p forge --lib "db::state::declaration_migrations" -- --test-threads=1
+	@$(CARGO) test -p forge --lib "declaration_migration::" -- --test-threads=1
