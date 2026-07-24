@@ -211,6 +211,20 @@ mod tests {
     }
 
     #[test]
+    fn the_paired_root_filesystem_documentation_example_normalizes_equally() {
+        let root_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let lua = std::fs::read_to_string(format!("{root_dir}/docs/examples/lua/root-filesystem.lua"))
+            .expect("lua root-filesystem example");
+        let fixture = Fixture::new();
+        let locator = "PARTUUID=11111111-2222-3333-4444-555555555555";
+
+        let lua_value = lua_value(&mut fixture.budget(), &lua).expect("lua example evaluates");
+        let gluon_value =
+            gluon_value_for_test(locator, &mut fixture.budget()).expect("gluon normalizes");
+        assert_eq!(lua_value, gluon_value);
+    }
+
+    #[test]
     fn a_lua_root_intent_with_the_reserved_prefix_is_rejected() {
         let fixture = Fixture::new();
         assert!(lua_value(&mut fixture.budget(), r#"return { root = "root=UUID=1111-2222" }"#).is_err());

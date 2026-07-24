@@ -274,6 +274,36 @@ return {{
     }
 
     #[test]
+    fn the_paired_boot_topology_documentation_examples_normalize_equally() {
+        let root_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let fixture = Fixture::new();
+        let esp = "11111111-2222-3333-4444-555555555555";
+
+        let alias = std::fs::read_to_string(format!(
+            "{root_dir}/docs/examples/lua/boot-topology-aliases-esp.lua"
+        ))
+        .expect("lua alias example");
+        assert_eq!(
+            lua_value(&fixture, &alias),
+            gluon_value_for_test(esp, "/efi", None).expect("gluon alias"),
+        );
+
+        let distinct = std::fs::read_to_string(format!(
+            "{root_dir}/docs/examples/lua/boot-topology-distinct-xbootldr.lua"
+        ))
+        .expect("lua distinct example");
+        assert_eq!(
+            lua_value(&fixture, &distinct),
+            gluon_value_for_test(
+                esp,
+                "/efi",
+                Some(("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "/boot")),
+            )
+            .expect("gluon distinct"),
+        );
+    }
+
+    #[test]
     fn a_lua_intent_with_a_noncanonical_partuuid_is_rejected() {
         let fixture = Fixture::new();
         let budget = fixture.budget();
