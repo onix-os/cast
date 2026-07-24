@@ -1,0 +1,28 @@
+let a = import! cast.authored.v1
+
+// The authored form names every field of the package record directly and selects
+// a shared-Rust default with `unset` / `outputs.default`. There is no template
+// inheritance stack and no second data format: `cast.authored.v1` is a pure
+// type + constructor layer, and the shared `lower` fills the versioned defaults.
+{
+    meta = {
+        pname = "minimal-hello",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/minimal-hello",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
