@@ -22,11 +22,76 @@ impl Client {
         let active_snapshot = active_state
             .map(|active_state| active_state.suspend(&self.installation))
             .transpose()?;
-        let snapshot = self.load_or_create_system_snapshot(path, &state)?;
+        // Bridge-era reader hook (Phase L8): a committed, revalidated Lua
+        // migration of this state's system-model slot is preferred over the
+        // legacy `.glu`. This is consulted only on the read-only export path,
+        // never the mutating verify/reblit paths, because the resolved model
+        // carries the Lua generated snapshot and fingerprint rather than the
+        // recorded Gluon provenance.
+        let snapshot = match self.resolve_migrated_system_model(&path, &state)? {
+            Some(migrated) => migrated,
+            None => self.load_or_create_system_snapshot(path, &state)?,
+        };
         if let Some(active_snapshot) = active_snapshot {
             drop(active_snapshot.resume(&self.installation)?);
         }
         Ok(snapshot)
+    }
+
+    /// Resolve a committed, revalidated Lua migration of a state's system-model
+    /// slot, or `None` when the slot is unmigrated (the caller reads the legacy
+    /// `.glu`). A committed row is revalidated against the exact snapshot bytes
+    /// and the state's retained `/usr` tree marker before its Lua blob is
+    /// selected; any drift fails closed rather than falling back.
+    fn resolve_migrated_system_model(
+        &self,
+        path: &std::path::Path,
+        state: &State,
+    ) -> Result<Option<SystemModel>, Error> {
+        let state_id = i32::from(state.id);
+
+        // Fast path: with no committed row the slot is unmigrated, so no
+        // tree-marker or snapshot-hash work is performed and the legacy reader
+        // runs unchanged.
+        if self
+            .state_db
+            .declaration_migration(state_id, system_model::SYSTEM_SNAPSHOT_PATH)
+            .map_err(|source| Error::QueryDeclarationMigration(Box::new(source)))?
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        let original = std::fs::read_to_string(path).map_err(|source| {
+            Error::ReadSystemSnapshotForMigration {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        let usr = path.parent().and_then(std::path::Path::parent).ok_or_else(|| {
+            Error::ReadSystemSnapshotForMigration {
+                path: path.to_path_buf(),
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "snapshot path has no /usr parent directory",
+                ),
+            }
+        })?;
+        let marker = crate::tree_marker::TreeMarkerStore::open_path(usr)
+            .and_then(|store| store.read_for_recovery())
+            .map_err(|source| Error::OpenTreeMarkerForMigration(Box::new(source)))?;
+        let blobs =
+            crate::declaration_migration::DeclarationMigrationBlobStore::new(&self.installation.root);
+
+        system_model::lua::resolve_migrated_system_snapshot(
+            &self.state_db,
+            &blobs,
+            state_id,
+            system_model::SYSTEM_SNAPSHOT_PATH,
+            &original,
+            marker.token().as_str().as_bytes(),
+        )
+        .map_err(|source| Error::ResolveMigratedSystemSnapshot(Box::new(source)))
     }
 
     /// Print boot status to stdout
