@@ -11,7 +11,12 @@
 // exercised by the tests below until the top-level evaluator lands.
 #![cfg_attr(not(test), allow(dead_code))]
 
-use declarative_config::{Diagnostic, Source};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, DeclarationInputEvaluator, Diagnostic,
+    Evaluation, EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+};
+
+use super::PackageConversionError;
 use lua_config::{LuaEngine, LuaOption};
 use serde::Deserialize;
 
@@ -427,6 +432,61 @@ impl LuaPackageEvaluator {
     }
 }
 
+impl DeclarationEvaluator<PackageSpec> for LuaPackageEvaluator {
+    // The Lua conversion (`From<LuaPackageSpec>`) is infallible, so no
+    // conversion error is ever produced; the shared error type keeps the Lua
+    // and Gluon recipe evaluators uniform for a registered set.
+    type Identity = EvaluationIdentity;
+    type Error = PackageConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<PackageSpec, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        let evaluation = self
+            .engine
+            .evaluate_within_as::<LuaPackageSpec>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        Ok(Evaluation {
+            value: evaluation.value.into(),
+            identity: evaluation.identity,
+        })
+    }
+}
+
+impl DeclarationInputEvaluator<PackageSpec> for LuaPackageEvaluator {
+    fn evaluate_with_inputs_within(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<Evaluation<PackageSpec, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs_within_as::<LuaPackageSpec>(source, explicit_inputs, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        Ok(Evaluation {
+            value: evaluation.value.into(),
+            identity: evaluation.identity,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,6 +564,26 @@ mod tests {
         let mut divergent = replacement.clone();
         divergent.mold = !divergent.mold;
         assert!(!recipe_is_equivalent_replacement(&original, &divergent));
+    }
+
+    #[test]
+    fn recipe_explicit_inputs_bind_into_the_identity() {
+        use declarative_config::{DeclarationInputEvaluator, EvaluationDeadline};
+
+        let source = complete_recipe_source();
+        let evaluator = LuaPackageEvaluator::default();
+        let deadline = || EvaluationDeadline::start(evaluator.limits().timeout);
+        let src = Source::new("stone.lua", &source);
+
+        // The source lock is bound as explicit inputs, so recipes evaluated with
+        // different locks commit to distinct identities even for equal values.
+        let none = evaluator.evaluate_with_inputs_within(&src, &[], deadline()).unwrap();
+        let locked = evaluator.evaluate_with_inputs_within(&src, b"lock-bytes", deadline()).unwrap();
+        assert_eq!(none.value, locked.value);
+        assert_ne!(
+            none.identity.explicit_inputs_sha256,
+            locked.identity.explicit_inputs_sha256
+        );
     }
 
     #[test]
