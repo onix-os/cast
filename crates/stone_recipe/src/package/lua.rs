@@ -389,6 +389,31 @@ pub(crate) fn recipe_is_equivalent_replacement(
     original == replacement
 }
 
+/// The bridge's decision on an operator-supplied Lua recipe replacement. A
+/// recipe tree is migrated only when the operator supplies its exact root and a
+/// Lua replacement whose normalized value matches the authored recipe; a
+/// mismatch is rejected rather than silently converted. Only an `Authorized`
+/// decision proceeds to regenerate the recipe's source/build-lock pair through
+/// that directory's retained generated-slot authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RecipeMigrationDecision {
+    Authorized,
+    Rejected,
+}
+
+/// Authorize (or reject) migrating a recipe to an operator-supplied Lua
+/// replacement, gated on exact semantic equivalence with the authored recipe.
+pub(crate) fn authorize_recipe_migration(
+    authored: &PackageSpec,
+    replacement: &PackageSpec,
+) -> RecipeMigrationDecision {
+    if recipe_is_equivalent_replacement(authored, replacement) {
+        RecipeMigrationDecision::Authorized
+    } else {
+        RecipeMigrationDecision::Rejected
+    }
+}
+
 /// Stateless Lua adapter for the package recipe declaration.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LuaPackageEvaluator {
@@ -479,6 +504,28 @@ mod tests {
         let mut divergent = replacement.clone();
         divergent.mold = !divergent.mold;
         assert!(!recipe_is_equivalent_replacement(&original, &divergent));
+    }
+
+    #[test]
+    fn the_migration_gate_authorizes_equivalents_and_rejects_mismatches() {
+        let source = complete_recipe_source();
+        let authored = LuaPackageEvaluator::default()
+            .evaluate(&Source::new("package.lua", &source))
+            .expect("recipe decodes");
+        let replacement = LuaPackageEvaluator::default()
+            .evaluate(&Source::new("package.lua", &source))
+            .expect("recipe decodes");
+        assert_eq!(
+            authorize_recipe_migration(&authored, &replacement),
+            RecipeMigrationDecision::Authorized
+        );
+
+        let mut divergent = replacement.clone();
+        divergent.meta.pname = "different".to_owned();
+        assert_eq!(
+            authorize_recipe_migration(&authored, &divergent),
+            RecipeMigrationDecision::Rejected
+        );
     }
 
     #[test]
