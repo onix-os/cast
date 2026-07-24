@@ -1,26 +1,30 @@
-let b = import! cast.package.v3
-let meson = import! cast.builders.meson.v2
+let a = import! cast.authored.v1
 
-let base = b.mk_package (b.meta {
-    pname = "layered-proxy",
-    version = "3.6.0",
-    release = 2,
-    homepage = "https://example.invalid/layered-proxy",
-    license = ["BSD-2-Clause"],
-})
-
+// The authored base package. Layers in layers.glu apply Gluon record
+// updates over this base to add security hardening and a diagnostics output.
 {
-    builder = meson.builder {
-        flags = ["-Dtests=enabled"],
-        run_tests = b.boolean.true,
+    meta = {
+        pname = "layered-proxy",
+        version = "3.6.0",
+        release = 2,
+        homepage = "https://example.invalid/layered-proxy",
+        license = ["BSD-2-Clause"],
     },
-    build_inputs = [b.dep.pkgconfig "zlib"],
-    tuning = [b.named "optimize" (b.tuning.config "speed")],
+    builder = a.builder.meson { flags = ["-Dtests=enabled"], run_tests = a.true },
     sources = [
-        b.source.archive
+        a.source.archive
             "https://example.invalid/layered-proxy-3.6.0.tar.xz"
             "789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456",
     ],
+    native_build_inputs = [],
+    build_inputs = [a.dep.pkgconfig "zlib"],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64", "aarch64"],
-    .. base
+    tuning = [a.named "optimize" (a.tuning.config "speed")],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

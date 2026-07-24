@@ -1,40 +1,42 @@
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
 
-let root = b.output_with {
-    summary = b.optional.set "Probe validated from the staged install tree",
-    paths = [b.path.exe "/usr/bin/staged-probe"],
-    .. b.output "out"
-}
-
-let base = b.mk_package (b.meta {
-    pname = "staged-probe",
-    version = "1.2.0",
-    release = 1,
-    homepage = "https://example.invalid/staged-probe",
-    license = ["BSD-3-Clause"],
-})
-
+// This is an installCheck-style assertion: it executes the artifact from
+// CAST_INSTALL_ROOT after the structural install step, not a build-tree
+// substitute and not a program found on the host PATH.
 {
-    builder = cmake.builder {
-        flags = ["-DBUILD_TESTING=ON"],
-        run_tests = b.boolean.true,
+    meta = {
+        pname = "staged-probe",
+        version = "1.2.0",
+        release = 1,
+        homepage = "https://example.invalid/staged-probe",
+        license = ["BSD-3-Clause"],
     },
-    // This is an installCheck-style assertion: it executes the artifact from
-    // CAST_INSTALL_ROOT after the structural install step, not a build-tree
-    // substitute and not a program found on the host PATH.
-    hooks = b.hooks {
-        post_install = [
-            b.step.shell r#""${CAST_INSTALL_ROOT}${CAST_BINDIR}/staged-probe" --self-test"#,
-        ],
-        .. b.defaults.hooks
-    },
-    outputs = [root],
+    builder = a.builder.cmake { flags = ["-DBUILD_TESTING=ON"], run_tests = a.true },
     sources = [
-        b.source.archive
+        a.source.archive
             "https://example.invalid/staged-probe-1.2.0.tar.xz"
             "89abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567",
     ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [
+        {
+            summary = a.optional.set "Probe validated from the staged install tree",
+            paths = [a.path.exe "/usr/bin/staged-probe"],
+            .. a.output "out"
+        },
+    ],
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64", "aarch64"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.some.hooks (a.hooks {
+        post_install = [
+            a.step.shell r#""${CAST_INSTALL_ROOT}${CAST_BINDIR}/staged-probe" --self-test"#,
+        ],
+        .. a.empty.hooks
+    }),
 }

@@ -165,10 +165,17 @@ impl GluonPackageEvaluator {
         DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
         DeclarationEvaluationError<PackageConversionError>,
     > {
-        if source.text().contains("cast.authored.v1") {
-            self.evaluate_authored_package(source, explicit_inputs, deadline)
-        } else {
-            self.evaluate_package(source, explicit_inputs, deadline)
+        // Try the authored decode first. A migrated recipe decodes as an
+        // `AuthoredPackage`; a legacy recipe produces the fully-lowered package
+        // shape (builder as a `BuilderSpec` record, not a `BuilderRequest`
+        // variant; hooks as a record, not `Optional`), so it fails the authored
+        // decode cleanly and falls back to the legacy path. Text sniffing is
+        // deliberately avoided: an ABI name can appear in a comment, and a
+        // factory entry reaches its ABI only through a transitive import.
+        let probe = EvaluationDeadline::start(self.engine.limits().timeout);
+        match self.evaluate_authored_package(source, explicit_inputs, probe) {
+            Ok(evaluation) => Ok(evaluation),
+            Err(_) => self.evaluate_package(source, explicit_inputs, deadline),
         }
     }
 

@@ -1,3 +1,4 @@
+let a = import! cast.authored.v1
 let artifact = import! "./artifact.glu"
 let package = import! "./package.glu"
 

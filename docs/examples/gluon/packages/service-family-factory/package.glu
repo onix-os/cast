@@ -1,30 +1,34 @@
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
 let family = import! "./family.glu"
 
 \release member ->
     let selected = family.select member
-    let base = b.mk_package (b.meta {
-        pname = selected.pname,
-        version = release.version,
-        release = release.package_release,
-        homepage = "https://example.invalid/relay-family",
-        license = ["Apache-2.0"],
-    })
     {
-        builder = cmake.builder {
-            flags = [selected.flag],
-            run_tests = b.boolean.true,
+        meta = {
+            pname = selected.pname,
+            version = release.version,
+            release = release.package_release,
+            homepage = "https://example.invalid/relay-family",
+            license = ["Apache-2.0"],
         },
-        outputs = [
-            b.output_with {
-                summary = b.optional.set selected.summary,
+        builder = a.builder.cmake { flags = [selected.flag], run_tests = a.true },
+        sources = [a.source.archive release.source_url release.source_sha256],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [
+            {
+                summary = a.optional.set selected.summary,
                 runtime_inputs = selected.runtime_inputs,
                 paths = selected.paths,
-                .. b.output "out"
+                .. a.output "out"
             },
         ],
-        sources = [b.source.archive release.source_url release.source_sha256],
+        options = a.unset,
+        profiles = [],
         architectures = ["x86_64", "aarch64"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }

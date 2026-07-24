@@ -1,30 +1,38 @@
-
-let b = import! cast.package.v3
-
-let base = b.mk_package (b.meta {
-    pname = "developer-workstation",
-    version = "1",
-    release = 1,
-    homepage = "https://example.invalid/developer-workstation",
-    license = ["CC0-1.0"],
-})
+let a = import! cast.authored.v1
 
 // A source-less package can declaratively compose a userspace. It has no
 // imperative setup phase and its root output exists only to carry relations.
 {
-    outputs = [
-        b.output_with {
-            summary = b.optional.set "Declarative developer workstation",
-            description = b.optional.set "Compiler, debugger, editor, and version-control tools.",
+    meta = {
+        pname = "developer-workstation",
+        version = "1",
+        release = 1,
+        homepage = "https://example.invalid/developer-workstation",
+        license = ["CC0-1.0"],
+    },
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [
+        {
+            summary = a.optional.set "Declarative developer workstation",
+            description = a.optional.set "Compiler, debugger, editor, and version-control tools.",
             runtime_inputs = [
-                b.dep.package "clang",
-                b.dep.package "gdb",
-                b.dep.package "git",
-                b.dep.package "helix",
+                a.dep.package "clang",
+                a.dep.package "gdb",
+                a.dep.package "git",
+                a.dep.package "helix",
             ],
-            .. b.output "out"
+            .. a.output "out"
         },
     ],
+    options = a.unset,
+    profiles = [],
     architectures = ["native"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

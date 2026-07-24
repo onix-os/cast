@@ -1,3 +1,4 @@
+let a = import! cast.authored.v1
 let interpreters = import! "./interpreters.glu"
 let make_package = import! "./package.glu"
 

@@ -1,6 +1,0 @@
-let a = import! cast.authored.v1
-let base = import! "./package_authored.glu"
-let layers = import! "./layers_authored.glu"
-
-let secured = layers.security base
-layers.distribution secured

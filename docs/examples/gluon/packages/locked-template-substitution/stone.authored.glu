@@ -1,5 +1,0 @@
-let a = import! cast.authored.v1
-let package = import! "./package_authored.glu"
-let values = import! "./values.glu"
-
-package values

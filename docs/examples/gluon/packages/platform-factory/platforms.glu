@@ -1,5 +1,5 @@
 
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 {
     edge_x86_64 = {
@@ -9,11 +9,11 @@ let b = import! cast.package.v3
             "-DENABLE_SERVER=OFF",
             "-DUSE_IO_URING=ON",
         ],
-        event_backend = b.dep.pkgconfig "liburing",
+        event_backend = a.dep.pkgconfig "liburing",
         tuning = [
-            b.named "harden" b.tuning.enable,
-            b.named "lto" (b.tuning.config "thin"),
-            b.named "optimize" (b.tuning.config "speed"),
+            a.named "harden" a.tuning.enable,
+            a.named "lto" (a.tuning.config "thin"),
+            a.named "optimize" (a.tuning.config "speed"),
         ],
     },
 }

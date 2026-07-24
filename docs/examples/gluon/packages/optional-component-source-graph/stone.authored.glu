@@ -1,8 +1,0 @@
-let a = import! cast.authored.v1
-
-let make_package = import! "./package_authored.glu"
-let features = import! "./features_authored.glu"
-
-// One typed choice changes the source, tool, setup, and output graphs as one
-// coherent value instead of leaving independently editable switches.
-make_package features

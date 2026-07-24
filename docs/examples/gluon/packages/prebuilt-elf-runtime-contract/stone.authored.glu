@@ -1,6 +1,0 @@
-let a = import! cast.authored.v1
-let artifact = import! "./artifact_authored.glu"
-let package = import! "./package_authored.glu"
-
-// The root makes one target-specific artifact choice explicitly.
-package artifact

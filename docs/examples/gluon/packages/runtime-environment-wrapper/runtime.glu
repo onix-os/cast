@@ -1,24 +1,24 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 let output_resource = \package_name output_name path ->
-    let package = b.package_ref package_name
+    let package = a.package_ref package_name
     {
         path,
-        runtime_input = b.dep.output package output_name,
+        runtime_input = a.dep.output package output_name,
     }
 
-let target_package = b.package_ref "graphite-renderer"
-let target_output = b.output_ref target_package "runtime"
+let target_package = a.package_ref "graphite-renderer"
+let target_output = a.output_ref target_package "runtime"
 
 // Every path is paired with the exact typed provider that supplies it. The
 // package-specific wrapper consumes this closed record; it never discovers a
 // target or resource through the build host, PATH, or an inherited variable.
 {
     target = {
-        program = b.program.output
+        program = a.program.output
             target_output
             "/usr/libexec/graphite-renderer/graphite-renderer",
-        runtime_input = b.dep.output target_package "runtime",
+        runtime_input = a.dep.output target_package "runtime",
     },
     plugins = output_resource
         "graphite-codecs"
@@ -37,7 +37,7 @@ let target_output = b.output_ref target_package "runtime"
         "schemas"
         "/usr/share/glib-2.0/schemas",
     interpreter = {
-        program = b.program.binary "bash",
-        runtime_input = b.dep.binary "bash",
+        program = a.program.binary "bash",
+        runtime_input = a.dep.binary "bash",
     },
 }

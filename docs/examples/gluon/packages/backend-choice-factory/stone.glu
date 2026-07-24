@@ -1,3 +1,4 @@
+let a = import! cast.authored.v1
 let factory = import! "./package.glu"
 
 // A closed variant makes the three backends mutually exclusive. Adding a

@@ -1,7 +1,0 @@
-let a = import! cast.authored.v1
-let runtime = import! "./runtime_authored.glu"
-let make_package = import! "./package_authored.glu"
-
-// The root chooses one complete runtime environment. Changing a provider or
-// path changes the evaluated package and frozen derivation together.
-make_package runtime

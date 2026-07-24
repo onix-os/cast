@@ -1,56 +1,65 @@
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
 
-let copy_test_vectors = b.step.shell_with {
-    interpreter = b.program.binary "bash",
-    declared_programs = [b.program.binary "cp"],
+let copy_test_vectors = a.step.shell_with {
+    interpreter = a.program.binary "bash",
+    declared_programs = [a.program.binary "cp"],
     script = r#"test ! -e "${CAST_BUILDER_DIR}/external-test-vectors.json" && cp --preserve=mode,timestamps -- "${CAST_SOURCE_DIR}/frame-codec-conformance.json" "${CAST_BUILDER_DIR}/external-test-vectors.json" && test -s "${CAST_BUILDER_DIR}/external-test-vectors.json""#,
 }
 
-let root = b.output_with {
-    summary = b.optional.set "Frame codec checked against an independently locked corpus",
-    paths = [b.path.exe "/usr/bin/frame-codec"],
-    .. b.output "out"
+let root = {
+    summary = a.optional.set "Frame codec checked against an independently locked corpus",
+    paths = [a.path.exe "/usr/bin/frame-codec"],
+    .. a.output "out"
 }
 
-let debugging = b.output_with {
-    include_in_manifest = b.boolean.false,
-    summary = b.optional.set "Frame codec debugging symbols",
-    paths = [b.path.any "/usr/lib/debug"],
-    .. b.output "dbginfo"
+let debugging = {
+    include_in_manifest = a.false,
+    summary = a.optional.set "Frame codec debugging symbols",
+    paths = [a.path.any "/usr/lib/debug"],
+    .. a.output "dbginfo"
 }
 
 // The factory receives the complete source set explicitly. The separately
 // locked corpus is copied into CMake's private builder directory immediately
 // before CTest; it is neither bundled into the primary archive nor published.
 \sources ->
-    let base = b.mk_package (b.meta {
-        pname = "frame-codec",
-        version = "2.6.1",
-        release = 1,
-        homepage = "https://example.invalid/frame-codec",
-        license = ["BSD-2-Clause"],
-    })
-
     {
-        builder = cmake.builder {
+        meta = {
+            pname = "frame-codec",
+            version = "2.6.1",
+            release = 1,
+            homepage = "https://example.invalid/frame-codec",
+            license = ["BSD-2-Clause"],
+        },
+        builder = a.builder.cmake {
             flags = [
                 "-DBUILD_TESTING=ON",
                 "-DFRAME_CODEC_EXTERNAL_VECTOR_FILE=external-test-vectors.json",
             ],
-            run_tests = b.boolean.true,
-        },
-        hooks = b.hooks {
-            pre_check = [copy_test_vectors],
-            .. b.defaults.hooks
-        },
-        native_build_inputs = [b.dep.binary "cp"],
-        outputs = [root, debugging],
-        options = b.options {
-            networking = b.boolean.false,
-            .. b.defaults.options
+            run_tests = a.true,
         },
         sources = [sources.primary, sources.test_vectors],
+        native_build_inputs = [a.dep.binary "cp"],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [root, debugging],
+        options = a.some.options (a.options {
+            toolchain = a.toolchain.llvm,
+            cspgo = a.false,
+            samplepgo = a.false,
+            debug = a.true,
+            strip = a.true,
+            networking = a.false,
+            compressman = a.false,
+            lastrip = a.true,
+        }),
+        profiles = [],
         architectures = ["x86_64", "aarch64"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.some.hooks (a.hooks {
+            pre_check = [copy_test_vectors],
+            .. a.empty.hooks
+        }),
     }

@@ -1,12 +1,12 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 let strings = import! std.string.prim
 
 // An interpreter is one coherent value: the executable used during checks,
 // the relation retained by the installed output, and the absolute shebang
 // written into that output all come from the same explicit target.
 let interpreter = \target token -> {
-    program = b.program.binary target,
-    runtime = b.dep.binary target,
+    program = a.program.binary target,
+    runtime = a.dep.binary target,
     shebang = strings.append "/usr/bin/" target,
     token,
 }

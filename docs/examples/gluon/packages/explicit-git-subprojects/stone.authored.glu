@@ -1,6 +1,0 @@
-let make_package = import! "./package_authored.glu"
-let repositories = import! "./repositories_authored.glu"
-
-// The package factory receives a closed, typed source graph. Linking the
-// independently locked trees into the expected build layout is also explicit.
-make_package repositories

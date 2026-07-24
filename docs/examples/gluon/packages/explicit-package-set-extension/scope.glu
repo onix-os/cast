@@ -1,8 +1,8 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 let base = {
-    shell = b.dep.package "bash",
-    core = b.dep.package "coreutils",
+    shell = a.dep.package "bash",
+    core = a.dep.package "coreutils",
 }
 
 // Extension is explicit, non-recursive, and receives the complete base set.
@@ -11,8 +11,8 @@ let with_observability = \packages ->
     {
         shell = packages.shell,
         core = packages.core,
-        metrics = b.dep.package "prometheus-node-exporter",
-        logs = b.dep.package "vector",
+        metrics = a.dep.package "prometheus-node-exporter",
+        logs = a.dep.package "vector",
     }
 
 {
