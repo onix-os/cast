@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 use fs_err as fs;
 use sha2::{Digest as _, Sha256};
 
+use crate::db::state::{
+    CATALOG_SCHEMA_VERSION, Database, DeclarationMigrationCommit, DeclarationMigrationError,
+    DeclarationMigrationRow,
+};
+
 const BLOB_STORE_RELATIVE: &str = ".cast/declaration-migrations/v1";
 
 /// The content-addressed blob store rooted beneath a retained private `.cast`
@@ -112,6 +117,71 @@ fn content_address(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+/// One state-owned declaration slot to migrate to Lua.
+pub(crate) struct DeclarationMigrationRequest {
+    pub state_id: i32,
+    pub logical_slot: String,
+    pub state_tree_marker: Vec<u8>,
+    pub original_language: String,
+    pub original_logical_path: String,
+    pub original_sha256: Vec<u8>,
+    pub migrated_language: String,
+    pub converted_bytes: Vec<u8>,
+    pub evaluation_identity: Vec<u8>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BridgeError {
+    #[error("declaration-migration blob store error")]
+    Blob(#[from] BlobStoreError),
+    #[error("declaration-migration catalog error")]
+    Catalog(#[from] DeclarationMigrationError),
+}
+
+/// Migrate one state-owned slot: make the converted blob durable *first*
+/// (write→sync→reopen-verify→dir-sync), and only then commit the catalog row in
+/// one exclusive transaction. A crash after the blob but before the commit
+/// leaves an unreachable blob (safe residue); a committed row therefore always
+/// points at a durable, verified blob — never the reverse.
+pub(crate) fn migrate_declaration(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    request: DeclarationMigrationRequest,
+) -> Result<DeclarationMigrationCommit, BridgeError> {
+    let blob_address = blobs.write(&request.converted_bytes)?;
+    let migrated_blob_sha256 = hex::decode(&blob_address)
+        .expect("the blob store returns a lowercase hex content address");
+
+    let row = DeclarationMigrationRow {
+        state_id: request.state_id,
+        logical_slot: request.logical_slot,
+        catalog_schema_version: CATALOG_SCHEMA_VERSION,
+        state_tree_marker: request.state_tree_marker,
+        original_language: request.original_language,
+        original_logical_path: request.original_logical_path,
+        original_sha256: request.original_sha256,
+        migrated_language: request.migrated_language,
+        migrated_blob_sha256,
+        evaluation_identity: request.evaluation_identity,
+    };
+    Ok(database.commit_declaration_migration(&row)?)
+}
+
+/// Resolve the migrated blob bytes for a state-owned slot. Only a committed
+/// catalog row selects a blob; a blob with no committed row is unreachable
+/// residue and yields `None`. The blob content address is revalidated on read.
+pub(crate) fn resolve_migrated_blob(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    state_id: i32,
+    logical_slot: &str,
+) -> Result<Option<Vec<u8>>, BridgeError> {
+    let Some(row) = database.declaration_migration(state_id, logical_slot)? else {
+        return Ok(None);
+    };
+    Ok(Some(blobs.read(&hex::encode(&row.migrated_blob_sha256))?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +229,75 @@ mod tests {
     fn reading_a_missing_blob_is_an_io_error() {
         let (_dir, store) = store();
         assert!(matches!(store.read(&"0".repeat(64)), Err(BlobStoreError::Io(_))));
+    }
+
+    fn database() -> Database {
+        Database::new(":memory:").expect("in-memory state database")
+    }
+
+    fn state_id(database: &Database) -> i32 {
+        i32::from(database.add(&[], None, None).expect("state row").id)
+    }
+
+    fn request(state_id: i32, converted: &[u8]) -> DeclarationMigrationRequest {
+        DeclarationMigrationRequest {
+            state_id,
+            logical_slot: "etc/cast/system.glu".to_owned(),
+            state_tree_marker: vec![1u8; 32],
+            original_language: "gluon".to_owned(),
+            original_logical_path: "etc/cast/system.glu".to_owned(),
+            original_sha256: vec![2u8; 32],
+            migrated_language: "lua".to_owned(),
+            converted_bytes: converted.to_vec(),
+            evaluation_identity: vec![7u8, 8, 9],
+        }
+    }
+
+    #[test]
+    fn a_migrated_slot_resolves_its_converted_blob() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        let converted = b"return { disable_warning = false }\n";
+
+        assert_eq!(
+            migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap(),
+            DeclarationMigrationCommit::Committed
+        );
+        assert_eq!(
+            resolve_migrated_blob(&database, &blobs, state_id, "etc/cast/system.glu").unwrap(),
+            Some(converted.to_vec())
+        );
+    }
+
+    #[test]
+    fn a_blob_written_without_a_committed_row_is_unreachable_residue() {
+        // Simulate a crash after the blob is durable but before the catalog
+        // commit: the blob exists on disk, but no committed row selects it, so
+        // resolution treats the slot as unmigrated rather than an implicit
+        // candidate.
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        blobs.write(b"orphan blob\n").unwrap();
+
+        assert_eq!(
+            resolve_migrated_blob(&database, &blobs, state_id, "etc/cast/system.glu").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn repeating_an_identical_migration_is_idempotent() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        let converted = b"return {}\n";
+
+        migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap();
+        assert_eq!(
+            migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap(),
+            DeclarationMigrationCommit::AlreadyPresent
+        );
     }
 }

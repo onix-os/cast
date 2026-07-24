@@ -69,6 +69,10 @@ pub(crate) use exact_fresh_transition_removal::{
 };
 #[allow(unused_imports)] // consumed by the ActiveReblit frozen-boot wiring slice
 pub(crate) use frozen_boot_input::{FrozenBootInput, FrozenBootInputError};
+pub(crate) use declaration_migrations::{
+    CATALOG_SCHEMA_VERSION, DeclarationMigrationCommit, DeclarationMigrationError,
+    DeclarationMigrationRow,
+};
 pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
 #[cfg(test)]
 pub(crate) use metadata_provenance::{
