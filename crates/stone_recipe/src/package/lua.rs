@@ -378,6 +378,17 @@ impl From<LuaPackageSpec> for PackageSpec {
     }
 }
 
+/// Semantic equivalence of an authored recipe and a proposed Lua replacement:
+/// two recipes are equivalent iff they normalize to the same [`PackageSpec`].
+/// The recipe-migration bridge proves this before regenerating a recipe's
+/// source/build-lock pair through that recipe directory's retained authority.
+pub(crate) fn recipe_is_equivalent_replacement(
+    original: &PackageSpec,
+    replacement: &PackageSpec,
+) -> bool {
+    original == replacement
+}
+
 /// Stateless Lua adapter for the package recipe declaration.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LuaPackageEvaluator {
@@ -450,6 +461,24 @@ mod tests {
             h = empty_hooks(),
             o = options(),
         )
+    }
+
+    #[test]
+    fn equivalent_replacements_compare_equal_and_divergent_ones_do_not() {
+        let source = complete_recipe_source();
+        let original = LuaPackageEvaluator::default()
+            .evaluate(&Source::new("package.lua", &source))
+            .expect("recipe decodes");
+        // A byte-identical replacement normalizes to the same spec.
+        let replacement = LuaPackageEvaluator::default()
+            .evaluate(&Source::new("package.lua", &source))
+            .expect("recipe decodes");
+        assert!(recipe_is_equivalent_replacement(&original, &replacement));
+
+        // A replacement that changes a field is not an equivalent migration.
+        let mut divergent = replacement.clone();
+        divergent.mold = !divergent.mold;
+        assert!(!recipe_is_equivalent_replacement(&original, &divergent));
     }
 
     #[test]
