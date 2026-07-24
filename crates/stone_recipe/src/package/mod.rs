@@ -7,11 +7,7 @@
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 
-pub use self::gluon::{
-    GluonPackageEvaluator, GLUON_AUTOTOOLS_BUILDER_ABI,
-    GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
-    GLUON_MESON_BUILDER_ABI, GLUON_PACKAGE_ABI, PACKAGE_ABI_VERSION,
-};
+pub use self::gluon::{GLUON_AUTHORED_PRELUDE, GluonPackageEvaluator};
 
 mod authored;
 pub use authored::{AuthoredPackage, default_output_set_with_root, lower};

@@ -15,17 +15,6 @@ use super::{
 };
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
-/// Version of the package-function ABI.
-pub const PACKAGE_ABI_VERSION: u32 = 3;
-
-/// Pure Gluon definitions exposed as `cast.package.v3`.
-pub const GLUON_PACKAGE_ABI: &str = include_str!("../../gluon/package.glu");
-
-pub const GLUON_CMAKE_BUILDER_ABI: &str = include_str!("../../gluon/builders/cmake.glu");
-pub const GLUON_MESON_BUILDER_ABI: &str = include_str!("../../gluon/builders/meson.glu");
-pub const GLUON_CARGO_BUILDER_ABI: &str = include_str!("../../gluon/builders/cargo.glu");
-pub const GLUON_AUTOTOOLS_BUILDER_ABI: &str = include_str!("../../gluon/builders/autotools.glu");
-
 /// The types-only authoring prelude exposed as `cast.authored.v1`.
 ///
 /// This is *not* an ABI: it carries no defaults and no builder logic — only the
@@ -84,42 +73,9 @@ impl GluonPackageEvaluator {
         import_policy.enable_array_primitives();
         import_policy.enable_string_primitives();
         import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-        import_policy.insert_embedded_module("cast.package.v3", GLUON_PACKAGE_ABI)?;
         import_policy.insert_embedded_module("cast.authored.v1", GLUON_AUTHORED_PRELUDE)?;
-        import_policy.insert_embedded_module("cast.builders.cmake.v2", GLUON_CMAKE_BUILDER_ABI)?;
-        import_policy.insert_embedded_module("cast.builders.meson.v2", GLUON_MESON_BUILDER_ABI)?;
-        import_policy.insert_embedded_module("cast.builders.cargo.v2", GLUON_CARGO_BUILDER_ABI)?;
-        import_policy.insert_embedded_module("cast.builders.autotools.v2", GLUON_AUTOTOOLS_BUILDER_ABI)?;
         Ok(Self {
             engine: engine.with_import_policy(import_policy),
-        })
-    }
-
-    fn evaluate_package(
-        &self,
-        source: &Source,
-        explicit_inputs: &[u8],
-        deadline: EvaluationDeadline,
-    ) -> Result<
-        DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
-        DeclarationEvaluationError<PackageConversionError>,
-    > {
-        let evaluation = self
-            .engine
-            .evaluate_with_inputs_within::<GluonPackageSpec>(
-                source,
-                explicit_inputs,
-                deadline,
-            )
-            .map_err(DeclarationEvaluationError::Evaluation)?;
-        let package = PackageSpec::from(evaluation.value);
-        package
-            .validate()
-            .map_err(DeclarationEvaluationError::Conversion)?;
-
-        Ok(DeclarationEvaluation {
-            value: package,
-            identity: evaluation.identity,
         })
     }
 
@@ -151,49 +107,9 @@ impl GluonPackageEvaluator {
         })
     }
 
-    /// Dispatch a recipe to the authored decode when it declares the
-    /// `cast.authored.v1` ABI, and to the legacy `cast.package.v3` decode
-    /// otherwise. This bridge lets the migrated corpus evaluate through the
-    /// shared authored layer while any not-yet-migrated legacy recipe still
-    /// evaluates, until the legacy ABI is removed.
-    fn evaluate_dispatched(
-        &self,
-        source: &Source,
-        explicit_inputs: &[u8],
-        deadline: EvaluationDeadline,
-    ) -> Result<
-        DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
-        DeclarationEvaluationError<PackageConversionError>,
-    > {
-        // Try the authored decode first. A migrated recipe decodes as an
-        // `AuthoredPackage`; a legacy recipe produces the fully-lowered package
-        // shape (builder as a `BuilderSpec` record, not a `BuilderRequest`
-        // variant; hooks as a record, not `Optional`), so it fails the authored
-        // decode cleanly and falls back to the legacy path. Text sniffing is
-        // deliberately avoided: an ABI name can appear in a comment, and a
-        // factory entry reaches its ABI only through a transitive import.
-        //
-        // Only an `Evaluation` failure (the Gluon-level decode itself did not
-        // match the authored shape) is ambiguous enough to justify a second
-        // attempt against the legacy shape. A `Conversion` failure means the
-        // authored decode succeeded and the language-agnostic `PackageSpec`
-        // domain validation rejected it — that is the authored recipe's real,
-        // final answer, and must not be masked by retrying against a legacy
-        // shape it was never written against.
-        let probe = EvaluationDeadline::start(self.engine.limits().timeout);
-        match self.evaluate_authored_package(source, explicit_inputs, probe) {
-            Ok(evaluation) => Ok(evaluation),
-            Err(DeclarationEvaluationError::Conversion(error)) => {
-                Err(DeclarationEvaluationError::Conversion(error))
-            }
-            Err(DeclarationEvaluationError::Evaluation(_)) => {
-                self.evaluate_package(source, explicit_inputs, deadline)
-            }
-        }
-    }
-
     /// Decode a minimal-form authored recipe into its [`PackageSpec`]. Test and
-    /// tooling entry point; the production path is [`Self::evaluate_dispatched`].
+    /// tooling entry point; the production path decodes through the same
+    /// [`Self::evaluate_authored_package`].
     pub fn evaluate_authored(
         &self,
         source: &Source,
@@ -231,7 +147,7 @@ impl DeclarationEvaluator<PackageSpec> for GluonPackageEvaluator {
         DeclarationEvaluation<PackageSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_dispatched(source, &[], deadline)
+        self.evaluate_authored_package(source, &[], deadline)
     }
 }
 
@@ -245,7 +161,7 @@ impl DeclarationInputEvaluator<PackageSpec> for GluonPackageEvaluator {
         DeclarationEvaluation<PackageSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_dispatched(source, explicit_inputs, deadline)
+        self.evaluate_authored_package(source, explicit_inputs, deadline)
     }
 }
 
@@ -259,24 +175,6 @@ enum GluonOptional<T> {
 enum GluonBool {
     False,
     True,
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-struct GluonPackageSpec {
-    meta: GluonMetaSpec,
-    builder: GluonBuilderSpec,
-    hooks: GluonHooksSpec,
-    native_build_inputs: Vec<GluonDependencySpec>,
-    build_inputs: Vec<GluonDependencySpec>,
-    check_inputs: Vec<GluonDependencySpec>,
-    outputs: Vec<GluonOutputSpec>,
-    options: GluonOptionsSpec,
-    profiles: Vec<GluonProfileSpec>,
-    sources: Vec<GluonUpstreamSpec>,
-    architectures: Vec<String>,
-    tuning: Vec<GluonNamedTuningSpec>,
-    emul32: GluonBool,
-    mold: GluonBool,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -513,27 +411,6 @@ impl<T> From<GluonOptional<T>> for Option<T> {
 impl From<GluonBool> for bool {
     fn from(value: GluonBool) -> Self {
         matches!(value, GluonBool::True)
-    }
-}
-
-impl From<GluonPackageSpec> for PackageSpec {
-    fn from(spec: GluonPackageSpec) -> Self {
-        Self {
-            meta: spec.meta.into(),
-            builder: spec.builder.into(),
-            hooks: spec.hooks.into(),
-            native_build_inputs: spec.native_build_inputs.into_iter().map(Into::into).collect(),
-            build_inputs: spec.build_inputs.into_iter().map(Into::into).collect(),
-            check_inputs: spec.check_inputs.into_iter().map(Into::into).collect(),
-            outputs: spec.outputs.into_iter().map(Into::into).collect(),
-            options: spec.options.into(),
-            profiles: spec.profiles.into_iter().map(Into::into).collect(),
-            sources: spec.sources.into_iter().map(Into::into).collect(),
-            architectures: spec.architectures,
-            tuning: spec.tuning.into_iter().map(Into::into).collect(),
-            emul32: spec.emul32.into(),
-            mold: spec.mold.into(),
-        }
     }
 }
 
