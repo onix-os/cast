@@ -15,8 +15,11 @@ use declarative_config::{
 };
 use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 
+use super::gluon::SystemSnapshotCodec;
 use super::{SystemModel, spec};
+use crate::declaration_migration::DeclarationMigrationRequest;
 use crate::repository::lua::{LuaRepositorySpec, encode_repository_record};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,12 +114,78 @@ pub(crate) fn encode_lua_system(model: &SystemModel) -> Result<String, spec::Con
     Ok(output)
 }
 
+/// Failure building a system-model migration request. Every path fails closed —
+/// no request is produced unless the converted Lua is proven to normalize to the
+/// original value.
+#[derive(Debug, thiserror::Error)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum SystemMigrationError {
+    #[error("decode the original generated system declaration")]
+    DecodeOriginal(#[source] DeclarationEvaluationError<spec::ConversionError>),
+    #[error("re-encode the system declaration as Lua")]
+    Encode(#[source] spec::ConversionError),
+    #[error("decode the re-encoded Lua system declaration")]
+    DecodeConverted(#[source] DeclarationEvaluationError<spec::ConversionError>),
+    #[error("the re-encoded Lua system declaration does not normalize to the original value")]
+    ConversionDiverged,
+}
+
+/// Build a fail-closed Gluon→Lua migration request for a state's generated
+/// system-model snapshot slot (`usr/lib/system-model.glu`).
+///
+/// The original generated Gluon is decoded, re-emitted as Lua, and the Lua is
+/// decoded again; only if it normalizes to the *same* [`spec::SystemSpec`] as
+/// the original is a [`DeclarationMigrationRequest`] produced. A conversion that
+/// would not round-trip is rejected rather than committed. This is pure: the
+/// caller supplies the original bytes and the live bindings the bridge later
+/// revalidates against (the state id, logical slot, and the state's retained
+/// `/usr` tree marker) — it reads no filesystem and commits nothing.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn convert_generated_system_declaration(
+    state_id: i32,
+    logical_slot: &str,
+    original_gluon: &str,
+    state_tree_marker: &[u8],
+) -> Result<DeclarationMigrationRequest, SystemMigrationError> {
+    let original = <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
+        &SystemSnapshotCodec::default(),
+        &Source::new(logical_slot, original_gluon),
+    )
+    .map_err(SystemMigrationError::DecodeOriginal)?
+    .value;
+
+    let converted = encode_lua_system(&original).map_err(SystemMigrationError::Encode)?;
+
+    let reevaluated = LuaSystemEvaluator::default()
+        .evaluate(&Source::new(logical_slot, &converted))
+        .map_err(SystemMigrationError::DecodeConverted)?;
+
+    // Fail closed: the migrated artifact must normalize to the original value.
+    let original_spec = spec::SystemSpec::try_from(&original).map_err(SystemMigrationError::Encode)?;
+    let converted_spec =
+        spec::SystemSpec::try_from(&reevaluated.value).map_err(SystemMigrationError::Encode)?;
+    if original_spec != converted_spec {
+        return Err(SystemMigrationError::ConversionDiverged);
+    }
+
+    Ok(DeclarationMigrationRequest {
+        state_id,
+        logical_slot: logical_slot.to_owned(),
+        state_tree_marker: state_tree_marker.to_vec(),
+        original_language: "gluon".to_owned(),
+        original_logical_path: logical_slot.to_owned(),
+        original_sha256: Sha256::digest(original_gluon.as_bytes()).to_vec(),
+        migrated_language: "lua".to_owned(),
+        converted_bytes: converted.into_bytes(),
+        evaluation_identity: reevaluated.identity.sha256.clone().into_bytes(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::{DeclarationEvaluator, Source};
 
     use super::*;
-    use crate::system_model::gluon::SystemSnapshotCodec;
 
     const GLUON_SYSTEM: &str = r#"
 let cast = import! cast.system.v1
@@ -234,5 +303,37 @@ return {
             format!("{:?}", gluon.repositories)
         );
         assert_eq!(redecoded.packages, gluon.packages);
+    }
+
+    #[test]
+    fn converting_the_generated_system_declaration_builds_a_verified_request() {
+        let marker = vec![9u8; 32];
+        let request = convert_generated_system_declaration(
+            7,
+            "usr/lib/system-model.glu",
+            GLUON_SYSTEM,
+            &marker,
+        )
+        .expect("conversion succeeds");
+
+        assert_eq!(request.state_id, 7);
+        assert_eq!(request.logical_slot, "usr/lib/system-model.glu");
+        assert_eq!(request.original_logical_path, "usr/lib/system-model.glu");
+        assert_eq!(request.original_language, "gluon");
+        assert_eq!(request.migrated_language, "lua");
+        assert_eq!(request.state_tree_marker, marker);
+        assert_eq!(
+            request.original_sha256,
+            Sha256::digest(GLUON_SYSTEM.as_bytes()).to_vec()
+        );
+        assert!(!request.evaluation_identity.is_empty());
+
+        // The converted bytes are generated-marked Lua that re-decodes to the
+        // same normalized value the original Gluon produced.
+        let converted = String::from_utf8(request.converted_bytes.clone()).expect("utf-8 lua");
+        assert!(converted.starts_with(GENERATED_LUA_MARKER));
+        let redecoded = spec::SystemSpec::try_from(&lua_model(&converted)).unwrap();
+        let original = spec::SystemSpec::try_from(&gluon_model(GLUON_SYSTEM)).unwrap();
+        assert_eq!(redecoded, original);
     }
 }
