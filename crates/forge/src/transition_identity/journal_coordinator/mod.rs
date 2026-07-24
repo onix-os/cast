@@ -22,6 +22,7 @@ mod active_reblit_forward;
 mod active_reblit_reservation;
 mod candidate_preparation;
 mod error;
+mod new_state_forward;
 mod request;
 mod root_abi_publication;
 mod system_triggers;
@@ -38,6 +39,10 @@ use active_reblit_reservation::ActiveReblitReservationFailure;
 pub(crate) use active_reblit_forward::{
     ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
     execute_active_reblit_forward,
+};
+pub(crate) use new_state_forward::{
+    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView,
+    execute_new_state_forward,
 };
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{

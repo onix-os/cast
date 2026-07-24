@@ -431,6 +431,7 @@ fn journal_names(root: &Path) -> Vec<String> {
 }
 
 include!("operation_prefixes.rs");
+include!("new_state_forward.rs");
 include!("failure_evidence.rs");
 include!("transaction_triggers.rs");
 include!("metadata_proof.rs");

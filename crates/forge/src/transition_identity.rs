@@ -101,7 +101,8 @@ pub(crate) use journal_coordinator::{
     ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
     ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
-    NewStatePrevious, execute_active_reblit_forward,
+    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView,
+    NewStatePrevious, execute_active_reblit_forward, execute_new_state_forward,
     StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
     StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
 };
