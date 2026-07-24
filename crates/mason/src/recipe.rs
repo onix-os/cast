@@ -687,6 +687,32 @@ mod tests {
         eprintln!("converted {} recipe examples to Lua", recipes.len());
     }
 
+    /// One-shot: convert the complete top-level recipe examples (the canonical
+    /// `stone` and the layered `composed-stone`) to verified Lua. The remaining
+    /// top-level `cast.package.v3` files are illustrative fragments, not complete
+    /// recipes, and are handled as doc prose rather than mechanically converted.
+    #[test]
+    #[ignore = "one-shot corpus conversion tool"]
+    fn generate_top_level_lua_recipe_examples() {
+        let gluon_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
+        let lua_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua");
+
+        for name in ["stone", "composed-stone"] {
+            let source = gluon_dir.join(format!("{name}.glu"));
+            let gluon = Recipe::load_authored(&source)
+                .unwrap_or_else(|error| panic!("load {source:?}: {error}"));
+            let lua = encode_lua_recipe(&gluon.declaration);
+
+            let scratch = tempfile::tempdir().unwrap();
+            fs::write(scratch.path().join("stone.lua"), &lua).unwrap();
+            let reloaded = Recipe::load_authored(scratch.path())
+                .unwrap_or_else(|error| panic!("reload emitted {name}: {error}"));
+            assert_eq!(reloaded.declaration, gluon.declaration, "round-trip {name}");
+
+            fs::write(lua_dir.join(format!("{name}.lua")), &lua).unwrap();
+        }
+    }
+
     #[test]
     fn a_recipe_authorizes_only_an_equivalent_replacement() {
         let authored = recipe_from(SOURCE_SPEC);
