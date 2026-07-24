@@ -7,11 +7,13 @@
 //! exactly, so equivalent Gluon and Lua sources normalize to equal domain
 //! values. It is not yet registered for `.lua` discovery.
 
+use std::fmt::Write as _;
+
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
     EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::{LuaEngine, LuaOption};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_option, lua_optional_string, lua_string};
 use serde::Deserialize;
 
 use crate::format::Trigger;
@@ -175,6 +177,82 @@ where
     }
 }
 
+/// Emit a [`TriggerSpec`] as generated-marked Lua source that re-decodes through
+/// [`LuaTriggerSpec`] into the same spec. This is the trigger write path — the
+/// canonical Lua an operator adopts as the verified replacement for an authored
+/// `tx.glu`/`sys.glu` trigger.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn encode_lua_trigger(spec: &TriggerSpec) -> String {
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    output.push_str("return {\n");
+    writeln!(output, "    name = {},", lua_string(&spec.name)).unwrap();
+    writeln!(output, "    description = {},", lua_string(&spec.description)).unwrap();
+    writeln!(output, "    before = {},", lua_optional_string(spec.before.as_deref())).unwrap();
+    writeln!(output, "    after = {},", lua_optional_string(spec.after.as_deref())).unwrap();
+    writeln!(output, "    inhibitors = {},", encode_inhibitors(spec.inhibitors.as_ref())).unwrap();
+    writeln!(output, "    paths = {},", encode_key_values(&spec.paths, encode_path_definition)).unwrap();
+    writeln!(output, "    handlers = {},", encode_key_values(&spec.handlers, encode_handler)).unwrap();
+    output.push_str("}\n");
+    output
+}
+
+/// Emit a Lua array table of string literals.
+fn string_list(items: &[String]) -> String {
+    let body = items.iter().map(|item| lua_string(item)).collect::<Vec<_>>().join(", ");
+    format!("{{ {body} }}")
+}
+
+/// Emit a `key`/`value` list, encoding each value with `encode_value`.
+fn encode_key_values<T>(entries: &[KeyValueSpec<T>], encode_value: impl Fn(&T) -> String) -> String {
+    let body = entries
+        .iter()
+        .map(|entry| format!("{{ key = {}, value = {} }}", lua_string(&entry.key), encode_value(&entry.value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {body} }}")
+}
+
+fn encode_inhibitors(inhibitors: Option<&InhibitorsSpec>) -> String {
+    lua_option(inhibitors.map(|inhibitors| {
+        format!(
+            "{{ paths = {}, environment = {} }}",
+            string_list(&inhibitors.paths),
+            string_list(&inhibitors.environment),
+        )
+    }))
+}
+
+fn encode_path_kind(kind: Option<&PathKindSpec>) -> String {
+    lua_option(kind.map(|kind| {
+        match kind {
+            PathKindSpec::Directory => "{ kind = \"directory\" }",
+            PathKindSpec::Symlink => "{ kind = \"symlink\" }",
+        }
+        .to_owned()
+    }))
+}
+
+fn encode_path_definition(definition: &PathDefinitionSpec) -> String {
+    format!(
+        "{{ handlers = {}, kind = {} }}",
+        string_list(&definition.handlers),
+        encode_path_kind(definition.kind.as_ref()),
+    )
+}
+
+fn encode_handler(handler: &HandlerSpec) -> String {
+    match handler {
+        HandlerSpec::Run { command, args } => format!(
+            "{{ kind = \"run\", command = {}, args = {} }}",
+            lua_string(command),
+            string_list(args),
+        ),
+        HandlerSpec::Delete { paths } => {
+            format!("{{ kind = \"delete\", paths = {} }}", string_list(paths))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::{DeclarationEvaluator, Source};
@@ -283,5 +361,50 @@ return {
             .unwrap();
         assert_eq!(lua.identity.engine.implementation(), "lua");
         assert_eq!(lua.identity.language.as_str(), "lua");
+    }
+
+    // Exercises every emitter branch: before/after and inhibitor options, both
+    // path kinds (a directory and an absent kind), and both handler variants.
+    const RICH_LUA_TRIGGER: &str = r#"
+return {
+    name = "full",
+    description = "every feature",
+    before = { kind = "some", value = "earlier" },
+    after = { kind = "some", value = "later" },
+    inhibitors = { kind = "some", value = { paths = { "/skip" }, environment = { "SKIP=1" } } },
+    paths = {
+        {
+            key = "/a/(x:*)",
+            value = { handlers = { "run-it" }, kind = { kind = "some", value = { kind = "directory" } } },
+        },
+        {
+            key = "/b",
+            value = { handlers = { "clean-it" }, kind = { kind = "none" } },
+        },
+    },
+    handlers = {
+        { key = "run-it", value = { kind = "run", command = "/bin/run", args = { "$(x)" } } },
+        { key = "clean-it", value = { kind = "delete", paths = { "/tmp/x" } } },
+    },
+}
+"#;
+
+    fn decode_spec(source: &str) -> TriggerSpec {
+        TriggerSpec::from(
+            LuaEngine::default()
+                .evaluate_as::<LuaTriggerSpec>(&Source::new("trigger.lua", source))
+                .expect("lua trigger evaluates")
+                .value,
+        )
+    }
+
+    #[test]
+    fn an_emitted_trigger_re_decodes_to_the_same_spec() {
+        for source in [LUA_TRIGGER, RICH_LUA_TRIGGER] {
+            let original = decode_spec(source);
+            let emitted = encode_lua_trigger(&original);
+            assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+            assert_eq!(decode_spec(&emitted), original);
+        }
     }
 }
