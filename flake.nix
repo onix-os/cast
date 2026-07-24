@@ -16,7 +16,10 @@
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        # Pin an exact stable release rather than the moving `stable.latest`, so
+        # the toolchain (and therefore rustfmt's formatting) is reproducible and
+        # does not drift every time upstream stable advances.
+        rustToolchain = pkgs.rust-bin.stable."1.94.1".default.override {
           extensions = [ "rust-src" "rustfmt" "clippy" ];
         };
         python =
