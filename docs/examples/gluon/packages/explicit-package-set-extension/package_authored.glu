@@ -1,0 +1,36 @@
+let a = import! cast.authored.v1
+
+\packages ->
+    {
+        meta = {
+            pname = "observability-workstation",
+            version = "1",
+            release = 1,
+            homepage = "https://example.invalid/observability-workstation",
+            license = ["CC0-1.0"],
+        },
+        builder = a.builder.custom a.empty.builder,
+        sources = [],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [
+            {
+                summary = a.optional.set "Explicitly extended userspace package set",
+                runtime_inputs = [
+                    packages.shell,
+                    packages.core,
+                    packages.metrics,
+                    packages.logs,
+                ],
+                .. a.output "out"
+            },
+        ],
+        options = a.unset,
+        profiles = [],
+        architectures = ["native"],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }

@@ -1,0 +1,80 @@
+let a = import! cast.authored.v1
+
+// Profile-specific builder/hook/input sets completely replace the generic
+// ones for the `x86_64` architecture. The generic values stay authored on the
+// package record, but the profile's own fields override them wholesale.
+let base_phases = a.scripts {
+    build = a.phase [
+        a.step.run (a.program.binary "base-phase-runner") ["--generic"],
+    ],
+    .. a.empty.scripts
+}
+
+let base_hooks = a.hooks {
+    pre_build = [
+        a.step.run (a.program.binary "base-hook-runner") ["--generic"],
+    ],
+    .. a.empty.hooks
+}
+
+let x86_64_phases = a.scripts {
+    build = a.phase [
+        a.step.run (a.program.binary "profile-phase-runner") ["--target", "x86_64"],
+    ],
+    .. a.empty.scripts
+}
+
+let x86_64_hooks = a.hooks {
+    pre_build = [
+        a.step.run (a.program.binary "profile-hook-runner") ["--target", "x86_64"],
+    ],
+    .. a.empty.hooks
+}
+
+// A profile's `builder` is a raw BuilderSpec (not a BuilderRequest): profiles
+// are authored as the final shape directly, with no builder-request lowering.
+let x86_64_profile = a.profile {
+    name = "x86_64",
+    builder = {
+        required_tools = [a.dep.binary "profile-builder-tool"],
+        environment = [],
+        phases = x86_64_phases,
+        supported_hooks = a.hook_support.all,
+    },
+    hooks = x86_64_hooks,
+    native_build_inputs = [a.dep.binary "profile-native-tool"],
+    build_inputs = [a.dep.pkgconfig "profile-target-library"],
+    check_inputs = [a.dep.binary "profile-check-tool"],
+}
+
+{
+    meta = {
+        pname = "target-profile-specialization",
+        version = "2.0.0",
+        release = 1,
+        homepage = "https://example.invalid/target-profile-specialization",
+        license = ["Apache-2.0"],
+    },
+    // These generic values remain visible in the declaration, but the exact
+    // x86_64 profile replaces the complete builder, hook, and input sets.
+    builder = a.builder.custom {
+        required_tools = [a.dep.binary "base-builder-tool"],
+        environment = [],
+        phases = base_phases,
+        supported_hooks = a.hook_support.all,
+    },
+    sources = [],
+    native_build_inputs = [a.dep.binary "base-native-tool"],
+    build_inputs = [a.dep.pkgconfig "base-target-library"],
+    check_inputs = [a.dep.binary "base-check-tool"],
+    outputs = a.outputs.explicit [
+        { paths = [a.path.any "*"], .. a.output "out" },
+    ],
+    options = a.unset,
+    profiles = [x86_64_profile],
+    architectures = ["x86_64"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.some.hooks base_hooks,
+}

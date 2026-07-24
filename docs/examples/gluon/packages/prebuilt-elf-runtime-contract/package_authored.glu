@@ -1,0 +1,72 @@
+let a = import! cast.authored.v1
+
+\artifact ->
+    let phases = a.scripts {
+        // Run the supplied ELF directly from the exact extracted archive. It
+        // is not rebuilt, wrapped, patched, or discovered through PATH.
+        check = a.phase [
+            a.step.run_built
+                (a.program.built artifact.executable)
+                ["--self-test"],
+        ],
+        // Dash interprets one install-only script. The interpreter and the
+        // sole external program are typed executable capabilities.
+        install = a.phase [
+            a.step.shell_with {
+                interpreter = a.program.binary "dash",
+                declared_programs = [a.program.binary "install"],
+                script = artifact.install_script,
+            },
+        ],
+        .. a.empty.scripts
+    }
+
+    let root = {
+        summary = a.optional.set "Prebuilt Quartz artifact inspector",
+        runtime_inputs = artifact.runtime_inputs,
+        paths = [a.path.exe artifact.installed_path],
+        .. a.output "out"
+    }
+
+    let debugging = {
+        include_in_manifest = a.false,
+        summary = a.optional.set "Quartz inspector debugging symbols",
+        paths = [a.path.any "/usr/lib/debug"],
+        .. a.output "dbginfo"
+    }
+
+    {
+        meta = {
+            pname = "quartz-inspector-bin",
+            version = "3.4.1",
+            release = 1,
+            homepage = "https://example.invalid/quartz-inspector",
+            license = ["Apache-2.0"],
+        },
+        // Dash is retained by the Shell executable edge; install is the only
+        // authored builder tool. This package declares no compile/link step or
+        // compiler dependency. Repository policy still supplies its selected
+        // frozen toolchain independently of this artifact contract.
+        builder = a.builder.shell phases [a.dep.binary "install"],
+        sources = [artifact.source],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [root, debugging],
+        options = a.some.options (a.options {
+            toolchain = a.toolchain.llvm,
+            cspgo = a.false,
+            samplepgo = a.false,
+            debug = a.true,
+            strip = a.true,
+            networking = a.false,
+            compressman = a.false,
+            lastrip = a.true,
+        }),
+        profiles = [],
+        architectures = [artifact.architecture],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }

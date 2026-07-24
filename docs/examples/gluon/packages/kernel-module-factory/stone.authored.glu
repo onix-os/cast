@@ -1,0 +1,5 @@
+let a = import! cast.authored.v1
+let kernel = import! "./kernel_authored.glu"
+let make_module = import! "./package_authored.glu"
+
+make_module kernel

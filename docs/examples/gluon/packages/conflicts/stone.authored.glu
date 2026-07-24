@@ -1,0 +1,136 @@
+let a = import! cast.authored.v1
+
+// The legacy recipe overrides only the "out" output's summary/excludes/paths/
+// conflicts via `b.outputs.with_root`, which overlays those fields onto the
+// shared default "out" output while leaving every other default output
+// (docs, devel, dbginfo, libs, 32bit, 32bit-devel, 32bit-dbginfo, demos)
+// untouched. The authored form has no overlay primitive, so the full output
+// list is reproduced explicitly here with the same overlay applied by hand.
+{
+    meta = {
+        pname = "modern-editor",
+        version = "2.0.0",
+        release = 1,
+        homepage = "https://example.invalid/modern-editor",
+        license = ["MIT"],
+    },
+    builder = a.builder.meson { flags = [], run_tests = a.true },
+    sources = [
+        a.source.archive
+            "https://example.invalid/modern-editor-2.0.0.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [
+        {
+            summary = a.optional.set "Modern terminal editor",
+            provides_exclude = ["legacy-helper"],
+            runtime_exclude = ["private-plugin"],
+            paths = [
+                a.path.exe "/usr/bin/modern-editor",
+                a.path.symlink "/usr/bin/editor",
+                a.path.any "*",
+            ],
+            conflicts = [
+                a.dep.package "legacy-editor",
+                a.dep.binary "old-editor",
+            ],
+            .. a.output "out"
+        },
+        {
+            summary = a.optional.set "Documentation for modern-editor",
+            description = a.optional.set "Documentation files for the modern-editor package",
+            paths = [a.path.any "/usr/share/gtk-doc"],
+            .. a.output "docs"
+        },
+        {
+            summary = a.optional.set "Development files for modern-editor",
+            description = a.optional.set "Install this package if you intend to build software against\nthe modern-editor package.",
+            runtime_inputs = [a.dep.output (a.package_ref "modern-editor") "out"],
+            paths = [
+                a.path.any "/usr/include",
+                a.path.any "/usr/lib/*.a",
+                a.path.any "/usr/lib/cmake",
+                a.path.any "/usr/lib/lib*.so",
+                a.path.any "/usr/lib/pkgconfig",
+                a.path.any "/usr/share/aclocal",
+                a.path.any "/usr/share/cmake",
+                a.path.any "/usr/share/man/man2",
+                a.path.any "/usr/share/man/man3",
+                a.path.any "/usr/share/man/man9",
+                a.path.any "/usr/share/pkgconfig",
+                a.path.any "/usr/share/gir-1.0/*.gir",
+                a.path.any "/usr/share/vala/vapi/*.deps",
+                a.path.any "/usr/share/vala/vapi/*.vapi",
+                a.path.any "/usr/lib/*.prl",
+                a.path.any "/usr/lib/metatypes",
+                a.path.any "/usr/lib/qt*/metatypes/qt*.json",
+                a.path.any "/usr/lib/qt*/mkspecs",
+                a.path.any "/usr/lib/qt*/modules/*.json",
+                a.path.any "/usr/lib/qt*/sbom",
+                a.path.any "/usr/lib/qt*/plugins/designer/*.so",
+                a.path.any "/usr/share/doc/qt5/*.qch",
+                a.path.any "/usr/share/doc/qt5/*.tags",
+                a.path.any "/usr/share/doc/qt6/*.qch",
+                a.path.any "/usr/share/doc/qt6/*.tags",
+            ],
+            .. a.output "devel"
+        },
+        {
+            include_in_manifest = a.false,
+            summary = a.optional.set "Debugging symbols for modern-editor",
+            description = a.optional.set "Install this package if you need debugging information + symbols\nfor the modern-editor package.",
+            paths = [a.path.any "/usr/lib/debug"],
+            .. a.output "dbginfo"
+        },
+        {
+            summary = a.optional.set "Library files for modern-editor",
+            description = a.optional.set "Library files for modern-editor, typically pulled in as a dependency of another package.",
+            .. a.output "libs"
+        },
+        {
+            summary = a.optional.set "Provides 32-bit runtime libraries for modern-editor",
+            description = a.optional.set "Install this package if you need the 32-bit versions of the\nmodern-editor package libraries.",
+            runtime_inputs = [a.dep.output (a.package_ref "modern-editor") "out"],
+            paths = [a.path.any "/usr/lib32", a.path.any "/usr/lib32/lib*.so.*"],
+            .. a.output "32bit"
+        },
+        {
+            summary = a.optional.set "Provides development files for modern-editor-32bit",
+            description = a.optional.set "Install this package if you need to build software against\nthe 32-bit version of modern-editor, modern-editor-32bit.",
+            runtime_inputs = [
+                a.dep.output (a.package_ref "modern-editor") "32bit",
+                a.dep.output (a.package_ref "modern-editor") "devel",
+            ],
+            paths = [
+                a.path.any "/usr/lib32/*.a",
+                a.path.any "/usr/lib32/cmake",
+                a.path.any "/usr/lib32/lib*.so",
+                a.path.any "/usr/lib32/pkgconfig",
+            ],
+            .. a.output "32bit-devel"
+        },
+        {
+            include_in_manifest = a.false,
+            summary = a.optional.set "Debugging symbols for modern-editor-32bit",
+            description = a.optional.set "Install this package if you need debugging information + symbols\nfor the modern-editor-32bit package.",
+            paths = [a.path.any "/usr/lib32/debug"],
+            .. a.output "32bit-dbginfo"
+        },
+        {
+            summary = a.optional.set "Example files for modern-editor",
+            description = a.optional.set "Example files for the modern-editor package",
+            paths = [a.path.any "/usr/lib/qt*/examples"],
+            .. a.output "demos"
+        },
+    ],
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

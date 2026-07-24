@@ -1,0 +1,109 @@
+let a = import! cast.authored.v1
+let strings = import! std.string.prim
+
+let shebang_substitution = \interpreter ->
+    strings.append
+        "s|^#!"
+        (strings.append
+            interpreter.token
+            (strings.append "$|#!" (strings.append interpreter.shebang "|")))
+
+\interpreters ->
+    let shell_script = "cast-interpreter-shell"
+    let python_script = "cast-interpreter-python"
+
+    let phases = a.scripts {
+        setup = a.phase [
+            // These complete source-less payloads start with inert authored
+            // tokens. No host file, recipe-directory input, interpreter
+            // discovery, or recursive shebang scan participates.
+            a.step.shell_with {
+                interpreter = interpreters.bash.program,
+                declared_programs = [],
+                script = r#"printf '%s\n' \
+    '#!@BASH@' \
+    'set -eu' \
+    'test "${1-}" = "--self-test"' \
+    'printf "%s\n" "explicit interpreter suite: bash"' \
+    > cast-interpreter-shell
+printf '%s\n' \
+    '#!@PYTHON@' \
+    'import sys' \
+    'if sys.argv[1:] != ["--self-test"]:' \
+    '    raise SystemExit(2)' \
+    'print("explicit interpreter suite: python")' \
+    > cast-interpreter-python"#,
+            },
+            a.step.run
+                (a.program.binary "sed")
+                ["-i", "-e", shebang_substitution interpreters.bash, shell_script],
+            a.step.run
+                (a.program.binary "sed")
+                ["-i", "-e", shebang_substitution interpreters.python, python_script],
+        ],
+        build = a.phase [],
+        install = a.phase [
+            a.step.shell_with {
+                interpreter = interpreters.bash.program,
+                declared_programs = [a.program.binary "install"],
+                script = r#"install -Dm755 cast-interpreter-shell "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-shell"
+install -Dm755 cast-interpreter-python "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-interpreter-python""#,
+            },
+        ],
+        check = a.phase [
+            a.step.run
+                (a.program.binary "grep")
+                ["-Fqx", strings.append "#!" interpreters.bash.shebang, shell_script],
+            a.step.run
+                (a.program.binary "grep")
+                ["-Fqx", strings.append "#!" interpreters.python.shebang, python_script],
+            // A source-tree script is never passed to RunBuilt. Each check
+            // invokes it through the exact typed interpreter capability.
+            a.step.run interpreters.bash.program [shell_script, "--self-test"],
+            a.step.run interpreters.python.program [python_script, "--self-test"],
+        ],
+        workload = a.phase [],
+    }
+
+    let root = {
+        summary = a.optional.set "Explicitly bound Bash and Python commands",
+        description = a.optional.set "Two source-less scripts whose exact interpreters are authored, checked, and retained as runtime relations.",
+        runtime_inputs = [
+            interpreters.bash.runtime,
+            interpreters.python.runtime,
+        ],
+        paths = [
+            a.path.exe "/usr/bin/cast-interpreter-shell",
+            a.path.exe "/usr/bin/cast-interpreter-python",
+        ],
+        .. a.output "out"
+    }
+
+    {
+        meta = {
+            pname = "explicit-interpreter-suite",
+            version = "1.0.0",
+            release = 1,
+            homepage = "https://example.invalid/explicit-interpreter-suite",
+            license = ["MPL-2.0"],
+        },
+        builder = a.builder.shell phases [
+            interpreters.bash.runtime,
+            interpreters.python.runtime,
+            a.dep.binary "sed",
+            a.dep.binary "grep",
+            a.dep.binary "install",
+        ],
+        sources = [],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [root],
+        options = a.unset,
+        profiles = [],
+        architectures = ["native"],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }

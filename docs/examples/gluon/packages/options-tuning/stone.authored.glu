@@ -1,0 +1,46 @@
+let a = import! cast.authored.v1
+
+// The authored form names every field of the package record directly and selects
+// a shared-Rust default with `unset` / `outputs.default`. There is no template
+// inheritance stack and no second data format: `cast.authored.v1` is a pure
+// type + constructor layer, and the shared `lower` fills the versioned defaults.
+{
+    meta = {
+        pname = "tuned-compressor",
+        version = "3.7.2",
+        release = 1,
+        homepage = "https://example.invalid/tuned-compressor",
+        license = ["Zlib"],
+    },
+    builder = a.builder.cmake { flags = [], run_tests = a.true },
+    sources = [
+        a.source.archive
+            "https://example.invalid/tuned-compressor-3.7.2.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.some.options (a.options {
+        toolchain = a.toolchain.gnu,
+        cspgo = a.false,
+        samplepgo = a.false,
+        debug = a.false,
+        strip = a.true,
+        networking = a.false,
+        compressman = a.true,
+        lastrip = a.true,
+    }),
+    profiles = [],
+    architectures = [],
+    tuning = [
+        a.named "harden" a.tuning.enable,
+        a.named "lto" (a.tuning.config "thin"),
+        a.named "nosemantic" a.tuning.disable,
+        a.named "optimize" (a.tuning.config "speed"),
+    ],
+    emul32 = a.false,
+    mold = a.true,
+    hooks = a.unset,
+}

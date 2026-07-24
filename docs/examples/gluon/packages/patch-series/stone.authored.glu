@@ -1,0 +1,33 @@
+let a = import! cast.authored.v1
+let patch_series = import! "./patches_authored.glu"
+
+// The authored form names every field of the package record directly and selects
+// a shared-Rust default with `unset` / `outputs.default`. There is no template
+// inheritance stack and no second data format: `cast.authored.v1` is a pure
+// type + constructor layer, and the shared `lower` fills the versioned defaults.
+{
+    meta = {
+        pname = "patched-archive",
+        version = "9.1.0",
+        release = 3,
+        homepage = "https://example.invalid/patched-archive",
+        license = ["BSD-3-Clause"],
+    },
+    builder = a.builder.cmake { flags = ["-DUSE_SYSTEM_DEPENDENCIES=ON"], run_tests = a.true },
+    sources = [
+        a.source.archive
+            "https://example.invalid/patched-archive-9.1.0.tar.xz"
+            "456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123",
+    ],
+    native_build_inputs = [a.dep.binary "patch"],
+    build_inputs = [a.dep.pkgconfig "libarchive"],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.some.hooks (a.hooks { pre_setup = patch_series, .. a.empty.hooks }),
+}

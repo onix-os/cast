@@ -1,0 +1,44 @@
+let a = import! cast.authored.v1
+let policies = import! "./policies_authored.glu"
+
+// The higher-order output_policy argument receives the same selected policy
+// as the builder. This is the Stone-native equivalent of composing a package
+// function from explicit dependencies and reusable library policy.
+\inputs ->
+    {
+        meta = {
+            pname = "telemetry-runtime",
+            version = "3.4.0",
+            release = 1,
+            homepage = "https://example.invalid/telemetry-runtime",
+            license = ["Apache-2.0"],
+        },
+        builder = a.builder.cmake {
+            flags = inputs.policy.cmake_flags,
+            run_tests = a.true,
+        },
+        sources = [
+            a.source.archive
+                "https://example.invalid/telemetry-runtime-3.4.0.tar.xz"
+                "cdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab",
+        ],
+        native_build_inputs = policies.when
+            inputs.policy.documentation
+            [inputs.dependencies.documentation_generator],
+        build_inputs = [
+            inputs.dependencies.compression,
+            inputs.dependencies.crypto,
+        ],
+        check_inputs = [],
+        outputs = a.outputs.explicit (inputs.output_policy {
+            pname = "telemetry-runtime",
+            policy = inputs.policy,
+        }),
+        options = a.unset,
+        profiles = [],
+        architectures = inputs.policy.architectures,
+        tuning = inputs.policy.tuning,
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }

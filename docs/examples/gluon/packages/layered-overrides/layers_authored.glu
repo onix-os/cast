@@ -1,0 +1,182 @@
+let a = import! cast.authored.v1
+let arrays = import! std.array.prim
+let strings = import! std.string.prim
+
+let release_options = a.options {
+    toolchain = a.toolchain.llvm,
+    cspgo = a.false,
+    samplepgo = a.false,
+    debug = a.false,
+    strip = a.true,
+    networking = a.false,
+    compressman = a.true,
+    lastrip = a.true,
+}
+
+// Mirrors the shared default output set (root/docs/devel/dbginfo/libs/32bit
+// family/demos) so the distribution layer can append its diagnostics output
+// onto the same concrete list the legacy `b.patch.array.append` operated on.
+// `a.outputs.default` cannot be inspected/appended to at authoring time since
+// it is just a marker the shared Rust `lower` expands later.
+let default_outputs_for = \pname ->
+    let out_ref = \output -> a.dep.output (a.package_ref pname) output
+    let root = { paths = [a.path.any "*"], .. a.output "out" }
+    let docs = {
+        summary = a.optional.set (strings.append "Documentation for " pname),
+        description = a.optional.set (strings.append (strings.append "Documentation files for the " pname) " package"),
+        paths = [a.path.any "/usr/share/gtk-doc"],
+        .. a.output "docs"
+    }
+    let devel = {
+        summary = a.optional.set (strings.append "Development files for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you intend to build software against\nthe " pname)
+            " package."),
+        runtime_inputs = [out_ref "out"],
+        paths = [
+            a.path.any "/usr/include",
+            a.path.any "/usr/lib/*.a",
+            a.path.any "/usr/lib/cmake",
+            a.path.any "/usr/lib/lib*.so",
+            a.path.any "/usr/lib/pkgconfig",
+            a.path.any "/usr/share/aclocal",
+            a.path.any "/usr/share/cmake",
+            a.path.any "/usr/share/man/man2",
+            a.path.any "/usr/share/man/man3",
+            a.path.any "/usr/share/man/man9",
+            a.path.any "/usr/share/pkgconfig",
+            a.path.any "/usr/share/gir-1.0/*.gir",
+            a.path.any "/usr/share/vala/vapi/*.deps",
+            a.path.any "/usr/share/vala/vapi/*.vapi",
+            a.path.any "/usr/lib/*.prl",
+            a.path.any "/usr/lib/metatypes",
+            a.path.any "/usr/lib/qt*/metatypes/qt*.json",
+            a.path.any "/usr/lib/qt*/mkspecs",
+            a.path.any "/usr/lib/qt*/modules/*.json",
+            a.path.any "/usr/lib/qt*/sbom",
+            a.path.any "/usr/lib/qt*/plugins/designer/*.so",
+            a.path.any "/usr/share/doc/qt5/*.qch",
+            a.path.any "/usr/share/doc/qt5/*.tags",
+            a.path.any "/usr/share/doc/qt6/*.qch",
+            a.path.any "/usr/share/doc/qt6/*.tags",
+        ],
+        .. a.output "devel"
+    }
+    let dbginfo = {
+        include_in_manifest = a.false,
+        summary = a.optional.set (strings.append "Debugging symbols for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            " package."),
+        paths = [a.path.any "/usr/lib/debug"],
+        .. a.output "dbginfo"
+    }
+    let libs = {
+        summary = a.optional.set (strings.append "Library files for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Library files for " pname)
+            ", typically pulled in as a dependency of another package."),
+        .. a.output "libs"
+    }
+    let bit32 = {
+        summary = a.optional.set (strings.append "Provides 32-bit runtime libraries for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you need the 32-bit versions of the\n" pname)
+            " package libraries."),
+        runtime_inputs = [out_ref "out"],
+        paths = [
+            a.path.any "/usr/lib32",
+            a.path.any "/usr/lib32/lib*.so.*",
+        ],
+        .. a.output "32bit"
+    }
+    let bit32_devel = {
+        summary = a.optional.set (strings.append "Provides development files for " (strings.append pname "-32bit")),
+        description = a.optional.set (strings.append
+            (strings.append
+                (strings.append "Install this package if you need to build software against\nthe 32-bit version of " pname)
+                ", ")
+            (strings.append pname "-32bit.")),
+        runtime_inputs = [
+            out_ref "32bit",
+            out_ref "devel",
+        ],
+        paths = [
+            a.path.any "/usr/lib32/*.a",
+            a.path.any "/usr/lib32/cmake",
+            a.path.any "/usr/lib32/lib*.so",
+            a.path.any "/usr/lib32/pkgconfig",
+        ],
+        .. a.output "32bit-devel"
+    }
+    let bit32_dbginfo = {
+        include_in_manifest = a.false,
+        summary = a.optional.set (strings.append "Debugging symbols for " (strings.append pname "-32bit")),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            "-32bit package."),
+        paths = [a.path.any "/usr/lib32/debug"],
+        .. a.output "32bit-dbginfo"
+    }
+    let demos = {
+        summary = a.optional.set (strings.append "Example files for " pname),
+        description = a.optional.set (strings.append (strings.append "Example files for the " pname) " package"),
+        paths = [a.path.any "/usr/lib/qt*/examples"],
+        .. a.output "demos"
+    }
+    [root, docs, devel, dbginfo, libs, bit32, bit32_devel, bit32_dbginfo, demos]
+
+// Each layer is a total PackageSpec -> PackageSpec transformation, expressed
+// as a Gluon record update over the authored package. Applying them in
+// stone.authored.glu makes precedence visible instead of relying on an
+// implicit repository overlay or order-dependent attribute merge.
+let security = \package -> {
+    meta = package.meta,
+    builder = package.builder,
+    sources = package.sources,
+    native_build_inputs = arrays.append [a.dep.binary "hardening-check"] package.native_build_inputs,
+    build_inputs = package.build_inputs,
+    check_inputs = package.check_inputs,
+    outputs = package.outputs,
+    options = a.some.options release_options,
+    profiles = package.profiles,
+    architectures = package.architectures,
+    tuning = arrays.append [a.named "harden" a.tuning.enable] package.tuning,
+    emul32 = package.emul32,
+    mold = package.mold,
+    hooks = package.hooks,
+}
+
+let distribution = \package ->
+    let diagnostics = {
+        name = "tools",
+        include_in_manifest = a.true,
+        summary = a.optional.set "Layered proxy diagnostics",
+        description = a.unset,
+        provides_exclude = [],
+        runtime_inputs = [a.dep.output (a.package_ref package.meta.pname) "out"],
+        runtime_exclude = [],
+        paths = [a.path.exe "/usr/bin/layered-proxy-inspect"],
+        conflicts = [],
+    }
+    {
+        meta = package.meta,
+        builder = package.builder,
+        sources = package.sources,
+        native_build_inputs = package.native_build_inputs,
+        build_inputs = arrays.append package.build_inputs [a.dep.pkgconfig "libarchive"],
+        check_inputs = package.check_inputs,
+        outputs = a.outputs.explicit (arrays.append (default_outputs_for package.meta.pname) [diagnostics]),
+        options = package.options,
+        profiles = package.profiles,
+        architectures = package.architectures,
+        tuning = package.tuning,
+        emul32 = package.emul32,
+        mold = package.mold,
+        hooks = package.hooks,
+    }
+
+{
+    security,
+    distribution,
+}

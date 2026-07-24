@@ -1,0 +1,82 @@
+let a = import! cast.authored.v1
+
+let phases = {
+    setup = a.phase [],
+    build = a.phase [],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [
+                a.program.binary "install",
+                a.program.binary "ln",
+            ],
+            script = r#"
+printf '%s\n' '#!/usr/bin/bash' 'exit 0' > typed-router
+printf '%s\n' 'Typed output routing example' > README
+printf '%s\n' 'p /run/typed-router/events.fifo 0600 root root -' > typed-router.conf
+install -Dm755 typed-router "${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router"
+ln -s typed-router "${CAST_INSTALL_ROOT}${CAST_BINDIR}/typed-router-current"
+install -Dm644 README "${CAST_INSTALL_ROOT}${CAST_DATADIR}/typed-router/README"
+install -Dm644 typed-router.conf "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/tmpfiles.d/typed-router.conf"
+"#,
+        },
+    ],
+    check = a.phase [],
+    workload = a.phase [],
+}
+
+let root = {
+    paths = [a.path.any "*"],
+    .. a.output "out"
+}
+
+let commands = {
+    runtime_inputs = [a.dep.binary "bash"],
+    paths = [a.path.exe "/usr/bin/typed-router"],
+    .. a.output "commands"
+}
+
+let links = {
+    runtime_inputs = [a.dep.output (a.package_ref "typed-output-routing") "commands"],
+    paths = [a.path.symlink "/usr/bin/typed-router-current"],
+    .. a.output "links"
+}
+
+let activation = {
+    paths = [a.path.any "/usr/lib/tmpfiles.d/typed-router.conf"],
+    .. a.output "activation"
+}
+
+{
+    meta = {
+        pname = "typed-output-routing",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/typed-output-routing",
+        license = ["ISC"],
+    },
+    builder = a.builder.custom {
+        required_tools = [
+            a.dep.binary "bash",
+            a.dep.binary "install",
+            a.dep.binary "ln",
+        ],
+        environment = [],
+        phases,
+        supported_hooks = a.hook_support.all,
+    },
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    // The catch-all is deliberately first. Later type-specific rules win
+    // collector matching without hiding their authored declaration order.
+    outputs = a.outputs.explicit [root, commands, links, activation],
+    options = a.unset,
+    profiles = [],
+    architectures = ["native"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

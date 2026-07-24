@@ -1,0 +1,6 @@
+
+let a = import! cast.authored.v1
+
+{
+    component = a.true,
+}

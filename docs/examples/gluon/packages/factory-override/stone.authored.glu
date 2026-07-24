@@ -1,0 +1,143 @@
+let a = import! cast.authored.v1
+let strings = import! std.string.prim
+let arrays = import! std.array.prim
+let make_package = import! "./package_authored.glu"
+let inputs = import! "./inputs_authored.glu"
+
+// This is analogous to overriding a Nix function argument before evaluating
+// the package: the factory receives an alternate TLS capability.
+let package = make_package {
+    tls = a.dep.pkgconfig "libressl",
+    .. inputs
+}
+
+let pname = package.meta.pname
+
+let local_output = \output -> a.dep.output (a.package_ref pname) output
+
+// The shared Rust default output set, reproduced here because appending the
+// "tools" output requires an explicit output list: the authored ABI only
+// offers `outputs.default` (opaque, Rust-filled) or `outputs.explicit`
+// (a complete authored list), not a way to extend the default from Gluon.
+let default_outputs =
+    let root = { paths = [a.path.any "*"], .. a.output "out" }
+    let docs = {
+        summary = a.optional.set (strings.append "Documentation for " pname),
+        description = a.optional.set (strings.append (strings.append "Documentation files for the " pname) " package"),
+        paths = [a.path.any "/usr/share/gtk-doc"],
+        .. a.output "docs"
+    }
+    let devel = {
+        summary = a.optional.set (strings.append "Development files for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you intend to build software against\nthe " pname)
+            " package."),
+        runtime_inputs = [local_output "out"],
+        paths = [
+            a.path.any "/usr/include",
+            a.path.any "/usr/lib/*.a",
+            a.path.any "/usr/lib/cmake",
+            a.path.any "/usr/lib/lib*.so",
+            a.path.any "/usr/lib/pkgconfig",
+            a.path.any "/usr/share/aclocal",
+            a.path.any "/usr/share/cmake",
+            a.path.any "/usr/share/man/man2",
+            a.path.any "/usr/share/man/man3",
+            a.path.any "/usr/share/man/man9",
+            a.path.any "/usr/share/pkgconfig",
+            a.path.any "/usr/share/gir-1.0/*.gir",
+            a.path.any "/usr/share/vala/vapi/*.deps",
+            a.path.any "/usr/share/vala/vapi/*.vapi",
+            a.path.any "/usr/lib/*.prl",
+            a.path.any "/usr/lib/metatypes",
+            a.path.any "/usr/lib/qt*/metatypes/qt*.json",
+            a.path.any "/usr/lib/qt*/mkspecs",
+            a.path.any "/usr/lib/qt*/modules/*.json",
+            a.path.any "/usr/lib/qt*/sbom",
+            a.path.any "/usr/lib/qt*/plugins/designer/*.so",
+            a.path.any "/usr/share/doc/qt5/*.qch",
+            a.path.any "/usr/share/doc/qt5/*.tags",
+            a.path.any "/usr/share/doc/qt6/*.qch",
+            a.path.any "/usr/share/doc/qt6/*.tags",
+        ],
+        .. a.output "devel"
+    }
+    let dbginfo = {
+        include_in_manifest = a.false,
+        summary = a.optional.set (strings.append "Debugging symbols for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            " package."),
+        paths = [a.path.any "/usr/lib/debug"],
+        .. a.output "dbginfo"
+    }
+    let libs = {
+        summary = a.optional.set (strings.append "Library files for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Library files for " pname)
+            ", typically pulled in as a dependency of another package."),
+        .. a.output "libs"
+    }
+    let bit32 = {
+        summary = a.optional.set (strings.append "Provides 32-bit runtime libraries for " pname),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you need the 32-bit versions of the\n" pname)
+            " package libraries."),
+        runtime_inputs = [local_output "out"],
+        paths = [
+            a.path.any "/usr/lib32",
+            a.path.any "/usr/lib32/lib*.so.*",
+        ],
+        .. a.output "32bit"
+    }
+    let bit32_devel = {
+        summary = a.optional.set (strings.append "Provides development files for " (strings.append pname "-32bit")),
+        description = a.optional.set (strings.append
+            (strings.append
+                (strings.append "Install this package if you need to build software against\nthe 32-bit version of " pname)
+                ", ")
+            (strings.append pname "-32bit.")),
+        runtime_inputs = [
+            local_output "32bit",
+            local_output "devel",
+        ],
+        paths = [
+            a.path.any "/usr/lib32/*.a",
+            a.path.any "/usr/lib32/cmake",
+            a.path.any "/usr/lib32/lib*.so",
+            a.path.any "/usr/lib32/pkgconfig",
+        ],
+        .. a.output "32bit-devel"
+    }
+    let bit32_dbginfo = {
+        include_in_manifest = a.false,
+        summary = a.optional.set (strings.append "Debugging symbols for " (strings.append pname "-32bit")),
+        description = a.optional.set (strings.append
+            (strings.append "Install this package if you need debugging information + symbols\nfor the " pname)
+            "-32bit package."),
+        paths = [a.path.any "/usr/lib32/debug"],
+        .. a.output "32bit-dbginfo"
+    }
+    let demos = {
+        summary = a.optional.set (strings.append "Example files for " pname),
+        description = a.optional.set (strings.append (strings.append "Example files for the " pname) " package"),
+        paths = [a.path.any "/usr/lib/qt*/examples"],
+        .. a.output "demos"
+    }
+    [root, docs, devel, dbginfo, libs, bit32, bit32_devel, bit32_dbginfo, demos]
+
+let tools = {
+    summary = a.optional.set "Optional diagnostics",
+    runtime_inputs = [local_output "out"],
+    paths = [a.path.exe "/usr/bin/override-client-diagnose"],
+    .. a.output "tools"
+}
+
+// Attribute patches make keep/replace/append semantics explicit: the legacy
+// "append" on `outputs` and "replace" on `architectures` become plain Gluon
+// list construction and a record update over the authored base.
+{
+    outputs = a.outputs.explicit (arrays.append default_outputs [tools]),
+    architectures = ["x86_64"],
+    .. package
+}

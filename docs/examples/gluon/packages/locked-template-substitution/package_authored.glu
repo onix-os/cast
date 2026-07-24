@@ -1,0 +1,82 @@
+let a = import! cast.authored.v1
+let strings = import! std.string.prim
+
+let substitution = \placeholder value ->
+    strings.append (strings.append (strings.append "s|@" placeholder) "@|") (strings.append value "|g")
+
+let expected = \name value -> strings.append (strings.append name " = ") value
+
+// This factory consumes one closed, checked-in values record. The fixed values
+// deliberately contain no sed replacement metacharacters; the exact generated
+// arguments remain visible in the frozen plan instead of hiding a templating
+// language inside Rust policy.
+\values ->
+    let template = "config/session-index.conf.in"
+    let sed = a.program.binary "sed"
+    let grep = a.program.binary "grep"
+
+    let phases = {
+        setup = a.phase [
+            a.step.run sed [
+                "-i",
+                "-e", substitution "SERVICE_NAME" values.service_name,
+                "-e", substitution "SOCKET_PATH" values.socket_path,
+                "-e", substitution "WORKER_COUNT" values.worker_count,
+                "-e", substitution "ACCESS_MODE" values.access_mode,
+                template,
+            ],
+        ],
+        build = a.phase [],
+        install = a.phase [
+            a.step.shell_with {
+                interpreter = a.program.binary "bash",
+                declared_programs = [a.program.binary "install"],
+                script = r#"install -Dm644 config/session-index.conf.in "${CAST_INSTALL_ROOT}${CAST_DATADIR}/session-index/session-index.conf""#,
+            },
+        ],
+        check = a.phase [
+            a.step.run grep ["-Fqx", expected "service_name" values.service_name, template],
+            a.step.run grep ["-Fqx", expected "socket_path" values.socket_path, template],
+            a.step.run grep ["-Fqx", expected "worker_count" values.worker_count, template],
+            a.step.run grep ["-Fqx", expected "access_mode" values.access_mode, template],
+        ],
+        workload = a.phase [],
+    }
+
+    {
+        meta = {
+            pname = "session-index-config",
+            version = "1",
+            release = 1,
+            homepage = "https://example.invalid/session-index",
+            license = ["MIT"],
+        },
+        builder = a.builder.shell phases [
+            a.dep.binary "sed",
+            a.dep.binary "grep",
+            a.dep.binary "bash",
+            a.dep.binary "install",
+        ],
+        sources = [
+            a.source.archive
+                "https://example.invalid/session-index-config-1.tar.xz"
+                "123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+        ],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [
+            {
+                summary = a.optional.set "Frozen session-index service defaults",
+                paths = [a.path.any "/usr/share/session-index/session-index.conf"],
+                .. a.output "out"
+            },
+        ],
+        options = a.unset,
+        profiles = [],
+        architectures = ["native"],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }

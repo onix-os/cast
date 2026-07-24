@@ -1,0 +1,59 @@
+let a = import! cast.authored.v1
+
+// The authored form names every field of the package record directly and selects
+// a shared-Rust default with `unset` / `outputs.default`. Custom hooks are wrapped
+// with `a.some.hooks`, built on top of `a.empty.hooks` for the phases left alone.
+{
+    meta = {
+        pname = "hooked-library",
+        version = "5.3.0",
+        release = 1,
+        homepage = "https://example.invalid/hooked-library",
+        license = ["Apache-2.0"],
+    },
+    builder = a.builder.cmake { flags = ["-DBUILD_TESTING=ON"], run_tests = a.true },
+    sources = [
+        a.source.archive
+            "https://example.invalid/hooked-library-5.3.0.tar.gz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    native_build_inputs = [
+        a.dep.binary "patch",
+        a.dep.binary "strip-nondeterminism",
+    ],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.some.hooks (a.hooks {
+        pre_setup = [
+            a.step.run (a.program.binary "patch") ["-p1", "-i", "compat.patch"],
+        ],
+        post_build = [
+            a.step.run (a.program.binary "strip-nondeterminism") ["build/generated.dat"],
+        ],
+        pre_check = [
+            a.step.shell r#"test -d "${CAST_BUILDER_DIR}"
+test -f "${CAST_BUILDER_DIR}/CMakeCache.txt""#,
+        ],
+        post_install = [
+            a.step.shell_with {
+                interpreter = a.program.binary "bash",
+                declared_programs = [
+                    a.program.binary "install",
+                    a.program.binary "ln",
+                ],
+                script = r#"
+install -Dm644 packaging/hooked.conf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/hooked/hooked.conf"
+ln -s hooked "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hooked-compat"
+"#,
+            },
+        ],
+        .. a.empty.hooks
+    }),
+}

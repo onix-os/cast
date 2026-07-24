@@ -1,0 +1,21 @@
+let a = import! cast.authored.v1
+
+// Every checkout has its own authored URL, revision, and materialization name.
+// No recursive fetch or implicit Git-submodule state is part of the recipe.
+{
+    application = a.source.git_with {
+        url = "https://example.invalid/orbit-console.git",
+        git_ref = "1111111111111111111111111111111111111111",
+        clone_dir = a.optional.set "application",
+    },
+    syntax = a.source.git_with {
+        url = "https://example.invalid/orbit-syntax.git",
+        git_ref = "2222222222222222222222222222222222222222",
+        clone_dir = a.optional.set "syntax-engine",
+    },
+    protocol = a.source.git_with {
+        url = "https://example.invalid/orbit-wire.git",
+        git_ref = "3333333333333333333333333333333333333333",
+        clone_dir = a.optional.set "wire-format",
+    },
+}

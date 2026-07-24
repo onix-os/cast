@@ -1,0 +1,162 @@
+let a = import! cast.authored.v1
+
+// `mk_package` supplied explicit versioned defaults; the legacy recipe then
+// customized `outputs` via `b.outputs.with_root`, overlaying a custom root
+// output's `runtime_inputs` onto the shared factory default output set while
+// leaving every other output untouched. The authored form has no partial
+// overlay for `outputs`: it reproduces the same shared default output set
+// explicitly, with the root output's `runtime_inputs` set directly.
+let pname = "dependency-roles"
+
+let root = {
+    runtime_inputs = [
+        a.dep.soname "libc.so.6",
+        a.dep.binary "sh",
+    ],
+    paths = [a.path.any "*"],
+    .. a.output "out"
+}
+
+let docs = {
+    summary = a.optional.set "Documentation for dependency-roles",
+    description = a.optional.set "Documentation files for the dependency-roles package",
+    paths = [a.path.any "/usr/share/gtk-doc"],
+    .. a.output "docs"
+}
+
+let devel = {
+    summary = a.optional.set "Development files for dependency-roles",
+    description = a.optional.set "Install this package if you intend to build software against\nthe dependency-roles package.",
+    runtime_inputs = [a.dep.output (a.package_ref pname) "out"],
+    paths = [
+        a.path.any "/usr/include",
+        a.path.any "/usr/lib/*.a",
+        a.path.any "/usr/lib/cmake",
+        a.path.any "/usr/lib/lib*.so",
+        a.path.any "/usr/lib/pkgconfig",
+        a.path.any "/usr/share/aclocal",
+        a.path.any "/usr/share/cmake",
+        a.path.any "/usr/share/man/man2",
+        a.path.any "/usr/share/man/man3",
+        a.path.any "/usr/share/man/man9",
+        a.path.any "/usr/share/pkgconfig",
+        a.path.any "/usr/share/gir-1.0/*.gir",
+        a.path.any "/usr/share/vala/vapi/*.deps",
+        a.path.any "/usr/share/vala/vapi/*.vapi",
+        a.path.any "/usr/lib/*.prl",
+        a.path.any "/usr/lib/metatypes",
+        a.path.any "/usr/lib/qt*/metatypes/qt*.json",
+        a.path.any "/usr/lib/qt*/mkspecs",
+        a.path.any "/usr/lib/qt*/modules/*.json",
+        a.path.any "/usr/lib/qt*/sbom",
+        a.path.any "/usr/lib/qt*/plugins/designer/*.so",
+        a.path.any "/usr/share/doc/qt5/*.qch",
+        a.path.any "/usr/share/doc/qt5/*.tags",
+        a.path.any "/usr/share/doc/qt6/*.qch",
+        a.path.any "/usr/share/doc/qt6/*.tags",
+    ],
+    .. a.output "devel"
+}
+
+let dbginfo = {
+    include_in_manifest = a.false,
+    summary = a.optional.set "Debugging symbols for dependency-roles",
+    description = a.optional.set "Install this package if you need debugging information + symbols\nfor the dependency-roles package.",
+    paths = [a.path.any "/usr/lib/debug"],
+    .. a.output "dbginfo"
+}
+
+let libs = {
+    summary = a.optional.set "Library files for dependency-roles",
+    description = a.optional.set "Library files for dependency-roles, typically pulled in as a dependency of another package.",
+    .. a.output "libs"
+}
+
+let bit32 = {
+    summary = a.optional.set "Provides 32-bit runtime libraries for dependency-roles",
+    description = a.optional.set "Install this package if you need the 32-bit versions of the\ndependency-roles package libraries.",
+    runtime_inputs = [a.dep.output (a.package_ref pname) "out"],
+    paths = [
+        a.path.any "/usr/lib32",
+        a.path.any "/usr/lib32/lib*.so.*",
+    ],
+    .. a.output "32bit"
+}
+
+let bit32_devel = {
+    summary = a.optional.set "Provides development files for dependency-roles-32bit",
+    description = a.optional.set "Install this package if you need to build software against\nthe 32-bit version of dependency-roles, dependency-roles-32bit.",
+    runtime_inputs = [
+        a.dep.output (a.package_ref pname) "32bit",
+        a.dep.output (a.package_ref pname) "devel",
+    ],
+    paths = [
+        a.path.any "/usr/lib32/*.a",
+        a.path.any "/usr/lib32/cmake",
+        a.path.any "/usr/lib32/lib*.so",
+        a.path.any "/usr/lib32/pkgconfig",
+    ],
+    .. a.output "32bit-devel"
+}
+
+let bit32_dbginfo = {
+    include_in_manifest = a.false,
+    summary = a.optional.set "Debugging symbols for dependency-roles-32bit",
+    description = a.optional.set "Install this package if you need debugging information + symbols\nfor the dependency-roles-32bit package.",
+    paths = [a.path.any "/usr/lib32/debug"],
+    .. a.output "32bit-dbginfo"
+}
+
+let demos = {
+    summary = a.optional.set "Example files for dependency-roles",
+    description = a.optional.set "Example files for the dependency-roles package",
+    paths = [a.path.any "/usr/lib/qt*/examples"],
+    .. a.output "demos"
+}
+
+{
+    meta = {
+        pname,
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/dependency-roles",
+        license = ["CC0-1.0"],
+    },
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    // Package references are typed by the capability they must provide. These
+    // roles remain data all the way into dependency resolution.
+    native_build_inputs = [
+        a.dep.binary "pkgconf",
+        a.dep.system_binary "ldconfig",
+        a.dep.cmake "ZLIB",
+    ],
+    build_inputs = [
+        a.dep.package "base-devel",
+        a.dep.output (a.package_ref "libwidget") "devel",
+        a.dep.pkgconfig "zlib",
+        a.dep.pkgconfig32 "zlib",
+        a.dep.soname "libz.so.1",
+        a.dep.python "setuptools",
+        a.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)",
+    ],
+    check_inputs = [a.dep.binary "bats"],
+    outputs = a.outputs.explicit [
+        root,
+        docs,
+        devel,
+        dbginfo,
+        libs,
+        bit32,
+        bit32_devel,
+        bit32_dbginfo,
+        demos,
+    ],
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

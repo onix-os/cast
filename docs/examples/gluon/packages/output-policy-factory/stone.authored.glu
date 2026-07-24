@@ -1,0 +1,11 @@
+let a = import! cast.authored.v1
+let dependencies = import! "./dependencies_authored.glu"
+let make_outputs = import! "./outputs_authored.glu"
+let make_package = import! "./package_authored.glu"
+let policies = import! "./policies_authored.glu"
+
+make_package {
+    dependencies,
+    output_policy = make_outputs,
+    policy = policies.edge_tools,
+}

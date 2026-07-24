@@ -1,0 +1,100 @@
+let a = import! cast.authored.v1
+let strings = import! std.string.prim
+
+let line = \value rest -> strings.append value (strings.append "\n" rest)
+
+// This is intentionally one fixed, package-specific wrapper rather than a
+// generic wrapper abstraction. Its command, variable names, and environment are
+// closed here; the selected runtime record supplies only their exact paths and
+// typed runtime relations.
+\runtime ->
+    let wrapper_payload =
+        line
+            (strings.append "#!" runtime.interpreter.program.path)
+            (line
+                (strings.append "export GRAPHITE_PLUGIN_DIR=" runtime.plugins.path)
+                (line
+                    (strings.append "export GRAPHITE_DATA_DIR=" runtime.data.path)
+                    (line
+                        (strings.append "export SSL_CERT_FILE=" runtime.certificates.path)
+                        (line
+                            (strings.append "export GSETTINGS_SCHEMA_DIR=" runtime.schemas.path)
+                            (strings.append
+                                (strings.append "exec " runtime.target.program.path)
+                                " \"$@\"\n")))))
+
+    // The payload contains no single quote. Bash's printf builtin therefore
+    // writes the exact authored bytes without cat, env, or interpreter lookup.
+    let install_script =
+        strings.append
+            r#"printf '%s' '"#
+            (strings.append
+                wrapper_payload
+                r#"' > graphite-renderer
+/usr/bin/install -Dm755 graphite-renderer "${CAST_INSTALL_ROOT}${CAST_BINDIR}/graphite-renderer""#)
+
+    let phases = a.scripts {
+        install = a.phase [
+            a.step.shell_with {
+                interpreter = runtime.interpreter.program,
+                declared_programs = [a.program.binary "install"],
+                script = install_script,
+            },
+        ],
+        .. a.empty.scripts
+    }
+
+    let root = {
+        summary = a.optional.set "Graphite renderer with a closed runtime environment",
+        description = a.optional.set "A source-less wrapper that binds one absolute renderer and every runtime resource without ambient discovery.",
+        runtime_inputs = [
+            runtime.target.runtime_input,
+            runtime.plugins.runtime_input,
+            runtime.data.runtime_input,
+            runtime.certificates.runtime_input,
+            runtime.schemas.runtime_input,
+            runtime.interpreter.runtime_input,
+        ],
+        paths = [a.path.exe "/usr/bin/graphite-renderer"],
+        .. a.output "out"
+    }
+
+    {
+        meta = {
+            pname = "graphite-renderer-wrapper",
+            version = "1.0.0",
+            release = 1,
+            homepage = "https://example.invalid/graphite-renderer",
+            license = ["MIT"],
+        },
+        builder = a.builder.custom {
+            required_tools = [
+                runtime.interpreter.runtime_input,
+                a.dep.binary "install",
+            ],
+            environment = [],
+            phases,
+            supported_hooks = a.hook_support.all,
+        },
+        sources = [],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [root],
+        options = a.some.options (a.options {
+            toolchain = a.toolchain.llvm,
+            cspgo = a.false,
+            samplepgo = a.false,
+            debug = a.true,
+            strip = a.true,
+            networking = a.false,
+            compressman = a.false,
+            lastrip = a.true,
+        }),
+        profiles = [],
+        architectures = ["native"],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }

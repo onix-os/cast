@@ -1,0 +1,6 @@
+let a = import! cast.authored.v1
+
+{
+    compression = a.dep.pkgconfig "zlib",
+    tls = a.dep.pkgconfig "openssl",
+}

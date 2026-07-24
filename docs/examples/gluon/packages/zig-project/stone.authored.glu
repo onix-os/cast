@@ -1,0 +1,93 @@
+let a = import! cast.authored.v1
+
+let pname = "zig-vector"
+let zig = a.program.binary "zig"
+
+// build.zig.zon refers only to the locked vendor tree. Zig receives explicit
+// local and global caches in every phase because process environments never
+// leak from one frozen step into the next.
+let phases = a.scripts {
+    setup = a.phase [
+        a.step.shell r#"test -f build.zig
+test -f build.zig.zon
+test -d vendor"#,
+    ],
+    build = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [zig],
+            script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
+ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
+zig build -Doptimize=ReleaseSafe"#,
+        },
+    ],
+    check = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [zig],
+            script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
+ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
+zig build test -Doptimize=ReleaseSafe"#,
+        },
+    ],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [zig],
+            script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
+ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
+zig build install -Doptimize=ReleaseSafe --prefix "${CAST_INSTALL_ROOT}${CAST_PREFIX}""#,
+        },
+    ],
+    .. a.empty.scripts
+}
+
+let root = a.output_with {
+    summary = a.optional.set "Vector conversion command-line tool",
+    runtime_inputs = [a.dep.output (a.package_ref pname) "libs"],
+    paths = [a.path.exe "/usr/bin/zig-vector"],
+    .. a.output "out"
+}
+
+let libraries = a.output_with {
+    summary = a.optional.set "Zig vector conversion runtime library",
+    paths = [a.path.any "/usr/lib/libzig-vector.so.*"],
+    .. a.output "libs"
+}
+
+let development = a.output_with {
+    summary = a.optional.set "Headers and link-time library for zig-vector",
+    runtime_inputs = [a.dep.output (a.package_ref pname) "libs"],
+    paths = [
+        a.path.any "/usr/include/zig-vector",
+        a.path.symlink "/usr/lib/libzig-vector.so",
+    ],
+    .. a.output "devel"
+}
+
+{
+    meta = {
+        pname,
+        version = "0.8.0",
+        release = 1,
+        homepage = "https://example.invalid/zig-vector",
+        license = ["MIT"],
+    },
+    builder = a.builder.shell phases [a.dep.binary "zig"],
+    sources = [
+        a.source.archive
+            "https://example.invalid/zig-vector-0.8.0-vendored.tar.xz"
+            "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+    ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root, libraries, development],
+    options = a.unset,
+    profiles = [],
+    architectures = ["x86_64", "aarch64"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

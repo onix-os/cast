@@ -1,0 +1,62 @@
+let a = import! cast.authored.v1
+
+let root = {
+    summary = a.optional.set "Lumen desktop document viewer",
+    description = a.optional.set "Viewer, desktop metadata, icons, and D-Bus activation service.",
+    runtime_inputs = [
+        a.dep.package "shared-mime-info",
+        a.dep.soname "libgtk-4.so.1",
+    ],
+    paths = [
+        a.path.exe "/usr/bin/lumen-viewer",
+        a.path.any "/usr/share/applications/io.lumen.Viewer.desktop",
+        a.path.any "/usr/share/dbus-1/services/io.lumen.Viewer.service",
+        a.path.any "/usr/share/icons/hicolor/*/apps/io.lumen.Viewer.*",
+        a.path.any "/usr/share/metainfo/io.lumen.Viewer.metainfo.xml",
+    ],
+    .. a.output "out"
+}
+
+{
+    meta = {
+        pname = "lumen-viewer",
+        version = "2.8.1",
+        release = 2,
+        homepage = "https://example.invalid/lumen-viewer",
+        license = ["GPL-3.0-or-later"],
+    },
+    builder = a.builder.meson {
+        flags = [
+            "-Ddbus_activation=enabled",
+            "-Dtests=enabled",
+        ],
+        run_tests = a.true,
+    },
+    sources = [
+        a.source.archive
+            "https://example.invalid/lumen-viewer-2.8.1.tar.xz"
+            "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+    ],
+    native_build_inputs = [a.dep.binary "desktop-file-validate"],
+    build_inputs = [
+        a.dep.pkgconfig "gtk4",
+        a.dep.pkgconfig "libadwaita-1",
+        a.dep.pkgconfig "poppler-glib",
+    ],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
+    architectures = ["x86_64", "aarch64"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.some.hooks (a.hooks {
+        pre_check = [
+            a.step.run
+                (a.program.binary "desktop-file-validate")
+                ["data/io.lumen.Viewer.desktop"],
+        ],
+        .. a.empty.hooks
+    }),
+}

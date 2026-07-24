@@ -1,0 +1,7 @@
+let a = import! cast.authored.v1
+let packages = import! "./packages_authored.glu"
+let scope = import! "./scope_authored.glu"
+
+// Selection is explicit and returns one PackageSpec. The unselected server
+// factory contributes no dependencies or sources to the client's closure.
+packages.client scope

@@ -1,0 +1,69 @@
+let a = import! cast.authored.v1
+
+let phases = {
+    setup = { steps = [] },
+    build = { steps = [] },
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "install"],
+            script = r#"
+install -d "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header"
+install -m644 include/*.h "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include/vector-header/"
+install -Dm644 vector-header.pc "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/pkgconfig/vector-header.pc"
+install -Dm644 LICENSE "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/vector-header/LICENSE"
+"#,
+        },
+    ],
+    check = a.phase [
+        // The compiler verifies a consumer, but the package itself emits no
+        // runtime library or executable.
+        a.step.run (a.program.binary "cc") ["-I./include", "-fsyntax-only", "tests/smoke.c"],
+    ],
+    workload = { steps = [] },
+}
+
+let root = {
+    summary = a.optional.set "Vector header license metadata",
+    paths = [a.path.any "/usr/share/licenses/vector-header"],
+    .. a.output "out"
+}
+
+let development = {
+    summary = a.optional.set "Header-only vector interfaces",
+    paths = [
+        a.path.any "/usr/include/vector-header",
+        a.path.any "/usr/lib/pkgconfig/vector-header.pc",
+    ],
+    .. a.output "devel"
+}
+
+{
+    meta = {
+        pname = "vector-header",
+        version = "1.8.0",
+        release = 1,
+        homepage = "https://example.invalid/vector-header",
+        license = ["MIT"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.binary "cc",
+        a.dep.binary "install",
+    ],
+    sources = [
+        a.source.archive
+            "https://example.invalid/vector-header-1.8.0.tar.xz"
+            "6789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345",
+    ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root, development],
+    options = a.unset,
+    profiles = [],
+    architectures = ["native"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

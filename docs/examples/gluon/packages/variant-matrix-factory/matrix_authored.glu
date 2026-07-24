@@ -1,0 +1,60 @@
+let arrays = import! std.array.prim
+let a = import! cast.authored.v1
+let { Bool } = import! cast.authored.v1
+
+type Storage =
+    | Sqlite
+    | PostgreSql
+
+type Telemetry =
+    | TelemetryOff
+    | OpenTelemetry
+
+// `Bool` is destructured from the authored prelude so its `True`/`False`
+// constructors are in scope for plain `if`/`then`/`else`, matching the type
+// of the boolean values produced below.
+let when = \condition values ->
+    if condition then values else []
+
+let select_storage = \storage ->
+    match storage with
+    | Sqlite -> {
+        flag = "-DSTORAGE=sqlite",
+        build_inputs = [a.dep.pkgconfig "sqlite3"],
+        runtime_inputs = [a.dep.soname "libsqlite3.so.0"],
+    }
+    | PostgreSql -> {
+        flag = "-DSTORAGE=postgresql",
+        build_inputs = [a.dep.pkgconfig "libpq"],
+        runtime_inputs = [a.dep.soname "libpq.so.5"],
+    }
+
+let select_telemetry = \telemetry ->
+    match telemetry with
+    | TelemetryOff -> {
+        flag = "-DTELEMETRY=off",
+        build_inputs = when a.false [a.dep.pkgconfig "opentelemetry-c"],
+        runtime_inputs = when a.false [a.dep.soname "libopentelemetry.so.1"],
+    }
+    | OpenTelemetry -> {
+        flag = "-DTELEMETRY=opentelemetry",
+        build_inputs = [a.dep.pkgconfig "opentelemetry-c"],
+        runtime_inputs = [a.dep.soname "libopentelemetry.so.1"],
+    }
+
+let select = \storage telemetry ->
+    let selected_storage = select_storage storage
+    let selected_telemetry = select_telemetry telemetry
+    {
+        flags = [selected_storage.flag, selected_telemetry.flag],
+        build_inputs = arrays.append selected_storage.build_inputs selected_telemetry.build_inputs,
+        runtime_inputs = arrays.append selected_storage.runtime_inputs selected_telemetry.runtime_inputs,
+    }
+
+{
+    sqlite = Sqlite,
+    postgresql = PostgreSql,
+    telemetry_off = TelemetryOff,
+    opentelemetry = OpenTelemetry,
+    select,
+}

@@ -1,0 +1,89 @@
+let a = import! cast.authored.v1
+
+let node = a.program.binary "node"
+
+// The admitted source contains package-lock.json plus the complete materialized
+// dependency closure under vendor/node_modules. Node receives that exact tree
+// in every phase, so neither npm nor a registry exists in the build graph.
+let phases = {
+    setup = a.phase [
+        a.step.shell r#"test -f package-lock.json
+test -d vendor/node_modules
+test -f tools/build.mjs"#,
+    ],
+    build = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [node],
+            script = r#"NODE_PATH="${CAST_SOURCE_DIR}/vendor/node_modules" \
+node tools/build.mjs --output dist"#,
+        },
+    ],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [
+                a.program.binary "install",
+                a.program.binary "cp",
+            ],
+            script = r#"install -Dm755 packaging/nebula-lint "${CAST_INSTALL_ROOT}${CAST_BINDIR}/nebula-lint"
+install -d "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/nebula-lint"
+cp -a dist package.json vendor/node_modules "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/nebula-lint/""#,
+        },
+    ],
+    check = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [node],
+            script = r#"NODE_PATH="${CAST_SOURCE_DIR}/vendor/node_modules" \
+node tools/test.mjs --input dist"#,
+        },
+    ],
+    workload = a.phase [],
+}
+
+let root = {
+    summary = a.optional.set "Offline-built JavaScript configuration linter",
+    runtime_inputs = [a.dep.binary "node"],
+    paths = [
+        a.path.exe "/usr/bin/nebula-lint",
+        a.path.any "/usr/lib/nebula-lint",
+    ],
+    .. a.output "out"
+}
+
+{
+    meta = {
+        pname = "nodejs-nebula-lint",
+        version = "4.1.0",
+        release = 1,
+        homepage = "https://example.invalid/nebula-lint",
+        license = ["MIT"],
+    },
+    builder = a.builder.custom {
+        required_tools = [
+            a.dep.binary "node",
+            a.dep.binary "install",
+            a.dep.binary "cp",
+        ],
+        environment = [],
+        phases,
+        supported_hooks = a.hook_support.all,
+    },
+    sources = [
+        a.source.archive
+            "https://example.invalid/nebula-lint-4.1.0-vendored.tar.zst"
+            "56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
+    ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
+    architectures = ["native"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

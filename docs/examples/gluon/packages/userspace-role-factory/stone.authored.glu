@@ -1,0 +1,7 @@
+let a = import! cast.authored.v1
+let roles = import! "./roles_authored.glu"
+let make_role = import! "./package_authored.glu"
+
+// NixOS-style system roles are the inspiration, but selection is an ordinary
+// typed function call rather than implicit module merging.
+make_role roles.server

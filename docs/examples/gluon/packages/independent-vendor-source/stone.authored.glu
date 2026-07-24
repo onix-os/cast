@@ -1,0 +1,7 @@
+let a = import! cast.authored.v1
+let make_package = import! "./package_authored.glu"
+let sources = import! "./sources_authored.glu"
+
+// The root composes two independent source-lock records with one pure package
+// factory; neither application nor vendor identity is inferred from the other.
+make_package sources

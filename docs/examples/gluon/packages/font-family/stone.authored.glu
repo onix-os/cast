@@ -1,0 +1,66 @@
+let a = import! cast.authored.v1
+
+let phases = {
+    setup = { steps = [] },
+    build = { steps = [] },
+    install = {
+        steps = [
+            a.step.shell_with {
+                interpreter = a.program.binary "bash",
+                declared_programs = [a.program.binary "install"],
+                script = r#"
+install -d "${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster"
+install -m644 fonts/*.otf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/aster/"
+install -Dm644 OFL.txt "${CAST_INSTALL_ROOT}${CAST_DATADIR}/doc/aster-fonts/OFL.txt"
+"#,
+            },
+        ],
+    },
+    check = { steps = [] },
+    workload = { steps = [] },
+}
+
+let root = {
+    summary = a.optional.set "Aster text and display fonts",
+    paths = [a.path.any "/usr/share/fonts/truetype/aster"],
+    .. a.output "out"
+}
+
+let docs = {
+    include_in_manifest = a.boolean.false,
+    summary = a.optional.set "Aster font license",
+    paths = [a.path.any "/usr/share/doc/aster-fonts"],
+    .. a.output "docs"
+}
+
+{
+    meta = {
+        pname = "aster-fonts",
+        version = "1.3.0",
+        release = 1,
+        homepage = "https://example.invalid/aster-fonts",
+        license = ["OFL-1.1"],
+    },
+    builder = a.builder.shell phases [a.dep.binary "install"],
+    sources = [
+        a.source.archive_with {
+            url = "https://example.invalid/aster-fonts-1.3.0.tar.gz",
+            hash = "3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
+            rename = a.optional.unset,
+            strip_dirs = a.optional.set 1,
+            unpack = a.boolean.true,
+            unpack_dir = a.optional.set "aster-fonts",
+        },
+    ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root, docs],
+    options = a.unset,
+    profiles = [],
+    architectures = ["native"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

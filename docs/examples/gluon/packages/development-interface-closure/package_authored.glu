@@ -1,0 +1,33 @@
+let a = import! cast.authored.v1
+
+// The package factory receives the complete output graph. Dependency scope is
+// therefore fixed by the output factory instead of inferred from a global
+// package input list.
+\inputs ->
+    let meta = {
+        pname = "development-interface-closure",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/development-interface-closure",
+        license = ["MIT"],
+    }
+
+    {
+        meta,
+        builder = a.builder.custom a.empty.builder,
+        sources = [],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit (inputs.output_factory {
+            pname = meta.pname,
+            dependencies = inputs.dependencies,
+        }),
+        options = a.unset,
+        profiles = [],
+        architectures = ["native"],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }

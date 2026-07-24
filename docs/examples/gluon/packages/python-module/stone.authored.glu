@@ -1,0 +1,73 @@
+let a = import! cast.authored.v1
+
+let python = a.program.binary "python3"
+
+let phases = a.scripts {
+    setup = a.phase [],
+    build = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [python],
+            script = r#"python3 -m build --wheel --no-isolation"#,
+        },
+    ],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [python],
+            script = r#"python3 -m installer --destdir "${CAST_INSTALL_ROOT}" --validate-record all dist/*.whl"#,
+        },
+    ],
+    check = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [python],
+            script = r#"python3 -m pytest -q"#,
+        },
+    ],
+    workload = a.phase [],
+}
+
+let root = {
+    summary = a.optional.set "Typed event-codec module for Python",
+    runtime_inputs = [
+        a.dep.binary "python3",
+        a.dep.python "typing-extensions",
+    ],
+    paths = [
+        a.path.any "/usr/lib/python*/site-packages/eventcodec",
+        a.path.any "/usr/lib/python*/site-packages/eventcodec-*.dist-info",
+    ],
+    .. a.output "out"
+}
+
+{
+    meta = {
+        pname = "python-eventcodec",
+        version = "0.9.3",
+        release = 1,
+        homepage = "https://example.invalid/python-eventcodec",
+        license = ["MIT"],
+    },
+    builder = a.builder.shell phases [a.dep.binary "python3"],
+    sources = [
+        a.source.archive
+            "https://example.invalid/python-eventcodec-0.9.3.tar.gz"
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+    ],
+    native_build_inputs = [
+        a.dep.python "build",
+        a.dep.python "installer",
+        a.dep.python "setuptools",
+    ],
+    build_inputs = [],
+    check_inputs = [a.dep.python "pytest"],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
+    architectures = ["native"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

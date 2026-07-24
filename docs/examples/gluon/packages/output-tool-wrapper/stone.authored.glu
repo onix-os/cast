@@ -1,0 +1,65 @@
+let a = import! cast.authored.v1
+
+let engine = a.package_ref "protocol-engine"
+let engine_tools = a.output_ref engine "tools"
+
+let phases = {
+    build = a.phase [
+        // The generator lives at a nonstandard path in one named dependency
+        // output. Both its path and provider are frozen into the plan.
+        a.step.run
+            (a.program.output engine_tools "/opt/protocol-engine/bin/protocol-inspect")
+            ["--emit-completions", "protocol-inspect.completions"],
+    ],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "install"],
+            script = r#"
+printf '%s\n' '#!/usr/bin/bash' 'exec /opt/protocol-engine/bin/protocol-inspect "$@"' > protocol-inspect
+install -Dm755 protocol-inspect "${CAST_INSTALL_ROOT}${CAST_BINDIR}/protocol-inspect"
+install -Dm644 protocol-inspect.completions "${CAST_INSTALL_ROOT}${CAST_DATADIR}/bash-completion/completions/protocol-inspect"
+"#,
+        },
+    ],
+    .. a.empty.scripts
+}
+
+let root = {
+    summary = a.optional.set "Protocol inspection command wrapper",
+    runtime_inputs = [
+        a.dep.output engine "tools",
+        a.dep.binary "bash",
+    ],
+    paths = [
+        a.path.exe "/usr/bin/protocol-inspect",
+        a.path.any "/usr/share/bash-completion/completions/protocol-inspect",
+    ],
+    .. a.output "out"
+}
+
+{
+    meta = {
+        pname = "protocol-inspect-wrapper",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid/protocol-engine",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.output engine "tools",
+        a.dep.binary "install",
+    ],
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
+    architectures = ["native"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}

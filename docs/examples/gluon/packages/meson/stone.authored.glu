@@ -1,0 +1,37 @@
+let a = import! cast.authored.v1
+
+{
+    meta = {
+        pname = "meson-hello",
+        version = "1.8.0",
+        release = 1,
+        homepage = "https://example.invalid/meson-hello",
+        license = ["MIT"],
+    },
+    builder = a.builder.meson {
+        flags = [
+            "-Ddefault_library=shared",
+            "-Ddocumentation=disabled",
+        ],
+        run_tests = a.true,
+    },
+    sources = [
+        a.source.archive
+            "https://example.invalid/meson-hello-1.8.0.tar.xz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    native_build_inputs = [],
+    build_inputs = [
+        a.dep.pkgconfig "glib-2.0",
+        a.dep.pkgconfig "libffi",
+    ],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
