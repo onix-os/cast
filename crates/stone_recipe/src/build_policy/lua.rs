@@ -15,7 +15,9 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 use declarative_config::{Diagnostic, Source};
-use lua_config::{GENERATED_LUA_MARKER, LuaEngine, LuaOption, LuaPatch, lua_option, lua_string};
+use lua_config::{
+    GENERATED_LUA_MARKER, LuaEngine, LuaOption, LuaPatch, lua_option, lua_string, pretty_lua,
+};
 use serde::Deserialize;
 
 use super::{
@@ -850,7 +852,7 @@ impl LuaBuildPolicyEvaluator {
 
 /// Emit a complete [`BuildPolicySpec`] as generated-marked Lua source.
 pub fn encode_lua_policy(policy: &BuildPolicySpec) -> String {
-    format!(
+    pretty_lua(&format!(
         "{marker}return {{\n\
          build_subdir = {build_subdir},\n\
          layout = {layout},\n\
@@ -880,7 +882,7 @@ pub fn encode_lua_policy(policy: &BuildPolicySpec) -> String {
         builders = builders(&policy.builders),
         analyzers = seq(&policy.analyzers, |kind| lua_string(&serde_snake_case(kind.as_str()))),
         pgo = pgo_policy(&policy.pgo),
-    )
+    ))
 }
 
 /// Emit a slice as a Lua array table using a per-element encoder.

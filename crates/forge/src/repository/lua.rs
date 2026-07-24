@@ -16,7 +16,7 @@ use declarative_config::{
 };
 use lua_config::{
     GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_optional_bool, lua_optional_integer,
-    lua_optional_string, lua_string,
+    lua_optional_string, lua_string, pretty_lua,
 };
 use serde::Deserialize;
 
@@ -232,7 +232,7 @@ fn encode_lua_specs(map: &Map) -> Result<String, RepositoryConversionError> {
         encode_repository_record(&mut output, spec);
     }
     output.push_str("}\n");
-    Ok(output)
+    Ok(pretty_lua(&output))
 }
 
 /// Emit one repository record as a Lua table entry, shared by the repository

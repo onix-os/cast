@@ -14,7 +14,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
     EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 
@@ -116,7 +116,7 @@ pub(crate) fn encode_lua_system(model: &SystemModel) -> Result<String, spec::Con
     }
     output.push_str("},\n");
     output.push_str("}\n");
-    Ok(output)
+    Ok(pretty_lua(&output))
 }
 
 /// Failure building a system-model migration request. Every path fails closed —

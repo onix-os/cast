@@ -22,7 +22,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
     EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
 
 use super::gluon::SOURCE_LOGICAL_NAME;
@@ -138,7 +138,7 @@ pub(super) fn encode_lua_root_filesystem(value: &RootFilesystemIntentValue) -> S
     output.push_str("return {\n");
     writeln!(output, "    root = {},", lua_string(&value.root)).unwrap();
     output.push_str("}\n");
-    output
+    pretty_lua(&output)
 }
 
 fn require_lua_fingerprint_contract(

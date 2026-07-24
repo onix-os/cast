@@ -13,7 +13,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
     EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 
 use super::{
     AnalyzerRole, BuildLock, BuildLockValidationError, CompilerCacheRole, CompilerExecutableRole,
@@ -59,7 +59,7 @@ pub(crate) fn encode_lua_lock(lock: &BuildLock) -> String {
         identity(&lock.toolchain),
         identity(&lock.builder),
     );
-    output
+    pretty_lua(&output)
 }
 
 fn seq<T>(items: &[T], encode: impl Fn(&T) -> String) -> String {

@@ -651,6 +651,42 @@ mod tests {
         Recipe::load(root.path()).unwrap()
     }
 
+    /// One-shot corpus converter: generate the Lua mirror of every `packages/`
+    /// recipe example, verifying each round-trips before writing. Run explicitly
+    /// with `cargo test -p mason generate_lua_recipe_example_mirror -- --ignored`.
+    #[test]
+    #[ignore = "one-shot corpus conversion tool"]
+    fn generate_lua_recipe_example_mirror() {
+        let gluon_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon/packages");
+        let lua_root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/lua/packages");
+
+        let mut recipes = Vec::new();
+        find_stone_glu(&gluon_root, &mut recipes);
+        assert!(!recipes.is_empty(), "recipe corpus is non-empty");
+
+        for stone_glu in &recipes {
+            let dir = stone_glu.parent().unwrap();
+            let gluon = Recipe::load_authored(dir)
+                .unwrap_or_else(|error| panic!("load {stone_glu:?}: {error}"));
+            let lua = encode_lua_recipe(&gluon.declaration);
+
+            // Verify the emitted Lua re-decodes to the same package value.
+            let scratch = tempfile::tempdir().unwrap();
+            fs::write(scratch.path().join("stone.lua"), &lua).unwrap();
+            let reloaded = Recipe::load_authored(scratch.path())
+                .unwrap_or_else(|error| panic!("reload emitted {stone_glu:?}: {error}"));
+            assert_eq!(reloaded.declaration, gluon.declaration, "round-trip {stone_glu:?}");
+
+            let relative = dir.strip_prefix(&gluon_root).unwrap();
+            let destination = lua_root.join(relative);
+            fs::create_dir_all(&destination).unwrap();
+            fs::write(destination.join("stone.lua"), &lua).unwrap();
+        }
+        eprintln!("converted {} recipe examples to Lua", recipes.len());
+    }
+
     #[test]
     fn a_recipe_authorizes_only_an_equivalent_replacement() {
         let authored = recipe_from(SOURCE_SPEC);

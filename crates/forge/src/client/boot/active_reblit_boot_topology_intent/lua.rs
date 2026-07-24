@@ -20,7 +20,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
     EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
 
 use super::gluon::{assemble_boot_topology, BootTargetInput, SOURCE_LOGICAL_NAME};
@@ -179,7 +179,7 @@ pub(super) fn encode_lua_boot_topology(value: &ActiveReblitBootTopologyIntentVal
         }
     }
     output.push_str("}\n");
-    output
+    pretty_lua(&output)
 }
 
 fn encode_selector(output: &mut String, selector: &ActiveReblitBootPartitionSelector) {

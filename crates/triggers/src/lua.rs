@@ -13,7 +13,10 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
     EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::{GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_option, lua_optional_string, lua_string};
+use lua_config::{
+    GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_option, lua_optional_string, lua_string,
+    pretty_lua,
+};
 use serde::Deserialize;
 
 use crate::format::Trigger;
@@ -193,7 +196,7 @@ pub(crate) fn encode_lua_trigger(spec: &TriggerSpec) -> String {
     writeln!(output, "    paths = {},", encode_key_values(&spec.paths, encode_path_definition)).unwrap();
     writeln!(output, "    handlers = {},", encode_key_values(&spec.handlers, encode_handler)).unwrap();
     output.push_str("}\n");
-    output
+    pretty_lua(&output)
 }
 
 /// Emit a Lua array table of string literals.
