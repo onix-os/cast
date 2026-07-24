@@ -34,6 +34,7 @@ use crate::{
 
 const RECIPE_ROOT_BASENAME: &str = "stone";
 const RECIPE_ROOT_LOGICAL_NAME_V1: &str = "stone.glu";
+const RECIPE_ROOT_LOGICAL_NAME_LUA: &str = "stone.lua";
 
 #[derive(Debug)]
 pub struct Recipe {
@@ -414,6 +415,66 @@ pub fn resolve_path(path: impl AsRef<Path>) -> Result<PathBuf, Error> {
     fs::canonicalize(&path).map_err(|_| Error::MissingRecipe(path))
 }
 
+/// The result of an operator recipe source-authority migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecipeMigration {
+    /// The co-located Lua replacement was verified equivalent and is now the
+    /// sole authority; the authored `stone.glu` was removed.
+    Migrated,
+    /// The Lua replacement was not an equivalent recipe; nothing on disk
+    /// changed and `stone.glu` remains the authority.
+    Rejected,
+}
+
+/// Operator command: switch a recipe directory's source authority from the
+/// authored `stone.glu` to an operator-supplied Lua replacement.
+///
+/// User-authored recipes are never auto-converted. The operator authors the Lua
+/// replacement in a *separate* location (`replacement_lua`) — it cannot sit
+/// beside the Gluon original, because a directory holding both `stone.glu` and
+/// `stone.lua` is a single-authority collision the loader rejects. This command
+/// loads both, and only when [`authorize_recipe_migration`] confirms the
+/// replacement's normalized package value matches the authored recipe does it
+/// install the Lua source into the recipe directory and drop the Gluon file. A
+/// non-equivalent replacement leaves the recipe directory untouched (fail
+/// closed).
+///
+/// The switch installs `stone.lua` first and only then removes `stone.glu`, so
+/// a crash between the two can leave both files (a recoverable collision the
+/// operator resolves by re-running) but never zero — the recipe's authority is
+/// never lost.
+pub fn migrate_recipe_to_lua(
+    recipe_dir: impl AsRef<Path>,
+    replacement_lua: impl AsRef<Path>,
+) -> Result<RecipeMigration, Error> {
+    let recipe_dir = recipe_dir.as_ref();
+    let replacement_lua = replacement_lua.as_ref();
+    let gluon_path = recipe_dir.join(RECIPE_ROOT_LOGICAL_NAME_V1);
+    let installed_lua = recipe_dir.join(RECIPE_ROOT_LOGICAL_NAME_LUA);
+
+    // Compare authored source values only; a stale or absent source lock must
+    // not gate a source-authority switch.
+    let authored = Recipe::load_authored(&gluon_path)?;
+    let replacement = Recipe::load_authored(replacement_lua)?;
+
+    match authored.authorize_lua_replacement(&replacement) {
+        RecipeMigrationDecision::Rejected => Ok(RecipeMigration::Rejected),
+        RecipeMigrationDecision::Authorized => {
+            fs::copy(replacement_lua, &installed_lua).map_err(|source| {
+                Error::SwitchRecipeAuthority {
+                    path: installed_lua.clone(),
+                    source,
+                }
+            })?;
+            fs::remove_file(&gluon_path).map_err(|source| Error::SwitchRecipeAuthority {
+                path: gluon_path.clone(),
+                source,
+            })?;
+            Ok(RecipeMigration::Migrated)
+        }
+    }
+}
+
 fn registered_recipe_languages() -> RegisteredLanguages {
     let languages = RecipeDeclarationEvaluator::registered(Arc::from(Vec::new()))
         .iter()
@@ -492,6 +553,12 @@ pub enum Error {
     },
     #[error("evaluate Gluon recipe")]
     EvaluateRecipe(#[from] DeclarationEvaluationError<PackageConversionError>),
+    #[error("remove authored recipe {path:?} after an authorized Lua migration")]
+    SwitchRecipeAuthority {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 #[cfg(test)]
@@ -598,6 +665,55 @@ mod tests {
             authored.authorize_lua_replacement(&divergent),
             RecipeMigrationDecision::Rejected
         );
+    }
+
+    /// Author an equivalent-or-divergent Lua replacement in a separate
+    /// directory (it cannot co-locate with the Gluon original) and return its
+    /// `stone.lua` path.
+    fn lua_replacement(declaration: &PackageSpec) -> (tempfile::TempDir, PathBuf) {
+        let candidate = tempfile::tempdir().unwrap();
+        let path = candidate.path().join("stone.lua");
+        fs::write(&path, encode_lua_recipe(declaration)).unwrap();
+        (candidate, path)
+    }
+
+    #[test]
+    fn an_authorized_recipe_migration_switches_the_source_authority() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+        let authored = Recipe::load_authored(dir.path().join("stone.glu")).unwrap();
+
+        // The operator authors an equivalent Lua replacement elsewhere.
+        let (_candidate, replacement) = lua_replacement(&authored.declaration);
+
+        let outcome = migrate_recipe_to_lua(dir.path(), &replacement).unwrap();
+        assert_eq!(outcome, RecipeMigration::Migrated);
+
+        // The authored Gluon authority is gone; the Lua one is now sole and
+        // discovery resolves it unambiguously.
+        assert!(!dir.path().join("stone.glu").exists());
+        assert!(dir.path().join("stone.lua").exists());
+        assert!(resolve_path(dir.path()).unwrap().ends_with("stone.lua"));
+
+        let migrated = Recipe::load_authored(dir.path()).unwrap();
+        assert_eq!(migrated.declaration, authored.declaration);
+    }
+
+    #[test]
+    fn a_rejected_recipe_migration_leaves_the_recipe_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
+
+        // A valid but non-equivalent Lua recipe (a different package name).
+        let divergent = recipe_from(&SOURCE_SPEC.replace("example", "renamed"));
+        let (_candidate, replacement) = lua_replacement(&divergent.declaration);
+
+        let outcome = migrate_recipe_to_lua(dir.path(), &replacement).unwrap();
+        assert_eq!(outcome, RecipeMigration::Rejected);
+
+        // Fail-closed: the Gluon authority stays and no Lua file was installed.
+        assert!(dir.path().join("stone.glu").exists());
+        assert!(!dir.path().join("stone.lua").exists());
     }
 
     #[test]
