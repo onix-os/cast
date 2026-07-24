@@ -287,6 +287,51 @@ impl Client {
         let handoff = coordinator.into_active_reblit_boot_sync_handoff()?;
         stage_active_reblit_boot_sync_from_handoff(self, plan, inventory, handoff)
     }
+
+    /// Stage an already-produced NewState boot handoff into receipt-bearing
+    /// `BootSyncStarted`. The predecessor is already archived; the handoff was
+    /// minted by `PreviousArchivedCoordinator::into_new_state_boot_sync_handoff`.
+    /// Staging itself is operation-neutral — it consumes the handoff's retained
+    /// stores and reservation exactly as for ActiveReblit.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::client) fn stage_new_state_boot_sync_from_handoff<
+        'plan,
+        'inventory,
+        'input,
+        'topology_view,
+        'topology_authority,
+        'attempt,
+        'stone,
+        'roots,
+    >(
+        &self,
+        plan: &'plan BoundActiveReblitBlsPublicationPlan<
+            'input,
+            'topology_view,
+            'topology_authority,
+            'attempt,
+            'stone,
+            'roots,
+        >,
+        inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
+        handoff: CoordinatorActiveReblitBootSyncHandoff,
+    ) -> Result<
+        StagedActiveReblitBootSync<
+            'plan,
+            'inventory,
+            BoundActiveReblitBlsPublicationPlan<
+                'input,
+                'topology_view,
+                'topology_authority,
+                'attempt,
+                'stone,
+                'roots,
+            >,
+        >,
+        ActiveReblitCoordinatorBootSyncStagingError,
+    > {
+        stage_active_reblit_boot_sync_from_handoff(self, plan, inventory, handoff)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -144,6 +144,7 @@ mod disposable_vm_gpt_topology_tests;
 mod disposable_vm_gpt_aggregate_publication_tests;
 mod active_state_authority;
 mod active_reblit_transition;
+mod new_state_boot_transition;
 #[cfg(test)]
 mod active_state_authority_tests;
 mod active_state_snapshot;
