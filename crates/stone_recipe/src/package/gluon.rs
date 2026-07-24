@@ -123,26 +123,65 @@ impl GluonPackageEvaluator {
         })
     }
 
-    /// Decode a *minimal-form* authored recipe: a native Gluon record that names
-    /// its builder by kind (via the `cast.authored.v1` prelude) and selects
-    /// package-ABI defaults with `unset`. The record decodes into the
-    /// language-agnostic [`AuthoredPackage`] and the shared [`lower`] fills the
-    /// defaults and lowers the builder request into typed steps — no authoring
-    /// logic runs in Gluon.
-    pub fn evaluate_authored(
+    /// Decode a *minimal-form* authored recipe (a native Gluon record importing
+    /// `cast.authored.v1`) into the language-agnostic [`AuthoredPackage`], and
+    /// lower it through shared Rust — threading explicit inputs and the
+    /// evaluation identity exactly as the legacy path does. No authoring logic
+    /// runs in Gluon.
+    fn evaluate_authored_package(
         &self,
         source: &Source,
-    ) -> Result<PackageSpec, DeclarationEvaluationError<PackageConversionError>> {
-        let deadline = EvaluationDeadline::start(self.engine.limits().timeout);
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
+        DeclarationEvaluationError<PackageConversionError>,
+    > {
         let evaluation = self
             .engine
-            .evaluate_with_inputs_within::<GluonAuthoredPackage>(source, &[], deadline)
+            .evaluate_with_inputs_within::<GluonAuthoredPackage>(source, explicit_inputs, deadline)
             .map_err(DeclarationEvaluationError::Evaluation)?;
         let package = lower(AuthoredPackage::from(evaluation.value));
         package
             .validate()
             .map_err(DeclarationEvaluationError::Conversion)?;
-        Ok(package)
+        Ok(DeclarationEvaluation {
+            value: package,
+            identity: evaluation.identity,
+        })
+    }
+
+    /// Dispatch a recipe to the authored decode when it declares the
+    /// `cast.authored.v1` ABI, and to the legacy `cast.package.v3` decode
+    /// otherwise. This bridge lets the migrated corpus evaluate through the
+    /// shared authored layer while any not-yet-migrated legacy recipe still
+    /// evaluates, until the legacy ABI is removed.
+    fn evaluate_dispatched(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
+        DeclarationEvaluationError<PackageConversionError>,
+    > {
+        if source.text().contains("cast.authored.v1") {
+            self.evaluate_authored_package(source, explicit_inputs, deadline)
+        } else {
+            self.evaluate_package(source, explicit_inputs, deadline)
+        }
+    }
+
+    /// Decode a minimal-form authored recipe into its [`PackageSpec`]. Test and
+    /// tooling entry point; the production path is [`Self::evaluate_dispatched`].
+    pub fn evaluate_authored(
+        &self,
+        source: &Source,
+    ) -> Result<PackageSpec, DeclarationEvaluationError<PackageConversionError>> {
+        let deadline = EvaluationDeadline::start(self.engine.limits().timeout);
+        Ok(self
+            .evaluate_authored_package(source, &[], deadline)?
+            .value)
     }
 }
 
@@ -172,7 +211,7 @@ impl DeclarationEvaluator<PackageSpec> for GluonPackageEvaluator {
         DeclarationEvaluation<PackageSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_package(source, &[], deadline)
+        self.evaluate_dispatched(source, &[], deadline)
     }
 }
 
@@ -186,7 +225,7 @@ impl DeclarationInputEvaluator<PackageSpec> for GluonPackageEvaluator {
         DeclarationEvaluation<PackageSpec, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
-        self.evaluate_package(source, explicit_inputs, deadline)
+        self.evaluate_dispatched(source, explicit_inputs, deadline)
     }
 }
 
