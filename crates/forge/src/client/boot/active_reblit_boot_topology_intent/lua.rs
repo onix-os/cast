@@ -13,19 +13,20 @@
 //! no admitted external inputs, and — because the Lua boot declaration imports
 //! nothing — an empty module set.
 
+use std::fmt::Write as _;
 use std::time::Duration;
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
     EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::LuaEngine;
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
 use serde::Deserialize;
 
 use super::gluon::{assemble_boot_topology, BootTargetInput, SOURCE_LOGICAL_NAME};
 use super::{
-    ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
-    BootTopologyIntentBudget,
+    ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError,
+    ActiveReblitBootTopologyIntentValue, ActiveReblitBootTopologyTarget, BootTopologyIntentBudget,
 };
 
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -152,6 +153,45 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
     }
 }
 
+/// Emit a normalized boot-topology intent as generated-marked Lua source that
+/// re-decodes through [`LuaBootTopologyIntentEvaluator`] to the same value.
+///
+/// The assembled value stores the canonical PARTUUID and the verbatim
+/// mount-point hint, and re-canonicalizing an already-canonical PARTUUID is a
+/// no-op, so this is idempotent. Because `etc/cast/boot-topology.glu` is an
+/// *authored*, boot-critical slot, this is the canonical Lua an operator adopts
+/// as the verified replacement — never an authority Cast switches on its own.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn encode_lua_boot_topology(value: &ActiveReblitBootTopologyIntentValue) -> String {
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    output.push_str("return {\n");
+    output.push_str("    esp = ");
+    encode_selector(&mut output, &value.esp);
+    output.push_str(",\n");
+    match &value.boot {
+        ActiveReblitBootTopologyTarget::AliasEsp => {
+            output.push_str("    boot = { kind = \"alias_esp\" },\n");
+        }
+        ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr) => {
+            output.push_str("    boot = { kind = \"distinct_xbootldr\", xbootldr = ");
+            encode_selector(&mut output, xbootldr);
+            output.push_str(" },\n");
+        }
+    }
+    output.push_str("}\n");
+    output
+}
+
+fn encode_selector(output: &mut String, selector: &ActiveReblitBootPartitionSelector) {
+    write!(
+        output,
+        "{{ partuuid = {}, mount_point = {} }}",
+        lua_string(&selector.partuuid),
+        lua_string(&selector.mount_point_hint),
+    )
+    .unwrap();
+}
+
 fn require_lua_fingerprint_contract(
     fingerprint: &EvaluationIdentity,
 ) -> Result<(), ActiveReblitBootTopologyIntentError> {
@@ -259,6 +299,20 @@ return {{
         let gluon = gluon_value_for_test(ESP_PARTUUID, ESP_MOUNT_POINT, None)
             .expect("gluon alias intent converts");
         assert_eq!(lua_value(&fixture, &alias_source()), gluon);
+    }
+
+    #[test]
+    fn an_emitted_boot_topology_intent_re_decodes_to_the_same_value() {
+        let fixture = Fixture::new();
+        // Cover both boot targets: the ESP alias and the distinct XBOOTLDR with
+        // its nested partition selector.
+        for source in [alias_source(), distinct_source()] {
+            let original = lua_value(&fixture, &source);
+            let emitted = encode_lua_boot_topology(&original);
+            assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+            let redecoded = lua_value(&fixture, &emitted);
+            assert_eq!(redecoded, original);
+        }
     }
 
     #[test]
