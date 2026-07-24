@@ -10,6 +10,7 @@
 
 mod boot_sync_handoff;
 mod no_boot_commit_decision;
+mod previous_archive;
 
 use std::error::Error as StdError;
 
@@ -39,6 +40,9 @@ pub(crate) use no_boot_commit_decision::{
 };
 pub(crate) use boot_sync_handoff::{
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
+};
+pub(crate) use previous_archive::{
+    PreviousArchiveEffectSeal, PreviousArchiveFailure, PreviousArchivedCoordinator,
 };
 
 const RUN_SYSTEM_TRIGGERS: &str = "run stateful system triggers";

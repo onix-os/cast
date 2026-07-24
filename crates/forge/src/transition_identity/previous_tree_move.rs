@@ -1,5 +1,28 @@
 use super::*;
 
+/// Journal expectation for a previous-tree move. Legacy entry points require
+/// the transition journal to be absent (a present journal signals an
+/// unreconciled crash); a journal-coordinated caller instead proves, with an
+/// unforgeable seal, that it owns the exact durable record whose journal is
+/// intentionally retained across this physical move.
+#[derive(Clone, Copy)]
+enum ArchiveJournalGuard<'authority> {
+    LegacyNoJournal,
+    Coordinator(&'authority journal_coordinator::PreviousArchiveEffectSeal),
+}
+
+impl ArchiveJournalGuard<'_> {
+    fn require(self, identity: &StatefulTreeIdentity) -> Result<(), Error> {
+        match self {
+            Self::LegacyNoJournal => identity.require_no_journal(),
+            Self::Coordinator(seal) => {
+                let _seal = seal;
+                Ok(())
+            }
+        }
+    }
+}
+
 impl StatefulTreeIdentity {
     /// Move the exact staged previous tree into an authenticated state slot.
     ///
@@ -12,10 +35,32 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), RetainedPreviousMoveFailure> {
-        let result = self.move_previous(installation, state, RetainedPreviousMoveDirection::Archive);
+        self.archive_previous_guarded(installation, state, ArchiveJournalGuard::LegacyNoJournal)
+    }
+
+    /// Coordinator-only archive. The seal proves the caller owns the exact
+    /// durable `PreviousArchiveIntent`; the journal stays retained across the
+    /// move rather than blocking it.
+    pub(super) fn archive_previous_with_journal(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        seal: &journal_coordinator::PreviousArchiveEffectSeal,
+    ) -> Result<(), RetainedPreviousMoveFailure> {
+        self.archive_previous_guarded(installation, state, ArchiveJournalGuard::Coordinator(seal))
+    }
+
+    fn archive_previous_guarded(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        guard: ArchiveJournalGuard<'_>,
+    ) -> Result<(), RetainedPreviousMoveFailure> {
+        let result =
+            self.move_previous(installation, state, RetainedPreviousMoveDirection::Archive, guard);
         match result {
             Err(failure) if failure.outcome == RetainedPreviousMoveOutcome::NotApplied => {
-                match self.finish_not_applied_previous_archive(installation, state) {
+                match self.finish_not_applied_previous_archive_guarded(installation, state, guard) {
                     Ok(()) => Err(failure),
                     Err(cleanup) => Err(failure.with_abort_cleanup(cleanup)),
                 }
@@ -31,7 +76,12 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), RetainedPreviousMoveFailure> {
-        self.move_previous(installation, state, RetainedPreviousMoveDirection::Restore)
+        self.move_previous(
+            installation,
+            state,
+            RetainedPreviousMoveDirection::Restore,
+            ArchiveJournalGuard::LegacyNoJournal,
+        )
     }
 
     /// Resume only the idempotent durability suffix of an archive already
@@ -64,6 +114,19 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), Error> {
+        self.finish_not_applied_previous_archive_guarded(
+            installation,
+            state,
+            ArchiveJournalGuard::LegacyNoJournal,
+        )
+    }
+
+    fn finish_not_applied_previous_archive_guarded(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        guard: ArchiveJournalGuard<'_>,
+    ) -> Result<(), Error> {
         let mut retained = self
             .previous_archive_attempt
             .lock()
@@ -73,7 +136,7 @@ impl StatefulTreeIdentity {
         };
         let name = canonical_state_name(state)?;
         require_previous_attempt_name(attempt, state, &name)?;
-        self.require_no_journal()?;
+        guard.require(self)?;
         self.revalidate_previous_move_base(installation, attempt)?;
         self.finish_previous_slot_retirement(installation, attempt)?;
         *retained = None;
@@ -85,6 +148,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
         direction: RetainedPreviousMoveDirection,
+        guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), RetainedPreviousMoveFailure> {
         let not_applied = |source| RetainedPreviousMoveFailure {
             outcome: RetainedPreviousMoveOutcome::NotApplied,
@@ -99,7 +163,7 @@ impl StatefulTreeIdentity {
             source,
         };
 
-        self.require_no_journal().map_err(not_applied)?;
+        guard.require(self).map_err(not_applied)?;
         installation
             .revalidate_root_directory()
             .map_err(Error::from)
@@ -142,14 +206,15 @@ impl StatefulTreeIdentity {
             }
 
             before_retained_previous_move_rename();
-            self.require_no_journal()?;
+            guard.require(self)?;
             installation.revalidate_root_directory()?;
             self.revalidate_previous_move_namespace(installation, attempt)?;
             self.require_previous_move_layout(attempt, direction.before())?;
             retained_previous_move_checkpoint(RetainedPreviousMoveFaultPoint::BeforeRename)
         })();
         if let Err(source) = preflight {
-            let reconciled = self.reconcile_previous_pre_move_failure(installation, attempt, direction, source);
+            let reconciled =
+                self.reconcile_previous_pre_move_failure(installation, attempt, direction, source, guard);
             if reconciled.is_ok() && direction == RetainedPreviousMoveDirection::Restore {
                 *retained = None;
             }
@@ -187,7 +252,7 @@ impl StatefulTreeIdentity {
         // A syscall error is superseded by exact post-move identity evidence.
         // Durability faults remain Applied so callers can resume this suffix
         // without issuing a second rename.
-        let finish = self.finish_previous_move(installation, attempt, direction);
+        let finish = self.finish_previous_move(installation, attempt, direction, guard);
         if finish.is_ok() && direction == RetainedPreviousMoveDirection::Restore {
             *retained = None;
         }
@@ -200,6 +265,7 @@ impl StatefulTreeIdentity {
         attempt: &RetainedPreviousArchiveAttempt,
         direction: RetainedPreviousMoveDirection,
         source: Error,
+        guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), RetainedPreviousMoveFailure> {
         let layout = self
             .revalidate_previous_move_base(installation, attempt)
@@ -210,7 +276,7 @@ impl StatefulTreeIdentity {
                 source,
             }),
             Ok(layout) if layout == direction.after() => self
-                .finish_previous_move(installation, attempt, direction)
+                .finish_previous_move(installation, attempt, direction, guard)
                 .map_err(|finish| RetainedPreviousMoveFailure {
                     outcome: RetainedPreviousMoveOutcome::Applied,
                     source: Error::PreviousMoveAppliedAfterPreflightFailure {
@@ -377,7 +443,12 @@ impl StatefulTreeIdentity {
             self.require_previous_slot_location(attempt, RetainedPreviousSlotLocation::Canonical)?;
         }
         self.require_previous_move_layout(attempt, direction.after())?;
-        let finish = self.finish_previous_move(installation, attempt, direction);
+        let finish = self.finish_previous_move(
+            installation,
+            attempt,
+            direction,
+            ArchiveJournalGuard::LegacyNoJournal,
+        );
         if finish.is_ok() && direction == RetainedPreviousMoveDirection::Restore {
             *retained = None;
         }
@@ -389,6 +460,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         attempt: &RetainedPreviousArchiveAttempt,
         direction: RetainedPreviousMoveDirection,
+        guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), Error> {
         let (source, destination) = match direction {
             RetainedPreviousMoveDirection::Archive => (&attempt.staging, &attempt.slot),
@@ -399,7 +471,7 @@ impl StatefulTreeIdentity {
         retained_previous_move_checkpoint(RetainedPreviousMoveFaultPoint::DestinationParentSync)?;
         destination.sync("sync previous-tree destination parent after move")?;
         retained_previous_move_checkpoint(RetainedPreviousMoveFaultPoint::FinalRevalidation)?;
-        self.require_no_journal()?;
+        guard.require(self)?;
         installation.revalidate_root_directory()?;
         self.revalidate_previous_move_base(installation, attempt)?;
         if direction == RetainedPreviousMoveDirection::Archive {
