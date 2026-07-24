@@ -14,6 +14,7 @@
 //! declaration imports nothing — an empty module set.
 
 use std::cell::RefCell;
+use std::fmt::Write as _;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -21,7 +22,7 @@ use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
     EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::LuaEngine;
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
 use serde::Deserialize;
 
 use super::gluon::SOURCE_LOGICAL_NAME;
@@ -120,6 +121,24 @@ impl DeclarationEvaluator<RootFilesystemIntentValue> for LuaRootFilesystemIntent
             identity: evaluation.identity,
         })
     }
+}
+
+/// Emit a normalized root-filesystem intent as generated-marked Lua source that
+/// re-decodes through [`LuaRootFilesystemIntentEvaluator`] to the same value.
+///
+/// The normalization stores the locator verbatim (rejecting the reserved
+/// `root=` prefix, non-graphic bytes, quotes, and backslashes), so this is
+/// idempotent: emitting the validated locator and decoding it again yields the
+/// same intent. Because `etc/cast/root-filesystem.glu` is an *authored*,
+/// boot-critical slot, this is the canonical Lua an operator adopts as the
+/// verified replacement — never an authority Cast switches on its own.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn encode_lua_root_filesystem(value: &RootFilesystemIntentValue) -> String {
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    output.push_str("return {\n");
+    writeln!(output, "    root = {},", lua_string(&value.root)).unwrap();
+    output.push_str("}\n");
+    output
 }
 
 fn require_lua_fingerprint_contract(
@@ -228,6 +247,20 @@ mod tests {
     fn a_lua_root_intent_with_the_reserved_prefix_is_rejected() {
         let fixture = Fixture::new();
         assert!(lua_value(&mut fixture.budget(), r#"return { root = "root=UUID=1111-2222" }"#).is_err());
+    }
+
+    #[test]
+    fn an_emitted_root_intent_re_decodes_to_the_same_value() {
+        let fixture = Fixture::new();
+        let original = lua_value(&mut fixture.budget(), r#"return { root = "UUID=abcd-1234" }"#)
+            .expect("root intent evaluates");
+
+        let emitted = encode_lua_root_filesystem(&original);
+        assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+
+        let redecoded =
+            lua_value(&mut fixture.budget(), &emitted).expect("emitted root intent re-decodes");
+        assert_eq!(redecoded, original);
     }
 
     #[test]
