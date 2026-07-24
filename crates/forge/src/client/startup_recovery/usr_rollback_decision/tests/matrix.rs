@@ -55,11 +55,21 @@ fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
     // This pins the exact boundary the predecessor-restore rollback suffix will
     // close; the prefix phases already auto-roll-back (see the terminal-outcome
     // matrix test above).
+    // The rollback decision now recognizes the archive phase as a rollback
+    // source (first layer of archive auto-recovery). Until the archived-layout
+    // evidence inspection and the predecessor-restore suffix land, the exact
+    // archived-slot evidence is not yet proven, so the decision defers and
+    // startup still halts fail-safe at PreviousArchived (record intact) — never
+    // a brick. This pins that safe intermediate boundary.
     let fixture = Fixture::previous_archived(OperationKind::NewState);
-    assert!(!usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+    assert!(usr_rollback_decision_source_is_supported_for_test(&fixture.source));
     let error = fixture.enter();
     let pending = pending(&error);
     assert_eq!(pending.phase(), Phase::PreviousArchived);
+    assert!(
+        fixture.canonical_record().rollback.is_none(),
+        "archived-layout evidence not yet proven, so no rollback plan is persisted yet"
+    );
 }
 
 #[test]

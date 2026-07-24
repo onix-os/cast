@@ -169,6 +169,16 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
+            // NewState archived its predecessor before booting: the candidate is
+            // live and the predecessor sits in its archived slot, so the /usr
+            // exchange still needs reversal (Post) after the predecessor is first
+            // restored to staging (see `previous_archive` below).
+            (Phase::PreviousArchived, UsrExchangeLayout::Post) => Some(InitialRollbackAction::Pending),
+            (Phase::PreviousArchived, UsrExchangeLayout::Pre) => {
+                return Ok(UsrRollbackDecisionAdmission::Deferred(
+                    UsrRollbackDecisionDeferral::IncompatibleEvidence,
+                ));
+            }
             _ => unreachable!("rollback-decision admission is restricted to exact /usr or ActiveReblit boot sources"),
         };
         let retained_state_db = state_db.clone();
@@ -187,7 +197,11 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         };
         Ok(match usr_exchange {
             Some(usr_exchange) => UsrRollbackDecisionAdmission::Ready(Self {
-                observations: rollback_observations(record.operation, usr_exchange),
+                observations: rollback_observations(
+                    record.operation,
+                    usr_exchange,
+                    previous_archive_observation(record.phase),
+                ),
                 evidence,
             }),
             None => UsrRollbackDecisionAdmission::ParentDurabilityRequired(UsrExchangeParentDurabilityAuthority {
@@ -243,6 +257,7 @@ fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
             (record.operation, record.phase, record.generation),
             (Operation::NewState, Phase::SystemTriggersStarted, 11)
                 | (Operation::NewState, Phase::SystemTriggersComplete, 12)
+                | (Operation::NewState, Phase::PreviousArchived, 14)
                 | (Operation::ActiveReblit, Phase::SystemTriggersStarted, 9)
                 | (Operation::ActiveReblit, Phase::SystemTriggersComplete, 10)
         )
@@ -337,7 +352,7 @@ impl<'reservation> UsrExchangeParentDurabilityAuthority<'reservation> {
         let operation = self.evidence.record.operation;
         Ok(UsrRollbackDecisionAuthority {
             evidence: self.evidence,
-            observations: rollback_observations(operation, InitialRollbackAction::Pending),
+            observations: rollback_observations(operation, InitialRollbackAction::Pending, None),
         })
     }
 
@@ -352,14 +367,25 @@ impl<'reservation> UsrExchangeParentDurabilityAuthority<'reservation> {
     }
 }
 
-fn rollback_observations(operation: Operation, usr_exchange: InitialRollbackAction) -> RollbackObservations {
+fn rollback_observations(
+    operation: Operation,
+    usr_exchange: InitialRollbackAction,
+    previous_archive: Option<InitialRollbackAction>,
+) -> RollbackObservations {
     RollbackObservations {
         allocated_candidate_id: None,
-        previous_archive: None,
+        previous_archive,
         usr_exchange: Some(usr_exchange),
         candidate: InitialRollbackAction::Pending,
         fresh_db: (operation == Operation::NewState).then_some(InitialRollbackAction::Pending),
     }
+}
+
+/// A durable `PreviousArchived` source archived its predecessor, so recovery
+/// must restore it before reversing the exchange. Every earlier phase archived
+/// nothing yet.
+fn previous_archive_observation(phase: Phase) -> Option<InitialRollbackAction> {
+    (phase == Phase::PreviousArchived).then_some(InitialRollbackAction::Pending)
 }
 
 fn inspect_current_database(
