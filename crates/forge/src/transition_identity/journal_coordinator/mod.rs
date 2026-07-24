@@ -59,7 +59,8 @@ pub(crate) use root_abi_publication::RootLinksCompleteCoordinator;
 pub(crate) use system_triggers::{
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
     ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
-    PreviousArchiveEffectSeal, PreviousArchiveFailure, PreviousArchivedCoordinator,
+    PreviousArchiveBootHandoffFailure, PreviousArchiveEffectSeal, PreviousArchiveFailure,
+    PreviousArchivedBootSyncHandoffSeal, PreviousArchivedCoordinator,
     SystemTriggersCompleteCoordinator,
 };
 #[cfg(test)]

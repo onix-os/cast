@@ -17,7 +17,7 @@ use crate::{
     db::state::Database,
     transition_identity::{
         ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
-        SystemTriggersCompleteCoordinator,
+        PreviousArchivedBootSyncHandoffSeal, SystemTriggersCompleteCoordinator,
     },
     transition_journal::{
         Operation, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
@@ -80,6 +80,31 @@ impl CoordinatorActiveReblitBootSyncHandoff {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_system_triggers_complete(
         _seal: ActiveReblitBootSyncHandoffSeal,
+        record: TransitionRecord,
+        record_binding: TransitionJournalRecordBinding,
+        journal: TransitionJournalStore,
+        database: Database,
+        installation: Installation,
+        active_reblit: State,
+        active_state_reservation: CoordinatorActiveStateReservation,
+    ) -> Self {
+        Self {
+            record,
+            record_binding,
+            journal,
+            database,
+            installation,
+            active_reblit,
+            active_state_reservation,
+        }
+    }
+
+    /// NewState boot handoff: the boot candidate is the freshly created state,
+    /// distinct from the archived predecessor. The operation-aware state gate
+    /// admits this shape.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_previous_archived(
+        _seal: PreviousArchivedBootSyncHandoffSeal,
         record: TransitionRecord,
         record_binding: TransitionJournalRecordBinding,
         journal: TransitionJournalStore,

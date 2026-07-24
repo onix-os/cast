@@ -42,7 +42,8 @@ pub(crate) use boot_sync_handoff::{
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
 };
 pub(crate) use previous_archive::{
-    PreviousArchiveEffectSeal, PreviousArchiveFailure, PreviousArchivedCoordinator,
+    PreviousArchiveBootHandoffFailure, PreviousArchiveEffectSeal, PreviousArchiveFailure,
+    PreviousArchivedBootSyncHandoffSeal, PreviousArchivedCoordinator,
 };
 
 const RUN_SYSTEM_TRIGGERS: &str = "run stateful system triggers";

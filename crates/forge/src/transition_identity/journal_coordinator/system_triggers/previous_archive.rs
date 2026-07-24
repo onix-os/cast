@@ -23,12 +23,21 @@ use crate::transition_journal::TransitionJournalRecordBinding;
 type BoxedAdvanceError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 const ARCHIVE_PREVIOUS: &str = "archive the previous state tree";
+const HAND_OFF_NEW_STATE_BOOT: &str = "hand off new state boot synchronization";
 
 /// Unforgeable proof that a journal-coordinated caller owns the exact durable
 /// `PreviousArchiveIntent` record and may physically archive its predecessor
 /// while its transition journal is retained. Every legacy archive entry point
 /// continues to require journal absence.
 pub(crate) struct PreviousArchiveEffectSeal {
+    _private: (),
+}
+
+/// Unforgeable proof that a NewState transition reached the exact durable
+/// `PreviousArchived` record and may hand its retained stores into boot
+/// publication. The client boot-staging constructor accepts only this seal for
+/// the NewState route, mirroring the ActiveReblit handoff seal.
+pub(crate) struct PreviousArchivedBootSyncHandoffSeal {
     _private: (),
 }
 
@@ -73,6 +82,24 @@ pub(crate) enum PreviousArchiveFailure {
         transition_id: TransitionId,
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum PreviousArchiveBootHandoffFailure {
+    #[error("transition {transition_id} is not a NewState PreviousArchived boot authority")]
+    SourceContract { transition_id: TransitionId },
+    #[error("transition {transition_id} failed NewState boot-handoff preflight")]
+    Preflight {
+        transition_id: TransitionId,
+        #[source]
+        source: StatefulTransitionCoordinatorError,
+    },
+    #[error("transition {transition_id} could not load its candidate state for boot")]
+    CandidateState {
+        transition_id: TransitionId,
+        #[source]
+        source: BoxedAdvanceError,
     },
 }
 
@@ -184,10 +211,92 @@ impl SystemTriggersCompleteCoordinator {
 }
 
 impl PreviousArchivedCoordinator {
+    /// Hand the retained stores into boot publication for the freshly booted
+    /// NewState candidate. The predecessor has already been durably archived,
+    /// so `boot::synchronize` can enumerate it as an immediate rollback entry.
+    pub(crate) fn into_new_state_boot_sync_handoff(
+        self,
+    ) -> Result<crate::client::CoordinatorActiveReblitBootSyncHandoff, PreviousArchiveBootHandoffFailure>
+    {
+        let Self {
+            coordinator,
+            metadata,
+            provenance,
+            authority,
+            readiness,
+            record_binding,
+        } = self;
+        let transition_id = coordinator.record.transition_id.clone();
+
+        if !exact_new_state_boot_source(&coordinator.record) {
+            return Err(PreviousArchiveBootHandoffFailure::SourceContract { transition_id });
+        }
+        let preflight = |source| PreviousArchiveBootHandoffFailure::Preflight {
+            transition_id: transition_id.clone(),
+            source,
+        };
+        coordinator
+            .require_phase(Phase::PreviousArchived, HAND_OFF_NEW_STATE_BOOT)
+            .map_err(preflight)?;
+        // The predecessor tree left staging during the archive, so only the
+        // journal record binding (cast + canonical inode) is re-validated here.
+        require_same_store_record_binding(&coordinator, &authority, &record_binding)
+            .map_err(preflight)?;
+
+        let candidate_id = coordinator
+            .record
+            .candidate
+            .id
+            .map(state::Id::from)
+            .ok_or_else(|| PreviousArchiveBootHandoffFailure::SourceContract {
+                transition_id: transition_id.clone(),
+            })?;
+        let installation = authority.installation().clone();
+        let active_state_reservation = authority.into_active_state_reservation();
+        drop(metadata);
+        let _ = provenance;
+        drop(readiness);
+        let StatefulTransitionCoordinator { identity, record } = coordinator;
+        let crate::transition_identity::StatefulTreeIdentity {
+            journal,
+            state_database,
+            ..
+        } = identity;
+        let boot_candidate =
+            state_database
+                .get(candidate_id)
+                .map_err(|source| PreviousArchiveBootHandoffFailure::CandidateState {
+                    transition_id,
+                    source: Box::new(source),
+                })?;
+        Ok(
+            crate::client::CoordinatorActiveReblitBootSyncHandoff::from_previous_archived(
+                PreviousArchivedBootSyncHandoffSeal { _private: () },
+                record,
+                record_binding,
+                journal,
+                state_database,
+                installation,
+                boot_candidate,
+                active_state_reservation,
+            ),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn record(&self) -> &TransitionRecord {
         &self.coordinator.record
     }
+}
+
+fn exact_new_state_boot_source(record: &TransitionRecord) -> bool {
+    record.operation == crate::transition_journal::Operation::NewState
+        && record.phase == Phase::PreviousArchived
+        && record.options.archive_previous
+        && record.options.run_boot_sync
+        && record.candidate.id.is_some()
+        && record.previous.id.is_some()
+        && record.candidate.id != record.previous.id
 }
 
 fn exact_archive_previous_source(record: &TransitionRecord) -> bool {
