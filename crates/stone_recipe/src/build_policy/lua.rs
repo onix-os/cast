@@ -825,13 +825,13 @@ impl From<LuaBuildPolicyPatchSpec> for BuildPolicyPatchSpec {
 
 /// Stateless Lua adapter for the build-policy declaration and its patch overlay.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LuaBuildPolicyEvaluator {
+pub struct LuaBuildPolicyEvaluator {
     engine: LuaEngine,
 }
 
 impl LuaBuildPolicyEvaluator {
     /// Decode a complete authored build policy.
-    pub(crate) fn evaluate(&self, source: &Source) -> Result<BuildPolicySpec, Diagnostic> {
+    pub fn evaluate(&self, source: &Source) -> Result<BuildPolicySpec, Diagnostic> {
         Ok(self.engine.evaluate_as::<LuaBuildPolicySpec>(source)?.value.into())
     }
 
@@ -849,7 +849,7 @@ impl LuaBuildPolicyEvaluator {
 // converts a `policy.glu` fragment to `policy.lua`.
 
 /// Emit a complete [`BuildPolicySpec`] as generated-marked Lua source.
-pub(crate) fn encode_lua_policy(policy: &BuildPolicySpec) -> String {
+pub fn encode_lua_policy(policy: &BuildPolicySpec) -> String {
     format!(
         "{marker}return {{\n\
          build_subdir = {build_subdir},\n\

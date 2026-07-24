@@ -10,6 +10,7 @@ pub use self::gluon::{
     BUILD_POLICY_ABI_VERSION, GLUON_BUILD_POLICY_ABI,
     GluonBuildPolicyEvaluator,
 };
+pub use self::lua::{LuaBuildPolicyEvaluator, encode_lua_policy};
 
 mod gluon;
 pub mod layers;

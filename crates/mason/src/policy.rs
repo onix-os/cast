@@ -388,6 +388,24 @@ mod tests {
         )
     }
 
+    /// The real shipped repository policy — `default.glu` plus the two large
+    /// tuning catalogs it imports (`tuning/flags.glu`, `tuning/groups.glu`) —
+    /// re-encodes to generated Lua and decodes back to an equal spec. This
+    /// pairs those authored Gluon files with the build-policy write path,
+    /// proving a generated-slot switch could reproduce them as `policy.lua`.
+    #[test]
+    fn the_repository_policy_round_trips_through_the_lua_emitter() {
+        let policy = BuildPolicy::repository_for_tests();
+
+        let emitted = stone_recipe::build_policy::encode_lua_policy(&policy.spec);
+        assert!(emitted.starts_with(lua_config::GENERATED_LUA_MARKER));
+
+        let redecoded = stone_recipe::build_policy::LuaBuildPolicyEvaluator::default()
+            .evaluate(&declarative_config::Source::new("policy.lua", &emitted))
+            .expect("emitted repository policy re-decodes");
+        assert_eq!(policy.spec, redecoded);
+    }
+
     fn assert_same_diagnostic(actual: &Diagnostic, expected: &Diagnostic) {
         assert_eq!(actual.category, expected.category);
         assert_eq!(actual.limit, expected.limit);
