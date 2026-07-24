@@ -389,6 +389,68 @@ let base = cast.trigger "isolation-root-race" "Retained isolation root race proo
 }
 
 #[test]
+fn apply_new_state_candidate_forwards_and_archives_before_boot_applicability() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut client = stateful_test_client(temporary.path());
+    let previous = client.state_db.add(&[], Some("previous"), None).unwrap();
+    client.installation.active_state = Some(previous.id);
+    record_state_id(&client.installation.root, previous.id).unwrap();
+    record_system_snapshot(
+        &client.installation.root,
+        generated_system_snapshot("previous-package"),
+    )
+    .unwrap();
+
+    let package = package::Id::from("new-state-forward-e2e");
+    client
+        .layout_db
+        .add(
+            &package,
+            &StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFDIR | 0o755,
+                tag: 0,
+                file: StonePayloadLayoutFile::Directory("share/new-state-forward-input".into()),
+            },
+        )
+        .unwrap();
+    let candidate = client.materialize_stateful_candidate([&package]).unwrap();
+
+    // Drive the coordinated durable route on a live Client. The row is allocated
+    // inside the forward prefix; the whole path runs (inspect → forward prefix →
+    // /usr exchange → transaction/system triggers → predecessor archive) and
+    // then fails cleanly at the boot-applicability boundary because this minimal
+    // candidate carries no bootable payload. That proves the entire client-level
+    // composition executes end-to-end, not merely type-checks.
+    let error = client
+        .apply_new_state_candidate(
+            candidate,
+            previous.id,
+            &[Selection::explicit(package)],
+            "new state forward candidate",
+            generated_system_snapshot("candidate-package"),
+        )
+        .unwrap_err();
+    assert!(
+        format!("{error:#?}").contains("boot applicability"),
+        "coordinated route did not reach the boot-applicability boundary: {error:#?}"
+    );
+
+    // The predecessor tree was durably archived into its per-state rollback slot
+    // (the anchor a real boot would enumerate), proving the archive advance ran
+    // against a live installation.
+    let archived_previous = client
+        .installation
+        .root_path(previous.id.to_string())
+        .join("usr");
+    assert!(
+        archived_previous.exists(),
+        "predecessor tree was not archived to its state slot"
+    );
+}
+
+#[test]
 fn archived_repair_state_id_write_uses_the_same_retained_usr() {
     let temporary = tempfile::tempdir().unwrap();
     let client = stateful_test_client(temporary.path());
