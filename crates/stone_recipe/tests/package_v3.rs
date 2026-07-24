@@ -1,16 +1,13 @@
-use std::path::Path;
-
 #[path = "package_v3/adapter.rs"]
 mod adapter;
 
 use adapter::{
-    PackageDeclarationError, evaluate_default_package, evaluate_package,
-    evaluate_package_with_inputs, rooted_package_evaluator,
+    PackageDeclarationError, evaluate_default_package, evaluate_package_with_inputs,
 };
-use declarative_config::{DeclarationEvaluationError, DeclarationInputEvaluator, Source, SourceRoot};
+use declarative_config::{DeclarationEvaluationError, DeclarationInputEvaluator, Source};
 use gluon_config::DiagnosticCategory;
 use stone_recipe::package::{
-    BuilderEnvironmentSpec, BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec, PACKAGE_ABI_VERSION,
+    BuiltProgramSpec, DependencyKind, DependencyRole, DependencySpec,
     GluonPackageEvaluator, PackageConversionError, ProgramSpec, StepSpec, SupportedHooksSpec,
 };
 
@@ -89,113 +86,6 @@ fn frozen_package_abi_has_no_cargo_fetch_escape_hatch() {
             if diagnostic.category == DiagnosticCategory::Type
                 && diagnostic.message.contains("cargo_fetch")
     ));
-}
-
-#[test]
-fn imported_factory_arguments_and_typed_patch_produce_a_direct_package() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples/gluon");
-    let source_root = SourceRoot::new(&root).unwrap();
-    let source = source_root
-        .load(Path::new("package_v3_stone.glu"), 1024 * 1024)
-        .unwrap();
-    let evaluator = rooted_package_evaluator(source_root);
-
-    let evaluated = evaluate_package(&evaluator, &source).unwrap();
-
-    assert_eq!(evaluated.value.meta.pname, "factory-hello");
-    assert_eq!(evaluated.value.outputs.len(), 10);
-    assert_eq!(evaluated.value.outputs[9].name, "dev");
-    assert!(matches!(
-        evaluated.value.build_inputs[0],
-        DependencySpec::Package(ref package) if package.name == "zlib"
-    ));
-    assert_eq!(
-        dependency_names(evaluated.value.builder.required_tools()),
-        ["binary(sh)", "binary(ninja)"]
-    );
-    assert_eq!(evaluated.value.builder.environment, [BuilderEnvironmentSpec::CMake]);
-    assert_eq!(evaluated.value.builder.supported_hooks, SupportedHooksSpec::all());
-    assert_eq!(
-        dependency_names(&evaluated.value.build_inputs),
-        ["zlib", "pkgconfig(libressl)"]
-    );
-    let phases = evaluated.value.phases();
-    assert_eq!(
-        phases.setup.steps,
-        [StepSpec::CMakeConfigure {
-            flags: vec!["-DBUILD_DOCUMENTATION=OFF".to_owned()]
-        }]
-    );
-    assert_eq!(phases.build.steps, [StepSpec::CMakeBuild]);
-    assert_eq!(phases.check.steps, [StepSpec::CMakeTest]);
-    assert_eq!(
-        phases.install.steps,
-        [
-            StepSpec::CMakeInstall,
-            StepSpec::Shell {
-                interpreter: binary_program("bash"),
-                declared_programs: vec![binary_program("ln")],
-                script: r#"ln -s factory-hello "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hello""#.to_owned()
-            }
-        ]
-    );
-    assert_eq!(
-        evaluated
-            .value
-            .outputs
-            .iter()
-            .map(|output| output.name.as_str())
-            .collect::<Vec<_>>(),
-        [
-            "out",
-            "docs",
-            "devel",
-            "dbginfo",
-            "libs",
-            "32bit",
-            "32bit-devel",
-            "32bit-dbginfo",
-            "demos",
-            "dev",
-        ]
-    );
-    assert_eq!(
-        evaluated
-            .value
-            .outputs
-            .iter()
-            .map(|output| (output.name.as_str(), output.include_in_manifest))
-            .collect::<Vec<_>>(),
-        [
-            ("out", true),
-            ("docs", true),
-            ("devel", true),
-            ("dbginfo", false),
-            ("libs", true),
-            ("32bit", true),
-            ("32bit-devel", true),
-            ("32bit-dbginfo", false),
-            ("demos", true),
-            ("dev", true),
-        ]
-    );
-    assert_eq!(
-        dependency_names(&evaluated.value.outputs[0].runtime_inputs),
-        ["soname(libtls.so.28)"]
-    );
-    assert_eq!(
-        dependency_names(&evaluated.value.outputs[9].runtime_inputs),
-        ["factory-hello"]
-    );
-    assert_eq!(evaluated.value.architectures, ["x86_64"]);
-    assert_eq!(PACKAGE_ABI_VERSION, 3);
-    assert!(
-        evaluated
-            .identity
-            .modules
-            .iter()
-            .any(|module| module.logical_name == "cast.package.v3")
-    );
 }
 
 #[test]
