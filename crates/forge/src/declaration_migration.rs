@@ -136,6 +136,14 @@ pub(crate) enum BridgeError {
     Blob(#[from] BlobStoreError),
     #[error("declaration-migration catalog error")]
     Catalog(#[from] DeclarationMigrationError),
+    #[error(
+        "committed declaration migration for slot {logical_slot:?} no longer binds the authenticated state-tree marker"
+    )]
+    StateTreeMarkerDrift { logical_slot: String },
+    #[error(
+        "committed declaration migration for slot {logical_slot:?} no longer matches the original source hash"
+    )]
+    OriginalSourceDrift { logical_slot: String },
 }
 
 /// Migrate one state-owned slot: make the converted blob durable *first*
@@ -179,6 +187,34 @@ pub(crate) fn resolve_migrated_blob(
     let Some(row) = database.declaration_migration(state_id, logical_slot)? else {
         return Ok(None);
     };
+    Ok(Some(blobs.read(&hex::encode(&row.migrated_blob_sha256))?))
+}
+
+/// Bridge-era selection: resolve a slot's Lua blob only after revalidating that
+/// the committed row still binds the authenticated state-tree marker and the
+/// original source hash. Any drift fails closed rather than selecting the blob
+/// or falling back to the legacy reader — the caller decides that separately.
+pub(crate) fn resolve_migrated_blob_revalidated(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    state_id: i32,
+    logical_slot: &str,
+    expected_state_tree_marker: &[u8],
+    expected_original_sha256: &[u8],
+) -> Result<Option<Vec<u8>>, BridgeError> {
+    let Some(row) = database.declaration_migration(state_id, logical_slot)? else {
+        return Ok(None);
+    };
+    if row.state_tree_marker != expected_state_tree_marker {
+        return Err(BridgeError::StateTreeMarkerDrift {
+            logical_slot: logical_slot.to_owned(),
+        });
+    }
+    if row.original_sha256 != expected_original_sha256 {
+        return Err(BridgeError::OriginalSourceDrift {
+            logical_slot: logical_slot.to_owned(),
+        });
+    }
     Ok(Some(blobs.read(&hex::encode(&row.migrated_blob_sha256))?))
 }
 
@@ -299,5 +335,50 @@ mod tests {
             migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap(),
             DeclarationMigrationCommit::AlreadyPresent
         );
+    }
+
+    #[test]
+    fn revalidated_resolution_selects_the_blob_only_when_marker_and_source_match() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        let converted = b"return { mold = true }\n";
+        // request() uses marker [1;32] and original_sha256 [2;32].
+        migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap();
+
+        let marker = vec![1u8; 32];
+        let original = vec![2u8; 32];
+        assert_eq!(
+            resolve_migrated_blob_revalidated(
+                &database, &blobs, state_id, "etc/cast/system.glu", &marker, &original,
+            )
+            .unwrap(),
+            Some(converted.to_vec())
+        );
+    }
+
+    #[test]
+    fn revalidated_resolution_fails_closed_on_state_tree_or_source_drift() {
+        let (_dir, blobs) = store();
+        let database = database();
+        let state_id = state_id(&database);
+        migrate_declaration(&database, &blobs, request(state_id, b"x")).unwrap();
+
+        let marker = vec![1u8; 32];
+        let original = vec![2u8; 32];
+        let wrong = vec![0u8; 32];
+
+        assert!(matches!(
+            resolve_migrated_blob_revalidated(
+                &database, &blobs, state_id, "etc/cast/system.glu", &wrong, &original,
+            ),
+            Err(BridgeError::StateTreeMarkerDrift { .. })
+        ));
+        assert!(matches!(
+            resolve_migrated_blob_revalidated(
+                &database, &blobs, state_id, "etc/cast/system.glu", &marker, &wrong,
+            ),
+            Err(BridgeError::OriginalSourceDrift { .. })
+        ));
     }
 }
