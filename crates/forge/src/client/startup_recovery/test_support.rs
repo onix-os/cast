@@ -186,6 +186,15 @@ impl Fixture {
     pub(super) fn previous_archived(kind: OperationKind) -> Self {
         let fixture = Self::with_forward_source(kind, Phase::PreviousArchived, true, false);
         install_root_abi(&fixture.installation.root);
+        // Archive the staged predecessor into its per-state slot so the
+        // namespace snapshot reads it as PreviousPlace::Archived
+        // (TreeLocation::State), matching a real PreviousArchived layout.
+        let staged = fixture.installation.root.join(".cast/root/staging/usr");
+        let slot = fixture
+            .installation
+            .root_path(fixture.previous_state.to_string());
+        fs::create_dir_all(&slot).unwrap();
+        fs::rename(&staged, slot.join("usr")).unwrap();
         assert_eq!(fixture.source.phase, Phase::PreviousArchived);
         assert!(fixture.source.options.archive_previous);
         fixture
