@@ -313,6 +313,18 @@ return {
         );
     }
 
+    #[test]
+    fn the_paired_repository_documentation_example_normalizes_equally() {
+        // Prove the shipped documentation example and its paired Lua form
+        // (Phase L7) decode to the same repository map.
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let gluon = std::fs::read_to_string(format!("{root}/docs/examples/gluon/repositories.glu"))
+            .expect("gluon repository example");
+        let lua = std::fs::read_to_string(format!("{root}/docs/examples/lua/repositories.lua"))
+            .expect("lua repository example");
+        assert_eq!(format!("{:?}", lua_map(&lua)), format!("{:?}", gluon_map(&gluon)));
+    }
+
     const GLUON_ROOT_INDEX: &str = r#"
 let cast = import! cast.repository.v1
 [
