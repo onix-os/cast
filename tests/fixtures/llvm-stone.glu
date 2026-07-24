@@ -1,12 +1,14 @@
+let a = import! cast.authored.v1
 
-let b = import! cast.package.v3
-let output_defaults = b.outputs.named "llvm"
+let pname = "llvm"
 
-let scripts = b.scripts {
-    setup = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "cmake"],
+let local_output = \output -> a.dep.output (a.package_ref pname) output
+
+let scripts = {
+    setup = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "cmake"],
             script = r#"cmake -G Ninja \
     -B "$CAST_BUILDER_DIR" \
     -DCMAKE_VERBOSE_MAKEFILE=ON \
@@ -24,134 +26,225 @@ let scripts = b.scripts {
     -DLLVM_ENABLE_PROJECTS=clang\;lld"#,
         },
     ],
-    build = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "cmake"],
+    build = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "cmake"],
             script = r#"LD_LIBRARY_PATH="${CAST_WORK_DIR}/${CAST_BUILDER_DIR}/lib" cmake --build "$CAST_BUILDER_DIR" --verbose --parallel "$CAST_JOBS""#,
         },
     ],
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "cmake"],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "cmake"],
             script = r#"LD_LIBRARY_PATH="${CAST_WORK_DIR}/${CAST_BUILDER_DIR}/lib" DESTDIR="$CAST_INSTALL_ROOT" cmake --install "$CAST_BUILDER_DIR" --verbose"#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
+// The shared Rust default output set, reproduced here because the root,
+// devel and libs outputs are overlaid with package-specific fields and two
+// extra (clang, lld) output pairs are appended: the authored ABI only offers
+// `outputs.default` (opaque, Rust-filled) or `outputs.explicit` (a complete
+// authored list), not a way to overlay-and-extend the default from Gluon.
 let root = {
-    summary = b.optional.set "Low Level Virtual Machine",
-    description = b.optional.set "Low Level Virtual Machine",
-    .. b.output "out"
+    summary = a.optional.set "Low Level Virtual Machine",
+    description = a.optional.set "Low Level Virtual Machine",
+    paths = [a.path.any "*"],
+    .. a.output "out"
+}
+let docs = {
+    summary = a.optional.set "Documentation for llvm",
+    description = a.optional.set "Documentation files for the llvm package",
+    paths = [a.path.any "/usr/share/gtk-doc"],
+    .. a.output "docs"
 }
 let development = {
+    summary = a.optional.set "Development files for llvm",
+    description = a.optional.set "Install this package if you intend to build software against\nthe llvm package.",
+    runtime_inputs = [local_output "out"],
     paths = [
-        b.path.any "/usr/bin/FileCheck",
-        b.path.any "/usr/bin/obj2yaml",
-        b.path.any "/usr/bin/yaml2obj",
+        a.path.any "/usr/bin/FileCheck",
+        a.path.any "/usr/bin/obj2yaml",
+        a.path.any "/usr/bin/yaml2obj",
+        a.path.any "/usr/include",
+        a.path.any "/usr/lib/*.a",
+        a.path.any "/usr/lib/cmake",
+        a.path.any "/usr/lib/lib*.so",
+        a.path.any "/usr/lib/pkgconfig",
+        a.path.any "/usr/share/aclocal",
+        a.path.any "/usr/share/cmake",
+        a.path.any "/usr/share/man/man2",
+        a.path.any "/usr/share/man/man3",
+        a.path.any "/usr/share/man/man9",
+        a.path.any "/usr/share/pkgconfig",
+        a.path.any "/usr/share/gir-1.0/*.gir",
+        a.path.any "/usr/share/vala/vapi/*.deps",
+        a.path.any "/usr/share/vala/vapi/*.vapi",
+        a.path.any "/usr/lib/*.prl",
+        a.path.any "/usr/lib/metatypes",
+        a.path.any "/usr/lib/qt*/metatypes/qt*.json",
+        a.path.any "/usr/lib/qt*/mkspecs",
+        a.path.any "/usr/lib/qt*/modules/*.json",
+        a.path.any "/usr/lib/qt*/sbom",
+        a.path.any "/usr/lib/qt*/plugins/designer/*.so",
+        a.path.any "/usr/share/doc/qt5/*.qch",
+        a.path.any "/usr/share/doc/qt5/*.tags",
+        a.path.any "/usr/share/doc/qt6/*.qch",
+        a.path.any "/usr/share/doc/qt6/*.tags",
     ],
-    .. b.output "devel"
+    .. a.output "devel"
+}
+let dbginfo = {
+    include_in_manifest = a.false,
+    summary = a.optional.set "Debugging symbols for llvm",
+    description = a.optional.set "Install this package if you need debugging information + symbols\nfor the llvm package.",
+    paths = [a.path.any "/usr/lib/debug"],
+    .. a.output "dbginfo"
 }
 let libraries = {
-    summary = b.optional.set "Library files for llvm",
-    paths = [b.path.any "/usr/lib/libLLVM-*.so"],
-    .. b.output "libs"
+    summary = a.optional.set "Library files for llvm",
+    description = a.optional.set "Library files for llvm, typically pulled in as a dependency of another package.",
+    paths = [a.path.any "/usr/lib/libLLVM-*.so"],
+    .. a.output "libs"
+}
+let bit32 = {
+    summary = a.optional.set "Provides 32-bit runtime libraries for llvm",
+    description = a.optional.set "Install this package if you need the 32-bit versions of the\nllvm package libraries.",
+    runtime_inputs = [local_output "out"],
+    paths = [
+        a.path.any "/usr/lib32",
+        a.path.any "/usr/lib32/lib*.so.*",
+    ],
+    .. a.output "32bit"
+}
+let bit32_devel = {
+    summary = a.optional.set "Provides development files for llvm-32bit",
+    description = a.optional.set "Install this package if you need to build software against\nthe 32-bit version of llvm, llvm-32bit.",
+    runtime_inputs = [local_output "32bit", local_output "devel"],
+    paths = [
+        a.path.any "/usr/lib32/*.a",
+        a.path.any "/usr/lib32/cmake",
+        a.path.any "/usr/lib32/lib*.so",
+        a.path.any "/usr/lib32/pkgconfig",
+    ],
+    .. a.output "32bit-devel"
+}
+let bit32_dbginfo = {
+    include_in_manifest = a.false,
+    summary = a.optional.set "Debugging symbols for llvm-32bit",
+    description = a.optional.set "Install this package if you need debugging information + symbols\nfor the llvm-32bit package.",
+    paths = [a.path.any "/usr/lib32/debug"],
+    .. a.output "32bit-dbginfo"
+}
+let demos = {
+    summary = a.optional.set "Example files for llvm",
+    description = a.optional.set "Example files for the llvm package",
+    paths = [a.path.any "/usr/lib/qt*/examples"],
+    .. a.output "demos"
 }
 let clang = {
-    summary = b.optional.set "Clang compiler front-end (LLVM)",
+    summary = a.optional.set "Clang compiler front-end (LLVM)",
     runtime_inputs = [
-        b.dep.package "libcxx-devel",
-        b.dep.output (b.package_ref "llvm") "lld",
-        b.dep.output (b.package_ref "llvm") "out",
+        a.dep.package "libcxx-devel",
+        a.dep.output (a.package_ref "llvm") "lld",
+        a.dep.output (a.package_ref "llvm") "out",
     ],
     paths = [
-        b.path.any "/usr/bin/*clang*",
-        b.path.any "/usr/lib/clang",
-        b.path.any "/usr/share/clang",
+        a.path.any "/usr/bin/*clang*",
+        a.path.any "/usr/lib/clang",
+        a.path.any "/usr/share/clang",
     ],
-    .. b.output "clang"
+    .. a.output "clang"
 }
 let clang_development = {
-    summary = b.optional.set "Development files for clang",
-    runtime_inputs = [b.dep.output (b.package_ref "llvm") "clang"],
+    summary = a.optional.set "Development files for clang",
+    runtime_inputs = [a.dep.output (a.package_ref "llvm") "clang"],
     paths = [
-        b.path.any "/usr/lib/cmake/clang",
-        b.path.any "/usr/lib/libclang*.a",
-        b.path.any "/usr/include/clang*",
+        a.path.any "/usr/lib/cmake/clang",
+        a.path.any "/usr/lib/libclang*.a",
+        a.path.any "/usr/include/clang*",
     ],
-    .. b.output "clang-devel"
+    .. a.output "clang-devel"
 }
 let lld = {
-    summary = b.optional.set "LLVM linker",
-    paths = [b.path.any "/usr/bin/*lld*", b.path.any "/usr/bin/wasm-ld"],
-    .. b.output "lld"
+    summary = a.optional.set "LLVM linker",
+    paths = [a.path.any "/usr/bin/*lld*", a.path.any "/usr/bin/wasm-ld"],
+    .. a.output "lld"
 }
 let lld_development = {
-    summary = b.optional.set "Development files for lld",
-    runtime_inputs = [b.dep.output (b.package_ref "llvm") "lld"],
-    paths = [b.path.any "/usr/lib/cmake/lld", b.path.any "/usr/lib/liblld*.a"],
-    .. b.output "lld-devel"
+    summary = a.optional.set "Development files for lld",
+    runtime_inputs = [a.dep.output (a.package_ref "llvm") "lld"],
+    paths = [a.path.any "/usr/lib/cmake/lld", a.path.any "/usr/lib/liblld*.a"],
+    .. a.output "lld-devel"
 }
 
 {
-    builder = b.builder.shell scripts [
-        b.dep.binary "cmake",
+    meta = {
+        pname,
+        version = "16.0.4",
+        release = 8,
+        homepage = "https://www.llvm.org",
+        license = ["Apache-2.0 WITH LLVM-exception", "NCSA"],
+    },
+    builder = a.builder.shell scripts [
+        a.dep.binary "cmake",
         // The selected Ninja generator spawns hardcoded /bin/sh.
-        b.dep.binary "sh",
-        b.dep.binary "ninja",
-        b.dep.binary "perl",
-        b.dep.binary "python3",
+        a.dep.binary "sh",
+        a.dep.binary "ninja",
+        a.dep.binary "perl",
+        a.dep.binary "python3",
     ],
+    sources = [
+        a.source.archive
+            "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.4/llvm-project-16.0.4.src.tar.xz"
+            "cf3c2a1152ed7a99866bd7f12c24528ada6d9f6336afb7a08416938762004c9f",
+    ],
+    native_build_inputs = [],
     build_inputs = [
-        b.dep.pkgconfig "libffi",
-        b.dep.pkgconfig "libxcrypt",
-        b.dep.pkgconfig "libxml-2.0",
-        b.dep.pkgconfig "ncursesw",
-        b.dep.pkgconfig "zlib",
-        b.dep.package "binutils-devel",
-        b.dep.package "gcc-32bit-devel",
-        b.dep.package "glibc-32bit-devel",
-        b.dep.package "libcxx-32bit-devel",
-        b.dep.package "clang-32bit",
+        a.dep.pkgconfig "libffi",
+        a.dep.pkgconfig "libxcrypt",
+        a.dep.pkgconfig "libxml-2.0",
+        a.dep.pkgconfig "ncursesw",
+        a.dep.pkgconfig "zlib",
+        a.dep.package "binutils-devel",
+        a.dep.package "gcc-32bit-devel",
+        a.dep.package "glibc-32bit-devel",
+        a.dep.package "libcxx-32bit-devel",
+        a.dep.package "clang-32bit",
     ],
-    outputs = [
-        b.outputs.overlay root output_defaults.root,
-        output_defaults.docs,
-        b.outputs.overlay development output_defaults.devel,
-        output_defaults.dbginfo,
-        b.outputs.overlay libraries output_defaults.libs,
-        output_defaults.bit32,
-        output_defaults.bit32_devel,
-        output_defaults.bit32_dbginfo,
-        output_defaults.demos,
+    check_inputs = [],
+    outputs = a.outputs.explicit [
+        root,
+        docs,
+        development,
+        dbginfo,
+        libraries,
+        bit32,
+        bit32_devel,
+        bit32_dbginfo,
+        demos,
         clang,
         clang_development,
         lld,
         lld_development,
     ],
-    sources = [
-        b.source.archive
-            "https://github.com/llvm/llvm-project/releases/download/llvmorg-16.0.4/llvm-project-16.0.4.src.tar.xz"
-            "cf3c2a1152ed7a99866bd7f12c24528ada6d9f6336afb7a08416938762004c9f",
-    ],
+    options = a.unset,
+    profiles = [],
+    architectures = [],
     tuning = [
-        b.named "bolt" b.tuning.enable,
-        b.named "fortify" b.tuning.disable,
-        b.named "harden" b.tuning.disable,
-        b.named "icf" (b.tuning.config "all"),
-        b.named "lto" b.tuning.disable,
-        b.named "nosemantic" b.tuning.enable,
-        b.named "optimize" (b.tuning.config "speed"),
-        b.named "polly" b.tuning.enable,
-        b.named "symbolic" b.tuning.enable,
+        a.named "bolt" a.tuning.enable,
+        a.named "fortify" a.tuning.disable,
+        a.named "harden" a.tuning.disable,
+        a.named "icf" (a.tuning.config "all"),
+        a.named "lto" a.tuning.disable,
+        a.named "nosemantic" a.tuning.enable,
+        a.named "optimize" (a.tuning.config "speed"),
+        a.named "polly" a.tuning.enable,
+        a.named "symbolic" a.tuning.enable,
     ],
-    .. b.mk_package (b.meta {
-        pname = "llvm",
-        version = "16.0.4",
-        release = 8,
-        homepage = "https://www.llvm.org",
-        license = ["Apache-2.0 WITH LLVM-exception", "NCSA"],
-    })
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

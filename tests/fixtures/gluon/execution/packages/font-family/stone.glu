@@ -1,19 +1,19 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
-let phases = b.scripts {
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "dash",
-            declared_programs = [b.program.binary "install"],
+let phases = a.scripts {
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "dash",
+            declared_programs = [a.program.binary "install"],
             script = r#"install -Dm644 fonts/CastAsterFixture-Regular.ttf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture/CastAsterFixture-Regular.ttf"
 install -Dm644 fonts/CastAsterFixture-Bold.ttf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture/CastAsterFixture-Bold.ttf"
 install -Dm644 OFL.txt "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-font-family-fixture/OFL.txt""#,
         },
     ],
-    check = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "dash",
-            declared_programs = [b.program.binary "fc-scan"],
+    check = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "dash",
+            declared_programs = [a.program.binary "fc-scan"],
             script = r#"font_root="${CAST_INSTALL_ROOT}${CAST_DATADIR}/fonts/truetype/cast-aster-fixture"
 regular="$font_root/CastAsterFixture-Regular.ttf"
 bold="$font_root/CastAsterFixture-Bold.ttf"
@@ -26,45 +26,51 @@ for cache in "$font_root/"fonts.cache-* "$font_root/fonts.dir" "$font_root/fonts
 done"#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
-let root = b.output_with {
-    summary = b.optional.set "Deterministic install-only TrueType fixture",
-    description = b.optional.set "A self-authored Regular and Bold font family with semantic metadata validation and no generated font cache.",
+let root = {
+    summary = a.optional.set "Deterministic install-only TrueType fixture",
+    description = a.optional.set "A self-authored Regular and Bold font family with semantic metadata validation and no generated font cache.",
     runtime_inputs = [],
     paths = [
-        b.path.any "/usr/share/fonts/truetype/cast-aster-fixture",
-        b.path.any "/usr/share/licenses/cast-font-family-fixture/OFL.txt",
+        a.path.any "/usr/share/fonts/truetype/cast-aster-fixture",
+        a.path.any "/usr/share/licenses/cast-font-family-fixture/OFL.txt",
     ],
-    .. b.output "out"
+    .. a.output "out"
 }
 
-let base = b.mk_package (b.meta {
-    pname = "cast-font-family-fixture",
-    version = "1.0.0",
-    release = 1,
-    homepage = "https://fixtures.invalid/cast-font-family-fixture",
-    license = ["OFL-1.1"],
-})
-
 {
-    builder = b.builder.custom phases [
-        b.dep.binary "dash",
-        b.dep.binary "install",
+    meta = {
+        pname = "cast-font-family-fixture",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://fixtures.invalid/cast-font-family-fixture",
+        license = ["OFL-1.1"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.binary "dash",
+        a.dep.binary "install",
     ],
-    check_inputs = [b.dep.binary "fc-scan"],
-    outputs = [root],
     sources = [
-        b.source.archive_with {
+        a.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-font-family-fixture-1.0.0.tar",
             hash = "8710f0728fbde240fd94ce8bce46c4e4d71336b8470416e8da7c0895dc2d700c",
-            rename = b.optional.set "cast-font-family-fixture.tar",
-            strip_dirs = b.optional.set 1,
-            unpack = b.boolean.true,
-            unpack_dir = b.optional.set "cast-font-family-fixture",
+            rename = a.optional.set "cast-font-family-fixture.tar",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "cast-font-family-fixture",
         },
     ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [a.dep.binary "fc-scan"],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }
