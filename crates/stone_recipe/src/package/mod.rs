@@ -13,6 +13,8 @@ pub use self::gluon::{
     GLUON_MESON_BUILDER_ABI, GLUON_PACKAGE_ABI, PACKAGE_ABI_VERSION,
 };
 
+mod builder_lowering;
+pub use builder_lowering::{BuilderRequest, lower_builder};
 mod gluon;
 mod lua;
 
