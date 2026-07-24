@@ -33,7 +33,12 @@ fi
 repo_root=$(cd -- "${repo_root}" && pwd -P)
 git -C "${repo_root}" rev-parse --is-inside-work-tree >/dev/null
 
-tracked_list=$(mktemp "${TMPDIR:-/tmp}/cast-source-loc-files.XXXXXX")
+# Prefer a repository-private scratch root over a per-user /tmp fallback: a
+# saturated /tmp must not prevent the LOC gate from starting when the repository
+# filesystem has ample capacity. An explicit TMPDIR still overrides.
+loc_tmp_root="${TMPDIR:-${repo_root}/target/host-validation}"
+mkdir -p -- "${loc_tmp_root}"
+tracked_list=$(mktemp "${loc_tmp_root}/cast-source-loc-files.XXXXXX")
 cleanup() {
     rm -f -- "${tracked_list}"
 }
