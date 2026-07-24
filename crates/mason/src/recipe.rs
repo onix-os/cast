@@ -24,7 +24,6 @@ use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{
     BuilderSpec, GluonPackageEvaluator, HooksSpec, LuaPackageEvaluator, PackageConversionError,
     PackageSpec, PhasesSpec, ProfileSpec, RecipeMigrationDecision, authorize_recipe_migration,
-    encode_lua_recipe,
 };
 use thiserror::Error;
 
@@ -498,7 +497,7 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use declarative_config::{DeclarationCodec, EngineId, LanguageId};
-    use stone_recipe::package::{BuilderSpec, HooksSpec, ProfileSpec};
+    use stone_recipe::package::{BuilderSpec, HooksSpec, ProfileSpec, encode_lua_recipe};
 
     use super::*;
 
