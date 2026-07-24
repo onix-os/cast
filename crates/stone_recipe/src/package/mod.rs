@@ -16,7 +16,7 @@ pub use self::gluon::{
 mod gluon;
 mod lua;
 
-pub use lua::{LuaPackageEvaluator, RecipeMigrationDecision, authorize_recipe_migration};
+pub use lua::{LuaPackageEvaluator, RecipeMigrationDecision, authorize_recipe_migration, encode_lua_recipe};
 mod validation;
 
 pub(crate) use validation::valid_package_name;

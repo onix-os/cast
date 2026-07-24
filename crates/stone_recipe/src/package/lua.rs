@@ -391,7 +391,7 @@ impl From<LuaPackageSpec> for PackageSpec {
 /// migrated recipe's `stone.lua`, and what pairs a `stone.glu` example with its
 /// verified `.lua` form.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn encode_lua_recipe(package: &PackageSpec) -> String {
+pub fn encode_lua_recipe(package: &PackageSpec) -> String {
     let mut output = String::from(GENERATED_LUA_MARKER);
     let _ = write!(
         output,

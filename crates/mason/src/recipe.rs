@@ -24,6 +24,7 @@ use stone_recipe::build_policy::{TargetEmulationSpec, TargetPolicySpec};
 use stone_recipe::package::{
     BuilderSpec, GluonPackageEvaluator, HooksSpec, LuaPackageEvaluator, PackageConversionError,
     PackageSpec, PhasesSpec, ProfileSpec, RecipeMigrationDecision, authorize_recipe_migration,
+    encode_lua_recipe,
 };
 use thiserror::Error;
 
@@ -539,6 +540,43 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), gluon_recipe(SOURCE_SPEC)).unwrap();
         Recipe::load(root.path()).unwrap()
+    }
+
+    fn find_stone_glu(dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                find_stone_glu(&path, found);
+            } else if path.file_name().and_then(|name| name.to_str()) == Some("stone.glu") {
+                found.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn every_gluon_recipe_example_round_trips_through_lua() {
+        // Pair the authored `stone.glu` documentation corpus with generated Lua
+        // by emitting each loaded recipe and re-loading it through the `.lua`
+        // path; every example must normalize to the same package value.
+        let examples =
+            Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/examples/gluon"));
+        let mut recipes = Vec::new();
+        find_stone_glu(examples, &mut recipes);
+        assert!(!recipes.is_empty(), "the Gluon recipe corpus is non-empty");
+
+        for recipe_path in recipes {
+            let directory = recipe_path.parent().unwrap();
+            let gluon = Recipe::load_authored(directory)
+                .unwrap_or_else(|error| panic!("load {recipe_path:?}: {error}"));
+            let emitted = encode_lua_recipe(&gluon.declaration);
+
+            let temporary = tempfile::tempdir().unwrap();
+            fs::write(temporary.path().join("stone.lua"), &emitted).unwrap();
+            let lua = Recipe::load_authored(temporary.path())
+                .unwrap_or_else(|error| panic!("reload emitted {recipe_path:?}: {error}"));
+
+            assert_eq!(lua.declaration, gluon.declaration, "recipe {recipe_path:?}");
+        }
     }
 
     fn recipe_from(source: &str) -> Recipe {
