@@ -13,6 +13,7 @@ use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 
 use fs_err as fs;
+use gluon_config::GLUON_GENERATED_MARKER;
 use sha2::{Digest as _, Sha256};
 
 use crate::db::state::{
@@ -220,6 +221,39 @@ pub(crate) fn resolve_migrated_blob(
     Ok(Some(blobs.read(&hex::encode(&row.migrated_blob_sha256))?))
 }
 
+/// Rooted enumeration of every remaining generated Gluon authority beneath a
+/// mutable config store root: any file named `*.glu` whose first bytes are the
+/// generated ownership marker. After a mutable-store migration switches its
+/// generated-slot language to Lua, this must return empty — it is the proof
+/// that no generated `.glu` authority remains, complementing the state catalog.
+/// Authored `.glu` files (which carry no generated marker) are never included.
+pub(crate) fn generated_gluon_authorities(root: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut found = Vec::new();
+    collect_generated_gluon_authorities(root, &mut found)?;
+    found.sort();
+    Ok(found)
+}
+
+fn collect_generated_gluon_authorities(dir: &Path, found: &mut Vec<PathBuf>) -> io::Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for entry in entries {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_generated_gluon_authorities(&path, found)?;
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("glu") {
+            let bytes = fs::read(&path)?;
+            if bytes.starts_with(GLUON_GENERATED_MARKER.as_bytes()) {
+                found.push(path);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Aggregate coverage of the required state-owned declaration slots: which have
 /// a committed catalog row and which remain unmigrated. A future Lua-only
 /// release refuses upgrade unless coverage is complete.
@@ -423,6 +457,33 @@ mod tests {
             migrate_declaration(&database, &blobs, request(state_id, converted)).unwrap(),
             DeclarationMigrationCommit::AlreadyPresent
         );
+    }
+
+    #[test]
+    fn rooted_enumeration_finds_only_remaining_generated_gluon_authority() {
+        use lua_config::GENERATED_LUA_MARKER;
+
+        let root = tempfile::tempdir().unwrap();
+        let fragments = root.path().join("repo.d");
+        fs::create_dir_all(&fragments).unwrap();
+        // A generated Gluon authority (what a migration must eliminate).
+        fs::write(
+            fragments.join("main.glu"),
+            format!("{GLUON_GENERATED_MARKER}[]\n"),
+        )
+        .unwrap();
+        // A generated Lua authority (the migration target) and an authored
+        // `.glu` with no generated marker — neither is a remaining generated
+        // Gluon authority.
+        fs::write(fragments.join("main.lua"), format!("{GENERATED_LUA_MARKER}return {{}}\n")).unwrap();
+        fs::write(fragments.join("authored.glu"), "[]\n").unwrap();
+
+        let remaining = generated_gluon_authorities(root.path()).unwrap();
+        assert_eq!(remaining, vec![fragments.join("main.glu")]);
+
+        // After the generated `.glu` authority is removed, none remains.
+        fs::remove_file(fragments.join("main.glu")).unwrap();
+        assert!(generated_gluon_authorities(root.path()).unwrap().is_empty());
     }
 
     #[test]
