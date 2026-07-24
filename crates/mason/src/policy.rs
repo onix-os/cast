@@ -375,15 +375,28 @@ mod tests {
 
     use super::*;
 
+    /// The shipped manifest — its foundation layer is Lua (`default.lua`).
     const REPOSITORY_MANIFEST: &str = include_str!("../data/policy/policy.glu");
+    /// The shipped Lua policy authority Cast loads.
+    const REPOSITORY_DEFAULT_LUA: &str = include_str!("../data/policy/default.lua");
+    /// The retained Gluon policy + tuning catalogs, kept as the full-parity
+    /// composition-test fixtures and the source for regenerating `default.lua`.
     const REPOSITORY_DEFAULT: &str = include_str!("../data/policy/default.glu");
     const REPOSITORY_TUNING_FLAGS: &str = include_str!("../data/policy/tuning/flags.glu");
     const REPOSITORY_TUNING_GROUPS: &str = include_str!("../data/policy/tuning/groups.glu");
+    /// An explicit Gluon foundation manifest, so composition-mechanics tests keep
+    /// exercising the modular Gluon path (module fingerprints, tuning-byte
+    /// participation) independently of the shipped Lua authority.
+    const GLUON_MANIFEST: &str = "let l = import! cast.build_policy.layers.v1\n\
+l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
 
     fn fixture(manifest: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("tuning")).unwrap();
         fs::write(root.path().join("policy.glu"), manifest).unwrap();
+        // Both authorities are present; the manifest chooses which is loaded, so
+        // Lua and Gluon manifests both resolve without a same-slot collision.
+        fs::write(root.path().join("default.lua"), REPOSITORY_DEFAULT_LUA).unwrap();
         fs::write(root.path().join("default.glu"), REPOSITORY_DEFAULT).unwrap();
         fs::write(root.path().join("tuning/flags.glu"), REPOSITORY_TUNING_FLAGS).unwrap();
         fs::write(root.path().join("tuning/groups.glu"), REPOSITORY_TUNING_GROUPS).unwrap();
@@ -409,7 +422,7 @@ mod tests {
         let emitted = stone_recipe::build_policy::encode_lua_policy(&policy.spec);
         assert!(emitted.starts_with(lua_config::GENERATED_LUA_MARKER));
 
-        let redecoded = stone_recipe::build_policy::LuaBuildPolicyEvaluator::default()
+        let redecoded = LuaBuildPolicyEvaluator::default()
             .evaluate(&declarative_config::Source::new("policy.lua", &emitted))
             .expect("emitted repository policy re-decodes");
         assert_eq!(policy.spec, redecoded);
@@ -424,7 +437,7 @@ mod tests {
         let policy = BuildPolicy::load_from(&policy_dir).expect("current policy loads");
 
         let lua = stone_recipe::build_policy::encode_lua_policy(&policy.spec);
-        let redecoded = stone_recipe::build_policy::LuaBuildPolicyEvaluator::default()
+        let redecoded = LuaBuildPolicyEvaluator::default()
             .evaluate(&declarative_config::Source::new("default.lua", &lua))
             .expect("emitted default.lua re-decodes");
         assert_eq!(policy.spec, redecoded);
@@ -470,8 +483,8 @@ mod tests {
         assert_eq!(policy.provenance.layers[0].transitions.len(), 1);
         let transition = &policy.provenance.layers[0].transitions[0];
         assert_eq!(transition.operation, BuildPolicyOperation::Add);
-        assert_eq!(transition.origin, "default.glu");
-        assert_eq!(transition.evaluation.root_logical_name, "default.glu");
+        assert_eq!(transition.origin, "default.lua");
+        assert_eq!(transition.evaluation.root_logical_name, "default.lua");
         transition.evaluation.validate().unwrap();
         policy.provenance.root.validate().unwrap();
         assert_ne!(
@@ -492,7 +505,7 @@ mod tests {
         assert_eq!(root.root_logical_name, "policy.glu");
         assert_eq!(
             root.root_source_sha256,
-            "758b6ad54d17bf82273f1e6f31acca3a8edb27ea473e4af128e04b8232dcd688"
+            "d68e48f2314fd0ffc9e651a630cf982270d140650185ec766522c100991c1603"
         );
         assert_eq!(
             root.modules
@@ -512,11 +525,11 @@ mod tests {
         assert_eq!(root.evaluator_policy.as_str(), "1");
         assert_eq!(
             root.explicit_inputs_sha256,
-            "4576620dd772958765bf3b4f6f6580679d3e2933294e406ea0f3d620e9f68ff1"
+            "540d2eff1f8acc28ab4f2603f2358c23ae56ebd14ee43e23bb4f38c0c48168dd"
         );
         assert_eq!(
             root.sha256,
-            "868b0ff848d3cab239c8c6bb17a071b426e644d899e4792cb6a87c561eab695d"
+            "3ce322766ab642e15858609088f47279fd264f2fc33226616ad5623a9d639c77"
         );
         root.validate().unwrap();
     }
@@ -557,37 +570,28 @@ mod tests {
                 .iter()
                 .any(|module| module.logical_name == "cast.build_policy.layers.v1")
         );
+        // The shipped foundation layer is now the self-contained Lua authority:
+        // it is evaluated by the Lua engine and imports nothing, so its
+        // transition provenance carries no modules (the tuning catalogs are
+        // inlined). The Gluon manifest still binds its own layers ABI module.
         let transition = &policy.provenance.layers[0].transitions[0];
-        assert_eq!(transition.evaluation.root_logical_name, "default.glu");
+        assert_eq!(transition.evaluation.root_logical_name, "default.lua");
         assert_eq!(transition.evaluation.root_source_sha256.len(), 64);
         assert_eq!(transition.evaluation.explicit_inputs_sha256.len(), 64);
         assert_eq!(transition.evaluation.sha256.len(), 64);
-        assert_eq!(transition.evaluation.engine.version(), gluon_config::GLUON_VERSION);
+        assert_eq!(transition.evaluation.engine.version(), lua_config::LUA_VERSION);
         assert_eq!(
             transition.evaluation.configuration_abi.version(),
-            gluon_config::CONFIGURATION_ABI_VERSION.to_string()
+            lua_config::CONFIGURATION_ABI_VERSION.to_string()
         );
         assert_eq!(
             transition.evaluation.evaluator_policy.as_str(),
-            gluon_config::EVALUATOR_POLICY_VERSION.to_string()
+            lua_config::EVALUATOR_POLICY_VERSION.to_string()
         );
         assert!(
-            transition
-                .evaluation
-                .modules
-                .iter()
-                .any(|module| module.logical_name == "cast.build_policy.v5")
+            transition.evaluation.modules.is_empty(),
+            "the Lua foundation authority imports nothing"
         );
-        for expected in ["tuning/flags.glu", "tuning/groups.glu"] {
-            assert!(
-                transition
-                    .evaluation
-                    .modules
-                    .iter()
-                    .any(|module| module.logical_name == expected),
-                "missing repository policy module {expected} from evaluation provenance"
-            );
-        }
     }
 
     #[test]
@@ -755,9 +759,12 @@ b.policy_patch {
 
     #[test]
     fn composed_identity_binds_manifest_order_and_complete_module_fingerprints() {
-        let first_root = fixture(REPOSITORY_MANIFEST);
-        let repeated_root = fixture(REPOSITORY_MANIFEST);
-        let changed_root = fixture(REPOSITORY_MANIFEST);
+        // Gluon composition-mechanics: exercise the modular foundation so a
+        // change to `default.glu`'s bytes alters the transition and composed
+        // identity while the normalized spec is unchanged.
+        let first_root = fixture(GLUON_MANIFEST);
+        let repeated_root = fixture(GLUON_MANIFEST);
+        let changed_root = fixture(GLUON_MANIFEST);
         fs::write(
             changed_root.path().join("default.glu"),
             format!("{REPOSITORY_DEFAULT}\n// identity-only source change\n"),
@@ -789,8 +796,12 @@ b.policy_patch {
             ("tuning/flags.glu", REPOSITORY_TUNING_FLAGS),
             ("tuning/groups.glu", REPOSITORY_TUNING_GROUPS),
         ] {
-            let baseline_root = fixture(REPOSITORY_MANIFEST);
-            let changed_root = fixture(REPOSITORY_MANIFEST);
+            // Gluon composition: `default.glu` imports the tuning modules, so a
+            // tuning-byte change must alter the transition's module fingerprint
+            // and the composed identity. (The shipped Lua authority inlines
+            // tuning; that parity is proved by the round-trip test instead.)
+            let baseline_root = fixture(GLUON_MANIFEST);
+            let changed_root = fixture(GLUON_MANIFEST);
             fs::write(
                 changed_root.path().join(logical_name),
                 format!("{source}\n// identity-only module change\n"),
