@@ -7,15 +7,17 @@
 //! and Lua sources normalize to equal semantic values with intentionally
 //! distinct evaluation identities.
 
+use std::fmt::Write as _;
+
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
     EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
-use lua_config::LuaEngine;
+use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string};
 use serde::Deserialize;
 
 use super::{SystemModel, spec};
-use crate::repository::lua::LuaRepositorySpec;
+use crate::repository::lua::{LuaRepositorySpec, encode_repository_record};
 
 #[derive(Debug, Clone, Deserialize)]
 struct LuaSystemSpec {
@@ -77,6 +79,36 @@ impl DeclarationEvaluator<SystemModel> for LuaSystemEvaluator {
             identity,
         })
     }
+}
+
+/// Emit a decoded [`SystemModel`] as canonical generated-marked Lua source that
+/// re-decodes through [`LuaSystemEvaluator`] to the same semantic value. This is
+/// the system-model write path — what a Gluon→Lua declaration migration emits
+/// for the `etc/cast/system.glu` slot. Repository records reuse the shared
+/// repository encoding, so a system model and a standalone repositories
+/// document canonicalize their repositories identically.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn encode_lua_system(model: &SystemModel) -> Result<String, spec::ConversionError> {
+    let system = spec::SystemSpec::try_from(model)?;
+
+    let mut output = String::from(GENERATED_LUA_MARKER);
+    output.push_str("return {\n");
+    writeln!(output, "    disable_warning = {},", system.disable_warning).unwrap();
+    output.push_str("    repositories = {\n");
+    for repository in &system.repositories {
+        encode_repository_record(&mut output, repository);
+    }
+    output.push_str("    },\n");
+    output.push_str("    packages = {");
+    for (index, package) in system.packages.iter().enumerate() {
+        if index > 0 {
+            output.push_str(", ");
+        }
+        output.push_str(&lua_string(package));
+    }
+    output.push_str("},\n");
+    output.push_str("}\n");
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -185,5 +217,22 @@ return {
             lua.fingerprint().engine.implementation(),
             gluon.fingerprint().engine.implementation(),
         );
+    }
+
+    #[test]
+    fn an_emitted_system_model_re_decodes_to_the_same_value() {
+        // The migration write path: a Gluon-decoded system model emits Lua that
+        // re-decodes to the same semantic value (repositories, packages, flag).
+        let gluon = gluon_model(GLUON_SYSTEM);
+        let emitted = encode_lua_system(&gluon).expect("system model emits to lua");
+        assert!(emitted.starts_with(GENERATED_LUA_MARKER));
+
+        let redecoded = lua_model(&emitted);
+        assert_eq!(redecoded.disable_warning, gluon.disable_warning);
+        assert_eq!(
+            format!("{:?}", redecoded.repositories),
+            format!("{:?}", gluon.repositories)
+        );
+        assert_eq!(redecoded.packages, gluon.packages);
     }
 }

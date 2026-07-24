@@ -229,21 +229,28 @@ fn encode_lua_specs(map: &Map) -> Result<String, RepositoryConversionError> {
     let mut output = String::from(GENERATED_LUA_MARKER);
     output.push_str("return {\n");
     for spec in &specs {
-        output.push_str("    {\n");
-        writeln!(output, "        id = {},", lua_string(&spec.id)).unwrap();
-        writeln!(
-            output,
-            "        description = {},",
-            lua_optional_string(spec.description.as_deref())
-        )
-        .unwrap();
-        encode_source(&mut output, &spec.source);
-        writeln!(output, "        priority = {},", lua_optional_integer(spec.priority)).unwrap();
-        writeln!(output, "        enabled = {},", lua_optional_bool(spec.enabled)).unwrap();
-        output.push_str("    },\n");
+        encode_repository_record(&mut output, spec);
     }
     output.push_str("}\n");
     Ok(output)
+}
+
+/// Emit one repository record as a Lua table entry, shared by the repository
+/// document emitter and the system-model emitter (which embeds the same
+/// records). The fields decode back through [`LuaRepositorySpec`].
+pub(crate) fn encode_repository_record(output: &mut String, spec: &RepositorySpec) {
+    output.push_str("    {\n");
+    writeln!(output, "        id = {},", lua_string(&spec.id)).unwrap();
+    writeln!(
+        output,
+        "        description = {},",
+        lua_optional_string(spec.description.as_deref())
+    )
+    .unwrap();
+    encode_source(output, &spec.source);
+    writeln!(output, "        priority = {},", lua_optional_integer(spec.priority)).unwrap();
+    writeln!(output, "        enabled = {},", lua_optional_bool(spec.enabled)).unwrap();
+    output.push_str("    },\n");
 }
 
 fn encode_source(output: &mut String, source: &RepositorySourceSpec) {
