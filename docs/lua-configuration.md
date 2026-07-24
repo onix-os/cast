@@ -120,6 +120,32 @@ their fixed retained `etc/cast/*` slot by extension and evaluated under the same
 retention, double-revalidation, and byte-exact source contract as Gluon; the
 slot keeps one canonical logical name regardless of engine.
 
+## ABI encoding reference
+
+Gluon declarations import a versioned `cast.*` ABI module that supplies typed
+constructors (`cast.repository.direct`, `cast.trigger`, `b.dep.package`, …). Lua
+has no imported ABI: the same shapes are written directly in the uniform tagged
+encoding above, so each Gluon ABI is "paired" by the Lua encoding of the value
+it constructs rather than by a second ABI file. The mapping per registered ABI:
+
+| Gluon ABI | Lua encoding of the constructed value |
+| --- | --- |
+| `cast.repository.v1` | array of repository records; source is `{ kind = "direct_index"/"root_index", … }` |
+| `cast.profile.v1` | array of `{ id, repositories = { … } }` records |
+| `cast.trigger.v1` | one record with `paths`/`handlers` as `{ key, value }` sequences; handler is `{ kind = "run"/"delete", … }` |
+| `cast.system.v1` | one `{ disable_warning, repositories, packages }` record |
+| `cast.build_policy.layers.v1` | `{ name, layers = { { name, entries = { { operation = { kind = … }, origin } } } } }` |
+| `cast.build_policy.v5` | the full policy record; `TextSpec` is `{ kind = "literal"/"context"/"concat", … }`, patches are `{ kind = "keep"/"set"/… }` |
+| `cast.package.v3` | one recipe record; `DependencySpec`/`StepSpec` are `{ kind = … }` variants |
+| `cast.builders.{cmake,meson,cargo,autotools}.v2` | selected via `BuilderEnvironmentSpec` names and the builder-specific `StepSpec` variants (`{ kind = "cmake_build" }`, …) |
+| `cast.boot_topology.v2` | `{ esp, boot = { kind = "alias_esp"/"distinct_xbootldr", … } }` |
+| `cast.root_filesystem.v1` | `{ root = "<locator>" }` |
+
+Runnable paired sources for the config and machine-local domains live under
+[`examples/lua`](./examples/lua) alongside their Gluon originals in
+[`examples/gluon`](./examples/gluon), and are proven to normalize to equal
+domain values by the differential parity tests.
+
 ## File authority
 
 - A generated `.lua` file carries the ownership marker
