@@ -103,6 +103,17 @@ normal package manager on a normal Linux tree.
   providing restricted evaluation, import policy, and diagnostics behind the
   neutral core.
 
+Both engines are **permanent and security-critical**: Cast supports Gluon and
+Lua at full parity as the recorded endpoint (permanent dual support). Every
+declaration domain registers both adapters through the shared registry, and
+per-domain parity tests pin that equivalent Gluon and Lua sources normalize to
+the same value with intentionally distinct evaluation identities. Neither is a
+compatibility shim — there is no fallback, cross-language import, dual write, or
+same-slot collision (each is a test-pinned error), and each generated slot has
+exactly one active language authority. Shipped authorities and documentation
+examples are Lua-canonical; Gluon remains fully evaluated, tested, and
+documented, and its dependencies are retained.
+
 ```text
 bin/cast/       external CLI
 crates/mason/   internal build library
