@@ -249,6 +249,19 @@ return {
     }
 
     #[test]
+    fn the_paired_trigger_documentation_example_normalizes_equally() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let gluon = std::fs::read_to_string(format!("{root}/docs/examples/gluon/trigger.glu"))
+            .expect("gluon trigger example");
+        let lua = std::fs::read_to_string(format!("{root}/docs/examples/lua/trigger.lua"))
+            .expect("lua trigger example");
+        assert_eq!(
+            format!("{:?}", lua_trigger(&lua)),
+            format!("{:?}", gluon_trigger(&gluon)),
+        );
+    }
+
+    #[test]
     fn the_lua_trigger_evaluator_matches_gluon_through_the_typed_boundary() {
         let evaluator = LuaTriggerEvaluator::default();
         let evaluation = <LuaTriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate(

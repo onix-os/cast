@@ -163,6 +163,20 @@ return {
     }
 
     #[test]
+    fn the_paired_system_documentation_example_normalizes_equally() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        let gluon = std::fs::read_to_string(format!("{root}/docs/examples/gluon/system.glu"))
+            .expect("gluon system example");
+        let lua = std::fs::read_to_string(format!("{root}/docs/examples/lua/system.lua"))
+            .expect("lua system example");
+        let gluon = gluon_model(&gluon);
+        let lua = lua_model(&lua);
+        assert_eq!(lua.disable_warning, gluon.disable_warning);
+        assert_eq!(format!("{:?}", lua.repositories), format!("{:?}", gluon.repositories));
+        assert_eq!(lua.packages, gluon.packages);
+    }
+
+    #[test]
     fn the_lua_and_gluon_system_identities_differ_by_engine() {
         let lua = lua_model(LUA_SYSTEM);
         let gluon = gluon_model(GLUON_SYSTEM);
