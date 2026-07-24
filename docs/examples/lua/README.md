@@ -87,8 +87,17 @@ while the durable publisher is not. Before rendering, the aggregate reserves
 the `root` key, rejects any package or local command-line duplicate, and emits
 the authenticated root token exactly once per kernel.
 
-The recipes under [`packages`](packages) exercise the public
-`cast.package.v3` interface as ordinary, pure Lua programs. They are
+The recipes under [`packages`](packages) exercise the shared authored
+package model as ordinary, pure Lua tables. Each table is the same shape
+that `cast.authored.v1` decodes into on the Gluon side: every authoring
+default and every builder-to-steps lowering (`cmake`, `meson`, `cargo`,
+`autotools`, or a fully custom `BuilderSpec`) lives once in shared Rust, so a
+Lua table and its Gluon twin author the identical `PackageSpec` — either
+language is a thin, interchangeable syntax over the same lowering, and
+`stone_recipe`'s `authoring_independence` test pins that equivalence
+directly. A Lua table simply omits any field that would take its default
+(`#[serde(default)]`); the paired Gluon recipe spells every field and marks a
+default explicitly with `a.unset` or `a.outputs.default`. They are
 deliberately small enough to study, but together cover the package shapes
 needed by a declarative userspace.
 

@@ -39,7 +39,7 @@ before any runtime is created.
 
 | Purpose | Authored source | Embedded ABI |
 |---|---|---|
-| Cast package | `stone.glu` | `cast.package.v3` and `cast.builders.*.v2` |
+| Cast package | `stone.glu` | `cast.authored.v1` |
 | Cast build policy | `crates/mason/data/policy/policy.glu` | `cast.build_policy.layers.v1` and `cast.build_policy.v5` |
 | Cast profile | `profile.glu` or `profile.d/*.glu` | `cast.profile.v1` |
 | Cast repository | `repo.glu` or `repo.d/*.glu` | `cast.repository.v1` |
@@ -210,7 +210,7 @@ effect, thread, channel, and reference modules are explicitly denied.
 There are two import classes:
 
 1. Versioned in-memory modules supplied by OS Tools, such as
-   `cast.package.v3` and `cast.system.v1`.
+   `cast.authored.v1` and `cast.system.v1`.
 2. Quoted relative modules beneath the explicit source root, for example
    `import! "./package-policy.glu"`.
 
@@ -244,54 +244,151 @@ or terminating the process.
 
 ## Typed and versioned ABIs
 
-The shared configuration boundary is version `1`. The canonical Cast
-package ABI is version `3`; the standard-builder modules are version `2`; the
-build-policy manifest remains version `1` and the build-policy value is version
-`3`.
+The shared configuration boundary is version `1`. The canonical Cast package
+authoring ABI is version `1` (`cast.authored.v1`); the build-policy manifest
+remains version `1` and the build-policy value is version `3`.
 The embedded modules expose constructors, defaults, explicit option/boolean
 variants, and immutable records. Gluon-facing DTOs use only stable language
 shapes such as strings, integers, arrays, records, and explicit variants.
 
-Record update syntax makes policy composition ordinary Gluon rather than a
-sidecar overlay format:
+`cast.authored.v1` is deliberately a type-and-constructor layer only: it
+carries no defaults, no builder expansion, and no patch/merge logic. A recipe
+imports it, names every field of the authored record directly, and selects a
+Rust default with `a.unset` (or `a.outputs.default` for the output set). The
+shared `stone_recipe::package::lower` then fills the package-ABI defaults and
+`lower_builder` expands the authored `BuilderRequest` into typed steps. Gluon
+and Lua author the identical shape and neither hosts authoring logic; the
+crate's `authoring_independence` test builds the same non-trivial package
+through `GluonPackageEvaluator` and `LuaPackageEvaluator` independently and
+asserts the two produce a byte-identical `PackageSpec`, so either language
+could be removed without losing authoring:
 
 ```gluon
-let cast = import! cast.package.v3
-let add_runtime = import! "./package_policy.glu"
-
-let meta = cast.meta {
-    pname = "hello",
-    version = "1.0.0",
-    release = 1,
-    homepage = "https://example.invalid/hello",
-    license = ["MPL-2.0"],
-}
+let a = import! cast.authored.v1
 
 {
-    outputs = [add_runtime (cast.output "out")],
-    .. cast.mk_package meta
+    meta = {
+        pname = "cmake-hello",
+        version = "3.2.0",
+        release = 2,
+        homepage = "https://example.invalid/cmake-hello",
+        license = ["BSD-2-Clause"],
+    },
+    builder = a.builder.cmake {
+        flags = ["-DBUILD_SHARED_LIBS=ON", "-DBUILD_DOCUMENTATION=OFF"],
+        run_tests = a.true,
+    },
+    sources = [
+        a.source.archive
+            "https://example.invalid/cmake-hello-3.2.0.tar.gz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    native_build_inputs = [],
+    build_inputs = [
+        a.dep.pkgconfig "zlib",
+        a.dep.cmake "Threads",
+    ],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }
 ```
 
-Package factories are ordinary functions from an explicit dependency record to
-a concrete package value. `cast.override_attrs` applies a total typed patch;
-patch records distinguish keeping an array from replacing it with `[]`.
-Standard CMake, Meson, Cargo, and Autotools modules return complete structural
-builder records: symbolic required capabilities, an environment marker,
-ordered `StepSpec` phases, and supported hooks. Repository policy separately
+The same package authored as a minimal Lua table omits every field that takes
+its shared-Rust default instead of writing it out explicitly:
+
+```lua
+return {
+    meta = {
+        pname = "cmake-hello",
+        version = "3.2.0",
+        release = 2,
+        homepage = "https://example.invalid/cmake-hello",
+        license = { "BSD-2-Clause" },
+    },
+    builder = {
+        kind = "cmake",
+        flags = { "-DBUILD_SHARED_LIBS=ON", "-DBUILD_DOCUMENTATION=OFF" },
+        run_tests = true,
+    },
+    sources = {
+        { kind = "archive", url = "https://example.invalid/cmake-hello-3.2.0.tar.gz",
+          hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+    },
+    build_inputs = {
+        { kind = "pkg_config", value = "zlib" },
+        { kind = "cmake", value = "Threads" },
+    },
+}
+```
+
+Record update syntax makes package composition and overrides ordinary Gluon
+rather than a sidecar patch format. There is no keep/replace ADT to author
+against: overriding a base package's metadata or sources is a plain record
+update over the authored base, and fields left out are inherited from that
+base unchanged —
+
+```gluon
+let a = import! cast.authored.v1
+let base = import! "./package.glu"
+
+{
+    meta = {
+        pname = "override-release",
+        version = "2.1.0",
+        release = 4,
+        homepage = "https://example.invalid/override-release",
+        license = ["MIT"],
+    },
+    sources = [
+        a.source.archive_with {
+            url = "https://example.invalid/override-release-2.1.0.tar.xz",
+            hash = "4444444444444444444444444444444444444444444444444444444444444444",
+            rename = a.optional.set "override-release-2.1.0.tar.xz",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "override-release-2.1.0",
+        },
+    ],
+    .. base
+}
+```
+
+— and appending to an inherited array (an output set, a dependency list) is
+ordinary `std.array.prim` list construction over the base's field rather than
+an "append" patch variant; replacing one wholesale is simply writing the new
+array literal in the record update.
+
+The `BuilderRequest` sent through `a.builder.{cmake,meson,cargo,autotools}`
+carries only that build system's flags/features and a `run_tests` flag; the
+shared Rust `lower_builder` expands it into a complete structural
+`BuilderSpec`: symbolic required capabilities, an environment marker, ordered
+`StepSpec` phases, and supported hooks. `a.builder.custom` and `a.builder.shell`
+are the explicit data escape hatches for a hand-authored `BuilderSpec` (see the
+per-profile builder in `docs/examples/gluon/packages/profiles-emul32`, which
+authors the cmake expansion by hand because `ProfileSpec` carries a lowered
+`BuilderSpec` rather than a `BuilderRequest`). Repository policy separately
 owns the typed command templates and environment bindings selected by those
 values. Rust performs typed lowering only; it neither synthesizes a standard
-phase graph nor supplies a second builder-tool list. Builders do not lower
-through `%action` strings. Direct `Run` steps bind an absolute guest program to
-its dependency capability. `Shell` binds its interpreter and every declared
-program the same way; `b.step.shell` remains ergonomic shorthand for a
-Gluon-constructed `/usr/bin/bash` capability and an empty declared-program
-list. Shell text stays literal and cannot invoke `%action` or `%(definition)`
-syntax. The executor receives only the resulting frozen `StepPlan` and
-environment values.
+phase graph beyond what `lower_builder` defines nor supplies a second
+builder-tool list. Builders do not lower through `%action` strings. Direct
+`Run` steps bind an absolute guest program to its dependency capability.
+`Shell` binds its interpreter and every declared program the same way;
+`a.step.shell` remains ergonomic shorthand for a Gluon-constructed
+`/usr/bin/bash` capability and an empty declared-program list, and
+`a.builder.shell phases required_tools` builds a complete custom `BuilderSpec`
+from explicit phases and required tools. Shell text stays literal and cannot
+invoke `%action` or `%(definition)` syntax. The executor receives only the
+resulting frozen `StepPlan` and environment values.
 
 The retired recipe and macro-policy embedded modules, evaluators, and
-standalone encoders have been removed. `cast.package.v3` is the only recipe
+standalone encoders have been removed. `cast.authored.v1` is the only recipe
 ABI, repository build policy evaluates directly as `BuildPolicySpec`, and Cast
 plans and packages the concrete
 values without a second recipe or macro domain.
@@ -536,7 +633,7 @@ Print the concrete normalized package declaration produced by the factory:
 cast recipe eval ./stone.glu
 ```
 
-Cast build, check, update, and evaluation all use `cast.package.v3`.
+Cast build, check, update, and evaluation all use `cast.authored.v1`.
 There is no automatic legacy-recipe fallback or dual-source precedence.
 
 Freeze a target-specific derivation and create or refresh its generated build

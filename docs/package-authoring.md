@@ -1,10 +1,22 @@
 
 # Package authoring
 
-Cast packages are pure Gluon programs evaluated through
-`cast.package.v3`. A recipe may import local modules and call functions, but
-Rust receives one concrete, validated `PackageSpec`; it never retains a Gluon
-closure. The retired recipe-v1 ABI is not a compatibility path.
+Cast packages are authored through `cast.authored.v1`, a pure type +
+constructor layer with no defaults and no builder-expansion or merge logic of
+its own, and evaluated to one concrete, validated `PackageSpec`; Rust never
+retains a Gluon closure. A recipe may import local modules and call functions
+to build that record, but every field of the authored record is named
+directly — there is no template-inheritance stack and no hidden repository
+merge. Lua authors the identical shape as a plain table, and all package-ABI
+defaults plus builder-request lowering live in shared Rust
+(`stone_recipe::package::{lower, lower_builder, default_output_set}`), so
+Gluon and Lua are interchangeable thin syntaxes over the same `PackageSpec`
+and either can be removed without losing authoring.
+`crates/stone_recipe/tests/authoring_independence.rs` proves this: it authors
+the same non-trivial package once through the Gluon evaluator with Lua
+nowhere in the path, once through the Lua evaluator with Gluon nowhere in the
+path, and asserts the two independently produced `PackageSpec`s are
+byte-identical. The retired recipe-v1 ABI is not a compatibility path.
 
 This guide describes the current authoring, planning, and execution contract.
 `cast recipe plan`, `cast recipe explain`, and normal `cast build` all use the same
@@ -17,30 +29,37 @@ record containing symbolic dependencies selected by the caller:
 
 ```gluon
 // package.glu
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
 
 \scope ->
-    let base = b.mk_package (b.meta {
-        pname = "hello",
-        version = "1.0.0",
-        release = 1,
-        homepage = "https://example.invalid/hello",
-        license = ["MPL-2.0"],
-    })
     {
-        builder = cmake.builder {
-            flags = ["-DBUILD_TESTS=ON"],
-            .. cmake.defaults
+        meta = {
+            pname = "hello",
+            version = "1.0.0",
+            release = 1,
+            homepage = "https://example.invalid/hello",
+            license = ["MPL-2.0"],
         },
-        native_build_inputs = [scope.pkgconf],
-        build_inputs = [scope.zlib],
+        builder = a.builder.cmake {
+            flags = ["-DBUILD_TESTS=ON"],
+            run_tests = a.true,
+        },
         sources = [
-            b.source.archive
+            a.source.archive
                 "https://example.invalid/hello-1.0.0.tar.xz"
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ],
-        .. base
+        native_build_inputs = [scope.pkgconf],
+        build_inputs = [scope.zlib],
+        check_inputs = [],
+        outputs = a.outputs.default,
+        options = a.unset,
+        profiles = [],
+        architectures = [],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }
 ```
 
@@ -48,12 +67,12 @@ The root `stone.glu` supplies the scope and therefore produces the concrete
 package value:
 
 ```gluon
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 let make = import! "./package.glu"
 
 make {
-    pkgconf = b.dep.binary "pkgconf",
-    zlib = b.dep.pkgconfig "zlib",
+    pkgconf = a.dep.binary "pkgconf",
+    zlib = a.dep.pkgconfig "zlib",
 }
 ```
 
@@ -73,26 +92,41 @@ second Rust `PackageSet` ABI or hidden alias-provenance layer. Local output
 cycles are rejected during package validation, and cycles in the resolved
 package closure report the concrete dependency path.
 
+Every authored record is structural and total: Gluon requires all fourteen
+top-level fields (`meta`, `builder`, `sources`, `native_build_inputs`,
+`build_inputs`, `check_inputs`, `outputs`, `options`, `profiles`,
+`architectures`, `tuning`, `emul32`, `mold`, `hooks`) to be present, and a
+default is selected explicitly with `a.unset` or `a.outputs.default`. Lua has
+no such requirement: `LuaAuthoredPackage` marks every field but `meta` and
+`builder` `#[serde(default)]`, so a Lua table simply omits any field taking
+its shared-Rust default.
+
 ## Dependency roles
 
 Use typed dependency constructors rather than provider strings:
 
 ```gluon
-b.dep.package "zlib"
-b.dep.output (b.package_ref "llvm") "clang"
-b.dep.binary "cmake"
-b.dep.system_binary "ldconfig"
-b.dep.pkgconfig "openssl"
-b.dep.pkgconfig32 "zlib"
-b.dep.soname "libz.so.1"
-b.dep.cmake "Qt6"
-b.dep.python "setuptools"
-b.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)"
+a.dep.package "zlib"
+a.dep.output (a.package_ref "llvm") "clang"
+a.dep.binary "cmake"
+a.dep.system_binary "ldconfig"
+a.dep.pkgconfig "openssl"
+a.dep.pkgconfig32 "zlib"
+a.dep.soname "libz.so.1"
+a.dep.cmake "Qt6"
+a.dep.python "setuptools"
+a.dep.interpreter "/usr/lib/ld-linux-x86-64.so.2(x86_64)"
 ```
+
+In Lua the same capabilities are tagged tables: `{ kind = "package", value = {
+name = "zlib" } }`, `{ kind = "output", value = { package = { name = "llvm" },
+output = "clang" } }`, `{ kind = "binary", value = "cmake" }`, and so on for
+`system_binary`, `pkg_config`, `pkg_config32`, `soname`, `cmake`, `python`, and
+`interpreter`.
 
 `interpreter` is the exact architecture-qualified ELF `PT_INTERP` loader
 capability emitted by package analysis. Script runtimes such as `python3`,
-`bash`, and `sh` are executable capabilities and use `b.dep.binary` instead.
+`bash`, and `sh` are executable capabilities and use `a.dep.binary` instead.
 
 Put them in the field matching their purpose:
 
@@ -123,61 +157,79 @@ the host filesystem is never used to complete the chain.
 
 ## Standard builders
 
-Import one standard builder module and start from its `defaults` record when
-overriding typed settings:
+`builder` is a request, not a template: name the standard build system by
+kind and Rust's shared `lower_builder` expands it into required tools, an
+environment marker, and the typed phase graph.
 
-| Module | Settings | Structural phases | Environment marker |
-|---|---|---|---|
-| `cast.builders.cmake.v2` | `flags`, `run_tests` | configure, build, install, test | CMake |
-| `cast.builders.meson.v2` | `flags`, `run_tests` | setup, build, install, test | Meson |
-| `cast.builders.cargo.v2` | `features`, `binaries`, `run_tests` | build, install, test | Cargo |
-| `cast.builders.autotools.v2` | `flags`, `run_tests` | configure, build, install, test | Autotools |
+| Request (Gluon) | Lua `kind` | Settings | Structural phases | Environment marker |
+|---|---|---|---|---|
+| `a.builder.cmake { .. }` | `"cmake"` | `flags`, `run_tests` | configure, build, install, test | CMake |
+| `a.builder.meson { .. }` | `"meson"` | `flags`, `run_tests` | setup, build, install, test | Meson |
+| `a.builder.cargo { .. }` | `"cargo"` | `features`, `binaries`, `run_tests` | build, install, test | Cargo |
+| `a.builder.autotools { .. }` | `"autotools"` | `flags`, `run_tests` | configure, build, install, test | Autotools |
 
-Booleans use `b.boolean.true` and `b.boolean.false`. For example:
+Booleans use `a.true` and `a.false`. For example:
 
 ```gluon
-let b = import! cast.package.v3
-let cargo = import! cast.builders.cargo.v2
+let a = import! cast.authored.v1
 
-cargo.builder {
-    features = ["cli", "tls"],
-    binaries = ["hello", "helloctl"],
-    run_tests = b.boolean.true,
+a.builder.cargo {
+    features = ["pcre2", "unicode"],
+    binaries = ["cargo-hello"],
+    run_tests = a.true,
 }
 ```
 
-Each module returns one concrete `BuilderSpec`: symbolic required-tool
+The equivalent minimal Lua table omits any field taking its default
+(`flags`/`features`/`binaries` default to `{}`, `run_tests` defaults to
+`true`):
+
+```lua
+builder = { kind = "cargo", features = { "pcre2", "unicode" }, binaries = { "cargo-hello" } }
+```
+
+Gluon has no such per-field serde default — `BuilderRequest`'s Cmake/Meson/
+Cargo/Autotools variants are ordinary Gluon records, so `flags`/`features`/
+`binaries`/`run_tests` must all be written explicitly, as in the table above.
+
+`lower_builder` expands the selected request into the same typed step phases
+regardless of which language authored it: symbolic required-tool
 capabilities, an environment marker, the ordered typed phase graph, and its
 supported hook surface. Repository policy owns only the command templates for
-those typed steps and the bindings selected by the marker. Rust lowers the two
-records together; it does not invent phases or a second tool list. No builder
-authors or lowers through `%cmake`, `%meson`, `%cargo`, `%configure`, or `%make`
-action strings.
+those typed steps and the bindings selected by the marker; Rust does not
+invent phases or a second tool list. No builder authors or lowers through
+`%cmake`, `%meson`, `%cargo`, `%configure`, or `%make` action strings.
+
+Use `a.builder.custom <BuilderSpec>` or `a.builder.shell <scripts> <tools>`
+(Lua: `{ kind = "custom", spec = { .. } }`) when the build cannot be
+represented by a standard request — see "Custom shell builders" below.
 
 ## Typed phases and hooks
 
 The standard builder owns its phase body and declares which hook positions it
 supports. Package or profile hooks add explicit steps before or after that
-body:
+body. The `hooks` field itself takes `a.unset` to select the empty hook set,
+or `a.some.hooks` wrapping an `a.hooks { .. }` record built on top of
+`a.empty.hooks` for the phases left alone:
 
 ```gluon
-hooks = b.hooks {
-    pre_build = [b.step.run (b.program.binary "generate-sources") []],
+hooks = a.some.hooks (a.hooks {
+    pre_build = [a.step.run (a.program.binary "generate-sources") []],
     post_install = [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "ln"],
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "ln"],
             script = r#"ln -s hello "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hi""#,
         },
     ],
-    .. b.defaults.hooks
-}
+    .. a.empty.hooks
+})
 ```
 
 The current standard modules support `pre_` and `post_` positions for `setup`,
 `build`, `check`, `install`, and `workload`; unsupported populated hooks are a
 package-validation error. Hook and builder step order is preserved, but every
-frozen shell step runs in its own declared interpreter process. `b.step.shell`
+frozen shell step runs in its own declared interpreter process. `a.step.shell`
 is shorthand for a Gluon-authored `/usr/bin/bash` capability with no additional
 programs. Filesystem effects persist; process-local variables, shell options,
 and working-directory changes never cross step boundaries. In particular, an
@@ -189,86 +241,104 @@ requires extra environment variables, use a custom builder whose `check` phase
 contains that command; a hook cannot mutate the standard builder step, and the
 current package ABI has no per-step environment override.
 
-The package ABI exposes the typed standard-step constructors used by the
-embedded modules, plus `b.step.run`, `b.step.run_built`, `b.step.shell`, and
-`b.step.shell_with` for explicit custom work. `b.step.run` binds an external
+The package ABI exposes the typed standard-step constructors used by
+`lower_builder`'s standard-request expansion, plus `a.step.run`, `a.step.run_built`, `a.step.shell`, and
+`a.step.shell_with` for explicit custom work. `a.step.run` binds an external
 program to the locked package capability that provides it. A native executable
 produced inside the current build tree instead uses
-`b.step.run_built (b.program.built "relative/path")`; freezing binds that
+`a.step.run_built (a.program.built "relative/path")`; freezing binds that
 normalized relative path beneath the exact phase working directory without
 inventing a package dependency. The current native format is Linux ELF, and
 the retained descriptor remains close-on-exec when passed directly to
-`execveat`. Scripts must use an explicit `b.step.shell` or `b.step.shell_with`;
+`execveat`. Scripts must use an explicit `a.step.shell` or `a.step.shell_with`;
 a descriptor-executed shebang fails closed without reopening the public path.
 The ABI deliberately has no `cargo_fetch` step: a frozen
 build cannot resolve or download Cargo dependencies. Cargo inputs must already
 be present in a locked source, with Cargo configured to use that vendored tree;
 the standard Cargo builder runs with `--frozen`. Package authors normally
-select a standard module rather than rebuilding its phase graph step by step.
+select a standard request rather than rebuilding its phase graph step by step.
 
 ## Custom shell builders
 
 Use a custom builder only when the build cannot be represented by a standard
-builder. Every phase is an explicit `b.phase`. A direct `Run` binds one program
+request. Every phase is an explicit `a.phase`. A direct `Run` binds one program
 to the dependency capability which provides it; a `Shell` binds its interpreter
-and every non-builtin program invoked by the script:
+and every non-builtin program invoked by the script. `a.builder.shell phases
+tools` is sugar for a `Custom` `BuilderSpec` with no extra environment marker
+and every hook position supported; use `a.builder.custom <BuilderSpec>`
+directly when the escape hatch itself needs a non-default `environment` or
+`supported_hooks`:
 
 ```gluon
-let b = import! cast.package.v3
-let zig = b.program.binary "zig"
+let a = import! cast.authored.v1
 
-let scripts = b.scripts {
-    // The locked source contains build.zig, build.zig.zon, and a complete
-    // vendor/ tree. build.zig.zon refers to each dependency by local path.
-    setup = b.phase [
-        b.step.shell r#"test -f build.zig
+let pname = "zig-vector"
+let zig = a.program.binary "zig"
+
+// build.zig.zon refers only to the locked vendor tree. Zig receives explicit
+// local and global caches in every phase because process environments never
+// leak from one frozen step into the next.
+let phases = a.scripts {
+    setup = a.phase [
+        a.step.shell r#"test -f build.zig
 test -f build.zig.zon
 test -d vendor"#,
     ],
-    build = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
+    build = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
             declared_programs = [zig],
             script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
 ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
 zig build -Doptimize=ReleaseSafe"#,
         },
     ],
-    check = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
+    check = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
             declared_programs = [zig],
             script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
 ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
 zig build test -Doptimize=ReleaseSafe"#,
         },
     ],
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
             declared_programs = [zig],
             script = r#"ZIG_GLOBAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-global-cache" \
 ZIG_LOCAL_CACHE_DIR="${CAST_BUILD_ROOT}/zig-local-cache" \
 zig build install -Doptimize=ReleaseSafe --prefix "${CAST_INSTALL_ROOT}${CAST_PREFIX}""#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
 {
-    builder = b.builder.custom scripts [b.dep.binary "zig"],
-    sources = [
-        b.source.archive
-            "https://example.invalid/zig-hello-1.0.0-vendored.tar.xz"
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    ],
-    .. b.mk_package (b.meta {
-        pname = "zig-hello",
-        version = "1.0.0",
+    meta = {
+        pname,
+        version = "0.8.0",
         release = 1,
-        homepage = "https://example.invalid/zig-hello",
+        homepage = "https://example.invalid/zig-vector",
         license = ["MIT"],
-    })
+    },
+    builder = a.builder.shell phases [a.dep.binary "zig"],
+    sources = [
+        a.source.archive
+            "https://example.invalid/zig-vector-0.8.0-vendored.tar.xz"
+            "23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+    ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = ["x86_64", "aarch64"],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }
 ```
 
@@ -280,9 +350,9 @@ incomplete vendor tree must fail the offline build; it is not a reason to add
 an in-build fetch command.
 
 `Shell` is an explicit, literal escape hatch. It never enters the former macro
-parser: `%name` and `%(name)` have no special meaning. `b.program.binary` and
-`b.program.system_binary` construct canonical `/usr/bin` and `/usr/sbin`
-bindings. `b.program.package` and `b.program.output` bind an arbitrary
+parser: `%name` and `%(name)` have no special meaning. `a.program.binary` and
+`a.program.system_binary` construct canonical `/usr/bin` and `/usr/sbin`
+bindings. `a.program.package` and `a.program.output` bind an arbitrary
 normalized absolute guest path to a package or output capability. Relative,
 traversing, mismatched, and non-executable relation bindings are rejected
 during package validation.
@@ -306,83 +376,246 @@ Every package must contain exactly one output named `out`. Additional output
 names are local names; Cast currently lowers `dev` to `<pname>-dev` at the
 internal packaging boundary.
 
-`b.mk_package` starts with the deterministic output set exported by
-`cast.package.v3` (root, documentation, development, debug, libraries,
-32-bit, and demos). These are versioned package-ABI defaults: they are ordinary
-Gluon values present in the concrete evaluated `PackageSpec`, not a hidden Rust
-merge or a repository policy layer. A package can replace `outputs` explicitly
-as below, and an incompatible change to the default set requires a new package
-ABI version.
+The `outputs` field is a choice, not a merge target: `a.outputs.default`
+selects the shared Rust `default_output_set` (an opaque marker — `Default`,
+`Explicit`, and `WithRoot` are a dedicated, non-`Optional` choice type, not an
+overlay Gluon can inspect), `a.outputs.explicit [ .. ]` replaces the whole set
+with an authored list, and `a.outputs.with_root <output>` overlays a custom
+root output onto the default split-output set, with the overlay itself
+applied by shared Rust:
+
+```gluon
+let a = import! cast.authored.v1
+let package_policy = import! "./package_policy.glu"
+
+{
+    // ...
+    outputs = a.outputs.with_root (package_policy (a.output "out")),
+    // ...
+}
+```
+
+where `package_policy.glu` decorates the base output record:
+
+```gluon
+let a = import! cast.authored.v1
+
+\output ->
+    let output = a.output_with output
+    {
+        summary = a.optional.set "Recipe composed with an imported policy",
+        runtime_inputs = [a.dep.package "ca-certificates"],
+        .. output
+    }
+```
+
+These are versioned package-ABI defaults: `default_output_set` is the same
+nine-output split (`out`, `docs`, `devel`, `dbginfo`, `libs`, `32bit`,
+`32bit-devel`, `32bit-dbginfo`, `demos`) for every recipe, computed once in
+shared Rust rather than duplicated per-language, and an incompatible change to
+it requires a new package ABI version. A recipe that needs to *extend* the
+default set (for example, appending an extra "tools" output) has no partial
+append: `a.outputs.default` is opaque at authoring time, so it must reproduce
+the same nine outputs explicitly through `a.outputs.explicit` and append its
+own — see `docs/examples/gluon/packages/factory-override/package.glu` and
+`docs/examples/gluon/packages/layered-overrides/layers.glu` for a full
+worked copy of that default set plus an appended output.
+
+A fully custom output list uses `a.outputs.explicit` directly:
 
 ```gluon
 let root = {
-    summary = b.optional.set "Hello executable",
-    paths = [b.path.exe "/usr/bin/hello"],
-    .. b.output "out"
+    summary = a.optional.set "Command-line tools",
+    paths = [
+        a.path.exe "/usr/bin/split-demo",
+        a.path.any "/usr/share/man/man1",
+    ],
+    .. a.output "out"
 }
 
-let development = {
-    summary = b.optional.set "Hello development files",
-    runtime_inputs = [b.dep.output (b.package_ref "hello") "out"],
-    paths = [
-        b.path.any "/usr/include/hello",
-        b.path.symlink "/usr/lib/libhello.so",
-    ],
-    .. b.output "dev"
+let libraries = {
+    summary = a.optional.set "Runtime libraries",
+    paths = [a.path.any "/usr/lib/libsplit-demo.so.*"],
+    .. a.output "libs"
 }
 
 {
-    outputs = [root, development],
+    // ...
+    outputs = a.outputs.explicit [root, libraries],
+    // ...
+}
+```
+
+Materializable path constructors are `a.path.any`, `a.path.exe`, and
+`a.path.symlink`. The `cast.authored.v1` `a.path.special` constructor remains
+reserved so the versioned ABI does not change in place, but concrete package
+validation rejects it: immutable package layouts cannot contain devices,
+FIFOs, or sockets. Package a `/usr/lib/tmpfiles.d/*.conf` regular file when
+such runtime state must be created during system activation. Outputs can also
+set `description`, `provides_exclude`, `runtime_exclude`, and typed
+`conflicts`.
+
+## Composition and overrides
+
+Change a factory argument before construction by updating its scope, the same
+way `make { pkgconf = .., zlib = .. }` above supplies concrete dependencies:
+
+```gluon
+let package = make_package {
+    tls = a.dep.pkgconfig "libressl",
+    .. inputs
+}
+```
+
+Change a completed package with an ordinary Gluon record update over the
+authored base — there is no patch ADT (`b.package_patch`, `b.override_attrs`,
+`b.patch.array.replace`/`append`/`prepend`, `b.patch.keep`/`set`) to route
+through. Fields left out are inherited from `base` unchanged; there is no
+implicit old-attribute merge or stale-source fallback:
+
+```gluon
+let a = import! cast.authored.v1
+let base = import! "./package.glu"
+
+{
+    meta = {
+        pname = "override-release",
+        version = "2.1.0",
+        release = 4,
+        homepage = "https://example.invalid/override-release",
+        license = ["MIT"],
+    },
+    sources = [
+        a.source.archive_with {
+            url = "https://example.invalid/override-release-2.1.0.tar.xz",
+            hash = "4444444444444444444444444444444444444444444444444444444444444444",
+            rename = a.optional.set "override-release-2.1.0.tar.xz",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "override-release-2.1.0",
+        },
+    ],
     .. base
 }
 ```
 
-Materializable path constructors are `any`, `exe`, and `symlink`. The
-`cast.package.v3` `special` constructor remains reserved so the versioned ABI
-does not change in place, but concrete package validation rejects it: immutable
-package layouts cannot contain devices, FIFOs, or sockets. Package a
-`/usr/lib/tmpfiles.d/*.conf` regular file when such runtime state must be
-created during system activation. Outputs can also set `description`,
-`provides_exclude`, `runtime_exclude`, and typed `conflicts`.
-
-## Package patches and argument overrides
-
-Change a factory argument before construction by updating its scope:
+Layer several independent transformations by chaining ordinary
+`PackageSpec -> PackageSpec` functions instead of an order-dependent
+attribute-merge stack. Composing a list field (rather than replacing it)
+is plain Gluon array concatenation:
 
 ```gluon
-let package = make {
-    tls = b.dep.pkgconfig "libressl",
-    .. packages
-}
-```
+let a = import! cast.authored.v1
+let arrays = import! std.array.prim
 
-Change a completed package through the total typed patch algebra:
-
-```gluon
-let patch = b.package_patch {
-    architectures = b.patch.array.replace ["x86_64"],
-    build_inputs = b.patch.array.append [b.dep.package "extra-input"],
-    outputs = b.patch.array.append [development],
-    .. b.defaults.package_patch
+let release_options = a.options {
+    toolchain = a.toolchain.llvm,
+    cspgo = a.false,
+    samplepgo = a.false,
+    debug = a.false,
+    strip = a.true,
+    networking = a.false,
+    compressman = a.true,
+    lastrip = a.true,
 }
 
-b.override_attrs patch package
+let security = \package -> {
+    meta = package.meta,
+    builder = package.builder,
+    sources = package.sources,
+    native_build_inputs = arrays.append [a.dep.binary "hardening-check"] package.native_build_inputs,
+    build_inputs = package.build_inputs,
+    check_inputs = package.check_inputs,
+    outputs = package.outputs,
+    options = a.some.options release_options,
+    profiles = package.profiles,
+    architectures = package.architectures,
+    tuning = arrays.append [a.named "harden" a.tuning.enable] package.tuning,
+    emul32 = package.emul32,
+    mold = package.mold,
+    hooks = package.hooks,
+}
+
+security base
 ```
 
-Scalar or record fields use `b.patch.keep` and `b.patch.set`. Arrays use
-`keep`, `replace`, `prepend`, or `append`; replacing an array with `[]` is
-different from keeping its existing value.
+Whether a layer keeps a field (copy it through, or omit it under `.. base`
+record update), replaces it (write a new literal, including `[]`), or extends
+it (`arrays.append` the addition and the existing value) is visible directly
+in the function body — there is no separate `keep`/`replace`/`prepend`/`append`
+verb layer to reach for. See `docs/examples/gluon/packages/release-override`,
+`docs/examples/gluon/packages/factory-override`, and
+`docs/examples/gluon/packages/layered-overrides` for complete, runnable
+copies of these three patterns.
 
 ## Options, profiles, and tuning
 
-`b.options` configures the toolchain and build behavior. Start from
-`b.defaults.options` and update only intentional fields. Toolchains are
-`b.toolchain.llvm` and `b.toolchain.gnu`; Boolean fields use the explicit
-Boolean constructors.
+`options` takes `a.unset` to select `OptionsSpec`'s shared-Rust default, or
+`a.some.options (a.options { .. })` to set every field explicitly. Toolchains
+are `a.toolchain.llvm` and `a.toolchain.gnu`; Boolean fields use `a.true` /
+`a.false`:
 
-Target-specific profiles use `b.profile "name"` or `b.profile_with`. A profile
-selects its own builder, hooks, and native/build/check inputs. Tuning entries
-use `b.named` with `b.tuning.enable`, `disable`, or `config`.
+```gluon
+options = a.some.options (a.options {
+    toolchain = a.toolchain.gnu,
+    cspgo = a.false,
+    samplepgo = a.false,
+    debug = a.false,
+    strip = a.true,
+    networking = a.false,
+    compressman = a.true,
+    lastrip = a.true,
+}),
+```
+
+Tuning entries use `a.named "<key>" <value>` with `a.tuning.enable`,
+`a.tuning.disable`, or `a.tuning.config "<value>"`:
+
+```gluon
+tuning = [
+    a.named "harden" a.tuning.enable,
+    a.named "lto" (a.tuning.config "thin"),
+    a.named "nosemantic" a.tuning.disable,
+    a.named "optimize" (a.tuning.config "speed"),
+],
+```
+
+Target-specific profiles are entries in `profiles`, each a `name`, `builder`,
+`hooks`, and native/build/check input list. A profile's `builder` field is a
+fully lowered `BuilderSpec`, not the top-level `BuilderRequest` — `ProfileSpec`
+passes through `lower` untouched, so a profile that wants the same expansion
+`a.builder.cmake { .. }` gets at the top level has to author that step graph
+by hand (or through a small local helper), the way
+`cast.builders.cmake.v2` used to for the legacy ABI:
+
+```gluon
+let cmake_profile_builder = \flags run_tests ->
+    let check_steps =
+        match run_tests with
+        | True -> [a.step.cmake_test]
+        | False -> []
+    {
+        required_tools = [a.dep.binary "sh", a.dep.binary "ninja"],
+        environment = [a.environment.cmake],
+        phases = {
+            setup = a.phase [a.step.cmake_configure flags],
+            build = a.phase [a.step.cmake_build],
+            install = a.phase [a.step.cmake_install],
+            check = a.phase check_steps,
+            workload = a.phase [],
+        },
+        supported_hooks = a.hook_support.all,
+    }
+
+let emul32_profile = {
+    name = "emul32",
+    builder = cmake_profile_builder ["-DCMAKE_INSTALL_LIBDIR=lib32", "-DENABLE_TOOLS=OFF"] True,
+    hooks = a.empty.hooks,
+    native_build_inputs = [a.dep.binary "nasm"],
+    build_inputs = [a.dep.pkgconfig32 "zlib"],
+    check_inputs = [a.dep.binary "file"],
+}
+```
 
 ## Source resolution and `sources.lock.glu`
 
@@ -390,10 +623,10 @@ Declare archives or Git requests in `sources`:
 
 ```gluon
 sources = [
-    b.source.archive
+    a.source.archive
         "https://example.invalid/hello.tar.xz"
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    b.source.git "https://example.invalid/hello.git" "v1.0.0",
+    a.source.git "https://example.invalid/hello.git" "v1.0.0",
 ]
 ```
 
@@ -405,10 +638,10 @@ Use `archive_with` to set `rename`, `strip_dirs`, `unpack`, or `unpack_dir`, and
 `git_with` to set `clone_dir`:
 
 ```gluon
-b.source.git_with {
+a.source.git_with {
     url = "https://example.invalid/hello.git",
     git_ref = "v1.0.0",
-    clone_dir = b.optional.set "hello-source",
+    clone_dir = a.optional.set "hello-source",
 }
 ```
 
@@ -445,7 +678,7 @@ the frozen timestamp.
 
 ### Archive extraction contract
 
-When an archive has `unpack = b.boolean.true`, derivation schema v16 records a
+When an archive has `unpack = a.true`, derivation schema v16 records a
 built-in `ExtractArchive` step in the prepare-phase body. The step refers to one
 locked archive by index and freezes its normalized relative destination and
 `strip_dirs` value. Plan validation rejects a non-archive source, extraction in
@@ -497,9 +730,9 @@ obsolete stage name.
 ### Frozen builds are offline
 
 Every byte fetched from outside the build root must be declared in `sources`
-and admitted through `sources.lock.glu` before execution. The package-v3
-`options.networking` field remains in the typed ABI as a possible future
-fixed-output request, but setting it to `b.boolean.true` is currently a package
+and admitted through `sources.lock.glu` before execution. The authored
+`options` field's `networking` setting remains in the typed ABI as a possible
+future fixed-output request, but setting it to `a.true` is currently a package
 validation error. No valid frozen `PackageSpec` can enable in-build network
 access.
 
@@ -621,10 +854,13 @@ shell are not frozen build artifacts. Use it for investigation only, not as a
 build path.
 
 The legacy macro policy and `%action`/`%(definition)` parser have been removed.
-Module-owned builder graphs and explicit literal `Shell` steps both freeze
-through the typed build context; repository command/environment templates are
-resolved during planning and there is no compatibility expansion pass.
+Standard and custom builder graphs alike freeze through the typed build
+context; repository command/environment templates are resolved during
+planning and there is no compatibility expansion pass.
 
-See [`examples/gluon/package_v3.glu`](examples/gluon/package_v3.glu) and
-[`examples/gluon/package_v3_stone.glu`](examples/gluon/package_v3_stone.glu)
-for runnable factory, scope, output, and patch examples.
+See [`examples/gluon/stone.glu`](examples/gluon/stone.glu) and
+[`examples/gluon/composed-stone.glu`](examples/gluon/composed-stone.glu) for
+minimal runnable authored-package examples, and
+[`examples/gluon/packages/`](examples/gluon/packages/) for a corpus of over
+sixty complete recipes covering every standard builder, custom-step,
+hook, factory/override, profile, and output pattern described above.
