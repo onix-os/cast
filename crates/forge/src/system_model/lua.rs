@@ -8,6 +8,7 @@
 //! distinct evaluation identities.
 
 use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 use declarative_config::{
     DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
@@ -18,8 +19,11 @@ use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 
 use super::gluon::SystemSnapshotCodec;
-use super::{SystemModel, spec};
-use crate::declaration_migration::DeclarationMigrationRequest;
+use super::{SYSTEM_SNAPSHOT_PATH, SystemModel, spec};
+use crate::db::state::{Database, DeclarationMigrationCommit};
+use crate::declaration_migration::{
+    BridgeError, DeclarationMigrationBlobStore, DeclarationMigrationRequest, migrate_declaration,
+};
 use crate::repository::lua::{LuaRepositorySpec, encode_repository_record};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -181,6 +185,68 @@ pub(crate) fn convert_generated_system_declaration(
     })
 }
 
+/// Failure migrating a state's generated system-model snapshot.
+#[derive(Debug, thiserror::Error)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) enum SystemDeclarationMigrationError {
+    #[error("read the generated system snapshot {path:?}")]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the generated system snapshot {path:?} is not UTF-8")]
+    Utf8 {
+        path: PathBuf,
+        #[source]
+        source: std::str::Utf8Error,
+    },
+    #[error("convert the system snapshot to Lua")]
+    Convert(#[source] SystemMigrationError),
+    #[error("commit the system-model migration")]
+    Bridge(#[source] BridgeError),
+}
+
+/// Operator command: migrate one state's generated system-model snapshot slot
+/// (`usr/lib/system-model.glu`) from Gluon to Lua.
+///
+/// Reads the snapshot beneath the state's root, builds a fail-closed conversion
+/// request bound to the supplied retained-tree marker, and commits it through
+/// the bridge — the durable content-addressed blob first, then the atomic
+/// catalog row. It is deliberately *additive and inert*: it records a migration
+/// but changes nothing about how the state boots or resolves declarations,
+/// because no resolve hook consults the catalog yet. The caller obtains the
+/// state's live `/usr` tree marker (`RetainedTreeMarker::token`) and passes it
+/// so a future resolver revalidates the row against the exact tree it owns.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn migrate_state_system_declaration(
+    database: &Database,
+    blobs: &DeclarationMigrationBlobStore,
+    state_id: i32,
+    state_root: &Path,
+    state_tree_marker: &[u8],
+) -> Result<DeclarationMigrationCommit, SystemDeclarationMigrationError> {
+    let path = state_root.join(SYSTEM_SNAPSHOT_PATH);
+    let bytes = std::fs::read(&path).map_err(|source| SystemDeclarationMigrationError::Read {
+        path: path.clone(),
+        source,
+    })?;
+    let text = std::str::from_utf8(&bytes).map_err(|source| SystemDeclarationMigrationError::Utf8 {
+        path: path.clone(),
+        source,
+    })?;
+
+    let request = convert_generated_system_declaration(
+        state_id,
+        SYSTEM_SNAPSHOT_PATH,
+        text,
+        state_tree_marker,
+    )
+    .map_err(SystemDeclarationMigrationError::Convert)?;
+
+    migrate_declaration(database, blobs, request).map_err(SystemDeclarationMigrationError::Bridge)
+}
+
 #[cfg(test)]
 mod tests {
     use declarative_config::{DeclarationEvaluator, Source};
@@ -335,5 +401,52 @@ return {
         let redecoded = spec::SystemSpec::try_from(&lua_model(&converted)).unwrap();
         let original = spec::SystemSpec::try_from(&gluon_model(GLUON_SYSTEM)).unwrap();
         assert_eq!(redecoded, original);
+    }
+
+    #[test]
+    fn the_operator_command_migrates_a_state_system_snapshot() {
+        use crate::declaration_migration::resolve_migrated_blob;
+
+        let state_root = tempfile::tempdir().unwrap();
+        let blobs_dir = tempfile::tempdir().unwrap();
+        let blobs = DeclarationMigrationBlobStore::new(blobs_dir.path());
+        let database = Database::new(":memory:").unwrap();
+        let state_id = i32::from(database.add(&[], None, None).unwrap().id);
+
+        // Lay down the generated snapshot beneath the state root.
+        let snapshot = state_root.path().join(SYSTEM_SNAPSHOT_PATH);
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        std::fs::write(&snapshot, GLUON_SYSTEM).unwrap();
+
+        let marker = vec![3u8; 32];
+        let commit = migrate_state_system_declaration(
+            &database,
+            &blobs,
+            state_id,
+            state_root.path(),
+            &marker,
+        )
+        .expect("system snapshot migrates");
+        assert_eq!(commit, DeclarationMigrationCommit::Committed);
+
+        // The committed Lua blob resolves and re-decodes to the original value.
+        let resolved = resolve_migrated_blob(&database, &blobs, state_id, SYSTEM_SNAPSHOT_PATH)
+            .unwrap()
+            .expect("a committed row selects the blob");
+        let redecoded =
+            spec::SystemSpec::try_from(&lua_model(std::str::from_utf8(&resolved).unwrap())).unwrap();
+        let original = spec::SystemSpec::try_from(&gluon_model(GLUON_SYSTEM)).unwrap();
+        assert_eq!(redecoded, original);
+
+        // Idempotent: re-running commits nothing new.
+        let again = migrate_state_system_declaration(
+            &database,
+            &blobs,
+            state_id,
+            state_root.path(),
+            &marker,
+        )
+        .expect("re-migration is idempotent");
+        assert_eq!(again, DeclarationMigrationCommit::AlreadyPresent);
     }
 }
