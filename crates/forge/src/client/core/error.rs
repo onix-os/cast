@@ -872,6 +872,18 @@ pub enum Error {
     LoadSystemModel(#[from] system_model::LoadError),
     #[error("update system model")]
     UpdateSystemModel(#[from] system_model::UpdateError),
+    #[error("query the declaration-migration catalog for the system snapshot")]
+    QueryDeclarationMigration(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("read the system snapshot {path:?} for migration revalidation")]
+    ReadSystemSnapshotForMigration {
+        path: std::path::PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("open the state /usr tree marker for migration revalidation")]
+    OpenTreeMarkerForMigration(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("resolve the migrated Lua system snapshot")]
+    ResolveMigratedSystemSnapshot(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("install")]
     Install(#[source] Box<install::Error>),
     #[error("remove")]

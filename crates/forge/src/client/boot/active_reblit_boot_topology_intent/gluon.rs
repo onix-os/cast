@@ -166,44 +166,71 @@ fn require_fingerprint_contract(
     Ok(())
 }
 
+/// Engine-neutral boot destination selection, decoded from either engine before
+/// the shared canonicalization and cross-selector checks run.
+pub(super) enum BootTargetInput {
+    AliasEsp,
+    DistinctXbootldr { partuuid: String, mount_point: String },
+}
+
 impl TryFrom<GluonBootTopologyIntent> for ActiveReblitBootTopologyIntentValue {
     type Error = ActiveReblitBootTopologyIntentError;
 
     fn try_from(value: GluonBootTopologyIntent) -> Result<Self, Self::Error> {
-        let esp = validated_partition_selector("esp.partuuid", "esp.mount_point", value.esp)?;
         let boot = match value.boot {
-            GluonBootTarget::AliasEsp => ActiveReblitBootTopologyTarget::AliasEsp,
-            GluonBootTarget::DistinctXbootldr(selector) => {
-                let xbootldr = validated_partition_selector("xbootldr.partuuid", "xbootldr.mount_point", selector)?;
-                if xbootldr.partuuid == esp.partuuid {
-                    return Err(invalid_partuuid(
-                        "xbootldr.partuuid",
-                        &xbootldr.partuuid,
-                        "distinct ESP and XBOOTLDR PARTUUIDs must not be equal",
-                    ));
-                }
-                if xbootldr.mount_point_hint == esp.mount_point_hint {
-                    return Err(invalid_mount_point_selector(
-                        "xbootldr.mount_point",
-                        &xbootldr.mount_point_hint,
-                        "distinct ESP and XBOOTLDR mount-point selectors must not be equal",
-                    ));
-                }
-                ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr)
-            }
+            GluonBootTarget::AliasEsp => BootTargetInput::AliasEsp,
+            GluonBootTarget::DistinctXbootldr(selector) => BootTargetInput::DistinctXbootldr {
+                partuuid: selector.partuuid,
+                mount_point: selector.mount_point,
+            },
         };
-        Ok(Self { esp, boot })
+        assemble_boot_topology(value.esp.partuuid, value.esp.mount_point, boot)
     }
+}
+
+/// Shared, engine-neutral assembly: canonicalize the ESP and boot selectors and
+/// enforce the distinct-target cross-checks. Both the Gluon and Lua adapters
+/// decode their own DTOs into raw strings and a [`BootTargetInput`], then call
+/// this so equivalent sources reach the identical validated intent value.
+pub(super) fn assemble_boot_topology(
+    esp_partuuid: String,
+    esp_mount_point: String,
+    boot: BootTargetInput,
+) -> Result<ActiveReblitBootTopologyIntentValue, ActiveReblitBootTopologyIntentError> {
+    let esp = validated_partition_selector("esp.partuuid", "esp.mount_point", esp_partuuid, esp_mount_point)?;
+    let boot = match boot {
+        BootTargetInput::AliasEsp => ActiveReblitBootTopologyTarget::AliasEsp,
+        BootTargetInput::DistinctXbootldr { partuuid, mount_point } => {
+            let xbootldr = validated_partition_selector("xbootldr.partuuid", "xbootldr.mount_point", partuuid, mount_point)?;
+            if xbootldr.partuuid == esp.partuuid {
+                return Err(invalid_partuuid(
+                    "xbootldr.partuuid",
+                    &xbootldr.partuuid,
+                    "distinct ESP and XBOOTLDR PARTUUIDs must not be equal",
+                ));
+            }
+            if xbootldr.mount_point_hint == esp.mount_point_hint {
+                return Err(invalid_mount_point_selector(
+                    "xbootldr.mount_point",
+                    &xbootldr.mount_point_hint,
+                    "distinct ESP and XBOOTLDR mount-point selectors must not be equal",
+                ));
+            }
+            ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr)
+        }
+    };
+    Ok(ActiveReblitBootTopologyIntentValue { esp, boot })
 }
 
 fn validated_partition_selector(
     partuuid_field: &'static str,
     mount_point_field: &'static str,
-    value: GluonPartitionSelector,
+    partuuid: String,
+    mount_point: String,
 ) -> Result<ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError> {
     Ok(ActiveReblitBootPartitionSelector {
-        partuuid: canonical_partuuid(partuuid_field, value.partuuid)?,
-        mount_point_hint: lexical_mount_point_hint(mount_point_field, value.mount_point)?,
+        partuuid: canonical_partuuid(partuuid_field, partuuid)?,
+        mount_point_hint: lexical_mount_point_hint(mount_point_field, mount_point)?,
     })
 }
 
@@ -332,4 +359,26 @@ fn invalid_mount_point_selector(
         actual_bytes: value.len(),
         reason,
     }
+}
+
+#[cfg(test)]
+pub(super) fn gluon_value_for_test(
+    esp_partuuid: &str,
+    esp_mount_point: &str,
+    xbootldr: Option<(&str, &str)>,
+) -> Result<ActiveReblitBootTopologyIntentValue, ActiveReblitBootTopologyIntentError> {
+    let intent = GluonBootTopologyIntent {
+        esp: GluonPartitionSelector {
+            partuuid: esp_partuuid.to_owned(),
+            mount_point: esp_mount_point.to_owned(),
+        },
+        boot: match xbootldr {
+            None => GluonBootTarget::AliasEsp,
+            Some((partuuid, mount_point)) => GluonBootTarget::DistinctXbootldr(GluonPartitionSelector {
+                partuuid: partuuid.to_owned(),
+                mount_point: mount_point.to_owned(),
+            }),
+        },
+    };
+    ActiveReblitBootTopologyIntentValue::try_from(intent)
 }

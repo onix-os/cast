@@ -86,6 +86,48 @@ fn conversion_error(source: String) -> (PathBuf, String) {
 }
 
 #[test]
+fn manager_loads_a_lua_profile_fragment_by_extension() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("profile.d/authored.lua");
+    write(
+        &path,
+        r#"
+return {
+    {
+        id = "test",
+        repositories = {
+            {
+                id = "local",
+                description = { kind = "none" },
+                source = { kind = "direct_index", uri = "file:///var/cache/local.index" },
+                priority = { kind = "none" },
+                enabled = { kind = "none" },
+            },
+        },
+    },
+}
+"#,
+    );
+
+    let env = environment(temporary.path());
+    let manager = Manager::new(&env).unwrap();
+    assert_eq!(
+        manager
+            .fragments
+            .iter()
+            .map(|fragment| fragment.logical_name.as_str())
+            .collect::<Vec<_>>(),
+        ["authored"]
+    );
+    let repositories = manager.repositories(&Id::new("test")).unwrap();
+    let local = repositories.get(&repository::Id::new("local")).unwrap();
+    let repository::Source::DirectIndex(uri) = &local.source else {
+        panic!("expected direct repository source");
+    };
+    assert_eq!(uri.as_str(), "file:///var/cache/local.index");
+}
+
+#[test]
 fn manager_loads_direct_root_and_repository_defaults() {
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("profile.d/authored.glu");

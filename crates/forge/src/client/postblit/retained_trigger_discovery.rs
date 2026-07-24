@@ -183,6 +183,58 @@ mod tests {
         assert!(displaced.join("share/cast/triggers/sys.d/system.glu").exists());
     }
 
+    #[test]
+    fn system_codec_loads_a_lua_declaration_through_the_registered_extension() {
+        let temporary = tempfile::tempdir().unwrap();
+        let candidate_usr_path = temporary.path().join("staging").join("usr");
+        let fragment = candidate_usr_path.join("share/cast/triggers/sys.d/system.lua");
+        fs_err::create_dir_all(fragment.parent().unwrap()).unwrap();
+        fs_err::write(&fragment, lua_trigger_source("lua-system", "/bin/true")).unwrap();
+        let candidate_usr = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
+            .open(&candidate_usr_path)
+            .unwrap();
+
+        let loaded = load_system(&candidate_usr, &candidate_usr_path).unwrap();
+
+        assert_eq!(
+            loaded.iter().map(|trigger| trigger.name.as_str()).collect_vec(),
+            ["lua-system"]
+        );
+        assert!(matches!(
+            loaded[0].handlers.get("lua-system"),
+            Some(triggers::format::Handler::Run { run, args })
+                if run == "/bin/true" && args.is_empty()
+        ));
+    }
+
+    fn lua_trigger_source(name: &str, command: &str) -> String {
+        format!(
+            r#"
+return {{
+    name = "{name}",
+    description = "Lua retained trigger discovery fixture",
+    before = {{ kind = "none" }},
+    after = {{ kind = "none" }},
+    inhibitors = {{ kind = "none" }},
+    paths = {{
+        {{
+            key = "/usr/share/{name}",
+            value = {{ handlers = {{ "{name}" }}, kind = {{ kind = "none" }} }},
+        }},
+    }},
+    handlers = {{
+        {{
+            key = "{name}",
+            value = {{ kind = "run", command = "{command}", args = {{}} }},
+        }},
+    }},
+}}
+"#
+        )
+    }
+
     struct SubstitutedUsrFixture {
         _temporary: tempfile::TempDir,
         candidate_usr: File,

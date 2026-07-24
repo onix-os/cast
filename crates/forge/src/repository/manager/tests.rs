@@ -325,6 +325,125 @@ cast.repositories [cast.repository.direct "selected" "file:///z.index"]
 }
 
 #[test]
+fn config_manager_loads_a_lua_repository_fragment_by_extension() {
+    let config_directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(
+        config_directory.path(),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+    let fragments = config_directory.path().join("repo.d");
+    fs::create_dir_all(&fragments).unwrap();
+    fs::write(
+        fragments.join("main.lua"),
+        r#"
+return {
+    {
+        id = "lua-main",
+        description = { kind = "none" },
+        source = { kind = "direct_index", uri = "file:///lua.index" },
+        priority = { kind = "none" },
+        enabled = { kind = "none" },
+    },
+}
+"#,
+    )
+    .unwrap();
+
+    let (_root, installation) = test_installation();
+    let manager = Manager::with_config_manager(
+        config::Manager::custom(config_directory.path()),
+        installation,
+    )
+    .unwrap();
+    let selected = manager
+        .repositories
+        .get(&repository::Id::new("lua-main"))
+        .unwrap();
+    let repository::Source::DirectIndex(uri) = &selected.repository.source else {
+        panic!("expected direct repository source");
+    };
+    assert_eq!(uri.as_str(), "file:///lua.index");
+    assert!(selected.config_path.as_ref().unwrap().ends_with("repo.d/main.lua"));
+}
+
+#[test]
+fn a_repository_store_switches_generated_authority_from_gluon_to_lua() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let config_directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(config_directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = config::Manager::custom(config_directory.path());
+
+    let uri = Url::parse("file:///var/cache/main.index").unwrap();
+    let map = repository::Map::with([(repository::Id::new("main"), direct_repository(uri))]);
+    let evaluators = DeclarationEvaluatorSet::new(repository::RepositoryEvaluator::registered())
+        .expect("both repository languages register");
+    let [gluon, lua] = repository::RepositoryEvaluator::registered();
+    let gluon_language = <repository::RepositoryEvaluator as declarative_config::DeclarationEvaluator<
+        repository::Map,
+    >>::language_spec(&gluon)
+    .clone();
+    let lua_language = <repository::RepositoryEvaluator as declarative_config::DeclarationEvaluator<
+        repository::Map,
+    >>::language_spec(&lua)
+    .clone();
+
+    // Establish a generated Gluon authority for the store.
+    let glu_path = config
+        .save_declaration("main", &map, &evaluators, &gluon_language)
+        .expect("save generated gluon authority");
+    assert!(glu_path.to_str().unwrap().ends_with("main.glu"));
+    assert!(glu_path.exists());
+
+    // Transactionally switch the store's generated authority to Lua.
+    let lua_path = config
+        .save_declaration("main", &map, &evaluators, &lua_language)
+        .expect("switch generated authority to lua");
+    assert!(lua_path.to_str().unwrap().ends_with("main.lua"));
+
+    // Single authority: the `.glu` is gone and rooted enumeration proves no
+    // generated Gluon authority remains in the store.
+    assert!(!glu_path.exists());
+    assert!(
+        crate::declaration_migration::generated_gluon_authorities(config_directory.path())
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn config_manager_admits_only_registered_declaration_languages() {
+    // Only the registered language set (`glu`, `lua`) is dispatched. Serialized
+    // configuration formats — YAML, KDL, JSON — are never an authored surface;
+    // a fragment with an unregistered extension is not loaded as a repository.
+    let config_directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(config_directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let fragments = config_directory.path().join("repo.d");
+    fs::create_dir_all(&fragments).unwrap();
+    for (name, body) in [
+        ("main.yaml", "- id: yaml-repo\n  source: {direct_index: {uri: 'file:///y.index'}}\n"),
+        ("main.kdl", "repository \"kdl-repo\" { direct_index \"file:///k.index\" }\n"),
+        ("main.json", "[{\"id\":\"json-repo\"}]\n"),
+    ] {
+        fs::write(fragments.join(name), body).unwrap();
+    }
+
+    let (_root, installation) = test_installation();
+    let manager = Manager::with_config_manager(
+        config::Manager::custom(config_directory.path()),
+        installation,
+    )
+    .unwrap();
+
+    // None of the unregistered-extension fragments produced a repository.
+    assert_eq!(manager.repositories.iter().count(), 0);
+    for id in ["yaml-repo", "kdl-repo", "json-repo"] {
+        assert!(manager.repositories.get(&repository::Id::new(id)).is_none());
+    }
+}
+
+#[test]
 fn repository_transport_errors_never_render_credentials() {
     let uri = Url::parse("https://user:secret@example.test/stone.index").unwrap();
     let error = validate_repository_transport(&uri).unwrap_err().to_string();

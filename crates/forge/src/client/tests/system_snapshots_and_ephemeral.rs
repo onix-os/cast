@@ -46,6 +46,63 @@ cast.system
 }
 
 #[test]
+fn export_prefers_a_committed_lua_migration_of_the_system_snapshot() {
+    let temporary = tempfile::tempdir().unwrap();
+    let intent_path = system_model::intent_path(temporary.path());
+    let intent_directory = intent_path.parent().unwrap();
+    fs::create_dir_all(intent_directory).unwrap();
+    fs::set_permissions(temporary.path().join("etc"), Permissions::from_mode(0o755)).unwrap();
+    fs::set_permissions(intent_directory, Permissions::from_mode(0o755)).unwrap();
+    fs::write(
+        &intent_path,
+        "// Authored intent.\nlet cast = import! cast.system.v1\ncast.system\n",
+    )
+    .unwrap();
+    fs::set_permissions(&intent_path, Permissions::from_mode(0o644)).unwrap();
+
+    let client = stateful_test_client(temporary.path());
+    fs::create_dir_all(client.installation.assets_path("v2")).unwrap();
+    let created = client.new_state(&[], "Gluon state creation").unwrap().unwrap();
+    let state_id = i32::from(created.id);
+
+    // The recorded generated snapshot is Gluon — what legacy export returns.
+    let snapshot_path = system_model::snapshot_path(temporary.path());
+    let recorded = fs::read_to_string(&snapshot_path).unwrap();
+    assert!(recorded.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
+
+    // Establish the state's /usr tree marker, then commit a Lua migration of the
+    // recorded snapshot bound to that marker.
+    let marker = crate::tree_marker::TreeMarkerStore::open_path(temporary.path().join("usr"))
+        .unwrap()
+        .adopt_or_create_before_journal()
+        .unwrap();
+    let blobs =
+        crate::declaration_migration::DeclarationMigrationBlobStore::new(&client.installation.root);
+    crate::system_model::lua::migrate_state_system_declaration(
+        &client.state_db,
+        &blobs,
+        state_id,
+        temporary.path(),
+        marker.token().as_str().as_bytes(),
+    )
+    .unwrap();
+
+    drop(client);
+    let reopened = stateful_test_client(temporary.path());
+    let exported = reopened.export_state(created.id).unwrap();
+
+    // The read-only export path now resolves the committed Lua migration rather
+    // than the legacy Gluon snapshot, and it is the same system semantically.
+    assert!(exported.encoded().starts_with(lua_config::GENERATED_LUA_MARKER));
+    assert_ne!(exported.encoded(), recorded);
+    let legacy = crate::system_model::load(&snapshot_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(exported.disable_warning, legacy.disable_warning);
+    assert_eq!(exported.packages, legacy.packages);
+}
+
+#[test]
 fn ephemeral_import_evaluates_intent_and_records_only_a_generated_snapshot() {
     let temporary = tempfile::tempdir().unwrap();
     prepare_private_installation_root(temporary.path());

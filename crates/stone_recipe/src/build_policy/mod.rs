@@ -10,9 +10,11 @@ pub use self::gluon::{
     BUILD_POLICY_ABI_VERSION, GLUON_BUILD_POLICY_ABI,
     GluonBuildPolicyEvaluator,
 };
+pub use self::lua::{BuildPolicyEvaluator, LuaBuildPolicyEvaluator, encode_lua_policy};
 
 mod gluon;
 pub mod layers;
+mod lua;
 mod validation;
 
 pub use validation::{
@@ -23,7 +25,8 @@ pub use validation::{
 pub const SUPPORTED_ARTIFACT_ARCHITECTURES: &[&str] = &["x86_64", "x86", "aarch64", "riscv64"];
 
 /// A value supplied explicitly by the planner when policy is resolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ContextValue {
     PackageName,
     PackageVersion,
@@ -214,14 +217,14 @@ pub struct NamedTuningFlagSpec {
 }
 
 /// Flag references activated or suppressed by a tuning group or choice.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct TuningOptionSpec {
     pub enabled: Vec<String>,
     pub disabled: Vec<String>,
 }
 
 /// One named choice within a tuning group.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct NamedTuningChoiceSpec {
     pub name: String,
     pub value: TuningOptionSpec,
@@ -252,7 +255,7 @@ pub struct TuningPolicySpec {
 }
 
 /// One concrete platform identity recorded in a frozen build lock.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct PlatformPolicySpec {
     pub architecture: String,
     pub vendor: String,
@@ -262,7 +265,8 @@ pub struct PlatformPolicySpec {
 
 /// Whether a target executes natively or through one explicitly named
 /// compatibility mode.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TargetEmulationSpec {
     Native,
     Emul32 { host_architecture: String },
@@ -289,14 +293,15 @@ pub struct TargetPolicySpec {
 
 /// A legacy target which must remain visible to policy consumers without
 /// silently remaining selectable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct RetiredTargetPolicySpec {
     pub name: String,
     pub reason: String,
 }
 
 /// Condition under which an environment binding is present.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EnvironmentCondition {
     Always,
     CompilerCacheEnabled,
@@ -410,7 +415,7 @@ pub struct BuildRootPolicySpec {
 
 /// Stable guest paths mounted into every sandbox. These paths participate in
 /// policy identity instead of being ambient Mason constants.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct SandboxPolicySpec {
     pub hostname: String,
     pub credentials: SandboxCredentialPolicySpec,
@@ -425,7 +430,8 @@ pub struct SandboxPolicySpec {
 }
 
 /// Fixed credentials visible inside a frozen sandbox.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxCredentialPolicySpec {
     /// Namespace user/group ID zero maps only to the invoking caller.
     IsolatedRoot,
@@ -436,24 +442,27 @@ pub enum SandboxCredentialPolicySpec {
 /// Proc is unconditionally absent from frozen builds and is therefore not an
 /// authored policy value. The finite modes also cannot express any `/sys`
 /// mount or a full host `/dev` view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 pub struct SandboxFilesystemPolicySpec {
     pub tmp: SandboxTmpPolicySpec,
     pub sys: SandboxSysPolicySpec,
     pub dev: SandboxDevPolicySpec,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxTmpPolicySpec {
     Empty,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxSysPolicySpec {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SandboxDevPolicySpec {
     None,
     Minimal,
@@ -552,7 +561,8 @@ pub struct PgoPolicySpec {
 }
 
 /// One repository-authorized package analyzer in execution order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AnalyzerKind {
     IgnoreBlocked,
     Binary,

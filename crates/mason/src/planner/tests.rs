@@ -141,6 +141,13 @@ fn write_repository_policy_fixture(data_dir: &Path) {
         include_str!("../../data/policy/policy.glu"),
     )
     .unwrap();
+    // The shipped manifest's foundation layer is the Lua authority; the Gluon
+    // sources remain as retained full-parity fixtures.
+    fs::write(
+        policy_dir.join("default.lua"),
+        include_str!("../../data/policy/default.lua"),
+    )
+    .unwrap();
     fs::write(
         policy_dir.join("default.glu"),
         include_str!("../../data/policy/default.glu"),

@@ -14,6 +14,9 @@ pub use self::gluon::{
 };
 
 mod gluon;
+mod lua;
+
+pub use lua::{LuaPackageEvaluator, RecipeMigrationDecision, authorize_recipe_migration, encode_lua_recipe};
 mod validation;
 
 pub(crate) use validation::valid_package_name;
@@ -41,7 +44,7 @@ pub struct PackageSpec {
 }
 
 /// Package identity and user-facing source metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct MetaSpec {
     pub pname: String,
     pub version: String,
@@ -152,8 +155,10 @@ pub struct HooksSpec {
 }
 
 /// One repository-owned environment layer selected by a pure builder module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BuilderEnvironmentSpec {
+    #[serde(rename = "cmake")]
     CMake,
     Meson,
     Cargo,
@@ -161,7 +166,7 @@ pub enum BuilderEnvironmentSpec {
 }
 
 /// Hook phases accepted by one structural builder contract.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct SupportedHooksSpec {
     pub setup: bool,
     pub build: bool,
@@ -238,13 +243,13 @@ pub struct OutputSpec {
 }
 
 /// A symbolic package name supplied to a package factory.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct PackageRef {
     pub name: String,
 }
 
 /// A named output of a symbolic package.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct OutputRef {
     pub package: PackageRef,
     pub output: String,
@@ -282,7 +287,7 @@ pub struct ProgramSpec {
 ///
 /// Scripts use [`StepSpec::Shell`]; a descriptor-executed shebang is rejected
 /// without falling back to its mutable public pathname.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct BuiltProgramSpec {
     pub path: String,
 }

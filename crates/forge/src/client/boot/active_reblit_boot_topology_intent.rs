@@ -32,8 +32,8 @@ use config::declaration::{
     RegisteredLanguages, TypedDeclarationEvaluatorSet,
 };
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Source,
+    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
+    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source, SourceRoot,
 };
 use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
@@ -49,6 +49,8 @@ use self::{
 mod filesystem;
 #[path = "active_reblit_boot_topology_intent/gluon.rs"]
 mod gluon;
+#[path = "active_reblit_boot_topology_intent/lua.rs"]
+mod lua;
 
 const KIB: usize = 1024;
 const MAX_BOOT_TOPOLOGY_SOURCE_BYTES: usize = 64 * KIB;
@@ -515,6 +517,68 @@ where
     Ok(prepared)
 }
 
+/// One registered boot-topology declaration language, selected by the fixed
+/// source's extension. Both engines reach the identical validated intent value
+/// through the shared assembly; the conversion error type is shared.
+enum BootTopologyIntentEvaluator<'budget> {
+    Gluon(GluonBootTopologyIntentEvaluator<'budget>),
+    Lua(lua::LuaBootTopologyIntentEvaluator<'budget>),
+}
+
+impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
+    for BootTopologyIntentEvaluator<'_>
+{
+    type Identity = EvaluationIdentity;
+    type Error = ActiveReblitBootTopologyIntentError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        match self {
+            Self::Gluon(evaluator) => DeclarationEvaluator::<
+                ActiveReblitBootTopologyIntentValue,
+            >::language_spec(evaluator),
+            Self::Lua(evaluator) => DeclarationEvaluator::<
+                ActiveReblitBootTopologyIntentValue,
+            >::language_spec(evaluator),
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        match self {
+            Self::Gluon(evaluator) => {
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator)
+            }
+            Self::Lua(evaluator) => {
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator)
+            }
+        }
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        match self {
+            Self::Gluon(evaluator) => Self::Gluon(DeclarationEvaluator::<
+                ActiveReblitBootTopologyIntentValue,
+            >::with_source_root(evaluator, source_root)),
+            Self::Lua(evaluator) => Self::Lua(DeclarationEvaluator::<
+                ActiveReblitBootTopologyIntentValue,
+            >::with_source_root(evaluator, source_root)),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        match self {
+            Self::Gluon(evaluator) => evaluator.evaluate_within(source, deadline),
+            Self::Lua(evaluator) => evaluator.evaluate_within(source, deadline),
+        }
+    }
+}
+
 fn evaluate_declaration(
     source_text: &str,
     language: &LanguageSpec,
@@ -527,9 +591,11 @@ fn evaluate_declaration(
     >,
     ActiveReblitBootTopologyIntentError,
 > {
-    let evaluator = GluonBootTopologyIntentEvaluator::new(budget)?;
-    let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
-        .expect("one validated boot-topology adapter has no extension collision");
+    let evaluators = TypedDeclarationEvaluatorSet::new([
+        BootTopologyIntentEvaluator::Gluon(GluonBootTopologyIntentEvaluator::new(budget)?),
+        BootTopologyIntentEvaluator::Lua(lua::LuaBootTopologyIntentEvaluator::new(budget)?),
+    ])
+    .expect("the boot-topology adapters register distinct extensions");
     let evaluator = evaluators.get(language).ok_or(
         ActiveReblitBootTopologyIntentError::EvaluationContract {
             reason: "boot-topology source language has no registered evaluator",
@@ -545,8 +611,8 @@ fn evaluate_declaration(
 }
 
 fn registered_declaration_languages() -> RegisteredLanguages {
-    RegisteredLanguages::new([gluon::language_spec()])
-        .expect("the one production boot-topology language is unique")
+    RegisteredLanguages::new([gluon::language_spec(), lua::language_spec()])
+        .expect("the production boot-topology languages register distinct extensions")
 }
 
 fn revalidate_installation_root(

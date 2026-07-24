@@ -66,7 +66,7 @@ is_owned_text() {
 
     is_generated_or_binary_fixture "${path}" && return 1
     case "${path}" in
-        *.rs | *.glu | *.sh | *.bash | *.zsh | *.fish | *.mk | *.make \
+        *.rs | *.glu | *.lua | *.sh | *.bash | *.zsh | *.fish | *.mk | *.make \
             | *.md | *.markdown | *.rst | *.adoc | *.txt | *.toml | *.nix \
             | *.c | *.h | *.cc | *.cpp | *.cxx | *.hh | *.hpp | *.hxx \
             | *.sql | *.json | *.json5 | *.yaml | *.yml | *.xml \

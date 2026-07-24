@@ -152,10 +152,10 @@ impl Manager {
             Source::ConfigManager(config) =>
             // Load all configs, default if none exist
             {
-                let evaluators = DeclarationEvaluatorSet::new([
-                    repository::RepositoryCodec::default(),
-                ])
-                .expect("one validated repository adapter has no extension collision");
+                let evaluators = DeclarationEvaluatorSet::new(
+                    repository::RepositoryEvaluator::registered(),
+                )
+                .expect("the repository languages register distinct extensions");
                 config
                     .load_declarations(&evaluators)?
                     .into_iter()

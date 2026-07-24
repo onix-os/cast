@@ -27,7 +27,7 @@ use container::{
 };
 use itertools::Itertools;
 use thiserror::Error;
-use triggers::{GluonTriggerConversionError, format::{CompiledHandler, Handler}};
+use triggers::{registry::TriggerAdapterError, format::{CompiledHandler, Handler}};
 
 use super::PendingFile;
 
@@ -477,7 +477,7 @@ pub enum Error {
     #[error("load packaged trigger declarations")]
     TriggerDeclarations {
         #[source]
-        source: Box<config::declaration::LoadManagedDeclarationError<GluonTriggerConversionError>>,
+        source: Box<config::declaration::LoadManagedDeclarationError<TriggerAdapterError>>,
     },
 
     #[error("open retained trigger declaration root `{}`", path.display())]
@@ -490,7 +490,7 @@ pub enum Error {
     #[error("load retained trigger declarations")]
     RootedTriggerDeclarations {
         #[source]
-        source: Box<config::declaration::LoadRootedDeclarationsError<GluonTriggerConversionError>>,
+        source: Box<config::declaration::LoadRootedDeclarationsError<TriggerAdapterError>>,
     },
 
     #[error("container")]

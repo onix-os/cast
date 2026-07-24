@@ -151,3 +151,12 @@ fn require_fingerprint_contract(
     }
     Ok(())
 }
+
+#[cfg(test)]
+pub(super) fn gluon_value_for_test(
+    root: &str,
+    budget: &mut RootFilesystemIntentBudget,
+) -> Result<RootFilesystemIntentValue, ActiveReblitRootFilesystemIntentError> {
+    let intent = GluonRootFilesystemIntent { root: root.to_owned() };
+    super::normalization::materialize_root_argument(intent.root, budget)
+}
