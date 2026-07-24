@@ -16,6 +16,19 @@ power-loss proof.
 Legend — **E** effort (S/M/L/XL), **R** risk (low/med/high/critical),
 **D** = open decision I need from you before that item starts.
 
+### Resolved decisions
+- **D2.3 → prerequisites first.** Real boot repair lands the receipt-bound
+  partial-residue authentication + exact-pending-receipt-head DB op *before* any
+  boot-mutation effect; boot mutation is confirmed with the user before wiring.
+- **D3.1 → strict.** Toolchain-free means *zero* compiler tools in the locked
+  closure/identity (analyzer objcopy/strip stay, selected separately); a `Shell`
+  step invoking `cc` in a toolchain-free package is a validation error.
+- **D4.3 → accept global bumps.** Keep the single global
+  `EVALUATOR_POLICY_VERSION`; a policy tightening re-fingerprints all Gluon
+  evaluations. No per-adapter policy id.
+- **D6.x → design sketch + trigger.** Phase 6 items stay concrete design specs
+  with explicit reconsideration triggers; no speculative implementation.
+
 ---
 
 ## Phase 0 — Safe prerequisites (unblock trust; do first)
