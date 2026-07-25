@@ -147,7 +147,12 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), Error> {
-        self.finish_applied_previous_move(installation, state, RetainedPreviousMoveDirection::Archive)
+        self.finish_applied_previous_move(
+            installation,
+            state,
+            RetainedPreviousMoveDirection::Archive,
+            ArchiveJournalGuard::LegacyNoJournal,
+        )
     }
 
     /// Resume only the idempotent durability suffix of a compensating restore
@@ -157,7 +162,36 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), Error> {
-        self.finish_applied_previous_move(installation, state, RetainedPreviousMoveDirection::Restore)
+        self.finish_applied_previous_move(
+            installation,
+            state,
+            RetainedPreviousMoveDirection::Restore,
+            ArchiveJournalGuard::LegacyNoJournal,
+        )
+    }
+
+    /// Resume the durability suffix of a compensating restore while the
+    /// transition journal is deliberately retained.
+    ///
+    /// The legacy sibling refuses whenever a journal is present, which is the
+    /// correct crash signal outside recovery. A rollback dispatcher resuming a
+    /// restore that already moved the tree owns the journal by construction, so
+    /// it presents the unforgeable recovery seal instead.
+    // Forward scaffolding: the PreviousRestore rollback dispatcher (Phase 1) will
+    // be the production caller; exercised today by the physical-primitive test.
+    #[allow(dead_code)]
+    pub(crate) fn finish_applied_previous_restore_with_journal(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        seal: &PreviousRestoreRecoverySeal,
+    ) -> Result<(), Error> {
+        self.finish_applied_previous_move(
+            installation,
+            state,
+            RetainedPreviousMoveDirection::Restore,
+            ArchiveJournalGuard::Recovery(seal),
+        )
     }
 
     /// Retire only an exact inert state slot retained by this guard after an
@@ -479,6 +513,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
         direction: RetainedPreviousMoveDirection,
+        guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), Error> {
         let name = canonical_state_name(state)?;
         let mut retained = self
@@ -494,7 +529,7 @@ impl StatefulTreeIdentity {
             self.require_previous_slot_location(attempt, RetainedPreviousSlotLocation::Canonical)?;
         }
         self.require_previous_move_layout(attempt, direction.after())?;
-        let finish = self.finish_previous_move(installation, attempt, direction, ArchiveJournalGuard::LegacyNoJournal);
+        let finish = self.finish_previous_move(installation, attempt, direction, guard);
         if finish.is_ok() && direction == RetainedPreviousMoveDirection::Restore {
             *retained = None;
         }

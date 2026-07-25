@@ -151,6 +151,78 @@ fn recovery_sealed_restore_reverses_the_archive_while_the_journal_is_retained() 
 }
 
 #[test]
+fn recovery_sealed_restore_resumes_its_durability_suffix_under_a_retained_journal() {
+    // A crash between the restore rename and its durability suffix leaves the
+    // tree moved but not yet durable. The dispatcher resumes only that suffix,
+    // and — unlike the legacy sibling — must be able to do so while the journal
+    // it owns is still present.
+    for point in [
+        crate::transition_identity::RetainedPreviousMoveFaultPoint::SourceParentSync,
+        crate::transition_identity::RetainedPreviousMoveFaultPoint::DestinationParentSync,
+        crate::transition_identity::RetainedPreviousMoveFaultPoint::FinalRevalidation,
+    ] {
+        let (fixture, identity, authority) =
+            fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+        let previous = NewStatePrevious::Active(fixture.previous_state);
+
+        let (complete, _allocated) = execute_new_state_forward(
+            identity,
+            authority,
+            &fixture.database,
+            previous,
+            &[],
+            "new-state restore-resume slice",
+            false,
+            |_| {
+                crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                    COORDINATOR_OS_RELEASE,
+                    crate::system_model::snapshot_authorities(),
+                    COORDINATOR_SYSTEM_SNAPSHOT,
+                )
+            },
+            |_view| Ok::<(), TriggerEffectError>(()),
+            |_view| Ok::<(), TriggerEffectError>(()),
+        )
+        .expect("new-state forward prefix reaches system-triggers complete");
+
+        let archived = complete
+            .archive_previous_tree()
+            .expect("archive_previous advances through PreviousArchived");
+        let installation = archived.installation();
+        let identity = archived.tree_identity();
+        let previous_id = archived
+            .record()
+            .previous
+            .id
+            .map(crate::state::Id::from)
+            .expect("archived record has a predecessor");
+
+        let seal = crate::transition_identity::PreviousRestoreRecoverySeal::for_recovery();
+        crate::transition_identity::arm_retained_previous_move_fault(point);
+        let failure = identity
+            .restore_previous_with_journal(installation, previous_id, &seal)
+            .expect_err("the armed durability fault stops the restore after the rename");
+        assert_eq!(
+            failure.outcome(),
+            crate::transition_identity::RetainedPreviousMoveOutcome::Applied,
+            "the tree moved at {point:?}; only durability remains",
+        );
+
+        // The legacy resume still refuses a present journal, which is the
+        // correct crash signal outside recovery.
+        let legacy = identity.finish_applied_previous_restore(installation, previous_id);
+        assert!(
+            matches!(legacy, Err(crate::transition_identity::Error::JournalAppeared { .. })),
+            "legacy restore resume must refuse the retained journal at {point:?}, got {legacy:?}",
+        );
+
+        identity
+            .finish_applied_previous_restore_with_journal(installation, previous_id, &seal)
+            .unwrap_or_else(|error| panic!("sealed restore resume completes durability at {point:?}: {error:?}"));
+    }
+}
+
+#[test]
 fn new_state_previous_archived_hands_off_into_boot_with_candidate_state() {
     let (fixture, identity, authority) =
         fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
