@@ -74,7 +74,9 @@ pub(in crate::client) fn persist_new_state_terminal_advance_retaining_binding(
 
     drop(journal);
     let (reopened, actual) = try_reopen_canonical_journal(&installation)
-        .map_err(|source| NewStateCommitCleanupPersistenceError::Reopen { source })?;
+        .map_err(|source| NewStateCommitCleanupPersistenceError::Reopen {
+            source: Box::new(source),
+        })?;
 
     if let Err(source) = same_store {
         let durable = durable_from(classify_reopened_record(actual.as_ref(), &source_record, &successor));
@@ -219,7 +221,7 @@ pub(in crate::client) enum NewStateCommitCleanupPersistenceError {
     #[error("reopen the canonical journal after the NewState cleanup advance")]
     Reopen {
         #[source]
-        source: super::canonical_journal_reopen::CanonicalJournalReopenError,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error("rebind the NewState cleanup successor in the reopened journal")]
     FreshSuccessorBinding {
@@ -232,6 +234,12 @@ pub(in crate::client) enum NewStateCommitCleanupPersistenceError {
         source: Box<crate::transition_journal::TransitionJournalRecordDeleteError>,
         verified: bool,
     },
+    #[error("audit the in-flight transition")]
+    InFlight(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("the {step} terminal step was deferred")]
+    AdmissionDeferred { step: String },
+    #[error("the {step} terminal step was not applicable")]
+    AdmissionNotApplicable { step: String },
     #[error("installation")]
     Installation(#[source] crate::installation::Error),
 }
@@ -274,4 +282,75 @@ pub(in crate::client) fn finalize_new_state_complete(
             })
         }
     }
+}
+
+/// Drive a committed NewState transition from `CommitDecided` to a deleted
+/// terminal record.
+///
+/// A transition that stops at `CommitDecided` is not finished: the next startup
+/// finds a live journal record and reports `RecoveryPending`. This walks the
+/// remaining chain — cleanup, cleanup-complete, then terminal deletion — so the
+/// transition actually ends (`plans/future_impl.md` §1.1b/§1.1c).
+#[allow(dead_code)] // consumed by the coordinated NewState route
+pub(in crate::client) fn finish_new_state_after_commit(
+    mut journal: TransitionJournalStore,
+    state_db: &crate::db::state::Database,
+    installation: &Installation,
+    mut record: TransitionRecord,
+    reservation: &crate::client::active_state_snapshot::ActiveStateReservation,
+) -> Result<TransitionJournalStore, NewStateCommitCleanupPersistenceError> {
+    for step in [NewStateTerminalStep::CommitCleanup, NewStateTerminalStep::CleanupComplete] {
+        let in_flight = state_db
+            .audit_in_flight_transition()
+            .map_err(|source| NewStateCommitCleanupPersistenceError::InFlight(Box::new(source)))?;
+        let authority = match NewStateCommitCleanupAuthority::capture(
+            installation,
+            &journal,
+            state_db,
+            reservation,
+            &record,
+            in_flight,
+            step,
+        )
+        .map_err(NewStateCommitCleanupPersistenceError::Authority)?
+        {
+            crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Ready(authority) => authority,
+            crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Deferred => {
+                return Err(NewStateCommitCleanupPersistenceError::AdmissionDeferred { step: format!("{step:?}") });
+            }
+            crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::NotApplicable => {
+                return Err(NewStateCommitCleanupPersistenceError::AdmissionNotApplicable {
+                    step: format!("{step:?}"),
+                });
+            }
+        };
+        let (next_journal, next_record, binding) =
+            persist_new_state_terminal_advance_retaining_binding(journal, authority, step)?;
+        drop(binding);
+        journal = next_journal;
+        record = next_record;
+    }
+
+    let in_flight = state_db
+        .audit_in_flight_transition()
+        .map_err(|source| NewStateCommitCleanupPersistenceError::InFlight(Box::new(source)))?;
+    let authority = match NewStateCommitCleanupAuthority::capture(
+        installation,
+        &journal,
+        state_db,
+        reservation,
+        &record,
+        in_flight,
+        NewStateTerminalStep::Finalize,
+    )
+    .map_err(NewStateCommitCleanupPersistenceError::Authority)?
+    {
+        crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Ready(authority) => authority,
+        _ => {
+            return Err(NewStateCommitCleanupPersistenceError::AdmissionDeferred {
+                step: "Finalize".to_owned(),
+            });
+        }
+    };
+    finalize_new_state_complete(journal, authority)
 }

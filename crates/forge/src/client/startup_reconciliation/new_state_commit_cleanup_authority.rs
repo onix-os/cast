@@ -448,13 +448,20 @@ fn require_binding(
 /// `archive_previous` with a distinct candidate is what distinguishes it from
 /// every ActiveReblit source.
 fn exact_new_state_terminal_source(record: &TransitionRecord, step: NewStateTerminalStep) -> bool {
-    record.operation == Operation::NewState
-        && record.phase == step.source()
-        && record.rollback.is_none()
-        && record.options.archive_previous
-        && record.candidate.id.is_some()
-        && record.previous.id.is_some()
-        && record.candidate.id != record.previous.id
+    if record.operation != Operation::NewState || record.phase != step.source() || record.rollback.is_some() {
+        return false;
+    }
+    if record.candidate.id.is_none() {
+        return false;
+    }
+    // NewState has two legitimate shapes, and the predecessor fields must agree
+    // with which one the options declare. Replacing an active state archives a
+    // distinct predecessor; a first install has none at all.
+    if record.options.archive_previous {
+        record.previous.id.is_some() && record.candidate.id != record.previous.id
+    } else {
+        record.previous.id.is_none()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -609,10 +616,24 @@ mod tests {
         wrong_operation.operation = Operation::ActiveReblit;
         assert!(!exact_new_state_terminal_source(&wrong_operation, step));
 
-        // A non-archiving NewState is the deferred no-previous case, not this one.
+        // A non-archiving NewState is the first-install shape: legitimate, but
+        // only when it also has no predecessor.
         let mut no_archive = exact.clone();
         no_archive.options.archive_previous = false;
-        assert!(!exact_new_state_terminal_source(&no_archive, step));
+        assert!(
+            !exact_new_state_terminal_source(&no_archive, step),
+            "archive_previous=false with a predecessor is contradictory",
+        );
+        no_archive.previous.id = None;
+        assert!(
+            exact_new_state_terminal_source(&no_archive, step),
+            "a first install has no predecessor and archives nothing",
+        );
+
+        // ...and an archiving record must actually name its predecessor.
+        let mut archiving_without_previous = exact.clone();
+        archiving_without_previous.previous.id = None;
+        assert!(!exact_new_state_terminal_source(&archiving_without_previous, step));
 
         // Candidate == previous is the in-place repair shape, never NewState.
         let mut same_state = exact.clone();

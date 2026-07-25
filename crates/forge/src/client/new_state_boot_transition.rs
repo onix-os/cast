@@ -18,7 +18,8 @@ use crate::{
     State, SystemModel,
     state::{self, Selection},
     transition_identity::{
-        NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator, execute_new_state_forward,
+        NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator,
+        SystemTriggersCompleteCoordinator, execute_new_state_forward,
     },
 };
 
@@ -148,53 +149,118 @@ impl Client {
         )
         .map_err(|source| LiveNewStateBootError::at("journal-coordinated forward prefix", source))?;
 
-        let archived = coordinator
-            .archive_previous_tree()
-            .map_err(|source| LiveNewStateBootError::at("predecessor archive", source))?;
-
         // The candidate state exists only after the forward prefix allocated its
-        // row, so boot applicability is captured here rather than pre-journal.
+        // row, so it is loaded here rather than pre-journal.
         let boot_candidate = self
             .state_db
             .get(allocated)
             .map_err(|source| LiveNewStateBootError::at("candidate state load", source))?;
 
+        // A first install has no predecessor, so the archive phases never occur
+        // and both tails start one step earlier, at `SystemTriggersComplete`.
+        let Some(_) = previous else {
+            if !run_boot_sync {
+                let handoff = coordinator
+                    .commit_new_state_unarchived_without_boot()
+                    .map_err(|source| LiveNewStateBootError::at("unarchived no-boot commit", source))?;
+                self.finish_new_state_transition(handoff.journal, handoff.record, &handoff.active_state_reservation)?;
+                return Ok(boot_candidate);
+            }
+            let stone = self.require_new_state_boot_inputs(&boot_candidate)?;
+            self.complete_new_state_boot(
+                NewStateBootSource::Unarchived(coordinator),
+                &candidate_usr,
+                &boot_candidate,
+                stone,
+            )?;
+            return Ok(boot_candidate);
+        };
+
+        let archived = coordinator
+            .archive_previous_tree()
+            .map_err(|source| LiveNewStateBootError::at("predecessor archive", source))?;
+
         if !run_boot_sync {
             // The pre-journal probe already established that this candidate
             // publishes no bootable plan, and the record says so. Commit
             // straight from `PreviousArchived` rather than entering boot.
-            let _handoff = archived
+            let handoff = archived
                 .commit_new_state_without_boot()
                 .map_err(|source| LiveNewStateBootError::at("no-boot commit decision", source))?;
+            self.finish_new_state_transition(handoff.journal, handoff.record, &handoff.active_state_reservation)?;
             return Ok(boot_candidate);
         }
 
+        let stone = self.require_new_state_boot_inputs(&boot_candidate)?;
+        self.complete_new_state_boot(
+            NewStateBootSource::Archived(archived),
+            &candidate_usr,
+            &boot_candidate,
+            stone,
+        )?;
+        Ok(boot_candidate)
+    }
+
+    /// Walk a committed transition to its terminal deletion.
+    ///
+    /// Stopping at `CommitDecided` would leave a live journal record, which the
+    /// next startup reports as `RecoveryPending` — the transition would look
+    /// interrupted even though it succeeded.
+    fn finish_new_state_transition(
+        &self,
+        journal: crate::transition_journal::TransitionJournalStore,
+        record: crate::transition_journal::TransitionRecord,
+        reservation: &crate::client::active_state_snapshot::ActiveStateReservation,
+    ) -> Result<(), LiveNewStateBootError> {
+        let journal = crate::client::startup_recovery::finish_new_state_after_commit(
+            journal,
+            &self.state_db,
+            &self.installation,
+            record,
+            reservation,
+        )
+        .map_err(|source| LiveNewStateBootError::at("terminal completion", source))?;
+        drop(journal);
+        Ok(())
+    }
+
+    /// Prepare the sealed boot inputs for a candidate the pre-journal probe
+    /// already judged bootable.
+    ///
+    /// Disagreement here means the namespace or database moved after the record
+    /// was written, so the journal now asserts a boot that cannot happen. That
+    /// must fail loudly rather than silently skip boot.
+    fn require_new_state_boot_inputs(
+        &self,
+        boot_candidate: &State,
+    ) -> Result<PreparedActiveReblitStoneBootInputs, LiveNewStateBootError> {
         let input_deadline = deadline_after(BOOT_PUBLICATION_TIMEOUT, "boot input deadline")?;
-        let stone = match PreparedActiveReblitStoneBootInputs::prepare_until(
+        match PreparedActiveReblitStoneBootInputs::prepare_until(
             &self.installation,
             &self.state_db,
             &self.layout_db,
-            &boot_candidate,
+            boot_candidate,
             input_deadline,
         )
         .map_err(|source| LiveNewStateBootError::at("boot applicability", source))?
         {
-            ActiveReblitStoneBootInputsOutcome::Ready(stone) => stone,
-            ActiveReblitStoneBootInputsOutcome::NotApplicable(_) => {
-                // The pre-journal probe said bootable, so the post-allocation
-                // plan must agree; disagreement means the namespace or database
-                // moved under us and the journal now asserts a boot that cannot
-                // happen.
-                return Err(LiveNewStateBootError::at(
-                    "boot applicability",
-                    NewStateBootNotApplicable,
-                ));
-            }
-        };
-
-        self.complete_new_state_boot(archived, &candidate_usr, &boot_candidate, stone)?;
-        Ok(boot_candidate)
+            ActiveReblitStoneBootInputsOutcome::Ready(stone) => Ok(stone),
+            ActiveReblitStoneBootInputsOutcome::NotApplicable(_) => Err(LiveNewStateBootError::at(
+                "boot applicability",
+                NewStateBootNotApplicable,
+            )),
+        }
     }
+}
+
+/// Where a NewState transition enters boot publication.
+///
+/// Replacing an active state enters from `PreviousArchived`, once the
+/// predecessor is the durable rollback anchor. A first install has no
+/// predecessor, so it enters one phase earlier, from `SystemTriggersComplete`.
+pub(in crate::client) enum NewStateBootSource {
+    Archived(PreviousArchivedCoordinator),
+    Unarchived(SystemTriggersCompleteCoordinator),
 }
 
 impl Client {
@@ -205,7 +271,7 @@ impl Client {
     #[allow(dead_code)]
     pub(in crate::client) fn complete_new_state_boot(
         &self,
-        coordinator: PreviousArchivedCoordinator,
+        coordinator: NewStateBootSource,
         boot_candidate_usr: &std::fs::File,
         boot_candidate: &State,
         stone: PreparedActiveReblitStoneBootInputs,
@@ -249,9 +315,16 @@ impl Client {
         let inventory = plan
             .prepare_desired_publication_inventory()
             .map_err(|source| LiveNewStateBootError::at("desired boot publication inventory", source))?;
-        let handoff = coordinator
-            .into_new_state_boot_sync_handoff()
-            .map_err(|source| LiveNewStateBootError::at("new state boot handoff", source))?;
+        // The coordinator is consumed only here, after every boot input is
+        // prepared, so a preparation failure leaves the journal untouched.
+        let handoff = match coordinator {
+            NewStateBootSource::Archived(coordinator) => coordinator
+                .into_new_state_boot_sync_handoff()
+                .map_err(|source| LiveNewStateBootError::at("new state boot handoff", source))?,
+            NewStateBootSource::Unarchived(coordinator) => coordinator
+                .into_new_state_unarchived_boot_sync_handoff()
+                .map_err(|source| LiveNewStateBootError::at("unarchived new state boot handoff", source))?,
+        };
         let staged = self
             .stage_new_state_boot_sync_from_handoff(&plan, &inventory, handoff)
             .map_err(|source| LiveNewStateBootError::at("BootSyncStarted staging", source))?;

@@ -179,22 +179,35 @@ impl Client {
                 let old_state = candidate.active_state.active();
                 candidate.active_state.revalidate(&self.installation)?;
 
-                // The journal-coordinated route owns the whole transition and
-                // allocates the state row inside its durable prefix, so a crash
-                // can never orphan the row from its transition. It handles both
-                // shapes: replacing an active state, whose predecessor becomes
-                // the archived rollback anchor, and a first install with no
-                // predecessor at all (`plans/future_impl.md` §1.1a).
-                let state = self
-                    .apply_new_state_candidate(
-                        candidate,
-                        old_state,
-                        selections,
-                        &summary.to_string(),
-                        system_snapshot,
-                    )
-                    .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
-                Ok(Some(state))
+                match old_state {
+                    // Replacing an active state: the journal-coordinated route
+                    // owns the whole transition and allocates the state row
+                    // inside its durable prefix, so a crash can never orphan the
+                    // row from its transition (`plans/future_impl.md` §1.1a).
+                    Some(previous) => {
+                        let state = self
+                            .apply_new_state_candidate(
+                                candidate,
+                                Some(previous),
+                                selections,
+                                &summary.to_string(),
+                                system_snapshot,
+                            )
+                            .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
+                        Ok(Some(state))
+                    }
+                    // First install. The coordinated tails exist and the forward
+                    // prefix runs, but the terminal chain defers at
+                    // `CleanupComplete` for a no-predecessor record, leaving a
+                    // live journal record that startup reports as
+                    // `RecoveryPending`. Legacy until that is resolved — see
+                    // `plans/future_impl.md` §1.1e.
+                    None => {
+                        let state = self.state_db.add(selections, Some(&summary.to_string()), None)?;
+                        self.apply_stateful_candidate(candidate, &state, None, system_snapshot)?;
+                        Ok(Some(state))
+                    }
+                }
             }
             Scope::Ephemeral { destination } => {
                 let candidate = self.materialize_ephemeral_candidate(selections.iter().map(|s| &s.package))?;

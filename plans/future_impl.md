@@ -425,6 +425,37 @@ two transition engines keyed on whether a candidate happens to ship a kernel —
 non-bootable installs through the durable route, bootable ones still legacy.
 That is worse than either engine alone.
 
+### 1.1e First-install terminal completion defers  · E:M R:med · **blocks routing first install**
+
+**Everything up to commit works; the transition does not end.** For a NewState
+record with no predecessor (`SynthesizedEmpty`), the coordinated route runs the
+forward prefix, the unarchived tails, and reaches `CommitDecided`. Driving the
+terminal chain from there then fails: `CommitCleanup` admits, but
+`CleanupComplete` returns `Deferred`.
+
+`Deferred` means the evidence was not exact — either the bracketing database
+captures disagreed, or the terminal namespace proof failed to admit. It is *not*
+a source-contract rejection: `exact_new_state_terminal_source` accepts both
+NewState shapes (verified by
+`each_terminal_step_admits_only_its_own_source_phase`).
+
+**Consequence if routed anyway:** the journal keeps a live record at
+`CommitDecided`, so the next startup reports `RecoveryPending` — a successful
+install looks like an interrupted one. Four `active_state_snapshot_tests` catch
+exactly this, which is how it was found.
+
+**So first install stays on the legacy route** (`state_planning.rs`, `None`
+arm) until this is resolved. Replacing an active state is unaffected and is
+already coordinated.
+
+**Where to look:** `NewStateCommitCleanupAuthority::capture` returns `Deferred`
+from two places — the `database != database_after` comparison and the
+`NewStateTerminalNamespaceInspection` begin/finish. Instrument which one fires
+for a no-predecessor record at `CommitCleanupComplete`. A likely candidate is
+the database evidence: `inspect_database` treats `Operation::NewState`
+specially, and a first install's in-flight/ownership shape differs from a
+replacement's.
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has

@@ -10,6 +10,7 @@ mod active_reblit_boot_sync_commit_decision;
 mod active_reblit_boot_sync_started_completion;
 mod active_reblit_commit_cleanup_complete;
 mod new_state_commit_cleanup_complete;
+pub(in crate::client) use new_state_commit_cleanup_complete::finish_new_state_after_commit;
 mod reopened_advance;
 mod active_reblit_commit_cleanup_complete_to_complete;
 mod active_reblit_complete_finalization;
