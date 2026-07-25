@@ -296,14 +296,20 @@ struct StateLayoutIndex<'a> {
 }
 
 impl<'a> StateLayoutIndex<'a> {
+    /// Index one state's `/usr`-relative layouts by path.
+    ///
+    /// Takes the layout slice rather than the projection so a prospective
+    /// candidate — whose state row does not exist yet — can be indexed with the
+    /// same rules as a persisted one (see `future_impl.md` §1.1a). `state_id`
+    /// only labels errors.
     fn build(
-        projection: &'a PreparedActiveReblitBootProjection,
+        layouts: &'a [(package::Id, StonePayloadLayoutRecord)],
         state_id: state::Id,
         selected: &BTreeSet<&str>,
         budget: &mut PlanBudget,
     ) -> Result<Self, ActiveReblitBootAssetPlanError> {
         let mut entries = BTreeMap::<PathBuf, IndexedLayout<'a>>::new();
-        for (package, record) in projection.layouts() {
+        for (package, record) in layouts {
             budget.step()?;
             if !selected.contains(package.as_str()) {
                 continue;
@@ -474,14 +480,8 @@ where
     for (state_index, state) in projection.states().iter().enumerate() {
         budget.step()?;
         let selected = selected_packages(state);
-        let index = StateLayoutIndex::build(projection, state.id, &selected, &mut budget)?;
-        let kernel_versions = index
-            .entries
-            .keys()
-            .filter_map(|path| {
-                kernel_candidate(path).and_then(|(version, name)| (name == "vmlinuz").then_some(version))
-            })
-            .collect::<BTreeSet<_>>();
+        let index = StateLayoutIndex::build(projection.layouts(), state.id, &selected, &mut budget)?;
+        let kernel_versions = indexed_kernel_versions(&index);
         kernel_count = kernel_count.saturating_add(kernel_versions.len());
         if kernel_count > policy.max_kernels {
             return Err(ActiveReblitBootAssetPlanError::KernelCountLimit {
@@ -561,7 +561,7 @@ where
     for (state, (state_id, candidates)) in projection.states().iter().zip(state_plans) {
         debug_assert_eq!(state.id, state_id);
         let selected = selected_packages(state);
-        let index = StateLayoutIndex::build(projection, state_id, &selected, &mut budget)?;
+        let index = StateLayoutIndex::build(projection.layouts(), state_id, &selected, &mut budget)?;
         for (path, role) in candidates {
             let (resolved_path, digest) = index.resolve_regular(state_id, &path, &mut budget)?;
             budget.admit_resolved_path(&resolved_path)?;
@@ -611,6 +611,19 @@ fn boot_asset_plan_deadline(timeout: Duration) -> Result<Instant, ActiveReblitBo
         .ok_or(ActiveReblitBootAssetPlanError::InvalidDeadline { timeout })
 }
 
+/// Distinct kernel versions an indexed state contributes.
+///
+/// One implementation serves both the persisted plan builder and the
+/// pre-allocation applicability probe (`future_impl.md` §1.1a); re-deriving
+/// this rule elsewhere would let the pre-journal answer drift from the plan.
+fn indexed_kernel_versions(index: &StateLayoutIndex<'_>) -> BTreeSet<String> {
+    index
+        .entries
+        .keys()
+        .filter_map(|path| kernel_candidate(path).and_then(|(version, name)| (name == "vmlinuz").then_some(version)))
+        .collect()
+}
+
 fn selected_packages(state: &crate::State) -> BTreeSet<&str> {
     state
         .selections
@@ -625,8 +638,24 @@ fn head_systemd_candidate_count(
 ) -> Result<usize, ActiveReblitBootAssetPlanError> {
     let head = projection.head();
     let selected = selected_packages(head);
+    systemd_candidate_count(projection.layouts(), head.id, &selected, budget)
+}
+
+/// Count the distinct systemd-boot candidate paths a head contributes, capped
+/// at two (two is already a conflict, so counting further is wasted work).
+///
+/// Takes the layout slice rather than the projection so a prospective
+/// candidate can be assessed with the same rule as a persisted head — the
+/// single implementation required by `future_impl.md` §1.1a. `state_id` only
+/// labels errors.
+fn systemd_candidate_count(
+    layouts: &[(package::Id, StonePayloadLayoutRecord)],
+    state_id: state::Id,
+    selected: &BTreeSet<&str>,
+    budget: &mut PlanBudget,
+) -> Result<usize, ActiveReblitBootAssetPlanError> {
     let mut paths = BTreeSet::new();
-    for (package, record) in projection.layouts() {
+    for (package, record) in layouts {
         budget.step()?;
         if !selected.contains(package.as_str()) {
             continue;
@@ -637,7 +666,7 @@ fn head_systemd_candidate_count(
         }
         super::super::require_usr_relative_stone_layout(package, record).map_err(|source| {
             ActiveReblitBootAssetPlanError::InvalidLayout {
-                state_id: i32::from(head.id),
+                state_id: i32::from(state_id),
                 package: package.clone(),
                 source: Box::new(source),
             }
