@@ -51,6 +51,9 @@ mod legacy_boot_repair;
 mod namespace_helpers;
 mod prejournal_inventory;
 mod previous_tree_move;
+// Forward scaffolding: minted by the not-yet-built PreviousRestore rollback
+// dispatcher (Phase 1) and used today by its physical-primitive test.
+#[allow(unused_imports)]
 pub(crate) use previous_tree_move::PreviousRestoreRecoverySeal;
 mod prune_residue;
 mod retained_usr_exchange_syscall;

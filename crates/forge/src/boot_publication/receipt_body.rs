@@ -6,6 +6,11 @@
 //! Likewise, an output provenance claim records an assertion and never grants
 //! write, replacement, removal, or deletion authority.
 
+// Dormant boot-publication scaffolding: the receipt is prepared and stored, but
+// several of its canonical accessors are not read until the Phase 1/2 NewState
+// boot-publication consumers land. Keep them (see plans/future_impl.md D0.4).
+#![allow(dead_code)]
+
 use std::{cmp::Ordering, collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};

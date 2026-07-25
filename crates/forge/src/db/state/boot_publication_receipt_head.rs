@@ -7,6 +7,11 @@
 //! policy remain in the receipt-state layer. It grants no repair, deletion,
 //! journal, filesystem, or publication authority.
 
+// Dormant boot-publication scaffolding: the receipt-head correlation is durable
+// but its query accessors and in-flight error variants are not consumed until
+// the Phase 1/2 NewState boot-publication path lands (plans/future_impl.md D0.4).
+#![allow(dead_code)]
+
 use diesel::{
     SqliteConnection,
     dsl::sql,

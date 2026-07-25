@@ -69,7 +69,7 @@ pub(super) fn emit(point: FixtureRetainedBootPublicationParentCheckpoint) {
     let _ = point;
 }
 
-pub(super) fn mkdir_report(component_index: usize, result: std::io::Result<()>) -> std::io::Result<()> {
+pub(super) fn mkdir_report(_component_index: usize, result: std::io::Result<()>) -> std::io::Result<()> {
     #[cfg(test)]
     if result.is_ok()
         && take_fault(FixtureRetainedBootPublicationParentFault::MkdirReportsErrorAfterApplied {
@@ -84,7 +84,7 @@ pub(super) fn mkdir_report(component_index: usize, result: std::io::Result<()>) 
     result
 }
 
-pub(super) fn fail_after_creation(component_index: usize) -> std::io::Result<()> {
+pub(super) fn fail_after_creation(_component_index: usize) -> std::io::Result<()> {
     #[cfg(test)]
     if take_fault(FixtureRetainedBootPublicationParentFault::AfterCreationBeforeDurability {
         component_index,

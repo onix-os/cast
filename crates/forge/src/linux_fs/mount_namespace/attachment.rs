@@ -105,7 +105,6 @@ use crate::linux_fs::descriptor_devtmpfs_filesystem::{
 };
 use crate::linux_fs::{
     descriptor_boot_filesystem::{BootFilesystemAuthenticationError, ValidatedBootFilesystemDescriptorEvidence},
-    gpt_partition_role::GptPartitionRole,
     mountinfo_devtmpfs_policy::ValidatedDevtmpfsMountInfoPolicy,
     sysfs_block::SysfsDeviceNumber,
 };

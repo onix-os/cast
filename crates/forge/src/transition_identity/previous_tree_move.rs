@@ -18,6 +18,9 @@ pub(crate) struct PreviousRestoreRecoverySeal {
 impl PreviousRestoreRecoverySeal {
     /// Mint the recovery seal. ONLY the `PreviousRestore` rollback dispatcher may
     /// call this, and only after admitting the exact durable record.
+    // Forward scaffolding: consumed by the not-yet-built dispatcher (Phase 1);
+    // exercised today only by the physical-primitive test.
+    #[allow(dead_code)]
     pub(crate) fn for_recovery() -> Self {
         Self { _private: () }
     }
@@ -32,6 +35,10 @@ impl PreviousRestoreRecoverySeal {
 enum ArchiveJournalGuard<'authority> {
     LegacyNoJournal,
     Coordinator(&'authority journal_coordinator::PreviousArchiveEffectSeal),
+    // Forward scaffolding: constructed by `restore_previous_with_journal`, whose
+    // only caller today is a test; the PreviousRestore dispatcher (Phase 1) will
+    // be the production caller.
+    #[allow(dead_code)]
     Recovery(&'authority PreviousRestoreRecoverySeal),
 }
 
@@ -117,6 +124,9 @@ impl StatefulTreeIdentity {
     /// is legitimately present (it selected this recovery) and stays retained
     /// across the compensating move rather than blocking it, exactly mirroring
     /// the forward [`Self::archive_previous_with_journal`].
+    // Forward scaffolding: the PreviousRestore rollback dispatcher (Phase 1) will
+    // be the production caller; exercised today by the physical-primitive test.
+    #[allow(dead_code)]
     pub(crate) fn restore_previous_with_journal(
         &self,
         installation: &Installation,
