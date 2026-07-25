@@ -378,6 +378,7 @@ include!("record_contract.rs");
 include!("record_binding.rs");
 include!("record_binding_delete.rs");
 include!("delete_residue_recovery.rs");
+include!("forward_generation.rs");
 include!("record_successors.rs");
 include!("runtime_evidence.rs");
 include!("transition_semantics.rs");

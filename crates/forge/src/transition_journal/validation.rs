@@ -467,6 +467,41 @@ fn require_option_presence<T>(value: Option<T>, required: bool, error: CodecErro
     Ok(())
 }
 
+/// The generation a record reaches at `phase`, derived from its own options.
+///
+/// A transition is created at `Preparing` with generation 1 and every advance
+/// increments by one, so the generation at a phase is fixed by which phases the
+/// record's options make it traverse. `NewState` that archives a predecessor
+/// passes through `PreviousArchiveIntent` and `PreviousArchived`, which
+/// `ActiveReblit` skips — so the same phase sits four generations higher.
+///
+/// Returns `None` when `phase` is unreachable for this record, which is itself
+/// the answer a caller wants: the record cannot legitimately be there.
+///
+/// Callers previously compared against per-operation literals. Deriving it
+/// keeps one rule for every operation (`plans/future_impl.md` §1.1d).
+pub(crate) fn expected_forward_generation(record: &TransitionRecord, phase: ForwardPhase) -> Option<u64> {
+    let mut current = ForwardPhase::Preparing;
+    let mut generation = 1_u64;
+    if phase == current {
+        return Some(generation);
+    }
+    // The chain is finite and strictly advancing, so the phase count bounds the
+    // walk; the guard makes that explicit rather than trusting the successor fn.
+    for _ in 0..MAX_FORWARD_PHASE_ADVANCES {
+        let next = next_forward_phase(record, current)?;
+        generation = generation.checked_add(1)?;
+        if next == phase {
+            return Some(generation);
+        }
+        current = next;
+    }
+    None
+}
+
+/// `ForwardPhase` has nineteen variants, so no legal walk exceeds that.
+const MAX_FORWARD_PHASE_ADVANCES: usize = 19;
+
 pub(super) fn next_forward_phase(record: &TransitionRecord, current: ForwardPhase) -> Option<ForwardPhase> {
     let after_system = || {
         if record.options.archive_previous {
