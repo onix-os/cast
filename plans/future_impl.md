@@ -493,32 +493,38 @@ private parking name**, so a racing inode is preserved rather than destroyed.
 The test at `activation_namespace/tests.rs:790` uses `remove_dir_all` because it
 is a *test* arranging a namespace, not a model of the production effect.
 
-**So the real question is which of these is correct**, and it needs deciding
-before any code:
+**Resolved by lookup: (a) is ruled out, so this is a policy question.**
+`NamespaceSnapshot` scans parking locations — `TreeLocation` includes
+`PreviousParking`, `ArchivedCandidateParking`, `TransitionQuarantine` and
+`AmbientQuarantine` (`capture/model.rs:46-55`) — and `trees_for_token` filters
+that whole set. A parked tree is therefore still *found*, just in a different
+place, so renaming cannot produce `Absent` any more than leaving it in staging
+can.
 
-- **(a) Rename the synthesized previous to a parking name**, mirroring
-  `finish_previous_slot_retirement`. Consistent with the layer's discipline. Open
-  question: does `trees_for_token` scan parking names? If it does, the previous
-  reads as some other `PreviousPlace` rather than `Absent`, and the policy needs
-  a matching alternative rather than the route needing a new effect.
-- **(b) Treat `Absent` as the wrong expectation for a synthesized previous** and
-  give `commit_layouts` an alternative covering "synthesized previous still in
-  staging". The layout would then describe what actually happens, and no new
-  effect is needed at all.
+**Which means `Absent` may be unreachable for a synthesized previous.** Nothing
+moves it: a first install synthesizes an empty `/usr` to exchange against, and
+after the exchange it sits in staging permanently. If no effect removes it — and
+none may, given the layer never unlinks — then
+`commit_layouts`' `SynthesizedEmpty -> Absent` mapping describes a state the
+system never reaches.
 
-(b) may well be right: a synthesized-empty previous is an artefact of having had
-no `/usr`, and there is no obvious reason the terminal phases must see it gone —
-the legacy route has always left it. Check what `trees_for_token` does with
-parking names before choosing.
+**D1.5 — needs a decision, because it changes a tested policy.**
+`activation_namespace/tests.rs:780-795` explicitly asserts today's behaviour
+(`PhaseLayout` error at `CommitCleanupComplete` with the tree in staging), so
+this is not a bug to quietly fix:
 
-**Fix:** the coordinated first-install route must remove the synthesized-empty
-previous tree after the exchange and before the terminal phases — the step the
-legacy route performs and the coordinator does not. This is a real missing
-effect, not a policy quirk: leaving an orphan empty tree in staging is itself
-wrong, independent of the layout check that caught it.
+- **(i)** The policy is right and a disposal effect is genuinely missing — in
+  which case that effect must be designed within the no-unlink discipline, which
+  is exactly what makes it hard.
+- **(ii)** The policy is wrong: `commit_layouts` should keep `POST_EXCHANGE` as
+  an alternative for `SynthesizedEmpty` at the terminal phases, since the
+  previous legitimately remains in staging. The `intent` flag (`policy.rs:271`)
+  currently drops it. Fix is one condition plus updating that test.
 
-Until then first install stays on the legacy route (`state_planning.rs`, `None`
-arm); replacing an active state is unaffected and already coordinated.
+(ii) is the smaller and, on the evidence, more likely correct answer — the
+legacy route has always left the tree there, and no coordinated route exercised
+this path until 2026-07-26. But it rewrites an asserted contract, so confirm the
+intent before changing it.
 
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
