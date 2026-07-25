@@ -152,6 +152,17 @@ impl Client {
             .state_db
             .get(allocated)
             .map_err(|source| LiveNewStateBootError::at("candidate state load", source))?;
+
+        if !run_boot_sync {
+            // The pre-journal probe already established that this candidate
+            // publishes no bootable plan, and the record says so. Commit
+            // straight from `PreviousArchived` rather than entering boot.
+            let _handoff = archived
+                .commit_new_state_without_boot()
+                .map_err(|source| LiveNewStateBootError::at("no-boot commit decision", source))?;
+            return Ok(boot_candidate);
+        }
+
         let input_deadline = deadline_after(BOOT_PUBLICATION_TIMEOUT, "boot input deadline")?;
         let stone = match PreparedActiveReblitStoneBootInputs::prepare_until(
             &self.installation,
@@ -164,6 +175,10 @@ impl Client {
         {
             ActiveReblitStoneBootInputsOutcome::Ready(stone) => stone,
             ActiveReblitStoneBootInputsOutcome::NotApplicable(_) => {
+                // The pre-journal probe said bootable, so the post-allocation
+                // plan must agree; disagreement means the namespace or database
+                // moved under us and the journal now asserts a boot that cannot
+                // happen.
                 return Err(LiveNewStateBootError::at(
                     "boot applicability",
                     NewStateBootNotApplicable,
