@@ -448,27 +448,37 @@ exactly this, which is how it was found.
 arm) until this is resolved. Replacing an active state is unaffected and is
 already coordinated.
 
-**First, make it diagnosable.** `capture` has *three* `Deferred` returns and all
-three discard the reason (`Err(_) =>` at the namespace `begin` and `finish`, plus
-the `database != database_after` comparison). That is why the failure says only
-"Deferred". Carrying the reason — even just in the `Debug` output — should come
-before any fix attempt; an authority this hard to reach is not one to debug by
-guessing.
+**DIAGNOSED (2026-07-26). The reason is `NamespaceAtBegin` — the terminal
+namespace proof, not the database evidence.** `capture` now carries a
+`NewStateCommitCleanupDeferral` so this is readable instead of guessed at; all
+three `Deferred` sites previously discarded their reason.
 
-**Leading hypothesis: the namespace proof, not the database.** For a first
-install the record's previous origin is `SynthesizedEmpty`, and
-`policy::commit_layouts` maps that to `PreviousPlace::Absent` — the namespace
-must show *no* previous tree. But a synthesized-empty previous is a real empty
-`/usr` that the transition created, so it may still be present in the snapshot
-under the record's previous tree token. If so, `assess_snapshot_layout` rejects
-the layout and the proof defers.
+**Root cause: nothing disposes of the synthesized-empty previous tree.**
+`policy::commit_layouts` maps `PreviousOrigin::SynthesizedEmpty` to
+`PreviousPlace::Absent`, and `previous_place_matches` only accepts `Absent` when
+*no* tree carries the record's previous token. A first install synthesizes an
+empty `/usr` as its "previous"; after the exchange that tree sits in staging, and
+the coordinated route never removes it.
 
-That also explains why the archive case works: it maps to
-`PreviousPlace::Archived`, and the predecessor genuinely is in its state slot.
+**Why `CommitCleanup` admits but `CleanupComplete` defers** — `commit_layouts`
+takes an `intent` flag, true only for `CommitDecided` (`policy.rs:255-256`). With
+`intent` it offers `[POST_EXCHANGE, completed]`, so a previous still in staging is
+accepted; without it, only `completed` = `{candidate: Live, previous: Absent}`.
+So the route passes the first terminal step and fails the second — exactly the
+observed behaviour.
 
-Check `trees_for_token(snapshot, record.previous.tree_token)` for a first-install
-record at `CommitCleanupComplete` before assuming the database evidence is at
-fault.
+**The expected end state is confirmed by an existing test:**
+`activation_namespace/tests.rs:790` does
+`fs::remove_dir_all(installation.staging_path("usr"))` for the synthesized case.
+
+**Fix:** the coordinated first-install route must remove the synthesized-empty
+previous tree after the exchange and before the terminal phases — the step the
+legacy route performs and the coordinator does not. This is a real missing
+effect, not a policy quirk: leaving an orphan empty tree in staging is itself
+wrong, independent of the layout check that caught it.
+
+Until then first install stays on the legacy route (`state_planning.rs`, `None`
+arm); replacing an active state is unaffected and already coordinated.
 
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an

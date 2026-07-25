@@ -236,8 +236,8 @@ pub(in crate::client) enum NewStateCommitCleanupPersistenceError {
     },
     #[error("audit the in-flight transition")]
     InFlight(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("the {step} terminal step was deferred")]
-    AdmissionDeferred { step: String },
+    #[error("the {step} terminal step was deferred: {reason}")]
+    AdmissionDeferred { step: String, reason: String },
     #[error("the {step} terminal step was not applicable")]
     AdmissionNotApplicable { step: String },
     #[error("installation")]
@@ -315,8 +315,11 @@ pub(in crate::client) fn finish_new_state_after_commit(
         .map_err(NewStateCommitCleanupPersistenceError::Authority)?
         {
             crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Ready(authority) => authority,
-            crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Deferred => {
-                return Err(NewStateCommitCleanupPersistenceError::AdmissionDeferred { step: format!("{step:?}") });
+            crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Deferred(reason) => {
+                return Err(NewStateCommitCleanupPersistenceError::AdmissionDeferred {
+                    step: format!("{step:?}"),
+                    reason: format!("{reason:?}"),
+                });
             }
             crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::NotApplicable => {
                 return Err(NewStateCommitCleanupPersistenceError::AdmissionNotApplicable {
@@ -346,8 +349,14 @@ pub(in crate::client) fn finish_new_state_after_commit(
     .map_err(NewStateCommitCleanupPersistenceError::Authority)?
     {
         crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Ready(authority) => authority,
-        _ => {
+        crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::Deferred(reason) => {
             return Err(NewStateCommitCleanupPersistenceError::AdmissionDeferred {
+                step: "Finalize".to_owned(),
+                reason: format!("{reason:?}"),
+            });
+        }
+        crate::client::startup_reconciliation::NewStateCommitCleanupAdmission::NotApplicable => {
+            return Err(NewStateCommitCleanupPersistenceError::AdmissionNotApplicable {
                 step: "Finalize".to_owned(),
             });
         }

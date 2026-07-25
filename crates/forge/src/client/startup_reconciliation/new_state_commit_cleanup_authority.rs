@@ -98,10 +98,25 @@ pub(in crate::client) enum NewStateCommitCleanupAdmission<'reservation> {
     /// The record is not a NewState commit-cleanup source.
     NotApplicable,
     /// The record is a NewState commit-cleanup source but its evidence is not
-    /// currently exact; the caller must not advance.
-    Deferred,
+    /// currently exact; the caller must not advance. The reason is carried
+    /// because this admission is reached deep inside a live transition, where
+    /// "deferred" alone is not diagnosable.
+    Deferred(NewStateCommitCleanupDeferral),
     /// Exact evidence; the caller may advance the record.
     Ready(NewStateCommitCleanupAuthority<'reservation>),
+}
+
+/// Why exact evidence could not be established.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+pub(in crate::client) enum NewStateCommitCleanupDeferral {
+    /// The terminal namespace did not match the record's expected layout at
+    /// admission.
+    NamespaceAtBegin,
+    /// The namespace changed between the bracketing captures.
+    NamespaceAtFinish,
+    /// The bracketing database captures disagreed.
+    DatabaseUnstable,
 }
 
 /// Exact `NewState + CommitDecided` evidence. Holds no namespace member: there
@@ -146,20 +161,30 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
         let namespace_inspection =
             match NewStateTerminalNamespaceInspection::begin(installation, journal, &journal_record_binding, record) {
                 Ok(inspection) => inspection,
-                Err(_) => return Ok(NewStateCommitCleanupAdmission::Deferred),
+                Err(_) => {
+                    return Ok(NewStateCommitCleanupAdmission::Deferred(
+                        NewStateCommitCleanupDeferral::NamespaceAtBegin,
+                    ));
+                }
             };
 
         let database = inspect_database(record, state_db, initial_in_flight)?;
         let in_flight_after = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
         let database_after = inspect_database(record, state_db, in_flight_after)?;
         if database != database_after {
-            return Ok(NewStateCommitCleanupAdmission::Deferred);
+            return Ok(NewStateCommitCleanupAdmission::Deferred(
+                NewStateCommitCleanupDeferral::DatabaseUnstable,
+            ));
         }
 
         let namespace =
             match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
                 Ok(namespace) => namespace,
-                Err(_) => return Ok(NewStateCommitCleanupAdmission::Deferred),
+                Err(_) => {
+                    return Ok(NewStateCommitCleanupAdmission::Deferred(
+                        NewStateCommitCleanupDeferral::NamespaceAtFinish,
+                    ));
+                }
             };
 
         installation.revalidate_mutable_namespace()?;
