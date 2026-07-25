@@ -193,6 +193,45 @@ possible.
 route at all and must be built before the legacy path can be deleted
 (`plans/cleanup_legacy.md` §2).
 
+### 1.1b NewState commit-cleanup authority  · E:L R:high · **blocks Slice 5**
+
+**Found 2026-07-25 by tracing the tail; not previously known.** Both coordinated
+NewState paths reach `Complete` through
+`ActiveReblitCommitCleanupAuthority`, which **rejects NewState records at
+runtime**:
+
+- `capture_with_record_binding` (`active_reblit_commit_cleanup_authority.rs:203`)
+  returns `NotApplicable` unless `record.operation == Operation::ActiveReblit`.
+- `capture` (`:165-173`) additionally rejects `options.archive_previous` and
+  `!same_nonempty_candidate_and_previous(record)`.
+
+A NewState record trips all three (operation `NewState`, `archive_previous`
+true, candidate ≠ previous). Both routes hit it:
+
+- boot path — `complete_new_state_boot` → `persist_commit_cleanup_complete` →
+  `capture_retained_binding`
+- no-boot path — the terminal tail `finish_active_reblit_no_boot` → `capture`
+
+**This corrects an earlier conclusion.** Slice 3c was recorded as "COMPILES for
+the NewState-derived staged boot — proving it operation-neutral". The types line
+up; the runtime admission does not. `apply_new_state_candidate` would fail at
+commit cleanup on a real system. The integration test
+`apply_new_state_candidate_forwards_and_archives_before_boot_applicability`
+never caught it because it stops earlier at `NewStateBootNotApplicable` — the
+very error §1.1a removes, so fixing §1.1a alone would have walked straight into
+this.
+
+**Shape.** Same structural problem catalogued for Slice 4 recovery: these
+authorities encode ActiveReblit's state model (`candidate == previous`, no
+archive) deep in their admission logic, not merely at the entry gate. Commit
+cleanup needs a NewState-shaped authority modelling fresh-candidate +
+archived-predecessor — a full authority stack (~500 lines, the class of
+`usr_rollback_reverse_authority`), not a gate relaxation.
+
+**Ordering:** build this **before** wiring §1.1a. Wiring the probe first yields
+a route that gets further and then fails at cleanup — strictly worse than
+today's honest `NewStateBootNotApplicable`.
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has
