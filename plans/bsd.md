@@ -1,7 +1,12 @@
-# Splitting Cast into `cast-core` + platform backends — Architecture Report
+# Splitting Cast into core, platform primitives, and deployment backends — Architecture and Implementation Plan
 
 Based on a four-track audit of the workspace (the `container` crate, `forge`, `mason`/`bin/cast`/support
 crates, and a repo-wide marker sweep), 2026-07-20. No code was changed as part of this analysis.
+
+**Ordering:** this plan is implemented before [`bootc.md`](bootc.md). It must separate two axes:
+`cast-platform-*` supplies OS primitives, while deployment engines own state, activation, rollback,
+and boot publication. Otherwise Cast-native `cast.fstx` semantics become a false universal platform
+contract and the later Linux-only bootc adapter has no honest sibling seam.
 
 ## 1. Executive summary
 
@@ -114,40 +119,64 @@ graph LR
 ## 4. Proposed crate structure
 
 ```
-cast (binary)
- ├─► cast-core                  resolver, registry, package model, db, repo fetch,
- │      │                       transaction planning, journal logic, system-model
- │      └─► cast-platform       TRAITS ONLY + neutral types (no OS deps)
- ├─► mason-core ──► cast-core, cast-platform
- ├─[cfg(linux)]──► cast-platform-linux ──► cast-sandbox-linux (today: container),
- │                                          blsforme, linux_fs, zbus
- └─[cfg(freebsd)]► cast-platform-freebsd ─► cast-sandbox-freebsd (jails/rctl),
-                                            loader.conf/bectl/GEOM
- (stone, vfs, dag, triggers, stone_recipe, … stay as-is under cast-core)
+cast (composition root)
+ ├─► cast-core                  resolve exact Stone closures; compose frozen roots;
+ │                              package/system planning and neutral identity
+ ├─► cast-platform              OS-PRIMITIVE TRAITS ONLY (no deployment policy)
+ ├─► cast-deploy-native         common native deployment contracts
+ ├─► mason-core ───────────────► cast-sandbox (build-host contract)
+ ├─[cfg(linux)]──► cast-platform-linux
+ │                 cast-deploy-native-linux ──► blsforme + Linux activation/boot policy
+ │                 cast-sandbox-linux (today: container)
+ └─[cfg(freebsd)]► cast-platform-freebsd
+                   cast-deploy-native-freebsd ─► strategy chosen at D0
+                   cast-sandbox-freebsd (jails/rctl)
+ later, Linux only: cast-deploy-bootc ──► OCI + upstream bootc (see bootc.md)
+ (stone, vfs, dag, triggers, stone_recipe, … remain neutral building blocks)
 ```
 
 ```mermaid
 graph TD
   bin["cast (binary)"] --> core[cast-core]
+  bin --> native["cast-deploy-native (contracts/common)"]
   bin --> mcore[mason-core]
+  mcore --> sapi["cast-sandbox (build-host API)"]
   bin -- "cfg(linux)" --> pl[cast-platform-linux]
   bin -- "cfg(freebsd)" --> pf[cast-platform-freebsd]
+  bin -- "cfg(linux)" --> nl[cast-deploy-native-linux]
+  bin -- "cfg(freebsd)" --> nf[cast-deploy-native-freebsd]
+  bin -- "cfg(linux)" --> sl[cast-sandbox-linux]
+  bin -- "cfg(freebsd)" --> sf[cast-sandbox-freebsd]
   mcore --> core
-  core --> papi["cast-platform (traits only)"]
+  core --> papi["cast-platform (OS primitives only)"]
   mcore --> papi
   pl -- implements --> papi
   pf -- implements --> papi
-  pl --> sl["cast-sandbox-linux (today: container)"]
-  pl --> bfl["blsforme · linux_fs · zbus"]
-  pf --> sf["cast-sandbox-freebsd (jails · rctl)"]
-  pf --> bff["loader.conf · bectl · GEOM"]
+  nl --> native
+  nf --> native
+  nl --> core
+  nf --> core
+  nl --> papi
+  nf --> papi
+  sl -- implements --> sapi
+  sf -- implements --> sapi
+  sl --> papi
+  sf --> papi
+  nl --> bfl["blsforme · Linux activation/boot"]
+  nf --> bff["D0-selected FreeBSD activation/boot"]
   core --> neutral["stone · vfs · dag · triggers · stone_recipe · ..."]
+  future["cast-deploy-bootc (later, Linux only)"] -.-> core
+  future -.-> upstream["OCI · upstream bootc"]
 ```
 
-- `cast-core` never links a platform backend; the binary selects one via `cfg` and injects it.
+- `cast-core` owns reusable exact-closure and frozen-root composition as well as planning; it never
+  activates a host. Concrete native adapters own Cast state semantics and consume injected platform
+  primitives. bootc will be their sibling, not a `cast-platform-linux` implementation and not a
+  client of the native deployer.
 - Keep **sandbox crates separate** from `cast-platform-*`: `container` is already a standalone unit
   with its own harness and two consumers, and FreeBSD sandboxing ships on a different schedule than
-  FreeBSD fs primitives.
+  FreeBSD fs primitives. Mason consumes the sandbox API; the composition root injects the selected
+  sandbox and platform implementations.
 - The existing `Error::execution_capability_unavailable()` probe pattern
   (`crates/container/src/lib.rs:562`) is the natural front door for platform capability
   negotiation — consumers already degrade gracefully through it.
@@ -159,20 +188,21 @@ FreeBSD backend becomes an emulation layer.
 
 ### `PlatformFs` — kernel interaction / filesystem primitives
 
-Guarantee: crash-durable, confinement-checked file publication relative to held directory
-descriptors.
+Guarantee: confinement-checked primitives with explicit durability and capability reporting. It
+must not promise a deployment algorithm that one supported OS cannot implement.
 
 - Scoped open: resolve beneath an anchor, no symlinks, no device/magic-link escape
-- Anonymous file → link-into-place publication; no-replace rename; **atomic pairwise exchange** of
-  two directory entries
+- Anonymous file → link-into-place publication; no-replace rename; advertise atomic pairwise
+  exchange only when the platform actually supplies it
 - Durable sync of file *and* parent directory; descriptor re-open capability (the current
   `/proc/self/fd` idiom)
 - Metadata guards: xattr/ACL rejection, noatime open, secure random
 
 Linux: `openat2 RESOLVE_*`, `O_TMPFILE`+`linkat`, `renameat2` `EXCHANGE`/`NOREPLACE`, fsync+dirsync,
 `fsetxattr`, `/proc/self/fd`.
-FreeBSD: `O_RESOLVE_BENEATH` (exists), tmpfile+linkat, fdescfs re-open, extattr — but *no
-rename-exchange* → BE/symlink-swap strategy (see R2).
+FreeBSD: `O_RESOLVE_BENEATH` (exists), tmpfile+linkat, fdescfs re-open, extattr — but no
+rename-exchange. Directory exchange versus boot-environment promotion is selected by the native
+deployment strategy, not emulated as a universal `PlatformFs` guarantee (see R2).
 
 ### `RuntimeEvidence` — process & boot-epoch authority
 
@@ -200,18 +230,21 @@ Linux: `/sys/block` uevent/links, `BLKSSZGET`/`BLKGETSIZE64` ioctls, `/proc/*/mo
 FreeBSD: GEOM confxml sysctl / libgeom, `DIOCGSECTORSIZE`/`DIOCGMEDIASIZE`, `getfsstat`,
 `f_fstypename` strings.
 
-### `BootManager`
+### `NativeActivationStrategy` and `NativeBootBackend`
 
-Guarantee: given installed kernel assets and a set of retained states, publish boot entries such
-that each state is selectable and the newest is default.
+These contracts belong to `cast-deploy-native` and its OS adapters, not the universal platform API.
+They select an activation algorithm, then publish native Cast states so each is boot-selectable and
+the newest is default. A later bootc deployer bypasses them because upstream bootc owns its
+deployments and boot.
 
-- Discover kernels from the layout DB (already neutral); render entries; publish/sync to the boot
-  partition; bounded rollback set; per-state kernel-argument injection (`cast.fstx=<id>`)
+- Discover kernels from the layout DB (already neutral); render entries; publish/sync boot assets;
+  bounded rollback set; encode the selected native state using the D0-proven OS mechanism
 
-Linux: blsforme — BLS entries + UKIs on ESP/XBOOTLDR, systemd-boot assets, EFI vars, dracut
-early-boot activation.
-FreeBSD: loader.conf + loader menu entries, kernel env for state selection, **bectl/ZFS boot
-environments** for rollback, rc.d early activation.
+Linux native: directory exchange plus blsforme BLS/UKI publication, EFI variables, and dracut
+early-boot activation using `cast.fstx=<id>`.
+FreeBSD native: D0 must choose and prove its activation strategy before extraction starts. ZFS boot
+environments with loader.conf/bectl/rc.d are one leading candidate, not an assumed universal
+filesystem primitive.
 
 ### `Sandbox` — isolated execution
 
@@ -248,15 +281,15 @@ FreeBSD: no-op inhibitor (or rc shutdown hook); devfs rulesets; rc.d script.
 2. **R2 — Atomic activation is built on `RENAME_EXCHANGE`** *(architectural, most safety-critical
    code in the tree)*. The `/usr` hot-swap, transition journal, and startup crash-recovery lean on
    atomic exchange + fsync ordering. FreeBSD's idiomatic substitute is ZFS boot environments —
-   stronger, but it inverts the design (activation = BE promotion, not directory swap) and the
-   journal's crash matrix must be re-derived.
+   stronger, but it inverts the design (activation = BE promotion, not directory swap). Put that
+   choice behind `NativeActivationStrategy`, not `PlatformFs`, and re-derive each crash matrix.
 3. **R3 — Security-posture parity is impossible 1:1.** Seccomp is a hand-built x86_64-only BPF
    filter; Capsicum is a different model entirely (fd capabilities, not syscall filtering). The
    Sandbox trait must state per-platform guarantees honestly.
-4. **R4 — Boot stack is single-vendor.** blsforme fuses "compute what entries should exist"
+4. **R4 — Native boot stack is single-vendor.** blsforme fuses "compute what entries should exist"
    (portable) with "write them for systemd-boot" (Linux) — no seam today. The newer
-   `active_reblit_*` renderer family partially creates one; put the trait boundary there. Dracut
-   early activation (`misc/boot/cast-fstx.*`) must be redesigned for loader/rc.
+   `active_reblit_*` renderer family partially creates one; put the native-deployer boundary there.
+   Dracut early activation (`misc/boot/cast-fstx.*`) must be redesigned for loader/rc.
 5. **R5 — procfs-as-capability idiom hides in "neutral" code.** `/proc/self/fd` anchors SQLite,
    downloader targets, and O_PATH re-opens across db/repository/installation. Each site needs the
    `PlatformFs` re-open capability; fdescfs is not mounted by default on FreeBSD.
@@ -273,16 +306,16 @@ FreeBSD: no-op inhibitor (or rc shutdown hook); devfs rulesets; rc.d script.
 | Workstream | Size | Rough effort | Notes |
 |---|---|---|---|
 | P0 · cfg scaffolding, CI matrix stub, FreeBSD cross-check build | S | 1–2 wk | Makes coupling visible as compile errors |
-| P1 · `cast-platform` traits + relocate linux_fs/boot/signal into `cast-platform-linux` | L | 6–10 wk | Mechanical but wide (~70 importer files); zero behavior change |
-| P2 · Carve `cast-core` out of forge client (inline syscalls → trait calls) | L–XL | 8–12 wk | The R2 contract must be designed first |
+| P1 · OS-primitive traits; relocate linux_fs/signal and create native-deployer boot seams | L | 6–10 wk | No generic `cast.fstx` or exchange requirement; zero Linux behavior change |
+| P2 · Carve `cast-core` and `cast-deploy-native` out of Forge | L–XL | 8–12 wk | Package planning stays core; R2 activation/journal policy stays native |
 | P3 · Shallow shims: config, gluon_config, gitwrap, cast bin | S | 1–2 wk | errno, openat2, renameat2 call sites |
 | P4 · mason split (executor behind Sandbox trait) | M | 3–5 wk | Planner/analysis untouched |
-| F1 · FreeBSD fs primitives + disk topology + evidence | L–XL | 2–4 mo | Hinges on the ZFS-first decision (R2) |
+| F1 · FreeBSD fs primitives + disk topology + evidence | L–XL | 2–4 mo | Contract follows the D0 activation decision without embedding its policy |
 | F2 · FreeBSD sandbox backend (jails/nullfs/devfs/rctl) | XL | 3–6 mo | Includes the R1 privilege-model decision and security-posture doc (R3) |
-| F3 · FreeBSD boot backend (loader.conf, bectl, rc) | L | 4–8 wk | Simpler than Linux if BEs carry rollback |
+| F3 · FreeBSD native activation + boot adapter | L | 4–8 wk | Concrete mechanism and activation effect are fixed by D0 evidence |
 | F4 · FreeBSD test/CI substrate | M–L | 4–8 wk | Do early — before F1, not after |
 
-**Sequencing:** P0 → P1 → (P3 ∥ P4) → P2, keeping Linux behavior byte-identical throughout
+**Sequencing:** D0 → P0 → P1 → (P3 ∥ P4) → P2, keeping Linux behavior byte-identical throughout
 (existing suites stay green — P1 is a pure relocation). On the FreeBSD side: F4 first, then a
 **read-only milestone** (query/resolve/fetch/install-into-image-root with sandbox and boot stubbed
 via capability probes) before F1/F2, F3 last.
@@ -290,3 +323,38 @@ via capability probes) before F1/F2, F3 last.
 Totals: **~4–6 engineer-months** for the split, **~8–12 more** to a first functional FreeBSD
 backend — with R1 and R2 decided up front, since both change trait contracts, not just
 implementations.
+
+## 8. Executable gates and the bootc handoff
+
+All implementation and validation goes through the root Makefile. D0 records two decisions before
+P1: the FreeBSD build privilege model (R1), and one native activation/boot strategy (R2), including
+its exact `ActivationEffect`, storage prerequisites, recovery path, and rejected alternatives. No
+later workstream may silently substitute bectl, directory exchange, or another mechanism.
+
+Each workstream adds its named target before it can be called complete:
+
+| Workstream | Required Make gate | Done evidence |
+|---|---|---|
+| P0 | `make bsd-cfg-ci-test` | Linux and FreeBSD cfg/feature graph; unsupported pairs fail at compile/admission boundaries |
+| P1 | `make bsd-platform-contract-test` | only primitive traits in `cast-platform`; Linux behavior preserved; capability negatives covered |
+| P2 | `make bsd-core-native-boundary-test` | core owns exact closure/frozen-root composition; native adapters own state/journal/activation/boot; forbidden dependency checks pass |
+| P3 | `make bsd-portability-shim-test` | config, Gluon, git, errno, descriptor re-open, and rename shims pass on both CI hosts |
+| P4 | `make bsd-sandbox-contract-test` | Mason uses only Sandbox API; both implementations prove their documented capability and failure modes |
+| F4 | `make freebsd-ci-contract-test` | maintained FreeBSD runner executes host-safe gates and archives version/capability evidence |
+| F1 | `make freebsd-platform-test` | filesystem, topology, runtime-evidence, durability, and negative-confinement cases pass |
+| F2 | `make freebsd-sandbox-test` | jail/nullfs/devfs/rctl lifecycle, cleanup, privilege, and security-difference cases pass |
+| F3 | `make freebsd-native-boot-harness-test` | selected strategy renders and validates install/update/rollback/recovery without touching the host boot disk |
+
+Add `make bsd-split-test` as the host-safe P0-P4 aggregate and `make freebsd-host-test` as the
+host-safe F1-F4 aggregate. Keep `make freebsd-native-vm-campaign` explicit and destructive: it must
+require a disposable VM/disk identity and prove firmware-to-userspace install, activation, reboot,
+update, rollback, interrupted transition, and recovery. It must never be a dependency of `make
+test` or `make verify`. At every workstream, also run `make check`, `make test`, and `make verify` on
+Linux; on the FreeBSD runner run every target that is admitted there.
+
+The implementation creates `plans/bsd-acceptance.md` as an append-only handoff manifest containing
+D0 outcomes, accepted commit SHA, actual crate/API/dependency map, OS/toolchain versions, every Make
+result, CI/VM evidence locations, known capability differences, and the exact FreeBSD activation
+effect. `bsd.md` is complete only when P0-P4 and F1-F4 are checked in that manifest and both the
+host-safe aggregates and VM campaign pass. Only then may `bootc.md` Phase 0 re-baseline against that
+SHA. OCI is a transport format, not a way to make bootc support FreeBSD.
