@@ -987,3 +987,71 @@ pub(crate) enum ActiveReblitBootAssetPlanError {
 #[cfg(test)]
 #[path = "active_reblit_asset_plan_tests.rs"]
 mod tests;
+
+/// Whether a not-yet-allocated NewState candidate would publish a bootable
+/// plan, decided before its state row exists.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::client) enum ProspectiveBootApplicability {
+    Applicable,
+    NotApplicable(BootAssetPlanNotApplicable),
+}
+
+/// Assess boot applicability for a NewState candidate **before** its row is
+/// allocated, so the journal's `run_boot_sync` is correct at creation
+/// (`future_impl.md` §1.1a, decision D1.4).
+///
+/// This reuses the same two rules the real plan applies — `systemd_candidate_count`
+/// for the head and `indexed_kernel_versions` per state — rather than restating
+/// them, so the pre-journal answer cannot drift from the post-allocation plan.
+///
+/// `chain` must be the states the *prospective* projection would retain besides
+/// the new head. Callers get that from [`prospective_chain_tail`]: allocating a
+/// head shifts the bounded history by one, so the current projection's oldest
+/// state is evicted and must not be counted — counting it could claim a kernel
+/// the real plan will never see.
+pub(in crate::client) fn assess_prospective_boot_applicability(
+    candidate_layouts: &[(package::Id, StonePayloadLayoutRecord)],
+    candidate_packages: &BTreeSet<&str>,
+    chain: &[(state::Id, &BTreeSet<&str>, &[(package::Id, StonePayloadLayoutRecord)])],
+    label: state::Id,
+    deadline: Instant,
+) -> Result<ProspectiveBootApplicability, ActiveReblitBootAssetPlanError> {
+    let policy = BootAssetPlanPolicy::production();
+    let mut budget = PlanBudget::new_until(policy, deadline)?;
+
+    // The candidate is the prospective head, so the head-local systemd rule
+    // applies to its layouts alone.
+    if systemd_candidate_count(candidate_layouts, label, candidate_packages, &mut budget)? == 0 {
+        return Ok(ProspectiveBootApplicability::NotApplicable(
+            BootAssetPlanNotApplicable::NoSystemdBootAsset,
+        ));
+    }
+
+    // `kernel_count` in the real plan sums per-state kernel versions across the
+    // whole retained chain, so applicability only needs *some* state to carry a
+    // kernel — the candidate itself or any state the new chain keeps.
+    let candidate_index = StateLayoutIndex::build(candidate_layouts, label, candidate_packages, &mut budget)?;
+    if !indexed_kernel_versions(&candidate_index).is_empty() {
+        return Ok(ProspectiveBootApplicability::Applicable);
+    }
+    for (state_id, selected, layouts) in chain {
+        budget.step()?;
+        let index = StateLayoutIndex::build(layouts, *state_id, selected, &mut budget)?;
+        if !indexed_kernel_versions(&index).is_empty() {
+            return Ok(ProspectiveBootApplicability::Applicable);
+        }
+    }
+    Ok(ProspectiveBootApplicability::NotApplicable(
+        BootAssetPlanNotApplicable::NoKernel,
+    ))
+}
+
+/// The states a prospective new head would retain besides itself.
+///
+/// The bounded history keeps `MAX_BOOT_HISTORY_STATES` entries, so allocating a
+/// head pushes the current chain down by one and drops its oldest entry. Taking
+/// that prefix keeps the probe's view identical to the post-allocation plan's.
+pub(in crate::client) fn prospective_chain_tail<'a>(current: &'a [crate::State]) -> &'a [crate::State] {
+    let keep = crate::db::state::MAX_BOOT_HISTORY_STATES.min(current.len());
+    &current[..keep]
+}

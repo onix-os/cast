@@ -797,3 +797,97 @@ fn expired_planning_deadline_fails_before_asset_admission() {
         "complete plan materialization must precede expiry"
     );
 }
+
+fn probe_deadline() -> Instant {
+    Instant::now() + Duration::from_secs(60)
+}
+
+fn owned(layouts: &[(&str, StonePayloadLayoutRecord)]) -> Vec<(package::Id, StonePayloadLayoutRecord)> {
+    layouts
+        .iter()
+        .map(|(name, record)| (package(name), record.clone()))
+        .collect()
+}
+
+#[test]
+fn prospective_candidate_without_systemd_boot_is_not_applicable() {
+    let candidate = owned(&[("cand", regular(1, "lib/kernel/6.6/vmlinuz"))]);
+    let selected = BTreeSet::from(["cand"]);
+
+    assert_eq!(
+        assess_prospective_boot_applicability(&candidate, &selected, &[], state::Id::from(1), probe_deadline())
+            .unwrap(),
+        ProspectiveBootApplicability::NotApplicable(BootAssetPlanNotApplicable::NoSystemdBootAsset)
+    );
+}
+
+#[test]
+fn prospective_candidate_carrying_its_own_kernel_is_applicable() {
+    let candidate = owned(&[
+        ("cand", regular(1, "lib/systemd/boot/efi/systemd-bootx64.efi")),
+        ("cand", regular(2, "lib/kernel/6.6/vmlinuz")),
+    ]);
+    let selected = BTreeSet::from(["cand"]);
+
+    assert_eq!(
+        assess_prospective_boot_applicability(&candidate, &selected, &[], state::Id::from(1), probe_deadline())
+            .unwrap(),
+        ProspectiveBootApplicability::Applicable
+    );
+}
+
+#[test]
+fn prospective_candidate_inherits_a_kernel_from_the_retained_chain() {
+    // The real plan sums kernels across the whole retained chain, so a
+    // kernel-less candidate is still bootable when a retained state carries one.
+    let candidate = owned(&[("cand", regular(1, "lib/systemd/boot/efi/systemd-bootx64.efi"))]);
+    let candidate_selected = BTreeSet::from(["cand"]);
+    let older = owned(&[("old", regular(2, "lib/kernel/6.6/vmlinuz"))]);
+    let older_selected = BTreeSet::from(["old"]);
+    let chain = [(state::Id::from(2), &older_selected, older.as_slice())];
+
+    assert_eq!(
+        assess_prospective_boot_applicability(
+            &candidate,
+            &candidate_selected,
+            &chain,
+            state::Id::from(1),
+            probe_deadline()
+        )
+        .unwrap(),
+        ProspectiveBootApplicability::Applicable
+    );
+
+    // ...and is not bootable once that state falls outside the retained chain.
+    assert_eq!(
+        assess_prospective_boot_applicability(
+            &candidate,
+            &candidate_selected,
+            &[],
+            state::Id::from(1),
+            probe_deadline()
+        )
+        .unwrap(),
+        ProspectiveBootApplicability::NotApplicable(BootAssetPlanNotApplicable::NoKernel)
+    );
+}
+
+#[test]
+fn prospective_chain_tail_drops_the_state_a_new_head_would_evict() {
+    // Allocating a head shifts the bounded history by one. Counting the evicted
+    // oldest state would let the probe claim a kernel the real plan never sees.
+    let chain_packages = vec![&["pkg"][..]; db::state::MAX_BOOT_HISTORY_STATES + 1];
+    let (_projection, states) = build_projection(&chain_packages, &[("pkg", regular(1, "lib/marker"))]);
+    assert_eq!(states.len(), db::state::MAX_BOOT_HISTORY_STATES + 1);
+
+    let tail = prospective_chain_tail(&states);
+    assert_eq!(tail.len(), db::state::MAX_BOOT_HISTORY_STATES);
+    assert!(
+        !tail.iter().any(|state| state.id == states.last().unwrap().id),
+        "the oldest retained state must be dropped",
+    );
+
+    // A chain shorter than the bound loses nothing.
+    let short = &states[..2];
+    assert_eq!(prospective_chain_tail(short).len(), 2);
+}

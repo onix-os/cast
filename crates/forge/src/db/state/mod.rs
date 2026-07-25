@@ -66,7 +66,7 @@ pub(crate) use exact_fresh_transition_removal::{
     assert_exact_fresh_transition_removal_fault_consumed, exact_fresh_transition_removal_transaction_attempts,
 };
 #[allow(unused_imports)] // consumed by the ActiveReblit frozen-boot wiring slice
-pub(crate) use frozen_boot_input::{FrozenBootInput, FrozenBootInputError};
+pub(crate) use frozen_boot_input::{FrozenBootInput, FrozenBootInputError, MAX_BOOT_HISTORY_STATES};
 pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
 #[cfg(test)]
 pub(crate) use metadata_provenance::{
