@@ -193,7 +193,7 @@ possible.
 route at all and must be built before the legacy path can be deleted
 (`plans/cleanup_legacy.md` §2).
 
-### 1.1b NewState commit-cleanup route  · E:M R:high · **blocks Slice 5**
+### 1.1b NewState commit-cleanup route  · E:M-L R:high · **blocks Slice 5**
 
 **Found 2026-07-25 by tracing the tail; not previously known.** Both coordinated
 NewState paths reach `Complete` through
@@ -245,7 +245,27 @@ NewState at `CommitDecided` and advance the record to `CommitCleanupComplete`
 without an exchange attempt, in the spirit of the existing
 `ActiveReblitCommitCleanupRoutePlan::NoBoot` variant. Keep the record-binding
 and database revalidation sandwiches; drop only the namespace exchange. Revised
-estimate: **E:M**, not E:L.
+estimate: **E:M-L**, not the original E:L "full mirror".
+
+**The one real obstacle (traced to the bottom).** The persistence step is
+already operation-neutral — `persist_active_reblit_commit_cleanup_complete_retaining_binding`
+(`startup_recovery/active_reblit_commit_cleanup_complete.rs:69`) just calls
+`forward_successor(None)`, which derives the successor from the record's own
+options. So nothing below the authority needs changing.
+
+The obstacle is the typestate above it:
+`ActiveReblitCommitCleanupDurableAuthority` holds a
+`DurableActiveReblitCommitCleanupNamespace` (`.../effect.rs:44-47`), and the
+only way to obtain one is `complete()` on a namespace that has *already
+exchanged* (`.../effect.rs:120-133`). A no-exchange route therefore cannot
+produce the existing durable type. Either:
+
+- make the durable namespace an enum (`Exchanged` | `NothingToExchange`), so one
+  persistence path serves both — smaller, but edits a crash-verified typestate; or
+- give NewState its own durable type plus a sibling persistence function —
+  larger, but leaves the ActiveReblit typestate untouched.
+
+Pick deliberately; this is the decision that sets the real size.
 
 The 8 ActiveReblit-specific predicates (`capture`, `capture_with_record_binding`,
 `exact_route_plan`, `record_plan_is_exact`) still all need a NewState branch, so
