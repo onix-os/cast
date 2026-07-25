@@ -115,9 +115,10 @@ restore instead of leaking one wrapper per successful activation" — so for the
 The forward archive writes the parking name (and its family) into the journal
 record before the publishing rename, so recovery reads exact evidence rather
 than reconstructing consumed evidence. This is the only option that makes the
-rollback exact; the accepted cost is a journal model change plus migration, and
-a careful edit to the crash-matrix-verified forward path (consistent with D1.1,
-which already accepted editing that path with the crash matrix as the net).
+rollback exact; the accepted cost is a journal model change and a careful edit to
+the crash-matrix-verified forward path (consistent with D1.1, which already
+accepted editing that path with the crash matrix as the net). There is no
+migration cost — see the mechanism below.
 
 Ordering constraint: the parking name must be durable in the record **before**
 the slot-publishing rename consumes it, otherwise a crash between the two leaves
@@ -151,16 +152,17 @@ pub(crate) struct PreviousArchiveSlot {
 (`namespace_helpers.rs:64`) — so the journal model's existing newtype applies
 unchanged, including its `MAX_QUARANTINE_NAME_BYTES` bound.
 
-Versioning, mirroring `codec.rs:15-23` and `validation.rs:134-155`:
+**No versioning work.** `os-tools` is unreleased and owes no compatibility to
+any record in the wild (see `plans/cleanup_legacy.md` §1, which deletes the
+existing `PAYLOAD_VERSION_V1`/`_V2` fallbacks outright). The field is simply
+added to the record; records written before it are invalid, not migrated. Drop
+the earlier plan of a version bump plus presence-by-version validation — the
+only rule needed is the unconditional invariant:
 
-- `PAYLOAD_VERSION` 3 → 4; keep `V1 | V2 | V3` accepted for compatibility.
-- Version-conditional validation: the field is required exactly for records at
-  or past the archive phases when `options.archive_previous` holds, and must be
-  absent otherwise — the same shape as `validate_boot_publication_receipts`
-  (`validation.rs:202-213`), which pins presence to a required-phase predicate.
+- the field is present exactly for records at or past the archive phases when
+  `options.archive_previous` holds, and absent otherwise.
 
-This removes the "migration" cost from the sizing below: old records remain
-readable and the new field is written only where it is meaningful.
+Doing `cleanup_legacy.md` §1 first makes this a pure addition.
 
 The options considered and rejected are kept below for the record.
 
