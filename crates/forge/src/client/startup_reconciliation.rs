@@ -35,6 +35,7 @@ mod database_evidence;
 #[cfg(test)]
 mod focused_test_exports;
 mod metadata_provenance;
+mod new_state_commit_cleanup_authority;
 mod replacement_mutation_authority;
 mod usr_exchanged_root_abi_authority;
 mod usr_rollback_activate_archived_complete_route_authority;
