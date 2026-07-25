@@ -154,14 +154,35 @@ the state chain:
 For a NewState candidate those layouts are exactly the incoming `&[Selection]`
 package layouts, all resolvable from `layout_db` before any row exists.
 
-**Implementation shape.** The chain today is
-`PreparedActiveReblitStoneBootInputs::prepare_until(.., expected_head: &State, ..)`
-→ `PreparedActiveReblitBootProjection::prepare_until(state_db, layout_db, head: state::Id, ..)`
-→ `prepare_asset_plan_until`. Only the projection is id-bound. Prefer making the
-projection constructible from an explicit package-layout set so **one**
-implementation serves both callers; do **not** re-implement the two rules
-separately, or the pre-journal answer will drift from the real plan and the
-journal will claim a boot that never becomes possible.
+**Implementation shape — CORRECTED after tracing the plan builder.** An earlier
+draft of this entry assumed the two rules could simply be lifted out over a
+`(package ids, layouts)` pair. They cannot, and that route would be wrong:
+
+- `NoSystemdBootAsset` *is* head-local (`head_systemd_candidate_count` filters
+  `projection.layouts()` by `selected_packages(projection.head())`), so it would
+  lift cleanly on its own.
+- `NoKernel` is **not**. `kernel_count` is accumulated across **every state in
+  the projection's chain** (`active_reblit_asset_plan.rs:473-485`), inside the
+  same loop that builds `state_plans`, `schema_requirements` and per-asset
+  roles. Bootability therefore means "the retained chain contributes at least
+  one kernel", not "this candidate ships one".
+
+So the pre-allocation probe cannot ignore the chain — it must run the existing
+accumulation with the *candidate's selections standing in as the prospective
+head*, the rest of the chain coming from `state_db` as it already does. The real
+obstacle is that `PreparedActiveReblitBootProjection.states` is a
+`db::state::FrozenBootInput` — a frozen capture of persisted `State` rows — with
+no way to express a head that has no row yet.
+
+**Therefore the work is:** let the projection carry a *prospective* head
+(package set + layouts, no `state::Id`) alongside the persisted tail, and have
+`prepare_asset_plan_until` treat it as `state_index == 0`. One implementation
+still serves both callers. This is a change to a crash-matrix-verified capture
+type, so it wants a fresh session and its own test pass — not a tail-end edit.
+
+Do **not** re-implement either rule separately: the pre-journal answer would
+drift from the real plan, and the journal would claim a boot that never becomes
+possible.
 
 **Then** Slice 5 passes the derived `run_boot_sync` into
 `execute_new_state_forward` (replacing the hardcoded `true`) and treats
