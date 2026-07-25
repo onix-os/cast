@@ -478,14 +478,38 @@ defer is the policy working as designed.
 phase-layout checks at all, which is why a first install has always left the
 synthesized tree behind without complaint.
 
-**Shape of the fix — treat it as a real durability effect.** Disposal must go
-through `StatefulTreeIdentity`, which retains descriptors on the previous store;
-it cannot be a bare `remove_dir_all`. Mirror `archive_previous`: a journal-guarded
-primitive that disposes of the synthesized-empty previous, invoked on the
-unarchived tails between the exchange and the terminal phases. Removing a tree is
-the most destructive primitive in the crate, so it wants the same retained-
-descriptor discipline, fault-injection points and reconciliation as the archive
-move — not a shortcut because the tree happens to be empty.
+**Shape of the fix — and a trap. Do NOT delete the tree.**
+
+The obvious reading of "previous must be `Absent`" is to remove the synthesized
+tree. That would violate an explicit architectural principle stated at
+`previous_tree_move.rs:658-664`:
+
+> *This is intentionally non-destructive. A same-UID writer can replace a final
+> pathname after it is checked, so `unlinkat` cannot safely remove the retained
+> inode. A no-replace rename preserves every racing inode.*
+
+Nothing in this layer unlinks. Every disposal is a **no-replace rename to a
+private parking name**, so a racing inode is preserved rather than destroyed.
+The test at `activation_namespace/tests.rs:790` uses `remove_dir_all` because it
+is a *test* arranging a namespace, not a model of the production effect.
+
+**So the real question is which of these is correct**, and it needs deciding
+before any code:
+
+- **(a) Rename the synthesized previous to a parking name**, mirroring
+  `finish_previous_slot_retirement`. Consistent with the layer's discipline. Open
+  question: does `trees_for_token` scan parking names? If it does, the previous
+  reads as some other `PreviousPlace` rather than `Absent`, and the policy needs
+  a matching alternative rather than the route needing a new effect.
+- **(b) Treat `Absent` as the wrong expectation for a synthesized previous** and
+  give `commit_layouts` an alternative covering "synthesized previous still in
+  staging". The layout would then describe what actually happens, and no new
+  effect is needed at all.
+
+(b) may well be right: a synthesized-empty previous is an artefact of having had
+no `/usr`, and there is no obvious reason the terminal phases must see it gone —
+the legacy route has always left it. Check what `trees_for_token` does with
+parking names before choosing.
 
 **Fix:** the coordinated first-install route must remove the synthesized-empty
 previous tree after the exchange and before the terminal phases — the step the
