@@ -97,13 +97,13 @@ pub(crate) fn arm_before_archived_state_repair_preservation(hook: impl FnOnce() 
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code)] // fault-injection arm consumed by the archived-state-repair fault matrix
 pub(crate) fn arm_between_archived_state_repair_layout_reads(hook: impl FnOnce() + 'static) {
     BETWEEN_LAYOUT_READS.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code)] // fault-injection arm consumed by the archived-state-repair fault matrix
 pub(crate) fn arm_before_archived_state_repair_suffix_retry(hook: impl FnOnce() + 'static) {
     BEFORE_SUFFIX_RETRY.with(|armed| *armed.borrow_mut() = Some(Box::new(hook)));
 }

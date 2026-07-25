@@ -7,7 +7,7 @@ use super::super::model::RAW_DIRECTORY_RECORD_ALIGNMENT_BYTES;
 #[cfg(not(target_os = "linux"))]
 compile_error!("the retained raw-directory adapter requires Linux getdents64");
 
-#[allow(dead_code)]
+#[allow(dead_code)] // kernel ABI layout; fields document the getdents64 wire shape rather than being read
 #[repr(C)]
 struct NativeLinuxDirent64Prefix {
     inode: u64,

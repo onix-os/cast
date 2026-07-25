@@ -14,12 +14,12 @@ files**. Not all are debt. Breakdown by nature:
 
 | # | Category | Refs | Blocked by |
 |---|---|---|---|
-| 1 | Journal payload version compatibility | 27 | nothing — do now |
+| 1 | Journal payload version compatibility | 27 | nothing — **done** |
 | 2 | Legacy stateful transition path | ~1000 lines | Phase 1 |
 | 3 | Legacy journal guards (`LegacyNoJournal`, `LegacyBlocking`) | 22 | category 2 |
 | 4 | `legacy_boot_repair` | 65 lines | category 2 |
-| 5 | `#[allow(dead_code)]` scaffolding debt | 208 | partly Phase 1 |
-| 6 | `TODO`/`FIXME` | 23 | nothing — audit |
+| 5 | `#[allow(dead_code)]` scaffolding debt | 208 | nothing — **done** |
+| 6 | `TODO`/`FIXME` | 23 → 20 | nothing — **triaged** |
 | 7 | False positives (fixture paths, test locals) | ~45 | not debt |
 
 ---
@@ -132,10 +132,40 @@ supersedes it.
 
 ---
 
-## 5. `#[allow(dead_code)]` scaffolding debt · E:M R:low · **incremental**
+## 5. `#[allow(dead_code)]` scaffolding debt · E:M R:low · **DONE**
 
-**State:** 208 allows — 199 in `forge`, 5 `container`, 4 `mason`. Only ~13 carry
-a rationale comment; the rest are unexplained.
+**Outcome: every one of the 208 allows now names why it exists (0 undocumented).**
+
+Two measurements corrected the original assessment; both are recorded because
+the wrong version of each is an easy trap to fall into again.
+
+**Correction 1 — the debt was far smaller than it looked.** The original "only
+~13 carry a rationale" was an artefact of grepping the *preceding* line. Most
+rationales are *trailing* comments on the same line
+(`#[allow(dead_code)] // consumed by ...`). Counting both forms: **186 of 208
+were already documented**, leaving 22. Those 22 have been annotated, in these
+groups:
+
+- 8 retained-capture structs in `activation_namespace/capture/model.rs` — their
+  fields hold `File` descriptors open for later revalidation and are never read
+  individually.
+- 7 shared `#[path]` test-support modules included by several test parents, each
+  of which consumes only a subset.
+- 2 archived-state-repair fault-injection arms; 1 compile-time signature pin;
+  1 `getdents64` kernel ABI layout struct; 1 retained accessor; 1 `mason`
+  deadline wrapper.
+
+**Correction 2 — "most allows are stale" is FALSE. Do not mass-delete them.**
+It is tempting to assume an allow on an item that compiles without warnings is
+unnecessary. Measured directly: neutralising all allows and building with
+`--tests` suggested 165 of 199 were stale. Removing those 165 produced **376
+warnings in the production build against a baseline of 0**. The reason is that
+`cargo build -p forge --tests` compiles `cfg(test)`, so test-only items look
+used; in the production build (504 dead items with allows neutralised) they are
+not. Any future audit must check **both** build configurations. The experiment
+was reverted in full.
+
+### Original entry
 
 Two distinct kinds, and they need opposite treatment:
 
@@ -203,16 +233,16 @@ block anything; each is a small independent improvement.
 ## Sequencing
 
 ```
-1. Payload version collapse        ── do now, unblocks the restore design
-6. TODO/FIXME triage               ── anytime, independent
-5. dead_code audit                 ── incremental, by module
+1. Payload version collapse        ── DONE
+5. dead_code audit                 ── DONE
+6. TODO/FIXME triage               ── triaged; D-CL6 open, 19 to file
         ↓ (Phase 1 must land first)
 2. Legacy stateful transition path ── the big one
 3. Legacy journal guards           ── mechanical after 2
 4. legacy_boot_repair              ── deleted with 2
 ```
 
-Categories 1, 5 and 6 are available immediately. Categories 2-4 are gated on
+Categories 1 and 5 are complete and 6 is triaged. Categories 2-4 are gated on
 Phase 1 durability closure and must not be started before it — the legacy route
 is currently the only proven path for real transitions.
 

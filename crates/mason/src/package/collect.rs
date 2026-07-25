@@ -249,7 +249,7 @@ impl Collector {
         Ok(witness)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // convenience wrapper over `deadline().check`; retained for collectors that bound their own traversal
     pub(crate) fn check_deadline(&self, path: &Path) -> Result<(), Error> {
         self.deadline().check(path)
     }

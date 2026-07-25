@@ -13,7 +13,7 @@ use super::super::super::{
     gpt_partition_role::{GptPartitionRole, GptPartitionRoleImage},
 };
 
-#[allow(dead_code)]
+#[allow(dead_code)] // shared `#[path]` test-support module; each including parent consumes only a subset
 #[path = "../gpt_partition_role/support.rs"]
 mod gpt_fixture;
 

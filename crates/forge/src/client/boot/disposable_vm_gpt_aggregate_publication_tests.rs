@@ -37,7 +37,7 @@ use crate::{
 };
 
 #[path = "active_reblit_boot_render_inputs_tests/support.rs"]
-#[allow(dead_code)]
+#[allow(dead_code)] // shared `#[path]` test-support module; each including parent consumes only a subset
 mod render_support;
 
 const TEST_NAME: &str =
