@@ -560,6 +560,37 @@ covers the archived case.
 against a hand-built record), then write the forward driver, then wire
 `state_planning.rs:115` off `commit_stateful_staging`.
 
+**Progress:** terminal admission SHIPPED (`700d4c6b`) — one authority now serves
+both NewState and ActivateArchived, with the no-predecessor shape restricted to
+NewState since activation always has something to archive. Forward driver
+SHIPPED (`f4f50cba`), and it is shorter than NewState's for two reasons the code
+itself dictates: no fresh allocation (the row already exists), and **no
+transaction triggers** — `PreparedArchivedTransitionCoordinator` has no
+`prepare_for_transaction_triggers` at all, and `usr_exchange_intent.rs:94`
+states why: *"archived activation never runs transaction triggers"*.
+
+**Remaining: the client composition, and it has an ordering question.**
+Unlike NewState — which materializes a candidate into staging before the
+journal — activation must first *move* the archived tree into staging via
+`tree_identity.stage_archived_candidate` (`state_planning.rs:80`), a physical,
+reconciled move with its own `Applied` resume path
+(`finish_applied_archived_candidate_stage`).
+
+**Decide where that move belongs:**
+
+- **Outside the journal**, before `execute_activate_archived_forward`, mirroring
+  how NewState materializes first. Simplest, and matches the legacy ordering —
+  but a crash between the stage and the journal leaves the archived tree in
+  staging with no record explaining why, which is exactly the class of orphan
+  the coordinated route exists to eliminate.
+- **Inside the journal**, as a phase between `Preparing` and
+  `CandidatePrepared`. Durable and recoverable, but needs a new phase or a
+  reused one, and the journal model currently has no archived-staging phase.
+
+The second is more in the spirit of Phase 1; the first is what ships soonest.
+Note this is the same class of question as D1.5 — whether a physical effect the
+legacy route performs untracked should become a journaled phase.
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has
