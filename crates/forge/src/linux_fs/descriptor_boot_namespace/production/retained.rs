@@ -200,7 +200,9 @@ fn assess_with_hook<'root, 'request, 'expected, 'source, Hook: hook::RetainedBoo
     if let Some(error) = adapter_failure {
         return Err(error);
     }
-    let _usage = closed?;
+    let usage = closed?;
+    #[cfg(not(test))]
+    let _ = usage;
     let (assessment, _) = classified.map_err(RetainedBootNamespaceAssessmentError::Namespace)?;
     let observed_root_identity = match (requests.is_empty(), observed_root_identity) {
         (true, None) => None,
