@@ -663,6 +663,46 @@ the `/usr`/boot boundary, none of the journal's exchange/boot/rollback machinery
 applies, and a second forward chain would impose cost on every phase-driven
 consumer for no gain beyond uniformity. See the narrowing note under §1.3.
 
+### 1.2b Archived-staging phase — concrete shape  · E:L R:med
+
+Follows from the staging-order decision. `ActivateArchived`'s candidate starts
+in the archived location, but `PRE_EXCHANGE` requires `{candidate: Staging,
+previous: Live}` by `CandidatePrepared`. The move between those two is what
+becomes durable.
+
+Chain (ActivateArchived only), inserted between `Preparing` and
+`CandidatePrepareStarted`:
+
+    Preparing -> ArchivedCandidateStagingIntent -> ArchivedCandidateStaged
+              -> CandidatePrepareStarted -> ...
+
+Work items, each of which the compiler will point at once the variants exist:
+
+1. `CandidatePlace::Archived` — a fourth variant in the namespace policy
+   (`activation_namespace/policy.rs:64`); today the candidate can only be
+   `Live`, `Staging` or `Destination`.
+2. Two `ForwardPhase` variants at ordinals 1 and 2, shifting every later ordinal
+   by two. Ordinals are not cosmetic: `rollback_allowed` compares them, so they
+   must keep reflecting true chain order — appending at the end would be wrong.
+3. Matching `Phase` variants plus codec encoding. No back-compat concern: the
+   payload version is already collapsed to a single current version.
+4. `next_forward_phase`: `Preparing if ActivateArchived => StagingIntent`,
+   `StagingIntent => Staged`, `Staged => CandidatePrepareStarted`. The existing
+   `Preparing => CandidatePrepareStarted` arm stays for the other operations.
+5. `forward_layouts`: `Preparing`/`StagingIntent` for `ActivateArchived` admit
+   `{Archived, Live}`; `StagingIntent` also admits `PRE_EXCHANGE` (the
+   intent-phase both-sides rule); `Staged` admits `PRE_EXCHANGE` alone.
+6. `MAX_FORWARD_PHASE_ADVANCES` 19 -> 21. `expected_forward_generation` needs no
+   other change — it walks the chain rather than hard-coding literals.
+7. `capture_snapshot` must be able to observe a candidate in the archived
+   location, which it has no reason to look for today.
+8. `execute_activate_archived_forward` drives the two new phases and performs
+   the move between them.
+
+Risk concentrates in (2): the ordinal shift touches every phase-ordering
+consumer, and a missed one degrades silently rather than failing to compile.
+Worth a dedicated pass over every `ordinal()` caller.
+
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
 ActiveReblit forward cleanup/finalization is already journal-durable+resumable
 (`recovery.rs:45` RollForward + startup dispatch). NewState/ActivateArchived
