@@ -473,19 +473,26 @@ fn require_binding(
 /// `archive_previous` with a distinct candidate is what distinguishes it from
 /// every ActiveReblit source.
 fn exact_new_state_terminal_source(record: &TransitionRecord, step: NewStateTerminalStep) -> bool {
-    if record.operation != Operation::NewState || record.phase != step.source() || record.rollback.is_some() {
+    // ActiveReblit repairs a state in place and keeps its own terminal
+    // authority, whose evidence is built around the staging-wrapper exchange it
+    // performs. The other two operations leave the same terminal shape — a
+    // candidate distinct from its predecessor, with no cleanup effect to
+    // reconcile — so one authority serves both (`plans/future_impl.md` §1.2a).
+    if !matches!(record.operation, Operation::NewState | Operation::ActivateArchived) {
         return false;
     }
-    if record.candidate.id.is_none() {
+    if record.phase != step.source() || record.rollback.is_some() || record.candidate.id.is_none() {
         return false;
     }
-    // NewState has two legitimate shapes, and the predecessor fields must agree
-    // with which one the options declare. Replacing an active state archives a
-    // distinct predecessor; a first install has none at all.
+    // The predecessor fields must agree with what the options declare.
+    // Replacing or activating over an active state archives a distinct
+    // predecessor; a first install has none at all.
     if record.options.archive_previous {
         record.previous.id.is_some() && record.candidate.id != record.previous.id
     } else {
-        record.previous.id.is_none()
+        // Only a fresh install legitimately has nothing preceding it; there is
+        // always something to archive when activating an existing state.
+        record.operation == Operation::NewState && record.previous.id.is_none()
     }
 }
 
@@ -640,6 +647,18 @@ mod tests {
         let mut wrong_operation = exact.clone();
         wrong_operation.operation = Operation::ActiveReblit;
         assert!(!exact_new_state_terminal_source(&wrong_operation, step));
+
+        // ActivateArchived leaves the same terminal shape and is served here.
+        let mut activate_archived = exact.clone();
+        activate_archived.operation = Operation::ActivateArchived;
+        assert!(exact_new_state_terminal_source(&activate_archived, step));
+
+        // ...but it always archives something, so the first-install shape is
+        // never valid for it.
+        let mut archived_without_previous = activate_archived.clone();
+        archived_without_previous.options.archive_previous = false;
+        archived_without_previous.previous.id = None;
+        assert!(!exact_new_state_terminal_source(&archived_without_previous, step));
 
         // A non-archiving NewState is the first-install shape: legitimate, but
         // only when it also has no predecessor.
