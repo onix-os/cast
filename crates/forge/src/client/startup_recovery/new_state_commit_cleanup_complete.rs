@@ -51,13 +51,7 @@ pub(in crate::client) fn persist_new_state_terminal_advance_retaining_binding(
         .map_err(NewStateCommitCleanupPersistenceError::Authority)?;
 
     let source_record = authority.record().clone();
-    let successor = match source_record.forward_successor(None) {
-        Ok(successor) if successor.phase == step.successor_phase() => successor,
-        Ok(successor) => {
-            return Err(NewStateCommitCleanupPersistenceError::UnexpectedSuccessor { phase: successor.phase });
-        }
-        Err(source) => return Err(NewStateCommitCleanupPersistenceError::RouteConstruction { source }),
-    };
+    let successor = derive_successor(&source_record, step)?;
 
     let installation = authority.installation().clone();
 
@@ -112,6 +106,35 @@ pub(in crate::client) fn persist_new_state_terminal_advance_retaining_binding(
         .map_err(NewStateCommitCleanupPersistenceError::Authority)?;
     drop(successor_binding);
     Ok((reopened, successor, fresh_binding))
+}
+
+/// Build the successor this step advances to.
+///
+/// Entering `BootSyncComplete` is the one receipt-bound edge in the chain: its
+/// successor must carry the exact pair the source record already binds, so it
+/// goes through the typed constructor. Every other step is a generic forward
+/// advance derived from the record's own options.
+fn derive_successor(
+    source_record: &TransitionRecord,
+    step: NewStateTerminalStep,
+) -> Result<TransitionRecord, NewStateCommitCleanupPersistenceError> {
+    let built = if step.is_receipt_bound() {
+        let pair = match source_record.boot_publication_receipt_correlation() {
+            Ok(Some(pair)) => pair,
+            Ok(None) => return Err(NewStateCommitCleanupPersistenceError::MissingReceiptCorrelation),
+            Err(source) => return Err(NewStateCommitCleanupPersistenceError::RouteConstruction { source }),
+        };
+        source_record.boot_sync_complete_successor(pair)
+    } else {
+        source_record.forward_successor(None)
+    };
+    match built {
+        Ok(successor) if successor.phase == step.successor_phase() => Ok(successor),
+        Ok(successor) => Err(NewStateCommitCleanupPersistenceError::UnexpectedSuccessor {
+            phase: successor.phase,
+        }),
+        Err(source) => Err(NewStateCommitCleanupPersistenceError::RouteConstruction { source }),
+    }
 }
 
 /// Reopen the canonical journal purely to learn which record is durable after a
@@ -170,6 +193,8 @@ pub(in crate::client) enum NewStateCommitCleanupPersistenceError {
     Authority(#[source] NewStateCommitCleanupAuthorityError),
     #[error("the cleanup successor is phase {phase:?}, not commit-cleanup-complete")]
     UnexpectedSuccessor { phase: Phase },
+    #[error("the receipt-bound step requires a bound boot-publication receipt pair")]
+    MissingReceiptCorrelation,
     #[error("construct the NewState cleanup successor")]
     RouteConstruction {
         #[source]

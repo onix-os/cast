@@ -37,6 +37,10 @@ use super::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
 pub(in crate::client) enum NewStateTerminalStep {
+    /// `BootSyncStarted -> BootSyncComplete`. The only receipt-bound step: its
+    /// successor must carry the exact pair the source record already binds, so
+    /// it uses the typed successor rather than a generic advance.
+    BootSyncStarted,
     /// `BootSyncComplete -> CommitDecided`, once boot publication has finished.
     BootSyncComplete,
     /// `CommitDecided -> CommitCleanupComplete`. NewState has no cleanup effect.
@@ -51,6 +55,7 @@ pub(in crate::client) enum NewStateTerminalStep {
 impl NewStateTerminalStep {
     const fn source(self) -> Phase {
         match self {
+            Self::BootSyncStarted => Phase::BootSyncStarted,
             Self::BootSyncComplete => Phase::BootSyncComplete,
             Self::CommitCleanup => Phase::CommitDecided,
             Self::CleanupComplete => Phase::CommitCleanupComplete,
@@ -63,12 +68,19 @@ impl NewStateTerminalStep {
         !matches!(self, Self::Finalize)
     }
 
+    /// Whether the successor must be built from the record's bound receipt pair
+    /// rather than a generic forward advance.
+    pub(in crate::client) const fn is_receipt_bound(self) -> bool {
+        matches!(self, Self::BootSyncStarted)
+    }
+
     pub(in crate::client) const fn successor_phase(self) -> Phase {
         self.successor()
     }
 
     const fn successor(self) -> Phase {
         match self {
+            Self::BootSyncStarted => Phase::BootSyncComplete,
             Self::BootSyncComplete => Phase::CommitDecided,
             Self::CommitCleanup => Phase::CommitCleanupComplete,
             // `Finalize` never advances; `advances()` gates every caller, and
@@ -561,7 +573,26 @@ mod tests {
         ));
         assert_eq!(NewStateTerminalStep::BootSyncComplete.successor(), Phase::CommitDecided);
 
+        // Entering `BootSyncComplete` is the one receipt-bound edge.
+        let mut boot_sync_started = commit_decided.clone();
+        boot_sync_started.phase = Phase::BootSyncStarted;
+        assert!(exact_new_state_terminal_source(
+            &boot_sync_started,
+            NewStateTerminalStep::BootSyncStarted
+        ));
+        assert_eq!(NewStateTerminalStep::BootSyncStarted.successor(), Phase::BootSyncComplete);
+        assert!(NewStateTerminalStep::BootSyncStarted.is_receipt_bound());
+        for step in [
+            NewStateTerminalStep::BootSyncComplete,
+            NewStateTerminalStep::CommitCleanup,
+            NewStateTerminalStep::CleanupComplete,
+            NewStateTerminalStep::Finalize,
+        ] {
+            assert!(!step.is_receipt_bound(), "{step:?} must not be receipt-bound");
+        }
+
         // Only `Finalize` deletes instead of advancing.
+        assert!(NewStateTerminalStep::BootSyncStarted.advances());
         assert!(NewStateTerminalStep::BootSyncComplete.advances());
         assert!(NewStateTerminalStep::CommitCleanup.advances());
         assert!(NewStateTerminalStep::CleanupComplete.advances());
