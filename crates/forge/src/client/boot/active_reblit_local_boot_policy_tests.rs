@@ -209,8 +209,17 @@ fn a_regular_file_change_between_capture_and_final_revalidation_is_rejected() {
 fn an_absent_component_appearing_before_final_revalidation_is_rejected() {
     let fixture = Fixture::new();
     let path = fixture.root.join("etc/kernel/cmdline.d");
+    let appearing = [fixture.root.join("etc"), fixture.root.join("etc/kernel"), path.clone()];
     let result = prepare_with_policy_and_checkpoint(&fixture.installation, LocalBootPolicy::production(), |_| {
-        fs::create_dir_all(&path).unwrap()
+        fs::create_dir_all(&path).unwrap();
+        // Mirror `Fixture::policy_directory`: `create_dir_all` inherits the
+        // ambient umask, which yields a group-writable 0775 outside the VM. The
+        // directory policy rejects that as an unsafe inode, so revalidation
+        // would fail on permissions before it could report the appearance the
+        // test is actually asserting.
+        for directory in &appearing {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
     });
     assert!(matches!(result, Err(ActiveReblitLocalBootPolicyError::Changed { .. })));
 }
