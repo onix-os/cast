@@ -28,6 +28,41 @@ use super::{
     inspect_database,
 };
 
+/// Which terminal record advance an authority is admitting.
+///
+/// Both steps have identical evidence requirements — record gate, database,
+/// terminal namespace layout, record binding — and differ only in the phase they
+/// advance from and to. Parameterizing avoids two near-identical authorities
+/// (`plans/future_impl.md` §1.1c).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+pub(in crate::client) enum NewStateTerminalStep {
+    /// `CommitDecided -> CommitCleanupComplete`. NewState has no cleanup effect.
+    CommitCleanup,
+    /// `CommitCleanupComplete -> Complete`.
+    CleanupComplete,
+}
+
+impl NewStateTerminalStep {
+    const fn source(self) -> Phase {
+        match self {
+            Self::CommitCleanup => Phase::CommitDecided,
+            Self::CleanupComplete => Phase::CommitCleanupComplete,
+        }
+    }
+
+    pub(in crate::client) const fn successor_phase(self) -> Phase {
+        self.successor()
+    }
+
+    const fn successor(self) -> Phase {
+        match self {
+            Self::CommitCleanup => Phase::CommitCleanupComplete,
+            Self::CleanupComplete => Phase::Complete,
+        }
+    }
+}
+
 /// Exact result of read-only NewState commit-cleanup admission.
 // Forward scaffolding: consumed by the coordinated NewState route once Slice 5
 // wires `apply_new_state_candidate` live (`plans/future_impl.md` §1.1b).
@@ -52,6 +87,7 @@ pub(in crate::client) struct NewStateCommitCleanupAuthority<'reservation> {
     database: DatabaseEvidence,
     namespace: NewStateTerminalNamespaceProof,
     journal_record_binding: TransitionJournalRecordBinding,
+    step: NewStateTerminalStep,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -65,8 +101,9 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
         active_state_reservation: &'reservation ActiveStateReservation,
         record: &TransitionRecord,
         initial_in_flight: Option<db::state::InFlightTransition>,
+        step: NewStateTerminalStep,
     ) -> Result<NewStateCommitCleanupAdmission<'reservation>, NewStateCommitCleanupAuthorityError> {
-        if !exact_new_state_commit_cleanup_source(record) {
+        if !exact_new_state_terminal_source(record, step) {
             return Ok(NewStateCommitCleanupAdmission::NotApplicable);
         }
 
@@ -107,6 +144,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
             database,
             namespace,
             journal_record_binding,
+            step,
             _active_state_reservation: active_state_reservation,
         }))
     }
@@ -127,7 +165,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
     ) -> Result<(), NewStateCommitCleanupAuthorityError> {
         require_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
-        if !exact_new_state_commit_cleanup_source(&self.record) {
+        if !exact_new_state_terminal_source(&self.record, self.step) {
             return Err(NewStateCommitCleanupAuthorityError::SourceContract);
         }
         let in_flight = self
@@ -158,7 +196,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
         NewStateCommitCleanupAuthorityError,
     > {
         self.revalidate(journal)?;
-        if successor.phase != Phase::CommitCleanupComplete
+        if successor.phase != self.step.successor()
             || successor.transition_id != self.record.transition_id
             || successor.generation != self.record.generation.saturating_add(1)
         {
@@ -172,6 +210,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
             database,
             namespace,
             journal_record_binding,
+            step,
             _active_state_reservation,
         } = self;
         let cast = installation.retained_mutable_cast_directory()?;
@@ -184,6 +223,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
                 completed_record: record,
                 database,
                 namespace,
+                step,
                 _active_state_reservation,
             },
         ))
@@ -198,6 +238,7 @@ pub(in crate::client) struct NewStateCommitCleanupPostAdvanceAuthority<'reservat
     completed_record: TransitionRecord,
     database: DatabaseEvidence,
     namespace: NewStateTerminalNamespaceProof,
+    step: NewStateTerminalStep,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -246,7 +287,7 @@ impl NewStateCommitCleanupPostAdvanceAuthority<'_> {
         if !exact {
             return Err(NewStateCommitCleanupAuthorityError::SuccessorRecordBindingChanged);
         }
-        if successor.phase != Phase::CommitCleanupComplete
+        if successor.phase != self.step.successor()
             || successor.transition_id != self.completed_record.transition_id
             || successor.generation != self.completed_record.generation.saturating_add(1)
         {
@@ -291,12 +332,12 @@ fn require_binding(
     Ok(())
 }
 
-/// A NewState transition that has committed and now only needs to traverse the
-/// mandatory cleanup phase. `archive_previous` with a distinct candidate is what
-/// distinguishes it from every ActiveReblit source.
-fn exact_new_state_commit_cleanup_source(record: &TransitionRecord) -> bool {
+/// A NewState transition at the exact terminal phase `step` advances from.
+/// `archive_previous` with a distinct candidate is what distinguishes it from
+/// every ActiveReblit source.
+fn exact_new_state_terminal_source(record: &TransitionRecord, step: NewStateTerminalStep) -> bool {
     record.operation == Operation::NewState
-        && record.phase == Phase::CommitDecided
+        && record.phase == step.source()
         && record.rollback.is_none()
         && record.options.archive_previous
         && record.candidate.id.is_some()
@@ -377,39 +418,58 @@ mod tests {
     }
 
     #[test]
-    fn only_a_committed_archiving_new_state_is_an_exact_source() {
+    fn each_terminal_step_admits_only_its_own_source_phase() {
+        let commit_decided = new_state_commit_decided();
+        assert!(commit_decided.options.archive_previous, "ActiveState previous implies archiving");
+
+        let mut cleanup_complete = commit_decided.clone();
+        cleanup_complete.phase = Phase::CommitCleanupComplete;
+
+        // Each step admits exactly the phase it advances from, and no other.
+        assert!(exact_new_state_terminal_source(
+            &commit_decided,
+            NewStateTerminalStep::CommitCleanup
+        ));
+        assert!(!exact_new_state_terminal_source(
+            &commit_decided,
+            NewStateTerminalStep::CleanupComplete
+        ));
+        assert!(exact_new_state_terminal_source(
+            &cleanup_complete,
+            NewStateTerminalStep::CleanupComplete
+        ));
+        assert!(!exact_new_state_terminal_source(
+            &cleanup_complete,
+            NewStateTerminalStep::CommitCleanup
+        ));
+
+        assert_eq!(NewStateTerminalStep::CommitCleanup.successor(), Phase::CommitCleanupComplete);
+        assert_eq!(NewStateTerminalStep::CleanupComplete.successor(), Phase::Complete);
+    }
+
+    #[test]
+    fn no_activereblit_shaped_record_is_ever_an_exact_source() {
         let exact = new_state_commit_decided();
-        assert!(exact.options.archive_previous, "ActiveState previous implies archiving");
-        assert!(exact_new_state_commit_cleanup_source(&exact));
+        let step = NewStateTerminalStep::CommitCleanup;
 
         // Every ActiveReblit-shaped record belongs to the other authority.
         let mut wrong_operation = exact.clone();
         wrong_operation.operation = Operation::ActiveReblit;
-        assert!(!exact_new_state_commit_cleanup_source(&wrong_operation));
-
-        // Cleanup admission is the CommitDecided boundary only.
-        for phase in [Phase::PreviousArchived, Phase::CommitCleanupComplete, Phase::Complete] {
-            let mut wrong_phase = exact.clone();
-            wrong_phase.phase = phase;
-            assert!(
-                !exact_new_state_commit_cleanup_source(&wrong_phase),
-                "{phase:?} must not admit cleanup",
-            );
-        }
+        assert!(!exact_new_state_terminal_source(&wrong_operation, step));
 
         // A non-archiving NewState is the deferred no-previous case, not this one.
         let mut no_archive = exact.clone();
         no_archive.options.archive_previous = false;
-        assert!(!exact_new_state_commit_cleanup_source(&no_archive));
+        assert!(!exact_new_state_terminal_source(&no_archive, step));
 
         // Candidate == previous is the in-place repair shape, never NewState.
         let mut same_state = exact.clone();
         same_state.previous.id = same_state.candidate.id;
-        assert!(!exact_new_state_commit_cleanup_source(&same_state));
+        assert!(!exact_new_state_terminal_source(&same_state, step));
 
-        // A rolling-back record is owned by the rollback suffixes.
         let mut missing_candidate = exact.clone();
         missing_candidate.candidate.id = None;
-        assert!(!exact_new_state_commit_cleanup_source(&missing_candidate));
+        assert!(!exact_new_state_terminal_source(&missing_candidate, step));
     }
+
 }

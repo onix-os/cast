@@ -37,7 +37,7 @@ mod focused_test_exports;
 mod metadata_provenance;
 mod new_state_commit_cleanup_authority;
 pub(in crate::client) use new_state_commit_cleanup_authority::{
-    NewStateCommitCleanupAuthority, NewStateCommitCleanupAuthorityError,
+    NewStateCommitCleanupAuthority, NewStateCommitCleanupAuthorityError, NewStateTerminalStep,
 };
 mod replacement_mutation_authority;
 mod usr_exchanged_root_abi_authority;

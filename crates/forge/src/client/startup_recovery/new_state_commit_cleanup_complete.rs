@@ -8,7 +8,9 @@
 
 use crate::{
     Installation,
-    client::startup_reconciliation::{NewStateCommitCleanupAuthority, NewStateCommitCleanupAuthorityError},
+    client::startup_reconciliation::{
+        NewStateCommitCleanupAuthority, NewStateCommitCleanupAuthorityError, NewStateTerminalStep,
+    },
     transition_journal::{CodecError, Phase, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
@@ -36,9 +38,10 @@ pub(in crate::client) enum DurableNewStateCommitCleanupRecord {
 // Forward scaffolding: consumed once Slice 5 wires `apply_new_state_candidate`
 // live; the coordinated NewState route reaches `Complete` through here.
 #[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
-pub(in crate::client) fn persist_new_state_commit_cleanup_complete_retaining_binding(
+pub(in crate::client) fn persist_new_state_terminal_advance_retaining_binding(
     journal: TransitionJournalStore,
     authority: NewStateCommitCleanupAuthority<'_>,
+    step: NewStateTerminalStep,
 ) -> Result<
     (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding),
     NewStateCommitCleanupPersistenceError,
@@ -49,7 +52,7 @@ pub(in crate::client) fn persist_new_state_commit_cleanup_complete_retaining_bin
 
     let source_record = authority.record().clone();
     let successor = match source_record.forward_successor(None) {
-        Ok(successor) if successor.phase == Phase::CommitCleanupComplete => successor,
+        Ok(successor) if successor.phase == step.successor_phase() => successor,
         Ok(successor) => {
             return Err(NewStateCommitCleanupPersistenceError::UnexpectedSuccessor { phase: successor.phase });
         }
