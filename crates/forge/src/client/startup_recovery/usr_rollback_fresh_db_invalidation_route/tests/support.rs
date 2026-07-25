@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    Installation, db,
+    Installation,
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackFreshDbInvalidationRouteSeal,
@@ -10,6 +10,7 @@ use crate::{
             UsrRollbackFreshDbInvalidationRouteAuthorityError,
         },
     },
+    db,
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
     transition_journal::{Phase, RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
@@ -154,33 +155,21 @@ impl RouteFixture {
         let database = open_state_database(&self.fixture.fixture.installation);
         let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
         let candidate = database
-            .add_with_transition(
-                &self.source.transition_id,
-                &[],
-                Some("rollback fresh candidate"),
-                None,
-            )
+            .add_with_transition(&self.source.transition_id, &[], Some("rollback fresh candidate"), None)
             .unwrap()
             .id;
         assert_eq!(previous, self.fixture.fixture.previous_state);
         assert_eq!(candidate, self.fixture.fixture.candidate_state);
         let provenance = db::state::MetadataProvenance::from_outputs(OS_RELEASE, SYSTEM_MODEL);
         database
-            .insert_fresh_metadata_provenance_if_transition_matches(
-                candidate,
-                &self.source.transition_id,
-                &provenance,
-            )
+            .insert_fresh_metadata_provenance_if_transition_matches(candidate, &self.source.transition_id, &provenance)
             .unwrap();
         let old = std::mem::replace(&mut self.fixture.fixture.database, database);
         drop(old);
     }
 
     pub(super) fn release_handles(mut self) -> tempfile::TempDir {
-        let retained = std::mem::replace(
-            &mut self.fixture.fixture._temporary,
-            private_installation_tempdir(),
-        );
+        let retained = std::mem::replace(&mut self.fixture.fixture._temporary, private_installation_tempdir());
         drop(self);
         retained
     }

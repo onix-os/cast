@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    Installation, State, db,
+    Installation, State,
     boot_publication::{
         BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
         BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
@@ -16,6 +16,7 @@ use crate::{
         BootPublicationReceiptPair, BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
         CanonicalBootPublicationReceipt, prepare_boot_publication_receipt,
     },
+    db,
     state::{self, TransitionId},
     test_support::private_installation_tempdir,
     transition_journal::{
@@ -190,9 +191,7 @@ impl Fixture {
         // namespace snapshot reads it as PreviousPlace::Archived
         // (TreeLocation::State), matching a real PreviousArchived layout.
         let staged = fixture.installation.root.join(".cast/root/staging/usr");
-        let slot = fixture
-            .installation
-            .root_path(fixture.previous_state.to_string());
+        let slot = fixture.installation.root_path(fixture.previous_state.to_string());
         fs::create_dir_all(&slot).unwrap();
         // The state slot must present safe (non-group/other-writable)
         // permissions, matching a coordinator-created archive slot; a bare
@@ -205,12 +204,7 @@ impl Fixture {
         fixture
     }
 
-    pub(super) fn system_trigger(
-        kind: OperationKind,
-        phase: Phase,
-        post_exchange: bool,
-        historical: bool,
-    ) -> Self {
+    pub(super) fn system_trigger(kind: OperationKind, phase: Phase, post_exchange: bool, historical: bool) -> Self {
         assert!(matches!(
             phase,
             Phase::SystemTriggersStarted | Phase::SystemTriggersComplete
@@ -352,7 +346,10 @@ impl Fixture {
     #[allow(dead_code)] // only the root-ABI normalization test instantiation uses this helper
     pub(super) fn assert_complete_root_abi(&self) {
         for (name, target) in ROOT_ABI {
-            assert_eq!(fs::read_link(self.installation.root.join(name)).unwrap(), Path::new(target));
+            assert_eq!(
+                fs::read_link(self.installation.root.join(name)).unwrap(),
+                Path::new(target)
+            );
         }
     }
 
@@ -630,11 +627,7 @@ fn persist_source_record(
         let next = match record.forward_successor(allocated) {
             Ok(next) => next,
             Err(CodecError::ExplicitBootSyncStartedSuccessorRequired) => {
-                let receipts = stage_test_boot_publication_receipts(
-                    database,
-                    &record.transition_id,
-                    historical,
-                );
+                let receipts = stage_test_boot_publication_receipts(database, &record.transition_id, historical);
                 record.boot_sync_started_successor(receipts).unwrap()
             }
             Err(error) => panic!("fixture forward successor failed: {error}"),

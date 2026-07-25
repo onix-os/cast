@@ -80,8 +80,7 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database(record, state_db)? {
@@ -100,12 +99,7 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
             Err(_) => return Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Deferred),
         };
         run_between_database_captures();
-        let namespace = match namespace_inspection.finish(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        ) {
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackActiveReblitCompleteRouteAdmission::Deferred),
         };
@@ -140,32 +134,18 @@ impl<'reservation> UsrRollbackActiveReblitCompleteRouteAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackActiveReblitCompleteRouteAuthorityError> {
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if database_before != database_after || !active_reblit_complete_route_plan_is_exact(&self.record) {
             return Err(UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -205,9 +185,7 @@ fn require_journal_record_binding(
     record: &TransitionRecord,
 ) -> Result<(), UsrRollbackActiveReblitCompleteRouteAuthorityError> {
     if !journal.has_record_store_binding(binding) {
-        return Err(
-            UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::JournalRecordBindingMismatch.into(),
-        );
+        return Err(UsrRollbackActiveReblitCompleteRouteAuthorityErrorKind::JournalRecordBindingMismatch.into());
     }
     let cast = installation.retained_mutable_cast_directory()?;
     if journal.has_record_binding(cast, binding, record)? {

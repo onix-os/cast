@@ -61,7 +61,10 @@ fn startup_root_links_complete_same_byte_journal_replacement_breaks_record_bindi
 fn startup_root_links_complete_successor_same_byte_replacement_reopens_but_never_succeeds() {
     let fixture = Fixture::new(OperationKind::Archived, SourceCase::RootLinksCompletePost);
     let canonical = canonical_journal(&fixture.installation.root);
-    let displaced = fixture.installation.root.join("root-links-complete-successor-displaced");
+    let displaced = fixture
+        .installation
+        .root
+        .join("root-links-complete-successor-displaced");
     let hook_canonical = canonical.clone();
     let hook_displaced = displaced.clone();
     arm_before_usr_rollback_decision_successor_binding_revalidation(move || {

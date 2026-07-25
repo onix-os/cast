@@ -8,11 +8,8 @@ use std::{
 };
 
 use super::{
-    Client, Error, Installation,
-    active_state_authority::ActiveStateAuthority,
-    active_state_snapshot::ActiveStateReservation,
-    fixed_staging::arm_before_coordinator_lock,
-    record_state_id,
+    Client, Error, Installation, active_state_authority::ActiveStateAuthority,
+    active_state_snapshot::ActiveStateReservation, fixed_staging::arm_before_coordinator_lock, record_state_id,
 };
 use crate::{Provider, repository, system_model, test_support::prepare_private_installation_root};
 

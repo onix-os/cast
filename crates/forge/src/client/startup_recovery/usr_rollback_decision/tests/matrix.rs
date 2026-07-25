@@ -139,7 +139,11 @@ fn startup_root_links_complete_requires_exact_complete_abi_and_never_republishes
                 assert_eq!(fixture.canonical_bytes(), journal_before, "{kind:?} mask={mask}");
             }
             assert_eq!(usr_exchanged_root_abi_publication_attempts(), 0, "{kind:?} mask={mask}");
-            assert_eq!(usr_exchanged_root_abi_complete_sync_attempts(), 0, "{kind:?} mask={mask}");
+            assert_eq!(
+                usr_exchanged_root_abi_complete_sync_attempts(),
+                0,
+                "{kind:?} mask={mask}"
+            );
             assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} mask={mask}");
             assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} mask={mask}");
         }
@@ -220,7 +224,11 @@ fn startup_system_trigger_post_sources_reach_the_exact_terminal_outcome() {
                         Err(error) => {
                             let pending = pending(&error);
                             let record = fixture.canonical_record();
-                            assert_eq!(record.phase, pending.phase(), "{kind:?} {source:?} historical={historical}");
+                            assert_eq!(
+                                record.phase,
+                                pending.phase(),
+                                "{kind:?} {source:?} historical={historical}"
+                            );
                             assert_eq!(record.operation, fixture.source.operation);
                             assert_eq!(record.transition_id, fixture.source.transition_id);
                             assert_eq!(record.creation_epoch, fixture.source.creation_epoch);
@@ -243,7 +251,10 @@ fn startup_system_trigger_post_sources_reach_the_exact_terminal_outcome() {
                     }
                 }
 
-                assert!(clean, "system-trigger rollback did not converge: {kind:?} {source:?} historical={historical}");
+                assert!(
+                    clean,
+                    "system-trigger rollback did not converge: {kind:?} {source:?} historical={historical}"
+                );
                 assert_eq!(observed.first().map(|entry| entry.0), Some(Phase::RollbackDecided));
                 let terminal = last_record.expect("terminal rollback record was observed before deletion");
                 assert_eq!(terminal.phase, Phase::RollbackComplete);

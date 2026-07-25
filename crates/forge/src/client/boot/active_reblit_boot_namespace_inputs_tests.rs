@@ -7,17 +7,19 @@ use std::{
 
 use super::*;
 use crate::{
-    Installation, db, state,
+    Installation,
     client::{
         active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
         active_reblit_boot_inputs::PreparedActiveReblitStoneBootInputs,
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
         active_reblit_mounted_boot_topology::AliasFixture,
     },
+    db,
     linux_fs::descriptor_boot_namespace::{
-        BootNamespaceAssessmentLimits, BootNamespaceDestinationState,
-        RetainedBootNamespaceAssessmentLimits, assess_retained_boot_namespace_until,
+        BootNamespaceAssessmentLimits, BootNamespaceDestinationState, RetainedBootNamespaceAssessmentLimits,
+        assess_retained_boot_namespace_until,
     },
+    state,
 };
 
 #[path = "active_reblit_boot_render_inputs_tests/support.rs"]
@@ -91,9 +93,7 @@ fn alias_plan_binds_one_ordered_domain_and_streams_exact_generated_and_sealed_so
 
         let root = OpenOptions::new()
             .read(true)
-            .custom_flags(
-                nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
-            )
+            .custom_flags(nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
             .open(destination.path())
             .unwrap();
         let assessment = assess_retained_boot_namespace_until(
@@ -150,8 +150,7 @@ fn retained_layout_routes_distinct_roots_without_reordering_global_indices() {
             )
             .unwrap();
     }
-    let BoundActiveReblitBootNamespaceInputs::DistinctXbootldr { esp, xbootldr } = builders.finish().unwrap()
-    else {
+    let BoundActiveReblitBootNamespaceInputs::DistinctXbootldr { esp, xbootldr } = builders.finish().unwrap() else {
         panic!("distinct retained layout must produce two domains")
     };
     assert_eq!(esp.plan_indices(), [1, 3]);
@@ -206,12 +205,18 @@ fn count_path_logical_generated_and_work_bounds_accept_n_and_reject_n_minus_one(
         let mut generated = exact;
         generated.max_generated_bytes -= 1;
         assert_bound_error(&plan, generated, |error| {
-            matches!(error, ActiveReblitBootNamespaceInputError::GeneratedTotalByteLimit { .. })
+            matches!(
+                error,
+                ActiveReblitBootNamespaceInputError::GeneratedTotalByteLimit { .. }
+            )
         });
         let mut generated_file = exact;
         generated_file.max_generated_file_bytes -= 1;
         assert_bound_error(&plan, generated_file, |error| {
-            matches!(error, ActiveReblitBootNamespaceInputError::GeneratedFileByteLimit { .. })
+            matches!(
+                error,
+                ActiveReblitBootNamespaceInputError::GeneratedFileByteLimit { .. }
+            )
         });
         let mut work = exact;
         work.max_work -= 1;

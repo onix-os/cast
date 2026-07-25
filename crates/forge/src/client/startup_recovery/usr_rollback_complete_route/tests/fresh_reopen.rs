@@ -43,8 +43,7 @@ fn startup_usr_rollback_complete_route_source_durable_fresh_handle_reopen_retrie
                         let expected_removals = origin.expected_removals();
                         arm_next_temporary_sync_fault();
 
-                        let error =
-                            persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
+                        let error = persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
 
                         assert_temporary_sync_fault_consumed();
                         assert!(matches!(
@@ -107,8 +106,7 @@ fn startup_usr_rollback_complete_route_successor_durable_fresh_handle_reopen_ski
                         let expected_removals = origin.expected_removals();
                         arm_next_update_first_directory_sync_fault();
 
-                        let error =
-                            persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
+                        let error = persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
 
                         assert_update_first_directory_sync_fault_consumed();
                         assert!(matches!(

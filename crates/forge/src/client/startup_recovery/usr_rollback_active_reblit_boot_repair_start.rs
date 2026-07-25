@@ -12,14 +12,12 @@ use thiserror::Error;
 use crate::{
     installation,
     transition_journal::{
-        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
-        TransitionRecord,
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
 use super::super::startup_reconciliation::{
-    UsrRollbackActiveReblitBootRepairStartAuthority,
-    UsrRollbackActiveReblitBootRepairStartAuthorityError,
+    UsrRollbackActiveReblitBootRepairStartAuthority, UsrRollbackActiveReblitBootRepairStartAuthorityError,
     UsrRollbackActiveReblitBootRepairStartRecordAdvanceError,
 };
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
@@ -46,25 +44,18 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_start_an
     if successor.phase != Phase::BootRepairStarted {
         drop(authority);
         drop(journal);
-        return Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::UnexpectedSuccessor {
-            phase: successor.phase,
-        });
+        return Err(
+            UsrRollbackActiveReblitBootRepairStartPersistenceError::UnexpectedSuccessor { phase: successor.phase },
+        );
     }
 
     let installation = authority.installation().clone();
     let advance = match authority.advance_record_binding(&journal, &successor) {
         Ok(successor_binding) => {
             before_usr_rollback_active_reblit_boot_repair_start_successor_binding_revalidation();
-            let exact = revalidate_published_start_binding(
-                &installation,
-                &journal,
-                &successor_binding,
-                &successor,
-            );
+            let exact = revalidate_published_start_binding(&installation, &journal, &successor_binding, &successor);
             match exact {
-                Ok(true) => {
-                    UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::Published(successor_binding)
-                }
+                Ok(true) => UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::Published(successor_binding),
                 Ok(false) => {
                     drop(successor_binding);
                     UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::SuccessorBindingFailed(
@@ -79,11 +70,15 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_start_an
         }
         Err(UsrRollbackActiveReblitBootRepairStartRecordAdvanceError::Authority(source)) => {
             drop(journal);
-            return Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::Authority(source));
+            return Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::Authority(
+                source,
+            ));
         }
         Err(UsrRollbackActiveReblitBootRepairStartRecordAdvanceError::Installation(source)) => {
             drop(journal);
-            return Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::Installation(source));
+            return Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::Installation(
+                source,
+            ));
         }
         Err(UsrRollbackActiveReblitBootRepairStartRecordAdvanceError::Storage(source)) => {
             UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::StorageFailed(source)
@@ -98,17 +93,12 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_start_an
     if let UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::Published(_) = &advance {
         after_usr_rollback_active_reblit_boot_repair_start_successor_binding_check_before_reopen();
     }
-    let reopened = reopen_canonical_journal(&installation)
-        .map_err(UsrRollbackActiveReblitBootRepairStartReopenError::from);
+    let reopened =
+        reopen_canonical_journal(&installation).map_err(UsrRollbackActiveReblitBootRepairStartReopenError::from);
     match advance {
         UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::Published(successor_binding) => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
-                let exact = revalidate_reopened_start_binding(
-                    &installation,
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                );
+                let exact = revalidate_reopened_start_binding(&installation, &reopened, &successor_binding, &successor);
                 drop(successor_binding);
                 match exact {
                     Ok(true) => Ok((reopened, successor)),
@@ -140,9 +130,9 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_start_an
                     },
                 )
             }
-            Err(source) => Err(
-                UsrRollbackActiveReblitBootRepairStartPersistenceError::ReopenAfterSuccessfulAdvance { source },
-            ),
+            Err(source) => {
+                Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::ReopenAfterSuccessfulAdvance { source })
+            }
         },
         UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::StorageFailed(advance_error) => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {
@@ -161,15 +151,19 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_start_an
             }
             Ok((reopened, actual)) => {
                 drop(reopened);
-                Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::AdvanceAndReopen {
-                    advance: advance_error,
-                    reopen: unexpected_record(&source_record, &successor, actual),
-                })
+                Err(
+                    UsrRollbackActiveReblitBootRepairStartPersistenceError::AdvanceAndReopen {
+                        advance: advance_error,
+                        reopen: unexpected_record(&source_record, &successor, actual),
+                    },
+                )
             }
-            Err(reopen) => Err(UsrRollbackActiveReblitBootRepairStartPersistenceError::AdvanceAndReopen {
-                advance: advance_error,
-                reopen,
-            }),
+            Err(reopen) => Err(
+                UsrRollbackActiveReblitBootRepairStartPersistenceError::AdvanceAndReopen {
+                    advance: advance_error,
+                    reopen,
+                },
+            ),
         },
         UsrRollbackActiveReblitBootRepairStartAdvanceOutcome::SuccessorBindingFailed(binding) => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {

@@ -116,10 +116,7 @@ fn stale_replay_cannot_displace_a_pending_or_promoted_successor() {
         database.promote_boot_publication_receipt(&predecessor, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::CommittedPredecessorMismatch { .. })
     ));
-    assert_eq!(
-        database.boot_publication_receipt_state().unwrap(),
-        pending_successor,
-    );
+    assert_eq!(database.boot_publication_receipt_state().unwrap(), pending_successor,);
 
     assert_eq!(
         database
@@ -132,10 +129,7 @@ fn stale_replay_cannot_displace_a_pending_or_promoted_successor() {
         database.promote_boot_publication_receipt(&predecessor, promotion_deadline()),
         Err(BootPublicationReceiptPromotionError::CommittedPredecessorMismatch { .. })
     ));
-    assert_eq!(
-        database.boot_publication_receipt_state().unwrap(),
-        promoted_successor,
-    );
+    assert_eq!(database.boot_publication_receipt_state().unwrap(), promoted_successor,);
 }
 
 #[test]

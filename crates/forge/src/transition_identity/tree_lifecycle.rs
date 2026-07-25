@@ -67,11 +67,7 @@ impl CandidateNameAuthority {
 }
 
 impl RetainedCandidateName {
-    fn open(
-        &self,
-        installation: &Installation,
-        diagnostic_path: &Path,
-    ) -> Result<TreeMarkerStore, Error> {
+    fn open(&self, installation: &Installation, diagnostic_path: &Path) -> Result<TreeMarkerStore, Error> {
         match self {
             Self::Pathname => TreeMarkerStore::open_path(diagnostic_path).map_err(Error::from),
             Self::Staging(staging) => {

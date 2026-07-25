@@ -3,15 +3,15 @@ use std::{io::Write as _, os::fd::AsRawFd as _, time::Instant};
 #[cfg(test)]
 use std::ffi::CString;
 
-use super::TransitionJournalRecordBinding;
-use super::super::{
-    DurabilityCheckpoint, StorageFaultPoint, TemporaryRecord, TransitionJournalStore, durability_checkpoint,
-    storage_fault,
-};
 use super::super::super::{
     CANONICAL_NAME, StorageError, TransitionRecord, controlled_resolution, encode, inode_identity, openat2_file,
     renameat2, require_safe_regular_file, require_same_inode, unlinkat, validation::validate_advance,
 };
+use super::super::{
+    DurabilityCheckpoint, StorageFaultPoint, TemporaryRecord, TransitionJournalStore, durability_checkpoint,
+    storage_fault,
+};
+use super::TransitionJournalRecordBinding;
 
 /// Two immutable monotonic observations used to test the admission and final
 /// publication boundaries without letting a clock callback mutate namespace
@@ -55,9 +55,7 @@ std::thread_local! {
 /// reauthentication and deadline sample. Clock readings remain immutable and
 /// side-effect free.
 #[cfg(test)]
-pub(crate) fn arm_bound_advance_before_final_deadline_callback(
-    callback: impl FnOnce(CString) + 'static,
-) {
+pub(crate) fn arm_bound_advance_before_final_deadline_callback(callback: impl FnOnce(CString) + 'static) {
     BEFORE_FINAL_DEADLINE_CALLBACK.with(|armed| {
         assert!(
             armed.borrow_mut().replace(Box::new(callback)).is_none(),
@@ -80,9 +78,7 @@ pub(crate) fn assert_bound_advance_before_final_deadline_callback_consumed() {
 /// temporary cleanup authentication. This hook cannot reach the publication
 /// path.
 #[cfg(test)]
-pub(crate) fn arm_bound_advance_before_expired_cleanup_callback(
-    callback: impl FnOnce(CString) + 'static,
-) {
+pub(crate) fn arm_bound_advance_before_expired_cleanup_callback(callback: impl FnOnce(CString) + 'static) {
     BEFORE_EXPIRED_CLEANUP_CALLBACK.with(|armed| {
         assert!(
             armed.borrow_mut().replace(Box::new(callback)).is_none(),
@@ -130,13 +126,7 @@ impl TransitionJournalStore {
         deadline: Instant,
     ) -> Result<TransitionJournalRecordBinding, StorageError> {
         let mut clock = Instant::now;
-        self.advance_record_binding_until_with_clock_inner(
-            cast_directory,
-            expected,
-            next,
-            deadline,
-            &mut clock,
-        )
+        self.advance_record_binding_until_with_clock_inner(cast_directory, expected, next, deadline, &mut clock)
     }
 
     #[cfg(test)]
@@ -148,13 +138,9 @@ impl TransitionJournalStore {
         deadline: Instant,
         clock: &mut ScriptedBoundAdvanceDeadlineClock,
     ) -> Result<TransitionJournalRecordBinding, StorageError> {
-        self.advance_record_binding_until_with_clock_inner(
-            cast_directory,
-            expected,
-            next,
-            deadline,
-            &mut || clock.read(),
-        )
+        self.advance_record_binding_until_with_clock_inner(cast_directory, expected, next, deadline, &mut || {
+            clock.read()
+        })
     }
 
     fn advance_record_binding_until_with_clock_inner(
@@ -175,8 +161,8 @@ impl TransitionJournalStore {
         let loaded = self
             .load_pinned_revalidated_retained_cast_locked(cast_directory)?
             .ok_or(StorageError::CanonicalChanged)?;
-        let retained = inode_identity(&expected.canonical)
-            .map_err(|source| StorageError::ValidateCanonical { source })?;
+        let retained =
+            inode_identity(&expected.canonical).map_err(|source| StorageError::ValidateCanonical { source })?;
         if loaded.record != expected.record || loaded.identity != retained {
             return Err(StorageError::CanonicalChanged);
         }
@@ -189,9 +175,7 @@ impl TransitionJournalStore {
 
         require_deadline(deadline, clock())?;
         let temporary = self.prepare_bound_update_temporary(&framed)?;
-        let named = self
-            .open_named(CANONICAL_NAME)?
-            .ok_or(StorageError::CanonicalChanged)?;
+        let named = self.open_named(CANONICAL_NAME)?.ok_or(StorageError::CanonicalChanged)?;
         require_same_inode(
             loaded.identity,
             inode_identity(&named).map_err(|source| StorageError::ValidateCanonical { source })?,
@@ -225,9 +209,7 @@ impl TransitionJournalStore {
             self.cleanup_temporary(&temporary)?;
             return Err(StorageError::WriteTemporary { source });
         }
-        if let Err(source) = storage_fault(StorageFaultPoint::TemporarySync)
-            .and_then(|()| temporary.file.sync_all())
-        {
+        if let Err(source) = storage_fault(StorageFaultPoint::TemporarySync).and_then(|()| temporary.file.sync_all()) {
             self.cleanup_temporary(&temporary)?;
             return Err(StorageError::SyncTemporary { source });
         }
@@ -253,10 +235,7 @@ impl TransitionJournalStore {
         Ok(temporary)
     }
 
-    fn require_prepared_bound_update_temporary(
-        &self,
-        temporary: &TemporaryRecord,
-    ) -> Result<(), StorageError> {
+    fn require_prepared_bound_update_temporary(&self, temporary: &TemporaryRecord) -> Result<(), StorageError> {
         let display = temporary.name.to_string_lossy().into_owned();
         let named = openat2_file(
             self.directory.as_raw_fd(),
@@ -274,10 +253,7 @@ impl TransitionJournalStore {
         )
     }
 
-    fn cleanup_expired_bound_update_temporary(
-        &self,
-        temporary: &TemporaryRecord,
-    ) -> Result<(), StorageError> {
+    fn cleanup_expired_bound_update_temporary(&self, temporary: &TemporaryRecord) -> Result<(), StorageError> {
         let display = temporary.name.to_string_lossy().into_owned();
         let named = openat2_file(
             self.directory.as_raw_fd(),
@@ -302,10 +278,7 @@ impl TransitionJournalStore {
 
         storage_fault(StorageFaultPoint::BoundAdvanceDeadlineCleanupUnlink)
             .and_then(|()| unlinkat(self.directory.as_raw_fd(), &temporary.name))
-            .map_err(|source| StorageError::CleanupTemporary {
-                name: display,
-                source,
-            })?;
+            .map_err(|source| StorageError::CleanupTemporary { name: display, source })?;
         storage_fault(StorageFaultPoint::BoundAdvanceDeadlineCleanupDirectorySync)
             .and_then(|()| self.directory.sync_all())
             .map_err(|source| StorageError::SyncJournalDirectory { source })?;
@@ -352,9 +325,7 @@ impl TransitionJournalStore {
         );
         durability_checkpoint(DurabilityCheckpoint::CanonicalExchanged);
 
-        let canonical = self
-            .open_named(CANONICAL_NAME)?
-            .ok_or(StorageError::CanonicalChanged)?;
+        let canonical = self.open_named(CANONICAL_NAME)?.ok_or(StorageError::CanonicalChanged)?;
         require_same_inode(
             temporary.identity,
             inode_identity(&canonical).map_err(|source| StorageError::ValidateCanonical { source })?,

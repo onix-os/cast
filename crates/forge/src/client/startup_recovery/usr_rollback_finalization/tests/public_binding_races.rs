@@ -17,9 +17,8 @@ use crate::{
         },
     },
     transition_journal::{
-        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError,
-        TransitionJournalRecordDeleteError, arm_public_binding_revalidation_callback,
-        assert_public_binding_revalidation_callback_consumed, encode,
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError, TransitionJournalRecordDeleteError,
+        arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed, encode,
     },
 };
 
@@ -112,13 +111,10 @@ fn startup_usr_rollback_finalization_bound_delete_never_unlinks_a_last_seam_repl
     let hook_canonical = canonical.clone();
     let hook_displaced = displaced.clone();
     let hook_bytes = exact_bytes.clone();
-    arm_public_binding_revalidation_callback(
-        PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach,
-        move || {
-            fs::rename(&hook_canonical, &hook_displaced).unwrap();
-            write_new_private_file(&hook_canonical, &hook_bytes);
-        },
-    );
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach, move || {
+        fs::rename(&hook_canonical, &hook_displaced).unwrap();
+        write_new_private_file(&hook_canonical, &hook_bytes);
+    });
 
     let error = finalize_usr_rollback(journal, authority).unwrap_err();
 
@@ -193,7 +189,10 @@ fn assert_binding_error(timing: Timing, error: &UsrRollbackFinalizationError) {
     let matched = matches!(
         (timing, error),
         (Timing::BeforeDelete, UsrRollbackFinalizationError::Authority(_))
-            | (Timing::AfterDelete, UsrRollbackFinalizationError::PostDeleteAuthority(_))
+            | (
+                Timing::AfterDelete,
+                UsrRollbackFinalizationError::PostDeleteAuthority(_)
+            )
     );
     assert!(matched, "timing={timing:?}: {error:?}");
 }

@@ -8,9 +8,8 @@ use std::os::unix::fs::MetadataExt as _;
 use crate::{Installation, transition_journal::TransitionRecord, tree_marker::TreeMarkerError};
 
 use super::{
-    ActiveReblitCommitCleanupEffectError, ActiveReblitCommitCleanupLayout,
-    ProjectedActiveReblitCommitCleanupNamespace, RetainedActiveReblitCommitCleanupParents,
-    os_name,
+    ActiveReblitCommitCleanupEffectError, ActiveReblitCommitCleanupLayout, ProjectedActiveReblitCommitCleanupNamespace,
+    RetainedActiveReblitCommitCleanupParents, os_name,
 };
 use crate::client::startup_reconciliation::activation_namespace::capture::{
     CaptureError, NamespaceSnapshot, capture_snapshot,
@@ -19,8 +18,7 @@ use crate::client::startup_reconciliation::activation_namespace::capture::{
 /// Exact Finish capability accepted from either a classified Apply exchange
 /// or independent Finish admission.
 #[must_use = "ActiveReblit cleanup Finish evidence must complete durability"]
-pub(in crate::client::startup_reconciliation) struct PendingActiveReblitCommitCleanupDurability
-{
+pub(in crate::client::startup_reconciliation) struct PendingActiveReblitCommitCleanupDurability {
     parents: RetainedActiveReblitCommitCleanupParents,
     authenticated_finish: NamespaceSnapshot,
     authenticated_projection: ProjectedActiveReblitCommitCleanupNamespace,
@@ -29,8 +27,7 @@ pub(in crate::client::startup_reconciliation) struct PendingActiveReblitCommitCl
 /// Opaque proof that the fixed five-barrier suffix and fresh Finish proof
 /// completed. No intermediate capability survives a failure.
 #[must_use = "durable ActiveReblit cleanup namespace evidence must remain sealed"]
-pub(in crate::client::startup_reconciliation) struct DurableActiveReblitCommitCleanupNamespace
-{
+pub(in crate::client::startup_reconciliation) struct DurableActiveReblitCommitCleanupNamespace {
     parents: RetainedActiveReblitCommitCleanupParents,
     final_finish: NamespaceSnapshot,
     final_projection: ProjectedActiveReblitCommitCleanupNamespace,
@@ -128,13 +125,17 @@ impl PendingActiveReblitCommitCleanupDurability {
         )?;
 
         require_boundary(DurabilityBoundary::RootsParentSync)?;
-        parents.roots.sync_all().map_err(|source| {
-            ActiveReblitCommitCleanupDurabilityError::RootsParentSync {
+        parents
+            .roots
+            .sync_all()
+            .map_err(|source| ActiveReblitCommitCleanupDurabilityError::RootsParentSync {
                 path: parents.roots_path.clone(),
                 source,
-            }
-        })?;
-        record_event(&parents.roots, ActiveReblitCommitCleanupDurabilityEventKind::RootsParent);
+            })?;
+        record_event(
+            &parents.roots,
+            ActiveReblitCommitCleanupDurabilityEventKind::RootsParent,
+        );
         require_exact_finish(
             installation,
             record,
@@ -174,13 +175,7 @@ impl PendingActiveReblitCommitCleanupDurability {
         {
             return Err(ActiveReblitCommitCleanupDurabilityError::FinalProjectionChanged);
         }
-        require_exact_finish(
-            installation,
-            record,
-            &parents,
-            &final_finish,
-            &final_projection,
-        )?;
+        require_exact_finish(installation, record, &parents, &final_finish, &final_projection)?;
         record_final_finish();
         Ok(DurableActiveReblitCommitCleanupNamespace {
             parents,
@@ -231,8 +226,7 @@ impl super::RetainedActiveReblitCommitCleanupNamespace {
         installation.revalidate_mutable_namespace()?;
         self.snapshot.revalidate_retained()?;
         if self.projection.layout != ActiveReblitCommitCleanupLayout::Finish
-            || ProjectedActiveReblitCommitCleanupNamespace::capture(&self.snapshot, record)?
-                != self.projection
+            || ProjectedActiveReblitCommitCleanupNamespace::capture(&self.snapshot, record)? != self.projection
         {
             return Err(ActiveReblitCommitCleanupEffectError::FinishEvidenceChanged);
         }
@@ -248,9 +242,7 @@ impl super::RetainedActiveReblitCommitCleanupNamespace {
         }
         parents.revalidate_layout(installation, ActiveReblitCommitCleanupLayout::Finish)?;
         Ok(PendingActiveReblitCommitCleanupDurability::new(
-            parents,
-            fresh,
-            projection,
+            parents, fresh, projection,
         ))
     }
 }
@@ -410,19 +402,13 @@ enum ActiveReblitCommitCleanupDurabilityEventKind {
 fn fault_point(boundary: DurabilityBoundary) -> ActiveReblitCommitCleanupDurabilityFaultPoint {
     match boundary {
         DurabilityBoundary::PreviousTreeSync => ActiveReblitCommitCleanupDurabilityFaultPoint::PreviousTreeSync,
-        DurabilityBoundary::PreviousWrapperSync => {
-            ActiveReblitCommitCleanupDurabilityFaultPoint::PreviousWrapperSync
-        }
+        DurabilityBoundary::PreviousWrapperSync => ActiveReblitCommitCleanupDurabilityFaultPoint::PreviousWrapperSync,
         DurabilityBoundary::ReplacementWrapperSync => {
             ActiveReblitCommitCleanupDurabilityFaultPoint::ReplacementWrapperSync
         }
         DurabilityBoundary::RootsParentSync => ActiveReblitCommitCleanupDurabilityFaultPoint::RootsParentSync,
-        DurabilityBoundary::QuarantineParentSync => {
-            ActiveReblitCommitCleanupDurabilityFaultPoint::QuarantineParentSync
-        }
-        DurabilityBoundary::FinalFinishCapture => {
-            ActiveReblitCommitCleanupDurabilityFaultPoint::FinalFinishCapture
-        }
+        DurabilityBoundary::QuarantineParentSync => ActiveReblitCommitCleanupDurabilityFaultPoint::QuarantineParentSync,
+        DurabilityBoundary::FinalFinishCapture => ActiveReblitCommitCleanupDurabilityFaultPoint::FinalFinishCapture,
     }
 }
 
@@ -439,7 +425,10 @@ pub(in crate::client) fn arm_active_reblit_commit_cleanup_durability_fault(
     point: ActiveReblitCommitCleanupDurabilityFaultPoint,
 ) {
     DURABILITY_FAULT.with(|slot| {
-        assert!(slot.replace(Some(point)).is_none(), "cleanup durability fault already armed");
+        assert!(
+            slot.replace(Some(point)).is_none(),
+            "cleanup durability fault already armed"
+        );
     });
 }
 
@@ -450,8 +439,8 @@ pub(in crate::client) fn reset_active_reblit_commit_cleanup_durability_events() 
 }
 
 #[cfg(test)]
-pub(in crate::client) fn take_active_reblit_commit_cleanup_durability_events(
-) -> Vec<ActiveReblitCommitCleanupDurabilityEvent> {
+pub(in crate::client) fn take_active_reblit_commit_cleanup_durability_events()
+-> Vec<ActiveReblitCommitCleanupDurabilityEvent> {
     DURABILITY_EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()))
 }
 
@@ -499,7 +488,9 @@ fn record_event(_file: &File, _kind: ActiveReblitCommitCleanupDurabilityEventKin
 #[cfg(test)]
 fn record_final_finish() {
     DURABILITY_EVENTS.with(|events| {
-        events.borrow_mut().push(ActiveReblitCommitCleanupDurabilityEvent::FinalFinishProven);
+        events
+            .borrow_mut()
+            .push(ActiveReblitCommitCleanupDurabilityEvent::FinalFinishProven);
     });
 }
 

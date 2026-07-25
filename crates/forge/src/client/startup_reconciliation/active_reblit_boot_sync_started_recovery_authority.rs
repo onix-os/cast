@@ -11,41 +11,34 @@
 use crate::{
     Installation, State, db, state,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore,
+        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
         TransitionRecord,
     },
 };
 
 use super::super::{
     active_reblit_mounted_boot_topology::{
-        ActiveReblitBootReceiptTargetValidationError,
-        ReceiptValidatedActiveReblitBootPublicationTargets,
+        ActiveReblitBootReceiptTargetValidationError, ReceiptValidatedActiveReblitBootPublicationTargets,
         RevalidatedActiveReblitMountedBootTopology,
     },
     active_reblit_promoted_boot_cleanup_plan::{
-        ActiveReblitPromotedBootCleanupPlan,
-        ActiveReblitPromotedBootCleanupPlanError,
+        ActiveReblitPromotedBootCleanupPlan, ActiveReblitPromotedBootCleanupPlanError,
     },
     active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot},
     startup_gate::ActiveReblitBootSyncStartedCleanupSeal,
 };
-use super::{
-    DatabaseEvidence, InspectionError,
-    database_ownership_evidence_compatible, inspect_database,
-    metadata_provenance_evidence_compatible,
-};
 use super::activation_namespace::{
-    ActiveReblitBootSyncStartedNamespaceError,
-    ActiveReblitBootSyncStartedNamespaceInspection,
-    ActiveReblitBootSyncStartedNamespaceProof,
-    active_reblit_boot_sync_started_namespace_error_is_mismatch,
+    ActiveReblitBootSyncStartedNamespaceError, ActiveReblitBootSyncStartedNamespaceInspection,
+    ActiveReblitBootSyncStartedNamespaceProof, active_reblit_boot_sync_started_namespace_error_is_mismatch,
+};
+use super::{
+    DatabaseEvidence, InspectionError, database_ownership_evidence_compatible, inspect_database,
+    metadata_provenance_evidence_compatible,
 };
 
 mod post_advance;
 pub(in crate::client) use post_advance::{
-    ActiveReblitBootSyncStartedPostAdvanceAuthority,
-    ActiveReblitBootSyncStartedRecordAdvanceError,
+    ActiveReblitBootSyncStartedPostAdvanceAuthority, ActiveReblitBootSyncStartedRecordAdvanceError,
 };
 
 /// Read-only result at the receipt-promotion boundary.
@@ -100,10 +93,11 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
         state_db: &db::state::Database,
         active_state_reservation: &'reservation ActiveStateReservation,
         record: &TransitionRecord,
-    ) -> Result<ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-        if record.operation != Operation::ActiveReblit
-            || record.phase != Phase::BootSyncStarted
-        {
+    ) -> Result<
+        ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>,
+        ActiveReblitBootSyncStartedRecoveryAuthorityError,
+    > {
+        if record.operation != Operation::ActiveReblit || record.phase != Phase::BootSyncStarted {
             return Ok(ActiveReblitBootSyncStartedRecoveryAdmission::NotApplicable);
         }
 
@@ -114,18 +108,12 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
             return Ok(ActiveReblitBootSyncStartedRecoveryAdmission::RollbackEligible);
         };
         if cleanup_seal.promoted_receipt() != receipt_pair.pending {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::CleanupSealReceiptMismatch
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::CleanupSealReceiptMismatch.into());
         }
 
         // Bind the exact source inode before mutable receipt or state reads.
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding = journal.record_binding(
-            installation.retained_mutable_cast_directory()?,
-            record,
-        )?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         match inspect_receipt_boundary(state_db, record, receipt_pair)? {
@@ -138,21 +126,13 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
             return Ok(ActiveReblitBootSyncStartedRecoveryAdmission::Deferred);
         }
 
-        let database_before = match inspect_current_database(
-            record,
-            receipt_pair,
-            state_db,
-        )? {
+        let database_before = match inspect_current_database(record, receipt_pair, state_db)? {
             ActiveReblitBootSyncStartedDatabaseInspection::Exact(database) => database,
             ActiveReblitBootSyncStartedDatabaseInspection::Incompatible => {
                 return Ok(ActiveReblitBootSyncStartedRecoveryAdmission::Deferred);
             }
         };
-        let active_state = match capture_exact_active_state(
-            record,
-            installation,
-            active_state_reservation,
-        )? {
+        let active_state = match capture_exact_active_state(record, installation, active_state_reservation)? {
             Some(active_state) => active_state,
             None => return Ok(ActiveReblitBootSyncStartedRecoveryAdmission::Deferred),
         };
@@ -163,40 +143,23 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
             record,
         ) {
             Ok(inspection) => inspection,
-            Err(source)
-                if active_reblit_boot_sync_started_namespace_error_is_mismatch(&source) =>
-            {
+            Err(source) if active_reblit_boot_sync_started_namespace_error_is_mismatch(&source) => {
                 return Ok(ActiveReblitBootSyncStartedRecoveryAdmission::Deferred);
             }
             Err(source) => return Err(source.into()),
         };
 
         run_between_database_captures();
-        let namespace = namespace_inspection.finish(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        )?;
+        let namespace = namespace_inspection.finish(installation, journal, &journal_record_binding, record)?;
         let database_after = require_exact_database(
             &database_before,
             inspect_current_database(record, receipt_pair, state_db)?,
         )?;
         require_exact_active_state(record, installation, &active_state)?;
-        if database_before != database_after
-            || !record_plan_is_exact(record, receipt_pair, &cleanup_seal)
-        {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::RouteEvidenceChanged
-                    .into(),
-            );
+        if database_before != database_after || !record_plan_is_exact(record, receipt_pair, &cleanup_seal) {
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::RouteEvidenceChanged.into());
         }
-        require_exact_record_binding(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        )?;
+        require_exact_record_binding(installation, journal, &journal_record_binding, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let retained_state_db = state_db.clone();
@@ -220,63 +183,26 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-        require_exact_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_exact_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = require_exact_database(
             &self.database,
-            inspect_current_database(
-                &self.record,
-                self.receipt_pair,
-                &self.state_db,
-            )?,
+            inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(
-            &self.record,
-            &self.installation,
-            &self.active_state,
-        )?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after = require_exact_database(
             &self.database,
-            inspect_current_database(
-                &self.record,
-                self.receipt_pair,
-                &self.state_db,
-            )?,
+            inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(
-            &self.record,
-            &self.installation,
-            &self.active_state,
-        )?;
+        require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
         if database_before != database_after
-            || !record_plan_is_exact(
-                &self.record,
-                self.receipt_pair,
-                &self.cleanup_seal,
-            )
+            || !record_plan_is_exact(&self.record, self.receipt_pair, &self.cleanup_seal)
         {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::RouteEvidenceChanged
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::RouteEvidenceChanged.into());
         }
-        require_exact_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_exact_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -286,26 +212,22 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
     pub(in crate::client) fn cleanup_plan<'authority>(
         &'authority self,
         journal: &TransitionJournalStore,
-    ) -> Result<ActiveReblitPromotedBootCleanupPlan<'authority>, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
+    ) -> Result<ActiveReblitPromotedBootCleanupPlan<'authority>, ActiveReblitBootSyncStartedRecoveryAuthorityError>
+    {
         self.revalidate(journal)?;
         let plan = self
             .database
             .receipt_chain
             .prepare_active_reblit_promoted_boot_cleanup_plan()?;
         if plan.promoted_receipt() != self.cleanup_seal.promoted_receipt() {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::CleanupPlanReceiptMismatch
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::CleanupPlanReceiptMismatch.into());
         }
         Ok(plan)
     }
 
     /// Expose only the inert cleanup seal; the exact receipt chain remains
     /// private authority evidence.
-    pub(in crate::client) fn cleanup_seal(
-        &self,
-    ) -> &ActiveReblitBootSyncStartedCleanupSeal {
+    pub(in crate::client) fn cleanup_seal(&self) -> &ActiveReblitBootSyncStartedCleanupSeal {
         &self.cleanup_seal
     }
 
@@ -321,13 +243,9 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
     > {
         self.revalidate(journal)?;
         if !topology.is_bound_to_installation(&self.installation) {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::TopologyInstallationMismatch
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::TopologyInstallationMismatch.into());
         }
-        let targets = topology
-            .revalidate_promoted_receipt_targets(&self.database.receipt_chain);
+        let targets = topology.revalidate_promoted_receipt_targets(&self.database.receipt_chain);
         let closing_authority = self.revalidate(journal);
         match (targets, closing_authority) {
             (Ok(targets), Ok(())) => Ok(targets),
@@ -357,37 +275,22 @@ fn inspect_receipt_boundary(
     record: &TransitionRecord,
     receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
 ) -> Result<ReceiptBoundary, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-    match state_db.load_exact_promoted_boot_publication_receipt_chain(
-        &record.transition_id,
-        &receipt_pair,
-    ) {
+    match state_db.load_exact_promoted_boot_publication_receipt_chain(&record.transition_id, &receipt_pair) {
         Ok(chain) => {
             require_exact_cleanup_plan(&chain, receipt_pair)?;
             Ok(ReceiptBoundary::Promoted)
         }
-        Err(
-            db::state::ExactPromotedBootPublicationReceiptStateError::PendingHeadPresent {
-                ..
-            },
-        ) => {
+        Err(db::state::ExactPromotedBootPublicationReceiptStateError::PendingHeadPresent { .. }) => {
             let pending = state_db
                 .boot_publication_receipt_state()
-                .map_err(
-                    ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::PendingReceiptState,
-                )?;
+                .map_err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::PendingReceiptState)?;
             if pending.receipt_pair_for(&record.transition_id) == Some(receipt_pair) {
                 Ok(ReceiptBoundary::Pending)
             } else {
-                Err(
-                    ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::PendingReceiptCorrelationMismatch
-                        .into(),
-                )
+                Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::PendingReceiptCorrelationMismatch.into())
             }
         }
-        Err(source) => Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptCorrelation(source)
-                .into(),
-        ),
+        Err(source) => Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptCorrelation(source).into()),
     }
 }
 
@@ -398,51 +301,31 @@ fn inspect_current_database(
 ) -> Result<ActiveReblitBootSyncStartedDatabaseInspection, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
     let receipt_before = load_exact_promoted_chain(state_db, record, receipt_pair)?;
     let plan_before = require_exact_cleanup_plan(&receipt_before, receipt_pair)?;
-    let in_flight = state_db
-        .audit_in_flight_transition()
-        .map_err(InspectionError::from)?;
+    let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
     let context = inspect_database(record, state_db, in_flight)?;
     if !existing_state_context_is_exact(record, &context) {
         return Ok(ActiveReblitBootSyncStartedDatabaseInspection::Incompatible);
     }
-    let state_id = state::Id::from(
-        record
-            .candidate
-            .id
-            .expect("checked exact ActiveReblit state ID"),
-    );
+    let state_id = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state ID"));
     let state = match state_db.get(state_id) {
         Ok(state) => state,
         Err(db::Error::RowNotFound) => {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged.into());
         }
         Err(source) => {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::StateDatabase(source)
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::StateDatabase(source).into());
         }
     };
     if state.id != state_id {
-        return Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged
-                .into(),
-        );
+        return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged.into());
     }
     let receipt_after = load_exact_promoted_chain(state_db, record, receipt_pair)?;
     let plan_after = require_exact_cleanup_plan(&receipt_after, receipt_pair)?;
-    let receipt_and_plan_match = receipt_before == receipt_after
-        && plan_before == plan_after;
+    let receipt_and_plan_match = receipt_before == receipt_after && plan_before == plan_after;
     drop(plan_before);
     drop(plan_after);
     if !receipt_and_plan_match {
-        return Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged
-                .into(),
-        );
+        return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged.into());
     }
     Ok(ActiveReblitBootSyncStartedDatabaseInspection::Exact(
         ActiveReblitBootSyncStartedDatabaseEvidence {
@@ -459,14 +342,8 @@ fn load_exact_promoted_chain(
     receipt_pair: crate::boot_publication::BootPublicationReceiptPair,
 ) -> Result<db::state::ExactPromotedBootPublicationReceiptChain, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
     state_db
-        .load_exact_promoted_boot_publication_receipt_chain(
-            &record.transition_id,
-            &receipt_pair,
-        )
-        .map_err(|source| {
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptCorrelation(source)
-                .into()
-        })
+        .load_exact_promoted_boot_publication_receipt_chain(&record.transition_id, &receipt_pair)
+        .map_err(|source| ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptCorrelation(source).into())
 }
 
 fn require_exact_cleanup_plan<'chain>(
@@ -477,17 +354,11 @@ fn require_exact_cleanup_plan<'chain>(
     if plan.promoted_receipt() == receipt_pair.pending {
         Ok(plan)
     } else {
-        Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::CleanupPlanReceiptMismatch
-                .into(),
-        )
+        Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::CleanupPlanReceiptMismatch.into())
     }
 }
 
-fn existing_state_context_is_exact(
-    record: &TransitionRecord,
-    evidence: &DatabaseEvidence,
-) -> bool {
+fn existing_state_context_is_exact(record: &TransitionRecord, evidence: &DatabaseEvidence) -> bool {
     if !database_ownership_evidence_compatible(record, evidence)
         || !metadata_provenance_evidence_compatible(record, evidence)
     {
@@ -516,16 +387,11 @@ fn require_exact_database(
     actual: ActiveReblitBootSyncStartedDatabaseInspection,
 ) -> Result<ActiveReblitBootSyncStartedDatabaseEvidence, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
     match actual {
-        ActiveReblitBootSyncStartedDatabaseInspection::Exact(actual)
-            if actual == *expected =>
-        {
-            Ok(actual)
-        }
+        ActiveReblitBootSyncStartedDatabaseInspection::Exact(actual) if actual == *expected => Ok(actual),
         ActiveReblitBootSyncStartedDatabaseInspection::Exact(_)
-        | ActiveReblitBootSyncStartedDatabaseInspection::Incompatible => Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged
-                .into(),
-        ),
+        | ActiveReblitBootSyncStartedDatabaseInspection::Incompatible => {
+            Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::DatabaseEvidenceChanged.into())
+        }
     }
 }
 
@@ -537,12 +403,7 @@ fn capture_exact_active_state(
     let active_state = reservation
         .capture_for_startup_recovery(installation)
         .map_err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ActiveState)?;
-    let expected = state::Id::from(
-        record
-            .candidate
-            .id
-            .expect("checked exact ActiveReblit state ID"),
-    );
+    let expected = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state ID"));
     if active_state.active() != Some(expected) {
         return Ok(None);
     }
@@ -557,20 +418,11 @@ fn require_exact_active_state(
     installation: &Installation,
     active_state: &ActiveStateSnapshot,
 ) -> Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-    let expected = state::Id::from(
-        record
-            .candidate
-            .id
-            .expect("validated ActiveReblit state ID"),
-    );
+    let expected = state::Id::from(record.candidate.id.expect("validated ActiveReblit state ID"));
     let actual = active_state.active();
     if actual != Some(expected) {
         return Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ActiveSelectionMismatch {
-                expected,
-                actual,
-            }
-            .into(),
+            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ActiveSelectionMismatch { expected, actual }.into(),
         );
     }
     active_state
@@ -601,19 +453,13 @@ fn require_exact_record_binding(
     record: &TransitionRecord,
 ) -> Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError> {
     if !journal.has_record_store_binding(binding) {
-        return Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::JournalRecordBindingChanged
-                .into(),
-        );
+        return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::JournalRecordBindingChanged.into());
     }
     let cast = installation.retained_mutable_cast_directory()?;
     if journal.has_record_binding(cast, binding, record)? {
         Ok(())
     } else {
-        Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::JournalRecordBindingChanged
-                .into(),
-        )
+        Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::JournalRecordBindingChanged.into())
     }
 }
 
@@ -629,34 +475,25 @@ impl From<InspectionError> for ActiveReblitBootSyncStartedRecoveryAuthorityError
     }
 }
 
-impl From<ActiveReblitBootSyncStartedNamespaceError>
-    for ActiveReblitBootSyncStartedRecoveryAuthorityError
-{
+impl From<ActiveReblitBootSyncStartedNamespaceError> for ActiveReblitBootSyncStartedRecoveryAuthorityError {
     fn from(source: ActiveReblitBootSyncStartedNamespaceError) -> Self {
         ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::Namespace(source).into()
     }
 }
 
-impl From<ActiveReblitPromotedBootCleanupPlanError>
-    for ActiveReblitBootSyncStartedRecoveryAuthorityError
-{
+impl From<ActiveReblitPromotedBootCleanupPlanError> for ActiveReblitBootSyncStartedRecoveryAuthorityError {
     fn from(source: ActiveReblitPromotedBootCleanupPlanError) -> Self {
         ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::CleanupPlan(source).into()
     }
 }
 
-impl From<ActiveReblitBootReceiptTargetValidationError>
-    for ActiveReblitBootSyncStartedRecoveryAuthorityError
-{
+impl From<ActiveReblitBootReceiptTargetValidationError> for ActiveReblitBootSyncStartedRecoveryAuthorityError {
     fn from(source: ActiveReblitBootReceiptTargetValidationError) -> Self {
-        ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptTargets(source)
-            .into()
+        ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::ReceiptTargets(source).into()
     }
 }
 
-impl From<crate::installation::Error>
-    for ActiveReblitBootSyncStartedRecoveryAuthorityError
-{
+impl From<crate::installation::Error> for ActiveReblitBootSyncStartedRecoveryAuthorityError {
     fn from(source: crate::installation::Error) -> Self {
         ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::Installation(source).into()
     }
@@ -685,9 +522,7 @@ enum ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind {
     #[error("the pending boot-publication receipt does not match the exact journal pair")]
     PendingReceiptCorrelationMismatch,
     #[error("the boot-publication receipt chain conflicts with the exact journal pair")]
-    ReceiptCorrelation(
-        #[source] db::state::ExactPromotedBootPublicationReceiptStateError,
-    ),
+    ReceiptCorrelation(#[source] db::state::ExactPromotedBootPublicationReceiptStateError),
     #[error("derive the exact promoted boot-publication cleanup plan")]
     CleanupPlan(#[source] ActiveReblitPromotedBootCleanupPlanError),
     #[error("the cleanup plan does not name the exact promoted receipt")]
@@ -696,7 +531,9 @@ enum ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind {
     TopologyInstallationMismatch,
     #[error("bind live boot publication targets to the exact promoted receipt chain")]
     ReceiptTargets(#[source] ActiveReblitBootReceiptTargetValidationError),
-    #[error("live boot target validation failed ({targets}) and closing recovery-authority revalidation also failed ({authority})")]
+    #[error(
+        "live boot target validation failed ({targets}) and closing recovery-authority revalidation also failed ({authority})"
+    )]
     ReceiptTargetsAndAuthorityChanged {
         targets: ActiveReblitBootReceiptTargetValidationError,
         authority: Box<ActiveReblitBootSyncStartedRecoveryAuthorityError>,
@@ -731,9 +568,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_between_active_reblit_boot_sync_started_database_captures(
-    hook: impl FnOnce() + 'static,
-) {
+pub(in crate::client) fn arm_between_active_reblit_boot_sync_started_database_captures(hook: impl FnOnce() + 'static) {
     BETWEEN_DATABASE_CAPTURES.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

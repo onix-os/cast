@@ -3,9 +3,8 @@ use std::time::{Duration, Instant};
 use super::super::{
     BootTargetRole, ObservationPhase,
     capture::{
-        ActiveReblitBootPublicationTargetsError as Error,
-        ActiveReblitMountedBootTopologyCaptureError, ObservationBoundary,
-        RevalidatedActiveReblitBootPublicationTargets,
+        ActiveReblitBootPublicationTargetsError as Error, ActiveReblitMountedBootTopologyCaptureError,
+        ObservationBoundary, RevalidatedActiveReblitBootPublicationTargets,
         validate_fixture_publication_target_binding,
     },
 };
@@ -28,7 +27,10 @@ fn alias_bridge_brackets_exact_attachment_and_retains_original_deadline() {
     };
     let (device, inode) = fixture.destination_identity();
     assert_eq!(esp.role(), BootTargetRole::Esp);
-    assert_eq!((esp.destination().raw_device(), esp.destination().inode()), (device, inode));
+    assert_eq!(
+        (esp.destination().raw_device(), esp.destination().inode()),
+        (device, inode)
+    );
     assert_eq!(esp.mount_id(), inode);
     assert_eq!(esp.deadline(), operation_deadline);
     assert_eq!(targets.deadline(), operation_deadline);

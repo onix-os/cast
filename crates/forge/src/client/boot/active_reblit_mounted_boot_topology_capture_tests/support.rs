@@ -159,14 +159,10 @@ impl AliasFixture {
             self.prepared_anchor()?,
             &self.sysfs_tree,
             self.feed.clone(),
-            FixtureBootFilesystemEvidenceFeeds::aliases_esp(
-                self.boot_filesystem_feed.clone(),
-            ),
+            FixtureBootFilesystemEvidenceFeeds::aliases_esp(self.boot_filesystem_feed.clone()),
             deadline,
         )
-        .map_err(|source| io::Error::other(format!(
-            "fixture topology preparation failed: {source}",
-        )))
+        .map_err(|source| io::Error::other(format!("fixture topology preparation failed: {source}",)))
     }
 
     pub(in crate::client) fn installation(&self) -> &Installation {

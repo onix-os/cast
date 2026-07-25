@@ -102,14 +102,13 @@ use fault_injection::{
 };
 #[allow(unused_imports)] // contract-only surface for the later live coordinator integration
 pub(crate) use journal_coordinator::{
-    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
-    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
-    ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
-    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView,
-    NewStatePrevious, PreviousArchiveBootHandoffFailure, PreviousArchivedBootSyncHandoffSeal,
-    PreviousArchivedCoordinator, execute_active_reblit_forward, execute_new_state_forward,
-    StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
-    StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
+    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, ActiveReblitForwardError,
+    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal, ActiveReblitSystemTriggerView,
+    ActiveReblitTransactionTriggerView, NewStateForwardError, NewStatePrevious, NewStateSystemTriggerView,
+    NewStateTransactionTriggerView, PreviousArchiveBootHandoffFailure, PreviousArchivedBootSyncHandoffSeal,
+    PreviousArchivedCoordinator, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
+    StatefulTransitionRequest, SystemTriggersCompleteCoordinator, execute_active_reblit_forward,
+    execute_new_state_forward,
 };
 pub(crate) use legacy_boot_repair::{LegacyBootRepairAuthority, LegacyBootRepairAuthorityError};
 use namespace_helpers::*;

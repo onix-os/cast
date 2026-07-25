@@ -39,6 +39,7 @@ pub(crate) use model::ProductionRawDirectoryInventoryUsage;
 #[allow(unused_imports)] // aggregate accounting for the future retained observer
 pub(crate) use parser::parse_production_raw_directory_inventory_with_usage_until;
 
+pub(in crate::linux_fs) use retained::BoundRetainedBootFileSource;
 #[cfg(test)]
 pub(crate) use retained::{
     FixtureFailedOpenDescriptorSlotUsage, FixtureRetainedBootNamespaceProtocolEvent,
@@ -48,4 +49,3 @@ pub(crate) use retained::{
     RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits, RetainedBootNamespaceExpectedSource,
     ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
 };
-pub(in crate::linux_fs) use retained::BoundRetainedBootFileSource;

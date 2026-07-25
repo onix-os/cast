@@ -19,42 +19,32 @@ use crate::{
     client::{
         Client,
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
-        active_reblit_boot_sync_staging::{
-            ActiveReblitBootSyncFreshValidationError,
-            StagedActiveReblitBootSync,
-        },
+        active_reblit_boot_sync_staging::{ActiveReblitBootSyncFreshValidationError, StagedActiveReblitBootSync},
         active_reblit_installed_boot_publication_delta::{
-            ActiveReblitBootPublicationDeltaAction,
-            ActiveReblitBootPublicationDeltaError,
+            ActiveReblitBootPublicationDeltaAction, ActiveReblitBootPublicationDeltaError,
             ActiveReblitBootPublicationEffectScheduleError,
         },
         active_reblit_mounted_boot_topology::{
-            ActiveReblitBootImmutableLeafPublicationError,
-            ActiveReblitBootOwnedLeafReplacementError,
+            ActiveReblitBootImmutableLeafPublicationError, ActiveReblitBootOwnedLeafReplacementError,
             ActiveReblitBootPublicationTargetsError, BootTargetRole,
         },
-        active_reblit_publication_plan::{
-            ActiveReblitBootPublicationPhase, ActiveReblitBootPublicationRole,
-        },
+        active_reblit_publication_plan::{ActiveReblitBootPublicationPhase, ActiveReblitBootPublicationRole},
     },
     linux_fs::{
-        descriptor_boot_namespace::BootNamespaceDestinationState,
-        mount_namespace::RetainedBootFilePublicationOutcome,
+        descriptor_boot_namespace::BootNamespaceDestinationState, mount_namespace::RetainedBootFilePublicationOutcome,
     },
 };
 
 use super::{
-    ActiveReblitBootPublicationPreflightError,
-    RevalidatedActiveReblitBootPublicationPreflight,
+    ActiveReblitBootPublicationPreflightError, RevalidatedActiveReblitBootPublicationPreflight,
     require_same_target_set, require_target_deadline,
 };
 
-use execution_schedule::{
-    initial_state_for_action, prepare_execution_schedule, route_publication,
-    terminal_namespace_assessment,
-};
 #[cfg(test)]
 use execution_schedule::{destination_role, domain_plan_position};
+use execution_schedule::{
+    initial_state_for_action, prepare_execution_schedule, route_publication, terminal_namespace_assessment,
+};
 
 /// Unforgeable safe-code proof that the exact staged authority passed its
 /// immediate pre-effect revalidation inside this aggregate executor.
@@ -70,9 +60,7 @@ impl ActiveReblitBootPublicationEffectSeal {
         Self { pending_receipt }
     }
 
-    pub(in crate::client) const fn pending_receipt(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn pending_receipt(&self) -> BootPublicationReceiptFingerprint {
         self.pending_receipt
     }
 }
@@ -92,9 +80,7 @@ impl ActiveReblitBootPromotedCleanupSeal {
         Self { promoted_receipt }
     }
 
-    pub(in crate::client) const fn promoted_receipt(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn promoted_receipt(&self) -> BootPublicationReceiptFingerprint {
         self.promoted_receipt
     }
 }
@@ -157,14 +143,7 @@ pub(in crate::client) struct StagedExactActiveReblitBootPublication<
     staged: StagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     publication_count: usize,
     published_count: usize,
@@ -174,9 +153,7 @@ pub(in crate::client) struct StagedExactActiveReblitBootPublication<
     evidence: Vec<ValidatedActiveReblitBootPublicationEffect>,
 }
 
-impl std::fmt::Debug
-    for StagedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for StagedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("StagedExactActiveReblitBootPublication")
@@ -193,9 +170,7 @@ impl std::fmt::Debug
 }
 
 impl StagedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.staged.receipt_fingerprint()
     }
 
@@ -272,10 +247,7 @@ pub(in crate::client) enum ActiveReblitBootImmutablePublicationAttemptError {
     #[error("the aggregate preflight target and namespace-input layouts differ")]
     DestinationLayoutMismatch,
     #[error("publication {plan_index} is absent from its expected {role:?} namespace domain")]
-    DomainPlanIndexMissing {
-        role: BootTargetRole,
-        plan_index: usize,
-    },
+    DomainPlanIndexMissing { role: BootTargetRole, plan_index: usize },
     #[error("publication {plan_index} maps to {found:?}, expected {expected:?}")]
     DestinationRoleMismatch {
         plan_index: usize,
@@ -310,9 +282,7 @@ pub(in crate::client) enum ActiveReblitBootImmutablePublicationAttemptError {
     PublicationCounterOverflow,
     #[error("allocate the bounded global publication-evidence vector before effects")]
     EvidenceAllocation(#[source] TryReserveError),
-    #[error(
-        "terminal publication accounting recorded {actual} outcomes for {expected} planned outputs"
-    )]
+    #[error("terminal publication accounting recorded {actual} outcomes for {expected} planned outputs")]
     PublicationCountMismatch { expected: usize, actual: usize },
     #[error("terminally reassess every aggregate boot-publication output")]
     TerminalNamespaceAssessment(#[source] ActiveReblitBootPublicationPreflightError),
@@ -331,15 +301,7 @@ pub(in crate::client) enum ActiveReblitBootImmutablePublicationAttemptError {
     TerminalStagedValidation(#[source] ActiveReblitBootSyncFreshValidationError),
 }
 
-impl<
-        'plan,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     RevalidatedActiveReblitBootPublicationPreflight<
         'plan,
         'input,
@@ -359,14 +321,7 @@ where
         staged: StagedActiveReblitBootSync<
             'plan,
             'inventory,
-            BoundActiveReblitBlsPublicationPlan<
-                'input,
-                'topology_view,
-                'topology_authority,
-                'attempt,
-                'stone,
-                'roots,
-            >,
+            BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
         >,
         client: &Client,
     ) -> Result<
@@ -394,15 +349,11 @@ where
         // with the staging-time classification is proved.
         let fresh = staged
             .revalidate_against(client)
-            .map_err(
-                ActiveReblitBootImmutablePublicationAttemptError::PreEffectStagedValidation,
-            )?;
+            .map_err(ActiveReblitBootImmutablePublicationAttemptError::PreEffectStagedValidation)?;
         if !std::ptr::eq(fresh.plan(), retained_plan) {
-            return Err(
-                ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
-                    checkpoint: "pre-effect durable revalidation",
-                },
-            );
+            return Err(ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
+                checkpoint: "pre-effect durable revalidation",
+            });
         }
         let preflight = fresh
             .plan()
@@ -410,13 +361,9 @@ where
             .map_err(ActiveReblitBootImmutablePublicationAttemptError::Preflight)?;
         let classified = preflight
             .classify_installed_boot_publication_delta(fresh.prepared_delta())
-            .map_err(
-                ActiveReblitBootImmutablePublicationAttemptError::PreEffectDeltaClassification,
-            )?;
+            .map_err(ActiveReblitBootImmutablePublicationAttemptError::PreEffectDeltaClassification)?;
         if &classified != fresh.classified_delta() {
-            return Err(
-                ActiveReblitBootImmutablePublicationAttemptError::PreEffectDeltaClassificationDrift,
-            );
+            return Err(ActiveReblitBootImmutablePublicationAttemptError::PreEffectDeltaClassificationDrift);
         }
         let schedule = classified
             .prepare_effect_schedule(retained_plan)
@@ -429,23 +376,17 @@ where
         after_pre_effect_schedule_validation();
         let immediate = staged
             .revalidate_against(client)
-            .map_err(
-                ActiveReblitBootImmutablePublicationAttemptError::PreEffectStagedValidation,
-            )?;
+            .map_err(ActiveReblitBootImmutablePublicationAttemptError::PreEffectStagedValidation)?;
         if !std::ptr::eq(immediate.plan(), retained_plan)
             || immediate.receipt_fingerprint() != pending_receipt
             || immediate.classified_delta() != &classified
         {
-            return Err(
-                ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
-                    checkpoint: "immediate pre-effect durable revalidation",
-                },
-            );
+            return Err(ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
+                checkpoint: "immediate pre-effect durable revalidation",
+            });
         }
         require_attempt_deadline("immediately before first namespace effect", deadline)?;
-        let effect_seal = ActiveReblitBootPublicationEffectSeal::new(
-            immediate.receipt_fingerprint(),
-        );
+        let effect_seal = ActiveReblitBootPublicationEffectSeal::new(immediate.receipt_fingerprint());
         drop(immediate);
 
         let mut published_count = 0usize;
@@ -466,9 +407,7 @@ where
                 | ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired
                 | ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired => {
                     let initial_state = initial_state_for_action(scheduled.action()).ok_or(
-                        ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState {
-                            plan_index,
-                        },
+                        ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState { plan_index },
                     )?;
                     let publication_evidence = routed
                         .target
@@ -480,23 +419,23 @@ where
                             routed.expected_source,
                             initial_state,
                         )
-                        .map_err(|source| {
-                            ActiveReblitBootImmutablePublicationAttemptError::LeafPublication {
+                        .map_err(
+                            |source| ActiveReblitBootImmutablePublicationAttemptError::LeafPublication {
                                 role: routed.role,
                                 plan_index,
                                 source,
-                            }
-                        })?;
+                            },
+                        )?;
                     match publication_evidence.outcome() {
                         RetainedBootFilePublicationOutcome::Published => {
-                            published_count = published_count.checked_add(1).ok_or(
-                                ActiveReblitBootImmutablePublicationAttemptError::PublicationCounterOverflow,
-                            )?;
+                            published_count = published_count
+                                .checked_add(1)
+                                .ok_or(ActiveReblitBootImmutablePublicationAttemptError::PublicationCounterOverflow)?;
                         }
                         RetainedBootFilePublicationOutcome::AlreadyExact => {
-                            already_exact_count = already_exact_count.checked_add(1).ok_or(
-                                ActiveReblitBootImmutablePublicationAttemptError::PublicationCounterOverflow,
-                            )?;
+                            already_exact_count = already_exact_count
+                                .checked_add(1)
+                                .ok_or(ActiveReblitBootImmutablePublicationAttemptError::PublicationCounterOverflow)?;
                         }
                     }
                     match scheduled.action() {
@@ -523,9 +462,7 @@ where
                 }
                 ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired => {
                     let installed_expected = scheduled.installed_expected().ok_or(
-                        ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState {
-                            plan_index,
-                        },
+                        ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState { plan_index },
                     )?;
                     let replacement_evidence = routed
                         .target
@@ -538,16 +475,16 @@ where
                             scheduled.desired_expected(),
                             installed_expected,
                         )
-                        .map_err(|source| {
-                            ActiveReblitBootImmutablePublicationAttemptError::OwnedLeafReplacement {
+                        .map_err(
+                            |source| ActiveReblitBootImmutablePublicationAttemptError::OwnedLeafReplacement {
                                 role: routed.role,
                                 plan_index,
                                 source,
-                            }
-                        })?;
-                    replaced_count = replaced_count.checked_add(1).ok_or(
-                        ActiveReblitBootImmutablePublicationAttemptError::PublicationCounterOverflow,
-                    )?;
+                            },
+                        )?;
+                    replaced_count = replaced_count
+                        .checked_add(1)
+                        .ok_or(ActiveReblitBootImmutablePublicationAttemptError::PublicationCounterOverflow)?;
                     ValidatedActiveReblitBootPublicationEffect::ReplacedOwned {
                         plan_index,
                         evidence: replacement_evidence,
@@ -555,11 +492,7 @@ where
                 }
                 ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion
                 | ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale => {
-                    return Err(
-                        ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState {
-                            plan_index,
-                        },
-                    );
+                    return Err(ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState { plan_index });
                 }
             };
             evidence.push(effect_evidence);
@@ -570,10 +503,7 @@ where
         for (plan_index, state) in terminal_states.iter().copied().enumerate() {
             if state != BootNamespaceDestinationState::Exact {
                 return Err(
-                    ActiveReblitBootImmutablePublicationAttemptError::TerminalDestinationNotExact {
-                        plan_index,
-                        state,
-                    },
+                    ActiveReblitBootImmutablePublicationAttemptError::TerminalDestinationNotExact { plan_index, state },
                 );
             }
         }
@@ -585,27 +515,20 @@ where
             .revalidate_publication_targets()
             .map_err(ActiveReblitBootImmutablePublicationAttemptError::TerminalTargets)?;
         require_target_deadline("post-publication target capture", deadline, &terminal_targets)
-            .map_err(
-                ActiveReblitBootImmutablePublicationAttemptError::TerminalTargetMismatch,
-            )?;
-        require_same_target_set(&preflight.targets, &terminal_targets).map_err(
-            ActiveReblitBootImmutablePublicationAttemptError::TerminalTargetMismatch,
-        )?;
+            .map_err(ActiveReblitBootImmutablePublicationAttemptError::TerminalTargetMismatch)?;
+        require_same_target_set(&preflight.targets, &terminal_targets)
+            .map_err(ActiveReblitBootImmutablePublicationAttemptError::TerminalTargetMismatch)?;
         drop(terminal_targets);
         require_attempt_deadline("after terminal topology capture", deadline)?;
 
         {
             let fresh = staged
                 .revalidate_against(client)
-                .map_err(
-                    ActiveReblitBootImmutablePublicationAttemptError::TerminalStagedValidation,
-                )?;
+                .map_err(ActiveReblitBootImmutablePublicationAttemptError::TerminalStagedValidation)?;
             if !std::ptr::eq(fresh.plan(), retained_plan) {
-                return Err(
-                    ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
-                        checkpoint: "terminal durable revalidation",
-                    },
-                );
+                return Err(ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
+                    checkpoint: "terminal durable revalidation",
+                });
             }
         }
         require_attempt_deadline("terminal staged publication evidence", deadline)?;
@@ -632,10 +555,10 @@ where
             );
         }
         let promoted_cleanup_required = replaced_count != 0
-            || classified.entries().iter().any(|entry| {
-                entry.action()
-                    == ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion
-            });
+            || classified
+                .entries()
+                .iter()
+                .any(|entry| entry.action() == ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion);
         Ok(StagedExactActiveReblitBootPublication {
             staged,
             publication_count,
@@ -653,10 +576,7 @@ fn require_attempt_deadline(
     deadline: Instant,
 ) -> Result<(), ActiveReblitBootImmutablePublicationAttemptError> {
     if Instant::now() > deadline {
-        Err(ActiveReblitBootImmutablePublicationAttemptError::DeadlineExceeded {
-            checkpoint,
-            deadline,
-        })
+        Err(ActiveReblitBootImmutablePublicationAttemptError::DeadlineExceeded { checkpoint, deadline })
     } else {
         Ok(())
     }
@@ -700,22 +620,12 @@ mod tests;
 #[path = "immutable_attempt/receipt_promotion.rs"]
 mod receipt_promotion;
 pub(in crate::client) use receipt_promotion::{
-    ActiveReblitBootCompleteError,
-    ActiveReblitBootCompleteHandoff,
-    ActiveReblitBootCompletePostAdvanceError,
-    ActiveReblitBootCommitCleanupCompleteHandoff,
-    ActiveReblitBootFinalizationError,
-    ActiveReblitBootFinalizedHandoff,
-    ActiveReblitBootCommitCleanupError,
-    ActiveReblitBootCommitCleanupPostAdvanceError,
-    ActiveReblitBootCommitDecisionError,
-    ActiveReblitBootCommitDecisionFinalValidation,
-    ActiveReblitBootCommitDecisionHandoff,
-    ActiveReblitBootPostCompletionValidationError,
-    ActiveReblitBootPromotedCleanupError,
-    ActiveReblitBootSyncCompletionError,
-    ActiveReblitBootReceiptPromotionError,
-    CleanedPromotedExactActiveReblitBootPublication,
-    CompletedExactActiveReblitBootPublication,
+    ActiveReblitBootCommitCleanupCompleteHandoff, ActiveReblitBootCommitCleanupError,
+    ActiveReblitBootCommitCleanupPostAdvanceError, ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation, ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootCompleteError, ActiveReblitBootCompleteHandoff, ActiveReblitBootCompletePostAdvanceError,
+    ActiveReblitBootFinalizationError, ActiveReblitBootFinalizedHandoff, ActiveReblitBootPostCompletionValidationError,
+    ActiveReblitBootPromotedCleanupError, ActiveReblitBootReceiptPromotionError, ActiveReblitBootSyncCompletionError,
+    CleanedPromotedExactActiveReblitBootPublication, CompletedExactActiveReblitBootPublication,
     PromotedExactActiveReblitBootPublication,
 };

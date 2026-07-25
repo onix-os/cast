@@ -50,15 +50,14 @@ pub(crate) use store::{
     DeleteResidueRecoveryDurabilityBoundary, DeleteResidueRecoveryRevalidationBoundary,
     JournalDeleteDurabilityBoundary, JournalUpdateDurabilityBoundary, PublicBindingRevalidationBoundary,
     ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
-    arm_bound_advance_before_final_deadline_callback,
+    arm_bound_advance_before_final_deadline_callback, arm_bound_delete_private_name_callback,
     arm_delete_residue_recovery_durability_callback, arm_delete_residue_recovery_revalidation_callback,
-    arm_bound_delete_private_name_callback, arm_journal_delete_durability_callback,
-    arm_journal_update_durability_callback, arm_public_binding_revalidation_callback,
+    arm_journal_delete_durability_callback, arm_journal_update_durability_callback,
+    arm_public_binding_revalidation_callback, assert_bound_advance_before_expired_cleanup_callback_consumed,
+    assert_bound_advance_before_final_deadline_callback_consumed, assert_bound_delete_private_name_callback_consumed,
     assert_delete_residue_recovery_durability_callback_consumed,
     assert_delete_residue_recovery_revalidation_callback_consumed,
-    assert_bound_advance_before_expired_cleanup_callback_consumed,
-    assert_bound_advance_before_final_deadline_callback_consumed,
-    assert_bound_delete_private_name_callback_consumed, assert_public_binding_revalidation_callback_consumed,
+    assert_public_binding_revalidation_callback_consumed,
 };
 #[allow(unused_imports)] // consumed by the bound terminal-finalizer wiring slice
 pub(crate) use store::{
@@ -375,7 +374,9 @@ pub(crate) enum StorageError {
         #[source]
         source: io::Error,
     },
-    #[error("restore interrupted bound-delete residue `{name}` failed ({restore}) and exact state reconciliation also failed")]
+    #[error(
+        "restore interrupted bound-delete residue `{name}` failed ({restore}) and exact state reconciliation also failed"
+    )]
     RestoreDeleteResidueAndReconciliation {
         name: String,
         restore: io::Error,
@@ -390,10 +391,7 @@ pub(crate) enum StorageError {
         reconciliation: Box<StorageError>,
     },
     #[error("bound-delete journal inventory is not canonical (private={private_name}, entries={entries:?})")]
-    BoundDeleteEntrySetMismatch {
-        private_name: String,
-        entries: Vec<String>,
-    },
+    BoundDeleteEntrySetMismatch { private_name: String, entries: Vec<String> },
     #[error("delete canonical state-transition journal")]
     DeleteCanonical {
         #[source]

@@ -69,12 +69,7 @@ pub(in crate::client) fn persist_usr_rollback_activate_archived_complete_route_a
     let advance = match authority.advance_record_binding(&journal, &successor) {
         Ok(successor_binding) => {
             before_usr_rollback_activate_archived_complete_route_successor_binding_revalidation();
-            let exact = revalidate_published_route_binding(
-                &installation,
-                &journal,
-                &successor_binding,
-                &successor,
-            );
+            let exact = revalidate_published_route_binding(&installation, &journal, &successor_binding, &successor);
             match exact {
                 Ok(true) => UsrRollbackActivateArchivedCompleteRouteAdvanceOutcome::Published(successor_binding),
                 Ok(false) => {
@@ -91,11 +86,15 @@ pub(in crate::client) fn persist_usr_rollback_activate_archived_complete_route_a
         }
         Err(UsrRollbackActivateArchivedCompleteRouteRecordAdvanceError::Authority(source)) => {
             drop(journal);
-            return Err(UsrRollbackActivateArchivedCompleteRoutePersistenceError::Authority(source));
+            return Err(UsrRollbackActivateArchivedCompleteRoutePersistenceError::Authority(
+                source,
+            ));
         }
         Err(UsrRollbackActivateArchivedCompleteRouteRecordAdvanceError::Installation(source)) => {
             drop(journal);
-            return Err(UsrRollbackActivateArchivedCompleteRoutePersistenceError::Installation(source));
+            return Err(UsrRollbackActivateArchivedCompleteRoutePersistenceError::Installation(
+                source,
+            ));
         }
         Err(UsrRollbackActivateArchivedCompleteRouteRecordAdvanceError::Storage(source)) => {
             UsrRollbackActivateArchivedCompleteRouteAdvanceOutcome::StorageFailed(source)
@@ -114,12 +113,7 @@ pub(in crate::client) fn persist_usr_rollback_activate_archived_complete_route_a
     match advance {
         UsrRollbackActivateArchivedCompleteRouteAdvanceOutcome::Published(successor_binding) => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
-                let exact = revalidate_reopened_route_binding(
-                    &installation,
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                );
+                let exact = revalidate_reopened_route_binding(&installation, &reopened, &successor_binding, &successor);
                 drop(successor_binding);
                 match exact {
                     Ok(true) => Ok((reopened, successor)),

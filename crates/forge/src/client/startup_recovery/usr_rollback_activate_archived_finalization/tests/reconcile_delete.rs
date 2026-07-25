@@ -6,15 +6,14 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            UsrRollbackActivateArchivedFinalizationError,
-            arm_after_usr_rollback_activate_archived_finalization_delete,
+            UsrRollbackActivateArchivedFinalizationError, arm_after_usr_rollback_activate_archived_finalization_delete,
             finalize_usr_rollback_activate_archived,
         },
     },
     transition_journal::{
-        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
-        arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
-        assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
+        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState, arm_next_delete_canonical_unlink_fault,
+        arm_next_delete_directory_sync_fault, assert_delete_canonical_unlink_fault_consumed,
+        assert_delete_directory_sync_fault_consumed,
     },
 };
 
@@ -33,12 +32,10 @@ fn activate_archived_finalization_preserves_exact_source_bound_delete_error() {
     assert_delete_canonical_unlink_fault_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActivateArchivedFinalizationError::Delete(
-            TransitionJournalRecordDeleteError::Storage {
-                state: TransitionJournalRecordDeleteState::ExactSource,
-                ..
-            }
-        )
+        UsrRollbackActivateArchivedFinalizationError::Delete(TransitionJournalRecordDeleteError::Storage {
+            state: TransitionJournalRecordDeleteState::ExactSource,
+            ..
+        })
     ));
     assert_eq!(fixture.fixture.fixture.canonical_record(), fixture.terminal);
 }
@@ -56,15 +53,13 @@ fn activate_archived_finalization_preserves_absent_bound_delete_error() {
     assert_delete_directory_sync_fault_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActivateArchivedFinalizationError::Delete(
-            TransitionJournalRecordDeleteError::Storage {
-                state: TransitionJournalRecordDeleteState::Absent,
-                ..
-            }
-        )
+        UsrRollbackActivateArchivedFinalizationError::Delete(TransitionJournalRecordDeleteError::Storage {
+            state: TransitionJournalRecordDeleteState::Absent,
+            ..
+        })
     ));
-    assert!(!
-        fixture
+    assert!(
+        !fixture
             .fixture
             .fixture
             .installation

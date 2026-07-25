@@ -10,9 +10,7 @@ fn only_the_exact_boot_sync_started_predecessor_is_admitted() {
             .unwrap_err();
         assert!(matches!(
             error,
-            ActiveReblitBootPublicationReceiptError::InvalidPredecessor(
-                CodecError::IllegalPhaseAdvance { .. }
-            )
+            ActiveReblitBootPublicationReceiptError::InvalidPredecessor(CodecError::IllegalPhaseAdvance { .. })
         ));
     });
 }
@@ -46,17 +44,8 @@ fn provenance_claim_bindings_reject_a_same_length_permutation() {
         permuted.swap(0, 1);
 
         assert!(matches!(
-            plan.prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &permuted,
-            ),
-            Err(
-                ActiveReblitBootPublicationReceiptError::ProvenanceClaimBindingMismatch {
-                    index: 0
-                }
-            )
+            plan.prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &permuted,),
+            Err(ActiveReblitBootPublicationReceiptError::ProvenanceClaimBindingMismatch { index: 0 })
         ));
     });
 }

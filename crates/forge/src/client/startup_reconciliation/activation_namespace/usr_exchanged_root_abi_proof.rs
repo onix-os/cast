@@ -140,12 +140,7 @@ impl UsrExchangedRootAbiNamespaceProof {
 
         // This capture is deliberately unconditional. In particular, do not
         // use `?` on the publisher result before fresh semantic reconciliation.
-        let reconciliation = reconcile_after_publication(
-            &self.after,
-            installation,
-            journal,
-            expected,
-        );
+        let reconciliation = reconcile_after_publication(&self.after, installation, journal, expected);
         match (publication, reconciliation) {
             (Ok(published), Ok(completed)) if completed.root_abi().is_complete() => {
                 Ok(UsrExchangedRootAbiAppliedNamespace { published, completed })
@@ -159,11 +154,11 @@ impl UsrExchangedRootAbiNamespaceProof {
                     source: Box::new(publication),
                 })
             }
-            (Err(publication), Ok(_)) => {
-                Err(UsrExchangedRootAbiNamespaceError::PublicationFailedAfterCanonicalSubset {
+            (Err(publication), Ok(_)) => Err(
+                UsrExchangedRootAbiNamespaceError::PublicationFailedAfterCanonicalSubset {
                     source: Box::new(publication),
-                })
-            }
+                },
+            ),
             (Err(publication), Err(reconciliation)) => {
                 Err(UsrExchangedRootAbiNamespaceError::AmbiguousPublicationFailure {
                     publication: Box::new(publication),
@@ -197,15 +192,12 @@ impl UsrExchangedRootAbiNamespaceProof {
 
         // Reconcile even when sync failed; callers still fail-stop, but retain
         // a precise distinction between a stable complete set and ambiguity.
-        let reconciliation = reconcile_after_complete_sync(
-            &self.after,
-            installation,
-            journal,
-            expected,
-        );
+        let reconciliation = reconcile_after_complete_sync(&self.after, installation, journal, expected);
         match (sync, reconciliation) {
             (Ok(()), Ok(completed)) => Ok(UsrExchangedRootAbiDurableNamespace { completed }),
-            (Ok(()), Err(source)) => Err(UsrExchangedRootAbiNamespaceError::ReconciliationAfterCompleteSync(source)),
+            (Ok(()), Err(source)) => Err(UsrExchangedRootAbiNamespaceError::ReconciliationAfterCompleteSync(
+                source,
+            )),
             (Err(source), Ok(_)) => Err(UsrExchangedRootAbiNamespaceError::CompleteSyncFailed { source }),
             (Err(sync), Err(reconciliation)) => Err(UsrExchangedRootAbiNamespaceError::AmbiguousCompleteSyncFailure {
                 sync,

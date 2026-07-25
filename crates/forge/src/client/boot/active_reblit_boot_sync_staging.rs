@@ -22,8 +22,7 @@ use thiserror::Error;
 use crate::{
     Installation,
     boot_publication::{
-        BootPublicationReceiptFingerprint, BootPublicationReceiptPair,
-        CanonicalBootPublicationReceipt,
+        BootPublicationReceiptFingerprint, BootPublicationReceiptPair, CanonicalBootPublicationReceipt,
     },
     db::state::{
         BootPublicationReceiptStageOutcome, BootPublicationReceiptStateError,
@@ -31,22 +30,20 @@ use crate::{
     },
     installation,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
 use super::{
     Client, CoordinatorActiveStateReservation,
     active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
-    active_reblit_boot_publication_receipt::ActiveReblitBootPublicationReceiptError,
     active_reblit_boot_publication_preflight::ActiveReblitBootPublicationPreflightError,
+    active_reblit_boot_publication_receipt::ActiveReblitBootPublicationReceiptError,
     active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
     active_reblit_installed_boot_publication_delta::{
-        ActiveReblitBootPublicationDeltaError,
-        AuthenticatedActiveReblitInstalledBootPublication,
-        ClassifiedActiveReblitBootPublicationDelta,
-        PreparedActiveReblitBootPublicationDelta,
+        ActiveReblitBootPublicationDeltaError, AuthenticatedActiveReblitInstalledBootPublication,
+        ClassifiedActiveReblitBootPublicationDelta, PreparedActiveReblitBootPublicationDelta,
     },
 };
 
@@ -83,13 +80,7 @@ pub(in crate::client) struct StagedActiveReblitBootSync<'plan, 'inventory, Plan>
 /// Private fields prevent sibling components from manufacturing this view.
 /// It carries no destination descriptor and grants no publication, promotion,
 /// replacement, removal, or deletion authority.
-pub(in crate::client) struct FreshStagedActiveReblitBootSync<
-    'staged,
-    'client,
-    'plan,
-    'inventory,
-    Plan,
-> {
+pub(in crate::client) struct FreshStagedActiveReblitBootSync<'staged, 'client, 'plan, 'inventory, Plan> {
     staged: &'staged StagedActiveReblitBootSync<'plan, 'inventory, Plan>,
     _client: &'client Client,
 }
@@ -128,20 +119,11 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
         &'staged self,
         client: &'client Client,
     ) -> Result<
-        FreshStagedActiveReblitBootSync<
-            'staged,
-            'client,
-            'plan,
-            'inventory,
-            Plan,
-        >,
+        FreshStagedActiveReblitBootSync<'staged, 'client, 'plan, 'inventory, Plan>,
         ActiveReblitBootSyncFreshValidationError,
     > {
         if !self.database.same_instance(&client.state_db)
-            || !std::ptr::eq(
-                self.installation.root_directory(),
-                client.installation.root_directory(),
-            )
+            || !std::ptr::eq(self.installation.root_directory(), client.installation.root_directory())
         {
             return Err(ActiveReblitBootSyncFreshValidationError::ClientCapabilityMismatch);
         }
@@ -163,18 +145,12 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
     #[cfg(test)]
     pub(in crate::client) fn into_parts(
         self,
-    ) -> (
-        TransitionJournalStore,
-        TransitionRecord,
-        TransitionJournalRecordBinding,
-    ) {
+    ) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
         (self.journal, self.record, self.record_binding)
     }
 }
 
-impl<'plan, 'inventory, Plan>
-    FreshStagedActiveReblitBootSync<'_, '_, 'plan, 'inventory, Plan>
-{
+impl<'plan, 'inventory, Plan> FreshStagedActiveReblitBootSync<'_, '_, 'plan, 'inventory, Plan> {
     pub(in crate::client) const fn record(&self) -> &TransitionRecord {
         self.staged.record()
     }
@@ -191,25 +167,19 @@ impl<'plan, 'inventory, Plan>
         self.staged.plan
     }
 
-    pub(in crate::client) const fn inventory(
-        &self,
-    ) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(&self) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
         self.staged.inventory
     }
 
     /// Borrow the exact authenticated installed-versus-desired union retained
     /// at staging. This inert value grants no filesystem or cleanup authority.
-    pub(in crate::client) const fn prepared_delta(
-        &self,
-    ) -> &PreparedActiveReblitBootPublicationDelta {
+    pub(in crate::client) const fn prepared_delta(&self) -> &PreparedActiveReblitBootPublicationDelta {
         &self.staged.prepared_delta
     }
 
     /// Borrow the initial sealed live classification retained at staging.
     /// Later effect code must recapture and compare it before any mutation.
-    pub(in crate::client) const fn classified_delta(
-        &self,
-    ) -> &ClassifiedActiveReblitBootPublicationDelta {
+    pub(in crate::client) const fn classified_delta(&self) -> &ClassifiedActiveReblitBootPublicationDelta {
         &self.staged.classified_delta
     }
 }
@@ -246,14 +216,7 @@ impl Client {
         StagedActiveReblitBootSync<
             'plan,
             'inventory,
-            BoundActiveReblitBlsPublicationPlan<
-                'input,
-                'topology_view,
-                'topology_authority,
-                'attempt,
-                'stone,
-                'roots,
-            >,
+            BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
         >,
         ActiveReblitBootSyncStagingError,
     > {
@@ -299,14 +262,7 @@ fn stage_with_retained_stores<
     StagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     ActiveReblitBootSyncStagingError,
 > {
@@ -356,14 +312,7 @@ fn stage_with_retained_stores_and_reservation<
     StagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     ActiveReblitBootSyncStagingError,
 > {
@@ -388,12 +337,8 @@ fn stage_with_retained_stores_and_reservation<
         .load_current_exact_promoted_boot_publication_receipt_chain()
         .map_err(ActiveReblitBootSyncStagingError::CurrentInstalledChain)?;
     let installed =
-        AuthenticatedActiveReblitInstalledBootPublication::from_current_exact_promoted_chain(
-            &current_chain,
-        );
-    let committed_predecessor = installed
-        .receipt()
-        .map(CanonicalBootPublicationReceipt::fingerprint);
+        AuthenticatedActiveReblitInstalledBootPublication::from_current_exact_promoted_chain(&current_chain);
+    let committed_predecessor = installed.receipt().map(CanonicalBootPublicationReceipt::fingerprint);
     let prepared_delta = plan
         .prepare_installed_boot_publication_delta(inventory, installed)
         .map_err(ActiveReblitBootSyncStagingError::DeltaPreparation)?;
@@ -407,12 +352,7 @@ fn stage_with_retained_stores_and_reservation<
         .derive_receipt_provenance_claims(inventory)
         .map_err(ActiveReblitBootSyncStagingError::ReceiptClaimDerivation)?;
     let receipt = plan
-        .prepare_complete_boot_publication_receipt(
-            inventory,
-            &predecessor,
-            committed_predecessor,
-            &provenance_claims,
-        )
+        .prepare_complete_boot_publication_receipt(inventory, &predecessor, committed_predecessor, &provenance_claims)
         .map_err(ActiveReblitBootSyncStagingError::ReceiptMapping)?;
     let pair = receipt_pair(&receipt);
     let successor = exact_successor(&predecessor, pair)?;
@@ -435,9 +375,7 @@ fn stage_with_retained_stores_and_reservation<
             && pending.body() == receipt.body()
             && pending.canonical_body() == receipt.canonical_body()
     });
-    if rederivation_state.receipt_pair_for(receipt.body().transition_id()) != Some(pair)
-        || !exact_pending
-    {
+    if rederivation_state.receipt_pair_for(receipt.body().transition_id()) != Some(pair) || !exact_pending {
         return Err(ActiveReblitBootSyncStagingError::DatabaseRevalidation(
             ActiveReblitBootSyncReceiptStateError::Mismatch,
         ));
@@ -507,12 +445,9 @@ fn stage_with_retained_stores_and_reservation<
                         &rederived,
                         pair,
                     ) {
-                        Ok(durable) => Err(
-                            ActiveReblitBootSyncStagingError::PostAdvanceValidation {
-                                durable,
-                                validation,
-                            },
-                        ),
+                        Ok(durable) => {
+                            Err(ActiveReblitBootSyncStagingError::PostAdvanceValidation { durable, validation })
+                        }
                         Err(reconciliation) => Err(
                             ActiveReblitBootSyncStagingError::PostAdvanceValidationAndReconciliation {
                                 validation,
@@ -532,16 +467,11 @@ fn stage_with_retained_stores_and_reservation<
             &rederived,
             pair,
         ) {
-            Ok(durable) => Err(ActiveReblitBootSyncStagingError::JournalAdvance {
-                durable,
-                source,
+            Ok(durable) => Err(ActiveReblitBootSyncStagingError::JournalAdvance { durable, source }),
+            Err(reconciliation) => Err(ActiveReblitBootSyncStagingError::JournalAdvanceAndReconciliation {
+                advance: source,
+                reconciliation,
             }),
-            Err(reconciliation) => {
-                Err(ActiveReblitBootSyncStagingError::JournalAdvanceAndReconciliation {
-                    advance: source,
-                    reconciliation,
-                })
-            }
         },
     }
 }
@@ -553,9 +483,7 @@ fn receipt_pair(receipt: &CanonicalBootPublicationReceipt) -> BootPublicationRec
     }
 }
 
-fn require_active_reblit_predecessor(
-    predecessor: &TransitionRecord,
-) -> Result<(), ActiveReblitBootSyncStagingError> {
+fn require_active_reblit_predecessor(predecessor: &TransitionRecord) -> Result<(), ActiveReblitBootSyncStagingError> {
     if predecessor.operation != Operation::ActiveReblit {
         return Err(ActiveReblitBootSyncStagingError::WrongOperation {
             actual: predecessor.operation,
@@ -691,12 +619,8 @@ fn reconcile_journal(
         .load_revalidated_retained_cast(cast)
         .map_err(ActiveReblitBootSyncReconciliationError::Load)?;
     let (durable, expected) = match actual {
-        Some(ref actual) if actual == predecessor => {
-            (DurableActiveReblitBootSyncRecord::Predecessor, predecessor)
-        }
-        Some(ref actual) if actual == successor => {
-            (DurableActiveReblitBootSyncRecord::BootSyncStarted, successor)
-        }
+        Some(ref actual) if actual == predecessor => (DurableActiveReblitBootSyncRecord::Predecessor, predecessor),
+        Some(ref actual) if actual == successor => (DurableActiveReblitBootSyncRecord::BootSyncStarted, successor),
         actual => {
             return Err(ActiveReblitBootSyncReconciliationError::UnexpectedRecord {
                 actual: actual.map(Box::new),
@@ -727,9 +651,7 @@ fn reconcile_journal(
     Ok(durable)
 }
 
-fn require_mutable_namespace(
-    installation: &Installation,
-) -> Result<(), ActiveReblitBootSyncStagingError> {
+fn require_mutable_namespace(installation: &Installation) -> Result<(), ActiveReblitBootSyncStagingError> {
     installation
         .revalidate_mutable_namespace()
         .map_err(ActiveReblitBootSyncStagingError::Installation)
@@ -916,9 +838,7 @@ pub(in crate::client) enum ActiveReblitBootSyncReconciliationError {
     #[error("load the exact canonical journal record after a fail-stop boundary")]
     Load(#[source] StorageError),
     #[error("journal reopen found neither the exact predecessor nor exact successor")]
-    UnexpectedRecord {
-        actual: Option<Box<TransitionRecord>>,
-    },
+    UnexpectedRecord { actual: Option<Box<TransitionRecord>> },
     #[error("bind the reconciled canonical journal record")]
     Bind(#[source] StorageError),
     #[error("the reconciled canonical journal binding changed")]
@@ -929,11 +849,11 @@ pub(in crate::client) enum ActiveReblitBootSyncReconciliationError {
 
 #[path = "active_reblit_boot_sync_staging/coordinator_handoff.rs"]
 mod coordinator_handoff;
+#[allow(unused_imports)] // returned by the intentionally unwired coordinator entry
+pub(in crate::client) use coordinator_handoff::ActiveReblitCoordinatorBootSyncStagingError;
 pub(crate) use coordinator_handoff::CoordinatorActiveReblitBootSyncHandoff;
 #[cfg(test)]
 pub(in crate::client) use coordinator_handoff::stage_active_reblit_boot_sync_from_handoff_for_test;
-#[allow(unused_imports)] // returned by the intentionally unwired coordinator entry
-pub(in crate::client) use coordinator_handoff::ActiveReblitCoordinatorBootSyncStagingError;
 
 #[path = "active_reblit_boot_sync_staging/immutable_publication_attempt.rs"]
 mod immutable_publication_attempt;
@@ -944,29 +864,21 @@ pub(in crate::client) use promoted_receipt_validation::ActiveReblitBootSyncPromo
 
 #[path = "active_reblit_boot_sync_staging/boot_sync_complete_persistence.rs"]
 mod boot_sync_complete_persistence;
-#[allow(unused_imports)] // fresh completed view is consumed by the later commit-coordination slice
-pub(in crate::client) use boot_sync_complete_persistence::{
-    ActiveReblitBootSyncCompletePersistenceError,
-    ActiveReblitBootSyncCompleteValidationError,
-    ActiveReblitBootSyncCompletionReconciliationError,
-    CompleteStagedActiveReblitFinalizationError,
-    CommitCleanupCompleteStagedActiveReblitCompleteError,
-    CommitCleanupCompleteStagedActiveReblitBootSync,
-    CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
-    CommittedStagedActiveReblitBootSync,
-    CommittedStagedActiveReblitBootSyncValidationError,
-    CommittedStagedActiveReblitCommitCleanupError,
-    CompleteStagedActiveReblitBootSync,
-    CompleteStagedActiveReblitBootSyncValidationError,
-    CompletedStagedActiveReblitCommitDecisionError,
-    CompletedStagedActiveReblitBootSync,
-    DurableActiveReblitBootSyncCompletionRecord,
-    FreshCompletedStagedActiveReblitBootSync,
-    FinalizedStagedActiveReblitBootSync,
-    FinalizedStagedActiveReblitBootSyncValidationError,
-};
 #[cfg(test)]
 pub(in crate::client) use boot_sync_complete_persistence::arm_before_completion_journal_reopen;
+#[allow(unused_imports)] // fresh completed view is consumed by the later commit-coordination slice
+pub(in crate::client) use boot_sync_complete_persistence::{
+    ActiveReblitBootSyncCompletePersistenceError, ActiveReblitBootSyncCompleteValidationError,
+    ActiveReblitBootSyncCompletionReconciliationError, CommitCleanupCompleteStagedActiveReblitBootSync,
+    CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
+    CommitCleanupCompleteStagedActiveReblitCompleteError, CommittedStagedActiveReblitBootSync,
+    CommittedStagedActiveReblitBootSyncValidationError, CommittedStagedActiveReblitCommitCleanupError,
+    CompleteStagedActiveReblitBootSync, CompleteStagedActiveReblitBootSyncValidationError,
+    CompleteStagedActiveReblitFinalizationError, CompletedStagedActiveReblitBootSync,
+    CompletedStagedActiveReblitCommitDecisionError, DurableActiveReblitBootSyncCompletionRecord,
+    FinalizedStagedActiveReblitBootSync, FinalizedStagedActiveReblitBootSyncValidationError,
+    FreshCompletedStagedActiveReblitBootSync,
+};
 
 #[cfg(test)]
 #[path = "active_reblit_boot_sync_staging_tests.rs"]

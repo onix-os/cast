@@ -19,13 +19,12 @@ use crate::{
     state::{self, Selection, TransitionId},
 };
 
+use super::super::{CandidateMetadataError, CandidateMetadataOutputs, StatefulTreeIdentity};
 use super::{
     NewStatePrevious, PreparedStatefulTransitionCoordinator, StatefulTransitionRequest,
-    SystemTriggersCompleteCoordinator,
-    system_triggers::StatefulSystemTriggerAuthority,
+    SystemTriggersCompleteCoordinator, system_triggers::StatefulSystemTriggerAuthority,
     transaction_triggers::StatefulTransactionTriggerAuthority,
 };
-use super::super::{CandidateMetadataError, CandidateMetadataOutputs, StatefulTreeIdentity};
 
 type BoxedForwardError = Box<dyn StdError + Send + Sync + 'static>;
 
@@ -97,9 +96,7 @@ impl<'authority> NewStateTransactionTriggerView<'authority> {
         (self.candidate_usr, self.candidate_usr_path)
     }
 
-    pub(crate) const fn retained_isolation_root(
-        &self,
-    ) -> (&'authority Installation, &'authority RetainedRootAbi) {
+    pub(crate) const fn retained_isolation_root(&self) -> (&'authority Installation, &'authority RetainedRootAbi) {
         (self.installation, self.isolation_root)
     }
 }
@@ -138,11 +135,7 @@ impl<'authority> NewStateSystemTriggerView<'authority> {
 
     pub(crate) const fn retained_view(
         &self,
-    ) -> (
-        &'authority Installation,
-        &'authority File,
-        &'authority RetainedRootAbi,
-    ) {
+    ) -> (&'authority Installation, &'authority File, &'authority RetainedRootAbi) {
         (self.installation, self.candidate_usr, self.isolation_root)
     }
 }
@@ -157,13 +150,7 @@ impl<'authority> NewStateSystemTriggerView<'authority> {
 /// mandatory. Boot applicability remains a caller decision made before the
 /// first journal record is created.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn execute_new_state_forward<
-    TxError,
-    SystemError,
-    DeriveMetadata,
-    TransactionTrigger,
-    SystemTrigger,
->(
+pub(crate) fn execute_new_state_forward<TxError, SystemError, DeriveMetadata, TransactionTrigger, SystemTrigger>(
     identity: StatefulTreeIdentity,
     authority: JournalUsrExchangeAuthority,
     database: &db::state::Database,
@@ -179,8 +166,7 @@ where
     TxError: StdError + Send + Sync + 'static,
     SystemError: StdError + Send + Sync + 'static,
     DeriveMetadata: FnOnce(Option<&[u8]>) -> Result<CandidateMetadataOutputs, CandidateMetadataError>,
-    TransactionTrigger:
-        for<'authority> FnOnce(NewStateTransactionTriggerView<'authority>) -> Result<(), TxError>,
+    TransactionTrigger: for<'authority> FnOnce(NewStateTransactionTriggerView<'authority>) -> Result<(), TxError>,
     SystemTrigger: for<'authority> FnOnce(NewStateSystemTriggerView<'authority>) -> Result<(), SystemError>,
 {
     let coordinator = identity
@@ -222,9 +208,7 @@ where
         .prepare_for_transaction_triggers(authority.installation())
         .map_err(|source| NewStateForwardError::at("transaction isolation publication", source))?;
     let complete = prepared
-        .run_transaction_triggers(|inner| {
-            transaction_trigger(NewStateTransactionTriggerView::from_authority(inner))
-        })
+        .run_transaction_triggers(|inner| transaction_trigger(NewStateTransactionTriggerView::from_authority(inner)))
         .map_err(|source| NewStateForwardError::at("transaction triggers", source))?;
     let intent = complete
         .begin_usr_exchange_intent()
@@ -236,9 +220,7 @@ where
         .publish_root_abi()
         .map_err(|source| NewStateForwardError::at("root ABI publication", source))?;
     let complete = root_links
-        .run_system_triggers(|inner| {
-            system_trigger(NewStateSystemTriggerView::from_authority(inner))
-        })
+        .run_system_triggers(|inner| system_trigger(NewStateSystemTriggerView::from_authority(inner)))
         .map_err(|source| NewStateForwardError::at("system triggers", source))?;
     Ok((complete, allocated))
 }

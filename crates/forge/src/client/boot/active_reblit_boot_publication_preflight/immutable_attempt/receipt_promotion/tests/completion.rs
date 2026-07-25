@@ -8,33 +8,24 @@ use std::{
 use super::*;
 use crate::{
     client::{
+        CoordinatorActiveStateReservation,
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_boot_publication_preflight::ActiveReblitBootPublicationPreflightError,
         active_reblit_boot_sync_staging::{
-            ActiveReblitBootSyncCompletePersistenceError,
-            ActiveReblitBootSyncCompleteValidationError,
-            ActiveReblitBootSyncCompletionReconciliationError,
-            ActiveReblitBootSyncPromotedValidationError,
-            DurableActiveReblitBootSyncCompletionRecord,
-            arm_before_completion_journal_reopen,
+            ActiveReblitBootSyncCompletePersistenceError, ActiveReblitBootSyncCompleteValidationError,
+            ActiveReblitBootSyncCompletionReconciliationError, ActiveReblitBootSyncPromotedValidationError,
+            DurableActiveReblitBootSyncCompletionRecord, arm_before_completion_journal_reopen,
         },
-        CoordinatorActiveStateReservation,
     },
     db::state::BootPublicationReceiptPromotionError,
     linux_fs::descriptor_boot_namespace::BootNamespaceDestinationState,
     transition_journal::{
-        PublicBindingRevalidationBoundary, TransitionJournalStore,
-        arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
-        arm_next_update_exchange_fault,
-        arm_next_update_final_directory_sync_fault,
-        arm_next_update_first_directory_sync_fault,
-        arm_public_binding_revalidation_callback,
-        assert_displaced_unlink_fault_consumed,
-        assert_public_binding_revalidation_callback_consumed,
-        assert_temporary_sync_fault_consumed,
-        assert_update_exchange_fault_consumed,
-        assert_update_final_directory_sync_fault_consumed,
-        assert_update_first_directory_sync_fault_consumed, encode,
+        PublicBindingRevalidationBoundary, TransitionJournalStore, arm_next_displaced_unlink_fault,
+        arm_next_temporary_sync_fault, arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
+        arm_next_update_first_directory_sync_fault, arm_public_binding_revalidation_callback,
+        assert_displaced_unlink_fault_consumed, assert_public_binding_revalidation_callback_consumed,
+        assert_temporary_sync_fault_consumed, assert_update_exchange_fault_consumed,
+        assert_update_final_directory_sync_fault_consumed, assert_update_first_directory_sync_fault_consumed, encode,
     },
 };
 
@@ -78,11 +69,7 @@ fn canonical_journal(installation: &Installation) -> PathBuf {
 
 fn load_journal_record(installation: &Installation) -> TransitionRecord {
     let cast = installation.retained_mutable_cast_directory().unwrap();
-    let journal = TransitionJournalStore::open_in_retained_cast(
-        cast,
-        &installation.root,
-    )
-    .unwrap();
+    let journal = TransitionJournalStore::open_in_retained_cast(cast, &installation.root).unwrap();
     journal
         .load_revalidated_retained_cast(cast)
         .unwrap()
@@ -114,10 +101,7 @@ fn replace_file_identity(canonical: &Path, displaced: &Path) {
     fs::remove_file(displaced).unwrap();
 }
 
-fn first_output_path(
-    plan: &impl CompletionTestPlan,
-    publication_root: &Path,
-) -> PathBuf {
+fn first_output_path(plan: &impl CompletionTestPlan, publication_root: &Path) -> PathBuf {
     publication_root.join(plan.first_relative_path())
 }
 
@@ -125,16 +109,8 @@ trait CompletionTestPlan {
     fn first_relative_path(&self) -> &Path;
 }
 
-impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
-    CompletionTestPlan
-    for BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots> CompletionTestPlan
+    for BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 {
     fn first_relative_path(&self) -> &Path {
         self.outputs()
@@ -152,18 +128,18 @@ fn assert_no_legacy_boot_effect() {
     assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
 }
 
-#[path = "completion/success.rs"]
-mod success;
-#[path = "completion/deadline.rs"]
-mod deadline;
-#[path = "completion/reconciliation.rs"]
-mod reconciliation;
-#[path = "completion/drift.rs"]
-mod drift;
-#[path = "completion/commit_decision.rs"]
-mod commit_decision;
 #[path = "completion/commit_cleanup.rs"]
 mod commit_cleanup;
+#[path = "completion/commit_decision.rs"]
+mod commit_decision;
+#[path = "completion/deadline.rs"]
+mod deadline;
+#[path = "completion/drift.rs"]
+mod drift;
+#[path = "completion/reconciliation.rs"]
+mod reconciliation;
+#[path = "completion/success.rs"]
+mod success;
 
 const EXPECTED_BEHAVIORAL_SCENARIO_COUNT: usize = 44;
 

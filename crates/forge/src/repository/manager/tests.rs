@@ -285,11 +285,7 @@ fn read_only_installation_rejects_repository_cache_without_weakening_ownership()
 #[test]
 fn config_manager_preserves_repository_fragment_precedence() {
     let config_directory = tempfile::tempdir().unwrap();
-    fs::set_permissions(
-        config_directory.path(),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
+    fs::set_permissions(config_directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let fragments = config_directory.path().join("repo.d");
     fs::create_dir_all(&fragments).unwrap();
     fs::write(
@@ -308,15 +304,8 @@ cast.repositories [cast.repository.direct "selected" "file:///z.index"]
     .unwrap();
 
     let (_root, installation) = test_installation();
-    let manager = Manager::with_config_manager(
-        config::Manager::custom(config_directory.path()),
-        installation,
-    )
-    .unwrap();
-    let selected = manager
-        .repositories
-        .get(&repository::Id::new("selected"))
-        .unwrap();
+    let manager = Manager::with_config_manager(config::Manager::custom(config_directory.path()), installation).unwrap();
+    let selected = manager.repositories.get(&repository::Id::new("selected")).unwrap();
     let repository::Source::DirectIndex(uri) = &selected.repository.source else {
         panic!("expected direct repository source");
     };
@@ -327,11 +316,7 @@ cast.repositories [cast.repository.direct "selected" "file:///z.index"]
 #[test]
 fn config_manager_loads_a_lua_repository_fragment_by_extension() {
     let config_directory = tempfile::tempdir().unwrap();
-    fs::set_permissions(
-        config_directory.path(),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
+    fs::set_permissions(config_directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let fragments = config_directory.path().join("repo.d");
     fs::create_dir_all(&fragments).unwrap();
     fs::write(
@@ -351,15 +336,8 @@ return {
     .unwrap();
 
     let (_root, installation) = test_installation();
-    let manager = Manager::with_config_manager(
-        config::Manager::custom(config_directory.path()),
-        installation,
-    )
-    .unwrap();
-    let selected = manager
-        .repositories
-        .get(&repository::Id::new("lua-main"))
-        .unwrap();
+    let manager = Manager::with_config_manager(config::Manager::custom(config_directory.path()), installation).unwrap();
+    let selected = manager.repositories.get(&repository::Id::new("lua-main")).unwrap();
     let repository::Source::DirectIndex(uri) = &selected.repository.source else {
         panic!("expected direct repository source");
     };
@@ -384,10 +362,11 @@ fn a_repository_store_switches_generated_authority_from_gluon_to_lua() {
         repository::Map,
     >>::language_spec(&gluon)
     .clone();
-    let lua_language = <repository::RepositoryEvaluator as declarative_config::DeclarationEvaluator<
-        repository::Map,
-    >>::language_spec(&lua)
-    .clone();
+    let lua_language =
+        <repository::RepositoryEvaluator as declarative_config::DeclarationEvaluator<repository::Map>>::language_spec(
+            &lua,
+        )
+        .clone();
 
     // Establish a generated Gluon authority for the store.
     let glu_path = config
@@ -422,19 +401,21 @@ fn config_manager_admits_only_registered_declaration_languages() {
     let fragments = config_directory.path().join("repo.d");
     fs::create_dir_all(&fragments).unwrap();
     for (name, body) in [
-        ("main.yaml", "- id: yaml-repo\n  source: {direct_index: {uri: 'file:///y.index'}}\n"),
-        ("main.kdl", "repository \"kdl-repo\" { direct_index \"file:///k.index\" }\n"),
+        (
+            "main.yaml",
+            "- id: yaml-repo\n  source: {direct_index: {uri: 'file:///y.index'}}\n",
+        ),
+        (
+            "main.kdl",
+            "repository \"kdl-repo\" { direct_index \"file:///k.index\" }\n",
+        ),
         ("main.json", "[{\"id\":\"json-repo\"}]\n"),
     ] {
         fs::write(fragments.join(name), body).unwrap();
     }
 
     let (_root, installation) = test_installation();
-    let manager = Manager::with_config_manager(
-        config::Manager::custom(config_directory.path()),
-        installation,
-    )
-    .unwrap();
+    let manager = Manager::with_config_manager(config::Manager::custom(config_directory.path()), installation).unwrap();
 
     // None of the unregistered-extension fragments produced a repository.
     assert_eq!(manager.repositories.iter().count(), 0);

@@ -20,21 +20,16 @@ use crate::{
         Client,
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_boot_sync_staging::{
-            ActiveReblitBootSyncFreshValidationError,
-            ActiveReblitBootSyncPromotedValidationError,
+            ActiveReblitBootSyncFreshValidationError, ActiveReblitBootSyncPromotedValidationError,
         },
     },
     db::state::{
-        BootPublicationReceiptPromotionDurableState,
-        BootPublicationReceiptPromotionError,
+        BootPublicationReceiptPromotionDurableState, BootPublicationReceiptPromotionError,
         BootPublicationReceiptPromotionOutcome,
     },
 };
 
-use super::{
-    StagedExactActiveReblitBootPublication,
-    ValidatedActiveReblitBootPublicationEffect,
-};
+use super::{StagedExactActiveReblitBootPublication, ValidatedActiveReblitBootPublicationEffect};
 use replacement_pair_validation::validate_applied_replacement_pairs;
 use terminal_evidence::validate_exact_terminal_evidence_snapshot;
 
@@ -97,9 +92,7 @@ pub(in crate::client) struct CleanedPromotedExactActiveReblitBootPublication<
     >,
 }
 
-impl std::fmt::Debug
-    for PromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for PromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PromotedExactActiveReblitBootPublication")
@@ -115,15 +108,11 @@ impl std::fmt::Debug
 }
 
 impl PromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.terminal.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn database_outcome(
-        &self,
-    ) -> BootPublicationReceiptPromotionOutcome {
+    pub(in crate::client) const fn database_outcome(&self) -> BootPublicationReceiptPromotionOutcome {
         self.database_outcome
     }
 
@@ -152,9 +141,7 @@ impl PromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
     }
 }
 
-impl std::fmt::Debug
-    for CleanedPromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for CleanedPromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CleanedPromotedExactActiveReblitBootPublication")
@@ -171,15 +158,11 @@ impl std::fmt::Debug
 }
 
 impl CleanedPromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.promoted.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn database_outcome(
-        &self,
-    ) -> BootPublicationReceiptPromotionOutcome {
+    pub(in crate::client) const fn database_outcome(&self) -> BootPublicationReceiptPromotionOutcome {
         self.promoted.database_outcome()
     }
 
@@ -204,16 +187,7 @@ impl CleanedPromotedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_,
     }
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     PromotedExactActiveReblitBootPublication<
         'plan,
         'inventory,
@@ -308,9 +282,7 @@ impl ActiveReblitBootReceiptPromotionError {
     ///
     /// A database-call error can instead report only the reconciled durable
     /// receipt state; use [`Self::durable_receipt_state`] for that distinction.
-    pub(in crate::client) const fn durable_promotion_outcome(
-        &self,
-    ) -> Option<BootPublicationReceiptPromotionOutcome> {
+    pub(in crate::client) const fn durable_promotion_outcome(&self) -> Option<BootPublicationReceiptPromotionOutcome> {
         match self {
             Self::PostPromotion { outcome, .. } => Some(*outcome),
             _ => None,
@@ -324,13 +296,9 @@ impl ActiveReblitBootReceiptPromotionError {
     /// successful invocation outcome. Both an ordinary successful DB return
     /// followed by validation failure and a reconciled commit-report error may
     /// prove only that the exact receipt is durably promoted.
-    pub(in crate::client) const fn durable_receipt_state(
-        &self,
-    ) -> Option<BootPublicationReceiptPromotionDurableState> {
+    pub(in crate::client) const fn durable_receipt_state(&self) -> Option<BootPublicationReceiptPromotionDurableState> {
         match self {
-            Self::PostPromotion { .. } => {
-                Some(BootPublicationReceiptPromotionDurableState::Promoted)
-            }
+            Self::PostPromotion { .. } => Some(BootPublicationReceiptPromotionDurableState::Promoted),
             Self::DatabasePromotion(
                 BootPublicationReceiptPromotionError::PostCommitDurableState { durable }
                 | BootPublicationReceiptPromotionError::CommitReport { durable, .. },
@@ -346,16 +314,7 @@ enum InitiallyAdmittedReceiptState {
     Promoted,
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     StagedExactActiveReblitBootPublication<
         'plan,
         'inventory,
@@ -398,10 +357,7 @@ where
             Err(pending) => match self.staged.revalidate_promoted_against(client) {
                 Ok(fresh) => (InitiallyAdmittedReceiptState::Promoted, fresh.plan()),
                 Err(promoted) => {
-                    return Err(ActiveReblitBootReceiptPromotionError::InitialAdmission {
-                        pending,
-                        promoted,
-                    });
+                    return Err(ActiveReblitBootReceiptPromotionError::InitialAdmission { pending, promoted });
                 }
             },
         };
@@ -429,9 +385,7 @@ where
                 let fresh = self
                     .staged
                     .revalidate_promoted_against(client)
-                    .map_err(
-                        ActiveReblitBootReceiptPromotionError::PrePromotionAlreadyPromoted,
-                    )?;
+                    .map_err(ActiveReblitBootReceiptPromotionError::PrePromotionAlreadyPromoted)?;
                 if !std::ptr::eq(fresh.plan(), plan) {
                     return Err(ActiveReblitBootReceiptPromotionError::PlanMismatch {
                         checkpoint: "immediate promoted receipt revalidation",
@@ -481,28 +435,18 @@ where
         self.validate_exact_terminal_evidence(plan, checkpoint)
             .map_err(|source| ActiveReblitBootReceiptPromotionError::PostPromotion {
                 outcome,
-                source: ActiveReblitBootPostPromotionValidationError::TerminalEvidence {
-                    checkpoint,
-                    source,
-                },
+                source: ActiveReblitBootPostPromotionValidationError::TerminalEvidence { checkpoint, source },
             })?;
-        let fresh = self
-            .staged
-            .revalidate_promoted_against(client)
-            .map_err(|source| ActiveReblitBootReceiptPromotionError::PostPromotion {
+        let fresh = self.staged.revalidate_promoted_against(client).map_err(|source| {
+            ActiveReblitBootReceiptPromotionError::PostPromotion {
                 outcome,
-                source:
-                    ActiveReblitBootPostPromotionValidationError::PromotedStagedEvidence {
-                        checkpoint,
-                        source,
-                    },
-            })?;
+                source: ActiveReblitBootPostPromotionValidationError::PromotedStagedEvidence { checkpoint, source },
+            }
+        })?;
         if !std::ptr::eq(fresh.plan(), plan) {
             return Err(ActiveReblitBootReceiptPromotionError::PostPromotion {
                 outcome,
-                source: ActiveReblitBootPostPromotionValidationError::PlanMismatch {
-                    checkpoint,
-                },
+                source: ActiveReblitBootPostPromotionValidationError::PlanMismatch { checkpoint },
             });
         }
         Ok(())
@@ -540,16 +484,10 @@ fn require_deadline(
 ) -> Result<(), ActiveReblitBootTerminalEvidenceValidationError> {
     #[cfg(test)]
     if FORCE_EXPIRED_DEADLINE.with(|forced| forced.replace(false)) {
-        return Err(ActiveReblitBootTerminalEvidenceValidationError::DeadlineExceeded {
-            checkpoint,
-            deadline,
-        });
+        return Err(ActiveReblitBootTerminalEvidenceValidationError::DeadlineExceeded { checkpoint, deadline });
     }
     if Instant::now() > deadline {
-        Err(ActiveReblitBootTerminalEvidenceValidationError::DeadlineExceeded {
-            checkpoint,
-            deadline,
-        })
+        Err(ActiveReblitBootTerminalEvidenceValidationError::DeadlineExceeded { checkpoint, deadline })
     } else {
         Ok(())
     }
@@ -586,9 +524,7 @@ pub(super) fn arm_before_fresh_admission(callback: impl FnOnce() + 'static) {
 }
 
 #[cfg(test)]
-pub(super) fn arm_before_immediate_pre_promotion_terminal_check(
-    callback: impl FnOnce() + 'static,
-) {
+pub(super) fn arm_before_immediate_pre_promotion_terminal_check(callback: impl FnOnce() + 'static) {
     arm_callback(&BEFORE_IMMEDIATE_PRE_PROMOTION_TERMINAL_CHECK, callback);
 }
 
@@ -615,9 +551,7 @@ pub(super) fn arm_expired_deadline() {
 }
 
 #[cfg(test)]
-fn run_callback(
-    slot: &'static std::thread::LocalKey<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>,
-) {
+fn run_callback(slot: &'static std::thread::LocalKey<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>) {
     slot.with(|slot| {
         if let Some(callback) = slot.borrow_mut().take() {
             callback();
@@ -678,31 +612,18 @@ pub(in crate::client) use promoted_cleanup::ActiveReblitBootPromotedCleanupError
 #[path = "receipt_promotion/boot_sync_completion.rs"]
 mod boot_sync_completion;
 pub(in crate::client) use boot_sync_completion::{
-    ActiveReblitBootCompleteError,
-    ActiveReblitBootCompleteHandoff,
-    ActiveReblitBootCompletePostAdvanceError,
-    ActiveReblitBootCommitCleanupCompleteHandoff,
-    ActiveReblitBootFinalizationError,
-    ActiveReblitBootFinalizedHandoff,
-    ActiveReblitBootCommitCleanupError,
-    ActiveReblitBootCommitCleanupPostAdvanceError,
-    ActiveReblitBootCommitDecisionError,
-    ActiveReblitBootCommitDecisionFinalValidation,
-    ActiveReblitBootCommitDecisionHandoff,
-    ActiveReblitBootPostCompletionValidationError,
-    ActiveReblitBootSyncCompletionError,
-    CompletedExactActiveReblitBootPublication,
+    ActiveReblitBootCommitCleanupCompleteHandoff, ActiveReblitBootCommitCleanupError,
+    ActiveReblitBootCommitCleanupPostAdvanceError, ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation, ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootCompleteError, ActiveReblitBootCompleteHandoff, ActiveReblitBootCompletePostAdvanceError,
+    ActiveReblitBootFinalizationError, ActiveReblitBootFinalizedHandoff, ActiveReblitBootPostCompletionValidationError,
+    ActiveReblitBootSyncCompletionError, CompletedExactActiveReblitBootPublication,
 };
 #[cfg(test)]
 pub(super) use boot_sync_completion::{
-    arm_after_active_reblit_commit_decision_terminal_validation,
-    arm_after_boot_sync_complete_persistence,
-    arm_after_initial_completion_handoff,
-    arm_before_completion_deadline,
-    arm_before_final_completion_validation,
-    assert_after_boot_sync_complete_persistence_hook_consumed,
-    assert_after_initial_completion_handoff_hook_consumed,
-    assert_before_completion_deadline_hook_consumed,
-    assert_before_final_completion_validation_hook_consumed,
+    arm_after_active_reblit_commit_decision_terminal_validation, arm_after_boot_sync_complete_persistence,
+    arm_after_initial_completion_handoff, arm_before_completion_deadline, arm_before_final_completion_validation,
     assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed,
+    assert_after_boot_sync_complete_persistence_hook_consumed, assert_after_initial_completion_handoff_hook_consumed,
+    assert_before_completion_deadline_hook_consumed, assert_before_final_completion_validation_hook_consumed,
 };

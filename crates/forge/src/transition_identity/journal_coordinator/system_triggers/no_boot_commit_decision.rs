@@ -6,22 +6,22 @@
 use thiserror::Error;
 
 use crate::{
+    Installation,
     client::{
-        ActiveReblitNoBootTailError, CoordinatorActiveStateReservation,
-        FinalizedActiveReblitNoBoot, finish_active_reblit_no_boot,
+        ActiveReblitNoBootTailError, CoordinatorActiveStateReservation, FinalizedActiveReblitNoBoot,
+        finish_active_reblit_no_boot,
     },
     db,
-    Installation,
     state::TransitionId,
     transition_identity::StatefulTreeIdentity,
     transition_journal::{Operation, Phase, TransitionJournalStore, TransitionRecord},
 };
 
-use super::{
-    BoundSystemTriggerAdvanceFailure, SystemTriggersCompleteCoordinator,
-    advance_bound_system_trigger_record, require_system_trigger_same_store_evidence,
-};
 use super::super::{StatefulTransitionCoordinator, StatefulTransitionCoordinatorError};
+use super::{
+    BoundSystemTriggerAdvanceFailure, SystemTriggersCompleteCoordinator, advance_bound_system_trigger_record,
+    require_system_trigger_same_store_evidence,
+};
 
 const COMMIT_ACTIVE_REBLIT_WITHOUT_BOOT: &str = "commit active reblit without boot synchronization";
 
@@ -42,7 +42,9 @@ pub(in crate::transition_identity::journal_coordinator) struct ActiveReblitNoBoo
 
 #[derive(Debug, Error)]
 pub(in crate::transition_identity::journal_coordinator) enum ActiveReblitNoBootCommitDecisionFailure {
-    #[error("transition {transition_id} is not exact ActiveReblit SystemTriggersComplete generation 10 no-boot authority")]
+    #[error(
+        "transition {transition_id} is not exact ActiveReblit SystemTriggersComplete generation 10 no-boot authority"
+    )]
     SourceContract { transition_id: TransitionId },
     #[error("transition {transition_id} failed no-boot commit-decision preflight")]
     Preflight {
@@ -50,13 +52,17 @@ pub(in crate::transition_identity::journal_coordinator) enum ActiveReblitNoBootC
         #[source]
         source: StatefulTransitionCoordinatorError,
     },
-    #[error("transition {transition_id} derived {actual_phase:?} generation {actual_generation} instead of CommitDecided generation 11")]
+    #[error(
+        "transition {transition_id} derived {actual_phase:?} generation {actual_generation} instead of CommitDecided generation 11"
+    )]
     SuccessorContract {
         transition_id: TransitionId,
         actual_phase: Phase,
         actual_generation: u64,
     },
-    #[error("transition {transition_id} could not durably publish no-boot commit decision; SystemTriggersComplete or CommitDecided is exact after fresh reopen when classifiable")]
+    #[error(
+        "transition {transition_id} could not durably publish no-boot commit decision; SystemTriggersComplete or CommitDecided is exact after fresh reopen when classifiable"
+    )]
     Persistence {
         transition_id: TransitionId,
         #[source]
@@ -111,9 +117,7 @@ impl SystemTriggersCompleteCoordinator {
         } = self;
         let transition_id = coordinator.record.transition_id.clone();
         if !exact_active_reblit_no_boot_source(&coordinator.record) {
-            return Err(ActiveReblitNoBootCommitDecisionFailure::SourceContract {
-                transition_id,
-            });
+            return Err(ActiveReblitNoBootCommitDecisionFailure::SourceContract { transition_id });
         }
 
         let preflight = |source| ActiveReblitNoBootCommitDecisionFailure::Preflight {
@@ -167,10 +171,7 @@ impl SystemTriggersCompleteCoordinator {
             &readiness,
             &record_binding,
         )
-        .map_err(|source| ActiveReblitNoBootCommitDecisionFailure::FinalEvidence {
-            transition_id,
-            source,
-        })?;
+        .map_err(|source| ActiveReblitNoBootCommitDecisionFailure::FinalEvidence { transition_id, source })?;
 
         let installation = authority.installation().clone();
         let active_state_reservation = authority.into_active_state_reservation();
@@ -196,9 +197,7 @@ impl SystemTriggersCompleteCoordinator {
 
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub(crate) struct ActiveReblitNoBootCompletionFailure(
-    #[from] ActiveReblitNoBootCompletionFailureKind,
-);
+pub(crate) struct ActiveReblitNoBootCompletionFailure(#[from] ActiveReblitNoBootCompletionFailureKind);
 
 #[derive(Debug, Error)]
 enum ActiveReblitNoBootCompletionFailureKind {

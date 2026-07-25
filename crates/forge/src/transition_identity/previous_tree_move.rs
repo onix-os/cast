@@ -91,8 +91,7 @@ impl StatefulTreeIdentity {
         state: state::Id,
         guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), RetainedPreviousMoveFailure> {
-        let result =
-            self.move_previous(installation, state, RetainedPreviousMoveDirection::Archive, guard);
+        let result = self.move_previous(installation, state, RetainedPreviousMoveDirection::Archive, guard);
         match result {
             Err(failure) if failure.outcome == RetainedPreviousMoveOutcome::NotApplied => {
                 match self.finish_not_applied_previous_archive_guarded(installation, state, guard) {
@@ -171,11 +170,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), Error> {
-        self.finish_not_applied_previous_archive_guarded(
-            installation,
-            state,
-            ArchiveJournalGuard::LegacyNoJournal,
-        )
+        self.finish_not_applied_previous_archive_guarded(installation, state, ArchiveJournalGuard::LegacyNoJournal)
     }
 
     fn finish_not_applied_previous_archive_guarded(
@@ -270,8 +265,7 @@ impl StatefulTreeIdentity {
             retained_previous_move_checkpoint(RetainedPreviousMoveFaultPoint::BeforeRename)
         })();
         if let Err(source) = preflight {
-            let reconciled =
-                self.reconcile_previous_pre_move_failure(installation, attempt, direction, source, guard);
+            let reconciled = self.reconcile_previous_pre_move_failure(installation, attempt, direction, source, guard);
             if reconciled.is_ok() && direction == RetainedPreviousMoveDirection::Restore {
                 *retained = None;
             }
@@ -500,12 +494,7 @@ impl StatefulTreeIdentity {
             self.require_previous_slot_location(attempt, RetainedPreviousSlotLocation::Canonical)?;
         }
         self.require_previous_move_layout(attempt, direction.after())?;
-        let finish = self.finish_previous_move(
-            installation,
-            attempt,
-            direction,
-            ArchiveJournalGuard::LegacyNoJournal,
-        );
+        let finish = self.finish_previous_move(installation, attempt, direction, ArchiveJournalGuard::LegacyNoJournal);
         if finish.is_ok() && direction == RetainedPreviousMoveDirection::Restore {
             *retained = None;
         }

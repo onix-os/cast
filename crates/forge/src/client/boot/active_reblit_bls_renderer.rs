@@ -184,14 +184,7 @@ impl<'input, 'attempt, 'stone, 'roots> RenderedActiveReblitBlsRequests<'input, '
 }
 
 impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
-    BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+    BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 {
     pub(in crate::client) fn outputs<'plan>(
         &'plan self,
@@ -216,12 +209,8 @@ impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
         self.plan.collision_domains_match(self.topology.topology())
     }
 
-    pub(in crate::client) fn is_bound_to_installation(
-        &self,
-        installation: &crate::Installation,
-    ) -> bool {
-        self.inputs.is_bound_to_installation(installation)
-            && self.topology.is_bound_to_installation(installation)
+    pub(in crate::client) fn is_bound_to_installation(&self, installation: &crate::Installation) -> bool {
+        self.inputs.is_bound_to_installation(installation) && self.topology.is_bound_to_installation(installation)
     }
 
     /// Exact global/head state authenticated by the retained render inputs.

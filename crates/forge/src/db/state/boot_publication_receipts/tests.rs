@@ -1,11 +1,14 @@
-use diesel::{RunQueryDsl as _, sql_types::{Binary, Text}};
+use diesel::{
+    RunQueryDsl as _,
+    sql_types::{Binary, Text},
+};
 
 use super::*;
 use crate::boot_publication::{
     BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
     BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
-    BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationRoot,
-    BootPublicationSha256, BootPublicationXxh3, prepare_boot_publication_receipt,
+    BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationRoot, BootPublicationSha256,
+    BootPublicationXxh3, prepare_boot_publication_receipt,
 };
 
 const ESP_PARTUUID: &str = "11111111-2222-3333-4444-555555555555";
@@ -67,28 +70,20 @@ fn insert_raw_receipt(database: &Database, receipt: &CanonicalBootPublicationRec
 }
 
 fn receipt_row_count(database: &Database) -> i64 {
-    database.conn.exec(|connection| {
-        boot_publication_receipts::table
-            .count()
-            .get_result(connection)
-            .unwrap()
-    })
+    database
+        .conn
+        .exec(|connection| boot_publication_receipts::table.count().get_result(connection).unwrap())
 }
 
 impl Database {
     /// Remove one exact fixture body while leaving its head reference intact.
     /// This exists only to prove cross-module startup consumers fail closed on
     /// a dangling receipt; production receipt storage exposes no deletion.
-    pub(crate) fn delete_boot_publication_receipt_body_for_test(
-        &self,
-        fingerprint: BootPublicationReceiptFingerprint,
-    ) {
+    pub(crate) fn delete_boot_publication_receipt_body_for_test(&self, fingerprint: BootPublicationReceiptFingerprint) {
         let deleted = self.conn.exec(|connection| {
             diesel::delete(
-                boot_publication_receipts::table.filter(
-                    boot_publication_receipts::receipt_sha256
-                        .eq(fingerprint.as_bytes().as_slice()),
-                ),
+                boot_publication_receipts::table
+                    .filter(boot_publication_receipts::receipt_sha256.eq(fingerprint.as_bytes().as_slice())),
             )
             .execute(connection)
             .unwrap()

@@ -13,9 +13,9 @@ use crate::{
 
 mod persistence;
 
+pub(in crate::client) use persistence::UsrRollbackCandidatePreserveRecordAdvanceError;
 #[cfg(test)]
 pub(in crate::client) use persistence::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
-pub(in crate::client) use persistence::UsrRollbackCandidatePreserveRecordAdvanceError;
 
 use super::super::UsrRollbackCandidatePreserveAuthorityErrorKind;
 use super::{
@@ -209,8 +209,8 @@ fn complete_applied_after_binding<'reservation>(
         journal,
     )?;
     let namespace_result = namespace.complete_post_move_durability(&installation, &record);
-    let trailing_evidence = require_effect_binding(&installation, &journal_record_binding, &record, journal)
-        .and_then(|()| {
+    let trailing_evidence =
+        require_effect_binding(&installation, &journal_record_binding, &record, journal).and_then(|()| {
             require_post_effect_evidence(
                 &installation,
                 &state_db,
@@ -260,8 +260,8 @@ fn complete_already_satisfied_after_binding<'reservation>(
         journal,
     )?;
     let namespace_result = namespace.complete_post_move_durability(&installation, &record);
-    let trailing_evidence = require_effect_binding(&installation, &journal_record_binding, &record, journal)
-        .and_then(|()| {
+    let trailing_evidence =
+        require_effect_binding(&installation, &journal_record_binding, &record, journal).and_then(|()| {
             require_post_effect_evidence(
                 &installation,
                 &state_db,

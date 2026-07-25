@@ -1,10 +1,10 @@
 use std::{ffi::CStr, os::fd::AsRawFd as _};
 
-use super::{TemporaryRecord, TransitionJournalStore};
 use super::super::{
-    InodeIdentity, MAX_STALE_TEMPORARIES, StorageError, controlled_resolution, directory_entries,
-    inode_identity, openat2_file, require_safe_stale_temporary, unlinkat, valid_temporary_name,
+    InodeIdentity, MAX_STALE_TEMPORARIES, StorageError, controlled_resolution, directory_entries, inode_identity,
+    openat2_file, require_safe_stale_temporary, unlinkat, valid_temporary_name,
 };
+use super::{TemporaryRecord, TransitionJournalStore};
 
 impl TransitionJournalStore {
     pub(in crate::transition_journal) fn cleanup_temporary(
@@ -14,11 +14,7 @@ impl TransitionJournalStore {
         self.cleanup_temporary_identity(&temporary.name, temporary.identity)
     }
 
-    pub(super) fn cleanup_temporary_identity(
-        &self,
-        name: &CStr,
-        expected: InodeIdentity,
-    ) -> Result<(), StorageError> {
+    pub(super) fn cleanup_temporary_identity(&self, name: &CStr, expected: InodeIdentity) -> Result<(), StorageError> {
         let display = name.to_string_lossy().into_owned();
         let named = openat2_file(
             self.directory.as_raw_fd(),

@@ -9,17 +9,12 @@
 use std::{marker::PhantomData, rc::Rc, time::Instant};
 
 use super::{
-    active_reblit_bls_renderer::{
-        BoundActiveReblitBlsPublication, BoundActiveReblitBlsPublicationPlan,
-    },
+    active_reblit_bls_renderer::{BoundActiveReblitBlsPublication, BoundActiveReblitBlsPublicationPlan},
     active_reblit_publication_plan::{
-        ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot,
-        MAX_ACTIVE_REBLIT_BOOT_PUBLICATIONS,
+        ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot, MAX_ACTIVE_REBLIT_BOOT_PUBLICATIONS,
     },
 };
-use crate::linux_fs::descriptor_boot_namespace::{
-    BootNamespaceRequest, RetainedBootNamespaceExpectedSource,
-};
+use crate::linux_fs::descriptor_boot_namespace::{BootNamespaceRequest, RetainedBootNamespaceExpectedSource};
 
 #[path = "active_reblit_boot_namespace_inputs/error.rs"]
 mod error;
@@ -132,14 +127,7 @@ enum DestinationBuilders<'plan> {
 }
 
 impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
-    BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+    BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 {
     /// Borrow every planned output into the exact retained destination layout.
     ///
@@ -153,12 +141,7 @@ impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
         'input: 'plan,
     {
         let mut now = Instant::now;
-        bind_with_policy_and_clocks(
-            self,
-            BOOT_NAMESPACE_INPUT_POLICY,
-            &mut now,
-            Instant::now,
-        )
+        bind_with_policy_and_clocks(self, BOOT_NAMESPACE_INPUT_POLICY, &mut now, Instant::now)
     }
 }
 
@@ -274,18 +257,9 @@ where
         // byte-comparing the streams. SHA-256 binds the retained source's exact
         // bytes here; cryptographic destination verification, signatures, and
         // ownership provenance remain separate publication prerequisites.
-        let request = BootNamespaceRequest::new(
-            relative_path,
-            output.expected_length(),
-            output.expected_digest(),
-        );
+        let request = BootNamespaceRequest::new(relative_path, output.expected_length(), output.expected_digest());
         let expected = bind_expected_source(&output, plan_index, budget)?;
-        builders.push(
-            destination_slot(layout, output.root()),
-            request,
-            expected,
-            plan_index,
-        )?;
+        builders.push(destination_slot(layout, output.root()), request, expected, plan_index)?;
     }
     Ok(metrics)
 }
@@ -474,12 +448,8 @@ impl<'plan> DestinationBuilders<'plan> {
         plan_index: usize,
     ) -> Result<(), ActiveReblitBootNamespaceInputError> {
         match (self, slot) {
-            (Self::BootAliasesEsp { shared }, DestinationSlot::Shared) => {
-                shared.push(request, expected, plan_index)
-            }
-            (Self::DistinctXbootldr { esp, .. }, DestinationSlot::Esp) => {
-                esp.push(request, expected, plan_index)
-            }
+            (Self::BootAliasesEsp { shared }, DestinationSlot::Shared) => shared.push(request, expected, plan_index),
+            (Self::DistinctXbootldr { esp, .. }, DestinationSlot::Esp) => esp.push(request, expected, plan_index),
             (Self::DistinctXbootldr { xbootldr, .. }, DestinationSlot::Xbootldr) => {
                 xbootldr.push(request, expected, plan_index)
             }
@@ -487,19 +457,15 @@ impl<'plan> DestinationBuilders<'plan> {
         }
     }
 
-    fn finish(
-        self,
-    ) -> Result<BoundActiveReblitBootNamespaceInputs<'plan>, ActiveReblitBootNamespaceInputError> {
+    fn finish(self) -> Result<BoundActiveReblitBootNamespaceInputs<'plan>, ActiveReblitBootNamespaceInputError> {
         match self {
             Self::BootAliasesEsp { shared } => Ok(BoundActiveReblitBootNamespaceInputs::BootAliasesEsp {
                 shared: shared.finish()?,
             }),
-            Self::DistinctXbootldr { esp, xbootldr } => {
-                Ok(BoundActiveReblitBootNamespaceInputs::DistinctXbootldr {
-                    esp: esp.finish()?,
-                    xbootldr: xbootldr.finish()?,
-                })
-            }
+            Self::DistinctXbootldr { esp, xbootldr } => Ok(BoundActiveReblitBootNamespaceInputs::DistinctXbootldr {
+                esp: esp.finish()?,
+                xbootldr: xbootldr.finish()?,
+            }),
         }
     }
 }
@@ -519,21 +485,9 @@ impl<'plan> DomainBuilder<'plan> {
         let mut requests = Vec::new();
         reserve_exact(&mut requests, expected_count, name, "requests", budget)?;
         let mut expected_sources = Vec::new();
-        reserve_exact(
-            &mut expected_sources,
-            expected_count,
-            name,
-            "expected sources",
-            budget,
-        )?;
+        reserve_exact(&mut expected_sources, expected_count, name, "expected sources", budget)?;
         let mut plan_indices = Vec::new();
-        reserve_exact(
-            &mut plan_indices,
-            expected_count,
-            name,
-            "plan indices",
-            budget,
-        )?;
+        reserve_exact(&mut plan_indices, expected_count, name, "plan indices", budget)?;
         Ok(Self {
             name,
             expected_count,
@@ -550,10 +504,7 @@ impl<'plan> DomainBuilder<'plan> {
         plan_index: usize,
     ) -> Result<(), ActiveReblitBootNamespaceInputError> {
         let actual = self.requests.len();
-        if actual >= self.expected_count
-            || self.expected_sources.len() != actual
-            || self.plan_indices.len() != actual
-        {
+        if actual >= self.expected_count || self.expected_sources.len() != actual || self.plan_indices.len() != actual {
             return Err(ActiveReblitBootNamespaceInputError::DomainLengthMismatch {
                 domain: self.name,
                 expected: self.expected_count,

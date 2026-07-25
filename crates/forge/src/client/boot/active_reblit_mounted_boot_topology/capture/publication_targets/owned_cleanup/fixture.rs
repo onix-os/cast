@@ -11,16 +11,15 @@ use std::{
 use crate::{
     client::active_reblit_installed_boot_publication_delta::ActiveReblitBootPublicationDeltaExpected,
     linux_fs::mount_namespace::{
-        PreparedMountNamespaceAnchor, RetainedBootFileMutationFingerprint,
-        RevalidatedTaskRootedAttachment, ValidatedRetainedBootFileReplacement,
+        PreparedMountNamespaceAnchor, RetainedBootFileMutationFingerprint, RevalidatedTaskRootedAttachment,
+        ValidatedRetainedBootFileReplacement,
     },
 };
 
 use super::{
-    ActiveReblitBootOwnedCleanupError, ActiveReblitBootOwnedCleanupOutcome,
-    OwnedCleanupPath, OwnedCleanupTargetIdentity,
-    RevalidatedActiveReblitBootPublicationTarget,
-    reconcile_and_cleanup_replacement_at, reconcile_and_cleanup_stale_at,
+    ActiveReblitBootOwnedCleanupError, ActiveReblitBootOwnedCleanupOutcome, OwnedCleanupPath,
+    OwnedCleanupTargetIdentity, RevalidatedActiveReblitBootPublicationTarget, reconcile_and_cleanup_replacement_at,
+    reconcile_and_cleanup_stale_at,
 };
 
 thread_local! {
@@ -45,10 +44,7 @@ pub(in crate::client) fn arm_fixture_owned_cleanup_targets(
     assert!(count > 0, "fixture owned-cleanup target queue is empty");
     ROOTS.with(|roots| {
         let mut roots = roots.borrow_mut();
-        assert!(
-            roots.is_empty(),
-            "fixture owned-cleanup target queue is already armed",
-        );
+        assert!(roots.is_empty(), "fixture owned-cleanup target queue is already armed",);
         roots.extend(std::iter::repeat_n(root, count));
     });
     FixtureOwnedCleanupTargetGuard
@@ -58,23 +54,14 @@ pub(in crate::client) fn fixture_owned_cleanup_targets_remaining() -> usize {
     ROOTS.with(|roots| roots.borrow().len())
 }
 
-pub(super) fn take(
-    target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
-) -> Option<FixtureOwnedCleanupTarget> {
+pub(super) fn take(target: &RevalidatedActiveReblitBootPublicationTarget<'_>) -> Option<FixtureOwnedCleanupTarget> {
     let root_path = ROOTS.with(|roots| roots.borrow_mut().pop_front())?;
     let root = OpenOptions::new()
         .read(true)
-        .custom_flags(
-            nix::libc::O_PATH
-                | nix::libc::O_DIRECTORY
-                | nix::libc::O_CLOEXEC
-                | nix::libc::O_NOFOLLOW,
-        )
+        .custom_flags(nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&root_path)
         .expect("open fixture owned-cleanup root");
-    let metadata = root
-        .metadata()
-        .expect("inspect fixture owned-cleanup root");
+    let metadata = root.metadata().expect("inspect fixture owned-cleanup root");
     let destination = target.destination();
     assert_eq!(
         metadata.dev(),
@@ -102,14 +89,7 @@ impl FixtureOwnedCleanupTarget {
         historical: &ValidatedRetainedBootFileReplacement,
     ) -> Result<ActiveReblitBootOwnedCleanupOutcome, ActiveReblitBootOwnedCleanupError> {
         self.with_real_target(synthetic, |target, identity, deadline| {
-            reconcile_and_cleanup_replacement_at(
-                target,
-                identity,
-                deadline,
-                plan_index,
-                path,
-                historical,
-            )
+            reconcile_and_cleanup_replacement_at(target, identity, deadline, plan_index, path, historical)
         })
     }
 
@@ -122,15 +102,7 @@ impl FixtureOwnedCleanupTarget {
         owner: RetainedBootFileMutationFingerprint,
     ) -> Result<ActiveReblitBootOwnedCleanupOutcome, ActiveReblitBootOwnedCleanupError> {
         self.with_real_target(synthetic, |target, identity, deadline| {
-            reconcile_and_cleanup_stale_at(
-                target,
-                identity,
-                deadline,
-                delta_index,
-                path,
-                expected,
-                owner,
-            )
+            reconcile_and_cleanup_stale_at(target, identity, deadline, delta_index, path, expected, owner)
         })
     }
 
@@ -144,10 +116,7 @@ impl FixtureOwnedCleanupTarget {
         ) -> Result,
     ) -> Result {
         let deadline = synthetic.deadline();
-        let selector = self
-            .root
-            .to_str()
-            .expect("fixture owned-cleanup root is UTF-8");
+        let selector = self.root.to_str().expect("fixture owned-cleanup root is UTF-8");
         let anchor = PreparedMountNamespaceAnchor::prepare_until(deadline)
             .expect("prepare current-task namespace anchor for fixture cleanup");
         let prepared = anchor

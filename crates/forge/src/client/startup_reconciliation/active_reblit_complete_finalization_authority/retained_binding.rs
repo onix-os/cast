@@ -1,22 +1,18 @@
 //! Live retained-binding adapter for exact generation-15 finalization.
 
 use crate::{
-    Installation, db,
+    Installation,
     client::{
         active_reblit_boot_publication_preflight::ActiveReblitBootCompleteFinalizationSeal,
         active_state_snapshot::ActiveStateReservation,
     },
-    transition_journal::{
-        Operation, Phase, TransitionJournalRecordBinding, TransitionJournalStore,
-        TransitionRecord,
-    },
+    db,
+    transition_journal::{Operation, Phase, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
-    ActiveReblitCompleteFinalizationAuthority,
-    ActiveReblitCompleteFinalizationAuthorityError,
-    ActiveReblitCompleteFinalizationAuthorityErrorKind,
-    ActiveReblitCompleteFinalizationCapture,
+    ActiveReblitCompleteFinalizationAuthority, ActiveReblitCompleteFinalizationAuthorityError,
+    ActiveReblitCompleteFinalizationAuthorityErrorKind, ActiveReblitCompleteFinalizationCapture,
     same_nonempty_candidate_and_previous,
 };
 
@@ -31,10 +27,8 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
         active_state_reservation: &'reservation ActiveStateReservation,
         record: &TransitionRecord,
         journal_record_binding: TransitionJournalRecordBinding,
-    ) -> Result<
-        ActiveReblitCompleteFinalizationAuthority<'reservation>,
-        ActiveReblitCompleteFinalizationAuthorityError,
-    > {
+    ) -> Result<ActiveReblitCompleteFinalizationAuthority<'reservation>, ActiveReblitCompleteFinalizationAuthorityError>
+    {
         let receipt_pair = record
             .boot_publication_receipt_correlation()
             .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::Record)?;
@@ -48,10 +42,7 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
             || receipt_pair.is_none()
             || !same_nonempty_candidate_and_previous(record)
         {
-            return Err(
-                ActiveReblitCompleteFinalizationAuthorityErrorKind::RetainedCompleteRejected
-                    .into(),
-            );
+            return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::RetainedCompleteRejected.into());
         }
 
         match Self::capture_with_record_binding(
@@ -64,10 +55,9 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
         )? {
             ActiveReblitCompleteFinalizationCapture::Ready(authority) => Ok(authority),
             ActiveReblitCompleteFinalizationCapture::NotApplicable
-            | ActiveReblitCompleteFinalizationCapture::Deferred => Err(
-                ActiveReblitCompleteFinalizationAuthorityErrorKind::RetainedCompleteRejected
-                    .into(),
-            ),
+            | ActiveReblitCompleteFinalizationCapture::Deferred => {
+                Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::RetainedCompleteRejected.into())
+            }
         }
     }
 }

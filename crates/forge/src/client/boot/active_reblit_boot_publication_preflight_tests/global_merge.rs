@@ -48,14 +48,7 @@ fn alias_and_distinct_domains_restore_exact_global_plan_order() {
             BootNamespaceDestinationState::Absent,
         ],
     );
-    merge_domain_assessment(
-        BootTargetRole::Esp,
-        expected_identity,
-        &[1, 3],
-        &esp,
-        &mut distinct,
-    )
-    .unwrap();
+    merge_domain_assessment(BootTargetRole::Esp, expected_identity, &[1, 3], &esp, &mut distinct).unwrap();
     merge_domain_assessment(
         BootTargetRole::Xbootldr,
         expected_identity,
@@ -79,41 +72,19 @@ fn alias_and_distinct_domains_restore_exact_global_plan_order() {
 #[test]
 fn different_is_retained_while_count_index_and_identity_evidence_fail_closed() {
     let identity = support::identity(10, 20, 30);
-    let different = support::fixture_assessment(
-        identity,
-        [BootNamespaceDestinationState::Different],
-    );
+    let different = support::fixture_assessment(identity, [BootNamespaceDestinationState::Different]);
     let mut states = support::empty_global_states(2);
-    merge_domain_assessment(
-        BootTargetRole::Xbootldr,
-        identity,
-        &[1],
-        &different,
-        &mut states,
-    )
-    .unwrap();
-    assert_eq!(
-        states[1],
-        Some(BootNamespaceDestinationState::Different),
-    );
+    merge_domain_assessment(BootTargetRole::Xbootldr, identity, &[1], &different, &mut states).unwrap();
+    assert_eq!(states[1], Some(BootNamespaceDestinationState::Different),);
 
     assert!(matches!(
         require_publication_count(3, 2),
-        Err(ActiveReblitBootPublicationPreflightError::PublicationCountMismatch {
-            expected: 3,
-            actual: 2,
-        })
+        Err(ActiveReblitBootPublicationPreflightError::PublicationCountMismatch { expected: 3, actual: 2 })
     ));
     let exact = support::fixture_assessment(identity, [BootNamespaceDestinationState::Exact]);
     let mut states = support::empty_global_states(2);
     assert!(matches!(
-        merge_domain_assessment(
-            BootTargetRole::Esp,
-            identity,
-            &[0, 1],
-            &exact,
-            &mut states,
-        ),
+        merge_domain_assessment(BootTargetRole::Esp, identity, &[0, 1], &exact, &mut states,),
         Err(ActiveReblitBootPublicationPreflightError::AssessmentLengthMismatch {
             role: BootTargetRole::Esp,
             states: 1,
@@ -121,23 +92,11 @@ fn different_is_retained_while_count_index_and_identity_evidence_fail_closed() {
         })
     ));
 
-    for (indices, expected_error) in [
-        (&[2][..], "out-of-range"),
-        (&[1, 0][..], "order"),
-    ] {
-        let observed = support::fixture_assessment(
-            identity,
-            vec![BootNamespaceDestinationState::Exact; indices.len()],
-        );
+    for (indices, expected_error) in [(&[2][..], "out-of-range"), (&[1, 0][..], "order")] {
+        let observed = support::fixture_assessment(identity, vec![BootNamespaceDestinationState::Exact; indices.len()]);
         let mut states = support::empty_global_states(2);
-        let error = merge_domain_assessment(
-            BootTargetRole::Esp,
-            identity,
-            indices,
-            &observed,
-            &mut states,
-        )
-        .unwrap_err();
+        let error =
+            merge_domain_assessment(BootTargetRole::Esp, identity, indices, &observed, &mut states).unwrap_err();
         assert!(
             matches!(
                 (&error, expected_error),
@@ -162,31 +121,14 @@ fn different_is_retained_while_count_index_and_identity_evidence_fail_closed() {
     }
 
     let mut duplicate = support::empty_global_states(2);
-    merge_domain_assessment(
-        BootTargetRole::Esp,
-        identity,
-        &[0],
-        &exact,
-        &mut duplicate,
-    )
-    .unwrap();
+    merge_domain_assessment(BootTargetRole::Esp, identity, &[0], &exact, &mut duplicate).unwrap();
     assert!(matches!(
-        merge_domain_assessment(
-            BootTargetRole::Xbootldr,
-            identity,
-            &[0],
-            &exact,
-            &mut duplicate,
-        ),
-        Err(ActiveReblitBootPublicationPreflightError::DuplicatePlanIndex {
-            plan_index: 0,
-        })
+        merge_domain_assessment(BootTargetRole::Xbootldr, identity, &[0], &exact, &mut duplicate,),
+        Err(ActiveReblitBootPublicationPreflightError::DuplicatePlanIndex { plan_index: 0 })
     ));
     assert!(matches!(
         close_global_states(duplicate),
-        Err(ActiveReblitBootPublicationPreflightError::MissingPlanIndex {
-            plan_index: 1,
-        })
+        Err(ActiveReblitBootPublicationPreflightError::MissingPlanIndex { plan_index: 1 })
     ));
 
     for found in [
@@ -194,10 +136,7 @@ fn different_is_retained_while_count_index_and_identity_evidence_fail_closed() {
         support::identity(10, 21, 30),
         support::identity(10, 20, 31),
     ] {
-        let observed = support::fixture_assessment(
-            found,
-            [BootNamespaceDestinationState::Absent],
-        );
+        let observed = support::fixture_assessment(found, [BootNamespaceDestinationState::Absent]);
         let mut states = support::empty_global_states(1);
         assert!(matches!(
             merge_domain_assessment(

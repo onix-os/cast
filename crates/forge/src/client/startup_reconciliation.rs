@@ -24,18 +24,19 @@ use crate::{
 };
 
 mod activation_namespace;
+mod active_reblit_boot_repair_evidence;
+#[allow(dead_code)] // read-only startup boundary; live dispatch is deliberately a later slice
+mod active_reblit_boot_sync_complete_authority;
 mod active_reblit_boot_sync_started_recovery_authority;
 mod active_reblit_commit_cleanup_authority;
 mod active_reblit_commit_cleanup_complete_authority;
 mod active_reblit_complete_finalization_authority;
-#[allow(dead_code)] // read-only startup boundary; live dispatch is deliberately a later slice
-mod active_reblit_boot_sync_complete_authority;
-mod active_reblit_boot_repair_evidence;
 mod database_evidence;
 #[cfg(test)]
 mod focused_test_exports;
 mod metadata_provenance;
 mod replacement_mutation_authority;
+mod usr_exchanged_root_abi_authority;
 mod usr_rollback_activate_archived_complete_route_authority;
 mod usr_rollback_activate_archived_finalization_authority;
 mod usr_rollback_active_reblit_boot_repair_complete_authority;
@@ -52,23 +53,33 @@ mod usr_rollback_fresh_db_invalidation_authority;
 mod usr_rollback_fresh_db_invalidation_route_authority;
 mod usr_rollback_resume_route_authority;
 mod usr_rollback_reverse_authority;
-mod usr_exchanged_root_abi_authority;
 
 #[cfg(test)]
 pub(in crate::client) use focused_test_exports::*;
 
-pub(in crate::client) use active_reblit_boot_sync_started_recovery_authority::{
-    ActiveReblitBootSyncStartedRecoveryAdmission,
-    ActiveReblitBootSyncStartedRecoveryAuthority,
-    ActiveReblitBootSyncStartedRecoveryAuthorityError,
-    ActiveReblitBootSyncStartedPostAdvanceAuthority,
-    ActiveReblitBootSyncStartedRecordAdvanceError,
-};
-#[cfg(test)]
-pub(in crate::client) use active_reblit_boot_sync_started_recovery_authority::arm_between_active_reblit_boot_sync_started_database_captures;
 #[cfg(test)]
 pub(in crate::client) use activation_namespace::arm_before_active_reblit_boot_sync_started_fresh_namespace_capture;
+#[cfg(test)]
+pub(in crate::client) use active_reblit_boot_sync_started_recovery_authority::arm_between_active_reblit_boot_sync_started_database_captures;
+pub(in crate::client) use active_reblit_boot_sync_started_recovery_authority::{
+    ActiveReblitBootSyncStartedPostAdvanceAuthority, ActiveReblitBootSyncStartedRecordAdvanceError,
+    ActiveReblitBootSyncStartedRecoveryAdmission, ActiveReblitBootSyncStartedRecoveryAuthority,
+    ActiveReblitBootSyncStartedRecoveryAuthorityError,
+};
 
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::arm_before_active_reblit_commit_cleanup_fresh_namespace_capture;
+#[cfg(test)]
+pub(in crate::client) use activation_namespace::{
+    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
+    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
+    arm_active_reblit_commit_cleanup_durability_fault, arm_active_reblit_commit_cleanup_exchange_fault,
+    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
+    reset_active_reblit_commit_cleanup_durability_events, reset_active_reblit_commit_cleanup_exchange_attempt_count,
+    take_active_reblit_commit_cleanup_durability_events,
+};
 #[allow(unused_imports)] // exported for focused startup adoption and the later persistence leaf
 pub(in crate::client) use active_reblit_boot_sync_complete_authority::{
     ActiveReblitBootSyncCompleteAdmission, ActiveReblitBootSyncCompleteAuthority,
@@ -81,7 +92,7 @@ pub(in crate::client) use active_reblit_boot_sync_complete_authority::{
     arm_between_active_reblit_boot_sync_complete_database_captures,
 };
 #[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
+pub(in crate::client) use active_reblit_commit_cleanup_authority::arm_between_active_reblit_commit_cleanup_database_captures;
 #[allow(unused_imports)] // exported for the specialized cleanup path and focused contracts
 pub(in crate::client) use active_reblit_commit_cleanup_authority::{
     ActiveReblitCommitCleanupAdmission, ActiveReblitCommitCleanupApplyAuthority,
@@ -89,53 +100,32 @@ pub(in crate::client) use active_reblit_commit_cleanup_authority::{
     ActiveReblitCommitCleanupAuthority, ActiveReblitCommitCleanupAuthorityError,
     ActiveReblitCommitCleanupDurableAuthority, ActiveReblitCommitCleanupEffectError,
     ActiveReblitCommitCleanupFinishAuthority, ActiveReblitCommitCleanupFinishEffectAuthority,
-    ActiveReblitCommitCleanupPendingDurabilityAuthority,
-    ActiveReblitCommitCleanupPostAdvanceAuthority, ActiveReblitCommitCleanupRecordAdvanceError,
+    ActiveReblitCommitCleanupPendingDurabilityAuthority, ActiveReblitCommitCleanupPostAdvanceAuthority,
+    ActiveReblitCommitCleanupRecordAdvanceError,
 };
+#[cfg(test)]
+pub(in crate::client) use active_reblit_commit_cleanup_complete_authority::arm_between_active_reblit_commit_cleanup_complete_database_captures;
 pub(in crate::client) use active_reblit_commit_cleanup_complete_authority::{
-    ActiveReblitCommitCleanupCompleteAdmission,
-    ActiveReblitCommitCleanupCompleteAuthority,
-    ActiveReblitCommitCleanupCompleteAuthorityError,
-    ActiveReblitCommitCleanupCompletePostAdvanceAuthority,
+    ActiveReblitCommitCleanupCompleteAdmission, ActiveReblitCommitCleanupCompleteAuthority,
+    ActiveReblitCommitCleanupCompleteAuthorityError, ActiveReblitCommitCleanupCompletePostAdvanceAuthority,
     ActiveReblitCommitCleanupCompleteRecordAdvanceError,
 };
 pub(in crate::client) use active_reblit_complete_finalization_authority::{
-    ActiveReblitCompleteFinalizationAdmission,
-    ActiveReblitCompleteFinalizationAfterDeleteAuthority,
-    ActiveReblitCompleteFinalizationAuthority,
-    ActiveReblitCompleteFinalizationAuthorityError,
+    ActiveReblitCompleteFinalizationAdmission, ActiveReblitCompleteFinalizationAfterDeleteAuthority,
+    ActiveReblitCompleteFinalizationAuthority, ActiveReblitCompleteFinalizationAuthorityError,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_complete_finalization_authority::{
     arm_between_active_reblit_complete_finalization_database_captures,
     arm_between_active_reblit_complete_finalization_post_delete_database_captures,
 };
-#[cfg(test)]
-pub(in crate::client) use active_reblit_commit_cleanup_complete_authority::arm_between_active_reblit_commit_cleanup_complete_database_captures;
-#[cfg(test)]
-pub(in crate::client) use active_reblit_commit_cleanup_authority::arm_between_active_reblit_commit_cleanup_database_captures;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::arm_before_active_reblit_commit_cleanup_fresh_namespace_capture;
-#[cfg(test)]
-pub(in crate::client) use activation_namespace::{
-    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
-    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
-    arm_active_reblit_commit_cleanup_durability_fault,
-    arm_active_reblit_commit_cleanup_exchange_fault,
-    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
-    reset_active_reblit_commit_cleanup_durability_events,
-    reset_active_reblit_commit_cleanup_exchange_attempt_count,
-    take_active_reblit_commit_cleanup_durability_events,
-};
 pub(crate) use replacement_mutation_authority::ActiveReblitReplacementMutationAuthorityProvider;
 pub(in crate::client) use usr_rollback_activate_archived_complete_route_authority::{
     UsrRollbackActivateArchivedCompleteRouteAdmission, UsrRollbackActivateArchivedCompleteRouteAuthority,
-    UsrRollbackActivateArchivedCompleteRouteAuthorityError,
-    UsrRollbackActivateArchivedCompleteRouteRecordAdvanceError,
+    UsrRollbackActivateArchivedCompleteRouteAuthorityError, UsrRollbackActivateArchivedCompleteRouteRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_activate_archived_finalization_authority::{
-    UsrRollbackActivateArchivedFinalizationAdmission,
-    UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority,
+    UsrRollbackActivateArchivedFinalizationAdmission, UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority,
     UsrRollbackActivateArchivedFinalizationAuthority, UsrRollbackActivateArchivedFinalizationAuthorityError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_complete_authority::{
@@ -148,8 +138,7 @@ pub(in crate::client) use usr_rollback_active_reblit_boot_repair_required_author
 };
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_start_authority::{
     UsrRollbackActiveReblitBootRepairStartAdmission, UsrRollbackActiveReblitBootRepairStartAuthority,
-    UsrRollbackActiveReblitBootRepairStartAuthorityError,
-    UsrRollbackActiveReblitBootRepairStartRecordAdvanceError,
+    UsrRollbackActiveReblitBootRepairStartAuthorityError, UsrRollbackActiveReblitBootRepairStartRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_unverified_authority::{
     UsrRollbackActiveReblitBootRepairUnverifiedAdmission, UsrRollbackActiveReblitBootRepairUnverifiedAuthority,
@@ -160,9 +149,8 @@ pub(in crate::client) use usr_rollback_active_reblit_complete_route_authority::{
     UsrRollbackActiveReblitCompleteRouteAuthorityError, UsrRollbackActiveReblitCompleteRouteRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_active_reblit_finalization_authority::{
-    UsrRollbackActiveReblitFinalizationAdmission,
-    UsrRollbackActiveReblitFinalizationAfterDeleteAuthority, UsrRollbackActiveReblitFinalizationAuthority,
-    UsrRollbackActiveReblitFinalizationAuthorityError,
+    UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAfterDeleteAuthority,
+    UsrRollbackActiveReblitFinalizationAuthority, UsrRollbackActiveReblitFinalizationAuthorityError,
 };
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackActiveReblitCandidatePreserveAlreadySatisfiedEffectAuthority,
@@ -173,16 +161,14 @@ pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveAppliedEffectAuthority,
     UsrRollbackArchivedCandidatePreserveApplyReconciliation,
-    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority,
-    UsrRollbackArchivedCandidatePreserveRecordAdvanceError,
+    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority, UsrRollbackArchivedCandidatePreserveRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_candidate_preserve_authority::{
     UsrRollbackCandidatePreserveAdmission, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthority,
     UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveFinishAuthority,
-    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackCandidatePreserveRestartAuthority,
-    UsrRollbackCandidatePreserveRecordAdvanceError,
-    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackCandidatePreserveRecordAdvanceError,
+    UsrRollbackCandidatePreserveRestartAuthority, UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,
@@ -200,8 +186,8 @@ pub(in crate::client) use usr_rollback_decision_authority::{
     UsrRollbackDecisionAuthorityError, UsrRollbackDecisionRecordAdvanceError,
 };
 pub(in crate::client) use usr_rollback_finalization_authority::{
-    UsrRollbackFinalizationAdmission, UsrRollbackFinalizationAfterDeleteAuthority,
-    UsrRollbackFinalizationAuthority, UsrRollbackFinalizationAuthorityError,
+    UsrRollbackFinalizationAdmission, UsrRollbackFinalizationAfterDeleteAuthority, UsrRollbackFinalizationAuthority,
+    UsrRollbackFinalizationAuthorityError,
 };
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_authority::{
     UsrRollbackFreshDbInvalidationAdmission, UsrRollbackFreshDbInvalidationApplyAuthority,
@@ -218,20 +204,21 @@ pub(in crate::client) use usr_rollback_resume_route_authority::{
     UsrRollbackResumeRouteRecordAdvanceError,
 };
 
+pub(in crate::client) use usr_exchanged_root_abi_authority::{
+    UsrExchangedRootAbiDurabilityAuthority, UsrExchangedRootAbiNormalizationAdmission,
+    UsrExchangedRootAbiNormalizationAuthority, UsrExchangedRootAbiNormalizationAuthorityError,
+};
 pub(in crate::client) use usr_rollback_reverse_authority::{
     UsrRollbackReverseAdmission, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
     UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyReconciliation,
     UsrRollbackReverseAuthority, UsrRollbackReverseAuthorityError, UsrRollbackReverseDurableEffectAuthority,
     UsrRollbackReverseFinishAuthority, UsrRollbackReverseRecordAdvanceError,
 };
-pub(in crate::client) use usr_exchanged_root_abi_authority::{
-    UsrExchangedRootAbiDurabilityAuthority, UsrExchangedRootAbiNormalizationAdmission,
-    UsrExchangedRootAbiNormalizationAuthority, UsrExchangedRootAbiNormalizationAuthorityError,
-};
 
 use activation_namespace::{
     ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
-    UsrRollbackActivateArchivedCompleteRouteNamespaceError,
+    UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError, UsrExchangedRootAbiNamespaceInspection,
+    UsrExchangedRootAbiNamespaceProof, UsrRollbackActivateArchivedCompleteRouteNamespaceError,
     UsrRollbackActivateArchivedCompleteRouteNamespaceInspection,
     UsrRollbackActivateArchivedCompleteRouteNamespaceProof, UsrRollbackActivateArchivedFinalizationNamespaceError,
     UsrRollbackActivateArchivedFinalizationNamespaceInspection, UsrRollbackActivateArchivedFinalizationNamespaceProof,
@@ -239,10 +226,9 @@ use activation_namespace::{
     UsrRollbackActiveReblitBootRepairCompleteNamespaceInspection,
     UsrRollbackActiveReblitBootRepairCompleteNamespaceProof, UsrRollbackActiveReblitBootRepairRequiredNamespaceError,
     UsrRollbackActiveReblitBootRepairRequiredNamespaceInspection,
-    UsrRollbackActiveReblitBootRepairRequiredNamespaceProof, UsrRollbackActiveReblitBootRepairStartedNamespaceError,
-    UsrRollbackActiveReblitBootRepairStartNamespaceError,
-    UsrRollbackActiveReblitBootRepairStartNamespaceInspection,
-    UsrRollbackActiveReblitBootRepairStartNamespaceProof,
+    UsrRollbackActiveReblitBootRepairRequiredNamespaceProof, UsrRollbackActiveReblitBootRepairStartNamespaceError,
+    UsrRollbackActiveReblitBootRepairStartNamespaceInspection, UsrRollbackActiveReblitBootRepairStartNamespaceProof,
+    UsrRollbackActiveReblitBootRepairStartedNamespaceError,
     UsrRollbackActiveReblitBootRepairStartedNamespaceInspection,
     UsrRollbackActiveReblitBootRepairStartedNamespaceProof, UsrRollbackActiveReblitCompleteRouteNamespaceError,
     UsrRollbackActiveReblitCompleteRouteNamespaceInspection, UsrRollbackActiveReblitCompleteRouteNamespaceProof,
@@ -261,8 +247,6 @@ use activation_namespace::{
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
     UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
     UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,
-    UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError,
-    UsrExchangedRootAbiNamespaceInspection, UsrExchangedRootAbiNamespaceProof,
 };
 use activation_namespace::{
     UsrRollbackArchivedCandidatePreserveAlreadySatisfiedNamespace,

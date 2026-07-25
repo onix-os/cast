@@ -20,23 +20,19 @@ use crate::{
     linux_fs::{
         descriptor_boot_namespace::RetainedBootNamespaceExpectedSource,
         mount_namespace::{
-            PreparedMountNamespaceAnchor,
-            RetainedBootFilePublicationLimits,
-            RetainedBootFileStaleCleanupRequest,
-            arm_after_boot_file_sidecar_unlink_callback,
-            arm_after_stale_boot_file_detach_callback,
+            PreparedMountNamespaceAnchor, RetainedBootFilePublicationLimits, RetainedBootFileStaleCleanupRequest,
+            arm_after_boot_file_sidecar_unlink_callback, arm_after_stale_boot_file_detach_callback,
         },
     },
 };
 
-use super::{
-    CleanupFixture, INSTALLED_BYTES, PREDECESSOR_BYTES, REPLACEMENT_PATH,
-    STALE_BYTES, STALE_PATH, deadline, fingerprint, output, output_request,
-    receipt_owner, replacement_request, retain_parent,
-};
 use super::super::{
-    OwnedCleanupTargetIdentity, reconcile_restart_replacement_with_attachment,
-    reconcile_restart_stale_with_attachment, split_cleanup_path,
+    OwnedCleanupTargetIdentity, reconcile_restart_replacement_with_attachment, reconcile_restart_stale_with_attachment,
+    split_cleanup_path,
+};
+use super::{
+    CleanupFixture, INSTALLED_BYTES, PREDECESSOR_BYTES, REPLACEMENT_PATH, STALE_BYTES, STALE_PATH, deadline,
+    fingerprint, output, output_request, receipt_owner, replacement_request, retain_parent,
 };
 
 const TEST_NAME: &str = concat!(
@@ -92,9 +88,7 @@ impl CleanupKillCase {
 
     fn parse(value: &str) -> Self {
         match value {
-            "replacement-sidecar-unlinked" => {
-                Self::ReplacementSidecarUnlinked
-            }
+            "replacement-sidecar-unlinked" => Self::ReplacementSidecarUnlinked,
             "stale-detached" => Self::StaleDetached,
             "stale-unlinked" => Self::StaleUnlinked,
             other => panic!("invalid owned-cleanup kill case {other:?}"),
@@ -103,9 +97,7 @@ impl CleanupKillCase {
 
     fn as_str(self) -> &'static str {
         match self {
-            Self::ReplacementSidecarUnlinked => {
-                "replacement-sidecar-unlinked"
-            }
+            Self::ReplacementSidecarUnlinked => "replacement-sidecar-unlinked",
             Self::StaleDetached => "stale-detached",
             Self::StaleUnlinked => "stale-unlinked",
         }
@@ -113,9 +105,7 @@ impl CleanupKillCase {
 
     fn prefix(self) -> &'static str {
         match self {
-            Self::ReplacementSidecarUnlinked => {
-                "forge-owned-cleanup-process-replacement-"
-            }
+            Self::ReplacementSidecarUnlinked => "forge-owned-cleanup-process-replacement-",
             Self::StaleDetached => "forge-owned-cleanup-process-stale-detach-",
             Self::StaleUnlinked => "forge-owned-cleanup-process-stale-unlink-",
         }
@@ -156,21 +146,13 @@ struct ParentControl {
 }
 
 impl ParentControl {
-    fn create(
-        root: &Path,
-        case: CleanupKillCase,
-        residue_leaf: &str,
-    ) -> Self {
+    fn create(root: &Path, case: CleanupKillCase, residue_leaf: &str) -> Self {
         let mut file = tempfile::Builder::new()
             .prefix(CONTROL_PREFIX)
             .rand_bytes(CONTROL_NONCE_LENGTH)
             .tempfile_in(root)
             .unwrap();
-        let leaf = file
-            .path()
-            .file_name()
-            .and_then(|leaf| leaf.to_str())
-            .unwrap();
+        let leaf = file.path().file_name().and_then(|leaf| leaf.to_str()).unwrap();
         let nonce = leaf.strip_prefix(CONTROL_PREFIX).unwrap().to_owned();
         assert_control_nonce(&nonce);
         file.as_file_mut()
@@ -185,11 +167,7 @@ impl ParentControl {
     }
 
     fn leaf(&self) -> &str {
-        self.file
-            .path()
-            .file_name()
-            .and_then(|leaf| leaf.to_str())
-            .unwrap()
+        self.file.path().file_name().and_then(|leaf| leaf.to_str()).unwrap()
     }
 
     fn assert_exact(&self, case: CleanupKillCase, residue_leaf: &str) {
@@ -210,18 +188,10 @@ struct ParentFixture {
 impl ParentFixture {
     fn stage(case: CleanupKillCase) -> Self {
         let fixture = CleanupFixture::new(case.prefix());
-        let view = fixture
-            .attachment
-            .revalidate_against(&fixture.anchor)
-            .unwrap();
+        let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
         let residue_leaf = match case {
-            CleanupKillCase::ReplacementSidecarUnlinked => {
-                stage_replacement(&fixture, &view)
-            }
-            CleanupKillCase::StaleDetached
-            | CleanupKillCase::StaleUnlinked => {
-                stage_stale(&view)
-            }
+            CleanupKillCase::ReplacementSidecarUnlinked => stage_replacement(&fixture, &view),
+            CleanupKillCase::StaleDetached | CleanupKillCase::StaleUnlinked => stage_stale(&view),
         };
         drop(view);
         let CleanupFixture {
@@ -249,26 +219,15 @@ impl ParentFixture {
         self.assert_controlled_root(case);
         match case {
             CleanupKillCase::ReplacementSidecarUnlinked => {
+                assert_eq!(fs::read(self.root.join(REPLACEMENT_PATH)).unwrap(), INSTALLED_BYTES,);
                 assert_eq!(
-                    fs::read(self.root.join(REPLACEMENT_PATH)).unwrap(),
-                    INSTALLED_BYTES,
-                );
-                assert_eq!(
-                    fs::read(parent_path(&self.root).join(&self.residue_leaf))
-                        .unwrap(),
+                    fs::read(parent_path(&self.root).join(&self.residue_leaf)).unwrap(),
                     PREDECESSOR_BYTES,
                 );
-                assert_parent_names(
-                    &self.root,
-                    &["restart-replacement.efi", &self.residue_leaf],
-                );
+                assert_parent_names(&self.root, &["restart-replacement.efi", &self.residue_leaf]);
             }
-            CleanupKillCase::StaleDetached
-            | CleanupKillCase::StaleUnlinked => {
-                assert_eq!(
-                    fs::read(self.root.join(STALE_PATH)).unwrap(),
-                    STALE_BYTES,
-                );
+            CleanupKillCase::StaleDetached | CleanupKillCase::StaleUnlinked => {
+                assert_eq!(fs::read(self.root.join(STALE_PATH)).unwrap(), STALE_BYTES,);
                 assert_parent_names(&self.root, &["restart-stale.efi"]);
             }
         }
@@ -278,18 +237,14 @@ impl ParentFixture {
         self.assert_controlled_root(case);
         match case {
             CleanupKillCase::ReplacementSidecarUnlinked => {
-                assert_eq!(
-                    fs::read(self.root.join(REPLACEMENT_PATH)).unwrap(),
-                    INSTALLED_BYTES,
-                );
+                assert_eq!(fs::read(self.root.join(REPLACEMENT_PATH)).unwrap(), INSTALLED_BYTES,);
                 assert!(!parent_path(&self.root).join(&self.residue_leaf).exists());
                 assert_parent_names(&self.root, &["restart-replacement.efi"]);
             }
             CleanupKillCase::StaleDetached => {
                 assert!(!self.root.join(STALE_PATH).exists());
                 assert_eq!(
-                    fs::read(parent_path(&self.root).join(&self.residue_leaf))
-                        .unwrap(),
+                    fs::read(parent_path(&self.root).join(&self.residue_leaf)).unwrap(),
                     STALE_BYTES,
                 );
                 assert_parent_names(&self.root, &[&self.residue_leaf]);
@@ -306,15 +261,11 @@ impl ParentFixture {
         self.assert_controlled_root(case);
         match case {
             CleanupKillCase::ReplacementSidecarUnlinked => {
-                assert_eq!(
-                    fs::read(self.root.join(REPLACEMENT_PATH)).unwrap(),
-                    INSTALLED_BYTES,
-                );
+                assert_eq!(fs::read(self.root.join(REPLACEMENT_PATH)).unwrap(), INSTALLED_BYTES,);
                 assert!(!parent_path(&self.root).join(&self.residue_leaf).exists());
                 assert_parent_names(&self.root, &["restart-replacement.efi"]);
             }
-            CleanupKillCase::StaleDetached
-            | CleanupKillCase::StaleUnlinked => {
+            CleanupKillCase::StaleDetached | CleanupKillCase::StaleUnlinked => {
                 assert!(!self.root.join(STALE_PATH).exists());
                 assert!(!parent_path(&self.root).join(&self.residue_leaf).exists());
                 assert_parent_names(&self.root, &[]);
@@ -365,9 +316,7 @@ fn run_parent() {
 fn run_parent_case(case: CleanupKillCase) {
     let fixture = ParentFixture::stage(case);
     let crash = spawn_child(ProcessRole::Crash, case, &fixture);
-    let crash_status =
-        DeadlineChild::new(crash, "owned-cleanup component crash child")
-            .wait(CHILD_DEADLINE);
+    let crash_status = DeadlineChild::new(crash, "owned-cleanup component crash child").wait(CHILD_DEADLINE);
     assert_eq!(
         crash_status.signal(),
         Some(nix::libc::SIGKILL),
@@ -376,9 +325,7 @@ fn run_parent_case(case: CleanupKillCase) {
     fixture.assert_after_crash(case);
 
     let recovery = spawn_child(ProcessRole::Recover, case, &fixture);
-    let recovery_status =
-        DeadlineChild::new(recovery, "owned-cleanup component recovery child")
-            .wait(CHILD_DEADLINE);
+    let recovery_status = DeadlineChild::new(recovery, "owned-cleanup component recovery child").wait(CHILD_DEADLINE);
     assert!(
         recovery_status.success(),
         "recovery child failed for {case:?}: {recovery_status:?}",
@@ -399,13 +346,8 @@ fn run_child(case: ChildCase) {
     let view = attachment.revalidate_against(&anchor).unwrap();
     let identity = OwnedCleanupTargetIdentity::from_attachment(&view);
     match case.case {
-        CleanupKillCase::ReplacementSidecarUnlinked => {
-            run_replacement_child(&case, &view, identity)
-        }
-        CleanupKillCase::StaleDetached
-        | CleanupKillCase::StaleUnlinked => {
-            run_stale_child(&case, &view, identity)
-        }
+        CleanupKillCase::ReplacementSidecarUnlinked => run_replacement_child(&case, &view, identity),
+        CleanupKillCase::StaleDetached | CleanupKillCase::StaleUnlinked => run_stale_child(&case, &view, identity),
     }
 }
 
@@ -416,8 +358,7 @@ fn run_replacement_child(
 ) {
     let predecessor = output(REPLACEMENT_PATH, PREDECESSOR_BYTES);
     let installed = output(REPLACEMENT_PATH, INSTALLED_BYTES);
-    let path = split_cleanup_path(REPLACEMENT_PATH, "owned cleanup replacement", 0)
-        .unwrap();
+    let path = split_cleanup_path(REPLACEMENT_PATH, "owned cleanup replacement", 0).unwrap();
     if case.role == ProcessRole::Crash {
         arm_after_boot_file_sidecar_unlink_callback(kill_self);
     }
@@ -432,13 +373,8 @@ fn run_replacement_child(
         receipt_owner(fingerprint(0x41)),
     );
     match case.role {
-        ProcessRole::Crash => panic!(
-            "replacement crash child escaped the post-unlink boundary: {result:?}",
-        ),
-        ProcessRole::Recover => assert_eq!(
-            result.unwrap(),
-            ActiveReblitBootOwnedCleanupOutcome::AlreadyClean,
-        ),
+        ProcessRole::Crash => panic!("replacement crash child escaped the post-unlink boundary: {result:?}",),
+        ProcessRole::Recover => assert_eq!(result.unwrap(), ActiveReblitBootOwnedCleanupOutcome::AlreadyClean,),
     }
 }
 
@@ -451,12 +387,8 @@ fn run_stale_child(
     let path = split_cleanup_path(STALE_PATH, "owned cleanup stale", 0).unwrap();
     if case.role == ProcessRole::Crash {
         match case.case {
-            CleanupKillCase::StaleDetached => {
-                arm_after_stale_boot_file_detach_callback(kill_self)
-            }
-            CleanupKillCase::StaleUnlinked => {
-                arm_after_boot_file_sidecar_unlink_callback(kill_self)
-            }
+            CleanupKillCase::StaleDetached => arm_after_stale_boot_file_detach_callback(kill_self),
+            CleanupKillCase::StaleUnlinked => arm_after_boot_file_sidecar_unlink_callback(kill_self),
             CleanupKillCase::ReplacementSidecarUnlinked => unreachable!(),
         }
     }
@@ -470,10 +402,7 @@ fn run_stale_child(
         receipt_owner(fingerprint(0x51)),
     );
     match case.role {
-        ProcessRole::Crash => panic!(
-            "stale crash child escaped {:?}: {result:?}",
-            case.case,
-        ),
+        ProcessRole::Crash => panic!("stale crash child escaped {:?}: {result:?}", case.case,),
         ProcessRole::Recover => assert_eq!(
             result.unwrap(),
             match case.case {
@@ -518,18 +447,13 @@ fn stage_replacement(
         )
         .unwrap();
     let residue_leaf = applied.sidecar_leaf().to_owned();
-    assert_eq!(
-        fs::read(fixture.root.join(REPLACEMENT_PATH)).unwrap(),
-        INSTALLED_BYTES,
-    );
+    assert_eq!(fs::read(fixture.root.join(REPLACEMENT_PATH)).unwrap(), INSTALLED_BYTES,);
     drop(applied);
     drop(parent);
     residue_leaf
 }
 
-fn stage_stale(
-    view: &crate::linux_fs::mount_namespace::RevalidatedTaskRootedAttachment<'_>,
-) -> String {
+fn stage_stale(view: &crate::linux_fs::mount_namespace::RevalidatedTaskRootedAttachment<'_>) -> String {
     let stale = output(STALE_PATH, STALE_BYTES);
     let owner = receipt_owner(fingerprint(0x51));
     let parent = retain_parent(view);
@@ -543,10 +467,7 @@ fn stage_stale(
         .unwrap();
     let authority = parent
         .authenticate_stale_boot_file_cleanup_until(
-            RetainedBootFileStaleCleanupRequest::new(
-                output_request("restart-stale.efi", &stale),
-                owner,
-            ),
+            RetainedBootFileStaleCleanupRequest::new(output_request("restart-stale.efi", &stale), owner),
             RetainedBootFilePublicationLimits::default(),
             deadline(),
         )
@@ -557,11 +478,7 @@ fn stage_stale(
     residue_leaf
 }
 
-fn spawn_child(
-    role: ProcessRole,
-    case: CleanupKillCase,
-    fixture: &ParentFixture,
-) -> Child {
+fn spawn_child(role: ProcessRole, case: CleanupKillCase, fixture: &ParentFixture) -> Child {
     Command::new(env::current_exe().unwrap())
         .arg(TEST_NAME)
         .arg("--exact")
@@ -588,36 +505,20 @@ fn verify_child_fixture(case: &ChildCase) {
     );
     match (case.role, case.case) {
         (ProcessRole::Crash, CleanupKillCase::ReplacementSidecarUnlinked) => {
-            assert_regular_file_bytes(
-                &case.root.join(REPLACEMENT_PATH),
-                INSTALLED_BYTES,
-            );
-            assert_regular_file_bytes(
-                &parent_path(&case.root).join(&case.residue_leaf),
-                PREDECESSOR_BYTES,
-            );
-            assert_parent_names(
-                &case.root,
-                &["restart-replacement.efi", &case.residue_leaf],
-            );
+            assert_regular_file_bytes(&case.root.join(REPLACEMENT_PATH), INSTALLED_BYTES);
+            assert_regular_file_bytes(&parent_path(&case.root).join(&case.residue_leaf), PREDECESSOR_BYTES);
+            assert_parent_names(&case.root, &["restart-replacement.efi", &case.residue_leaf]);
         }
         (ProcessRole::Recover, CleanupKillCase::ReplacementSidecarUnlinked) => {
-            assert_regular_file_bytes(
-                &case.root.join(REPLACEMENT_PATH),
-                INSTALLED_BYTES,
-            );
+            assert_regular_file_bytes(&case.root.join(REPLACEMENT_PATH), INSTALLED_BYTES);
             assert_parent_names(&case.root, &["restart-replacement.efi"]);
         }
-        (ProcessRole::Crash, CleanupKillCase::StaleDetached)
-        | (ProcessRole::Crash, CleanupKillCase::StaleUnlinked) => {
+        (ProcessRole::Crash, CleanupKillCase::StaleDetached) | (ProcessRole::Crash, CleanupKillCase::StaleUnlinked) => {
             assert_regular_file_bytes(&case.root.join(STALE_PATH), STALE_BYTES);
             assert_parent_names(&case.root, &["restart-stale.efi"]);
         }
         (ProcessRole::Recover, CleanupKillCase::StaleDetached) => {
-            assert_regular_file_bytes(
-                &parent_path(&case.root).join(&case.residue_leaf),
-                STALE_BYTES,
-            );
+            assert_regular_file_bytes(&parent_path(&case.root).join(&case.residue_leaf), STALE_BYTES);
             assert_parent_names(&case.root, &[&case.residue_leaf]);
         }
         (ProcessRole::Recover, CleanupKillCase::StaleUnlinked) => {
@@ -626,11 +527,7 @@ fn verify_child_fixture(case: &ChildCase) {
     }
 }
 
-fn control_contents(
-    case: CleanupKillCase,
-    nonce: &str,
-    residue_leaf: &str,
-) -> String {
+fn control_contents(case: CleanupKillCase, nonce: &str, residue_leaf: &str) -> String {
     format!(
         "owned-cleanup-process-control-v1\ncase={}\nnonce={nonce}\nresidue={residue_leaf}\n",
         case.as_str(),
@@ -664,10 +561,7 @@ fn assert_names(path: &Path, expected: &[&str]) {
         .map(|entry| entry.unwrap().file_name())
         .collect::<Vec<OsString>>();
     actual.sort();
-    let mut expected = expected
-        .iter()
-        .map(OsString::from)
-        .collect::<Vec<OsString>>();
+    let mut expected = expected.iter().map(OsString::from).collect::<Vec<OsString>>();
     expected.sort();
     assert_eq!(actual, expected);
 }
@@ -735,9 +629,7 @@ fn canonical_environment_path(name: &str) -> PathBuf {
 fn kill_self() {
     // Genuine same-boot process death only. This is neither a reboot nor a
     // power-loss durability oracle.
-    let result = unsafe {
-        nix::libc::kill(nix::libc::getpid(), nix::libc::SIGKILL)
-    };
+    let result = unsafe { nix::libc::kill(nix::libc::getpid(), nix::libc::SIGKILL) };
     panic!(
         "SIGKILL self-injection unexpectedly returned {result}: {}",
         io::Error::last_os_error(),

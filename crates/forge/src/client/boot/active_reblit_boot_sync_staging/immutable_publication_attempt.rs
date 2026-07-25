@@ -4,34 +4,17 @@ use crate::client::{
     Client,
     active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
     active_reblit_boot_publication_preflight::{
-        ActiveReblitBootImmutablePublicationAttemptError,
-        StagedExactActiveReblitBootPublication,
+        ActiveReblitBootImmutablePublicationAttemptError, StagedExactActiveReblitBootPublication,
     },
 };
 
 use super::StagedActiveReblitBootSync;
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     StagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >
 where
     'input: 'plan,
@@ -64,11 +47,9 @@ where
                 .revalidate_against(client)
                 .map_err(ActiveReblitBootImmutablePublicationAttemptError::StagedAdmission)?;
             if !std::ptr::eq(fresh.plan(), plan) {
-                return Err(
-                    ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
-                        checkpoint: "initial durable admission",
-                    },
-                );
+                return Err(ActiveReblitBootImmutablePublicationAttemptError::StagedPlanMismatch {
+                    checkpoint: "initial durable admission",
+                });
             }
         }
         let preflight = plan

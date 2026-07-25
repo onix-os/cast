@@ -8,8 +8,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        CodecError, Phase, RollbackActionOutcome, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Phase, RollbackActionOutcome, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
@@ -122,9 +122,7 @@ impl UsrRollbackReverseDurableEffectAuthority<'_> {
             .rollback_successor(Some(self.outcome))
             .map_err(UsrRollbackReverseRecordAdvanceError::Successor)?;
         if successor.phase != Phase::UsrRestored {
-            return Err(UsrRollbackReverseRecordAdvanceError::UnexpectedSuccessor {
-                phase: successor.phase,
-            });
+            return Err(UsrRollbackReverseRecordAdvanceError::UnexpectedSuccessor { phase: successor.phase });
         }
         let cast = self._effect.installation.retained_mutable_cast_directory()?;
         match journal.advance_record_binding(cast, self._effect.journal_record_binding, &successor) {

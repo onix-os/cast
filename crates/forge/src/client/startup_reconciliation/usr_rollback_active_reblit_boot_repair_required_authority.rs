@@ -222,9 +222,7 @@ fn inspect_current_database(
         Some(pair) if receipt_state.receipt_pair_for(&record.transition_id) == Some(pair) => {
             Some(BootPublicationReceiptCorrelation::Authenticated)
         }
-        None if receipt_state.head().pending().is_none() => {
-            Some(BootPublicationReceiptCorrelation::LegacyUnverified)
-        }
+        None if receipt_state.head().pending().is_none() => Some(BootPublicationReceiptCorrelation::LegacyUnverified),
         Some(_) | None => None,
     };
     if active_reblit_database_pair_is_exact(record, &context) && receipt_correlation.is_some() {
@@ -236,10 +234,7 @@ fn inspect_current_database(
             },
         ))
     } else {
-        Ok(DatabaseInspection::Incompatible {
-            context,
-            receipt_state,
-        })
+        Ok(DatabaseInspection::Incompatible { context, receipt_state })
     }
 }
 
@@ -281,10 +276,7 @@ fn require_exact_database(
         DatabaseInspection::Exact(_) => {
             Err(UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::DatabaseChanged.into())
         }
-        DatabaseInspection::Incompatible {
-            context,
-            receipt_state,
-        } => Err(
+        DatabaseInspection::Incompatible { context, receipt_state } => Err(
             UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::DatabaseIncompatible {
                 evidence: Box::new(context),
                 receipt_state: Box::new(receipt_state),
@@ -306,9 +298,7 @@ impl From<InspectionError> for UsrRollbackActiveReblitBootRepairRequiredAuthorit
     }
 }
 
-impl From<db::state::BootPublicationReceiptStateError>
-    for UsrRollbackActiveReblitBootRepairRequiredAuthorityError
-{
+impl From<db::state::BootPublicationReceiptStateError> for UsrRollbackActiveReblitBootRepairRequiredAuthorityError {
     fn from(source: db::state::BootPublicationReceiptStateError) -> Self {
         UsrRollbackActiveReblitBootRepairRequiredAuthorityErrorKind::ReceiptState(source).into()
     }

@@ -8,9 +8,9 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
-            UsrRollbackFreshDbInvalidationAdmission, arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture,
-            arm_between_usr_rollback_fresh_db_invalidation_database_captures,
-            fresh_db_invalidation_removal_call_count,
+            UsrRollbackFreshDbInvalidationAdmission,
+            arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture,
+            arm_between_usr_rollback_fresh_db_invalidation_database_captures, fresh_db_invalidation_removal_call_count,
         },
         startup_recovery::UsrRollbackFreshDbInvalidationEffectSeal,
     },
@@ -76,10 +76,7 @@ fn assert_exact_root_abi_mutation(
     mutation: RootAbiMutation,
     label: &str,
 ) {
-    let selected_index = ROOT_ABI
-        .iter()
-        .position(|(name, _)| *name == selected_name)
-        .unwrap();
+    let selected_index = ROOT_ABI.iter().position(|(name, _)| *name == selected_name).unwrap();
     for (index, (_, expected_target)) in ROOT_ABI.into_iter().enumerate() {
         let original = before[index]
             .as_ref()
@@ -95,7 +92,11 @@ fn assert_exact_root_abi_mutation(
         RootAbiMutation::Missing => assert!(after[selected_index].is_none(), "{label}"),
         RootAbiMutation::WrongTarget => {
             let changed = after[selected_index].as_ref().unwrap();
-            assert_eq!(changed.target, PathBuf::from(format!("usr/wrong-{selected_name}")), "{label}");
+            assert_eq!(
+                changed.target,
+                PathBuf::from(format!("usr/wrong-{selected_name}")),
+                "{label}"
+            );
             assert_eq!(changed.device, original.device, "{label}");
             assert_ne!(changed.inode, original.inode, "{label}");
             assert_eq!(changed.mode, original.mode, "{label}");
@@ -167,19 +168,9 @@ fn fixture_at_epoch(
     row: FreshRowLayout,
 ) -> FreshDbInvalidationFixture {
     if historical {
-        FreshDbInvalidationFixture::historical(
-            CandidateSource::RootLinksComplete,
-            usr_outcome,
-            candidate_outcome,
-            row,
-        )
+        FreshDbInvalidationFixture::historical(CandidateSource::RootLinksComplete, usr_outcome, candidate_outcome, row)
     } else {
-        FreshDbInvalidationFixture::new(
-            CandidateSource::RootLinksComplete,
-            usr_outcome,
-            candidate_outcome,
-            row,
-        )
+        FreshDbInvalidationFixture::new(CandidateSource::RootLinksComplete, usr_outcome, candidate_outcome, row)
     }
 }
 
@@ -293,12 +284,8 @@ fn startup_root_links_fresh_db_invalidation_post_attempt_rejects_all_root_abi_mu
             for candidate_outcome in CandidateOutcome::ALL {
                 for (name, target) in ROOT_ABI {
                     for mutation in RootAbiMutation::ALL {
-                        let fixture = fixture_at_epoch(
-                            historical,
-                            usr_outcome,
-                            candidate_outcome,
-                            FreshRowLayout::Present,
-                        );
+                        let fixture =
+                            fixture_at_epoch(historical, usr_outcome, candidate_outcome, FreshRowLayout::Present);
                         let journal = fixture.open_journal();
                         let reservation = ActiveStateReservation::acquire().unwrap();
                         let authority = fixture.capture_apply(&journal, &reservation);

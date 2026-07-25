@@ -24,9 +24,9 @@ fn deadline_expiring_after_exclusive_admission_blocks_head_mutation() {
     let result = database.promote_boot_publication_receipt(&pending, deadline);
 
     match result {
-        Err(BootPublicationReceiptPromotionError::DeadlineExceeded {
-            deadline: actual,
-        }) => assert_eq!(actual, deadline),
+        Err(BootPublicationReceiptPromotionError::DeadlineExceeded { deadline: actual }) => {
+            assert_eq!(actual, deadline)
+        }
         other => panic!("unexpected promotion result: {other:?}"),
     }
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
@@ -43,9 +43,7 @@ fn deadline_equality_at_exclusive_mutation_boundary_allows_promotion() {
     arm_before_head_update(move |_| arm_promotion_deadline_now(deadline));
 
     assert_eq!(
-        database
-            .promote_boot_publication_receipt(&pending, deadline)
-            .unwrap(),
+        database.promote_boot_publication_receipt(&pending, deadline).unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
     let state = database.boot_publication_receipt_state().unwrap();

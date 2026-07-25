@@ -67,7 +67,10 @@ fn startup_usr_rollback_fresh_db_invalidation_route_source_durable_fresh_handle_
                     assert_eq!(reopened.load().unwrap(), Some(expected));
                     assert_eq!(database.all().unwrap(), all_before);
                     assert_eq!(database.audit_in_flight_transition().unwrap(), in_flight_before);
-                    assert_eq!(database.metadata_provenance(candidate_state).unwrap(), provenance_before);
+                    assert_eq!(
+                        database.metadata_provenance(candidate_state).unwrap(),
+                        provenance_before
+                    );
                     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
                 }
             }
@@ -119,7 +122,10 @@ fn startup_usr_rollback_fresh_db_invalidation_route_successor_durable_fresh_hand
                     assert_eq!(fresh.journal.load().unwrap(), Some(expected));
                     assert_eq!(fresh.database.all().unwrap(), all_before);
                     assert_eq!(fresh.database.audit_in_flight_transition().unwrap(), in_flight_before);
-                    assert_eq!(fresh.database.metadata_provenance(candidate_state).unwrap(), provenance_before);
+                    assert_eq!(
+                        fresh.database.metadata_provenance(candidate_state).unwrap(),
+                        provenance_before
+                    );
                     assert_eq!(new_state_candidate_preserve_move_attempt_count(), 0);
                 }
             }

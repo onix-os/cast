@@ -105,8 +105,7 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let namespace_inspection = match UsrRollbackReverseNamespaceInspection::begin(installation, record) {
             Ok(inspection) => inspection,
@@ -160,12 +159,7 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
     ) -> Result<(), UsrRollbackReverseAuthorityError> {
         // Exact public record identity is the first observation. Equal bytes
         // at a replacement inode cannot authorize an effect.
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
@@ -176,12 +170,7 @@ impl<'reservation> UsrRollbackReverseAuthority<'reservation> {
             return Err(UsrRollbackReverseAuthorityErrorKind::ReverseEvidenceMismatch.into());
         }
         self.installation.revalidate_mutable_namespace()?;
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -278,8 +267,7 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
                 | (Operation::NewState, ForwardPhase::SystemTriggersComplete, 14)
                 | (Operation::ActiveReblit, ForwardPhase::SystemTriggersStarted, 11)
                 | (Operation::ActiveReblit, ForwardPhase::SystemTriggersComplete, 12)
-        )
-            && !boot_source)
+        ) && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || rollback.usr_exchange != RollbackAction::Pending
         || rollback.candidate.action != RollbackAction::Pending

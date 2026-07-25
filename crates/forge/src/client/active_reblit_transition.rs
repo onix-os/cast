@@ -4,31 +4,30 @@
 //! activation. Boot applicability is fixed before journal creation; every
 //! later effect consumes the existing coordinator and boot typestates.
 
-use std::{error::Error as StdError, time::{Duration, Instant}};
+use std::{
+    error::Error as StdError,
+    time::{Duration, Instant},
+};
 
 use thiserror::Error as ThisError;
 
 use crate::{
     State, SystemModel,
     transition_identity::{
-        PreparedActiveReblitBootStateRoots, SystemTriggersCompleteCoordinator,
-        execute_active_reblit_forward,
+        PreparedActiveReblitBootStateRoots, SystemTriggersCompleteCoordinator, execute_active_reblit_forward,
     },
 };
 
 use super::{
-    Client, Error,
+    Client, Error, JournalUsrExchangeAuthorityPreflight,
     active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
-    active_reblit_boot_inputs::{
-        ActiveReblitStoneBootInputsOutcome, PreparedActiveReblitStoneBootInputs,
-    },
+    active_reblit_boot_inputs::{ActiveReblitStoneBootInputsOutcome, PreparedActiveReblitStoneBootInputs},
     active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
     active_reblit_local_boot_policy::PreparedActiveReblitLocalBootPolicy,
     active_reblit_mounted_boot_topology::PreparedActiveReblitMountedBootTopology,
     active_reblit_root_filesystem_intent::PreparedActiveReblitRootFilesystemIntent,
     fixed_staging,
     postblit::{self, TriggerScope},
-    JournalUsrExchangeAuthorityPreflight,
 };
 
 const BOOT_INPUT_TIMEOUT: Duration = Duration::from_secs(120);
@@ -100,20 +99,12 @@ impl Client {
             ActiveReblitStoneBootInputsOutcome::Ready(stone) => (true, Some(stone)),
         };
 
-        let authority = JournalUsrExchangeAuthorityPreflight::inspect(
-            &self.installation,
-            active_state,
-            Some(state.clone()),
-        )
-        .map_err(|source| LiveActiveReblitError::at("pre-journal client authority", source))?;
+        let authority =
+            JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, Some(state.clone()))
+                .map_err(|source| LiveActiveReblitError::at("pre-journal client authority", source))?;
         let candidate_path = self.installation.staging_path("usr");
         let (identity, authority) = authority
-            .prepare_retained_active_reblit_identity(
-                &self.state_db,
-                &candidate_usr,
-                &candidate_path,
-                state.id,
-            )
+            .prepare_retained_active_reblit_identity(&self.state_db, &candidate_usr, &candidate_path, state.id)
             .map_err(|source| LiveActiveReblitError::at("retained tree identity", source))?;
 
         let coordinator = execute_active_reblit_forward(
@@ -155,12 +146,7 @@ impl Client {
         .map_err(|source| LiveActiveReblitError::at("journal-coordinated forward prefix", source))?;
 
         match stone {
-            Some(stone) => self.complete_active_reblit_boot(
-                coordinator,
-                &candidate_usr,
-                state,
-                stone,
-            ),
+            Some(stone) => self.complete_active_reblit_boot(coordinator, &candidate_usr, state, stone),
             None => {
                 let _finalized = coordinator
                     .complete_active_reblit_without_boot()
@@ -186,23 +172,13 @@ impl Client {
             deadline,
         )
         .map_err(|source| LiveActiveReblitError::at("live boot state roots", source))?;
-        let prepared = PreparedActiveReblitBootRenderInputs::prepare_until(
-            &stone,
-            &roots,
-            &self.installation,
-            deadline,
-        )
-        .map_err(|source| LiveActiveReblitError::at("boot render inputs", source))?;
-        let local_policy = PreparedActiveReblitLocalBootPolicy::prepare_until(
-            &self.installation,
-            deadline,
-        )
-        .map_err(|source| LiveActiveReblitError::at("local boot policy", source))?;
-        let root_intent = PreparedActiveReblitRootFilesystemIntent::prepare_until(
-            &self.installation,
-            deadline,
-        )
-        .map_err(|source| LiveActiveReblitError::at("root filesystem intent", source))?;
+        let prepared =
+            PreparedActiveReblitBootRenderInputs::prepare_until(&stone, &roots, &self.installation, deadline)
+                .map_err(|source| LiveActiveReblitError::at("boot render inputs", source))?;
+        let local_policy = PreparedActiveReblitLocalBootPolicy::prepare_until(&self.installation, deadline)
+            .map_err(|source| LiveActiveReblitError::at("local boot policy", source))?;
+        let root_intent = PreparedActiveReblitRootFilesystemIntent::prepare_until(&self.installation, deadline)
+            .map_err(|source| LiveActiveReblitError::at("root filesystem intent", source))?;
         let inputs = prepared
             .revalidate_until(
                 &self.state_db,
@@ -213,11 +189,8 @@ impl Client {
                 deadline,
             )
             .map_err(|source| LiveActiveReblitError::at("boot input revalidation", source))?;
-        let topology = PreparedActiveReblitMountedBootTopology::prepare_until(
-            &self.installation,
-            deadline,
-        )
-        .map_err(|source| LiveActiveReblitError::at("mounted boot topology", source))?;
+        let topology = PreparedActiveReblitMountedBootTopology::prepare_until(&self.installation, deadline)
+            .map_err(|source| LiveActiveReblitError::at("mounted boot topology", source))?;
         let topology = topology
             .revalidate_until(&self.installation, deadline)
             .map_err(|source| LiveActiveReblitError::at("mounted boot topology revalidation", source))?;
@@ -263,10 +236,7 @@ impl Client {
     }
 }
 
-fn deadline_after(
-    duration: Duration,
-    stage: &'static str,
-) -> Result<Instant, LiveActiveReblitError> {
+fn deadline_after(duration: Duration, stage: &'static str) -> Result<Instant, LiveActiveReblitError> {
     Instant::now()
         .checked_add(duration)
         .ok_or_else(|| LiveActiveReblitError::at(stage, DeadlineOverflow))

@@ -17,8 +17,8 @@ use crate::{
 };
 
 use super::super::startup_reconciliation::{
-    UsrRollbackCandidatePreserveAuthorityError, UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
-    UsrRollbackCandidatePreserveRecordAdvanceError,
+    UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveRecordAdvanceError,
+    UsrRollbackNewStateCandidatePreserveDurableEffectAuthority,
 };
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
@@ -145,21 +145,17 @@ pub(in crate::client) fn persist_usr_rollback_candidate_preserve_and_reopen(
                     Ok(true) => Ok((reopened, successor)),
                     Ok(false) => {
                         drop(reopened);
-                        Err(
-                            UsrRollbackCandidatePreservePersistenceError::SuccessorRecordBinding {
-                                durable: DurableUsrRollbackCandidatePreserveRecord::CandidatePreserved,
-                                source: UsrRollbackCandidatePreserveSuccessorBindingError::Changed,
-                            },
-                        )
+                        Err(UsrRollbackCandidatePreservePersistenceError::SuccessorRecordBinding {
+                            durable: DurableUsrRollbackCandidatePreserveRecord::CandidatePreserved,
+                            source: UsrRollbackCandidatePreserveSuccessorBindingError::Changed,
+                        })
                     }
                     Err(source) => {
                         drop(reopened);
-                        Err(
-                            UsrRollbackCandidatePreservePersistenceError::SuccessorRecordBinding {
-                                durable: DurableUsrRollbackCandidatePreserveRecord::CandidatePreserved,
-                                source,
-                            },
-                        )
+                        Err(UsrRollbackCandidatePreservePersistenceError::SuccessorRecordBinding {
+                            durable: DurableUsrRollbackCandidatePreserveRecord::CandidatePreserved,
+                            source,
+                        })
                     }
                 }
             }
@@ -230,12 +226,9 @@ pub(in crate::client) fn persist_usr_rollback_candidate_preserve_and_reopen(
                     },
                 )
             }
-            Err(reopen) => Err(
-                UsrRollbackCandidatePreservePersistenceError::SuccessorRecordBindingAndReopen {
-                    binding,
-                    reopen,
-                },
-            ),
+            Err(reopen) => {
+                Err(UsrRollbackCandidatePreservePersistenceError::SuccessorRecordBindingAndReopen { binding, reopen })
+            }
         },
     }
 }
@@ -324,9 +317,7 @@ fn before_usr_rollback_candidate_preserve_persistence_final_revalidation() {
 fn before_usr_rollback_candidate_preserve_persistence_final_revalidation() {}
 
 #[cfg(test)]
-pub(crate) fn arm_before_usr_rollback_candidate_preserve_successor_binding_revalidation(
-    hook: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_before_usr_rollback_candidate_preserve_successor_binding_revalidation(hook: impl FnOnce() + 'static) {
     BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

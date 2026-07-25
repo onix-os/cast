@@ -113,14 +113,12 @@ fn exact_system_triggered_no_boot_authorities_preserve_unrelated_receipts() {
                 )
                 .unwrap();
                 match (layout, admission) {
-                    (
-                        SharedCleanupLayout::Apply,
-                        ActiveReblitCommitCleanupAdmission::Apply(authority),
-                    ) => authority.revalidate(&journal).unwrap(),
-                    (
-                        SharedCleanupLayout::Finish,
-                        ActiveReblitCommitCleanupAdmission::Finish(authority),
-                    ) => authority.revalidate(&journal).unwrap(),
+                    (SharedCleanupLayout::Apply, ActiveReblitCommitCleanupAdmission::Apply(authority)) => {
+                        authority.revalidate(&journal).unwrap()
+                    }
+                    (SharedCleanupLayout::Finish, ActiveReblitCommitCleanupAdmission::Finish(authority)) => {
+                        authority.revalidate(&journal).unwrap()
+                    }
                     _ => panic!("exact no-boot cleanup layout admitted the wrong typestate"),
                 }
                 assert_eq!(fixture.fixture.source.generation, 11);
@@ -139,11 +137,7 @@ fn exact_system_triggered_no_boot_authorities_preserve_unrelated_receipts() {
         }
     }
 
-    let fixture = no_boot_commit_decided_fixture(
-        Epoch::Current,
-        SharedCleanupLayout::Apply,
-        true,
-    );
+    let fixture = no_boot_commit_decided_fixture(Epoch::Current, SharedCleanupLayout::Apply, true);
     let mut trigger_disabled = fixture.fixture.source.clone();
     trigger_disabled.options.run_system_triggers = false;
     trigger_disabled.generation = 9;
@@ -298,9 +292,10 @@ fn fresh_namespace_and_same_byte_record_replacements_fail_stop() {
         ActiveReblitCommitCleanupAdmission::Finish(authority) => authority,
         _ => panic!("exact Finish cleanup evidence did not admit"),
     };
-    arm_before_active_reblit_commit_cleanup_fresh_namespace_capture(
-        same_byte_different_inode_hook(&fixture, "commit-cleanup-record-race"),
-    );
+    arm_before_active_reblit_commit_cleanup_fresh_namespace_capture(same_byte_different_inode_hook(
+        &fixture,
+        "commit-cleanup-record-race",
+    ));
     assert!(authority.into_effect_authority(&journal).is_err());
 }
 

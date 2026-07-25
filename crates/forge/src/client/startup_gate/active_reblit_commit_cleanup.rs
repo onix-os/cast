@@ -19,8 +19,7 @@ use crate::client::{
         ActiveReblitCommitCleanupPendingDurabilityAuthority,
     },
     startup_recovery::{
-        ActiveReblitCommitCleanupPersistenceError,
-        persist_active_reblit_commit_cleanup_complete_and_reopen,
+        ActiveReblitCommitCleanupPersistenceError, persist_active_reblit_commit_cleanup_complete_and_reopen,
     },
 };
 
@@ -98,8 +97,7 @@ fn complete_and_persist(
         Ok(durable) => durable,
         Err(_) => return Ok(Dispatch::Handled { journal, record }),
     };
-    let (journal, record) =
-        persist_active_reblit_commit_cleanup_complete_and_reopen(journal, durable)?;
+    let (journal, record) = persist_active_reblit_commit_cleanup_complete_and_reopen(journal, durable)?;
     Ok(Dispatch::Handled { journal, record })
 }
 

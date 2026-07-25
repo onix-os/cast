@@ -20,9 +20,9 @@ mod active_reblit_boot_repair_required_proof;
 mod active_reblit_boot_repair_start_proof;
 mod active_reblit_boot_repair_started_error_classification;
 mod active_reblit_boot_repair_started_proof;
+mod active_reblit_boot_sync_complete_proof;
 mod active_reblit_boot_sync_started_proof;
 mod active_reblit_commit_cleanup_proof;
-mod active_reblit_boot_sync_complete_proof;
 mod active_reblit_complete_route_proof;
 mod active_reblit_finalization_proof;
 mod candidate_preserve_proof;
@@ -78,13 +78,11 @@ pub(super) use active_reblit_boot_repair_required_proof::{
     UsrRollbackActiveReblitBootRepairRequiredNamespaceProof,
 };
 pub(super) use active_reblit_boot_repair_start_proof::{
-    UsrRollbackActiveReblitBootRepairStartNamespaceError,
-    UsrRollbackActiveReblitBootRepairStartNamespaceInspection,
+    UsrRollbackActiveReblitBootRepairStartNamespaceError, UsrRollbackActiveReblitBootRepairStartNamespaceInspection,
     UsrRollbackActiveReblitBootRepairStartNamespaceProof,
 };
 pub(super) use active_reblit_boot_repair_started_error_classification::{
-    complete_namespace_error_is_structural, start_namespace_error_is_structural,
-    started_namespace_error_is_structural,
+    complete_namespace_error_is_structural, start_namespace_error_is_structural, started_namespace_error_is_structural,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_boot_repair_started_proof::{
@@ -96,27 +94,24 @@ pub(super) use active_reblit_boot_repair_started_proof::{
     UsrRollbackActiveReblitBootRepairStartedNamespaceProof,
 };
 #[cfg(test)]
-pub(in crate::client) use active_reblit_boot_sync_started_proof::arm_before_active_reblit_boot_sync_started_fresh_namespace_capture;
-pub(super) use active_reblit_boot_sync_started_proof::{
-    ActiveReblitBootSyncStartedNamespaceError,
-    ActiveReblitBootSyncStartedNamespaceInspection,
-    ActiveReblitBootSyncStartedNamespaceProof,
-    active_reblit_boot_sync_started_namespace_error_is_mismatch,
-};
-#[cfg(test)]
-pub(in crate::client) use active_reblit_commit_cleanup_proof::arm_before_active_reblit_commit_cleanup_fresh_namespace_capture;
-pub(super) use active_reblit_commit_cleanup_proof::{
-    ActiveReblitCommitCleanupApplyNamespaceEffectEvidence,
-    ActiveReblitCommitCleanupApplyNamespaceProof, ActiveReblitCommitCleanupFinishNamespaceProof,
-    ActiveReblitCommitCleanupFinishNamespaceEffectEvidence,
-    ActiveReblitCommitCleanupNamespaceError, ActiveReblitCommitCleanupNamespaceInspection,
-    ActiveReblitCommitCleanupNamespaceProof, active_reblit_commit_cleanup_namespace_error_is_mismatch,
-};
-#[cfg(test)]
 pub(in crate::client) use active_reblit_boot_sync_complete_proof::arm_before_active_reblit_boot_sync_complete_fresh_namespace_capture;
 pub(super) use active_reblit_boot_sync_complete_proof::{
     ActiveReblitBootSyncCompleteNamespaceError, ActiveReblitBootSyncCompleteNamespaceInspection,
     ActiveReblitBootSyncCompleteNamespaceProof, active_reblit_boot_sync_complete_namespace_error_is_mismatch,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_boot_sync_started_proof::arm_before_active_reblit_boot_sync_started_fresh_namespace_capture;
+pub(super) use active_reblit_boot_sync_started_proof::{
+    ActiveReblitBootSyncStartedNamespaceError, ActiveReblitBootSyncStartedNamespaceInspection,
+    ActiveReblitBootSyncStartedNamespaceProof, active_reblit_boot_sync_started_namespace_error_is_mismatch,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_commit_cleanup_proof::arm_before_active_reblit_commit_cleanup_fresh_namespace_capture;
+pub(super) use active_reblit_commit_cleanup_proof::{
+    ActiveReblitCommitCleanupApplyNamespaceEffectEvidence, ActiveReblitCommitCleanupApplyNamespaceProof,
+    ActiveReblitCommitCleanupFinishNamespaceEffectEvidence, ActiveReblitCommitCleanupFinishNamespaceProof,
+    ActiveReblitCommitCleanupNamespaceError, ActiveReblitCommitCleanupNamespaceInspection,
+    ActiveReblitCommitCleanupNamespaceProof, active_reblit_commit_cleanup_namespace_error_is_mismatch,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_complete_route_proof::arm_before_usr_rollback_active_reblit_complete_route_fresh_namespace_capture;
@@ -210,19 +205,14 @@ pub(super) use candidate_preserve_proof::{
 pub(in crate::client) use capture::arm_before_reverse_exchange_reconciliation_capture;
 #[cfg(test)]
 pub(in crate::client) use capture::{
-    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
-    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
-    arm_active_reblit_commit_cleanup_durability_fault,
-    arm_active_reblit_commit_cleanup_exchange_fault,
-    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
-    reset_active_reblit_commit_cleanup_durability_events,
-    reset_active_reblit_commit_cleanup_exchange_attempt_count,
-    take_active_reblit_commit_cleanup_durability_events,
     ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
-    ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, NewStateCandidatePreserveMoveFault,
-    NewStateTargetCreateFault, NewStateTargetNormalizeFault, active_reblit_candidate_preserve_exchange_attempt_count,
+    ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, ActiveReblitCommitCleanupDurabilityEvent,
+    ActiveReblitCommitCleanupDurabilityFaultPoint, ActiveReblitCommitCleanupExchangeFault,
+    NewStateCandidatePreserveMoveFault, NewStateTargetCreateFault, NewStateTargetNormalizeFault,
+    active_reblit_candidate_preserve_exchange_attempt_count, active_reblit_commit_cleanup_exchange_attempt_count,
     arm_active_reblit_candidate_preserve_exchange_fault,
     arm_active_reblit_candidate_preserve_post_exchange_durability_fault,
+    arm_active_reblit_commit_cleanup_durability_fault, arm_active_reblit_commit_cleanup_exchange_fault,
     arm_before_active_reblit_candidate_preserve_durable_post_revalidation_capture,
     arm_before_active_reblit_candidate_preserve_post_exchange_candidate_sync,
     arm_before_active_reblit_candidate_preserve_post_exchange_candidate_wrapper_sync,
@@ -231,6 +221,7 @@ pub(in crate::client) use capture::{
     arm_before_active_reblit_candidate_preserve_post_exchange_reservation_wrapper_sync,
     arm_before_active_reblit_candidate_preserve_post_exchange_roots_parent_sync,
     arm_before_active_reblit_candidate_preserve_reconciliation_capture,
+    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
     arm_before_new_state_candidate_preserve_move_reconciliation_capture, arm_before_new_state_target_create_attempt,
     arm_before_new_state_target_create_reconciliation_capture, arm_before_new_state_target_normalize_attempt,
     arm_before_new_state_target_normalize_reconciliation_capture, arm_new_state_candidate_preserve_move_fault,
@@ -238,17 +229,19 @@ pub(in crate::client) use capture::{
     new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
     new_state_target_normalize_attempt_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
     reset_active_reblit_candidate_preserve_post_exchange_durability_events,
+    reset_active_reblit_commit_cleanup_durability_events, reset_active_reblit_commit_cleanup_exchange_attempt_count,
     reset_new_state_candidate_preserve_move_attempt_count, reset_new_state_target_create_attempt_count,
     reset_new_state_target_normalize_attempt_count,
     take_active_reblit_candidate_preserve_post_exchange_durability_events,
+    take_active_reblit_commit_cleanup_durability_events,
 };
-use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 pub(super) use capture::{
     ActiveReblitCommitCleanupDurabilityError, ActiveReblitCommitCleanupEffectError,
     ActiveReblitCommitCleanupExchangeReconciliation, DurableActiveReblitCommitCleanupNamespace,
-    PendingActiveReblitCommitCleanupDurability,
-    UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
+    PendingActiveReblitCommitCleanupDurability, UsrRollbackNewStateTargetCreateNamespaceEvidence,
+    UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
 };
+use capture::{CaptureError, NamespaceSnapshot, capture_snapshot};
 #[cfg(test)]
 pub(in crate::client) use decision_proof::arm_before_usr_rollback_decision_fresh_namespace_capture;
 pub(super) use decision_proof::{
@@ -293,18 +286,6 @@ pub(super) use rollback_reverse_proof::{
     UsrRollbackReverseNamespaceProof,
 };
 #[cfg(test)]
-pub(in crate::client) use usr_exchanged_root_abi_proof::{
-    arm_after_usr_exchanged_root_abi_complete_sync, arm_after_usr_exchanged_root_abi_publication,
-    arm_before_usr_exchanged_root_abi_complete_sync, arm_before_usr_exchanged_root_abi_publication,
-    arm_usr_exchanged_root_abi_complete_sync_fault,
-    reset_usr_exchanged_root_abi_effect_counts, usr_exchanged_root_abi_complete_sync_attempts,
-    usr_exchanged_root_abi_publication_attempts,
-};
-pub(super) use usr_exchanged_root_abi_proof::{
-    UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError,
-    UsrExchangedRootAbiNamespaceInspection, UsrExchangedRootAbiNamespaceProof,
-};
-#[cfg(test)]
 pub(in crate::client) use rollback_reverse_proof::{
     UsrRollbackReverseNamespaceDurabilityEvent, UsrRollbackReverseNamespaceDurabilityFaultPoint,
     arm_before_usr_rollback_reverse_durable_namespace_capture,
@@ -314,6 +295,17 @@ pub(in crate::client) use rollback_reverse_proof::{
     arm_before_usr_rollback_reverse_namespace_installation_root_sync,
     arm_usr_rollback_reverse_namespace_durability_fault, reset_usr_rollback_reverse_namespace_durability_events,
     take_usr_rollback_reverse_namespace_durability_events,
+};
+pub(super) use usr_exchanged_root_abi_proof::{
+    UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError, UsrExchangedRootAbiNamespaceInspection,
+    UsrExchangedRootAbiNamespaceProof,
+};
+#[cfg(test)]
+pub(in crate::client) use usr_exchanged_root_abi_proof::{
+    arm_after_usr_exchanged_root_abi_complete_sync, arm_after_usr_exchanged_root_abi_publication,
+    arm_before_usr_exchanged_root_abi_complete_sync, arm_before_usr_exchanged_root_abi_publication,
+    arm_usr_exchanged_root_abi_complete_sync_fault, reset_usr_exchanged_root_abi_effect_counts,
+    usr_exchanged_root_abi_complete_sync_attempts, usr_exchanged_root_abi_publication_attempts,
 };
 
 /// Complete read-only evidence collected around one startup assessment.

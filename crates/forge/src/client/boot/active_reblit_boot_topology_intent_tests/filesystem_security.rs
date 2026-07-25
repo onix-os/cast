@@ -12,10 +12,7 @@ use super::{
         ActiveReblitBootTopologyIntentError, BoundActiveReblitBootPartitionSelector,
         BoundActiveReblitBootTopologyIntent,
     },
-    support::{
-        ESP_MOUNT_POINT, ESP_PARTUUID, Fixture, TreeSnapshot, authored_alias, set_access_acl,
-        set_test_xattr,
-    },
+    support::{ESP_MOUNT_POINT, ESP_PARTUUID, Fixture, TreeSnapshot, authored_alias, set_access_acl, set_test_xattr},
 };
 
 fn lua_alias(partuuid: &str) -> String {

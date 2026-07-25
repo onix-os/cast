@@ -395,11 +395,7 @@ fn apply_new_state_candidate_forwards_and_archives_before_boot_applicability() {
     let previous = client.state_db.add(&[], Some("previous"), None).unwrap();
     client.installation.active_state = Some(previous.id);
     record_state_id(&client.installation.root, previous.id).unwrap();
-    record_system_snapshot(
-        &client.installation.root,
-        generated_system_snapshot("previous-package"),
-    )
-    .unwrap();
+    record_system_snapshot(&client.installation.root, generated_system_snapshot("previous-package")).unwrap();
 
     let package = package::Id::from("new-state-forward-e2e");
     client
@@ -440,10 +436,7 @@ fn apply_new_state_candidate_forwards_and_archives_before_boot_applicability() {
     // The predecessor tree was durably archived into its per-state rollback slot
     // (the anchor a real boot would enumerate), proving the archive advance ran
     // against a live installation.
-    let archived_previous = client
-        .installation
-        .root_path(previous.id.to_string())
-        .join("usr");
+    let archived_previous = client.installation.root_path(previous.id.to_string()).join("usr");
     assert!(
         archived_previous.exists(),
         "predecessor tree was not archived to its state slot"

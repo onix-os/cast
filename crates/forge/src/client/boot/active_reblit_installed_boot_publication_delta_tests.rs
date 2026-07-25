@@ -2,11 +2,10 @@ use std::time::{Duration, Instant};
 
 use super::*;
 use crate::{
-    Installation, db, state,
+    Installation,
     boot_publication::{
-        BootPublicationDestination, BootPublicationHistoricalRuntimeWitness,
-        BootPublicationOutputProvenanceClaim, BootPublicationReceiptBody,
-        BootPublicationSha256, BootPublicationXxh3, prepare_boot_publication_receipt,
+        BootPublicationDestination, BootPublicationHistoricalRuntimeWitness, BootPublicationOutputProvenanceClaim,
+        BootPublicationReceiptBody, BootPublicationSha256, BootPublicationXxh3, prepare_boot_publication_receipt,
     },
     client::{
         active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
@@ -14,11 +13,12 @@ use crate::{
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
         active_reblit_mounted_boot_topology::AliasFixture,
     },
+    db,
     db::state::{
-        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
-        Database as StateDatabase,
+        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome, Database as StateDatabase,
     },
     linux_fs::descriptor_boot_namespace::BootNamespaceDestinationState,
+    state,
     state::TransitionId,
 };
 
@@ -78,9 +78,7 @@ fn request(
     }
 }
 
-fn prepared(
-    requests: Vec<ActiveReblitBootPublicationDeltaRequest>,
-) -> PreparedActiveReblitBootPublicationDelta {
+fn prepared(requests: Vec<ActiveReblitBootPublicationDeltaRequest>) -> PreparedActiveReblitBootPublicationDelta {
     PreparedActiveReblitBootPublicationDelta {
         destination_layout: ActiveReblitBootDestinationLayout::BootAliasesEsp,
         requests,
@@ -123,17 +121,12 @@ fn desired_absent_exact_and_owned_different_have_closed_actions() {
 #[test]
 fn stale_owned_is_post_promotion_deletion_and_stale_unowned_is_preserved() {
     let old = expected(3);
-    let requests = [
-        request(None, Some(old), true),
-        request(None, Some(old), false),
-    ];
+    let requests = [request(None, Some(old), true), request(None, Some(old), false)];
     assert_eq!(
         requests
             .iter()
             .enumerate()
-            .map(|(index, request)| {
-                live_classification::classify_stale_for_test(index, request).unwrap()
-            })
+            .map(|(index, request)| { live_classification::classify_stale_for_test(index, request).unwrap() })
             .collect::<Vec<_>>(),
         [
             ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion,
@@ -149,11 +142,7 @@ fn different_desired_without_authenticated_owned_predecessor_fails_closed() {
     for (installed, owned) in [(None, false), (Some(old), false)] {
         let request = request(Some(new), installed, owned);
         assert!(matches!(
-            live_classification::classify_desired_for_test(
-                0,
-                &request,
-                BootNamespaceDestinationState::Different,
-            ),
+            live_classification::classify_desired_for_test(0, &request, BootNamespaceDestinationState::Different,),
             Err(ActiveReblitBootPublicationDeltaError::UnownedDifferentDesired { index: 0 })
         ));
     }
@@ -164,14 +153,8 @@ fn owned_marker_without_installed_identity_fails_closed() {
     let same = expected(6);
     let request = request(Some(same), None, true);
     assert!(matches!(
-        live_classification::classify_desired_for_test(
-            0,
-            &request,
-            BootNamespaceDestinationState::Exact,
-        ),
-        Err(ActiveReblitBootPublicationDeltaError::OwnedOutputWithoutInstalledIdentity {
-            index: 0,
-        })
+        live_classification::classify_desired_for_test(0, &request, BootNamespaceDestinationState::Exact,),
+        Err(ActiveReblitBootPublicationDeltaError::OwnedOutputWithoutInstalledIdentity { index: 0 })
     ));
 }
 
@@ -238,10 +221,12 @@ fn receipt(claim: BootPublicationOutputProvenanceClaim) -> crate::boot_publicati
 fn only_strict_empty_or_promoted_database_state_can_form_installed_input() {
     let database = StateDatabase::new(":memory:").unwrap();
     let empty = database.boot_publication_receipt_state().unwrap();
-    assert!(AuthenticatedActiveReblitInstalledBootPublication::from_strict_empty_state(&empty)
-        .unwrap()
-        .receipt()
-        .is_none());
+    assert!(
+        AuthenticatedActiveReblitInstalledBootPublication::from_strict_empty_state(&empty)
+            .unwrap()
+            .receipt()
+            .is_none()
+    );
 
     let receipt = receipt(BootPublicationOutputProvenanceClaim::UnclaimedAbsent);
     assert_eq!(
@@ -255,10 +240,7 @@ fn only_strict_empty_or_promoted_database_state_can_form_installed_input() {
     ));
     assert_eq!(
         database
-            .promote_boot_publication_receipt(
-                &receipt,
-                Instant::now() + Duration::from_secs(30),
-            )
+            .promote_boot_publication_receipt(&receipt, Instant::now() + Duration::from_secs(30),)
             .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
@@ -267,10 +249,7 @@ fn only_strict_empty_or_promoted_database_state_can_form_installed_input() {
         pending: receipt.fingerprint(),
     };
     let promoted = database
-        .load_exact_promoted_boot_publication_receipt_chain(
-            receipt.body().transition_id(),
-            &pair,
-        )
+        .load_exact_promoted_boot_publication_receipt_chain(receipt.body().transition_id(), &pair)
         .unwrap();
     assert_eq!(
         AuthenticatedActiveReblitInstalledBootPublication::from_exact_promoted_chain(&promoted)
@@ -387,9 +366,7 @@ fn receipt_claim_bridge_rejects_missing_duplicate_and_stale_desired_keys() {
         assert!(matches!(
             (ClassifiedActiveReblitBootPublicationDelta { entries: missing })
                 .derive_receipt_provenance_claims(&inventory),
-            Err(ActiveReblitBootPublicationDeltaError::MissingDesiredClassifiedKey {
-                desired_index: 0
-            })
+            Err(ActiveReblitBootPublicationDeltaError::MissingDesiredClassifiedKey { desired_index: 0 })
         ));
 
         let mut duplicate = publish_entries(&inventory);
@@ -406,13 +383,10 @@ fn receipt_claim_bridge_rejects_missing_duplicate_and_stale_desired_keys() {
         ));
 
         let mut stale_desired = publish_entries(&inventory);
-        stale_desired[0].action =
-            ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion;
+        stale_desired[0].action = ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion;
         assert!(matches!(
-            (ClassifiedActiveReblitBootPublicationDelta {
-                entries: stale_desired,
-            })
-            .derive_receipt_provenance_claims(&inventory),
+            (ClassifiedActiveReblitBootPublicationDelta { entries: stale_desired })
+                .derive_receipt_provenance_claims(&inventory),
             Err(ActiveReblitBootPublicationDeltaError::StaleActionForDesiredKey {
                 desired_index: 0,
                 delta_index: 0,

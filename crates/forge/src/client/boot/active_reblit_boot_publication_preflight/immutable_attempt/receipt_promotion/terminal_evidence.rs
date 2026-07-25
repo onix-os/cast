@@ -11,13 +11,11 @@ use crate::{
         active_reblit_boot_publication_preflight::ActiveReblitBootPublicationPreflightError,
         active_reblit_installed_boot_publication_delta::ActiveReblitBootPublicationDeltaAction,
         active_reblit_mounted_boot_topology::{
-            ActiveReblitBootOwnedLeafReplacementError,
-            ActiveReblitBootPublicationTargetsError, BootTargetRole,
+            ActiveReblitBootOwnedLeafReplacementError, ActiveReblitBootPublicationTargetsError, BootTargetRole,
         },
     },
     linux_fs::{
-        descriptor_boot_namespace::BootNamespaceDestinationState,
-        mount_namespace::RetainedBootFilePublicationOutcome,
+        descriptor_boot_namespace::BootNamespaceDestinationState, mount_namespace::RetainedBootFilePublicationOutcome,
     },
 };
 
@@ -104,14 +102,7 @@ pub(super) fn validate_exact_terminal_evidence_snapshot<
     'stone,
     'roots,
 >(
-    plan: &BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >,
+    plan: &BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     receipt_fingerprint: BootPublicationReceiptFingerprint,
     publication_count: usize,
     published_count: usize,
@@ -134,27 +125,18 @@ pub(super) fn validate_exact_terminal_evidence_snapshot<
             || retained.xxh3() != output.expected_digest()
             || retained.sha256() != *output.expected_content_identity().as_bytes()
         {
-            return Err(
-                ActiveReblitBootTerminalEvidenceValidationError::EvidenceMismatch {
-                    checkpoint,
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootTerminalEvidenceValidationError::EvidenceMismatch { checkpoint, plan_index });
         }
         match retained.action() {
             ActiveReblitBootPublicationDeltaAction::PublishDesired => {
-                if retained.immutable_outcome()
-                    != Some(RetainedBootFilePublicationOutcome::Published)
-                {
+                if retained.immutable_outcome() != Some(RetainedBootFilePublicationOutcome::Published) {
                     return Err(evidence_mismatch(checkpoint, plan_index));
                 }
                 published = increment(checkpoint, published)?;
             }
             ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired
             | ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired => {
-                if retained.immutable_outcome()
-                    != Some(RetainedBootFilePublicationOutcome::AlreadyExact)
-                {
+                if retained.immutable_outcome() != Some(RetainedBootFilePublicationOutcome::AlreadyExact) {
                     return Err(evidence_mismatch(checkpoint, plan_index));
                 }
                 already_exact = increment(checkpoint, already_exact)?;
@@ -186,10 +168,7 @@ pub(super) fn validate_exact_terminal_evidence_snapshot<
             }
         }
     }
-    if published != published_count
-        || already_exact != already_exact_count
-        || replaced != replaced_count
-    {
+    if published != published_count || already_exact != already_exact_count || replaced != replaced_count {
         return Err(
             ActiveReblitBootTerminalEvidenceValidationError::PublicationOutcomeMismatch {
                 checkpoint,
@@ -205,29 +184,20 @@ pub(super) fn validate_exact_terminal_evidence_snapshot<
     let accounted = published
         .checked_add(already_exact)
         .and_then(|count| count.checked_add(replaced))
-        .ok_or(
-            ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
-                checkpoint,
-            },
-        )?;
+        .ok_or(ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow { checkpoint })?;
     require_count(checkpoint, expected, accounted)?;
 
     let preflight = plan
         .prepare_boot_publication_preflight()
-        .map_err(|source| ActiveReblitBootTerminalEvidenceValidationError::Preflight {
-            checkpoint,
-            source,
-        })?;
+        .map_err(|source| ActiveReblitBootTerminalEvidenceValidationError::Preflight { checkpoint, source })?;
     require_count(checkpoint, expected, preflight.publication_count())?;
     for (plan_index, state) in preflight.initial_states().iter().copied().enumerate() {
         if state != BootNamespaceDestinationState::Exact {
-            return Err(
-                ActiveReblitBootTerminalEvidenceValidationError::DestinationNotExact {
-                    checkpoint,
-                    plan_index,
-                    state,
-                },
-            );
+            return Err(ActiveReblitBootTerminalEvidenceValidationError::DestinationNotExact {
+                checkpoint,
+                plan_index,
+                state,
+            });
         }
     }
     require_deadline(checkpoint, plan.input_deadline())
@@ -251,23 +221,15 @@ fn require_count(
     }
 }
 
-fn increment(
-    checkpoint: &'static str,
-    value: usize,
-) -> Result<usize, ActiveReblitBootTerminalEvidenceValidationError> {
-    value.checked_add(1).ok_or(
-        ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow {
-            checkpoint,
-        },
-    )
+fn increment(checkpoint: &'static str, value: usize) -> Result<usize, ActiveReblitBootTerminalEvidenceValidationError> {
+    value
+        .checked_add(1)
+        .ok_or(ActiveReblitBootTerminalEvidenceValidationError::PublicationCounterOverflow { checkpoint })
 }
 
 const fn evidence_mismatch(
     checkpoint: &'static str,
     plan_index: usize,
 ) -> ActiveReblitBootTerminalEvidenceValidationError {
-    ActiveReblitBootTerminalEvidenceValidationError::EvidenceMismatch {
-        checkpoint,
-        plan_index,
-    }
+    ActiveReblitBootTerminalEvidenceValidationError::EvidenceMismatch { checkpoint, plan_index }
 }

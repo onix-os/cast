@@ -18,19 +18,19 @@ use crate::{
     State, SystemModel,
     state::{self, Selection},
     transition_identity::{
-        NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator,
-        execute_new_state_forward,
+        NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator, execute_new_state_forward,
     },
 };
 
 use super::{
-    Client, JournalUsrExchangeAuthorityPreflight, candidate_metadata, fixed_staging,
+    Client, JournalUsrExchangeAuthorityPreflight,
     active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
     active_reblit_boot_inputs::{ActiveReblitStoneBootInputsOutcome, PreparedActiveReblitStoneBootInputs},
     active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
     active_reblit_local_boot_policy::PreparedActiveReblitLocalBootPolicy,
     active_reblit_mounted_boot_topology::PreparedActiveReblitMountedBootTopology,
     active_reblit_root_filesystem_intent::PreparedActiveReblitRootFilesystemIntent,
+    candidate_metadata, fixed_staging,
     postblit::{self, TriggerScope},
 };
 
@@ -86,17 +86,12 @@ impl Client {
             active_state,
         } = candidate;
 
-        let preflight =
-            JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, None)
-                .map_err(|source| {
-                    LiveNewStateBootError::at("pre-journal client authority", source)
-                })?;
+        let preflight = JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, None)
+            .map_err(|source| LiveNewStateBootError::at("pre-journal client authority", source))?;
         let candidate_path = self.installation.staging_path("usr");
         let (identity, authority) = preflight
             .prepare_unallocated_candidate(&self.state_db, &candidate_path)
-            .map_err(|source| {
-                LiveNewStateBootError::at("unallocated candidate identity", source)
-            })?;
+            .map_err(|source| LiveNewStateBootError::at("unallocated candidate identity", source))?;
 
         let (coordinator, allocated) = execute_new_state_forward(
             identity,
@@ -137,9 +132,7 @@ impl Client {
                 )
             },
         )
-        .map_err(|source| {
-            LiveNewStateBootError::at("journal-coordinated forward prefix", source)
-        })?;
+        .map_err(|source| LiveNewStateBootError::at("journal-coordinated forward prefix", source))?;
 
         let archived = coordinator
             .archive_previous_tree()
@@ -197,19 +190,13 @@ impl Client {
             deadline,
         )
         .map_err(|source| LiveNewStateBootError::at("live boot state roots", source))?;
-        let prepared = PreparedActiveReblitBootRenderInputs::prepare_until(
-            &stone,
-            &roots,
-            &self.installation,
-            deadline,
-        )
-        .map_err(|source| LiveNewStateBootError::at("boot render inputs", source))?;
-        let local_policy =
-            PreparedActiveReblitLocalBootPolicy::prepare_until(&self.installation, deadline)
-                .map_err(|source| LiveNewStateBootError::at("local boot policy", source))?;
-        let root_intent =
-            PreparedActiveReblitRootFilesystemIntent::prepare_until(&self.installation, deadline)
-                .map_err(|source| LiveNewStateBootError::at("root filesystem intent", source))?;
+        let prepared =
+            PreparedActiveReblitBootRenderInputs::prepare_until(&stone, &roots, &self.installation, deadline)
+                .map_err(|source| LiveNewStateBootError::at("boot render inputs", source))?;
+        let local_policy = PreparedActiveReblitLocalBootPolicy::prepare_until(&self.installation, deadline)
+            .map_err(|source| LiveNewStateBootError::at("local boot policy", source))?;
+        let root_intent = PreparedActiveReblitRootFilesystemIntent::prepare_until(&self.installation, deadline)
+            .map_err(|source| LiveNewStateBootError::at("root filesystem intent", source))?;
         let inputs = prepared
             .revalidate_until(
                 &self.state_db,
@@ -220,22 +207,19 @@ impl Client {
                 deadline,
             )
             .map_err(|source| LiveNewStateBootError::at("boot input revalidation", source))?;
-        let topology =
-            PreparedActiveReblitMountedBootTopology::prepare_until(&self.installation, deadline)
-                .map_err(|source| LiveNewStateBootError::at("mounted boot topology", source))?;
+        let topology = PreparedActiveReblitMountedBootTopology::prepare_until(&self.installation, deadline)
+            .map_err(|source| LiveNewStateBootError::at("mounted boot topology", source))?;
         let topology = topology
             .revalidate_until(&self.installation, deadline)
-            .map_err(|source| {
-                LiveNewStateBootError::at("mounted boot topology revalidation", source)
-            })?;
+            .map_err(|source| LiveNewStateBootError::at("mounted boot topology revalidation", source))?;
         let rendered = RenderedActiveReblitBlsRequests::render(&inputs)
             .map_err(|source| LiveNewStateBootError::at("BLS rendering", source))?;
         let plan = rendered
             .into_publication_plan(&topology)
             .map_err(|source| LiveNewStateBootError::at("boot publication planning", source))?;
-        let inventory = plan.prepare_desired_publication_inventory().map_err(|source| {
-            LiveNewStateBootError::at("desired boot publication inventory", source)
-        })?;
+        let inventory = plan
+            .prepare_desired_publication_inventory()
+            .map_err(|source| LiveNewStateBootError::at("desired boot publication inventory", source))?;
         let handoff = coordinator
             .into_new_state_boot_sync_handoff()
             .map_err(|source| LiveNewStateBootError::at("new state boot handoff", source))?;
@@ -250,9 +234,9 @@ impl Client {
             .map_err(|source| LiveNewStateBootError::at("boot receipt promotion", source))?;
         let cleaned = match promoted.try_into_cleaned() {
             Ok(cleaned) => cleaned,
-            Err(promoted) => promoted.cleanup_promoted_outputs(self).map_err(|source| {
-                LiveNewStateBootError::at("promoted boot output cleanup", source)
-            })?,
+            Err(promoted) => promoted
+                .cleanup_promoted_outputs(self)
+                .map_err(|source| LiveNewStateBootError::at("promoted boot output cleanup", source))?,
         };
         let completed = cleaned
             .persist_boot_sync_complete(self)

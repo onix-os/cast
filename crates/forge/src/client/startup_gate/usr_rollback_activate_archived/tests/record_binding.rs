@@ -73,17 +73,10 @@ fn assert_route_only(
     fixture.assert_exact_database_pair();
     fixture.assert_exact_archived_topology();
     assert_eq!(candidate_move_count(), 0);
-    let names = fs::read_dir(
-        fixture
-            .fixture
-            .fixture
-            .installation
-            .root
-            .join(".cast/journal"),
-    )
-    .unwrap()
-    .map(|entry| entry.unwrap().file_name())
-    .collect::<Vec<_>>();
+    let names = fs::read_dir(fixture.fixture.fixture.installation.root.join(".cast/journal"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
     assert_eq!(names.len(), 2, "bound route left journal residue: {names:?}");
 }
 
@@ -118,10 +111,9 @@ fn startup_activate_archived_complete_route_bound_advance_same_byte_replacements
                         );
                         arm_public_binding_revalidation_callback(boundary, hook);
 
-                        let error = persist_usr_rollback_activate_archived_complete_route_and_reopen(
-                            journal, authority,
-                        )
-                        .unwrap_err();
+                        let error =
+                            persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority)
+                                .unwrap_err();
 
                         assert_public_binding_revalidation_callback_consumed();
                         assert!(matches!(
@@ -168,9 +160,8 @@ fn startup_activate_archived_complete_route_same_byte_successor_replacement_fail
                     );
                     arm_before_usr_rollback_activate_archived_complete_route_successor_binding_revalidation(hook);
 
-                    let error =
-                        persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority)
-                            .unwrap_err();
+                    let error = persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority)
+                        .unwrap_err();
 
                     assert!(matches!(
                         error,
@@ -208,13 +199,10 @@ fn startup_activate_archived_complete_route_same_byte_successor_replacement_fail
                         &fixture,
                         format!("reopened-{epoch:?}-{source:?}-{usr_outcome:?}-{candidate_outcome:?}"),
                     );
-                    arm_after_usr_rollback_activate_archived_complete_route_successor_binding_check_before_reopen(
-                        hook,
-                    );
+                    arm_after_usr_rollback_activate_archived_complete_route_successor_binding_check_before_reopen(hook);
 
-                    let error =
-                        persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority)
-                            .unwrap_err();
+                    let error = persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority)
+                        .unwrap_err();
 
                     assert!(matches!(
                         error,

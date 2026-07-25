@@ -21,11 +21,11 @@ use crate::{
 };
 
 use super::super::UsrRollbackReverseDispatchError;
-pub(super) use super::super::test_fixture::create_private_directory;
-use super::super::test_fixture::ROOT_ABI;
 pub(super) use super::super::reverse_test_support::{
     EffectOperationKind as OperationKind, ReverseFixture as Fixture, ReverseLayout, SourceCase,
 };
+use super::super::test_fixture::ROOT_ABI;
+pub(super) use super::super::test_fixture::create_private_directory;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct UsrLayout {

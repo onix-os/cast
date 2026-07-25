@@ -13,8 +13,7 @@ use std::{
 };
 
 use config::declaration::{
-    DiscoveredRootDeclaration, RegisteredLanguages,
-    RootDeclarationDiscoveryError, RootDeclarationSlot,
+    DiscoveredRootDeclaration, RegisteredLanguages, RootDeclarationDiscoveryError, RootDeclarationSlot,
 };
 use declarative_config::LanguageSpec;
 
@@ -138,32 +137,11 @@ pub(super) fn capture_source(
         .expect("boot-topology component chain always retains etc/cast")
         .directory;
     let declaration = discover_source(parent, &path, languages, budget)?;
-    let source = open_source(
-        parent,
-        declaration.relative_path(),
-        declaration.path(),
-        budget,
-    )?;
+    let source = open_source(parent, declaration.relative_path(), declaration.path(), budget)?;
     let source_witness = source_witness(&source, declaration.path(), budget)?;
-    require_source_policy(
-        &source,
-        source_witness,
-        declaration.path(),
-        budget,
-    )?;
-    let bytes = read_source_bytes(
-        &source,
-        source_witness,
-        declaration.path(),
-        budget,
-    )?;
-    require_named_source(
-        parent,
-        &declaration,
-        languages,
-        source_witness,
-        budget,
-    )?;
+    require_source_policy(&source, source_witness, declaration.path(), budget)?;
+    let bytes = read_source_bytes(&source, source_witness, declaration.path(), budget)?;
+    require_named_source(parent, &declaration, languages, source_witness, budget)?;
     require_component_chain(&components, installation, budget)?;
 
     Ok((
@@ -184,24 +162,9 @@ pub(super) fn revalidate_source(
     budget: &mut BootTopologyIntentBudget,
 ) -> Result<Box<[u8]>, ActiveReblitBootTopologyIntentError> {
     require_component_chain(&retained.components, installation, budget)?;
-    require_source_policy(
-        &retained.source,
-        retained.source_witness,
-        retained.path(),
-        budget,
-    )?;
-    require_source_witness(
-        &retained.source,
-        retained.source_witness,
-        retained.path(),
-        budget,
-    )?;
-    let retained_bytes = read_source_bytes(
-        &retained.source,
-        retained.source_witness,
-        retained.path(),
-        budget,
-    )?;
+    require_source_policy(&retained.source, retained.source_witness, retained.path(), budget)?;
+    require_source_witness(&retained.source, retained.source_witness, retained.path(), budget)?;
+    let retained_bytes = read_source_bytes(&retained.source, retained.source_witness, retained.path(), budget)?;
     let parent = &retained
         .components
         .last()
@@ -217,9 +180,7 @@ pub(super) fn revalidate_source(
 
     let (actual, actual_bytes) = capture_source(installation, languages, budget)?;
     require_same_component_chains(&retained.components, &actual.components, installation, budget)?;
-    if actual.declaration != retained.declaration
-        || actual.source_witness != retained.source_witness
-    {
+    if actual.declaration != retained.declaration || actual.source_witness != retained.source_witness {
         return Err(ActiveReblitBootTopologyIntentError::Changed {
             path: retained.path().to_owned(),
             reason: "fixed boot-topology source name no longer selects the retained inode",
@@ -238,12 +199,7 @@ pub(super) fn revalidate_source(
             reason: "retained and rebound boot-topology source bytes differ",
         });
     }
-    require_source_witness(
-        &retained.source,
-        retained.source_witness,
-        retained.path(),
-        budget,
-    )?;
+    require_source_witness(&retained.source, retained.source_witness, retained.path(), budget)?;
     Ok(actual_bytes)
 }
 
@@ -308,8 +264,8 @@ fn open_source(
     budget: &mut BootTopologyIntentBudget,
 ) -> Result<std::fs::File, ActiveReblitBootTopologyIntentError> {
     budget.step(path)?;
-    let source_name = CString::new(relative_path.as_os_str().as_bytes())
-        .expect("validated declaration names contain no NUL byte");
+    let source_name =
+        CString::new(relative_path.as_os_str().as_bytes()).expect("validated declaration names contain no NUL byte");
     match openat2_file_until(
         directory.as_raw_fd(),
         &source_name,
@@ -334,12 +290,7 @@ fn require_named_source(
     budget: &mut BootTopologyIntentBudget,
 ) -> Result<(), ActiveReblitBootTopologyIntentError> {
     let path = expected_declaration.path();
-    let actual_declaration = discover_source(
-        directory,
-        path,
-        languages,
-        budget,
-    )?;
+    let actual_declaration = discover_source(directory, path, languages, budget)?;
     if &actual_declaration != expected_declaration {
         return Err(ActiveReblitBootTopologyIntentError::Changed {
             path: path.to_owned(),
@@ -376,9 +327,7 @@ fn discover_source(
         .discover_at(directory_path, directory, languages)
         .map_err(discovery_error)?;
     budget.require_deadline_at(path)?;
-    discovered.ok_or_else(|| ActiveReblitBootTopologyIntentError::Missing {
-        path: path.to_owned(),
-    })
+    discovered.ok_or_else(|| ActiveReblitBootTopologyIntentError::Missing { path: path.to_owned() })
 }
 
 fn declaration_slot() -> RootDeclarationSlot {
@@ -386,24 +335,18 @@ fn declaration_slot() -> RootDeclarationSlot {
         .expect("the fixed boot-topology declaration slot is canonical")
 }
 
-fn discovery_error(
-    error: RootDeclarationDiscoveryError,
-) -> ActiveReblitBootTopologyIntentError {
+fn discovery_error(error: RootDeclarationDiscoveryError) -> ActiveReblitBootTopologyIntentError {
     match error {
         RootDeclarationDiscoveryError::Inspect { path, source } => {
             io_error("discover fixed boot-topology source", &path, source)
         }
-        RootDeclarationDiscoveryError::NotRegular { path } => {
-            ActiveReblitBootTopologyIntentError::UnsafeInode {
-                path,
-                reason: "boot-topology source is not a regular file",
-            }
-        }
-        RootDeclarationDiscoveryError::Collision { .. } => {
-            ActiveReblitBootTopologyIntentError::EvaluationContract {
-                reason: "boot-topology declaration registry selected multiple languages",
-            }
-        }
+        RootDeclarationDiscoveryError::NotRegular { path } => ActiveReblitBootTopologyIntentError::UnsafeInode {
+            path,
+            reason: "boot-topology source is not a regular file",
+        },
+        RootDeclarationDiscoveryError::Collision { .. } => ActiveReblitBootTopologyIntentError::EvaluationContract {
+            reason: "boot-topology declaration registry selected multiple languages",
+        },
     }
 }
 

@@ -43,9 +43,11 @@ fn alias_and_distinct_routes_preserve_global_plan_order() {
     assert_eq!(reconstructed, [0, 1, 2, 3, 4]);
     assert!(matches!(
         domain_plan_position(BootTargetRole::Esp, &esp, 2),
-        Err(ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing {
-            role: BootTargetRole::Esp,
-            plan_index: 2,
-        }),
+        Err(
+            ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing {
+                role: BootTargetRole::Esp,
+                plan_index: 2,
+            }
+        ),
     ));
 }

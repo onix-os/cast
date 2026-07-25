@@ -14,11 +14,11 @@ const MAX_SELECTIONS_PER_STATE: usize = 32_768;
 const MAX_SELECTION_TEXT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_STATE_DATABASE_TEXT_FIELD_BYTES: usize = 64 * 1024;
 
-mod exact_archived_removal;
 mod boot_publication_receipt_head;
 mod boot_publication_receipts;
 #[allow(dead_code)] // L8 catalog substrate; consumed by the migration-bridge slice
 mod declaration_migrations;
+mod exact_archived_removal;
 #[allow(dead_code)] // exact fresh removal remains sealed from startup dispatch
 mod exact_fresh_transition_removal;
 #[allow(dead_code)] // consumed by the ActiveReblit frozen-boot wiring slice
@@ -28,30 +28,28 @@ mod metadata_provenance;
 mod read_only;
 mod schema;
 
-pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
+#[cfg(test)]
+#[allow(unused_imports)] // consumed by cross-module receipt-race tests
+pub(crate) use boot_publication_receipt_head::BootPublicationReceiptHeadRawForTest;
 #[allow(unused_imports)] // consumed by authenticated boot-publication coordination
 pub(crate) use boot_publication_receipt_head::{
     BootPublicationReceiptHead, BootPublicationReceiptHeadError, BootPublicationReceiptStageOutcome,
     PendingBootPublicationReceipt,
 };
-#[allow(unused_imports)] // consumed by authenticated boot-publication coordination
-pub(crate) use boot_publication_receipts::{
-    BootPublicationReceiptPromotionDurableState,
-    BootPublicationReceiptPromotionError,
-    BootPublicationReceiptPromotionOutcome,
-    CurrentExactPromotedBootPublicationReceiptChain,
-    CurrentExactPromotedBootPublicationReceiptChainError,
-    ExactPromotedBootPublicationReceiptChain,
-    BootPublicationReceiptState,
-    BootPublicationReceiptStateError,
-    ExactPromotedBootPublicationReceiptStateError,
-};
 #[cfg(test)]
 #[allow(unused_imports)] // consumed by cross-module receipt-promotion fault tests
 pub(crate) use boot_publication_receipts::arm_boot_publication_receipt_promotion_after_commit_error;
-#[cfg(test)]
-#[allow(unused_imports)] // consumed by cross-module receipt-race tests
-pub(crate) use boot_publication_receipt_head::BootPublicationReceiptHeadRawForTest;
+#[allow(unused_imports)] // consumed by authenticated boot-publication coordination
+pub(crate) use boot_publication_receipts::{
+    BootPublicationReceiptPromotionDurableState, BootPublicationReceiptPromotionError,
+    BootPublicationReceiptPromotionOutcome, BootPublicationReceiptState, BootPublicationReceiptStateError,
+    CurrentExactPromotedBootPublicationReceiptChain, CurrentExactPromotedBootPublicationReceiptChainError,
+    ExactPromotedBootPublicationReceiptChain, ExactPromotedBootPublicationReceiptStateError,
+};
+pub(crate) use declaration_migrations::{
+    CATALOG_SCHEMA_VERSION, DeclarationMigrationCommit, DeclarationMigrationError, DeclarationMigrationRow,
+};
+pub(crate) use exact_archived_removal::ExactArchivedRemovalError;
 #[cfg(test)]
 use exact_archived_removal::{ExactArchivedRemovalFault, arm_exact_archived_removal_fault};
 #[allow(unused_imports)] // exact fresh removal remains sealed from startup dispatch
@@ -69,10 +67,6 @@ pub(crate) use exact_fresh_transition_removal::{
 };
 #[allow(unused_imports)] // consumed by the ActiveReblit frozen-boot wiring slice
 pub(crate) use frozen_boot_input::{FrozenBootInput, FrozenBootInputError};
-pub(crate) use declaration_migrations::{
-    CATALOG_SCHEMA_VERSION, DeclarationMigrationCommit, DeclarationMigrationError,
-    DeclarationMigrationRow,
-};
 pub(crate) use metadata_provenance::{MetadataProvenance, MetadataProvenanceError};
 #[cfg(test)]
 pub(crate) use metadata_provenance::{

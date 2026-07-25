@@ -4,11 +4,7 @@ use std::{
     env,
     ffi::OsString,
     fs, io,
-    os::unix::{
-        ffi::OsStrExt as _,
-        fs::MetadataExt as _,
-        process::ExitStatusExt as _,
-    },
+    os::unix::{ffi::OsStrExt as _, fs::MetadataExt as _, process::ExitStatusExt as _},
     path::{Path, PathBuf},
     process::{Child, Command, ExitStatus, Stdio},
     thread,
@@ -177,17 +173,11 @@ impl RootLinksDeleteScenario {
                 true
             }
             Self::PrivateUnlinked => {
-                arm_journal_delete_durability_callback(
-                    JournalDeleteDurabilityBoundary::CanonicalUnlinked,
-                    death,
-                );
+                arm_journal_delete_durability_callback(JournalDeleteDurabilityBoundary::CanonicalUnlinked, death);
                 true
             }
             Self::DeleteDirectorySynced => {
-                arm_journal_delete_durability_callback(
-                    JournalDeleteDurabilityBoundary::DeleteDirectorySynced,
-                    death,
-                );
+                arm_journal_delete_durability_callback(JournalDeleteDurabilityBoundary::DeleteDirectorySynced, death);
                 true
             }
         }
@@ -288,7 +278,10 @@ impl ChildInvocation {
         assert_eq!(record.operation, self.operation.operation());
         assert_eq!(record.phase, Phase::RollbackComplete);
         assert_eq!(record.generation, self.operation.generation());
-        assert_eq!(record.rollback.as_ref().unwrap().source, ForwardPhase::RootLinksComplete);
+        assert_eq!(
+            record.rollback.as_ref().unwrap().source,
+            ForwardPhase::RootLinksComplete
+        );
         self.epoch.validate(&record);
         let expected_case = format!(
             "v1\n{}\n{}\n{}\n{}\n{}\n{}\n",
@@ -699,7 +692,11 @@ fn canonical_environment_path(name: &str) -> PathBuf {
 
 fn assert_host_temporary_path(path: &Path) {
     let temporary = fs::canonicalize(env::temp_dir()).unwrap();
-    assert!(path.starts_with(&temporary), "{} is outside the host temporary root", path.display());
+    assert!(
+        path.starts_with(&temporary),
+        "{} is outside the host temporary root",
+        path.display()
+    );
 }
 
 fn assert_separate_control_path(root: &Path, control: &Path) {
@@ -709,7 +706,10 @@ fn assert_separate_control_path(root: &Path, control: &Path) {
 
 fn assert_parent_environment_clean() {
     for name in [ROLE_ENV, OPERATION_ENV, EPOCH_ENV, SCENARIO_ENV, ROOT_ENV, CONTROL_ENV] {
-        assert!(env::var_os(name).is_none(), "parent inherited child-only environment {name}");
+        assert!(
+            env::var_os(name).is_none(),
+            "parent inherited child-only environment {name}"
+        );
     }
 }
 

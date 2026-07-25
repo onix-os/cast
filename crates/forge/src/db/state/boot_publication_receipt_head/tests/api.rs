@@ -99,9 +99,7 @@ fn every_nonexact_existing_pending_pair_is_a_hard_conflict() {
         committed: None,
         pending: fingerprint(0x60),
     };
-    database
-        .stage_boot_publication_receipt_pair(&owner, &pair)
-        .unwrap();
+    database.stage_boot_publication_receipt_pair(&owner, &pair).unwrap();
     let before = database.boot_publication_receipt_head().unwrap();
 
     for (requested_transition, requested_pair) in [

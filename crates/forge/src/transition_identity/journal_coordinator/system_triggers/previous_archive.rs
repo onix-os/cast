@@ -12,9 +12,8 @@
 use thiserror::Error;
 
 use super::{
-    CandidateMetadataProof, Phase, StatefulTransitionCoordinator,
-    StatefulTransitionCoordinatorError, SystemTriggersCompleteCoordinator, TransitionRecord,
-    UsrExchangeReadiness, advance_bound_system_trigger_record, db,
+    CandidateMetadataProof, Phase, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
+    SystemTriggersCompleteCoordinator, TransitionRecord, UsrExchangeReadiness, advance_bound_system_trigger_record, db,
     require_same_store_record_binding, require_system_trigger_same_store_evidence, state,
 };
 use crate::state::TransitionId;
@@ -55,9 +54,7 @@ pub(crate) struct PreviousArchivedCoordinator {
 
 #[derive(Debug, Error)]
 pub(crate) enum PreviousArchiveFailure {
-    #[error(
-        "transition {transition_id} is not an archive-previous SystemTriggersComplete authority"
-    )]
+    #[error("transition {transition_id} is not an archive-previous SystemTriggersComplete authority")]
     SourceContract { transition_id: TransitionId },
     #[error("transition {transition_id} failed predecessor-archive preflight")]
     Preflight {
@@ -106,9 +103,7 @@ pub(crate) enum PreviousArchiveBootHandoffFailure {
 impl SystemTriggersCompleteCoordinator {
     /// Durably archive the displaced predecessor tree, advancing the journal
     /// through `PreviousArchiveIntent → PreviousArchived`.
-    pub(crate) fn archive_previous_tree(
-        self,
-    ) -> Result<PreviousArchivedCoordinator, PreviousArchiveFailure> {
+    pub(crate) fn archive_previous_tree(self) -> Result<PreviousArchivedCoordinator, PreviousArchiveFailure> {
         let Self {
             coordinator,
             metadata,
@@ -141,10 +136,12 @@ impl SystemTriggersCompleteCoordinator {
 
         // Intent is durable before the physical move: a crash after this record
         // leaves startup reconciliation to complete or reverse the archive.
-        let intent = archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent")
-            .map_err(|stage| PreviousArchiveFailure::SuccessorContract {
-                transition_id: transition_id.clone(),
-                stage,
+        let intent =
+            archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent").map_err(|stage| {
+                PreviousArchiveFailure::SuccessorContract {
+                    transition_id: transition_id.clone(),
+                    stage,
+                }
             })?;
         let (coordinator, record_binding) = advance_bound_system_trigger_record(
             coordinator,
@@ -162,14 +159,11 @@ impl SystemTriggersCompleteCoordinator {
         })?;
 
         // Physical move of the exact staged predecessor into its state slot.
-        let previous_id = coordinator
-            .record
-            .previous
-            .id
-            .map(state::Id::from)
-            .ok_or_else(|| PreviousArchiveFailure::SourceContract {
+        let previous_id = coordinator.record.previous.id.map(state::Id::from).ok_or_else(|| {
+            PreviousArchiveFailure::SourceContract {
                 transition_id: transition_id.clone(),
-            })?;
+            }
+        })?;
         let seal = PreviousArchiveEffectSeal { _private: () };
         coordinator
             .identity
@@ -181,23 +175,24 @@ impl SystemTriggersCompleteCoordinator {
 
         // Completion is durable only after the move succeeded.
         let archived =
-            archive_successor(&coordinator.record, Phase::PreviousArchived, "archived").map_err(
-                |stage| PreviousArchiveFailure::SuccessorContract {
+            archive_successor(&coordinator.record, Phase::PreviousArchived, "archived").map_err(|stage| {
+                PreviousArchiveFailure::SuccessorContract {
                     transition_id: transition_id.clone(),
                     stage,
-                },
-            )?;
+                }
+            })?;
         // The physical move deliberately relocated the previous tree out of
         // staging, so the tree/root-ABI same-store sandwich no longer holds by
         // design. Completion re-validates only the journal record binding (cast
         // and canonical inode), which the move did not touch.
         let (coordinator, record_binding) =
-            advance_archive_completion_record(coordinator, &authority, record_binding, archived)
-                .map_err(|source| PreviousArchiveFailure::Advance {
+            advance_archive_completion_record(coordinator, &authority, record_binding, archived).map_err(|source| {
+                PreviousArchiveFailure::Advance {
                     transition_id,
                     stage: "archived",
                     source,
-                })?;
+                }
+            })?;
 
         Ok(PreviousArchivedCoordinator {
             coordinator,
@@ -216,8 +211,7 @@ impl PreviousArchivedCoordinator {
     /// so `boot::synchronize` can enumerate it as an immediate rollback entry.
     pub(crate) fn into_new_state_boot_sync_handoff(
         self,
-    ) -> Result<crate::client::CoordinatorActiveReblitBootSyncHandoff, PreviousArchiveBootHandoffFailure>
-    {
+    ) -> Result<crate::client::CoordinatorActiveReblitBootSyncHandoff, PreviousArchiveBootHandoffFailure> {
         let Self {
             coordinator,
             metadata,
@@ -240,17 +234,13 @@ impl PreviousArchivedCoordinator {
             .map_err(preflight)?;
         // The predecessor tree left staging during the archive, so only the
         // journal record binding (cast + canonical inode) is re-validated here.
-        require_same_store_record_binding(&coordinator, &authority, &record_binding)
-            .map_err(preflight)?;
+        require_same_store_record_binding(&coordinator, &authority, &record_binding).map_err(preflight)?;
 
-        let candidate_id = coordinator
-            .record
-            .candidate
-            .id
-            .map(state::Id::from)
-            .ok_or_else(|| PreviousArchiveBootHandoffFailure::SourceContract {
+        let candidate_id = coordinator.record.candidate.id.map(state::Id::from).ok_or_else(|| {
+            PreviousArchiveBootHandoffFailure::SourceContract {
                 transition_id: transition_id.clone(),
-            })?;
+            }
+        })?;
         let installation = authority.installation().clone();
         let active_state_reservation = authority.into_active_state_reservation();
         drop(metadata);
@@ -310,9 +300,7 @@ fn exact_new_state_boot_source(record: &TransitionRecord) -> bool {
 }
 
 fn exact_archive_previous_source(record: &TransitionRecord) -> bool {
-    record.phase == Phase::SystemTriggersComplete
-        && record.options.archive_previous
-        && record.previous.id.is_some()
+    record.phase == Phase::SystemTriggersComplete && record.options.archive_previous && record.previous.id.is_some()
 }
 
 fn archive_successor(
@@ -341,10 +329,11 @@ fn advance_archive_completion_record(
         .installation()
         .retained_mutable_cast_directory()
         .map_err(crate::transition_identity::Error::from)?;
-    let successor_binding = coordinator
-        .identity
-        .journal
-        .advance_record_binding(&cast, predecessor_binding, &successor)?;
+    let successor_binding =
+        coordinator
+            .identity
+            .journal
+            .advance_record_binding(&cast, predecessor_binding, &successor)?;
     coordinator.record = successor;
     require_same_store_record_binding(&coordinator, authority, &successor_binding)?;
     Ok((coordinator, successor_binding))

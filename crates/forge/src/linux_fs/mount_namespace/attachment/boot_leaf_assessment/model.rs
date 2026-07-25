@@ -107,7 +107,10 @@ impl ValidatedRetainedBootLeafAssessment {
         expected_sha256: [u8; 32],
         exact_file_identity: Option<(u64, u64, u64)>,
     ) -> Self {
-        debug_assert_eq!(state == RetainedBootLeafAssessmentState::Exact, exact_file_identity.is_some());
+        debug_assert_eq!(
+            state == RetainedBootLeafAssessmentState::Exact,
+            exact_file_identity.is_some()
+        );
         let retained_parent = retained_parent_identity.map(file_identity_from_tuple);
         let exact_file = exact_file_identity.map(file_identity_from_tuple);
         Self {

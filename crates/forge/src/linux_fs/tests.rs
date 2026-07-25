@@ -12,13 +12,13 @@ mod authenticated_mountinfo_snapshot;
 #[path = "tests/mountinfo_boot_policy.rs"]
 mod boot_mount_policy;
 mod chmod_once;
-mod descriptor_boot_filesystem;
 mod descriptor_boot_file_publication;
 mod descriptor_boot_file_replacement;
+mod descriptor_boot_filesystem;
 mod descriptor_boot_leaf_assessment;
-mod descriptor_boot_publication_parent;
 mod descriptor_boot_namespace;
 mod descriptor_boot_namespace_production;
+mod descriptor_boot_publication_parent;
 mod descriptor_devtmpfs_filesystem;
 #[path = "tests/mountinfo_devtmpfs_policy.rs"]
 mod devtmpfs_mount_policy;

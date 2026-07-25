@@ -39,7 +39,12 @@ fn receipt_table_constraints_reject_invalid_storage_shapes() {
         "INSERT INTO boot_publication_receipts VALUES (zeroblob(32), '33333333333333333333333333333333', zeroblob(16777217))",
         "INSERT INTO boot_publication_receipts VALUES (zeroblob(32), '33333333333333333333333333333333', 'not-a-blob')",
     ] {
-        assert!(database.conn.exec(|connection| diesel::sql_query(statement).execute(connection)).is_err());
+        assert!(
+            database
+                .conn
+                .exec(|connection| diesel::sql_query(statement).execute(connection))
+                .is_err()
+        );
         assert_eq!(receipt_row_count(&database), 0);
     }
 
@@ -57,16 +62,21 @@ fn receipt_table_constraints_reject_invalid_storage_shapes() {
     assert_eq!(receipt_row_count(&database), 1);
 
     let same_transition = receipt('3', None, 0x34);
-    assert!(database.conn.exec(|connection| {
-        diesel::sql_query(
-            "INSERT INTO boot_publication_receipts (receipt_sha256, transition_id, canonical_body) \
+    assert!(
+        database
+            .conn
+            .exec(|connection| {
+                diesel::sql_query(
+                    "INSERT INTO boot_publication_receipts (receipt_sha256, transition_id, canonical_body) \
              VALUES (?, ?, ?)",
-        )
-        .bind::<Binary, _>(same_transition.fingerprint().as_bytes().as_slice())
-        .bind::<Text, _>(same_transition.body().transition_id().as_str())
-        .bind::<Binary, _>(same_transition.canonical_body())
-        .execute(connection)
-    }).is_err());
+                )
+                .bind::<Binary, _>(same_transition.fingerprint().as_bytes().as_slice())
+                .bind::<Text, _>(same_transition.body().transition_id().as_str())
+                .bind::<Binary, _>(same_transition.canonical_body())
+                .execute(connection)
+            })
+            .is_err()
+    );
     assert_eq!(receipt_row_count(&database), 1);
 }
 

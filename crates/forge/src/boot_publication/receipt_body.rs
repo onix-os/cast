@@ -283,10 +283,8 @@ impl BootPublicationDestinations {
         if esp.historical_runtime_witness.disk_sequence != xbootldr.historical_runtime_witness.disk_sequence {
             return Err(BootPublicationReceiptBodyError::DistinctDiskSequenceMismatch);
         }
-        if esp.historical_runtime_witness.destination_device
-            == xbootldr.historical_runtime_witness.destination_device
-            && esp.historical_runtime_witness.destination_inode
-                == xbootldr.historical_runtime_witness.destination_inode
+        if esp.historical_runtime_witness.destination_device == xbootldr.historical_runtime_witness.destination_device
+            && esp.historical_runtime_witness.destination_inode == xbootldr.historical_runtime_witness.destination_inode
         {
             return Err(BootPublicationReceiptBodyError::DistinctRuntimeDestinationCollision);
         }
@@ -693,9 +691,10 @@ fn role_binding(role: BootPublicationOutputRole) -> (BootPublicationRoot, BootPu
     match role {
         BootPublicationOutputRole::Payload => (BootPublicationRoot::Boot, BootPublicationPublicationPhase::Payload),
         BootPublicationOutputRole::Entry => (BootPublicationRoot::Boot, BootPublicationPublicationPhase::Entry),
-        BootPublicationOutputRole::LoaderControl => {
-            (BootPublicationRoot::Boot, BootPublicationPublicationPhase::LoaderControl)
-        }
+        BootPublicationOutputRole::LoaderControl => (
+            BootPublicationRoot::Boot,
+            BootPublicationPublicationPhase::LoaderControl,
+        ),
         BootPublicationOutputRole::FallbackBootloader | BootPublicationOutputRole::SystemdBootloader => {
             (BootPublicationRoot::Esp, BootPublicationPublicationPhase::Bootloader)
         }
@@ -797,10 +796,7 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
     encoded
 }
 
-fn deserialize_lower_hex<'de, D, const N: usize>(
-    deserializer: D,
-    expected: &'static str,
-) -> Result<[u8; N], D::Error>
+fn deserialize_lower_hex<'de, D, const N: usize>(deserializer: D, expected: &'static str) -> Result<[u8; N], D::Error>
 where
     D: Deserializer<'de>,
 {

@@ -55,11 +55,8 @@ fn generated_repository_fragment_has_exact_normalized_owned_value() {
         "repository-fragment.glu",
         include_str!("../../../../../../tests/fixtures/gluon/goldens/repository-fragment.glu"),
     );
-    let evaluated = <RepositoryCodec as DeclarationEvaluator<Map>>::evaluate(
-        &RepositoryCodec::default(),
-        &source,
-    )
-    .unwrap();
+    let evaluated =
+        <RepositoryCodec as DeclarationEvaluator<Map>>::evaluate(&RepositoryCodec::default(), &source).unwrap();
     let actual = evaluated
         .value
         .iter()

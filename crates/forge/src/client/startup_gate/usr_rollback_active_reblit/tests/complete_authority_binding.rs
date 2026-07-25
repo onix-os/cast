@@ -1,16 +1,13 @@
 //! Direct negative proof for a capability pairing startup cannot construct.
 
-use crate::{
-    client::active_state_snapshot::ActiveStateReservation,
-    transition_journal::RollbackActionOutcome,
-};
+use crate::{client::active_state_snapshot::ActiveStateReservation, transition_journal::RollbackActionOutcome};
 
 use super::{
     super::candidate_test_support::CandidateSource,
     support::{
         CandidateOrigin, Epoch, WRAPPER_INDEX, assert_complete_route_journal_only,
-        assert_exact_no_boot_completion_plan, build_active, capture_complete_route_ready,
-        persist_candidate_preserved, reset_complete_route_effect_observers,
+        assert_exact_no_boot_completion_plan, build_active, capture_complete_route_ready, persist_candidate_preserved,
+        reset_complete_route_effect_observers,
     },
 };
 

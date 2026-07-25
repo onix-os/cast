@@ -128,9 +128,7 @@ impl TransitionRecord {
     ) -> Result<Self, CodecError> {
         self.validate()?;
         if self.version != PAYLOAD_VERSION {
-            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(
-                self.version,
-            ));
+            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(self.version));
         }
         let current = self.phase.forward().ok_or(CodecError::IllegalPhaseAdvance {
             current: self.phase,
@@ -160,9 +158,7 @@ impl TransitionRecord {
     ) -> Result<Self, CodecError> {
         self.validate()?;
         if self.version != PAYLOAD_VERSION {
-            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(
-                self.version,
-            ));
+            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(self.version));
         }
         if self.phase != Phase::BootSyncStarted {
             return Err(CodecError::IllegalPhaseAdvance {

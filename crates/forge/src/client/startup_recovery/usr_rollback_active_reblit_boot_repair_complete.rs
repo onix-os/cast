@@ -33,7 +33,10 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_complete
     let successor = authority.rollback_complete_successor()?;
     let successor_boot = successor.rollback.as_ref().map(|rollback| rollback.boot);
     if successor.phase != Phase::RollbackComplete
-        || !matches!(successor_boot, Some(BootRollback::Applied | BootRollback::AlreadySatisfied))
+        || !matches!(
+            successor_boot,
+            Some(BootRollback::Applied | BootRollback::AlreadySatisfied)
+        )
         || successor_boot != source_boot
     {
         drop(authority);
@@ -53,8 +56,8 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_complete
     drop(authority);
     drop(journal);
 
-    let reopened = reopen_canonical_journal(&installation)
-        .map_err(UsrRollbackActiveReblitBootRepairCompleteReopenError::from);
+    let reopened =
+        reopen_canonical_journal(&installation).map_err(UsrRollbackActiveReblitBootRepairCompleteReopenError::from);
     match advance {
         Ok(()) => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => Ok((reopened, successor)),
@@ -66,9 +69,9 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_boot_repair_complete
                     },
                 )
             }
-            Err(source) => Err(
-                UsrRollbackActiveReblitBootRepairCompletePersistenceError::ReopenAfterSuccessfulAdvance { source },
-            ),
+            Err(source) => {
+                Err(UsrRollbackActiveReblitBootRepairCompletePersistenceError::ReopenAfterSuccessfulAdvance { source })
+            }
         },
         Err(advance_error) => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {
@@ -149,7 +152,9 @@ pub(in crate::client) enum UsrRollbackActiveReblitBootRepairCompletePersistenceE
     Authority(#[from] UsrRollbackActiveReblitBootRepairCompleteAuthorityError),
     #[error("derive the sole legal ActiveReblit RollbackComplete successor after verified boot repair")]
     RouteConstruction(#[from] CodecError),
-    #[error("ActiveReblit successful boot-repair route selected unexpected successor phase {phase:?} and boot state {boot:?}")]
+    #[error(
+        "ActiveReblit successful boot-repair route selected unexpected successor phase {phase:?} and boot state {boot:?}"
+    )]
     UnexpectedSuccessor { phase: Phase, boot: Option<BootRollback> },
     #[error("ActiveReblit BootRepairComplete route failed after reopening exact durable {durable:?}")]
     Advance {

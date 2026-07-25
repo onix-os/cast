@@ -20,11 +20,8 @@ fn startup_active_reblit_boot_repair_complete_routes_all_exact_success_outcomes_
             for candidate_outcome in CandidateOrigin::ALL {
                 for boot_outcome in [BootRepairOutcome::Applied, BootRepairOutcome::AlreadySatisfied] {
                     let fixture = build_boot_sync_started(epoch, BootSyncStartedLayout::Post);
-                    let preserved = drive_boot_sync_started_to_candidate_preserved(
-                        &fixture,
-                        usr_outcome,
-                        candidate_outcome,
-                    );
+                    let preserved =
+                        drive_boot_sync_started_to_candidate_preserved(&fixture, usr_outcome, candidate_outcome);
                     let required = expected_boot_repair_required(&preserved);
                     let required_entry = enter_boot(&fixture);
                     assert_pending_phase(&required_entry, Phase::BootRepairRequired);

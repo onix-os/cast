@@ -139,13 +139,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
                 ))
             }
             Err(source) => {
-                revalidate_trailing_non_database(
-                    &installation,
-                    &record,
-                    &namespace,
-                    &journal_record_binding,
-                    journal,
-                )?;
+                revalidate_trailing_non_database(&installation, &record, &namespace, &journal_record_binding, journal)?;
                 Ok(match source.outcome() {
                     db::state::ExactFreshTransitionRemovalOutcome::DefinitelyNotApplied => {
                         UsrRollbackFreshDbInvalidationApplyReconciliation::NotApplied

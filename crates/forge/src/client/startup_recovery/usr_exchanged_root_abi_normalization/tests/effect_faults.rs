@@ -71,7 +71,10 @@ fn startup_usr_exchanged_root_abi_exact_eexist_is_authenticated_and_wrong_eexist
         symlink("usr/not-lib", wrong_root.join("lib")).unwrap();
     });
     assert_execution_failure(wrong.enter());
-    assert_eq!(fs::read_link(wrong.installation.root.join("lib")).unwrap(), std::path::Path::new("usr/not-lib"));
+    assert_eq!(
+        fs::read_link(wrong.installation.root.join("lib")).unwrap(),
+        std::path::Path::new("usr/not-lib")
+    );
     assert!(fs::symlink_metadata(wrong.installation.root.join("bin")).is_ok());
     assert!(fs::symlink_metadata(wrong.installation.root.join("sbin")).is_ok());
     assert!(fs::symlink_metadata(wrong.installation.root.join("lib32")).is_err());
@@ -133,7 +136,10 @@ fn startup_usr_exchanged_root_abi_next_name_race_after_preflight_fails_partial()
     assert_eq!(fixture.canonical_bytes(), source);
     assert_eq!(fixture.canonical_record().phase, Phase::UsrExchanged);
     assert_eq!(usr_exchanged_root_abi_publication_attempts(), 1);
-    assert_eq!(fs::read_link(fixture.installation.root.join("lib.next")).unwrap(), std::path::Path::new("usr/lib"));
+    assert_eq!(
+        fs::read_link(fixture.installation.root.join("lib.next")).unwrap(),
+        std::path::Path::new("usr/lib")
+    );
 }
 
 #[test]

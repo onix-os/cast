@@ -10,21 +10,15 @@ use std::{
 };
 
 use super::{
-    AssessmentBinding, AttachmentIdentity, RetainedBootLeafAssessmentError,
-    RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
-    RetainedBootLeafAssessmentState, ValidatedRetainedBootLeafAssessment,
-    assess_from_retained_parent_until, checkpoint, effect, open_parent_alias,
-    require_parent, validate_request,
-};
-use crate::linux_fs::{
-    controlled_resolution, descriptor_mount_id_until, openat2_file_until,
+    AssessmentBinding, AttachmentIdentity, RetainedBootLeafAssessmentError, RetainedBootLeafAssessmentLimits,
+    RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState, ValidatedRetainedBootLeafAssessment,
+    assess_from_retained_parent_until, checkpoint, effect, open_parent_alias, require_parent, validate_request,
 };
 use crate::linux_fs::mount_namespace::attachment::{
     RevalidatedTaskRootedAttachment,
-    boot_file_publication::{
-        RetainedBootFilePublicationError, RetainedBootFilePublicationTarget,
-    },
+    boot_file_publication::{RetainedBootFilePublicationError, RetainedBootFilePublicationTarget},
 };
+use crate::linux_fs::{controlled_resolution, descriptor_mount_id_until, openat2_file_until};
 
 const MAX_PARENT_COMPONENTS: usize = 15;
 
@@ -77,8 +71,7 @@ impl RevalidatedTaskRootedAttachment<'_> {
         limits: RetainedBootLeafAssessmentLimits,
         deadline: Instant,
     ) -> Result<ValidatedRetainedBootLeafAssessment, RetainedBootLeafAssessmentError> {
-        let (parent_names, parent_components) =
-            copy_parent_components(validated_parent_components, deadline)?;
+        let (parent_names, parent_components) = copy_parent_components(validated_parent_components, deadline)?;
         let (_, canonical_leaf) = validate_request(request, limits, deadline)?;
         let root = self.publication_parent_identity();
         let binding = AssessmentBinding {
@@ -163,10 +156,7 @@ fn copy_parent_components(
         {
             return Err(RetainedBootLeafAssessmentError::InvalidParentComponent { index });
         }
-        names.push(
-            CString::new(bytes)
-                .map_err(|_| RetainedBootLeafAssessmentError::InvalidParentComponent { index })?,
-        );
+        names.push(CString::new(bytes).map_err(|_| RetainedBootLeafAssessmentError::InvalidParentComponent { index })?);
         let mut copy = String::new();
         copy.try_reserve_exact(bytes.len())
             .map_err(|source| RetainedBootLeafAssessmentError::Allocation { source })?;
@@ -208,11 +198,7 @@ fn walk_existing_parents<'view, 'prepared>(
             }
         };
         let identity = observe_directory(&file, root_identity, index, deadline)?;
-        chain.push(RetainedReadOnlyDirectory {
-            name,
-            file,
-            identity,
-        });
+        chain.push(RetainedReadOnlyDirectory { name, file, identity });
     }
     require_existing_chain(root, &root_file, root_identity, &chain, deadline)?;
     Ok(ParentWalk::Existing(RetainedReadOnlyParent {
@@ -233,10 +219,7 @@ fn open_directory(
     openat2_file_until(
         parent.as_raw_fd(),
         name,
-        nix::libc::O_PATH
-            | nix::libc::O_DIRECTORY
-            | nix::libc::O_CLOEXEC
-            | nix::libc::O_NOFOLLOW,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         controlled_resolution(),
         deadline,
@@ -334,7 +317,12 @@ fn require_existing_chain(
     deadline: Instant,
 ) -> Result<(), RetainedBootLeafAssessmentError> {
     require_parent(root, "revalidating the read-only boot-leaf parent chain", deadline)?;
-    require_directory_identity(root_file, root_identity, "revalidating the read-only boot-leaf root", deadline)?;
+    require_directory_identity(
+        root_file,
+        root_identity,
+        "revalidating the read-only boot-leaf root",
+        deadline,
+    )?;
     let mut parent = root_file;
     for (index, directory) in chain.iter().enumerate() {
         require_directory_identity(
@@ -356,7 +344,11 @@ fn require_existing_chain(
         )?;
         parent = &directory.file;
     }
-    require_parent(root, "closing the read-only boot-leaf parent-chain revalidation", deadline)
+    require_parent(
+        root,
+        "closing the read-only boot-leaf parent-chain revalidation",
+        deadline,
+    )
 }
 
 fn require_directory_identity(
@@ -426,16 +418,11 @@ impl RetainedBootFilePublicationTarget for RetainedReadOnlyParent<'_, '_> {
         action: &'static str,
         deadline: Instant,
     ) -> Result<(), RetainedBootFilePublicationError> {
-        require_existing_chain(
-            self.root,
-            &self.root_file,
-            self.root_identity,
-            &self.chain,
-            deadline,
+        require_existing_chain(self.root, &self.root_file, self.root_identity, &self.chain, deadline).map_err(
+            |source| RetainedBootFilePublicationError::Attachment {
+                action,
+                source: io::Error::other(source.to_string()),
+            },
         )
-        .map_err(|source| RetainedBootFilePublicationError::Attachment {
-            action,
-            source: io::Error::other(source.to_string()),
-        })
     }
 }

@@ -9,8 +9,7 @@ use crate::{
         },
     },
     linux_fs::{
-        mountinfo_boot_policy::validated_boot_mount_policy_fixture,
-        sysfs_block::parse_sysfs_partition_identity,
+        mountinfo_boot_policy::validated_boot_mount_policy_fixture, sysfs_block::parse_sysfs_partition_identity,
     },
 };
 
@@ -32,8 +31,7 @@ fn target(
     let uevent = format!(
         "MAJOR={major}\nMINOR={minor}\nDEVNAME=synthetic-diskp{partition_number}\nDEVTYPE=partition\nPARTN={partition_number}\nPARTUUID={partuuid}\nDISKSEQ=77\n"
     );
-    let identity =
-        parse_sysfs_partition_identity(dev.as_bytes(), partition.as_bytes(), uevent.as_bytes()).unwrap();
+    let identity = parse_sysfs_partition_identity(dev.as_bytes(), partition.as_bytes(), uevent.as_bytes()).unwrap();
     let raw_device = u64::try_from(nix::libc::makedev(major, minor)).unwrap();
     MountedBootTargetObservation::new(
         BoundActiveReblitBootPartitionSelector {

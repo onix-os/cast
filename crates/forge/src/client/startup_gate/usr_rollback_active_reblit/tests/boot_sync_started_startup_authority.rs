@@ -16,9 +16,8 @@ use crate::{
 
 use super::{
     boot_sync_complete_support::{
-        BootSyncCompleteReadOnlySnapshot, boot_sync_started_fixture,
-        capture_boot_sync_started, capture_boot_sync_started_ready,
-        capture_boot_sync_started_record, open_boot_sync_complete_journal,
+        BootSyncCompleteReadOnlySnapshot, boot_sync_started_fixture, capture_boot_sync_started,
+        capture_boot_sync_started_ready, capture_boot_sync_started_record, open_boot_sync_complete_journal,
         same_byte_different_inode_hook,
     },
     support::Epoch,
@@ -42,17 +41,13 @@ fn exact_promoted_chain_plan_state_selection_namespace_and_binding_admit() {
         let read_only = BootSyncCompleteReadOnlySnapshot::capture(&fixture);
         let journal = open_boot_sync_complete_journal(&fixture);
         let reservation = ActiveStateReservation::acquire().unwrap();
-        let authority =
-            capture_boot_sync_started_ready(&fixture, &journal, &reservation);
+        let authority = capture_boot_sync_started_ready(&fixture, &journal, &reservation);
 
         assert_eq!(authority.record(), &source);
         assert_eq!(authority.installation().root, fixture.fixture.installation.root);
         authority.revalidate(&journal).unwrap();
         let plan = authority.cleanup_plan(&journal).unwrap();
-        let pair = source
-            .boot_publication_receipt_correlation()
-            .unwrap()
-            .unwrap();
+        let pair = source.boot_publication_receipt_correlation().unwrap().unwrap();
         assert_eq!(plan.promoted_receipt(), pair.pending);
         drop(plan);
         assert_eq!(fixture.fixture.canonical_record(), source);
@@ -87,15 +82,7 @@ fn stable_wrong_selection_defers_but_unbound_record_fails_stop() {
     unbound_record.candidate.id = None;
     let journal = open_boot_sync_complete_journal(&malformed);
     let reservation = ActiveStateReservation::acquire().unwrap();
-    assert!(
-        capture_boot_sync_started_record(
-            &malformed,
-            &journal,
-            &reservation,
-            &unbound_record,
-        )
-        .is_err()
-    );
+    assert!(capture_boot_sync_started_record(&malformed, &journal, &reservation, &unbound_record,).is_err());
     assert_eq!(malformed.fixture.canonical_record(), malformed.fixture.source);
 }
 
@@ -106,19 +93,13 @@ fn database_receipt_chain_and_source_binding_races_fail_stop() {
     let candidate = database_race.fixture.candidate_state;
     arm_between_active_reblit_boot_sync_started_database_captures(move || {
         database
-            .change_summary_for_test(
-                candidate,
-                Some("changed inside BootSyncStarted recovery sandwich"),
-            )
+            .change_summary_for_test(candidate, Some("changed inside BootSyncStarted recovery sandwich"))
             .unwrap();
     });
     let journal = open_boot_sync_complete_journal(&database_race);
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(capture_boot_sync_started(&database_race, &journal, &reservation).is_err());
-    assert_eq!(
-        database_race.fixture.canonical_record(),
-        database_race.fixture.source,
-    );
+    assert_eq!(database_race.fixture.canonical_record(), database_race.fixture.source,);
     drop(reservation);
     drop(journal);
 
@@ -130,17 +111,15 @@ fn database_receipt_chain_and_source_binding_races_fail_stop() {
     let journal = open_boot_sync_complete_journal(&receipt_race);
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(capture_boot_sync_started(&receipt_race, &journal, &reservation).is_err());
-    assert_eq!(
-        receipt_race.fixture.canonical_record(),
-        receipt_race.fixture.source,
-    );
+    assert_eq!(receipt_race.fixture.canonical_record(), receipt_race.fixture.source,);
     drop(reservation);
     drop(journal);
 
     let binding_race = boot_sync_started_fixture(Epoch::Historical, true);
-    arm_between_active_reblit_boot_sync_started_database_captures(
-        same_byte_different_inode_hook(&binding_race, "boot-sync-started-authority"),
-    );
+    arm_between_active_reblit_boot_sync_started_database_captures(same_byte_different_inode_hook(
+        &binding_race,
+        "boot-sync-started-authority",
+    ));
     let journal = open_boot_sync_complete_journal(&binding_race);
     let reservation = ActiveStateReservation::acquire().unwrap();
     assert!(capture_boot_sync_started(&binding_race, &journal, &reservation).is_err());

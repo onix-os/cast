@@ -19,14 +19,14 @@ mod receipt_codec;
 pub(crate) use receipt_body::{
     BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
     BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
-    BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationReceiptBodyError,
-    BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
-    MAX_BOOT_PUBLICATION_RECEIPT_OUTPUTS,
+    BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationReceiptBodyError, BootPublicationRoot,
+    BootPublicationSha256, BootPublicationXxh3, MAX_BOOT_PUBLICATION_RECEIPT_OUTPUTS,
 };
 #[allow(unused_imports)] // shared with durable receipt storage
 pub(crate) use receipt_codec::{
-    BootPublicationReceiptCodecError, CanonicalBootPublicationReceipt, decode_boot_publication_receipt,
-    prepare_boot_publication_receipt, MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES,
+    BootPublicationReceiptCodecError, CanonicalBootPublicationReceipt,
+    MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES, decode_boot_publication_receipt,
+    prepare_boot_publication_receipt,
 };
 
 const FINGERPRINT_BYTES: usize = 32;

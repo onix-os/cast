@@ -35,13 +35,13 @@ use super::{
     RevalidatedTaskRootedAttachment,
     boot_file_publication::{
         AttachmentIdentity, RetainedBootFilePublicationError, RetainedBootFilePublicationLimits,
-        RetainedBootFilePublicationRequest, RetainedBootFilePublicationTarget,
-        ValidatedRetainedBootFilePublication, publish_immutable_boot_file_from_target_until,
+        RetainedBootFilePublicationRequest, RetainedBootFilePublicationTarget, ValidatedRetainedBootFilePublication,
+        publish_immutable_boot_file_from_target_until,
     },
 };
 use crate::linux_fs::{
-    controlled_resolution, descriptor_boot_namespace::RetainedBootNamespaceExpectedSource,
-    descriptor_mount_id_until, mkdirat_once, openat2_file_until, sync_filesystem_until,
+    controlled_resolution, descriptor_boot_namespace::RetainedBootNamespaceExpectedSource, descriptor_mount_id_until,
+    mkdirat_once, openat2_file_until, sync_filesystem_until,
 };
 
 #[path = "boot_publication_parent/effect.rs"]
@@ -54,8 +54,7 @@ use effect::FixtureRetainedBootPublicationParentCheckpoint as ParentCheckpoint;
 #[cfg(test)]
 pub(crate) use effect::{
     FixtureRetainedBootPublicationParentCheckpoint, FixtureRetainedBootPublicationParentFault,
-    arm_retained_boot_publication_parent_checkpoint_hook,
-    arm_retained_boot_publication_parent_fault,
+    arm_retained_boot_publication_parent_checkpoint_hook, arm_retained_boot_publication_parent_fault,
 };
 
 const MAX_PARENT_COMPONENTS: usize = 15;
@@ -195,16 +194,15 @@ fn retain_boot_publication_parent_with<'view, 'prepared>(
             source,
         })?;
     let root_attachment = root.publication_parent_identity();
-    let (root_file, root_identity) =
-        open_directory_alias(root.publication_parent(), root_attachment, 0, deadline)?;
+    let (root_file, root_identity) = open_directory_alias(root.publication_parent(), root_attachment, 0, deadline)?;
     let mut chain = Vec::new();
-    chain.try_reserve_exact(names.len()).map_err(|source| {
-        RetainedBootPublicationParentError::Filesystem {
+    chain
+        .try_reserve_exact(names.len())
+        .map_err(|source| RetainedBootPublicationParentError::Filesystem {
             index: 0,
             action: "allocating retained publication-parent descriptors",
             source: io::Error::other(source.to_string()),
-        }
-    })?;
+        })?;
 
     for (index, name) in names.into_iter().enumerate() {
         require_named_chain(root, &root_file, root_identity, &chain, deadline).map_err(|source| {
@@ -213,26 +211,17 @@ fn retain_boot_publication_parent_with<'view, 'prepared>(
                 source,
             }
         })?;
-        let parent = chain.last().map_or(
-            &root_file,
-            |entry: &RetainedPublicationDirectory| &entry.file,
-        );
+        let parent = chain
+            .last()
+            .map_or(&root_file, |entry: &RetainedPublicationDirectory| &entry.file);
         let parent_identity = chain
             .last()
             .map_or(root_identity, |entry: &RetainedPublicationDirectory| entry.identity);
         let (file, created) = match mode {
-            ParentRetentionMode::CreateMissing => open_or_create_component(
-                parent,
-                parent_identity,
-                &name,
-                root_identity,
-                index,
-                deadline,
-            )?,
-            ParentRetentionMode::ExistingOnly => (
-                open_existing_component(parent, &name, index, deadline)?,
-                false,
-            ),
+            ParentRetentionMode::CreateMissing => {
+                open_or_create_component(parent, parent_identity, &name, root_identity, index, deadline)?
+            }
+            ParentRetentionMode::ExistingOnly => (open_existing_component(parent, &name, index, deadline)?, false),
         };
         let identity = observe_directory(
             &file,
@@ -259,9 +248,7 @@ fn retain_boot_publication_parent_with<'view, 'prepared>(
     }
     let closing_action = match mode {
         ParentRetentionMode::CreateMissing => "terminally revalidating boot publication-parent creation",
-        ParentRetentionMode::ExistingOnly => {
-            "terminally revalidating existing boot publication-parent retention"
-        }
+        ParentRetentionMode::ExistingOnly => "terminally revalidating existing boot publication-parent retention",
     };
     require_named_chain(root, &root_file, root_identity, &chain, deadline).map_err(|source| {
         RetainedBootPublicationParentError::RootAttachment {
@@ -348,12 +335,12 @@ impl RetainedBootFilePublicationTarget for RetainedBootPublicationParent<'_, '_>
         action: &'static str,
         deadline: Instant,
     ) -> Result<(), RetainedBootFilePublicationError> {
-        require_named_chain(self.root, &self.root_file, self.root_identity, &self.chain, deadline).map_err(
-            |source| RetainedBootFilePublicationError::Attachment {
+        require_named_chain(self.root, &self.root_file, self.root_identity, &self.chain, deadline).map_err(|source| {
+            RetainedBootFilePublicationError::Attachment {
                 action,
                 source: io::Error::other(source.to_string()),
-            },
-        )
+            }
+        })
     }
 }
 
@@ -368,11 +355,13 @@ fn copy_components(components: &[&str]) -> Result<Vec<CString>, RetainedBootPubl
         });
     }
     let mut names = Vec::new();
-    names.try_reserve_exact(components.len()).map_err(|source| RetainedBootPublicationParentError::Filesystem {
-        index: 0,
-        action: "allocating publication-parent component names",
-        source: io::Error::other(source.to_string()),
-    })?;
+    names
+        .try_reserve_exact(components.len())
+        .map_err(|source| RetainedBootPublicationParentError::Filesystem {
+            index: 0,
+            action: "allocating publication-parent component names",
+            source: io::Error::other(source.to_string()),
+        })?;
     for (index, component) in components.iter().enumerate() {
         let bytes = component.as_bytes();
         if bytes.is_empty() || bytes.len() > 255 || matches!(bytes, b"." | b"..") || bytes.contains(&b'/') {
@@ -393,10 +382,7 @@ fn open_directory_alias(
     let file = openat2_file_until(
         retained.as_raw_fd(),
         c".",
-        nix::libc::O_PATH
-            | nix::libc::O_DIRECTORY
-            | nix::libc::O_CLOEXEC
-            | nix::libc::O_NOFOLLOW,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         controlled_resolution(),
         deadline,
@@ -428,7 +414,13 @@ fn open_or_create_component(
 ) -> Result<(File, bool), RetainedBootPublicationParentError> {
     match open_component(parent, name, index, deadline) {
         Ok(file) => {
-            observe_directory(&file, root, index, "admitting existing publication-parent component", deadline)?;
+            observe_directory(
+                &file,
+                root,
+                index,
+                "admitting existing publication-parent component",
+                deadline,
+            )?;
             Ok((file, false))
         }
         Err(source) if source.raw_os_error() == Some(nix::libc::ENOENT) => {
@@ -496,10 +488,7 @@ fn open_component(parent: &File, name: &CStr, _index: usize, deadline: Instant) 
     openat2_file_until(
         parent.as_raw_fd(),
         name,
-        nix::libc::O_PATH
-            | nix::libc::O_DIRECTORY
-            | nix::libc::O_CLOEXEC
-            | nix::libc::O_NOFOLLOW,
+        nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0,
         controlled_resolution(),
         deadline,
@@ -514,18 +503,11 @@ fn observe_directory(
     deadline: Instant,
 ) -> Result<DirectoryIdentity, RetainedBootPublicationParentError> {
     require_deadline(deadline)?;
-    let metadata = file.metadata().map_err(|source| RetainedBootPublicationParentError::Filesystem {
-        index,
-        action,
-        source,
-    })?;
-    let mount_id = descriptor_mount_id_until(file, deadline).map_err(|source| {
-        RetainedBootPublicationParentError::Filesystem {
-            index,
-            action,
-            source,
-        }
-    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| RetainedBootPublicationParentError::Filesystem { index, action, source })?;
+    let mount_id = descriptor_mount_id_until(file, deadline)
+        .map_err(|source| RetainedBootPublicationParentError::Filesystem { index, action, source })?;
     let found = DirectoryIdentity {
         device: metadata.dev(),
         inode: metadata.ino(),
@@ -545,23 +527,20 @@ fn observe_root_directory(
     deadline: Instant,
 ) -> Result<DirectoryIdentity, RetainedBootPublicationParentError> {
     require_deadline(deadline)?;
-    let metadata = file.metadata().map_err(|source| RetainedBootPublicationParentError::Filesystem {
-        index,
-        action: "observing retained boot publication root",
-        source,
-    })?;
-    let mount_id = descriptor_mount_id_until(file, deadline).map_err(|source| {
-        RetainedBootPublicationParentError::Filesystem {
+    let metadata = file
+        .metadata()
+        .map_err(|source| RetainedBootPublicationParentError::Filesystem {
             index,
             action: "observing retained boot publication root",
             source,
-        }
-    })?;
-    if !metadata.file_type().is_dir()
-        || metadata.dev() == 0
-        || metadata.ino() == 0
-        || mount_id == 0
-    {
+        })?;
+    let mount_id =
+        descriptor_mount_id_until(file, deadline).map_err(|source| RetainedBootPublicationParentError::Filesystem {
+            index,
+            action: "observing retained boot publication root",
+            source,
+        })?;
+    if !metadata.file_type().is_dir() || metadata.dev() == 0 || metadata.ino() == 0 || mount_id == 0 {
         return Err(RetainedBootPublicationParentError::DirectoryIdentityChanged {
             index,
             action: "observing retained boot publication root",
@@ -687,13 +666,7 @@ fn sync_chain(
         let depth = index + 1;
         effect::emit(ParentCheckpoint::BeforeDirectorySync { depth });
         require_deadline(deadline)?;
-        let readable = open_readable_directory(
-            &directory.file,
-            root_identity,
-            directory.identity,
-            index,
-            deadline,
-        )?;
+        let readable = open_readable_directory(&directory.file, root_identity, directory.identity, index, deadline)?;
         readable
             .sync_all()
             .map_err(|source| RetainedBootPublicationParentError::Filesystem {
@@ -706,18 +679,22 @@ fn sync_chain(
     }
     effect::emit(ParentCheckpoint::BeforeDirectorySync { depth: 0 });
     let readable_root = open_readable_directory(root, root_identity, root_identity, 0, deadline)?;
-    readable_root.sync_all().map_err(|source| RetainedBootPublicationParentError::Filesystem {
-        index: 0,
-        action: "synchronizing retained boot publication root",
-        source,
-    })?;
+    readable_root
+        .sync_all()
+        .map_err(|source| RetainedBootPublicationParentError::Filesystem {
+            index: 0,
+            action: "synchronizing retained boot publication root",
+            source,
+        })?;
     require_deadline(deadline)?;
     effect::emit(ParentCheckpoint::AfterDirectorySync { depth: 0 });
     effect::emit(ParentCheckpoint::BeforeFilesystemSync);
-    sync_filesystem_until(&readable_root, deadline).map_err(|source| RetainedBootPublicationParentError::Filesystem {
-        index: 0,
-        action: "synchronizing retained boot publication filesystem",
-        source,
+    sync_filesystem_until(&readable_root, deadline).map_err(|source| {
+        RetainedBootPublicationParentError::Filesystem {
+            index: 0,
+            action: "synchronizing retained boot publication filesystem",
+            source,
+        }
     })?;
     require_deadline(deadline)
 }
@@ -730,14 +707,18 @@ fn require_named_chain(
     deadline: Instant,
 ) -> Result<(), RetainedBootFilePublicationError> {
     root.require_publication_parent_until("opening nested boot publication-parent revalidation", deadline)?;
-    if root_identity.uid != nix::unistd::geteuid().as_raw()
-        || root_identity.gid != nix::unistd::getegid().as_raw()
-    {
+    if root_identity.uid != nix::unistd::geteuid().as_raw() || root_identity.gid != nix::unistd::getegid().as_raw() {
         return Err(RetainedBootFilePublicationError::DestinationIdentityChanged {
             action: "matching retained boot root to current effective credentials",
         });
     }
-    require_exact_directory(root_file, root_identity, root_identity, "revalidating retained boot root", deadline)?;
+    require_exact_directory(
+        root_file,
+        root_identity,
+        root_identity,
+        "revalidating retained boot root",
+        deadline,
+    )?;
     let mut parent = root_file;
     for (index, directory) in chain.iter().enumerate() {
         require_exact_directory(
@@ -772,7 +753,9 @@ fn require_exact_directory(
     action: &'static str,
     deadline: Instant,
 ) -> Result<(), RetainedBootFilePublicationError> {
-    let metadata = file.metadata().map_err(|source| RetainedBootFilePublicationError::Attachment { action, source })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| RetainedBootFilePublicationError::Attachment { action, source })?;
     let mount_id = descriptor_mount_id_until(file, deadline)
         .map_err(|source| RetainedBootFilePublicationError::Attachment { action, source })?;
     let found = DirectoryIdentity {

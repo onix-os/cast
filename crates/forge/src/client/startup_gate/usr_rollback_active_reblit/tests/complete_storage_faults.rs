@@ -67,12 +67,8 @@ fn startup_active_reblit_complete_route_all_five_journal_faults_reopen_exact_dur
                 for candidate_outcome in CandidateOrigin::ALL {
                     for fault in JOURNAL_FAULTS {
                         let case = (epoch, candidate_source, usr_outcome, candidate_outcome);
-                        let fixture = build_active(
-                            epoch,
-                            candidate_source,
-                            usr_outcome,
-                            CandidateOrigin::AlreadySatisfied,
-                        );
+                        let fixture =
+                            build_active(epoch, candidate_source, usr_outcome, CandidateOrigin::AlreadySatisfied);
                         let source = persist_candidate_preserved(&fixture, candidate_outcome);
                         let expected = expected_rollback_complete(&source);
                         let database_before = fixture.fixture.database_snapshot();

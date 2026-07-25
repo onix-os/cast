@@ -172,8 +172,9 @@ impl Database {
                 boot_publication_receipt_head::committed_receipt_sha256
                     .eq(committed.as_ref().map(|fingerprint| fingerprint.as_bytes().as_slice())),
                 boot_publication_receipt_head::pending_transition_id.eq(pending_transition_id),
-                boot_publication_receipt_head::pending_receipt_sha256
-                    .eq(pending_receipt.as_ref().map(|fingerprint| fingerprint.as_bytes().as_slice())),
+                boot_publication_receipt_head::pending_receipt_sha256.eq(pending_receipt
+                    .as_ref()
+                    .map(|fingerprint| fingerprint.as_bytes().as_slice())),
             ))
             .execute(tx)?;
             require_single_test_update(changed)
@@ -200,8 +201,7 @@ impl Database {
                     .filter(boot_publication_receipt_head::singleton.eq(RECEIPT_HEAD_SINGLETON)),
             )
             .set((
-                boot_publication_receipt_head::committed_receipt_sha256
-                    .eq(raw.committed_receipt_sha256.as_deref()),
+                boot_publication_receipt_head::committed_receipt_sha256.eq(raw.committed_receipt_sha256.as_deref()),
                 boot_publication_receipt_head::pending_transition_id.eq(raw.pending_transition_id.as_deref()),
                 boot_publication_receipt_head::pending_receipt_sha256.eq(raw.pending_receipt_sha256.as_deref()),
             ))
@@ -374,9 +374,7 @@ pub(super) fn stage_pending_row(
     );
     match pair.committed {
         Some(committed) => diesel::update(
-            base.filter(
-                boot_publication_receipt_head::committed_receipt_sha256.eq(committed.as_bytes().as_slice()),
-            ),
+            base.filter(boot_publication_receipt_head::committed_receipt_sha256.eq(committed.as_bytes().as_slice())),
         )
         .set(values)
         .execute(connection)
@@ -401,39 +399,24 @@ pub(super) fn promote_pending_row(
 ) -> Result<usize, Error> {
     let base = boot_publication_receipt_head::table
         .filter(boot_publication_receipt_head::singleton.eq(RECEIPT_HEAD_SINGLETON))
-        .filter(
-            boot_publication_receipt_head::pending_transition_id
-                .eq(Some(transition_id.as_str())),
-        )
-        .filter(
-            boot_publication_receipt_head::pending_receipt_sha256
-                .eq(Some(pair.pending.as_bytes().as_slice())),
-        );
+        .filter(boot_publication_receipt_head::pending_transition_id.eq(Some(transition_id.as_str())))
+        .filter(boot_publication_receipt_head::pending_receipt_sha256.eq(Some(pair.pending.as_bytes().as_slice())));
     let promoted = (
-        boot_publication_receipt_head::committed_receipt_sha256
-            .eq(Some(pair.pending.as_bytes().as_slice())),
+        boot_publication_receipt_head::committed_receipt_sha256.eq(Some(pair.pending.as_bytes().as_slice())),
         boot_publication_receipt_head::pending_transition_id.eq(None::<&str>),
-        boot_publication_receipt_head::pending_receipt_sha256
-            .eq(None::<&[u8]>),
+        boot_publication_receipt_head::pending_receipt_sha256.eq(None::<&[u8]>),
     );
     match pair.committed {
         Some(committed) => diesel::update(
-            base.filter(
-                boot_publication_receipt_head::committed_receipt_sha256
-                    .eq(committed.as_bytes().as_slice()),
-            ),
+            base.filter(boot_publication_receipt_head::committed_receipt_sha256.eq(committed.as_bytes().as_slice())),
         )
         .set(promoted)
         .execute(connection)
         .map_err(Error::from),
-        None => diesel::update(
-            base.filter(
-                boot_publication_receipt_head::committed_receipt_sha256.is_null(),
-            ),
-        )
-        .set(promoted)
-        .execute(connection)
-        .map_err(Error::from),
+        None => diesel::update(base.filter(boot_publication_receipt_head::committed_receipt_sha256.is_null()))
+            .set(promoted)
+            .execute(connection)
+            .map_err(Error::from),
     }
 }
 
@@ -468,11 +451,7 @@ pub(crate) struct BootPublicationReceiptHeadRawForTest {
 
 #[cfg(test)]
 fn require_single_test_update(changed: usize) -> Result<(), Error> {
-    if changed == 1 {
-        Ok(())
-    } else {
-        Err(Error::RowNotFound)
-    }
+    if changed == 1 { Ok(()) } else { Err(Error::RowNotFound) }
 }
 
 #[derive(Debug, thiserror::Error)]

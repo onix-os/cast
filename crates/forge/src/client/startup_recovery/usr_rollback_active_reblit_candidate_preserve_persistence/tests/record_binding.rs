@@ -13,31 +13,26 @@ use crate::{
         },
     },
     transition_journal::{
-        PublicBindingRevalidationBoundary, RollbackActionOutcome,
-        arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed,
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, arm_public_binding_revalidation_callback,
+        assert_public_binding_revalidation_callback_consumed,
     },
 };
 
+use super::super::candidate_test_support::CandidatePreserveFixture;
 use super::super::{
-    DurableUsrRollbackActiveReblitCandidatePreserveRecord,
-    UsrRollbackActiveReblitCandidatePreservePersistenceError,
+    DurableUsrRollbackActiveReblitCandidatePreserveRecord, UsrRollbackActiveReblitCandidatePreservePersistenceError,
     UsrRollbackActiveReblitCandidatePreserveSuccessorBindingError,
     arm_after_usr_rollback_active_reblit_candidate_preserve_successor_binding_check_before_reopen,
     arm_before_usr_rollback_active_reblit_candidate_preserve_successor_binding_revalidation,
     persist_usr_rollback_active_reblit_candidate_preserve_and_reopen,
 };
-use super::super::candidate_test_support::CandidatePreserveFixture;
 use super::support::{
     CandidateOrigin, Epoch, Source, durable_authority, expected_candidate_preserved, fixture_for_origin,
     non_journal_namespace_snapshot,
 };
 
 fn canonical_journal(fixture: &CandidatePreserveFixture) -> std::path::PathBuf {
-    fixture
-        .fixture
-        .installation
-        .root
-        .join(".cast/journal/state-transition")
+    fixture.fixture.installation.root.join(".cast/journal/state-transition")
 }
 
 fn inode_identity(path: &Path) -> (u64, u64) {
@@ -45,10 +40,7 @@ fn inode_identity(path: &Path) -> (u64, u64) {
     (metadata.dev(), metadata.ino())
 }
 
-fn same_byte_different_inode_hook(
-    fixture: &CandidatePreserveFixture,
-    label: String,
-) -> impl FnOnce() + 'static {
+fn same_byte_different_inode_hook(fixture: &CandidatePreserveFixture, label: String) -> impl FnOnce() + 'static {
     let canonical = canonical_journal(fixture);
     let displaced = fixture
         .fixture
@@ -205,7 +197,7 @@ fn startup_active_reblit_candidate_preserve_same_byte_successor_replacement_afte
 
 #[test]
 fn startup_active_reblit_candidate_preserve_same_byte_successor_replacement_after_same_store_binding_fails_reopened_binding()
-{
+ {
     let mut exercised = 0;
     for epoch in Epoch::ALL {
         for source in Source::ALL {

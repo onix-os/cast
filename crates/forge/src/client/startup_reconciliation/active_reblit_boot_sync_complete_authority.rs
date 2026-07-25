@@ -13,28 +13,26 @@
 use crate::{
     Installation, State, db, state,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
 use super::super::{
-    active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot},
     active_reblit_boot_publication_preflight::{
-        ActiveReblitBootCommitDecisionFinalValidation,
-        ActiveReblitBootPostCompletionValidationError,
+        ActiveReblitBootCommitDecisionFinalValidation, ActiveReblitBootPostCompletionValidationError,
         ActiveReblitBootSyncCommitDecisionSeal,
     },
+    active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot},
     startup_gate::ActiveReblitBootSyncCompleteSeal,
+};
+use super::activation_namespace::{
+    ActiveReblitBootSyncCompleteNamespaceError, ActiveReblitBootSyncCompleteNamespaceInspection,
+    ActiveReblitBootSyncCompleteNamespaceProof, active_reblit_boot_sync_complete_namespace_error_is_mismatch,
 };
 use super::{
     DatabaseEvidence, InspectionError, database_ownership_evidence_compatible, inspect_database,
     metadata_provenance_evidence_compatible,
-};
-use super::activation_namespace::{
-    ActiveReblitBootSyncCompleteNamespaceError, ActiveReblitBootSyncCompleteNamespaceInspection,
-    ActiveReblitBootSyncCompleteNamespaceProof,
-    active_reblit_boot_sync_complete_namespace_error_is_mismatch,
 };
 
 const ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION: u64 = 12;
@@ -110,10 +108,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
             record,
             || {
                 installation.revalidate_mutable_namespace()?;
-                let binding = journal.record_binding(
-                    installation.retained_mutable_cast_directory()?,
-                    record,
-                )?;
+                let binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
                 installation.revalidate_mutable_namespace()?;
                 Ok(binding)
             },
@@ -140,10 +135,9 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
             || Ok(journal_record_binding),
         )? {
             ActiveReblitBootSyncCompleteAdmission::Ready(authority) => Ok(authority),
-            ActiveReblitBootSyncCompleteAdmission::NotApplicable
-            | ActiveReblitBootSyncCompleteAdmission::Deferred => Err(
-                ActiveReblitBootSyncCompleteAuthorityErrorKind::RetainedCompletionRejected.into(),
-            ),
+            ActiveReblitBootSyncCompleteAdmission::NotApplicable | ActiveReblitBootSyncCompleteAdmission::Deferred => {
+                Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::RetainedCompletionRejected.into())
+            }
         }
     }
 
@@ -153,10 +147,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         state_db: &db::state::Database,
         active_state_reservation: &'reservation ActiveStateReservation,
         record: &TransitionRecord,
-        capture_binding: impl FnOnce() -> Result<
-            TransitionJournalRecordBinding,
-            ActiveReblitBootSyncCompleteAuthorityError,
-        >,
+        capture_binding: impl FnOnce() -> Result<TransitionJournalRecordBinding, ActiveReblitBootSyncCompleteAuthorityError>,
     ) -> Result<ActiveReblitBootSyncCompleteAdmission<'reservation>, ActiveReblitBootSyncCompleteAuthorityError> {
         if record.operation != Operation::ActiveReblit || record.phase != Phase::BootSyncComplete {
             return Ok(ActiveReblitBootSyncCompleteAdmission::NotApplicable);
@@ -181,11 +172,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
                 return Ok(ActiveReblitBootSyncCompleteAdmission::Deferred);
             }
         };
-        let active_state = match capture_exact_active_state(
-            record,
-            installation,
-            active_state_reservation,
-        )? {
+        let active_state = match capture_exact_active_state(record, installation, active_state_reservation)? {
             Some(active_state) => active_state,
             None => return Ok(ActiveReblitBootSyncCompleteAdmission::Deferred),
         };
@@ -202,12 +189,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
             Err(source) => return Err(source.into()),
         };
         run_between_database_captures();
-        let namespace = namespace_inspection.finish(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        )?;
+        let namespace = namespace_inspection.finish(installation, journal, &journal_record_binding, record)?;
         let database_after = match inspect_current_database(record, receipt_pair, state_db)? {
             ActiveReblitBootSyncCompleteDatabaseInspection::Exact(database) => database,
             ActiveReblitBootSyncCompleteDatabaseInspection::Incompatible => {
@@ -246,24 +228,15 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), ActiveReblitBootSyncCompleteAuthorityError> {
-        require_exact_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_exact_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = require_exact_database(
             &self.database,
             inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
         )?;
         require_exact_active_state(&self.record, &self.installation, &self.active_state)?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after = require_exact_database(
             &self.database,
             inspect_current_database(&self.record, self.receipt_pair, &self.state_db)?,
@@ -272,12 +245,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         if database_before != database_after || !record_plan_is_exact(&self.record, self.receipt_pair) {
             return Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::RouteEvidenceChanged.into());
         }
-        require_exact_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_exact_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -331,9 +299,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         }
         let deadline = final_validation
             .validate()
-            .map_err(
-                ActiveReblitBootSyncCompleteRecordAdvanceError::FinalTerminalValidation,
-            )?;
+            .map_err(ActiveReblitBootSyncCompleteRecordAdvanceError::FinalTerminalValidation)?;
         after_active_reblit_boot_commit_decision_bound_terminal_validation();
         self.revalidate(journal)?;
         if !exact_commit_decided_successor(&self.record, successor, self.receipt_pair)? {
@@ -367,14 +333,7 @@ impl<'reservation> ActiveReblitBootSyncCompleteAuthority<'reservation> {
         } = self;
         let cast = installation.retained_mutable_cast_directory()?;
         let successor_binding = match deadline {
-            Some(deadline) => {
-                journal.advance_record_binding_until(
-                    cast,
-                    journal_record_binding,
-                    successor,
-                    deadline,
-                )
-            }
+            Some(deadline) => journal.advance_record_binding_until(cast, journal_record_binding, successor, deadline),
             None => journal.advance_record_binding(cast, journal_record_binding, successor),
         }
         .map_err(ActiveReblitBootSyncCompleteRecordAdvanceError::Storage)?;
@@ -422,13 +381,7 @@ impl ActiveReblitBootSyncCompletePostAdvanceAuthority<'_> {
         successor: &TransitionRecord,
         binding_mode: SuccessorBindingMode,
     ) -> Result<(), ActiveReblitBootSyncCompleteAuthorityError> {
-        require_exact_successor_binding(
-            &self.installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_binding(&self.installation, journal, successor_binding, successor, binding_mode)?;
         if !exact_commit_decided_successor(&self.completed_record, successor, self.receipt_pair)
             .map_err(ActiveReblitBootSyncCompleteAuthorityErrorKind::Record)?
         {
@@ -464,13 +417,7 @@ impl ActiveReblitBootSyncCompletePostAdvanceAuthority<'_> {
         if database_before != database_after {
             return Err(ActiveReblitBootSyncCompleteAuthorityErrorKind::RouteEvidenceChanged.into());
         }
-        require_exact_successor_binding(
-            &self.installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_binding(&self.installation, journal, successor_binding, successor, binding_mode)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -647,9 +594,7 @@ fn same_nonempty_candidate_and_previous(record: &TransitionRecord) -> bool {
 }
 
 fn has_exact_boot_enabled_options(record: &TransitionRecord) -> bool {
-    !record.options.archive_previous
-        && record.options.run_system_triggers
-        && record.options.run_boot_sync
+    !record.options.archive_previous && record.options.run_system_triggers && record.options.run_boot_sync
 }
 
 fn record_plan_is_exact(
@@ -778,10 +723,7 @@ pub(in crate::client) enum ActiveReblitBootSyncCompleteRecordAdvanceError {
     #[error("the caller-supplied record is not the exact ActiveReblit CommitDecided successor")]
     UnexpectedSuccessor,
     #[error("repeat exact terminal output validation at the bound journal advance")]
-    FinalTerminalValidation(
-        #[source]
-        ActiveReblitBootPostCompletionValidationError,
-    ),
+    FinalTerminalValidation(#[source] ActiveReblitBootPostCompletionValidationError),
     #[error("revalidate retained installation before the bound ActiveReblit CommitDecided advance")]
     Installation(#[from] crate::installation::Error),
     #[error("advance the exact bound ActiveReblit BootSyncComplete record")]
@@ -838,9 +780,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_between_active_reblit_boot_sync_complete_database_captures(
-    hook: impl FnOnce() + 'static,
-) {
+pub(in crate::client) fn arm_between_active_reblit_boot_sync_complete_database_captures(hook: impl FnOnce() + 'static) {
     BETWEEN_DATABASE_CAPTURES.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

@@ -230,12 +230,9 @@ pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_and_reopen(
                     },
                 )
             }
-            Err(reopen) => Err(
-                UsrRollbackFreshDbInvalidationPersistenceError::SuccessorRecordBindingAndReopen {
-                    binding,
-                    reopen,
-                },
-            ),
+            Err(reopen) => {
+                Err(UsrRollbackFreshDbInvalidationPersistenceError::SuccessorRecordBindingAndReopen { binding, reopen })
+            }
         },
     }
 }

@@ -8,8 +8,7 @@ use super::*;
 #[test]
 fn reconciliation_never_waits_behind_a_writer_blocked_journal_contender() {
     with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let root = fixture.installation.root.clone();
         let (journal_sender, journal_receiver) = mpsc::channel();
         let (writer_sender, writer_receiver) = mpsc::channel();
@@ -22,9 +21,7 @@ fn reconciliation_never_waits_behind_a_writer_blocked_journal_contender() {
             drop(journal);
         });
         arm_after_old_journal_drop_before_reopen(move || {
-            journal_receiver
-                .recv_timeout(Duration::from_secs(120))
-                .unwrap();
+            journal_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
         });
         arm_next_temporary_sync_fault();
 
@@ -47,13 +44,8 @@ fn reconciliation_never_waits_behind_a_writer_blocked_journal_contender() {
                 ..
             },
         ));
-        writer_receiver
-            .recv_timeout(Duration::from_secs(120))
-            .unwrap();
+        writer_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
         contender.join().unwrap();
-        assert!(matches!(
-            writer_receiver.try_recv(),
-            Err(TryRecvError::Disconnected),
-        ));
+        assert!(matches!(writer_receiver.try_recv(), Err(TryRecvError::Disconnected),));
     });
 }

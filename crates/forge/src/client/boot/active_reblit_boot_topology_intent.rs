@@ -28,12 +28,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use config::declaration::{
-    RegisteredLanguages, TypedDeclarationEvaluatorSet,
-};
+use config::declaration::{RegisteredLanguages, TypedDeclarationEvaluatorSet};
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
+    LanguageSpec, Limits, Source, SourceRoot,
 };
 use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
@@ -228,33 +226,18 @@ impl PreparedActiveReblitBootTopologyIntent {
         F: FnOnce(),
     {
         let languages = registered_declaration_languages();
-        let bytes = revalidate_source(
-            installation,
-            &self.source,
-            &languages,
-            budget,
-        )?;
+        let bytes = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&bytes)?;
         let source_text =
             std::str::from_utf8(&bytes).map_err(|source| ActiveReblitBootTopologyIntentError::InvalidUtf8 {
                 path: budget.source_path.clone(),
                 source,
             })?;
-        let evaluated = evaluate_declaration(
-            source_text,
-            self.source.language(),
-            self.source.logical_name(),
-            budget,
-        )?;
+        let evaluated = evaluate_declaration(source_text, self.source.language(), self.source.logical_name(), budget)?;
         self.require_exact_evaluation(&evaluated)?;
 
         before_terminal_rebind();
-        let terminal = revalidate_source(
-            installation,
-            &self.source,
-            &languages,
-            budget,
-        )?;
+        let terminal = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&terminal)
     }
 
@@ -271,10 +254,7 @@ impl PreparedActiveReblitBootTopologyIntent {
 
     fn require_exact_evaluation(
         &self,
-        evaluated: &DeclarationEvaluation<
-            ActiveReblitBootTopologyIntentValue,
-            EvaluationIdentity,
-        >,
+        evaluated: &DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, EvaluationIdentity>,
     ) -> Result<(), ActiveReblitBootTopologyIntentError> {
         if evaluated.value == self.value && evaluated.identity == self.fingerprint {
             Ok(())
@@ -481,11 +461,7 @@ where
 {
     revalidate_installation_root(installation, budget)?;
     let languages = registered_declaration_languages();
-    let (source, bytes) = capture_source(
-        installation,
-        &languages,
-        budget,
-    )?;
+    let (source, bytes) = capture_source(installation, &languages, budget)?;
     let source_text = std::str::from_utf8(&bytes)
         .map_err(|source| ActiveReblitBootTopologyIntentError::InvalidUtf8 {
             path: boot_topology_intent_path(installation),
@@ -493,12 +469,7 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = evaluate_declaration(
-        &source_text,
-        source.language(),
-        source.logical_name(),
-        budget,
-    )?;
+    let evaluated = evaluate_declaration(&source_text, source.language(), source.logical_name(), budget)?;
     let prepared = PreparedActiveReblitBootTopologyIntent {
         source,
         source_text,
@@ -525,42 +496,36 @@ enum BootTopologyIntentEvaluator<'budget> {
     Lua(lua::LuaBootTopologyIntentEvaluator<'budget>),
 }
 
-impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
-    for BootTopologyIntentEvaluator<'_>
-{
+impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for BootTopologyIntentEvaluator<'_> {
     type Identity = EvaluationIdentity;
     type Error = ActiveReblitBootTopologyIntentError;
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(evaluator) => DeclarationEvaluator::<
-                ActiveReblitBootTopologyIntentValue,
-            >::language_spec(evaluator),
-            Self::Lua(evaluator) => DeclarationEvaluator::<
-                ActiveReblitBootTopologyIntentValue,
-            >::language_spec(evaluator),
+            Self::Gluon(evaluator) => {
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::language_spec(evaluator)
+            }
+            Self::Lua(evaluator) => {
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::language_spec(evaluator)
+            }
         }
     }
 
     fn limits(&self) -> Limits {
         match self {
-            Self::Gluon(evaluator) => {
-                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator)
-            }
-            Self::Lua(evaluator) => {
-                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator)
-            }
+            Self::Gluon(evaluator) => DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator),
+            Self::Lua(evaluator) => DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator),
         }
     }
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(evaluator) => Self::Gluon(DeclarationEvaluator::<
-                ActiveReblitBootTopologyIntentValue,
-            >::with_source_root(evaluator, source_root)),
-            Self::Lua(evaluator) => Self::Lua(DeclarationEvaluator::<
-                ActiveReblitBootTopologyIntentValue,
-            >::with_source_root(evaluator, source_root)),
+            Self::Gluon(evaluator) => Self::Gluon(
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::with_source_root(evaluator, source_root),
+            ),
+            Self::Lua(evaluator) => Self::Lua(
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::with_source_root(evaluator, source_root),
+            ),
         }
     }
 
@@ -585,10 +550,7 @@ fn evaluate_declaration(
     logical_name: &str,
     budget: &BootTopologyIntentBudget,
 ) -> Result<
-    DeclarationEvaluation<
-        ActiveReblitBootTopologyIntentValue,
-        EvaluationIdentity,
-    >,
+    DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, EvaluationIdentity>,
     ActiveReblitBootTopologyIntentError,
 > {
     let evaluators = TypedDeclarationEvaluatorSet::new([
@@ -596,16 +558,14 @@ fn evaluate_declaration(
         BootTopologyIntentEvaluator::Lua(lua::LuaBootTopologyIntentEvaluator::new(budget)?),
     ])
     .expect("the boot-topology adapters register distinct extensions");
-    let evaluator = evaluators.get(language).ok_or(
-        ActiveReblitBootTopologyIntentError::EvaluationContract {
+    let evaluator = evaluators
+        .get(language)
+        .ok_or(ActiveReblitBootTopologyIntentError::EvaluationContract {
             reason: "boot-topology source language has no registered evaluator",
-        },
-    )?;
+        })?;
     let source = Source::new(logical_name, source_text);
     evaluator.evaluate(&source).map_err(|error| match error {
-        DeclarationEvaluationError::Evaluation(source) => {
-            ActiveReblitBootTopologyIntentError::Evaluation(source)
-        }
+        DeclarationEvaluationError::Evaluation(source) => ActiveReblitBootTopologyIntentError::Evaluation(source),
         DeclarationEvaluationError::Conversion(source) => source,
     })
 }

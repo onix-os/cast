@@ -9,10 +9,6 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         boot::{boot_synchronize_attempt_count, reset_boot_synchronize_attempt_count},
         snapshot_startup_recovery_namespace,
-        startup_reconciliation::{
-            active_reblit_candidate_preserve_exchange_attempt_count,
-            reset_active_reblit_candidate_preserve_exchange_attempt_count,
-        },
         startup_gate::{
             CleanSystemStartup,
             root_links_terminal_process_harness::{
@@ -20,6 +16,10 @@ use crate::{
                 RawRecordState, RootLinksDeleteScenario, RootLinksSnapshot, TerminalOperation,
                 assert_clean_holds_journal_lock, assert_clean_store_reopens, forbid_journal_update, kill_self,
             },
+        },
+        startup_reconciliation::{
+            active_reblit_candidate_preserve_exchange_attempt_count,
+            reset_active_reblit_candidate_preserve_exchange_attempt_count,
         },
         startup_recovery::arm_before_usr_rollback_finalization_final_revalidation,
     },
@@ -234,7 +234,10 @@ fn run_final_recovery(
     }
 
     assert_zero_effects();
-    assert_eq!(NewStateDatabaseEvidence::capture(system.state_db(), terminal), database_before);
+    assert_eq!(
+        NewStateDatabaseEvidence::capture(system.state_db(), terminal),
+        database_before
+    );
     assert_eq!(snapshot_startup_recovery_namespace(&case.root), namespace_before);
     root_links.assert_unchanged(&case.root);
     assert_preserved_topology(&case.root, terminal);
@@ -253,7 +256,10 @@ fn assert_exact_terminal(record: &TransitionRecord, epoch: ProcessEpoch) {
     let rollback = record.rollback.as_ref().unwrap();
     assert_eq!(rollback.source, ForwardPhase::RootLinksComplete);
     assert_eq!(rollback.usr_exchange, recorded_action(epoch_outcome(epoch)));
-    assert_eq!(rollback.candidate.action, recorded_action(candidate_outcome(epoch).journal()));
+    assert_eq!(
+        rollback.candidate.action,
+        recorded_action(candidate_outcome(epoch).journal())
+    );
     assert_eq!(rollback.fresh_db, recorded_action(fresh_outcome(epoch).journal()));
     let current = crate::transition_journal::RuntimeEpoch::capture().unwrap();
     match epoch {

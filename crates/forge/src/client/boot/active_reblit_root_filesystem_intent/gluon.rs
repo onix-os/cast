@@ -1,15 +1,10 @@
 //! Restricted Gluon boundary for machine-local root-filesystem intent.
 
-use std::{
-    cell::RefCell,
-    rc::Rc,
-    time::Duration,
-};
+use std::{cell::RefCell, rc::Rc, time::Duration};
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
-    SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
+    LanguageSpec, Limits, Source, SourceRoot,
 };
 use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
@@ -73,9 +68,7 @@ impl<'budget> GluonRootFilesystemIntentEvaluator<'budget> {
     }
 }
 
-impl DeclarationEvaluator<RootFilesystemIntentValue>
-    for GluonRootFilesystemIntentEvaluator<'_>
-{
+impl DeclarationEvaluator<RootFilesystemIntentValue> for GluonRootFilesystemIntentEvaluator<'_> {
     type Identity = EvaluationIdentity;
     type Error = ActiveReblitRootFilesystemIntentError;
 
@@ -98,10 +91,8 @@ impl DeclarationEvaluator<RootFilesystemIntentValue>
         &self,
         source: &Source,
         deadline: EvaluationDeadline,
-    ) -> Result<
-        DeclarationEvaluation<RootFilesystemIntentValue, Self::Identity>,
-        DeclarationEvaluationError<Self::Error>,
-    > {
+    ) -> Result<DeclarationEvaluation<RootFilesystemIntentValue, Self::Identity>, DeclarationEvaluationError<Self::Error>>
+    {
         let evaluation = self
             .engine
             .evaluate_within::<GluonRootFilesystemIntent>(source, deadline)
@@ -110,14 +101,10 @@ impl DeclarationEvaluator<RootFilesystemIntentValue>
         budget
             .require_deadline()
             .map_err(DeclarationEvaluationError::Conversion)?;
-        require_fingerprint_contract(&evaluation.identity)
-            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_fingerprint_contract(&evaluation.identity).map_err(DeclarationEvaluationError::Conversion)?;
 
-        let value = normalization::materialize_root_argument(
-            evaluation.value.root,
-            &mut budget,
-        )
-        .map_err(DeclarationEvaluationError::Conversion)?;
+        let value = normalization::materialize_root_argument(evaluation.value.root, &mut budget)
+            .map_err(DeclarationEvaluationError::Conversion)?;
         budget
             .require_deadline()
             .map_err(DeclarationEvaluationError::Conversion)?;
@@ -128,9 +115,7 @@ impl DeclarationEvaluator<RootFilesystemIntentValue>
     }
 }
 
-fn require_fingerprint_contract(
-    fingerprint: &EvaluationIdentity,
-) -> Result<(), ActiveReblitRootFilesystemIntentError> {
+fn require_fingerprint_contract(fingerprint: &EvaluationIdentity) -> Result<(), ActiveReblitRootFilesystemIntentError> {
     fingerprint.validate()?;
     if fingerprint.root_logical_name != SOURCE_LOGICAL_NAME {
         return Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
@@ -142,9 +127,7 @@ fn require_fingerprint_contract(
             reason: "root-filesystem evaluation admitted explicit external inputs",
         });
     }
-    if fingerprint.modules.len() != 1
-        || fingerprint.modules[0].logical_name != ROOT_FILESYSTEM_ABI_NAME
-    {
+    if fingerprint.modules.len() != 1 || fingerprint.modules[0].logical_name != ROOT_FILESYSTEM_ABI_NAME {
         return Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
             reason: "root-filesystem intent must import exactly cast.root_filesystem.v1",
         });

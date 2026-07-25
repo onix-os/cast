@@ -12,8 +12,8 @@ use crate::{
     client::startup_reconciliation::fresh_db_invalidation_removal_call_count,
     db::state::exact_fresh_transition_removal_transaction_attempts,
     transition_journal::{
-        AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase,
-        PreviousOrigin, RollbackAction, RollbackActionOutcome, TransitionRecord, decode, encode,
+        AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin,
+        RollbackAction, RollbackActionOutcome, TransitionRecord, decode, encode,
     },
 };
 
@@ -217,7 +217,10 @@ pub(super) fn expected_fresh_db_invalidated(
     assert_eq!(successor.operation, Operation::NewState);
     assert_eq!(successor.phase, Phase::FreshDbInvalidated);
     assert_eq!(successor.generation, 17);
-    assert_eq!(successor.rollback.as_ref().unwrap().source, ForwardPhase::RootLinksComplete);
+    assert_eq!(
+        successor.rollback.as_ref().unwrap().source,
+        ForwardPhase::RootLinksComplete
+    );
     assert_eq!(successor.rollback.as_ref().unwrap().fresh_db, recorded_action(outcome));
     successor
 }

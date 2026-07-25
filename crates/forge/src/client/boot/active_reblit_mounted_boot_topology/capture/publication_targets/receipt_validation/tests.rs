@@ -3,21 +3,14 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::{
     boot_publication::{
-        BootPublicationHistoricalRuntimeWitness, BootPublicationOutput,
-        BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
-        BootPublicationPublicationPhase, BootPublicationReceiptBody,
-        BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
-        prepare_boot_publication_receipt,
+        BootPublicationHistoricalRuntimeWitness, BootPublicationOutput, BootPublicationOutputProvenanceClaim,
+        BootPublicationOutputRole, BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationRoot,
+        BootPublicationSha256, BootPublicationXxh3, prepare_boot_publication_receipt,
     },
-    client::{
-        active_reblit_mounted_boot_topology::{
-            AliasFixture, RevalidatedActiveReblitBootPublicationTargets,
-        },
-    },
+    client::active_reblit_mounted_boot_topology::{AliasFixture, RevalidatedActiveReblitBootPublicationTargets},
     db::state::{
-        BootPublicationReceiptPromotionOutcome,
-        BootPublicationReceiptStageOutcome, CurrentExactPromotedBootPublicationReceiptChain,
-        Database,
+        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
+        CurrentExactPromotedBootPublicationReceiptChain, Database,
     },
     state::TransitionId,
 };
@@ -36,28 +29,12 @@ fn historical_witness(major: u32, minor: u32, seed: u64) -> BootPublicationHisto
     )
 }
 
-fn destination(
-    partuuid: &str,
-    partition_number: u32,
-    major: u32,
-    minor: u32,
-    seed: u64,
-) -> BootPublicationDestination {
-    BootPublicationDestination::new(
-        partuuid,
-        partition_number,
-        historical_witness(major, minor, seed),
-    )
+fn destination(partuuid: &str, partition_number: u32, major: u32, minor: u32, seed: u64) -> BootPublicationDestination {
+    BootPublicationDestination::new(partuuid, partition_number, historical_witness(major, minor, seed))
 }
 
 fn alias_destinations(runtime_seed: u64) -> BootPublicationDestinations {
-    BootPublicationDestinations::boot_aliases_esp(destination(
-        ESP_PARTUUID,
-        1,
-        8,
-        1,
-        runtime_seed,
-    ))
+    BootPublicationDestinations::boot_aliases_esp(destination(ESP_PARTUUID, 1, 8, 1, runtime_seed))
 }
 
 fn distinct_destinations(runtime_seed: u64) -> BootPublicationDestinations {
@@ -88,9 +65,7 @@ fn distinct_destinations(runtime_seed: u64) -> BootPublicationDestinations {
     BootPublicationDestinations::distinct_xbootldr(esp, xbootldr)
 }
 
-fn promoted_alias_chain(
-    runtime_seed: u64,
-) -> ExactPromotedBootPublicationReceiptChain {
+fn promoted_alias_chain(runtime_seed: u64) -> ExactPromotedBootPublicationReceiptChain {
     let output = BootPublicationOutput::new(
         BootPublicationRoot::Boot,
         BootPublicationPublicationPhase::Payload,
@@ -121,10 +96,7 @@ fn promoted_alias_chain(
     );
     assert_eq!(
         database
-            .promote_boot_publication_receipt(
-                &receipt,
-                Instant::now() + Duration::from_secs(30),
-            )
+            .promote_boot_publication_receipt(&receipt, Instant::now() + Duration::from_secs(30),)
             .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
@@ -147,15 +119,10 @@ fn fresh_alias_targets_bind_stable_receipt_identity_while_ignoring_runtime_histo
         .unwrap();
     let chain = promoted_alias_chain(900);
 
-    let validated = topology
-        .revalidate_promoted_receipt_targets(&chain)
-        .unwrap();
+    let validated = topology.revalidate_promoted_receipt_targets(&chain).unwrap();
 
     assert!(validated.aliases_esp);
-    assert_eq!(
-        validated.promoted_receipt,
-        chain.installed_receipt().fingerprint()
-    );
+    assert_eq!(validated.promoted_receipt, chain.installed_receipt().fingerprint());
     assert!(matches!(
         validated.targets,
         RevalidatedActiveReblitBootPublicationTargets::BootAliasesEsp { .. }
@@ -214,11 +181,7 @@ fn layout_partuuid_and_partition_number_mismatches_fail_closed() {
                 StableLiveBootDestinations::BootAliasesEsp { esp: live },
                 &alias_destinations(40),
             ),
-            Err(
-                ActiveReblitBootReceiptTargetValidationError::StableIdentityMismatch {
-                    destination: "esp"
-                }
-            )
+            Err(ActiveReblitBootReceiptTargetValidationError::StableIdentityMismatch { destination: "esp" })
         ));
     }
 }
@@ -237,10 +200,8 @@ fn distinct_xbootldr_identity_mismatch_is_role_specific() {
     };
     assert!(matches!(
         require_stable_destinations(live, &distinct_destinations(50)),
-        Err(
-            ActiveReblitBootReceiptTargetValidationError::StableIdentityMismatch {
-                destination: "xbootldr"
-            }
-        )
+        Err(ActiveReblitBootReceiptTargetValidationError::StableIdentityMismatch {
+            destination: "xbootldr"
+        })
     ));
 }

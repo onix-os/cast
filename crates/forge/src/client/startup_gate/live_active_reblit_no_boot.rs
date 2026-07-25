@@ -12,23 +12,16 @@ use crate::{
     client::{
         CoordinatorActiveStateReservation,
         startup_reconciliation::{
-            ActiveReblitCommitCleanupAdmission,
-            ActiveReblitCommitCleanupApplyReconciliation,
-            ActiveReblitCommitCleanupAuthority,
-            ActiveReblitCommitCleanupAuthorityError,
-            ActiveReblitCommitCleanupCompleteAdmission,
-            ActiveReblitCommitCleanupCompleteAuthority,
-            ActiveReblitCommitCleanupCompleteAuthorityError,
-            ActiveReblitCommitCleanupEffectError,
-            ActiveReblitCompleteFinalizationAdmission,
-            ActiveReblitCompleteFinalizationAuthority,
+            ActiveReblitCommitCleanupAdmission, ActiveReblitCommitCleanupApplyReconciliation,
+            ActiveReblitCommitCleanupAuthority, ActiveReblitCommitCleanupAuthorityError,
+            ActiveReblitCommitCleanupCompleteAdmission, ActiveReblitCommitCleanupCompleteAuthority,
+            ActiveReblitCommitCleanupCompleteAuthorityError, ActiveReblitCommitCleanupEffectError,
+            ActiveReblitCompleteFinalizationAdmission, ActiveReblitCompleteFinalizationAuthority,
             ActiveReblitCompleteFinalizationAuthorityError,
         },
         startup_recovery::{
-            ActiveReblitCommitCleanupCompletePersistenceError,
-            ActiveReblitCommitCleanupPersistenceError,
-            ActiveReblitCompleteFinalizationError,
-            finalize_active_reblit_complete,
+            ActiveReblitCommitCleanupCompletePersistenceError, ActiveReblitCommitCleanupPersistenceError,
+            ActiveReblitCompleteFinalizationError, finalize_active_reblit_complete,
             persist_active_reblit_commit_cleanup_complete_retaining_binding,
             persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding,
         },
@@ -38,10 +31,7 @@ use crate::{
     transition_journal::{TransitionJournalStore, TransitionRecord},
 };
 
-use super::{
-    ActiveReblitCommitCleanupCompleteSeal, ActiveReblitCompleteFinalizationSeal,
-    CleanSystemStartup,
-};
+use super::{ActiveReblitCommitCleanupCompleteSeal, ActiveReblitCompleteFinalizationSeal, CleanSystemStartup};
 
 /// Exact clean terminal authority returned to the future live client route.
 ///
@@ -145,11 +135,8 @@ pub(crate) fn finish_active_reblit_no_boot(
         ActiveReblitCommitCleanupCompleteAdmission::Ready(authority) => authority,
     };
     let (journal, complete_record, complete_binding) =
-        persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding(
-            journal,
-            cleanup_complete,
-        )
-        .map_err(ActiveReblitNoBootTailErrorKind::CompletePersistence)?;
+        persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding(journal, cleanup_complete)
+            .map_err(ActiveReblitNoBootTailErrorKind::CompletePersistence)?;
     drop(complete_binding);
 
     let finalization_seal = ActiveReblitCompleteFinalizationSeal::new();
@@ -173,12 +160,8 @@ pub(crate) fn finish_active_reblit_no_boot(
     };
     let journal = finalize_active_reblit_complete(journal, finalization)
         .map_err(ActiveReblitNoBootTailErrorKind::Finalization)?;
-    let clean_startup = CleanSystemStartup::admit_clean_after_terminal_finalization(
-        &installation,
-        &state_db,
-        journal,
-    )
-    .map_err(ActiveReblitNoBootTailErrorKind::CleanAdmission)?;
+    let clean_startup = CleanSystemStartup::admit_clean_after_terminal_finalization(&installation, &state_db, journal)
+        .map_err(ActiveReblitNoBootTailErrorKind::CleanAdmission)?;
 
     Ok(FinalizedActiveReblitNoBoot {
         complete_record,

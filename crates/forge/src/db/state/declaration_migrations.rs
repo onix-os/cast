@@ -8,8 +8,8 @@
 //! overwriting. Immutable converted blobs are content-addressed on disk; this
 //! module owns only the catalog authority, never blob or filesystem authority.
 
-use diesel::prelude::*;
 use diesel::SqliteConnection;
+use diesel::prelude::*;
 
 use super::{Database, Error, schema::declaration_migrations};
 
@@ -125,14 +125,9 @@ impl Database {
 /// state-prune transaction so pruning a state cascades its catalog authority;
 /// the content-addressed blobs it referenced become unreachable residue,
 /// removed only by a later retained-authority garbage-collection pass.
-pub(super) fn delete_declaration_migrations(
-    tx: &mut SqliteConnection,
-    states: &[i32],
-) -> Result<(), Error> {
-    diesel::delete(
-        declaration_migrations::table.filter(declaration_migrations::state_id.eq_any(states)),
-    )
-    .execute(tx)?;
+pub(super) fn delete_declaration_migrations(tx: &mut SqliteConnection, states: &[i32]) -> Result<(), Error> {
+    diesel::delete(declaration_migrations::table.filter(declaration_migrations::state_id.eq_any(states)))
+        .execute(tx)?;
     Ok(())
 }
 

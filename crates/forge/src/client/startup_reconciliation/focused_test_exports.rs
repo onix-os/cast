@@ -38,8 +38,7 @@ pub(in crate::client) use super::{
 
 pub(in crate::client) use super::activation_namespace::{
     ActiveReblitBootRepairCompleteCaptureFault, ActiveReblitBootRepairStartedCaptureFault,
-    ActiveReblitCandidatePreserveExchangeFault,
-    ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
+    ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
     ActiveReblitCandidatePreservePostExchangeDurabilityFaultPoint, ArchivedCandidatePreserveMoveFault,
     ArchivedCandidatePreservePostMoveDurabilityEvent, ArchivedCandidatePreservePostMoveDurabilityFaultPoint,
     ArchivedCandidatePreserveTargetDurabilityEvent, ArchivedCandidatePreserveTargetDurabilityFaultPoint,
@@ -141,7 +140,6 @@ pub(in crate::client) use super::activation_namespace::arm_before_usr_rollback_d
 pub(in crate::client) use super::activation_namespace::{
     arm_after_usr_exchanged_root_abi_complete_sync, arm_after_usr_exchanged_root_abi_publication,
     arm_before_usr_exchanged_root_abi_complete_sync, arm_before_usr_exchanged_root_abi_publication,
-    arm_usr_exchanged_root_abi_complete_sync_fault,
-    reset_usr_exchanged_root_abi_effect_counts, usr_exchanged_root_abi_complete_sync_attempts,
-    usr_exchanged_root_abi_publication_attempts,
+    arm_usr_exchanged_root_abi_complete_sync_fault, reset_usr_exchanged_root_abi_effect_counts,
+    usr_exchanged_root_abi_complete_sync_attempts, usr_exchanged_root_abi_publication_attempts,
 };

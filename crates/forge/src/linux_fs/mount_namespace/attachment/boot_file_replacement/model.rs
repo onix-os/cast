@@ -1,6 +1,5 @@
 use super::super::boot_file_publication::{
-    AttachmentIdentity, RetainedBootFilePublicationRequest,
-    destination::FileIdentity,
+    AttachmentIdentity, RetainedBootFilePublicationRequest, destination::FileIdentity,
 };
 
 /// Receipt-correlated namespace owner used only to derive collision-resistant

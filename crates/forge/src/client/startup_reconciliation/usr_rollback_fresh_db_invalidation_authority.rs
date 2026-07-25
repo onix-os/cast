@@ -119,8 +119,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database(record, state_db)? {
@@ -129,23 +128,17 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
                 return Ok(UsrRollbackFreshDbInvalidationAdmission::Deferred);
             }
         };
-        let namespace_inspection =
-            match UsrRollbackFreshDbInvalidationNamespaceInspection::begin(
-                installation,
-                journal,
-                &journal_record_binding,
-                record,
-            ) {
-                Ok(inspection) => inspection,
-                Err(_) => return Ok(UsrRollbackFreshDbInvalidationAdmission::Deferred),
-            };
-        run_between_database_captures();
-        let namespace = match namespace_inspection.finish(
+        let namespace_inspection = match UsrRollbackFreshDbInvalidationNamespaceInspection::begin(
             installation,
             journal,
             &journal_record_binding,
             record,
         ) {
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(UsrRollbackFreshDbInvalidationAdmission::Deferred),
+        };
+        run_between_database_captures();
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackFreshDbInvalidationAdmission::Deferred),
         };
@@ -202,12 +195,8 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
         self.installation.revalidate_mutable_namespace()?;
         let database_before =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if database_before != database_after
@@ -225,12 +214,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackFreshDbInvalidationAuthorityError> {
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)
     }
 }
 

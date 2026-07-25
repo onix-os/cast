@@ -99,8 +99,7 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let namespace_inspection = match UsrRollbackDecisionNamespaceInspection::begin(installation, journal, record) {
             Ok(inspection) => inspection,
@@ -149,14 +148,10 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
-            (
-                Phase::SystemTriggersStarted | Phase::SystemTriggersComplete,
-                UsrExchangeLayout::Post,
-            ) => Some(InitialRollbackAction::Pending),
-            (
-                Phase::SystemTriggersStarted | Phase::SystemTriggersComplete,
-                UsrExchangeLayout::Pre,
-            ) => {
+            (Phase::SystemTriggersStarted | Phase::SystemTriggersComplete, UsrExchangeLayout::Post) => {
+                Some(InitialRollbackAction::Pending)
+            }
+            (Phase::SystemTriggersStarted | Phase::SystemTriggersComplete, UsrExchangeLayout::Pre) => {
                 return Ok(UsrRollbackDecisionAdmission::Deferred(
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
@@ -252,16 +247,14 @@ fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
     matches!(
         record.phase,
         Phase::UsrExchangeIntent | Phase::UsrExchanged | Phase::RootLinksComplete
-    )
-        || matches!(
-            (record.operation, record.phase, record.generation),
-            (Operation::NewState, Phase::SystemTriggersStarted, 11)
-                | (Operation::NewState, Phase::SystemTriggersComplete, 12)
-                | (Operation::NewState, Phase::PreviousArchived, 14)
-                | (Operation::ActiveReblit, Phase::SystemTriggersStarted, 9)
-                | (Operation::ActiveReblit, Phase::SystemTriggersComplete, 10)
-        )
-        || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
+    ) || matches!(
+        (record.operation, record.phase, record.generation),
+        (Operation::NewState, Phase::SystemTriggersStarted, 11)
+            | (Operation::NewState, Phase::SystemTriggersComplete, 12)
+            | (Operation::NewState, Phase::PreviousArchived, 14)
+            | (Operation::ActiveReblit, Phase::SystemTriggersStarted, 9)
+            | (Operation::ActiveReblit, Phase::SystemTriggersComplete, 10)
+    ) || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
 }
 
 #[cfg(test)]
@@ -275,24 +268,14 @@ impl UsrRollbackDecisionEvidence<'_> {
     fn revalidate(&self, journal: &TransitionJournalStore) -> Result<(), UsrRollbackDecisionAuthorityError> {
         // Exact public record identity is deliberately the first check. Equal
         // bytes at a replacement inode cannot authorize persistence.
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
         self.namespace.revalidate(&self.installation, journal, &self.record)?;
         let database_after = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_after)?;
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }

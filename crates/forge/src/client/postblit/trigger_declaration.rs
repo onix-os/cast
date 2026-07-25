@@ -1,12 +1,9 @@
 //! Read-only typed declaration adapters for packaged trigger scopes.
 
-use config::declaration::{
-    ConfigDeclarationEvaluator, DeclarationEvaluatorSet,
-};
+use config::declaration::{ConfigDeclarationEvaluator, DeclarationEvaluatorSet};
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
-    Evaluation, EvaluationIdentity,
-    LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline, EvaluationIdentity, LanguageSpec,
+    Limits, Source, SourceRoot,
 };
 use triggers::{
     GluonTriggerEvaluator,
@@ -74,23 +71,16 @@ macro_rules! trigger_evaluator {
             type Error = TriggerAdapterError;
 
             fn language_spec(&self) -> &LanguageSpec {
-                <TriggerEvaluator as DeclarationEvaluator<Trigger>>::language_spec(
-                    &self.trigger,
-                )
+                <TriggerEvaluator as DeclarationEvaluator<Trigger>>::language_spec(&self.trigger)
             }
 
             fn limits(&self) -> Limits {
-                <TriggerEvaluator as DeclarationEvaluator<Trigger>>::limits(
-                    &self.trigger,
-                )
+                <TriggerEvaluator as DeclarationEvaluator<Trigger>>::limits(&self.trigger)
             }
 
             fn with_source_root(&self, source_root: SourceRoot) -> Self {
                 Self::wrap(
-                    <TriggerEvaluator as DeclarationEvaluator<Trigger>>::with_source_root(
-                        &self.trigger,
-                        source_root,
-                    ),
+                    <TriggerEvaluator as DeclarationEvaluator<Trigger>>::with_source_root(&self.trigger, source_root),
                 )
             }
 
@@ -98,16 +88,12 @@ macro_rules! trigger_evaluator {
                 &self,
                 source: &Source,
                 deadline: EvaluationDeadline,
-            ) -> Result<
-                Evaluation<$config, Self::Identity>,
-                DeclarationEvaluationError<Self::Error>,
-            > {
-                let evaluation =
-                    <TriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate_within(
-                        &self.trigger,
-                        source,
-                        deadline,
-                    )?;
+            ) -> Result<Evaluation<$config, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
+                let evaluation = <TriggerEvaluator as DeclarationEvaluator<Trigger>>::evaluate_within(
+                    &self.trigger,
+                    source,
+                    deadline,
+                )?;
                 Ok(Evaluation {
                     value: <$config>::from(evaluation.value),
                     identity: evaluation.identity,
@@ -131,18 +117,12 @@ fn registered_engines() -> [TriggerEvaluator; 2] {
     ]
 }
 
-pub(super) fn transaction_evaluators(
-) -> DeclarationEvaluatorSet<TransactionTriggerEvaluator> {
-    DeclarationEvaluatorSet::new(
-        registered_engines().map(TransactionTriggerEvaluator::wrap),
-    )
-    .expect("the transaction-trigger languages register distinct extensions")
+pub(super) fn transaction_evaluators() -> DeclarationEvaluatorSet<TransactionTriggerEvaluator> {
+    DeclarationEvaluatorSet::new(registered_engines().map(TransactionTriggerEvaluator::wrap))
+        .expect("the transaction-trigger languages register distinct extensions")
 }
 
-pub(super) fn system_evaluators(
-) -> DeclarationEvaluatorSet<SystemTriggerEvaluator> {
-    DeclarationEvaluatorSet::new(
-        registered_engines().map(SystemTriggerEvaluator::wrap),
-    )
-    .expect("the system-trigger languages register distinct extensions")
+pub(super) fn system_evaluators() -> DeclarationEvaluatorSet<SystemTriggerEvaluator> {
+    DeclarationEvaluatorSet::new(registered_engines().map(SystemTriggerEvaluator::wrap))
+        .expect("the system-trigger languages register distinct extensions")
 }

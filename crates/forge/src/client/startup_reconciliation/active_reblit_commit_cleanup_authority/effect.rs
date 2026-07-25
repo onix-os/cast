@@ -11,14 +11,13 @@ use crate::transition_journal::TransitionJournalStore;
 use super::{
     ActiveReblitCommitCleanupApplyEffectAuthority, ActiveReblitCommitCleanupAuthorityError,
     ActiveReblitCommitCleanupCommonEvidence, ActiveReblitCommitCleanupDatabaseEvidence,
-    ActiveReblitCommitCleanupFinishEffectAuthority, inspect_current_database,
-    record_plan_is_exact, require_exact_active_state, require_exact_database,
-    require_exact_record_binding,
+    ActiveReblitCommitCleanupFinishEffectAuthority, inspect_current_database, record_plan_is_exact,
+    require_exact_active_state, require_exact_database, require_exact_record_binding,
 };
 use crate::client::startup_reconciliation::activation_namespace::{
     ActiveReblitCommitCleanupDurabilityError, ActiveReblitCommitCleanupEffectError as NamespaceEffectError,
-    ActiveReblitCommitCleanupExchangeReconciliation,
-    DurableActiveReblitCommitCleanupNamespace, PendingActiveReblitCommitCleanupDurability,
+    ActiveReblitCommitCleanupExchangeReconciliation, DurableActiveReblitCommitCleanupNamespace,
+    PendingActiveReblitCommitCleanupDurability,
 };
 
 /// Semantic result of consuming the exact Apply capability. Neither failure
@@ -52,10 +51,7 @@ impl<'reservation> ActiveReblitCommitCleanupApplyEffectAuthority<'reservation> {
     pub(in crate::client) fn reconcile(
         self,
         journal: &TransitionJournalStore,
-    ) -> Result<
-        ActiveReblitCommitCleanupApplyReconciliation<'reservation>,
-        ActiveReblitCommitCleanupEffectError,
-    > {
+    ) -> Result<ActiveReblitCommitCleanupApplyReconciliation<'reservation>, ActiveReblitCommitCleanupEffectError> {
         let Self {
             _evidence: evidence,
             _namespace: namespace,
@@ -103,10 +99,8 @@ impl<'reservation> ActiveReblitCommitCleanupFinishEffectAuthority<'reservation> 
     pub(in crate::client) fn into_durability(
         self,
         journal: &TransitionJournalStore,
-    ) -> Result<
-        ActiveReblitCommitCleanupPendingDurabilityAuthority<'reservation>,
-        ActiveReblitCommitCleanupEffectError,
-    > {
+    ) -> Result<ActiveReblitCommitCleanupPendingDurabilityAuthority<'reservation>, ActiveReblitCommitCleanupEffectError>
+    {
         let Self {
             _evidence: evidence,
             _namespace: namespace,
@@ -126,10 +120,7 @@ impl<'reservation> ActiveReblitCommitCleanupPendingDurabilityAuthority<'reservat
     pub(in crate::client) fn complete(
         self,
         journal: &TransitionJournalStore,
-    ) -> Result<
-        ActiveReblitCommitCleanupDurableAuthority<'reservation>,
-        ActiveReblitCommitCleanupEffectError,
-    > {
+    ) -> Result<ActiveReblitCommitCleanupDurableAuthority<'reservation>, ActiveReblitCommitCleanupEffectError> {
         let Self { evidence, namespace } = self;
         let database_before = begin_common_revalidation(&evidence, journal)?;
         let durable_namespace = namespace.complete(&evidence.installation, &evidence.record);
@@ -189,9 +180,7 @@ fn finish_common_revalidation(
         inspect_current_database(&evidence.record, &evidence.database.route, &evidence.state_db)?,
     )?;
     require_exact_active_state(&evidence.record, &evidence.installation, &evidence.active_state)?;
-    if database_before != database_after
-        || !record_plan_is_exact(&evidence.record, &evidence.database.route)
-    {
+    if database_before != database_after || !record_plan_is_exact(&evidence.record, &evidence.database.route) {
         return Err(super::ActiveReblitCommitCleanupAuthorityErrorKind::RouteEvidenceChanged.into());
     }
     require_exact_record_binding(
@@ -206,9 +195,7 @@ fn finish_common_revalidation(
 
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]
-pub(in crate::client) struct ActiveReblitCommitCleanupEffectError(
-    ActiveReblitCommitCleanupEffectErrorKind,
-);
+pub(in crate::client) struct ActiveReblitCommitCleanupEffectError(ActiveReblitCommitCleanupEffectErrorKind);
 
 impl From<ActiveReblitCommitCleanupAuthorityError> for ActiveReblitCommitCleanupEffectError {
     fn from(source: ActiveReblitCommitCleanupAuthorityError) -> Self {

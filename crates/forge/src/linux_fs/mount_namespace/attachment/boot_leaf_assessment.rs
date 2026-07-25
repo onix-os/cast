@@ -31,8 +31,7 @@ use super::{
     boot_publication_parent::RetainedBootPublicationParent,
 };
 use crate::linux_fs::{
-    controlled_resolution, descriptor_mount_id_until, is_retained_boot_file_private_component,
-    openat2_file_until,
+    controlled_resolution, descriptor_mount_id_until, is_retained_boot_file_private_component, openat2_file_until,
 };
 
 #[path = "boot_leaf_assessment/effect.rs"]
@@ -46,13 +45,12 @@ mod parent_walk;
 
 #[cfg(test)]
 pub(crate) use effect::{
-    FixtureRetainedBootLeafAssessmentHookGuard,
-    arm_retained_boot_leaf_assessment_terminal_rebind_hook,
+    FixtureRetainedBootLeafAssessmentHookGuard, arm_retained_boot_leaf_assessment_terminal_rebind_hook,
 };
 pub(crate) use error::RetainedBootLeafAssessmentError;
 pub(crate) use model::{
-    RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
-    RetainedBootLeafAssessmentState, ValidatedRetainedBootLeafAssessment,
+    RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState,
+    ValidatedRetainedBootLeafAssessment,
 };
 
 const READ_BUFFER_BYTES: usize = 4 * 1024;
@@ -127,7 +125,12 @@ pub(super) fn assess_from_retained_parent_until(
     let observed = observe_leaf(&parent, &canonical_name, request, limits, expected_parent, deadline)?;
 
     require_parent(target, "sandwiching boot-leaf assessment", deadline)?;
-    require_parent_alias(&parent, expected_parent, "sandwiching the retained parent alias", deadline)?;
+    require_parent_alias(
+        &parent,
+        expected_parent,
+        "sandwiching the retained parent alias",
+        deadline,
+    )?;
     effect::before_terminal_rebind();
     require_observation_current(&parent, &canonical_name, observed, expected_parent, deadline)?;
 
@@ -284,7 +287,12 @@ fn observe_leaf(
     let opening_mount_id = require_leaf_mount(&path, expected_parent, "binding the canonical boot leaf", deadline)?;
 
     if opening.mode != REQUIRED_MODE || opening.length != request.expected_length() {
-        let closing = require_regular_snapshot(&path, expected_parent, "closing mismatched boot-leaf metadata", deadline)?;
+        let closing = require_regular_snapshot(
+            &path,
+            expected_parent,
+            "closing mismatched boot-leaf metadata",
+            deadline,
+        )?;
         require_same_snapshot(opening, closing, "sandwiching mismatched boot-leaf metadata")?;
         return Ok(ObservedLeaf::Present(PresentLeaf {
             state: RetainedBootLeafAssessmentState::Different,
@@ -306,7 +314,11 @@ fn observe_leaf(
         "binding the readable canonical boot-leaf attachment",
         deadline,
     )?;
-    require_same_snapshot(opening, readable_opening, "rebinding the canonical boot leaf for reading")?;
+    require_same_snapshot(
+        opening,
+        readable_opening,
+        "rebinding the canonical boot leaf for reading",
+    )?;
     if readable_mount_id != opening_mount_id {
         return Err(RetainedBootLeafAssessmentError::AttachmentIdentityChanged {
             action: "rebinding the canonical boot-leaf mount",
@@ -366,11 +378,7 @@ fn open_leaf_path(parent: &File, name: &CStr, deadline: Instant) -> Result<File,
     })
 }
 
-fn open_readable_leaf(
-    parent: &File,
-    name: &CStr,
-    deadline: Instant,
-) -> Result<File, RetainedBootLeafAssessmentError> {
+fn open_readable_leaf(parent: &File, name: &CStr, deadline: Instant) -> Result<File, RetainedBootLeafAssessmentError> {
     checkpoint(deadline)?;
     openat2_file_until(
         parent.as_raw_fd(),
@@ -477,9 +485,9 @@ fn read_complete_identity(
         checkpoint(deadline)?;
         let offered = usize::try_from((request.expected_length() - offset).min(READ_BUFFER_BYTES as u64))
             .expect("fixed boot-leaf read buffer fits usize");
-        read_calls = read_calls.checked_add(1).ok_or(RetainedBootLeafAssessmentError::InvalidLimit {
-            field: "read calls",
-        })?;
+        read_calls = read_calls
+            .checked_add(1)
+            .ok_or(RetainedBootLeafAssessmentError::InvalidLimit { field: "read calls" })?;
         if read_calls > limits.max_read_calls {
             return Err(RetainedBootLeafAssessmentError::ReadCallLimitExceeded {
                 required: read_calls,
@@ -513,9 +521,9 @@ fn read_complete_identity(
             .ok_or(RetainedBootLeafAssessmentError::InvalidLimit { field: "read bytes" })?;
     }
 
-    read_calls = read_calls.checked_add(1).ok_or(RetainedBootLeafAssessmentError::InvalidLimit {
-        field: "read calls",
-    })?;
+    read_calls = read_calls
+        .checked_add(1)
+        .ok_or(RetainedBootLeafAssessmentError::InvalidLimit { field: "read calls" })?;
     if read_calls > limits.max_read_calls {
         return Err(RetainedBootLeafAssessmentError::ReadCallLimitExceeded {
             required: read_calls,

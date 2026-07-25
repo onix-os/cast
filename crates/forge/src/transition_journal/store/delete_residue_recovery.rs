@@ -1,12 +1,14 @@
-use std::{ffi::{CStr, CString}, os::fd::AsRawFd as _};
-
-use super::{StorageFaultPoint, TransitionJournalStore, storage_fault};
-use super::super::{
-    CANONICAL_NAME, DELETE_PREFIX, DirectoryPolicy, InodeIdentity, LOCK_NAME,
-    StorageError, TransitionRecord, controlled_resolution, decode, directory_entries, inode_identity,
-    openat2_file, read_bounded, renameat2, require_directory, require_safe_regular_file,
-    require_same_directory, valid_delete_name,
+use std::{
+    ffi::{CStr, CString},
+    os::fd::AsRawFd as _,
 };
+
+use super::super::{
+    CANONICAL_NAME, DELETE_PREFIX, DirectoryPolicy, InodeIdentity, LOCK_NAME, StorageError, TransitionRecord,
+    controlled_resolution, decode, directory_entries, inode_identity, openat2_file, read_bounded, renameat2,
+    require_directory, require_safe_regular_file, require_same_directory, valid_delete_name,
+};
+use super::{StorageFaultPoint, TransitionJournalStore, storage_fault};
 
 #[derive(Debug)]
 struct RetainedDeleteResidue {
@@ -146,15 +148,9 @@ impl TransitionJournalStore {
     /// cooperative same-credential boundary. An uncooperative same-credential
     /// writer changing a name inside the final compare/rename syscall window
     /// is outside that boundary. No optional work occurs in that window.
-    pub(super) fn recover_interrupted_bound_delete(
-        &self,
-        cast_directory: &std::fs::File,
-    ) -> Result<(), StorageError> {
+    pub(super) fn recover_interrupted_bound_delete(&self, cast_directory: &std::fs::File) -> Result<(), StorageError> {
         let entries = self.delete_recovery_entries(cast_directory)?;
-        if !entries
-            .iter()
-            .any(|name| name.as_bytes().starts_with(DELETE_PREFIX))
-        {
+        if !entries.iter().any(|name| name.as_bytes().starts_with(DELETE_PREFIX)) {
             return Ok(());
         }
         let residue_name = require_unique_delete_residue_inventory(entries)?;
@@ -214,8 +210,8 @@ impl TransitionJournalStore {
         if directory_sync.is_ok() {
             durability_boundary(DeleteResidueRecoveryDurabilityBoundary::JournalDirectorySynced);
         }
-        let directory_sync = directory_sync
-            .and_then(|()| storage_fault(StorageFaultPoint::DeleteResidueDirectorySyncReport));
+        let directory_sync =
+            directory_sync.and_then(|()| storage_fault(StorageFaultPoint::DeleteResidueDirectorySyncReport));
         if let Err(source) = directory_sync {
             return Err(self.reconcile_delete_residue_sync_error(cast_directory, &retained, source));
         }
@@ -354,7 +350,11 @@ impl TransitionJournalStore {
             return Err(delete_residue_entry_set_error(entries));
         }
         let (name, display, layout) = if residue_count == 1 {
-            (retained.name.as_c_str(), retained.display.as_str(), DeleteResidueLayout::ExactResidue)
+            (
+                retained.name.as_c_str(),
+                retained.display.as_str(),
+                DeleteResidueLayout::ExactResidue,
+            )
         } else {
             (CANONICAL_NAME, "state-transition", DeleteResidueLayout::ExactCanonical)
         };
@@ -381,11 +381,7 @@ impl TransitionJournalStore {
         Ok(layout)
     }
 
-    fn open_delete_recovery_record(
-        &self,
-        name: &CStr,
-        display: &str,
-    ) -> Result<std::fs::File, StorageError> {
+    fn open_delete_recovery_record(&self, name: &CStr, display: &str) -> Result<std::fs::File, StorageError> {
         let file = openat2_file(
             self.directory.as_raw_fd(),
             name,
@@ -410,10 +406,7 @@ impl TransitionJournalStore {
         Ok(file)
     }
 
-    fn delete_recovery_entries(
-        &self,
-        cast_directory: &std::fs::File,
-    ) -> Result<Vec<CString>, StorageError> {
+    fn delete_recovery_entries(&self, cast_directory: &std::fs::File) -> Result<Vec<CString>, StorageError> {
         let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
         let scan = openat2_file(
             journal.as_raw_fd(),
@@ -441,18 +434,16 @@ fn require_unique_delete_residue_inventory(entries: Vec<CString>) -> Result<CStr
         .iter()
         .filter(|name| name.as_bytes() == LOCK_NAME.to_bytes())
         .count();
-    let mut residues = entries
-        .iter()
-        .filter(|name| valid_delete_name(name.as_bytes()));
+    let mut residues = entries.iter().filter(|name| valid_delete_name(name.as_bytes()));
     let residue = residues.next().cloned();
     let multiple_residues = residues.next().is_some();
     if lock_count != 1
         || entries.len() != 2
         || multiple_residues
         || residue.is_none()
-        || entries.iter().any(|name| {
-            name.as_bytes().starts_with(DELETE_PREFIX) && !valid_delete_name(name.as_bytes())
-        })
+        || entries
+            .iter()
+            .any(|name| name.as_bytes().starts_with(DELETE_PREFIX) && !valid_delete_name(name.as_bytes()))
     {
         return Err(delete_residue_entry_set_error(entries));
     }

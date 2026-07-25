@@ -8,13 +8,11 @@
 use thiserror::Error;
 
 use crate::transition_journal::{
-    Operation, Phase, TransitionJournalRecordDeleteError,
-    TransitionJournalRecordDeleteState, TransitionJournalStore,
+    Operation, Phase, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState, TransitionJournalStore,
 };
 
 use super::super::startup_reconciliation::{
-    ActiveReblitCompleteFinalizationAfterDeleteAuthority,
-    ActiveReblitCompleteFinalizationAuthority,
+    ActiveReblitCompleteFinalizationAfterDeleteAuthority, ActiveReblitCompleteFinalizationAuthority,
     ActiveReblitCompleteFinalizationAuthorityError,
 };
 
@@ -56,17 +54,16 @@ fn reconcile_bound_delete(
                 .map_err(ActiveReblitCompleteFinalizationError::PostDeleteAuthority)?;
             Ok(journal)
         }
-        Err(delete @ TransitionJournalRecordDeleteError::Storage {
-            state: TransitionJournalRecordDeleteState::Absent,
-            ..
-        }) => match after_delete.revalidate_after_journal_delete(&journal) {
+        Err(
+            delete @ TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::Absent,
+                ..
+            },
+        ) => match after_delete.revalidate_after_journal_delete(&journal) {
             Ok(()) => Err(ActiveReblitCompleteFinalizationError::Delete(delete)),
-            Err(verification) => Err(
-                ActiveReblitCompleteFinalizationError::DeleteAndPostDeleteAuthority {
-                    delete,
-                    verification,
-                },
-            ),
+            Err(verification) => {
+                Err(ActiveReblitCompleteFinalizationError::DeleteAndPostDeleteAuthority { delete, verification })
+            }
         },
         Err(source) => Err(ActiveReblitCompleteFinalizationError::Delete(source)),
     }
@@ -76,9 +73,7 @@ fn reconcile_bound_delete(
 pub(in crate::client) enum ActiveReblitCompleteFinalizationError {
     #[error("revalidate exact forward ActiveReblit Complete finalization authority")]
     Authority(#[source] ActiveReblitCompleteFinalizationAuthorityError),
-    #[error(
-        "forward ActiveReblit finalization requires exact ActiveReblit Complete, got {operation:?} {phase:?}"
-    )]
+    #[error("forward ActiveReblit finalization requires exact ActiveReblit Complete, got {operation:?} {phase:?}")]
     UnexpectedSource { operation: Operation, phase: Phase },
     #[error("delete the exact retained forward ActiveReblit Complete journal inode")]
     Delete(#[source] TransitionJournalRecordDeleteError),
@@ -101,18 +96,14 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn arm_before_active_reblit_complete_finalization_final_revalidation(
-    hook: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_before_active_reblit_complete_finalization_final_revalidation(hook: impl FnOnce() + 'static) {
     BEFORE_FINAL_AUTHORITY_REVALIDATION.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });
 }
 
 #[cfg(test)]
-pub(crate) fn arm_after_active_reblit_complete_finalization_delete(
-    hook: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_after_active_reblit_complete_finalization_delete(hook: impl FnOnce() + 'static) {
     AFTER_DELETE.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

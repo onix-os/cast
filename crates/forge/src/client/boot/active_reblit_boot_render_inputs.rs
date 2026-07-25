@@ -186,10 +186,7 @@ impl<'stone, 'roots> PreparedActiveReblitBootRenderInputs<'stone, 'roots> {
 }
 
 impl<'attempt, 'stone, 'roots> RevalidatedActiveReblitBootRenderInputs<'attempt, 'stone, 'roots> {
-    pub(in crate::client) fn is_bound_to_installation(
-        &self,
-        installation: &Installation,
-    ) -> bool {
+    pub(in crate::client) fn is_bound_to_installation(&self, installation: &Installation) -> bool {
         self._roots.is_bound_to_installation(installation)
     }
 

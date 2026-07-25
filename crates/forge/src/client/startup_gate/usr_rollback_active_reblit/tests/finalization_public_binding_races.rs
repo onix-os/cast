@@ -12,15 +12,13 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::arm_before_usr_rollback_active_reblit_finalization_fresh_namespace_capture,
         startup_recovery::{
-            UsrRollbackActiveReblitFinalizationError,
-            arm_after_usr_rollback_active_reblit_finalization_delete,
+            UsrRollbackActiveReblitFinalizationError, arm_after_usr_rollback_active_reblit_finalization_delete,
             arm_before_usr_rollback_active_reblit_finalization_final_revalidation, finalize_usr_rollback_active_reblit,
         },
     },
     transition_journal::{
-        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError,
-        TransitionJournalRecordDeleteError, arm_public_binding_revalidation_callback,
-        assert_public_binding_revalidation_callback_consumed, encode,
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError, TransitionJournalRecordDeleteError,
+        arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed, encode,
     },
 };
 
@@ -126,13 +124,10 @@ fn startup_active_reblit_finalization_bound_delete_never_unlinks_a_last_seam_rep
     let hook_canonical = canonical.clone();
     let hook_displaced = displaced.clone();
     let hook_bytes = exact_bytes.clone();
-    arm_public_binding_revalidation_callback(
-        PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach,
-        move || {
-            fs::rename(&hook_canonical, &hook_displaced).unwrap();
-            write_new_private_file(&hook_canonical, &hook_bytes);
-        },
-    );
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach, move || {
+        fs::rename(&hook_canonical, &hook_displaced).unwrap();
+        write_new_private_file(&hook_canonical, &hook_bytes);
+    });
     reset_candidate_effect_observers();
 
     let error = finalize_usr_rollback_active_reblit(journal, authority).unwrap_err();
@@ -140,9 +135,9 @@ fn startup_active_reblit_finalization_bound_delete_never_unlinks_a_last_seam_rep
     assert_public_binding_revalidation_callback_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActiveReblitFinalizationError::Delete(
-            TransitionJournalRecordDeleteError::Detached(StorageError::CanonicalChanged)
-        )
+        UsrRollbackActiveReblitFinalizationError::Delete(TransitionJournalRecordDeleteError::Detached(
+            StorageError::CanonicalChanged
+        ))
     ));
     assert_eq!(fs::read(displaced).unwrap(), exact_bytes);
     assert!(!canonical.exists());

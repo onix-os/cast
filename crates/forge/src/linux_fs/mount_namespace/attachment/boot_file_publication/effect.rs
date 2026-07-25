@@ -50,7 +50,10 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn arm_retained_boot_file_publication_fault(point: FixtureRetainedBootFilePublicationFault) {
     PUBLICATION_FAULT.with(|slot| {
-        assert!(slot.replace(Some(point)).is_none(), "boot-file publication fault already armed");
+        assert!(
+            slot.replace(Some(point)).is_none(),
+            "boot-file publication fault already armed"
+        );
     });
 }
 
@@ -59,7 +62,10 @@ pub(crate) fn arm_retained_boot_file_publication_fault(point: FixtureRetainedBoo
 #[cfg(test)]
 pub(crate) fn arm_retained_boot_file_private_name_substitution(callback: impl FnOnce() + 'static) {
     PRIVATE_NAME_SUBSTITUTION.with(|slot| {
-        assert!(slot.borrow_mut().replace(Box::new(callback)).is_none(), "private-name substitution already armed");
+        assert!(
+            slot.borrow_mut().replace(Box::new(callback)).is_none(),
+            "private-name substitution already armed"
+        );
     });
 }
 
@@ -104,35 +110,31 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn stream_expected_source(
 
     while offset < request.expected_length() {
         checkpoint(deadline)?;
-        source.checkpoint().map_err(|source| RetainedBootFilePublicationError::Source { source })?;
+        source
+            .checkpoint()
+            .map_err(|source| RetainedBootFilePublicationError::Source { source })?;
         let offered = usize::try_from((request.expected_length() - offset).min(STREAM_BUFFER_BYTES as u64))
             .expect("fixed boot-file stream buffer fits usize");
         let found = source
             .read_at(offset, &mut buffer[..offered])
             .map_err(|source| RetainedBootFilePublicationError::Source { source })?;
         if found == 0 || found > offered {
-            return Err(RetainedBootFilePublicationError::ContentIdentityMismatch {
-                field: "source length",
-            });
+            return Err(RetainedBootFilePublicationError::ContentIdentityMismatch { field: "source length" });
         }
         xxh3.update(&buffer[..found]);
         sha256.update(&buffer[..found]);
         let mut written = 0usize;
         while written < found {
             checkpoint(deadline)?;
-            write_calls = write_calls.checked_add(1).ok_or(RetainedBootFilePublicationError::InvalidLimit {
-                field: "write calls",
-            })?;
+            write_calls = write_calls
+                .checked_add(1)
+                .ok_or(RetainedBootFilePublicationError::InvalidLimit { field: "write calls" })?;
             if write_calls > limits.max_write_calls {
-                return Err(RetainedBootFilePublicationError::InvalidLimit {
-                    field: "write calls",
-                });
+                return Err(RetainedBootFilePublicationError::InvalidLimit { field: "write calls" });
             }
-            let write_offset = offset.checked_add(written as u64).ok_or(
-                RetainedBootFilePublicationError::ContentIdentityMismatch {
-                    field: "write offset",
-                },
-            )?;
+            let write_offset = offset
+                .checked_add(written as u64)
+                .ok_or(RetainedBootFilePublicationError::ContentIdentityMismatch { field: "write offset" })?;
             let count = pwrite_once(destination, write_offset, &buffer[written..found]).map_err(|source| {
                 RetainedBootFilePublicationError::Filesystem {
                     action: "writing one private boot-file chunk",
@@ -157,11 +159,9 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn stream_expected_source(
                 });
             }
         }
-        offset = offset.checked_add(found as u64).ok_or(
-            RetainedBootFilePublicationError::ContentIdentityMismatch {
-                field: "source offset",
-            },
-        )?;
+        offset = offset
+            .checked_add(found as u64)
+            .ok_or(RetainedBootFilePublicationError::ContentIdentityMismatch { field: "source offset" })?;
         if offset < request.expected_length() {
             fault(FixtureRetainedBootFilePublicationFault::MidMultiChunkWrite)?;
         }
@@ -179,9 +179,7 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn stream_expected_source(
         });
     }
     if offset != request.expected_length() || written_bytes != request.expected_length() {
-        return Err(RetainedBootFilePublicationError::ContentIdentityMismatch {
-            field: "source length",
-        });
+        return Err(RetainedBootFilePublicationError::ContentIdentityMismatch { field: "source length" });
     }
     if xxh3.digest128() != request.expected_xxh3() {
         return Err(RetainedBootFilePublicationError::ContentIdentityMismatch { field: "source XXH3" });

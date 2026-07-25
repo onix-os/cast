@@ -6,19 +6,16 @@ use thiserror::Error;
 use crate::{
     installation,
     transition_journal::{
-        CodecError, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
+use super::super::startup_reconciliation::{
+    ActiveReblitCommitCleanupCompleteAuthority, ActiveReblitCommitCleanupCompleteAuthorityError,
+    ActiveReblitCommitCleanupCompletePostAdvanceAuthority, ActiveReblitCommitCleanupCompleteRecordAdvanceError,
+};
 use super::canonical_journal_reopen::{
     CanonicalJournalReopenError, reopen_canonical_journal, try_reopen_canonical_journal,
-};
-use super::super::startup_reconciliation::{
-    ActiveReblitCommitCleanupCompleteAuthorityError,
-    ActiveReblitCommitCleanupCompleteAuthority,
-    ActiveReblitCommitCleanupCompletePostAdvanceAuthority,
-    ActiveReblitCommitCleanupCompleteRecordAdvanceError,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,16 +54,12 @@ enum CanonicalReopenMode {
 pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(
     journal: TransitionJournalStore,
     authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
-) -> Result<
-    (TransitionJournalStore, TransitionRecord),
-    ActiveReblitCommitCleanupCompletePersistenceError,
-> {
-    let (journal, record, binding) =
-        persist_active_reblit_commit_cleanup_complete_to_complete_inner(
-            journal,
-            authority,
-            CanonicalReopenMode::StartupBlocking,
-        )?;
+) -> Result<(TransitionJournalStore, TransitionRecord), ActiveReblitCommitCleanupCompletePersistenceError> {
+    let (journal, record, binding) = persist_active_reblit_commit_cleanup_complete_to_complete_inner(
+        journal,
+        authority,
+        CanonicalReopenMode::StartupBlocking,
+    )?;
     drop(binding);
     Ok((journal, record))
 }
@@ -77,11 +70,7 @@ pub(in crate::client) fn persist_active_reblit_commit_cleanup_complete_to_comple
     journal: TransitionJournalStore,
     authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
 ) -> Result<
-    (
-        TransitionJournalStore,
-        TransitionRecord,
-        TransitionJournalRecordBinding,
-    ),
+    (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding),
     ActiveReblitCommitCleanupCompletePersistenceError,
 > {
     persist_active_reblit_commit_cleanup_complete_to_complete_inner(
@@ -96,11 +85,7 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
     authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
     reopen_mode: CanonicalReopenMode,
 ) -> Result<
-    (
-        TransitionJournalStore,
-        TransitionRecord,
-        TransitionJournalRecordBinding,
-    ),
+    (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding),
     ActiveReblitCommitCleanupCompletePersistenceError,
 > {
     let source_record = authority.record().clone();
@@ -109,11 +94,8 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
     let advance = match authority.advance_to_complete(&journal) {
         Ok((successor, successor_binding, post_advance)) => {
             before_active_reblit_commit_cleanup_complete_same_store_validation();
-            let same_store_validation = post_advance.revalidate_successor_same_store(
-                &journal,
-                &successor_binding,
-                &successor,
-            );
+            let same_store_validation =
+                post_advance.revalidate_successor_same_store(&journal, &successor_binding, &successor);
             AdvanceOutcome::Published {
                 successor,
                 successor_binding,
@@ -127,27 +109,22 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
         }
         Err(ActiveReblitCommitCleanupCompleteRecordAdvanceError::Record(source)) => {
             drop(journal);
-            return Err(ActiveReblitCommitCleanupCompletePersistenceError::RouteConstruction {
-                source,
-            });
+            return Err(ActiveReblitCommitCleanupCompletePersistenceError::RouteConstruction { source });
         }
         Err(ActiveReblitCommitCleanupCompleteRecordAdvanceError::UnexpectedSuccessor) => {
             drop(journal);
-            return Err(
-                ActiveReblitCommitCleanupCompletePersistenceError::UnexpectedSuccessor,
-            );
+            return Err(ActiveReblitCommitCleanupCompletePersistenceError::UnexpectedSuccessor);
         }
         Err(ActiveReblitCommitCleanupCompleteRecordAdvanceError::Installation(source)) => {
             drop(journal);
             return Err(ActiveReblitCommitCleanupCompletePersistenceError::Installation(source));
         }
-        Err(ActiveReblitCommitCleanupCompleteRecordAdvanceError::Storage {
-            source,
-            successor,
-        }) => AdvanceOutcome::StorageFailed {
-            source,
-            successor: *successor,
-        },
+        Err(ActiveReblitCommitCleanupCompleteRecordAdvanceError::Storage { source, successor }) => {
+            AdvanceOutcome::StorageFailed {
+                source,
+                successor: *successor,
+            }
+        }
     };
 
     drop(journal);
@@ -158,7 +135,7 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
         CanonicalReopenMode::StartupBlocking => reopen_canonical_journal(&installation),
         CanonicalReopenMode::RetainedNonBlocking => try_reopen_canonical_journal(&installation),
     }
-        .map_err(ActiveReblitCommitCleanupCompleteReopenError::from);
+    .map_err(ActiveReblitCommitCleanupCompleteReopenError::from);
 
     match advance {
         AdvanceOutcome::Published {
@@ -169,11 +146,9 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
         } => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
                 before_active_reblit_commit_cleanup_complete_reopened_validation();
-                if let Err(source) = post_advance.revalidate_successor_reopened(
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                ) {
+                if let Err(source) =
+                    post_advance.revalidate_successor_reopened(&reopened, &successor_binding, &successor)
+                {
                     drop(successor_binding);
                     drop(post_advance);
                     drop(reopened);
@@ -186,28 +161,20 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
                     );
                 }
                 after_active_reblit_commit_cleanup_complete_old_binding_validation();
-                let fresh_binding = match recapture_successor_binding(
-                    &installation,
-                    &reopened,
-                    &successor,
-                ) {
+                let fresh_binding = match recapture_successor_binding(&installation, &reopened, &successor) {
                     Ok(binding) => binding,
                     Err(source) => {
                         drop(successor_binding);
                         drop(post_advance);
                         drop(reopened);
                         return Err(
-                            ActiveReblitCommitCleanupCompletePersistenceError::FreshSuccessorBinding {
-                                source,
-                            },
+                            ActiveReblitCommitCleanupCompletePersistenceError::FreshSuccessorBinding { source },
                         );
                     }
                 };
-                if let Err(source) = post_advance.revalidate_successor_reopened(
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                ) {
+                if let Err(source) =
+                    post_advance.revalidate_successor_reopened(&reopened, &successor_binding, &successor)
+                {
                     drop(fresh_binding);
                     drop(successor_binding);
                     drop(post_advance);
@@ -215,18 +182,15 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
                     return Err(
                         ActiveReblitCommitCleanupCompletePersistenceError::PostAdvanceValidation {
                             durable: DurableActiveReblitCommitCleanupCompleteRecord::Complete,
-                            stage: ActiveReblitCommitCleanupCompleteValidationStage::ReopenedOldBindingAfterFreshCapture,
+                            stage:
+                                ActiveReblitCommitCleanupCompleteValidationStage::ReopenedOldBindingAfterFreshCapture,
                             source,
                         },
                     );
                 }
                 drop(successor_binding);
                 before_active_reblit_commit_cleanup_complete_fresh_binding_validation();
-                let validation = post_advance.revalidate_successor_same_store(
-                    &reopened,
-                    &fresh_binding,
-                    &successor,
-                );
+                let validation = post_advance.revalidate_successor_same_store(&reopened, &fresh_binding, &successor);
                 drop(post_advance);
                 match validation {
                     Ok(()) => Ok((reopened, successor, fresh_binding)),
@@ -251,11 +215,9 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
                     },
                 )
             }
-            Err(source) => Err(
-                ActiveReblitCommitCleanupCompletePersistenceError::ReopenAfterSuccessfulAdvance {
-                    source,
-                },
-            ),
+            Err(source) => {
+                Err(ActiveReblitCommitCleanupCompletePersistenceError::ReopenAfterSuccessfulAdvance { source })
+            }
         },
         AdvanceOutcome::Published {
             successor,
@@ -320,19 +282,15 @@ fn persist_active_reblit_commit_cleanup_complete_to_complete_inner(
             }
             Ok((reopened, actual)) => {
                 drop(reopened);
-                Err(
-                    ActiveReblitCommitCleanupCompletePersistenceError::AdvanceAndReopen {
-                        advance: source,
-                        reopen: unexpected_record(&source_record, &successor, actual),
-                    },
-                )
-            }
-            Err(reopen) => Err(
-                ActiveReblitCommitCleanupCompletePersistenceError::AdvanceAndReopen {
+                Err(ActiveReblitCommitCleanupCompletePersistenceError::AdvanceAndReopen {
                     advance: source,
-                    reopen,
-                },
-            ),
+                    reopen: unexpected_record(&source_record, &successor, actual),
+                })
+            }
+            Err(reopen) => Err(ActiveReblitCommitCleanupCompletePersistenceError::AdvanceAndReopen {
+                advance: source,
+                reopen,
+            }),
         },
     }
 }
@@ -384,7 +342,10 @@ pub(in crate::client) enum ActiveReblitCommitCleanupCompletePersistenceError {
     #[error("revalidate exact promoted CommitCleanupComplete authority")]
     Authority(#[source] ActiveReblitCommitCleanupCompleteAuthorityError),
     #[error("derive sole legal ActiveReblit Complete successor")]
-    RouteConstruction { #[source] source: CodecError },
+    RouteConstruction {
+        #[source]
+        source: CodecError,
+    },
     #[error("derived successor was not exact ActiveReblit Complete")]
     UnexpectedSuccessor,
     #[error("revalidate installation before bound Complete advance")]

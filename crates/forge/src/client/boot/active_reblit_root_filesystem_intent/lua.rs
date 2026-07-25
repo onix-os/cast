@@ -19,17 +19,15 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
-    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
+    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
 use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
 
 use super::gluon::SOURCE_LOGICAL_NAME;
 use super::normalization::materialize_root_argument;
-use super::{
-    ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue,
-};
+use super::{ActiveReblitRootFilesystemIntentError, RootFilesystemIntentBudget, RootFilesystemIntentValue};
 
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const MAX_EVALUATION_TIME: Duration = Duration::from_secs(2);
@@ -96,10 +94,8 @@ impl DeclarationEvaluator<RootFilesystemIntentValue> for LuaRootFilesystemIntent
         &self,
         source: &Source,
         deadline: EvaluationDeadline,
-    ) -> Result<
-        DeclarationEvaluation<RootFilesystemIntentValue, Self::Identity>,
-        DeclarationEvaluationError<Self::Error>,
-    > {
+    ) -> Result<DeclarationEvaluation<RootFilesystemIntentValue, Self::Identity>, DeclarationEvaluationError<Self::Error>>
+    {
         let evaluation = self
             .engine
             .evaluate_within_as::<LuaRootFilesystemIntent>(source, deadline)
@@ -108,8 +104,7 @@ impl DeclarationEvaluator<RootFilesystemIntentValue> for LuaRootFilesystemIntent
         budget
             .require_deadline()
             .map_err(DeclarationEvaluationError::Conversion)?;
-        require_lua_fingerprint_contract(&evaluation.identity)
-            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_lua_fingerprint_contract(&evaluation.identity).map_err(DeclarationEvaluationError::Conversion)?;
 
         let value = materialize_root_argument(evaluation.value.root, &mut budget)
             .map_err(DeclarationEvaluationError::Conversion)?;
@@ -169,8 +164,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::time::{Duration, Instant};
 
-    use super::super::gluon::gluon_value_for_test;
     use super::super::RootFilesystemIntentPolicy;
+    use super::super::gluon::gluon_value_for_test;
     use super::*;
     use crate::Installation;
 
@@ -223,8 +218,8 @@ mod tests {
 
         let lua = lua_value(&mut fixture.budget(), r#"return { root = "UUID=1111-2222" }"#)
             .expect("lua root intent evaluates");
-        let gluon = gluon_value_for_test("UUID=1111-2222", &mut fixture.budget())
-            .expect("gluon root intent normalizes");
+        let gluon =
+            gluon_value_for_test("UUID=1111-2222", &mut fixture.budget()).expect("gluon root intent normalizes");
 
         assert_eq!(lua, gluon);
     }
@@ -238,8 +233,7 @@ mod tests {
         let locator = "PARTUUID=11111111-2222-3333-4444-555555555555";
 
         let lua_value = lua_value(&mut fixture.budget(), &lua).expect("lua example evaluates");
-        let gluon_value =
-            gluon_value_for_test(locator, &mut fixture.budget()).expect("gluon normalizes");
+        let gluon_value = gluon_value_for_test(locator, &mut fixture.budget()).expect("gluon normalizes");
         assert_eq!(lua_value, gluon_value);
     }
 
@@ -252,14 +246,13 @@ mod tests {
     #[test]
     fn an_emitted_root_intent_re_decodes_to_the_same_value() {
         let fixture = Fixture::new();
-        let original = lua_value(&mut fixture.budget(), r#"return { root = "UUID=abcd-1234" }"#)
-            .expect("root intent evaluates");
+        let original =
+            lua_value(&mut fixture.budget(), r#"return { root = "UUID=abcd-1234" }"#).expect("root intent evaluates");
 
         let emitted = encode_lua_root_filesystem(&original);
         assert!(emitted.starts_with(GENERATED_LUA_MARKER));
 
-        let redecoded =
-            lua_value(&mut fixture.budget(), &emitted).expect("emitted root intent re-decodes");
+        let redecoded = lua_value(&mut fixture.budget(), &emitted).expect("emitted root intent re-decodes");
         assert_eq!(redecoded, original);
     }
 

@@ -343,9 +343,7 @@ impl Database {
             }
 
             #[cfg(test)]
-            exact_fresh_transition_removal_boundary(
-                ExactFreshTransitionRemovalBoundary::StateRowDeletedBeforeCommit,
-            );
+            exact_fresh_transition_removal_boundary(ExactFreshTransitionRemovalBoundary::StateRowDeletedBeforeCommit);
 
             if exact_fresh_transition_removal_fault(ExactFreshTransitionRemovalFault::BeforeCommit) {
                 return Err(ExactFreshTransitionAttemptError::FaultInjected {

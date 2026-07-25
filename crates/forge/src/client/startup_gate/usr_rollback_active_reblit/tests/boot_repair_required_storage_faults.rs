@@ -2,8 +2,7 @@
 
 use crate::{
     client::startup_recovery::{
-        DurableUsrRollbackActiveReblitBootRepairRequiredRecord,
-        DurableUsrRollbackActiveReblitBootRepairStartRecord,
+        DurableUsrRollbackActiveReblitBootRepairRequiredRecord, DurableUsrRollbackActiveReblitBootRepairStartRecord,
     },
     transition_journal::{
         Phase, arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault, arm_next_update_exchange_fault,
@@ -18,13 +17,12 @@ use super::{
     super::test_fixture::BootSyncStartedLayout,
     support::{
         CandidateOrigin, Epoch, UsrRestoreOrigin, assert_boot_required_persistence_advance,
-        assert_boot_start_persistence_advance,
-        assert_fresh_existing_candidate_database, assert_no_boot_synchronize_attempts, assert_no_candidate_effects,
-        assert_pending_phase, boot_active_wrapper_path, build_boot_sync_started, canonical_record,
+        assert_boot_start_persistence_advance, assert_fresh_existing_candidate_database,
+        assert_no_boot_synchronize_attempts, assert_no_candidate_effects, assert_pending_phase,
+        boot_active_wrapper_path, build_boot_sync_started, canonical_record,
         drive_boot_sync_started_to_candidate_preserved, enter_boot, enter_fresh_handles, expected_boot_repair_required,
-        expected_boot_repair_started, expected_boot_repair_unverified,
-        install_persistent_boot_database, release_boot_handles, reset_boot_synchronize_observer,
-        reset_candidate_effect_observers,
+        expected_boot_repair_started, expected_boot_repair_unverified, install_persistent_boot_database,
+        release_boot_handles, reset_boot_synchronize_observer, reset_candidate_effect_observers,
     },
 };
 

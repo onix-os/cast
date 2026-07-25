@@ -12,9 +12,8 @@ mod retained_binding;
 use crate::{
     Installation, State, db, state,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalBinding,
-        TransitionJournalRecordBinding, TransitionJournalRecordDeleteError,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Operation, Phase, StorageError, TransitionJournalBinding, TransitionJournalRecordBinding,
+        TransitionJournalRecordDeleteError, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -22,16 +21,14 @@ use super::super::{
     active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot},
     startup_gate::ActiveReblitCompleteFinalizationSeal,
 };
-use super::{
-    DatabaseEvidence, InspectionError, database_ownership_evidence_compatible,
-    inspect_database, metadata_provenance_evidence_compatible,
-};
 use super::activation_namespace::{
-    ActiveReblitCommitCleanupFinishNamespaceProof,
-    ActiveReblitCommitCleanupNamespaceError,
-    ActiveReblitCommitCleanupNamespaceInspection,
-    ActiveReblitCommitCleanupNamespaceProof,
+    ActiveReblitCommitCleanupFinishNamespaceProof, ActiveReblitCommitCleanupNamespaceError,
+    ActiveReblitCommitCleanupNamespaceInspection, ActiveReblitCommitCleanupNamespaceProof,
     active_reblit_commit_cleanup_namespace_error_is_mismatch,
+};
+use super::{
+    DatabaseEvidence, InspectionError, database_ownership_evidence_compatible, inspect_database,
+    metadata_provenance_evidence_compatible,
 };
 
 /// Read-only result for exact forward terminal admission.
@@ -109,10 +106,8 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
         state_db: &db::state::Database,
         active_state_reservation: &'reservation ActiveStateReservation,
         record: &TransitionRecord,
-    ) -> Result<
-        ActiveReblitCompleteFinalizationAdmission<'reservation>,
-        ActiveReblitCompleteFinalizationAuthorityError,
-    > {
+    ) -> Result<ActiveReblitCompleteFinalizationAdmission<'reservation>, ActiveReblitCompleteFinalizationAuthorityError>
+    {
         let captured = Self::capture_with_record_binding(
             installation,
             journal,
@@ -122,10 +117,8 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
             || {
                 installation.revalidate_mutable_namespace()?;
                 let journal_binding = journal.binding();
-                let journal_record_binding = journal.record_binding(
-                    installation.retained_mutable_cast_directory()?,
-                    record,
-                )?;
+                let journal_record_binding =
+                    journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
                 installation.revalidate_mutable_namespace()?;
                 Ok((journal_binding, journal_record_binding))
             },
@@ -134,9 +127,7 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
             ActiveReblitCompleteFinalizationCapture::NotApplicable => {
                 ActiveReblitCompleteFinalizationAdmission::NotApplicable
             }
-            ActiveReblitCompleteFinalizationCapture::Deferred => {
-                ActiveReblitCompleteFinalizationAdmission::Deferred
-            }
+            ActiveReblitCompleteFinalizationCapture::Deferred => ActiveReblitCompleteFinalizationAdmission::Deferred,
             ActiveReblitCompleteFinalizationCapture::Ready(authority) => {
                 ActiveReblitCompleteFinalizationAdmission::Ready(authority)
             }
@@ -153,10 +144,8 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
             (TransitionJournalBinding, TransitionJournalRecordBinding),
             ActiveReblitCompleteFinalizationAuthorityError,
         >,
-    ) -> Result<
-        ActiveReblitCompleteFinalizationCapture<'reservation>,
-        ActiveReblitCompleteFinalizationAuthorityError,
-    > {
+    ) -> Result<ActiveReblitCompleteFinalizationCapture<'reservation>, ActiveReblitCompleteFinalizationAuthorityError>
+    {
         if record.operation != Operation::ActiveReblit || record.phase != Phase::Complete {
             return Ok(ActiveReblitCompleteFinalizationCapture::NotApplicable);
         }
@@ -179,11 +168,7 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
                 return Ok(ActiveReblitCompleteFinalizationCapture::Deferred);
             }
         };
-        let active_state = match capture_exact_active_state(
-            record,
-            installation,
-            active_state_reservation,
-        )? {
+        let active_state = match capture_exact_active_state(record, installation, active_state_reservation)? {
             Some(active_state) => active_state,
             None => return Ok(ActiveReblitCompleteFinalizationCapture::Deferred),
         };
@@ -200,12 +185,7 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
             Err(source) => return Err(source.into()),
         };
         run_between_database_captures();
-        let namespace = match inspection.finish(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        )? {
+        let namespace = match inspection.finish(installation, journal, &journal_record_binding, record)? {
             ActiveReblitCommitCleanupNamespaceProof::Finish(namespace) => namespace,
             ActiveReblitCommitCleanupNamespaceProof::Apply(_) => {
                 return Ok(ActiveReblitCompleteFinalizationCapture::Deferred);
@@ -216,17 +196,10 @@ impl ActiveReblitCompleteFinalizationAuthority<'_> {
             inspect_current_database(record, &database_before.route, state_db)?,
         )?;
         require_exact_active_state(record, installation, &active_state)?;
-        if database_before != database_after
-            || !record_plan_is_exact(record, &database_after.route)
-        {
+        if database_before != database_after || !record_plan_is_exact(record, &database_after.route) {
             return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::EvidenceChanged.into());
         }
-        require_exact_record_binding(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        )?;
+        require_exact_record_binding(installation, journal, &journal_record_binding, record)?;
         installation.revalidate_mutable_namespace()?;
 
         Ok(ActiveReblitCompleteFinalizationCapture::Ready(
@@ -404,17 +377,12 @@ fn inspect_current_database(
     record: &TransitionRecord,
     route: &ActiveReblitCompleteFinalizationRouteEvidence,
     state_db: &db::state::Database,
-) -> Result<
-    ActiveReblitCompleteFinalizationDatabaseInspection,
-    ActiveReblitCompleteFinalizationAuthorityError,
-> {
+) -> Result<ActiveReblitCompleteFinalizationDatabaseInspection, ActiveReblitCompleteFinalizationAuthorityError> {
     match route {
         ActiveReblitCompleteFinalizationRouteEvidence::ReceiptBacked { pair, .. } => {
             inspect_receipt_backed_database(record, *pair, state_db)
         }
-        ActiveReblitCompleteFinalizationRouteEvidence::NoBoot { .. } => {
-            inspect_no_boot_database(record, state_db)
-        }
+        ActiveReblitCompleteFinalizationRouteEvidence::NoBoot { .. } => inspect_no_boot_database(record, state_db),
     }
 }
 
@@ -422,17 +390,12 @@ fn inspect_current_database_for_plan(
     record: &TransitionRecord,
     route: &ActiveReblitCompleteFinalizationRoutePlan,
     state_db: &db::state::Database,
-) -> Result<
-    ActiveReblitCompleteFinalizationDatabaseInspection,
-    ActiveReblitCompleteFinalizationAuthorityError,
-> {
+) -> Result<ActiveReblitCompleteFinalizationDatabaseInspection, ActiveReblitCompleteFinalizationAuthorityError> {
     match route {
         ActiveReblitCompleteFinalizationRoutePlan::ReceiptBacked(pair) => {
             inspect_receipt_backed_database(record, *pair, state_db)
         }
-        ActiveReblitCompleteFinalizationRoutePlan::NoBoot => {
-            inspect_no_boot_database(record, state_db)
-        }
+        ActiveReblitCompleteFinalizationRoutePlan::NoBoot => inspect_no_boot_database(record, state_db),
     }
 }
 
@@ -440,10 +403,7 @@ fn inspect_receipt_backed_database(
     record: &TransitionRecord,
     pair: crate::boot_publication::BootPublicationReceiptPair,
     state_db: &db::state::Database,
-) -> Result<
-    ActiveReblitCompleteFinalizationDatabaseInspection,
-    ActiveReblitCompleteFinalizationAuthorityError,
-> {
+) -> Result<ActiveReblitCompleteFinalizationDatabaseInspection, ActiveReblitCompleteFinalizationAuthorityError> {
     let receipt_before = match load_exact_promoted_receipt(state_db, record, pair)? {
         Some(receipt) => receipt,
         None => return Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible),
@@ -475,10 +435,7 @@ fn inspect_receipt_backed_database(
 fn inspect_no_boot_database(
     record: &TransitionRecord,
     state_db: &db::state::Database,
-) -> Result<
-    ActiveReblitCompleteFinalizationDatabaseInspection,
-    ActiveReblitCompleteFinalizationAuthorityError,
-> {
+) -> Result<ActiveReblitCompleteFinalizationDatabaseInspection, ActiveReblitCompleteFinalizationAuthorityError> {
     let receipt_chain_before = load_inert_no_boot_receipt_chain(record, state_db)?;
     let Some((context, state)) = inspect_context_and_state(record, state_db)? else {
         return Ok(ActiveReblitCompleteFinalizationDatabaseInspection::Incompatible);
@@ -501,10 +458,8 @@ fn inspect_no_boot_database(
 fn load_inert_no_boot_receipt_chain(
     record: &TransitionRecord,
     state_db: &db::state::Database,
-) -> Result<
-    db::state::CurrentExactPromotedBootPublicationReceiptChain,
-    ActiveReblitCompleteFinalizationAuthorityError,
-> {
+) -> Result<db::state::CurrentExactPromotedBootPublicationReceiptChain, ActiveReblitCompleteFinalizationAuthorityError>
+{
     let chain = state_db
         .load_current_exact_promoted_boot_publication_receipt_chain()
         .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptChain)?;
@@ -513,10 +468,7 @@ fn load_inert_no_boot_receipt_chain(
         db::state::CurrentExactPromotedBootPublicationReceiptChain::Installed(installed)
             if installed.installed_receipt().body().transition_id() == &record.transition_id
     ) {
-        return Err(
-            ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptChainMatchesNoBootTransition
-                .into(),
-        );
+        return Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptChainMatchesNoBootTransition.into());
     }
     Ok(chain)
 }
@@ -525,19 +477,12 @@ fn inspect_context_and_state(
     record: &TransitionRecord,
     state_db: &db::state::Database,
 ) -> Result<Option<(DatabaseEvidence, State)>, ActiveReblitCompleteFinalizationAuthorityError> {
-    let in_flight = state_db
-        .audit_in_flight_transition()
-        .map_err(InspectionError::from)?;
+    let in_flight = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
     let context = inspect_database(record, state_db, in_flight)?;
     if !existing_state_context_is_exact(record, &context) {
         return Ok(None);
     }
-    let state_id = state::Id::from(
-        record
-            .candidate
-            .id
-            .expect("checked exact ActiveReblit state"),
-    );
+    let state_id = state::Id::from(record.candidate.id.expect("checked exact ActiveReblit state"));
     let state = state_db
         .get(state_id)
         .map_err(ActiveReblitCompleteFinalizationAuthorityErrorKind::StateDatabase)?;
@@ -551,13 +496,8 @@ fn load_exact_promoted_receipt(
     state_db: &db::state::Database,
     record: &TransitionRecord,
     pair: crate::boot_publication::BootPublicationReceiptPair,
-) -> Result<
-    Option<db::state::BootPublicationReceiptState>,
-    ActiveReblitCompleteFinalizationAuthorityError,
-> {
-    match state_db
-        .load_exact_promoted_boot_publication_receipt_state(&record.transition_id, &pair)
-    {
+) -> Result<Option<db::state::BootPublicationReceiptState>, ActiveReblitCompleteFinalizationAuthorityError> {
+    match state_db.load_exact_promoted_boot_publication_receipt_state(&record.transition_id, &pair) {
         Ok(receipt) => Ok(Some(receipt)),
         Err(db::state::ExactPromotedBootPublicationReceiptStateError::State(source)) => {
             Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptState(source).into())
@@ -568,9 +508,7 @@ fn load_exact_promoted_receipt(
             source @ db::state::ExactPromotedBootPublicationReceiptStateError::CommittedBodyFingerprintMismatch {
                 ..
             },
-        ) => Err(
-            ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptCorrelation(source).into(),
-        ),
+        ) => Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::ReceiptCorrelation(source).into()),
         Err(
             db::state::ExactPromotedBootPublicationReceiptStateError::PendingHeadPresent { .. }
             | db::state::ExactPromotedBootPublicationReceiptStateError::CommittedHeadMismatch { .. }
@@ -583,13 +521,9 @@ fn load_exact_promoted_receipt(
 fn require_exact_database(
     expected: &ActiveReblitCompleteFinalizationDatabaseEvidence,
     actual: ActiveReblitCompleteFinalizationDatabaseInspection,
-) -> Result<
-    ActiveReblitCompleteFinalizationDatabaseEvidence,
-    ActiveReblitCompleteFinalizationAuthorityError,
-> {
+) -> Result<ActiveReblitCompleteFinalizationDatabaseEvidence, ActiveReblitCompleteFinalizationAuthorityError> {
     match actual {
-        ActiveReblitCompleteFinalizationDatabaseInspection::Exact(actual)
-            if actual == *expected => Ok(actual),
+        ActiveReblitCompleteFinalizationDatabaseInspection::Exact(actual) if actual == *expected => Ok(actual),
         _ => Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::DatabaseChanged.into()),
     }
 }
@@ -666,27 +600,16 @@ fn exact_route_plan(
     {
         return None;
     }
-    match (
-        record.generation,
-        record.options.run_boot_sync,
-        receipt_correlation,
-    ) {
-        (_, true, Some(pair)) => {
-            Some(ActiveReblitCompleteFinalizationRoutePlan::ReceiptBacked(pair))
-        }
-        (13, false, None)
-            if record.options.run_system_triggers && !record.options.archive_previous =>
-        {
+    match (record.generation, record.options.run_boot_sync, receipt_correlation) {
+        (_, true, Some(pair)) => Some(ActiveReblitCompleteFinalizationRoutePlan::ReceiptBacked(pair)),
+        (13, false, None) if record.options.run_system_triggers && !record.options.archive_previous => {
             Some(ActiveReblitCompleteFinalizationRoutePlan::NoBoot)
         }
         _ => None,
     }
 }
 
-fn record_plan_is_exact(
-    record: &TransitionRecord,
-    route: &ActiveReblitCompleteFinalizationRouteEvidence,
-) -> bool {
+fn record_plan_is_exact(record: &TransitionRecord, route: &ActiveReblitCompleteFinalizationRouteEvidence) -> bool {
     let common = record.operation == Operation::ActiveReblit
         && record.phase == Phase::Complete
         && record.rollback.is_none()
@@ -694,8 +617,7 @@ fn record_plan_is_exact(
     common
         && match route {
             ActiveReblitCompleteFinalizationRouteEvidence::ReceiptBacked { pair, .. } => {
-                record.options.run_boot_sync
-                    && record.boot_publication_receipts == Some(*pair)
+                record.options.run_boot_sync && record.boot_publication_receipts == Some(*pair)
             }
             ActiveReblitCompleteFinalizationRouteEvidence::NoBoot { .. } => {
                 record.generation == 13
@@ -714,9 +636,7 @@ fn require_exact_record_binding(
     record: &TransitionRecord,
 ) -> Result<(), ActiveReblitCompleteFinalizationAuthorityError> {
     let cast = installation.retained_mutable_cast_directory()?;
-    if journal.has_record_store_binding(binding)
-        && journal.has_record_binding(cast, binding, record)?
-    {
+    if journal.has_record_store_binding(binding) && journal.has_record_binding(cast, binding, record)? {
         Ok(())
     } else {
         Err(ActiveReblitCompleteFinalizationAuthorityErrorKind::JournalRecordBindingChanged.into())
@@ -773,9 +693,7 @@ impl From<InspectionError> for ActiveReblitCompleteFinalizationAuthorityError {
     }
 }
 
-impl From<ActiveReblitCommitCleanupNamespaceError>
-    for ActiveReblitCompleteFinalizationAuthorityError
-{
+impl From<ActiveReblitCommitCleanupNamespaceError> for ActiveReblitCompleteFinalizationAuthorityError {
     fn from(source: ActiveReblitCommitCleanupNamespaceError) -> Self {
         ActiveReblitCompleteFinalizationAuthorityErrorKind::Namespace(source).into()
     }

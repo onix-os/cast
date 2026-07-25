@@ -10,10 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use config::declaration::{
-    GeneratedDeclarationAuthority,
-    RegisteredGeneratedDeclarationAuthorities,
-};
+use config::declaration::{GeneratedDeclarationAuthority, RegisteredGeneratedDeclarationAuthorities};
 
 use super::{CandidateMetadataError, bounded_output};
 
@@ -33,18 +30,13 @@ impl GeneratedDeclarationOutput {
         authorities: RegisteredGeneratedDeclarationAuthorities,
         bytes: impl Into<Vec<u8>>,
     ) -> Result<Self, CandidateMetadataError> {
-        let active_file_name = system_model_file_name(
-            authorities.active_authority(),
-        )?;
+        let active_file_name = system_model_file_name(authorities.active_authority())?;
         let alternate_file_names = authorities
             .alternate_authorities()
             .map(system_model_file_name)
             .collect::<Result<Vec<_>, _>>()?;
         let bytes = bytes.into();
-        bounded_output(
-            active_file_name.to_string_lossy().into_owned(),
-            &bytes,
-        )?;
+        bounded_output(active_file_name.to_string_lossy().into_owned(), &bytes)?;
         let output = Self {
             authorities,
             active_file_name,
@@ -59,13 +51,9 @@ impl GeneratedDeclarationOutput {
     /// complete registration set, and fixed logical slot before every
     /// publication/proof operation.
     pub(super) fn revalidate_authority(&self) -> Result<(), CandidateMetadataError> {
-        let public_name = system_model_public_name(
-            self.authorities.active_authority(),
-        );
+        let public_name = system_model_public_name(self.authorities.active_authority());
         if self.active_file_name.to_bytes() != public_name.as_bytes() {
-            return Err(CandidateMetadataError::InvalidGeneratedDeclarationName {
-                name: public_name,
-            });
+            return Err(CandidateMetadataError::InvalidGeneratedDeclarationName { name: public_name });
         }
         let expected_alternates = self
             .authorities
@@ -77,9 +65,7 @@ impl GeneratedDeclarationOutput {
                 .alternate_file_names
                 .iter()
                 .zip(&expected_alternates)
-                .any(|(retained, expected)| {
-                    retained.to_bytes() != expected.as_bytes()
-                })
+                .any(|(retained, expected)| retained.to_bytes() != expected.as_bytes())
         {
             return Err(CandidateMetadataError::InvalidGeneratedDeclarationName {
                 name: expected_alternates.join(", "),
@@ -89,9 +75,7 @@ impl GeneratedDeclarationOutput {
             .bytes
             .starts_with(self.authorities.active_authority().ownership_marker())
         {
-            return Err(CandidateMetadataError::MissingGeneratedDeclarationMarker {
-                name: public_name,
-            });
+            return Err(CandidateMetadataError::MissingGeneratedDeclarationMarker { name: public_name });
         }
         Ok(())
     }
@@ -102,9 +86,7 @@ impl GeneratedDeclarationOutput {
     }
 
     #[cfg(test)]
-    pub(super) fn authorities(
-        &self,
-    ) -> &RegisteredGeneratedDeclarationAuthorities {
+    pub(super) fn authorities(&self) -> &RegisteredGeneratedDeclarationAuthorities {
         &self.authorities
     }
 
@@ -112,9 +94,7 @@ impl GeneratedDeclarationOutput {
         &self.active_file_name
     }
 
-    pub(super) fn alternate_file_names(
-        &self,
-    ) -> impl Iterator<Item = &CStr> {
+    pub(super) fn alternate_file_names(&self) -> impl Iterator<Item = &CStr> {
         self.alternate_file_names.iter().map(CString::as_c_str)
     }
 
@@ -127,22 +107,12 @@ impl GeneratedDeclarationOutput {
     }
 }
 
-fn system_model_public_name(
-    authority: &GeneratedDeclarationAuthority,
-) -> String {
-    format!(
-        "{SYSTEM_MODEL_LOGICAL_NAME}.{}",
-        authority.language_spec().extension(),
-    )
+fn system_model_public_name(authority: &GeneratedDeclarationAuthority) -> String {
+    format!("{SYSTEM_MODEL_LOGICAL_NAME}.{}", authority.language_spec().extension(),)
 }
 
-fn system_model_file_name(
-    authority: &GeneratedDeclarationAuthority,
-) -> Result<CString, CandidateMetadataError> {
+fn system_model_file_name(authority: &GeneratedDeclarationAuthority) -> Result<CString, CandidateMetadataError> {
     let public_name = system_model_public_name(authority);
-    CString::new(public_name.clone()).map_err(|_| {
-        CandidateMetadataError::InvalidGeneratedDeclarationName {
-            name: public_name,
-        }
-    })
+    CString::new(public_name.clone())
+        .map_err(|_| CandidateMetadataError::InvalidGeneratedDeclarationName { name: public_name })
 }

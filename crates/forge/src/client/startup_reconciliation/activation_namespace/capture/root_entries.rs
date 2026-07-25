@@ -36,14 +36,8 @@ pub(super) fn revalidate_root_entries(
     budget: &mut Budget,
 ) -> Result<(), CaptureError> {
     let current = inspect_root_entries(root, root_path, budget)?;
-    let expected_fingerprints = retained
-        .iter()
-        .map(|entry| &entry.fingerprint)
-        .collect::<Vec<_>>();
-    let current_fingerprints = current
-        .iter()
-        .map(|entry| &entry.fingerprint)
-        .collect::<Vec<_>>();
+    let expected_fingerprints = retained.iter().map(|entry| &entry.fingerprint).collect::<Vec<_>>();
+    let current_fingerprints = current.iter().map(|entry| &entry.fingerprint).collect::<Vec<_>>();
     if expected_fingerprints != current_fingerprints {
         return Err(CaptureError::DirectoryContentsChanged {
             path: root_path.to_owned(),

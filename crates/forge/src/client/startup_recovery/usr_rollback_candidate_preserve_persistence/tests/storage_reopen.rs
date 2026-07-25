@@ -4,8 +4,7 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
-            new_state_candidate_preserve_move_attempt_count,
-            reset_new_state_candidate_preserve_move_attempt_count,
+            new_state_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
         },
         startup_recovery::{
             DurableUsrRollbackCandidatePreserveRecord, UsrRollbackCandidatePreservePersistenceError,
@@ -73,8 +72,7 @@ fn startup_usr_rollback_candidate_preserve_persistence_faults_reopen_exact_sourc
                         let successor = expected_candidate_preserved(&fixture, origin);
                         arm();
 
-                        let error =
-                            persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap_err();
+                        let error = persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap_err();
 
                         assert_consumed();
                         assert!(matches!(
@@ -121,8 +119,7 @@ fn startup_usr_rollback_candidate_preserve_persistence_consumes_old_store_and_re
             let namespace_before = non_journal_namespace_snapshot(&fixture);
             let expected = expected_candidate_preserved(&fixture, origin);
 
-            let (reopened, actual) =
-                persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap();
+            let (reopened, actual) = persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap();
 
             assert_eq!(actual, expected);
             assert_eq!(reopened.load().unwrap(), Some(expected.clone()));

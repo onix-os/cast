@@ -124,28 +124,26 @@ pub(super) use usr_rollback_active_reblit_complete_route::{
     UsrRollbackActiveReblitCompleteRoutePersistenceError, persist_usr_rollback_active_reblit_complete_route_and_reopen,
 };
 
-pub(super) use active_reblit_boot_sync_commit_decision::{
-    ActiveReblitBootSyncCommitDecisionPersistenceError,
-    persist_active_reblit_boot_sync_commit_decision_and_reopen,
-};
 pub(in crate::client) use active_reblit_boot_sync_commit_decision::persist_active_reblit_boot_sync_commit_decision_retaining_binding;
+pub(super) use active_reblit_boot_sync_commit_decision::{
+    ActiveReblitBootSyncCommitDecisionPersistenceError, persist_active_reblit_boot_sync_commit_decision_and_reopen,
+};
 
 pub(super) use active_reblit_boot_sync_started_completion::{
     ActiveReblitBootSyncStartedCompletionPersistenceError,
     persist_active_reblit_boot_sync_started_completion_and_reopen,
 };
 
-pub(super) use active_reblit_commit_cleanup_complete::{
-    ActiveReblitCommitCleanupPersistenceError,
-    persist_active_reblit_commit_cleanup_complete_and_reopen,
-};
 pub(in crate::client) use active_reblit_commit_cleanup_complete::persist_active_reblit_commit_cleanup_complete_retaining_binding;
+pub(super) use active_reblit_commit_cleanup_complete::{
+    ActiveReblitCommitCleanupPersistenceError, persist_active_reblit_commit_cleanup_complete_and_reopen,
+};
 
+pub(in crate::client) use active_reblit_commit_cleanup_complete_to_complete::persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding;
 pub(super) use active_reblit_commit_cleanup_complete_to_complete::{
     ActiveReblitCommitCleanupCompletePersistenceError,
     persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen,
 };
-pub(in crate::client) use active_reblit_commit_cleanup_complete_to_complete::persist_active_reblit_commit_cleanup_complete_to_complete_retaining_binding;
 
 pub(super) use active_reblit_complete_finalization::{
     ActiveReblitCompleteFinalizationError, finalize_active_reblit_complete,
@@ -212,20 +210,18 @@ pub(in crate::client) use usr_rollback_active_reblit_complete_route::{
 
 #[cfg(test)]
 pub(in crate::client) use active_reblit_boot_sync_commit_decision::{
-    ActiveReblitBootSyncCommitDecisionValidationStage,
-    DurableActiveReblitBootSyncCommitDecisionRecord,
+    ActiveReblitBootSyncCommitDecisionValidationStage, DurableActiveReblitBootSyncCommitDecisionRecord,
     arm_after_active_reblit_boot_sync_commit_decision_old_binding_validation,
     arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen,
-    arm_before_active_reblit_boot_sync_commit_decision_fresh_binding_validation,
     arm_before_active_reblit_boot_sync_commit_decision_final_revalidation,
+    arm_before_active_reblit_boot_sync_commit_decision_fresh_binding_validation,
     arm_before_active_reblit_boot_sync_commit_decision_reopened_validation,
     arm_before_active_reblit_boot_sync_commit_decision_same_store_validation,
 };
 
 #[cfg(test)]
 pub(in crate::client) use active_reblit_boot_sync_started_completion::{
-    ActiveReblitBootSyncStartedCompletionValidationStage,
-    DurableActiveReblitBootSyncStartedCompletionRecord,
+    ActiveReblitBootSyncStartedCompletionValidationStage, DurableActiveReblitBootSyncStartedCompletionRecord,
     arm_after_active_reblit_boot_sync_started_completion_old_binding_validation,
     arm_after_active_reblit_boot_sync_started_completion_same_store_check_before_reopen,
     arm_before_active_reblit_boot_sync_started_completion_final_revalidation,
@@ -248,8 +244,7 @@ pub(in crate::client) use active_reblit_commit_cleanup_complete::{
 
 #[cfg(test)]
 pub(in crate::client) use active_reblit_commit_cleanup_complete_to_complete::{
-    ActiveReblitCommitCleanupCompleteValidationStage,
-    DurableActiveReblitCommitCleanupCompleteRecord,
+    ActiveReblitCommitCleanupCompleteValidationStage, DurableActiveReblitCommitCleanupCompleteRecord,
     arm_after_active_reblit_commit_cleanup_complete_old_binding_validation,
     arm_after_active_reblit_commit_cleanup_complete_same_store_before_reopen,
     arm_before_active_reblit_commit_cleanup_complete_final_revalidation,
@@ -272,8 +267,7 @@ pub(in crate::client) use usr_rollback_active_reblit_boot_repair_required::{
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_active_reblit_boot_repair_start::{
-    DurableUsrRollbackActiveReblitBootRepairStartRecord,
-    UsrRollbackActiveReblitBootRepairStartSuccessorBindingError,
+    DurableUsrRollbackActiveReblitBootRepairStartRecord, UsrRollbackActiveReblitBootRepairStartSuccessorBindingError,
     arm_after_usr_rollback_active_reblit_boot_repair_start_successor_binding_check_before_reopen,
     arm_before_usr_rollback_active_reblit_boot_repair_start_successor_binding_revalidation,
 };
@@ -328,8 +322,7 @@ pub(in crate::client) use usr_rollback_fresh_db_invalidation_persistence::{
 
 #[cfg(test)]
 pub(in crate::client) use usr_rollback_fresh_db_invalidation_route::{
-    DurableUsrRollbackFreshDbInvalidationRouteRecord,
-    UsrRollbackFreshDbInvalidationRouteSuccessorBindingError,
+    DurableUsrRollbackFreshDbInvalidationRouteRecord, UsrRollbackFreshDbInvalidationRouteSuccessorBindingError,
     arm_after_usr_rollback_fresh_db_invalidation_route_successor_binding_check_before_reopen,
     arm_before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation,
 };

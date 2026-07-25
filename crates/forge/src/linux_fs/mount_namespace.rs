@@ -27,20 +27,16 @@ mod mountinfo_snapshot;
 
 #[allow(unused_imports)] // named by the future owned mounted-topology aggregate
 pub(crate) use attachment::{
-    PreparedTaskRootedAttachment, RetainedBootFilePublicationError, RetainedBootFilePublicationLimits,
-    RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest, RevalidatedTaskRootedAttachment,
-    AuthenticatedRetainedBootFileStaleCleanup, RetainedBootFileMutationFingerprint,
-    RetainedBootFileAppliedSidecarCleanupState,
-    RetainedBootFileRestoredSidecarCleanupState,
-    RetainedBootFileReplacementError, RetainedBootFileStaleCleanupOutcome,
-    RetainedBootFileStaleCleanupRequest, RetainedBootFileStaleCleanupState,
-    RetainedBootFileReplacementRequest, RetainedBootFileSidecarCleanupOutcome,
-    RetainedBootLeafAssessmentError, RetainedBootLeafAssessmentLimits,
-    RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState,
-    RetainedBootPublicationParent, RetainedBootPublicationParentError, TaskRootBootNamespaceAssessmentError,
-    ValidatedRetainedBootFilePublication, ValidatedRetainedBootFileReplacement,
-    ValidatedRetainedBootFileRestoration, ValidatedRetainedBootLeafAssessment,
-    ValidatedTaskRootBootNamespaceAssessment,
+    AuthenticatedRetainedBootFileStaleCleanup, PreparedTaskRootedAttachment,
+    RetainedBootFileAppliedSidecarCleanupState, RetainedBootFileMutationFingerprint, RetainedBootFilePublicationError,
+    RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest,
+    RetainedBootFileReplacementError, RetainedBootFileReplacementRequest, RetainedBootFileRestoredSidecarCleanupState,
+    RetainedBootFileSidecarCleanupOutcome, RetainedBootFileStaleCleanupOutcome, RetainedBootFileStaleCleanupRequest,
+    RetainedBootFileStaleCleanupState, RetainedBootLeafAssessmentError, RetainedBootLeafAssessmentLimits,
+    RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState, RetainedBootPublicationParent,
+    RetainedBootPublicationParentError, RevalidatedTaskRootedAttachment, TaskRootBootNamespaceAssessmentError,
+    ValidatedRetainedBootFilePublication, ValidatedRetainedBootFileReplacement, ValidatedRetainedBootFileRestoration,
+    ValidatedRetainedBootLeafAssessment, ValidatedTaskRootBootNamespaceAssessment,
 };
 #[allow(unused_imports)] // consumed by the authenticated mounted-topology aggregate
 pub(crate) use mountinfo_snapshot::AuthenticatedMountInfoSnapshot;
@@ -51,17 +47,14 @@ pub(crate) use attachment::FixtureTaskRootedAttachmentLimits;
 
 #[cfg(test)]
 pub(crate) use attachment::{
-    arm_after_boot_file_sidecar_unlink_callback,
-    arm_after_stale_boot_file_detach_callback,
+    FixtureRetainedBootFilePublicationFault, FixtureRetainedBootLeafAssessmentHookGuard,
+    FixtureRetainedBootPublicationParentCheckpoint, FixtureRetainedBootPublicationParentFault,
+    arm_after_boot_file_sidecar_unlink_callback, arm_after_stale_boot_file_detach_callback,
     arm_boot_file_exchange_error_after_applied, arm_boot_file_replacement_stop_before_exchange,
-    arm_boot_file_sidecar_stop_after_unlink, arm_stale_boot_file_detach_error_after_applied,
-    arm_stale_boot_file_stop_after_detach,
-    FixtureRetainedBootLeafAssessmentHookGuard,
-    FixtureRetainedBootFilePublicationFault, FixtureRetainedBootPublicationParentCheckpoint,
-    FixtureRetainedBootPublicationParentFault,
-    arm_retained_boot_leaf_assessment_terminal_rebind_hook,
-    arm_retained_boot_file_private_name_substitution, arm_retained_boot_file_publication_fault,
+    arm_boot_file_sidecar_stop_after_unlink, arm_retained_boot_file_private_name_substitution,
+    arm_retained_boot_file_publication_fault, arm_retained_boot_leaf_assessment_terminal_rebind_hook,
     arm_retained_boot_publication_parent_checkpoint_hook, arm_retained_boot_publication_parent_fault,
+    arm_stale_boot_file_detach_error_after_applied, arm_stale_boot_file_stop_after_detach,
     validate_fixture_boot_publication_parent_identity, validate_fixture_boot_publication_parent_policy,
 };
 

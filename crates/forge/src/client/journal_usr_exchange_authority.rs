@@ -14,9 +14,8 @@ use crate::{
 };
 
 use super::{
-    Error as ClientError, RetainedRootAbi, RootAbiPreflight,
-    active_state_authority::ActiveStateAuthority, active_state_authority::AppliedActiveStateWriterAuthority,
-    active_state_snapshot::ActiveStateReservation,
+    Error as ClientError, RetainedRootAbi, RootAbiPreflight, active_state_authority::ActiveStateAuthority,
+    active_state_authority::AppliedActiveStateWriterAuthority, active_state_snapshot::ActiveStateReservation,
 };
 
 #[derive(Debug, Error)]

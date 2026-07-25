@@ -76,12 +76,7 @@ pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_route_and_re
     let advance = match authority.advance_record_binding(&journal, &successor) {
         Ok(successor_binding) => {
             before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation();
-            let exact = revalidate_published_route_binding(
-                &installation,
-                &journal,
-                &successor_binding,
-                &successor,
-            );
+            let exact = revalidate_published_route_binding(&installation, &journal, &successor_binding, &successor);
             match exact {
                 Ok(true) => UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::Published(successor_binding),
                 Ok(false) => {
@@ -102,7 +97,9 @@ pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_route_and_re
         }
         Err(UsrRollbackFreshDbInvalidationRouteRecordAdvanceError::Installation(source)) => {
             drop(journal);
-            return Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::Installation(source));
+            return Err(UsrRollbackFreshDbInvalidationRoutePersistenceError::Installation(
+                source,
+            ));
         }
         Err(UsrRollbackFreshDbInvalidationRouteRecordAdvanceError::Storage(source)) => {
             UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::StorageFailed(source)
@@ -121,12 +118,7 @@ pub(in crate::client) fn persist_usr_rollback_fresh_db_invalidation_route_and_re
     match advance {
         UsrRollbackFreshDbInvalidationRouteAdvanceOutcome::Published(successor_binding) => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
-                let exact = revalidate_reopened_route_binding(
-                    &installation,
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                );
+                let exact = revalidate_reopened_route_binding(&installation, &reopened, &successor_binding, &successor);
                 drop(successor_binding);
                 match exact {
                     Ok(true) => Ok((reopened, successor)),

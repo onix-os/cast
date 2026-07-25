@@ -27,7 +27,10 @@ use container::{
 };
 use itertools::Itertools;
 use thiserror::Error;
-use triggers::{registry::TriggerAdapterError, format::{CompiledHandler, Handler}};
+use triggers::{
+    format::{CompiledHandler, Handler},
+    registry::TriggerAdapterError,
+};
 
 use super::PendingFile;
 

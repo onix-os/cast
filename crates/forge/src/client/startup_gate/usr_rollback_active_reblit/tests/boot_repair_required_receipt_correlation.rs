@@ -9,8 +9,7 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackActiveReblitBootRepairRequiredSeal,
         startup_reconciliation::{
-            UsrRollbackActiveReblitBootRepairRequiredAdmission,
-            UsrRollbackActiveReblitBootRepairRequiredAuthority,
+            UsrRollbackActiveReblitBootRepairRequiredAdmission, UsrRollbackActiveReblitBootRepairRequiredAuthority,
             arm_between_usr_rollback_active_reblit_boot_repair_required_database_captures,
         },
         startup_recovery::arm_before_usr_rollback_active_reblit_boot_repair_required_final_revalidation,
@@ -23,12 +22,11 @@ use crate::{
 use super::{
     super::test_fixture::BootSyncStartedLayout,
     support::{
-        BootRepairFixture, CandidateOrigin, Epoch, UsrRestoreOrigin,
-        assert_boot_required_capture_authority_error, assert_boot_required_persistence_authority_error,
-        assert_no_boot_synchronize_attempts, assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started,
-        build_legacy_boot_sync_started, drive_boot_sync_started_to_candidate_preserved, enter_boot,
-        expected_boot_repair_required, expected_boot_repair_started, reset_boot_synchronize_observer,
-        reset_candidate_effect_observers,
+        BootRepairFixture, CandidateOrigin, Epoch, UsrRestoreOrigin, assert_boot_required_capture_authority_error,
+        assert_boot_required_persistence_authority_error, assert_no_boot_synchronize_attempts,
+        assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started, build_legacy_boot_sync_started,
+        drive_boot_sync_started_to_candidate_preserved, enter_boot, expected_boot_repair_required,
+        expected_boot_repair_started, reset_boot_synchronize_observer, reset_candidate_effect_observers,
     },
 };
 
@@ -88,11 +86,7 @@ fn startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preser
             );
             assert_eq!(preserved.version, version);
             assert_eq!(preserved.boot_publication_receipt_correlation().unwrap(), None);
-            let receipt_state = fixture
-                .fixture
-                .database
-                .boot_publication_receipt_state()
-                .unwrap();
+            let receipt_state = fixture.fixture.database.boot_publication_receipt_state().unwrap();
             assert_eq!(receipt_state.committed().is_some(), epoch == Epoch::Historical);
             assert!(receipt_state.pending().is_none());
             assert!(receipt_state.head().pending().is_none());
@@ -183,11 +177,8 @@ fn startup_active_reblit_boot_repair_required_rejects_receipt_races_and_corrupti
     assert_no_boot_synchronize_attempts();
 
     let fixture = build_boot_sync_started(Epoch::Current, BootSyncStartedLayout::Post);
-    let record = drive_boot_sync_started_to_candidate_preserved(
-        &fixture,
-        UsrRestoreOrigin::Applied,
-        CandidateOrigin::Applied,
-    );
+    let record =
+        drive_boot_sync_started_to_candidate_preserved(&fixture, UsrRestoreOrigin::Applied, CandidateOrigin::Applied);
     fixture
         .fixture
         .database
@@ -205,15 +196,16 @@ fn startup_active_reblit_boot_repair_required_rejects_receipt_races_and_corrupti
         UsrRestoreOrigin::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );
-    fixture.fixture.database.delete_boot_publication_receipt_head_for_test().unwrap();
+    fixture
+        .fixture
+        .database
+        .delete_boot_publication_receipt_head_for_test()
+        .unwrap();
     assert_capture_fails_closed(&fixture, &record);
 
     let fixture = build_boot_sync_started(Epoch::Current, BootSyncStartedLayout::Post);
-    let record = drive_boot_sync_started_to_candidate_preserved(
-        &fixture,
-        UsrRestoreOrigin::Applied,
-        CandidateOrigin::Applied,
-    );
+    let record =
+        drive_boot_sync_started_to_candidate_preserved(&fixture, UsrRestoreOrigin::Applied, CandidateOrigin::Applied);
     let pending = record
         .boot_publication_receipt_correlation()
         .unwrap()
@@ -249,7 +241,10 @@ fn install_mismatch(fixture: &BootRepairFixture, mismatch: ReceiptMismatch) {
             .database
             .replace_boot_publication_receipt_head_for_test(
                 None,
-                Some((&record.transition_id, BootPublicationReceiptFingerprint::from_bytes([0x41; 32]))),
+                Some((
+                    &record.transition_id,
+                    BootPublicationReceiptFingerprint::from_bytes([0x41; 32]),
+                )),
             )
             .unwrap(),
         ReceiptMismatch::WrongCommitted => fixture

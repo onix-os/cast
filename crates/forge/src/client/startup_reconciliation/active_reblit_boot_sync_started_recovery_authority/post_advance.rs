@@ -2,32 +2,27 @@
 //! ActiveReblit `BootSyncStarted` restart recovery.
 
 use crate::{
-    Installation, db,
+    Installation,
     client::{
         active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot},
         startup_gate::ActiveReblitBootSyncStartedCleanupSeal,
     },
+    db,
     transition_journal::{
-        CodecError, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
 use super::{
-    ActiveReblitBootSyncStartedDatabaseEvidence,
-    ActiveReblitBootSyncStartedRecoveryAuthority,
-    ActiveReblitBootSyncStartedRecoveryAuthorityError,
-    ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind,
-    inspect_current_database, record_plan_is_exact, require_exact_active_state,
-    require_exact_database,
+    ActiveReblitBootSyncStartedDatabaseEvidence, ActiveReblitBootSyncStartedRecoveryAuthority,
+    ActiveReblitBootSyncStartedRecoveryAuthorityError, ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind,
+    inspect_current_database, record_plan_is_exact, require_exact_active_state, require_exact_database,
 };
 use crate::client::startup_reconciliation::activation_namespace::ActiveReblitBootSyncStartedNamespaceProof;
 
 /// Evidence which survives the sole bound advance but grants no second
 /// advance. It intentionally implements neither `Clone` nor `Copy`.
-pub(in crate::client) struct ActiveReblitBootSyncStartedPostAdvanceAuthority<
-    'reservation,
-> {
+pub(in crate::client) struct ActiveReblitBootSyncStartedPostAdvanceAuthority<'reservation> {
     cleanup_seal: ActiveReblitBootSyncStartedCleanupSeal,
     installation: Installation,
     state_db: db::state::Database,
@@ -54,15 +49,8 @@ impl<'reservation> ActiveReblitBootSyncStartedRecoveryAuthority<'reservation> {
         ActiveReblitBootSyncStartedRecordAdvanceError,
     > {
         self.revalidate(journal)?;
-        if !exact_boot_sync_complete_successor(
-            &self.record,
-            successor,
-            self.receipt_pair,
-            &self.cleanup_seal,
-        )? {
-            return Err(
-                ActiveReblitBootSyncStartedRecordAdvanceError::UnexpectedSuccessor,
-            );
+        if !exact_boot_sync_complete_successor(&self.record, successor, self.receipt_pair, &self.cleanup_seal)? {
+            return Err(ActiveReblitBootSyncStartedRecordAdvanceError::UnexpectedSuccessor);
         }
 
         let Self {
@@ -107,12 +95,7 @@ impl ActiveReblitBootSyncStartedPostAdvanceAuthority<'_> {
         successor_binding: &TransitionJournalRecordBinding,
         successor: &TransitionRecord,
     ) -> Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-        self.revalidate_successor(
-            journal,
-            successor_binding,
-            successor,
-            SuccessorBindingMode::SameStore,
-        )
+        self.revalidate_successor(journal, successor_binding, successor, SuccessorBindingMode::SameStore)
     }
 
     /// Authenticate the same successor inode after canonical writer reopen.
@@ -122,12 +105,7 @@ impl ActiveReblitBootSyncStartedPostAdvanceAuthority<'_> {
         successor_binding: &TransitionJournalRecordBinding,
         successor: &TransitionRecord,
     ) -> Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-        self.revalidate_successor(
-            journal,
-            successor_binding,
-            successor,
-            SuccessorBindingMode::Reopened,
-        )
+        self.revalidate_successor(journal, successor_binding, successor, SuccessorBindingMode::Reopened)
     }
 
     fn revalidate_successor(
@@ -137,78 +115,43 @@ impl ActiveReblitBootSyncStartedPostAdvanceAuthority<'_> {
         successor: &TransitionRecord,
         binding_mode: SuccessorBindingMode,
     ) -> Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-        require_exact_successor_binding(
-            &self.installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
-        if !exact_boot_sync_complete_successor(
-            &self.started_record,
-            successor,
-            self.receipt_pair,
-            &self.cleanup_seal,
-        )
-        .map_err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::Record)?
+        require_exact_successor_binding(&self.installation, journal, successor_binding, successor, binding_mode)?;
+        if !exact_boot_sync_complete_successor(&self.started_record, successor, self.receipt_pair, &self.cleanup_seal)
+            .map_err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::Record)?
         {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::UnexpectedSuccessor
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::UnexpectedSuccessor.into());
         }
         self.installation.revalidate_mutable_namespace()?;
         let database_before = require_exact_database(
             &self.database,
             inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(
-            successor,
-            &self.installation,
-            &self.active_state,
-        )?;
+        require_exact_active_state(successor, &self.installation, &self.active_state)?;
         match binding_mode {
-            SuccessorBindingMode::SameStore => {
-                self.namespace.revalidate_successor_same_store(
-                    &self.installation,
-                    journal,
-                    successor_binding,
-                    &self.started_record,
-                    successor,
-                )?
-            }
-            SuccessorBindingMode::Reopened => {
-                self.namespace.revalidate_successor_reopened(
-                    &self.installation,
-                    journal,
-                    successor_binding,
-                    &self.started_record,
-                    successor,
-                )?
-            }
+            SuccessorBindingMode::SameStore => self.namespace.revalidate_successor_same_store(
+                &self.installation,
+                journal,
+                successor_binding,
+                &self.started_record,
+                successor,
+            )?,
+            SuccessorBindingMode::Reopened => self.namespace.revalidate_successor_reopened(
+                &self.installation,
+                journal,
+                successor_binding,
+                &self.started_record,
+                successor,
+            )?,
         }
         let database_after = require_exact_database(
             &self.database,
             inspect_current_database(successor, self.receipt_pair, &self.state_db)?,
         )?;
-        require_exact_active_state(
-            successor,
-            &self.installation,
-            &self.active_state,
-        )?;
+        require_exact_active_state(successor, &self.installation, &self.active_state)?;
         if database_before != database_after {
-            return Err(
-                ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::RouteEvidenceChanged
-                    .into(),
-            );
+            return Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::RouteEvidenceChanged.into());
         }
-        require_exact_successor_binding(
-            &self.installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_binding(&self.installation, journal, successor_binding, successor, binding_mode)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -240,20 +183,14 @@ fn require_exact_successor_binding(
     let cast = installation.retained_mutable_cast_directory()?;
     let exact = match mode {
         SuccessorBindingMode::SameStore => {
-            journal.has_record_store_binding(binding)
-                && journal.has_record_binding(cast, binding, successor)?
+            journal.has_record_store_binding(binding) && journal.has_record_binding(cast, binding, successor)?
         }
-        SuccessorBindingMode::Reopened => {
-            journal.has_reopened_record_binding(cast, binding, successor)?
-        }
+        SuccessorBindingMode::Reopened => journal.has_reopened_record_binding(cast, binding, successor)?,
     };
     if exact {
         Ok(())
     } else {
-        Err(
-            ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::SuccessorRecordBindingChanged
-                .into(),
-        )
+        Err(ActiveReblitBootSyncStartedRecoveryAuthorityErrorKind::SuccessorRecordBindingChanged.into())
     }
 }
 

@@ -24,9 +24,7 @@ use crate::{
     },
 };
 
-use super::support::{
-    CandidateResult, FreshDbOutcome, RouteFixture, Source, canonical_journal,
-};
+use super::support::{CandidateResult, FreshDbOutcome, RouteFixture, Source, canonical_journal};
 
 fn inode_identity(path: &Path) -> (u64, u64) {
     let metadata = fs::symlink_metadata(path).unwrap();
@@ -112,8 +110,7 @@ fn startup_usr_rollback_complete_route_bound_advance_same_byte_replacements_neve
                             );
                             arm_public_binding_revalidation_callback(boundary, hook);
 
-                            let error =
-                                persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
+                            let error = persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
 
                             assert_public_binding_revalidation_callback_consumed();
                             assert!(matches!(
@@ -167,8 +164,7 @@ fn startup_usr_rollback_complete_route_same_byte_successor_replacement_fails_sam
                         );
                         arm_before_usr_rollback_complete_route_successor_binding_revalidation(hook);
 
-                        let error =
-                            persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
+                        let error = persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
 
                         assert!(matches!(
                             error,
@@ -215,8 +211,7 @@ fn startup_usr_rollback_complete_route_same_byte_successor_replacement_fails_reo
                         );
                         arm_after_usr_rollback_complete_route_successor_binding_check_before_reopen(hook);
 
-                        let error =
-                            persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
+                        let error = persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
 
                         assert!(matches!(
                             error,

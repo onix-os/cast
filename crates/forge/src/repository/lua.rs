@@ -11,17 +11,17 @@ use std::fmt::Write as _;
 
 use config::declaration::ConfigDeclarationEvaluator;
 use declarative_config::{
-    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator, Evaluation,
-    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
+    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
 use lua_config::{
-    GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_optional_bool, lua_optional_integer,
-    lua_optional_string, lua_string, pretty_lua,
+    GENERATED_LUA_MARKER, LuaEngine, LuaOption, lua_optional_bool, lua_optional_integer, lua_optional_string,
+    lua_string, pretty_lua,
 };
 use serde::Deserialize;
 
-use super::gluon::{RepositoryCodec, decode_specs, repository_to_spec};
 use super::Map;
+use super::gluon::{RepositoryCodec, decode_specs, repository_to_spec};
 use crate::repository::RepositoryConversionError;
 use crate::system_model::spec::{RepositorySourceSpec, RepositorySpec};
 
@@ -157,9 +157,7 @@ impl DeclarationEvaluator<Map> for RepositoryEvaluator {
 
     fn language_spec(&self) -> &LanguageSpec {
         match self {
-            Self::Gluon(codec) => {
-                <RepositoryCodec as DeclarationEvaluator<Map>>::language_spec(codec)
-            }
+            Self::Gluon(codec) => <RepositoryCodec as DeclarationEvaluator<Map>>::language_spec(codec),
             Self::Lua(codec) => <LuaRepositoryCodec as DeclarationEvaluator<Map>>::language_spec(codec),
         }
     }
@@ -173,12 +171,14 @@ impl DeclarationEvaluator<Map> for RepositoryEvaluator {
 
     fn with_source_root(&self, source_root: SourceRoot) -> Self {
         match self {
-            Self::Gluon(codec) => Self::Gluon(
-                <RepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
-            ),
-            Self::Lua(codec) => Self::Lua(
-                <LuaRepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(codec, source_root),
-            ),
+            Self::Gluon(codec) => Self::Gluon(<RepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(
+                codec,
+                source_root,
+            )),
+            Self::Lua(codec) => Self::Lua(<LuaRepositoryCodec as DeclarationEvaluator<Map>>::with_source_root(
+                codec,
+                source_root,
+            )),
         }
     }
 

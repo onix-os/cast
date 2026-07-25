@@ -3,9 +3,8 @@
 use std::time::Duration;
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, EvaluationDeadline,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Limits, Source,
-    SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
+    LanguageSpec, Limits, Source, SourceRoot,
 };
 use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
@@ -61,9 +60,7 @@ pub(super) struct GluonBootTopologyIntentEvaluator<'budget> {
 }
 
 impl<'budget> GluonBootTopologyIntentEvaluator<'budget> {
-    pub(super) fn new(
-        budget: &'budget BootTopologyIntentBudget,
-    ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+    pub(super) fn new(budget: &'budget BootTopologyIntentBudget) -> Result<Self, ActiveReblitBootTopologyIntentError> {
         budget.require_deadline()?;
         let remaining = budget.remaining_duration()?;
         let mut limits = Limits::default();
@@ -89,9 +86,7 @@ impl<'budget> GluonBootTopologyIntentEvaluator<'budget> {
     }
 }
 
-impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
-    for GluonBootTopologyIntentEvaluator<'_>
-{
+impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for GluonBootTopologyIntentEvaluator<'_> {
     type Identity = EvaluationIdentity;
     type Error = ActiveReblitBootTopologyIntentError;
 
@@ -115,10 +110,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
         source: &Source,
         deadline: EvaluationDeadline,
     ) -> Result<
-        DeclarationEvaluation<
-            ActiveReblitBootTopologyIntentValue,
-            Self::Identity,
-        >,
+        DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, Self::Identity>,
         DeclarationEvaluationError<Self::Error>,
     > {
         let evaluation = self
@@ -128,8 +120,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
         self.budget
             .require_deadline()
             .map_err(DeclarationEvaluationError::Conversion)?;
-        require_fingerprint_contract(&evaluation.identity)
-            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_fingerprint_contract(&evaluation.identity).map_err(DeclarationEvaluationError::Conversion)?;
 
         let value = ActiveReblitBootTopologyIntentValue::try_from(evaluation.value)
             .map_err(DeclarationEvaluationError::Conversion)?;
@@ -143,9 +134,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
     }
 }
 
-fn require_fingerprint_contract(
-    fingerprint: &EvaluationIdentity,
-) -> Result<(), ActiveReblitBootTopologyIntentError> {
+fn require_fingerprint_contract(fingerprint: &EvaluationIdentity) -> Result<(), ActiveReblitBootTopologyIntentError> {
     fingerprint.validate()?;
     if fingerprint.root_logical_name != SOURCE_LOGICAL_NAME {
         return Err(ActiveReblitBootTopologyIntentError::EvaluationContract {
@@ -157,8 +146,7 @@ fn require_fingerprint_contract(
             reason: "boot-topology evaluation admitted explicit external inputs",
         });
     }
-    if fingerprint.modules.len() != 1 || fingerprint.modules[0].logical_name != BOOT_TOPOLOGY_ABI_NAME
-    {
+    if fingerprint.modules.len() != 1 || fingerprint.modules[0].logical_name != BOOT_TOPOLOGY_ABI_NAME {
         return Err(ActiveReblitBootTopologyIntentError::EvaluationContract {
             reason: "boot-topology intent must import exactly cast.boot_topology.v2",
         });
@@ -201,7 +189,8 @@ pub(super) fn assemble_boot_topology(
     let boot = match boot {
         BootTargetInput::AliasEsp => ActiveReblitBootTopologyTarget::AliasEsp,
         BootTargetInput::DistinctXbootldr { partuuid, mount_point } => {
-            let xbootldr = validated_partition_selector("xbootldr.partuuid", "xbootldr.mount_point", partuuid, mount_point)?;
+            let xbootldr =
+                validated_partition_selector("xbootldr.partuuid", "xbootldr.mount_point", partuuid, mount_point)?;
             if xbootldr.partuuid == esp.partuuid {
                 return Err(invalid_partuuid(
                     "xbootldr.partuuid",

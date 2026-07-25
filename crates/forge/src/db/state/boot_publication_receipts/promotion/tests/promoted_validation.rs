@@ -58,15 +58,10 @@ fn read_only_validator_rejects_pending_then_accepts_exact_promoted_without_write
     assert_eq!(rows, 1);
 
     let correlated = database
-        .load_exact_promoted_boot_publication_receipt_state(
-            receipt.body().transition_id(),
-            &receipt_pair(&receipt),
-        )
+        .load_exact_promoted_boot_publication_receipt_state(receipt.body().transition_id(), &receipt_pair(&receipt))
         .unwrap();
     assert_eq!(correlated, before);
-    database
-        .require_promoted_boot_publication_receipt(&receipt)
-        .unwrap();
+    database.require_promoted_boot_publication_receipt(&receipt).unwrap();
     independent_reader.batch_execute("ROLLBACK").unwrap();
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
     assert_eq!(stored_body(&database, receipt.fingerprint()), body);
@@ -82,18 +77,13 @@ fn read_only_validator_requires_the_retained_committed_predecessor_body() {
     stage_and_promote(&database, &committed);
 
     let correlated = database
-        .load_exact_promoted_boot_publication_receipt_state(
-            committed.body().transition_id(),
-            &receipt_pair(&committed),
-        )
+        .load_exact_promoted_boot_publication_receipt_state(committed.body().transition_id(), &receipt_pair(&committed))
         .unwrap();
     assert_eq!(correlated.head().committed(), Some(committed.fingerprint()));
     assert_eq!(correlated.committed(), Some(&committed));
     assert!(correlated.head().pending().is_none());
     assert!(correlated.pending().is_none());
-    database
-        .require_promoted_boot_publication_receipt(&committed)
-        .unwrap();
+    database.require_promoted_boot_publication_receipt(&committed).unwrap();
     database.delete_boot_publication_receipt_body_for_test(predecessor.fingerprint());
     assert!(matches!(
         database.load_exact_promoted_boot_publication_receipt_state(
@@ -217,10 +207,8 @@ fn exact_startup_query_rejects_a_corrupt_retained_predecessor_without_mutation()
 
     database.conn.exec(|connection| {
         let changed = diesel::update(
-            boot_publication_receipts::table.filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(predecessor.fingerprint().as_bytes().as_slice()),
-            ),
+            boot_publication_receipts::table
+                .filter(boot_publication_receipts::receipt_sha256.eq(predecessor.fingerprint().as_bytes().as_slice())),
         )
         .set(boot_publication_receipts::canonical_body.eq(vec![0xff_u8]))
         .execute(connection)
