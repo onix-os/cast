@@ -41,6 +41,9 @@ pub(in crate::client) enum NewStateTerminalStep {
     CommitCleanup,
     /// `CommitCleanupComplete -> Complete`.
     CleanupComplete,
+    /// Terminal `Complete`: the record is deleted rather than advanced, so this
+    /// step has no successor phase.
+    Finalize,
 }
 
 impl NewStateTerminalStep {
@@ -48,7 +51,13 @@ impl NewStateTerminalStep {
         match self {
             Self::CommitCleanup => Phase::CommitDecided,
             Self::CleanupComplete => Phase::CommitCleanupComplete,
+            Self::Finalize => Phase::Complete,
         }
+    }
+
+    /// Whether this step advances the record. `Finalize` deletes it instead.
+    pub(in crate::client) const fn advances(self) -> bool {
+        !matches!(self, Self::Finalize)
     }
 
     pub(in crate::client) const fn successor_phase(self) -> Phase {
@@ -58,7 +67,9 @@ impl NewStateTerminalStep {
     const fn successor(self) -> Phase {
         match self {
             Self::CommitCleanup => Phase::CommitCleanupComplete,
-            Self::CleanupComplete => Phase::Complete,
+            // `Finalize` never advances; `advances()` gates every caller, and
+            // reporting `Complete` keeps the accessor total.
+            Self::CleanupComplete | Self::Finalize => Phase::Complete,
         }
     }
 }
@@ -316,6 +327,91 @@ enum SuccessorBindingMode {
     Reopened,
 }
 
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
+    /// Delete the terminal record, ending the transition.
+    ///
+    /// Only valid for [`NewStateTerminalStep::Finalize`]: every other step
+    /// advances instead. The returned authority proves the deletion landed and
+    /// that the surrounding evidence is unchanged.
+    pub(in crate::client) fn attempt_record_bound_delete(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<
+        (
+            Result<(), crate::transition_journal::TransitionJournalRecordDeleteError>,
+            NewStateTerminalAfterDeleteAuthority<'reservation>,
+        ),
+        NewStateCommitCleanupAuthorityError,
+    > {
+        if self.step.advances() {
+            return Err(NewStateCommitCleanupAuthorityError::UnexpectedSuccessor);
+        }
+        self.revalidate(journal)?;
+        let Self {
+            installation,
+            state_db,
+            record,
+            database,
+            namespace,
+            journal_record_binding,
+            step: _,
+            _active_state_reservation,
+        } = self;
+        let cast = installation.retained_mutable_cast_directory()?;
+        let delete = journal.delete_record_binding(cast, journal_record_binding, &record);
+        Ok((
+            delete,
+            NewStateTerminalAfterDeleteAuthority {
+                installation,
+                state_db,
+                record,
+                database,
+                namespace,
+                _active_state_reservation,
+            },
+        ))
+    }
+}
+
+/// Evidence retained across the terminal record deletion.
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+pub(in crate::client) struct NewStateTerminalAfterDeleteAuthority<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    record: TransitionRecord,
+    database: DatabaseEvidence,
+    namespace: NewStateTerminalNamespaceProof,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+impl NewStateTerminalAfterDeleteAuthority<'_> {
+    /// Prove the record is gone and the surrounding evidence still holds.
+    pub(in crate::client) fn revalidate_after_journal_delete(
+        self,
+        journal: &TransitionJournalStore,
+    ) -> Result<(), NewStateCommitCleanupAuthorityError> {
+        if journal.load()?.is_some() {
+            return Err(NewStateCommitCleanupAuthorityError::RecordStillPresent);
+        }
+        self.installation.revalidate_mutable_namespace()?;
+        let in_flight = self
+            .state_db
+            .audit_in_flight_transition()
+            .map_err(InspectionError::from)?;
+        let database = inspect_database(&self.record, &self.state_db, in_flight)?;
+        if database != self.database {
+            return Err(NewStateCommitCleanupAuthorityError::DatabaseChanged);
+        }
+        self.namespace
+            .revalidate(&self.installation, &self.record)
+            .map_err(|source| NewStateCommitCleanupAuthorityError::Namespace(Box::new(source)))?;
+        self.installation.revalidate_mutable_namespace()?;
+        Ok(())
+    }
+}
+
 fn require_binding(
     installation: &Installation,
     journal: &TransitionJournalStore,
@@ -358,6 +454,8 @@ pub(in crate::client) enum NewStateCommitCleanupAuthorityError {
     UnexpectedSuccessor,
     #[error("the state database changed during admission")]
     DatabaseChanged,
+    #[error("the terminal record is still present after its bound deletion")]
+    RecordStillPresent,
     #[error("terminal namespace")]
     Namespace(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("installation: {0}")]

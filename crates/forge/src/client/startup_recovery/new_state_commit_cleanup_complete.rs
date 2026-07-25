@@ -201,6 +201,52 @@ pub(in crate::client) enum NewStateCommitCleanupPersistenceError {
         #[source]
         source: crate::transition_journal::StorageError,
     },
+    #[error("delete the terminal NewState record (surrounding evidence verified: {verified})")]
+    TerminalDelete {
+        #[source]
+        source: Box<crate::transition_journal::TransitionJournalRecordDeleteError>,
+        verified: bool,
+    },
     #[error("installation")]
     Installation(#[source] crate::installation::Error),
+}
+
+/// End a NewState transition by deleting its terminal `Complete` record.
+///
+/// Deletion is the last durable act of the transition. A delete that reports
+/// `Absent` is still a failure to report, because it means something else
+/// removed the record — but the surrounding evidence is verified either way, so
+/// the caller can tell "finished" from "someone else interfered".
+// Forward scaffolding: consumed once Slice 5 wires `apply_new_state_candidate` live.
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+pub(in crate::client) fn finalize_new_state_complete(
+    journal: TransitionJournalStore,
+    authority: NewStateCommitCleanupAuthority<'_>,
+) -> Result<TransitionJournalStore, NewStateCommitCleanupPersistenceError> {
+    let source = authority.record();
+    if source.phase != Phase::Complete {
+        return Err(NewStateCommitCleanupPersistenceError::UnexpectedSuccessor { phase: source.phase });
+    }
+
+    let (delete, after_delete) = authority
+        .attempt_record_bound_delete(&journal)
+        .map_err(NewStateCommitCleanupPersistenceError::Authority)?;
+
+    match delete {
+        Ok(()) => {
+            after_delete
+                .revalidate_after_journal_delete(&journal)
+                .map_err(NewStateCommitCleanupPersistenceError::Authority)?;
+            Ok(journal)
+        }
+        Err(source) => {
+            // Verify the surrounding evidence regardless, so a failed delete is
+            // never confused with a corrupted transition.
+            let verification = after_delete.revalidate_after_journal_delete(&journal);
+            Err(NewStateCommitCleanupPersistenceError::TerminalDelete {
+                source: Box::new(source),
+                verified: verification.is_ok(),
+            })
+        }
+    }
 }
