@@ -1,6 +1,6 @@
 # Legacy cleanup — audit and phased removal plan
 
-**Status:** §1 and §5 complete, §6 triaged; §§2-4 blocked on Phase 1
+**Status:** §§1, 5, 6 complete; §§2-4 blocked on Phase 1 durability closure
 **Audit date:** 2026-07-25
 **Planned against:** `feature/feature_plan` at `0bf2c75a`; executed on `feature/cleanup_legacy`
 **Premise:** `os-tools` is unreleased with no installed base, so **no
@@ -19,7 +19,7 @@ files**. Not all are debt. Breakdown by nature:
 | 3 | Legacy journal guards (`LegacyNoJournal`, `LegacyBlocking`) | 22 | category 2 |
 | 4 | `legacy_boot_repair` | 65 lines | category 2 |
 | 5 | `#[allow(dead_code)]` scaffolding debt | 208 | nothing — **done** |
-| 6 | `TODO`/`FIXME` | 23 → 20 | nothing — **triaged** |
+| 6 | `TODO`/`FIXME` | 23 → 20, all filed | nothing — **done** |
 | 7 | False positives (fixture paths, test locals) | ~45 | not debt |
 
 ---
@@ -99,6 +99,26 @@ route and its recovery machinery outright.
 
 **Do not start before Phase 1 lands.** This is the safety net for every
 transition today.
+
+**Blocker verified against the code (2026-07-25), not assumed.** Deleting this
+today would remove shipping functionality outright:
+
+- `state_planning.rs:115` drives **ActivateArchived** through
+  `commit_stateful_staging(..., StatefulCandidateOrigin::Archived, ...)`, and
+  there is **no coordinator replacement whatsoever** — no
+  `execute_activate_archived` exists anywhere in the tree. Archived-state
+  activation would simply cease to work.
+- `state_planning.rs:185` drives **NewState** (package install/update) through
+  `apply_stateful_candidate`. A coordinator route does exist
+  (`execute_new_state_forward` → `apply_new_state_candidate`) but is **not
+  wired as the default**; its only caller today is an integration test.
+- Archived-state repair (1.3) likewise has no coordinator route.
+
+So §2 is gated on Phase 1.1 **Slice 5** (wire NewState live), plus Phase 1.2 and
+1.3 being built from scratch, plus the crash matrix — and per
+`destructive-tests-in-vm`, the crash matrix needs the VM. §§3 and 4 are in turn
+gated on §2: the `Legacy*` guard variants and `legacy_boot_repair` each still
+have live callers inside the legacy route.
 
 ---
 
@@ -185,7 +205,7 @@ the surrounding design.
 
 ---
 
-## 6. `TODO`/`FIXME` audit · E:S R:low · **triaged, partly done**
+## 6. `TODO`/`FIXME` audit · E:S R:low · **DONE**
 
 **State:** was 23 across `crates/` and `bin/`; **20 remain**. An earlier example
 was already closed by `1218c00a` (`cli/repo.rs` canonical output).
@@ -213,8 +233,13 @@ gitlab/github version parsing, `build/job/phase`), `stone`/`libstone`
 (encoding, error types), `container` (error granularity, mount syscalls). None
 block anything; each is a small independent improvement.
 
-**Action:** resolve D-CL6, then file the remaining notes as concrete entries in
-`future_impl.md` so no `TODO` survives without a plan reference.
+**Filed (done):** all 20 remaining comments are now recorded in
+`plans/future_impl.md` §7.4, grouped by nature (correctness/behaviour, parsing
+gaps, API/ergonomics, blocked-on-upstream, cosmetic). **No `TODO` or `FIXME` in
+the tree lacks a plan reference.**
+
+**Open:** D-CL6 is the only one needing a decision before it can be actioned;
+the rest are small independent improvements that block nothing.
 
 ---
 
@@ -235,14 +260,14 @@ block anything; each is a small independent improvement.
 ```
 1. Payload version collapse        ── DONE
 5. dead_code audit                 ── DONE
-6. TODO/FIXME triage               ── triaged; D-CL6 open, 19 to file
+6. TODO/FIXME triage               ── DONE (filed as future_impl.md §7.4)
         ↓ (Phase 1 must land first)
 2. Legacy stateful transition path ── the big one
 3. Legacy journal guards           ── mechanical after 2
 4. legacy_boot_repair              ── deleted with 2
 ```
 
-Categories 1 and 5 are complete and 6 is triaged. Categories 2-4 are gated on
+Categories 1, 5 and 6 are complete. Categories 2-4 are gated on
 Phase 1 durability closure and must not be started before it — the legacy route
 is currently the only proven path for real transitions.
 

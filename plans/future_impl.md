@@ -445,6 +445,51 @@ which filesystem (`target/` build root vs `/var/tmp` VM build root).
 
 ---
 
+### 7.4 Source-comment backlog (`TODO`/`FIXME`)  · E:S-per-item R:low
+
+Filed from `plans/cleanup_legacy.md` §6 so no source comment survives without a
+plan reference. Each is small, independent, and blocks nothing. Grouped by
+nature; the file:line is the anchor, not a promise about scope.
+
+**Correctness / behaviour (decide before changing):**
+- `vfs/src/tree/mod.rs:147` — duplicate-path detection is downgraded from an
+  error to an `eprintln!` (`return Err(e)` commented out). Re-enabling makes
+  currently-succeeding installs fail. **D-CL6** in `cleanup_legacy.md`.
+- `dag/src/subgraph.rs:123` — cycle breaking is unimplemented.
+- `forge/src/registry/plugin/active.rs:39` and
+  `forge/src/registry/plugin/active.rs:81` — two unhandled error paths.
+- `forge/src/registry/plugin/cobble.rs:99` — unverified flag choice.
+- `libstone/src/lib.rs:156` — error handling unimplemented.
+- `container/src/lib.rs:548` — replace the catch-all error with finer variants.
+
+**Parsing gaps (known-wrong inputs):**
+- `mason/src/draft/metadata/github.rs:106` — string version prefixes unhandled.
+- `mason/src/draft/metadata/gitlab.rs:106` — project name embedded in the
+  version is unhandled.
+
+**API / ergonomics:**
+- `forge/src/cli/repo.rs:60` — the `repo` CLI API wants a full overhaul; the
+  current shape is explicitly temporary. (Its canonical-output TODO is already
+  closed by `1218c00a`.)
+- `forge/src/client/cache.rs:244` — return an `Unpacked` value owning `blit`.
+- `forge/src/registry/plugin/repository.rs:31` — replace mutation with a
+  type-safe construction.
+- `forge/src/cli/search.rs:398` — search binary names by default.
+- `forge/src/client/prune.rs:116` — report "no states to be removed".
+- `forge/src/client/sync.rs:163` — surface the "why" of system-intent packages.
+- `forge/src/client/postblit.rs:235` — cache under `/var/`.
+- `stone/src/write.rs:21` — allow plain encoding.
+- `container/src/mounts/syscalls.rs:40` — prefer a real API over the current
+  approach.
+
+**Blocked on upstream Rust:**
+- `forge/src/util.rs:266` — adopt `try {}` once stable.
+
+**Cosmetic:**
+- `mason/src/build/job/phase.rs:70` — output formatting.
+
+---
+
 ## Cross-cutting sequencing summary
 
 ```
