@@ -5,6 +5,6 @@ let layers = import! cast.build_policy.layers.v1
 
 layers.policy "aerynos" [
     layers.layer "foundation" [
-        layers.add "default.glu",
+        layers.add "default.lua",
     ],
 ]

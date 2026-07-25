@@ -6,6 +6,7 @@
 # Nix-compatibility proof.
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
 tree_name=cast-go-module-fixture-1.0.0
@@ -14,7 +15,7 @@ authored="$fixture_root/source-trees/$tree_name"
 expected_archive_sha256=f4c4eb74304956e3f3e650d2004c78a39c4d4c009e447b9c28b3819370dbc78f
 identity='cast go module fixture: vendored dependency v0.1.0: declarative userspace'
 
-temporary=$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-go-module-host.XXXXXXXX")
+temporary=$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-go-module-host.XXXXXXXX")
 cleanup() {
     timeout 30s chmod -R u+w "$temporary" 2>/dev/null || :
     timeout 30s rm -rf "$temporary"

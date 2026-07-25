@@ -1,19 +1,19 @@
 //! Generated build-lock lifecycle.
 
-use std::{
-    io::{self, Write},
-    path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{io, path::{Path, PathBuf}, str};
 
-use fs_err as fs;
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+    Source,
+};
 use stone_recipe::derivation::{
-    BUILD_LOCK_FILE_NAME, BuildLock, BuildLockDecodeError, BuildLockValidationError, LockedIdentity, Platform,
-    RequestedInput, decode_build_lock, encode_build_lock,
+    BUILD_LOCK_FILE_NAME, BUILD_LOCK_GENERATED_GLUON_MARKER, BuildLock,
+    BuildLockValidationError, GluonBuildLockCodec, LockedIdentity, Platform,
+    RequestedInput,
 };
 use thiserror::Error;
 
-use crate::generated_lock;
+use crate::{generated_declaration, generated_lock};
 
 /// Relationship of generated lock data to the current explicit plan request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +32,8 @@ pub fn path_for_recipe(recipe: &Path) -> PathBuf {
 }
 
 pub fn load(path: &Path, request_fingerprint: &str) -> Result<Status, Error> {
-    let bytes = match generated_lock::read(path) {
+    let codec = GluonBuildLockCodec::default();
+    let bytes = match generated_lock::read(path, codec.limits().max_source_bytes) {
         Ok(bytes) => bytes,
         Err(error) if error.is_not_found() => return Ok(Status::Missing),
         Err(source) => {
@@ -42,7 +43,14 @@ pub fn load(path: &Path, request_fingerprint: &str) -> Result<Status, Error> {
             });
         }
     };
-    let lock = decode_build_lock(BUILD_LOCK_FILE_NAME, &bytes).map_err(|source| Error::Decode {
+    let text = str::from_utf8(&bytes).map_err(|source| Error::Utf8 {
+        path: path.to_owned(),
+        source,
+    })?;
+    let lock = codec
+        .evaluate(&Source::new(BUILD_LOCK_FILE_NAME, text))
+        .map(|evaluation| evaluation.value)
+        .map_err(|source| Error::Decode {
         path: path.to_owned(),
         source: Box::new(source),
     })?;
@@ -190,8 +198,9 @@ fn require_selected_value(path: &Path, field: &str, expected: &str, found: &str)
 /// bytes leave the existing inode untouched.
 pub fn write(path: &Path, lock: &BuildLock) -> Result<WriteOutcome, Error> {
     lock.validate()?;
-    let encoded = encode_build_lock(lock);
-    match generated_lock::read(path) {
+    let codec = GluonBuildLockCodec::default();
+    let encoded = codec.encode(lock)?;
+    match generated_lock::read(path, codec.limits().max_source_bytes) {
         Ok(existing) if existing == encoded.as_bytes() => return Ok(WriteOutcome::Unchanged),
         Ok(_) => {}
         Err(error) if error.is_not_found() => {}
@@ -203,53 +212,24 @@ pub fn write(path: &Path, lock: &BuildLock) -> Result<WriteOutcome, Error> {
         }
     }
 
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).map_err(|source| Error::Write {
+    let slot = generated_declaration::declaration_slot(
+        path,
+        BUILD_LOCK_FILE_NAME,
+        codec.language_spec(),
+        BUILD_LOCK_GENERATED_GLUON_MARKER,
+        codec.limits().max_source_bytes,
+    )
+    .map_err(|source| Error::Write {
         path: path.to_owned(),
         source,
     })?;
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| Error::InvalidPath(path.to_owned()))?
-        .to_string_lossy();
-    let (temporary, mut file) = create_temporary(parent, &file_name).map_err(|source| Error::Write {
-        path: path.to_owned(),
-        source,
-    })?;
-    let result = (|| {
-        file.write_all(encoded.as_bytes())?;
-        file.sync_all()?;
-        drop(file);
-        fs::rename(&temporary, path)?;
-        fs::File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result.map_err(|source| Error::Write {
-        path: path.to_owned(),
-        source,
-    })?;
+    slot.save(encoded.as_bytes())
+        .map_err(generated_declaration::save_error_into_io)
+        .map_err(|source| Error::Write {
+            path: path.to_owned(),
+            source,
+        })?;
     Ok(WriteOutcome::Written)
-}
-
-static TEMPORARY_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-fn create_temporary(parent: &Path, file_name: &str) -> io::Result<(PathBuf, fs::File)> {
-    for _ in 0..100 {
-        let counter = TEMPORARY_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = parent.join(format!(".{file_name}.tmp-{}-{counter}", std::process::id()));
-        match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate a unique build-lock temporary file",
-    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -285,11 +265,17 @@ pub enum Error {
         #[source]
         source: Box<generated_lock::ReadError>,
     },
+    #[error("generated build lock {path:?} is not UTF-8")]
+    Utf8 {
+        path: PathBuf,
+        #[source]
+        source: str::Utf8Error,
+    },
     #[error("decode generated build lock {path:?}")]
     Decode {
         path: PathBuf,
         #[source]
-        source: Box<BuildLockDecodeError>,
+        source: Box<DeclarationEvaluationError<BuildLockValidationError>>,
     },
     #[error("write generated build lock {path:?}")]
     Write {
@@ -305,12 +291,17 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use fs_err as fs;
     use stone_recipe::derivation::{
         BUILD_LOCK_SCHEMA_VERSION, InputOrigin, LockedOutput, LockedPackage, LockedRequest, PackageInputSelection,
         RepositorySnapshot,
     };
 
     use super::*;
+
+    fn canonical_build_lock(lock: &BuildLock) -> String {
+        GluonBuildLockCodec::default().encode(lock).unwrap()
+    }
 
     fn platform() -> Platform {
         Platform {
@@ -430,12 +421,27 @@ mod tests {
     }
 
     #[test]
+    fn generated_slot_refuses_to_replace_an_authored_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(BUILD_LOCK_FILE_NAME);
+        fs::write(&path, "authored lock\n").unwrap();
+
+        let error = write(&path, &lock("request")).unwrap_err();
+
+        let Error::Write { source, .. } = error else {
+            panic!("unexpected error: {error}");
+        };
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read_to_string(path).unwrap(), "authored lock\n");
+    }
+
+    #[test]
     fn load_and_unchanged_comparison_reject_unsafe_build_lock_inputs() {
         use std::os::unix::fs::symlink;
 
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(BUILD_LOCK_FILE_NAME);
-        let limit = gluon_config::Limits::default().max_source_bytes;
+        let limit = GluonBuildLockCodec::default().limits().max_source_bytes;
         fs::File::create(&path)
             .unwrap()
             .set_len(u64::try_from(limit).unwrap() + 1)
@@ -453,7 +459,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
         let target = root.path().join("target");
         let expected = lock("request");
-        let encoded = encode_build_lock(&expected);
+        let encoded = canonical_build_lock(&expected);
         fs::write(&target, &encoded).unwrap();
         symlink(&target, &path).unwrap();
 

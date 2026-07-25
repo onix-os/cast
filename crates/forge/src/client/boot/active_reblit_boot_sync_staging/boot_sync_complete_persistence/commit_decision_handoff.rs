@@ -5,40 +5,29 @@ use thiserror::Error;
 use crate::{
     Installation,
     boot_publication::{
-        BootPublicationReceiptFingerprint, BootPublicationReceiptPair,
-        CanonicalBootPublicationReceipt,
+        BootPublicationReceiptFingerprint, BootPublicationReceiptPair, CanonicalBootPublicationReceipt,
     },
     client::{
         Client, CoordinatorActiveStateReservation,
         active_reblit_boot_publication_preflight::{
-            ActiveReblitBootCommitDecisionFinalValidation,
-            ActiveReblitBootSyncCommitDecisionSeal,
+            ActiveReblitBootCommitDecisionFinalValidation, ActiveReblitBootSyncCommitDecisionSeal,
         },
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
-        startup_reconciliation::{
-            ActiveReblitBootSyncCompleteAuthority,
-            ActiveReblitBootSyncCompleteAuthorityError,
-        },
+        startup_reconciliation::{ActiveReblitBootSyncCompleteAuthority, ActiveReblitBootSyncCompleteAuthorityError},
         startup_recovery::{
             ActiveReblitBootSyncCommitDecisionPersistenceError,
             persist_active_reblit_boot_sync_commit_decision_retaining_binding,
         },
     },
-    db::state::{
-        BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome,
-        Database,
-    },
+    db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database},
     installation,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
-use super::{
-    ActiveReblitBootSyncCompleteValidationError,
-    CompletedStagedActiveReblitBootSync,
-};
+use super::{ActiveReblitBootSyncCompleteValidationError, CompletedStagedActiveReblitBootSync};
 
 const ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION: u64 = 12;
 const ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION: u64 = 13;
@@ -48,11 +37,7 @@ const ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION: u64 = 13;
 /// Private fields and the absence of constructors make this a one-origin,
 /// non-cloneable handoff for the later cleanup slice.
 #[must_use = "commit-decision authority must enter cleanup coordination or be deliberately discarded"]
-pub(in crate::client) struct CommittedStagedActiveReblitBootSync<
-    'plan,
-    'inventory,
-    Plan,
-> {
+pub(in crate::client) struct CommittedStagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     completed_record: TransitionRecord,
     record: TransitionRecord,
     record_binding: TransitionJournalRecordBinding,
@@ -66,9 +51,7 @@ pub(in crate::client) struct CommittedStagedActiveReblitBootSync<
     active_state_reservation: CoordinatorActiveStateReservation,
 }
 
-impl<Plan> std::fmt::Debug
-    for CommittedStagedActiveReblitBootSync<'_, '_, Plan>
-{
+impl<Plan> std::fmt::Debug for CommittedStagedActiveReblitBootSync<'_, '_, Plan> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CommittedStagedActiveReblitBootSync")
@@ -79,16 +62,12 @@ impl<Plan> std::fmt::Debug
     }
 }
 
-impl<'plan, 'inventory, Plan>
-    CommittedStagedActiveReblitBootSync<'plan, 'inventory, Plan>
-{
+impl<'plan, 'inventory, Plan> CommittedStagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     pub(in crate::client) const fn record(&self) -> &TransitionRecord {
         &self.record
     }
 
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.receipt.fingerprint()
     }
 
@@ -96,15 +75,11 @@ impl<'plan, 'inventory, Plan>
         self.plan
     }
 
-    pub(in crate::client) const fn inventory(
-        &self,
-    ) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(&self) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
         self.inventory
     }
 
-    pub(in crate::client) const fn staging_outcome(
-        &self,
-    ) -> BootPublicationReceiptStageOutcome {
+    pub(in crate::client) const fn staging_outcome(&self) -> BootPublicationReceiptStageOutcome {
         self.staging_outcome
     }
 
@@ -113,14 +88,9 @@ impl<'plan, 'inventory, Plan>
         client: &Client,
     ) -> Result<(), CommittedStagedActiveReblitBootSyncValidationError> {
         if !self.database.same_instance(&client.state_db)
-            || !std::ptr::eq(
-                self.installation.root_directory(),
-                client.installation.root_directory(),
-            )
+            || !std::ptr::eq(self.installation.root_directory(), client.installation.root_directory())
         {
-            return Err(
-                CommittedStagedActiveReblitBootSyncValidationError::ClientCapabilityMismatch,
-            );
+            return Err(CommittedStagedActiveReblitBootSyncValidationError::ClientCapabilityMismatch);
         }
         self.installation.revalidate_mutable_namespace()?;
         let cast = self.installation.retained_mutable_cast_directory()?;
@@ -129,15 +99,12 @@ impl<'plan, 'inventory, Plan>
                 .journal
                 .has_record_binding(cast, &self.record_binding, &self.record)?
         {
-            return Err(
-                CommittedStagedActiveReblitBootSyncValidationError::BindingChanged,
-            );
+            return Err(CommittedStagedActiveReblitBootSyncValidationError::BindingChanged);
         }
         let expected = self.completed_record.forward_successor(None)?;
         let pair = receipt_pair(&self.receipt);
         if expected != self.record
-            || self.completed_record.generation
-                != ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION
+            || self.completed_record.generation != ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION
             || self.record.generation != ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION
             || self.record.operation != Operation::ActiveReblit
             || self.record.phase != Phase::CommitDecided
@@ -150,28 +117,21 @@ impl<'plan, 'inventory, Plan>
             || self.record.rollback.is_some()
             || self.record.boot_publication_receipt_correlation()? != Some(pair)
         {
-            return Err(
-                CommittedStagedActiveReblitBootSyncValidationError::UnexpectedRecord,
-            );
+            return Err(CommittedStagedActiveReblitBootSyncValidationError::UnexpectedRecord);
         }
-        self.database
-            .require_promoted_boot_publication_receipt(&self.receipt)?;
+        self.database.require_promoted_boot_publication_receipt(&self.receipt)?;
         self.installation.revalidate_mutable_namespace()?;
         if !self
             .journal
             .has_record_binding(cast, &self.record_binding, &self.record)?
         {
-            return Err(
-                CommittedStagedActiveReblitBootSyncValidationError::BindingChanged,
-            );
+            return Err(CommittedStagedActiveReblitBootSyncValidationError::BindingChanged);
         }
         Ok(())
     }
 }
 
-impl<'plan, 'inventory, Plan>
-    CompletedStagedActiveReblitBootSync<'plan, 'inventory, Plan>
-{
+impl<'plan, 'inventory, Plan> CompletedStagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     pub(in crate::client) fn persist_commit_decided(
         self,
         client: &Client,
@@ -209,12 +169,8 @@ impl<'plan, 'inventory, Plan>
         )
         .map_err(CompletedStagedActiveReblitCommitDecisionError::Authority)?;
         let (journal, record, record_binding) =
-            persist_active_reblit_boot_sync_commit_decision_retaining_binding(
-                journal,
-                authority,
-                final_validation,
-            )
-            .map_err(CompletedStagedActiveReblitCommitDecisionError::Persistence)?;
+            persist_active_reblit_boot_sync_commit_decision_retaining_binding(journal, authority, final_validation)
+                .map_err(CompletedStagedActiveReblitCommitDecisionError::Persistence)?;
 
         let committed = CommittedStagedActiveReblitBootSync {
             completed_record,
@@ -236,9 +192,7 @@ impl<'plan, 'inventory, Plan>
     }
 }
 
-fn receipt_pair(
-    receipt: &CanonicalBootPublicationReceipt,
-) -> BootPublicationReceiptPair {
+fn receipt_pair(receipt: &CanonicalBootPublicationReceipt) -> BootPublicationReceiptPair {
     BootPublicationReceiptPair {
         pending: receipt.fingerprint(),
         committed: receipt.body().committed_predecessor(),
@@ -248,14 +202,10 @@ fn receipt_pair(
 #[path = "commit_decision_handoff/commit_cleanup_handoff.rs"]
 mod commit_cleanup_handoff;
 pub(in crate::client) use commit_cleanup_handoff::{
-    CompleteStagedActiveReblitFinalizationError,
-    CommitCleanupCompleteStagedActiveReblitCompleteError,
-    CommitCleanupCompleteStagedActiveReblitBootSync,
-    CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
-    CommittedStagedActiveReblitCommitCleanupError,
-    CompleteStagedActiveReblitBootSync,
-    CompleteStagedActiveReblitBootSyncValidationError,
-    FinalizedStagedActiveReblitBootSync,
+    CommitCleanupCompleteStagedActiveReblitBootSync, CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
+    CommitCleanupCompleteStagedActiveReblitCompleteError, CommittedStagedActiveReblitCommitCleanupError,
+    CompleteStagedActiveReblitBootSync, CompleteStagedActiveReblitBootSyncValidationError,
+    CompleteStagedActiveReblitFinalizationError, FinalizedStagedActiveReblitBootSync,
     FinalizedStagedActiveReblitBootSyncValidationError,
 };
 

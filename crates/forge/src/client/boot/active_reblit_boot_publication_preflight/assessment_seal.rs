@@ -4,15 +4,9 @@ use std::path::Path;
 
 use crate::linux_fs::descriptor_boot_namespace::BootNamespaceDestinationState;
 
-use super::{
-    ActiveReblitBootPublicationPreflightError,
-    BoundActiveReblitBlsPublicationPlan,
-};
+use super::{ActiveReblitBootPublicationPreflightError, BoundActiveReblitBlsPublicationPlan};
 use crate::client::{
-    active_reblit_publication_plan::{
-        ActiveReblitBootDestinationLayout,
-        ActiveReblitBootDestinationRoot,
-    },
+    active_reblit_publication_plan::{ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot},
     boot_content_identity::BootContentIdentity,
 };
 
@@ -38,15 +32,11 @@ pub(in crate::client) struct SealedActiveReblitBootPublicationDesiredState<'plan
 }
 
 impl ActiveReblitBootPublicationAssessmentSeal<'_> {
-    pub(in crate::client) const fn destination_layout(
-        &self,
-    ) -> ActiveReblitBootDestinationLayout {
+    pub(in crate::client) const fn destination_layout(&self) -> ActiveReblitBootDestinationLayout {
         self.destination_layout
     }
 
-    pub(in crate::client) fn desired_states(
-        &self,
-    ) -> &[SealedActiveReblitBootPublicationDesiredState<'_>] {
+    pub(in crate::client) fn desired_states(&self) -> &[SealedActiveReblitBootPublicationDesiredState<'_>] {
         &self.desired_states
     }
 }
@@ -95,21 +85,18 @@ pub(super) fn seal_bound_desired_states<
         'roots,
     >,
     states: &[BootNamespaceDestinationState],
-) -> Result<ActiveReblitBootPublicationAssessmentSeal<'plan>, ActiveReblitBootPublicationPreflightError>
-{
+) -> Result<ActiveReblitBootPublicationAssessmentSeal<'plan>, ActiveReblitBootPublicationPreflightError> {
     if plan.publication_count() != states.len() {
-        return Err(
-            ActiveReblitBootPublicationPreflightError::PublicationCountMismatch {
-                expected: plan.publication_count(),
-                actual: states.len(),
-            },
-        );
+        return Err(ActiveReblitBootPublicationPreflightError::PublicationCountMismatch {
+            expected: plan.publication_count(),
+            actual: states.len(),
+        });
     }
 
     let mut desired_states = Vec::new();
-    desired_states.try_reserve_exact(states.len()).map_err(|source| {
-        ActiveReblitBootPublicationPreflightError::StateAllocation { source }
-    })?;
+    desired_states
+        .try_reserve_exact(states.len())
+        .map_err(|source| ActiveReblitBootPublicationPreflightError::StateAllocation { source })?;
     for (output, state) in plan.outputs().zip(states.iter().copied()) {
         desired_states.push(SealedActiveReblitBootPublicationDesiredState {
             root: output.root(),

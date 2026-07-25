@@ -67,8 +67,7 @@ fn startup_activate_archived_complete_route_source_durable_fresh_handle_reopen_r
                     let journal = fresh.journal;
 
                     let (reopened, actual) =
-                        persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority)
-                            .unwrap();
+                        persist_usr_rollback_activate_archived_complete_route_and_reopen(journal, authority).unwrap();
 
                     assert_eq!(actual, expected);
                     assert_eq!(reopened.load().unwrap(), Some(expected));
@@ -132,8 +131,14 @@ fn startup_activate_archived_complete_route_successor_durable_fresh_handle_reope
                     assert_eq!(fresh.journal.load().unwrap(), Some(expected));
                     assert_eq!(fresh.database.all().unwrap(), all_before);
                     assert_eq!(fresh.database.audit_in_flight_transition().unwrap(), None);
-                    assert_eq!(fresh.database.metadata_provenance(candidate).unwrap(), candidate_provenance);
-                    assert_eq!(fresh.database.metadata_provenance(previous).unwrap(), previous_provenance);
+                    assert_eq!(
+                        fresh.database.metadata_provenance(candidate).unwrap(),
+                        candidate_provenance
+                    );
+                    assert_eq!(
+                        fresh.database.metadata_provenance(previous).unwrap(),
+                        previous_provenance
+                    );
                     assert_eq!(candidate_move_count(), 0);
                     cases += 1;
                 }

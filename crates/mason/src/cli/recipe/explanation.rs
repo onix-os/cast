@@ -687,22 +687,19 @@ fn format_locked_identity(formatter: &mut Formatter, indent: usize, name: &str, 
 fn format_evaluation_fingerprint(
     formatter: &mut Formatter,
     indent: usize,
-    fingerprint: &gluon_config::EvaluationFingerprint,
+    fingerprint: &gluon_config::EvaluationIdentity,
 ) {
     formatter.open(indent, "evaluation");
     formatter.string(indent + 1, "root_logical_name", &fingerprint.root_logical_name);
     formatter.string(indent + 1, "root_source_sha256", &fingerprint.root_source_sha256);
-    formatter.string(indent + 1, "gluon_version", fingerprint.gluon_version);
-    formatter.field(
-        indent + 1,
-        "configuration_abi_version",
-        fingerprint.configuration_abi_version,
-    );
-    formatter.field(
-        indent + 1,
-        "evaluator_policy_version",
-        fingerprint.evaluator_policy_version,
-    );
+    formatter.string(indent + 1, "language", fingerprint.language.as_str());
+    formatter.string(indent + 1, "source_profile", &fingerprint.source_profile);
+    formatter.string(indent + 1, "engine_implementation", fingerprint.engine.implementation());
+    formatter.string(indent + 1, "engine_version", fingerprint.engine.version());
+    formatter.string(indent + 1, "configuration_abi", fingerprint.configuration_abi.name());
+    formatter.string(indent + 1, "configuration_abi_version", fingerprint.configuration_abi.version());
+    formatter.string(indent + 1, "evaluator_policy", fingerprint.evaluator_policy.as_str());
+    formatter.string(indent + 1, "resource_policy_sha256", &fingerprint.resource_policy_sha256);
     formatter.string(
         indent + 1,
         "explicit_inputs_sha256",
@@ -710,9 +707,10 @@ fn format_evaluation_fingerprint(
     );
     formatter.string(indent + 1, "sha256", &fingerprint.sha256);
 
-    formatter.open(indent + 1, "imported_modules");
-    for (index, module) in fingerprint.imported_modules.iter().enumerate() {
+    formatter.open(indent + 1, "modules");
+    for (index, module) in fingerprint.modules.iter().enumerate() {
         formatter.indexed_open(indent + 2, "module", index);
+        formatter.string(indent + 3, "identity", &module.identity);
         formatter.string(indent + 3, "logical_name", &module.logical_name);
         formatter.string(indent + 3, "sha256", &module.sha256);
         formatter.close(indent + 2);

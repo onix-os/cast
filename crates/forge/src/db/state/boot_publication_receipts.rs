@@ -18,16 +18,15 @@ use diesel::{
 use super::{
     Database, Error,
     boot_publication_receipt_head::{
-        BootPublicationReceiptHead, BootPublicationReceiptHeadError,
-        BootPublicationReceiptStageOutcome, load_receipt_head, stage_pending_row,
+        BootPublicationReceiptHead, BootPublicationReceiptHeadError, BootPublicationReceiptStageOutcome,
+        load_receipt_head, stage_pending_row,
     },
     schema::boot_publication_receipts,
 };
 use crate::{
     boot_publication::{
-        BootPublicationReceiptCodecError, BootPublicationReceiptFingerprint,
-        BootPublicationReceiptFingerprintError, BootPublicationReceiptPair,
-        CanonicalBootPublicationReceipt, MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES,
+        BootPublicationReceiptCodecError, BootPublicationReceiptFingerprint, BootPublicationReceiptFingerprintError,
+        BootPublicationReceiptPair, CanonicalBootPublicationReceipt, MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES,
         decode_boot_publication_receipt,
     },
     state::{TransitionId, TransitionIdError},
@@ -35,25 +34,22 @@ use crate::{
 
 const RECEIPT_LOOKUP_LIMIT: i64 = 2;
 
-#[allow(dead_code)] // DB-only substrate; consumed by the aggregate coordination slice
-#[path = "boot_publication_receipts/promotion.rs"]
-mod promotion;
 #[allow(dead_code)] // crash-recovery foundation; client integration follows separately
 #[path = "boot_publication_receipts/exact_promoted_receipt_chain.rs"]
 mod exact_promoted_receipt_chain;
+#[allow(dead_code)] // DB-only substrate; consumed by the aggregate coordination slice
+#[path = "boot_publication_receipts/promotion.rs"]
+mod promotion;
 pub(crate) use exact_promoted_receipt_chain::{
-    CurrentExactPromotedBootPublicationReceiptChain,
-    CurrentExactPromotedBootPublicationReceiptChainError,
+    CurrentExactPromotedBootPublicationReceiptChain, CurrentExactPromotedBootPublicationReceiptChainError,
     ExactPromotedBootPublicationReceiptChain,
-};
-pub(crate) use promotion::{
-    BootPublicationReceiptPromotionDurableState,
-    BootPublicationReceiptPromotionError,
-    BootPublicationReceiptPromotionOutcome,
-    ExactPromotedBootPublicationReceiptStateError,
 };
 #[cfg(test)]
 pub(crate) use promotion::arm_boot_publication_receipt_promotion_after_commit_error;
+pub(crate) use promotion::{
+    BootPublicationReceiptPromotionDurableState, BootPublicationReceiptPromotionError,
+    BootPublicationReceiptPromotionOutcome, ExactPromotedBootPublicationReceiptStateError,
+};
 
 /// One strictly decoded state of the compact head and its referenced bodies.
 ///
@@ -118,13 +114,7 @@ fn load_receipt_state(
         .transpose()?;
     let pending = head
         .pending()
-        .map(|pending| {
-            load_required_receipt(
-                connection,
-                ReceiptReference::Pending,
-                pending.fingerprint(),
-            )
-        })
+        .map(|pending| load_required_receipt(connection, ReceiptReference::Pending, pending.fingerprint()))
         .transpose()?;
 
     if let (Some(pending_head), Some(pending_body)) = (head.pending(), pending.as_ref()) {
@@ -249,10 +239,8 @@ fn load_required_receipt(
     reference: ReceiptReference,
     fingerprint: BootPublicationReceiptFingerprint,
 ) -> Result<CanonicalBootPublicationReceipt, BootPublicationReceiptStateError> {
-    load_receipt(connection, fingerprint)?.ok_or(BootPublicationReceiptStateError::DanglingReference {
-        reference,
-        fingerprint,
-    })
+    load_receipt(connection, fingerprint)?
+        .ok_or(BootPublicationReceiptStateError::DanglingReference { reference, fingerprint })
 }
 
 fn load_receipt(
@@ -330,9 +318,7 @@ fn load_transition_owner(
         .map_err(BootPublicationReceiptStateError::InvalidStoredFingerprint)
 }
 
-fn validate_receipt_shape(
-    shape: &StoredBootPublicationReceiptShape,
-) -> Result<(), BootPublicationReceiptStateError> {
+fn validate_receipt_shape(shape: &StoredBootPublicationReceiptShape) -> Result<(), BootPublicationReceiptStateError> {
     validate_storage_type("receipt_sha256", "blob", &shape.fingerprint_storage)?;
     validate_exact_length("receipt_sha256", 32, shape.fingerprint_bytes)?;
     validate_storage_type("transition_id", "text", &shape.transition_storage)?;
@@ -342,8 +328,7 @@ fn validate_receipt_shape(
         shape.transition_bytes,
     )?;
     validate_storage_type("canonical_body", "blob", &shape.body_storage)?;
-    let max = i64::try_from(MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES)
-        .expect("receipt body limit fits i64");
+    let max = i64::try_from(MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES).expect("receipt body limit fits i64");
     if !(1..=max).contains(&shape.body_bytes) {
         return Err(BootPublicationReceiptStateError::InvalidStoredBodyLength {
             actual: shape.body_bytes,
@@ -496,10 +481,7 @@ pub(crate) enum BootPublicationReceiptStateError {
         body: BootPublicationReceiptFingerprint,
     },
     #[error("boot-publication receipt body transition {body} differs from stored transition {stored}")]
-    BodyTransitionMismatch {
-        stored: TransitionId,
-        body: TransitionId,
-    },
+    BodyTransitionMismatch { stored: TransitionId, body: TransitionId },
     #[error("pending boot-publication receipt body transition {body} differs from head transition {head}")]
     PendingTransitionMismatch { head: TransitionId, body: TransitionId },
     #[error("pending boot-publication receipt predecessor {body:?} differs from head committed value {head:?}")]
@@ -548,11 +530,11 @@ impl From<diesel::result::Error> for BootPublicationReceiptStateError {
 }
 
 #[cfg(test)]
-#[path = "boot_publication_receipts/tests.rs"]
-mod tests;
+#[path = "boot_publication_receipts/exact_promoted_receipt_chain_tests.rs"]
+mod exact_promoted_receipt_chain_tests;
 #[cfg(test)]
 #[path = "boot_publication_receipts/installed_receipt_tests.rs"]
 mod installed_receipt_tests;
 #[cfg(test)]
-#[path = "boot_publication_receipts/exact_promoted_receipt_chain_tests.rs"]
-mod exact_promoted_receipt_chain_tests;
+#[path = "boot_publication_receipts/tests.rs"]
+mod tests;

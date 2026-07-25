@@ -10,21 +10,17 @@ use std::{
 
 use crate::linux_fs::{
     descriptor_boot_namespace::{
-        BootNamespaceAssessmentLimits, BootNamespaceDestinationState,
-        BootNamespaceRequest, RetainedBootNamespaceAssessmentLimits,
-        RetainedBootNamespaceExpectedSource, assess_retained_boot_namespace_until,
+        BootNamespaceAssessmentLimits, BootNamespaceDestinationState, BootNamespaceRequest,
+        RetainedBootNamespaceAssessmentLimits, RetainedBootNamespaceExpectedSource,
+        assess_retained_boot_namespace_until,
     },
     mount_namespace::{
-        PreparedMountNamespaceAnchor, RetainedBootFilePublicationLimits,
-        RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest,
-        ValidatedRetainedBootFilePublication,
+        PreparedMountNamespaceAnchor, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
+        RetainedBootFilePublicationRequest, ValidatedRetainedBootFilePublication,
     },
 };
 
-use super::{
-    ActiveReblitBootImmutableLeafPublicationError,
-    RevalidatedActiveReblitBootPublicationTarget,
-};
+use super::{ActiveReblitBootImmutableLeafPublicationError, RevalidatedActiveReblitBootPublicationTarget};
 
 pub(super) struct FixtureImmutableLeafAssessment {
     state: BootNamespaceDestinationState,
@@ -122,12 +118,7 @@ pub(super) fn take(
     let root_path = ROOTS.with(|roots| roots.borrow_mut().pop_front())?;
     let root = OpenOptions::new()
         .read(true)
-        .custom_flags(
-            nix::libc::O_PATH
-                | nix::libc::O_DIRECTORY
-                | nix::libc::O_CLOEXEC
-                | nix::libc::O_NOFOLLOW,
-        )
+        .custom_flags(nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&root_path)
         .expect("open fixture immutable-leaf root");
     let metadata = root.metadata().expect("inspect fixture immutable-leaf root");

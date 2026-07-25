@@ -5,8 +5,7 @@ use thiserror::Error;
 
 use super::{BootPublicationReceiptFingerprint, receipt_body::BootPublicationReceiptBody};
 
-const BOOT_PUBLICATION_RECEIPT_FINGERPRINT_DOMAIN: &[u8] =
-    b"os-tools/forge/boot-publication-receipt-body/v1\0";
+const BOOT_PUBLICATION_RECEIPT_FINGERPRINT_DOMAIN: &[u8] = b"os-tools/forge/boot-publication-receipt-body/v1\0";
 pub(crate) const MAX_CANONICAL_BOOT_PUBLICATION_RECEIPT_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 /// One validated body together with its exact canonical bytes and identity.

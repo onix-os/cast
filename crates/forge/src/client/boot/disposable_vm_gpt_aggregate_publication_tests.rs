@@ -8,30 +8,30 @@ use sha2::{Digest as _, Sha256};
 
 use super::{Client, Scope};
 use crate::{
-    Installation, db, repository,
+    Installation,
     boot_publication::BootPublicationReceiptFingerprint,
     client::{
         active_reblit_bls_renderer::RenderedActiveReblitBlsRequests,
         active_reblit_boot_inputs::PreparedActiveReblitStoneBootInputs,
-        active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
         active_reblit_boot_publication_preflight::ValidatedActiveReblitBootPublicationEffect,
+        active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
         active_reblit_mounted_boot_topology::{
             BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology,
             PreparedActiveReblitMountedBootTopology,
         },
         active_reblit_publication_plan::{
-            ACTIVE_REBLIT_BOOT_OUTPUT_MODE, ActiveReblitBootDestinationLayout,
-            ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase,
-            ActiveReblitBootPublicationRole,
+            ACTIVE_REBLIT_BOOT_OUTPUT_MODE, ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot,
+            ActiveReblitBootPublicationPhase, ActiveReblitBootPublicationRole,
         },
     },
+    db,
     db::state::BootPublicationReceiptStageOutcome,
     linux_fs::mount_namespace::RetainedBootFilePublicationOutcome,
+    repository,
     state::{self, TransitionId},
     transition_journal::{
-        BootId, CodecError, MountNamespaceIdentity, Operation, Phase, Previous,
-        PreviousOrigin, QuarantineName, RuntimeEpoch, RuntimeTreeIdentity,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootId, CodecError, MountNamespaceIdentity, Operation, Phase, Previous, PreviousOrigin, QuarantineName,
+        RuntimeEpoch, RuntimeTreeIdentity, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
         TreeToken,
     },
 };
@@ -40,7 +40,8 @@ use crate::{
 #[allow(dead_code)]
 mod render_support;
 
-const TEST_NAME: &str = "client::disposable_vm_gpt_aggregate_publication_tests::disposable_vm_receipt_bound_aggregate_publication";
+const TEST_NAME: &str =
+    "client::disposable_vm_gpt_aggregate_publication_tests::disposable_vm_receipt_bound_aggregate_publication";
 const CONFIRMATION: &str = "disposable-vm-gpt-receipt-bound-aggregate-only";
 const CAMPAIGN_PROFILE: &str = "gpt-receipt-bound-aggregate-v1";
 const RUNTIME_ROOT: &str = "/run/cast-vm-boot-storage";
@@ -92,9 +93,11 @@ fn assert_partuuid(value: &str) {
     assert_eq!(&value[13..14], "-");
     assert_eq!(&value[18..19], "-");
     assert_eq!(&value[23..24], "-");
-    assert!(value.bytes().all(|byte| {
-        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || byte == b'-'
-    }));
+    assert!(
+        value
+            .bytes()
+            .all(|byte| { byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || byte == b'-' })
+    );
 }
 
 fn parse_devnum(value: &str) -> (u32, u32) {
@@ -181,17 +184,12 @@ fn prepare_fixture(kind: &str, challenge: &str) -> render_support::RenderFixture
     let build_root = PathBuf::from(required("CAST_VM_BOOT_PUBLICATION_BUILD_ROOT"));
     assert_eq!(
         build_root,
-        Path::new("/var/tmp").join(format!(
-            "cast-vm-boot-storage-{expected_boot_id}-{challenge}"
-        ))
+        Path::new("/var/tmp").join(format!("cast-vm-boot-storage-{expected_boot_id}-{challenge}"))
     );
     assert_directory(&build_root, 0o700);
 
     let fixture_parent = PathBuf::from(required("CAST_VM_GPT_AGGREGATE_FIXTURE_PARENT"));
-    assert_eq!(
-        fixture_parent,
-        build_root.join("gpt-aggregate-fixtures").join(kind)
-    );
+    assert_eq!(fixture_parent, build_root.join("gpt-aggregate-fixtures").join(kind));
     assert!(!fixture_parent.starts_with(MOUNT_ROOT));
     assert!(fixture_parent.starts_with(&build_root));
     assert_directory(&fixture_parent, 0o700);
@@ -253,10 +251,7 @@ fn preparing_record() -> TransitionRecord {
         TransitionId::parse("0123456789abcdef0123456789abcdef").unwrap(),
         RuntimeEpoch {
             boot_id: BootId::parse("01234567-89ab-4cde-8f01-23456789abcd").unwrap(),
-            mount_namespace: MountNamespaceIdentity {
-                st_dev: 30,
-                inode: 31,
-            },
+            mount_namespace: MountNamespaceIdentity { st_dev: 30, inode: 31 },
         },
         Operation::ActiveReblit,
         Some(42),
@@ -285,11 +280,7 @@ fn preparing_record() -> TransitionRecord {
 
 fn exact_system_triggers_complete_journal(
     installation: &Installation,
-) -> (
-    TransitionJournalStore,
-    TransitionRecord,
-    TransitionJournalRecordBinding,
-) {
+) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
     let cast = installation.retained_mutable_cast_directory().unwrap();
     let journal = TransitionJournalStore::open_in_retained_cast(cast, &installation.root).unwrap();
     let mut predecessor = preparing_record();
@@ -343,22 +334,14 @@ fn topology_targets(
             let esp = expected_target(esp, esp_path, esp_devnum, &esp_partuuid);
             (esp.clone(), esp)
         }
-        (
-            "distinct",
-            BoundActiveReblitMountedBootTopology::DistinctXbootldr { esp, xbootldr },
-        ) => {
+        ("distinct", BoundActiveReblitMountedBootTopology::DistinctXbootldr { esp, xbootldr }) => {
             let esp = expected_target(esp, esp_path, esp_devnum, &esp_partuuid);
             let xbootldr_path = PathBuf::from(required("CAST_VM_GPT_TOPOLOGY_XBOOTLDR_MOUNT"));
             assert_eq!(xbootldr_path, Path::new(MOUNT_ROOT).join("xbootldr"));
             let xbootldr_devnum = parse_devnum(&required("CAST_VM_GPT_TOPOLOGY_XBOOTLDR_DEVNUM"));
             let xbootldr_partuuid = required("CAST_VM_GPT_TOPOLOGY_XBOOTLDR_PARTUUID");
             assert_partuuid(&xbootldr_partuuid);
-            let xbootldr = expected_target(
-                xbootldr,
-                xbootldr_path,
-                xbootldr_devnum,
-                &xbootldr_partuuid,
-            );
+            let xbootldr = expected_target(xbootldr, xbootldr_path, xbootldr_devnum, &xbootldr_partuuid);
             assert_ne!(esp.device, xbootldr.device);
             (esp, xbootldr)
         }
@@ -435,10 +418,7 @@ fn assert_pending_boot_sync_started(
     assert!(state.head().committed().is_none());
     assert_eq!(expected_record.operation, Operation::ActiveReblit);
     assert_eq!(expected_record.phase, Phase::BootSyncStarted);
-    let pair = expected_record
-        .boot_publication_receipt_correlation()
-        .unwrap()
-        .unwrap();
+    let pair = expected_record.boot_publication_receipt_correlation().unwrap().unwrap();
     assert_eq!(pair.committed, None);
     assert_eq!(pair.pending, fingerprint);
     let cast = installation.retained_mutable_cast_directory().unwrap();
@@ -532,16 +512,9 @@ fn disposable_vm_receipt_bound_aggregate_publication() {
 
     let inventory = plan.prepare_desired_publication_inventory().unwrap();
     assert_eq!(inventory.outputs().len(), 5);
-    let (journal, predecessor, binding) =
-        exact_system_triggers_complete_journal(&client.installation);
+    let (journal, predecessor, binding) = exact_system_triggers_complete_journal(&client.installation);
     let staged = client
-        .stage_active_reblit_boot_sync(
-            &plan,
-            &inventory,
-            journal,
-            predecessor,
-            binding,
-        )
+        .stage_active_reblit_boot_sync(&plan, &inventory, journal, predecessor, binding)
         .unwrap();
     assert_eq!(staged.database_outcome(), BootPublicationReceiptStageOutcome::Staged);
     assert_eq!(staged.record().phase, Phase::BootSyncStarted);
@@ -582,11 +555,6 @@ fn disposable_vm_receipt_bound_aggregate_publication() {
     // Each phase intentionally builds a fresh deterministic journal and receipt.
     // `revalidate` proves five preexisting exact outputs, not cross-process
     // continuity of the receipt created by the preceding `publish` invocation.
-    assert_pending_boot_sync_started(
-        &fixture.state_db,
-        &client.installation,
-        &expected_record,
-        fingerprint,
-    );
+    assert_pending_boot_sync_started(&fixture.state_db, &client.installation, &expected_record, fingerprint);
     assert!(Path::new(RUNTIME_ROOT).is_dir());
 }

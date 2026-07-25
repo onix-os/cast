@@ -9,16 +9,11 @@ use std::{
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_gate::{
-            ActiveReblitBootSyncCompleteSeal,
-            ActiveReblitBootSyncStartedCleanupSeal,
-        },
+        startup_gate::{ActiveReblitBootSyncCompleteSeal, ActiveReblitBootSyncStartedCleanupSeal},
         startup_reconciliation::{
             ActiveReblitBootSyncCompleteAdmission, ActiveReblitBootSyncCompleteAuthority,
-            ActiveReblitBootSyncCompleteAuthorityError,
-            ActiveReblitBootSyncStartedRecoveryAdmission,
-            ActiveReblitBootSyncStartedRecoveryAuthority,
-            ActiveReblitBootSyncStartedRecoveryAuthorityError,
+            ActiveReblitBootSyncCompleteAuthorityError, ActiveReblitBootSyncStartedRecoveryAdmission,
+            ActiveReblitBootSyncStartedRecoveryAuthority, ActiveReblitBootSyncStartedRecoveryAuthorityError,
         },
     },
     db,
@@ -80,11 +75,7 @@ pub(super) fn boot_sync_complete_fixture(epoch: Epoch, promote_receipt: bool) ->
         .boot_publication_receipt_correlation()
         .unwrap()
         .unwrap();
-    let completed = fixture
-        .fixture
-        .source
-        .boot_sync_complete_successor(pair)
-        .unwrap();
+    let completed = fixture.fixture.source.boot_sync_complete_successor(pair).unwrap();
     let journal = open_boot_sync_complete_journal(&fixture);
     journal.advance(&fixture.fixture.source, &completed).unwrap();
     drop(journal);
@@ -101,11 +92,7 @@ pub(super) fn legacy_boot_sync_complete_fixture(epoch: Epoch, version: u16) -> B
     fixture.fixture.source.version = version;
     fixture.fixture.source.boot_publication_receipts = None;
     fs::write(
-        fixture
-            .fixture
-            .installation
-            .root
-            .join(".cast/journal/state-transition"),
+        fixture.fixture.installation.root.join(".cast/journal/state-transition"),
         encode(&fixture.fixture.source).unwrap(),
     )
     .unwrap();
@@ -127,15 +114,8 @@ pub(super) fn exact_commit_decided(fixture: &BootRepairFixture) -> TransitionRec
     successor
 }
 
-pub(super) fn same_byte_different_inode_hook(
-    fixture: &BootRepairFixture,
-    label: &str,
-) -> impl FnOnce() + 'static {
-    let canonical = fixture
-        .fixture
-        .installation
-        .root
-        .join(".cast/journal/state-transition");
+pub(super) fn same_byte_different_inode_hook(fixture: &BootRepairFixture, label: &str) -> impl FnOnce() + 'static {
+    let canonical = fixture.fixture.installation.root.join(".cast/journal/state-transition");
     let displaced = fixture
         .fixture
         .installation
@@ -195,13 +175,9 @@ pub(super) fn capture_boot_sync_started<'reservation>(
     fixture: &BootRepairFixture,
     journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,
-) -> Result<ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
-    capture_boot_sync_started_record(
-        fixture,
-        journal,
-        reservation,
-        &fixture.fixture.source,
-    )
+) -> Result<ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>, ActiveReblitBootSyncStartedRecoveryAuthorityError>
+{
+    capture_boot_sync_started_record(fixture, journal, reservation, &fixture.fixture.source)
 }
 
 pub(super) fn capture_boot_sync_started_record<'reservation>(
@@ -209,7 +185,8 @@ pub(super) fn capture_boot_sync_started_record<'reservation>(
     journal: &TransitionJournalStore,
     reservation: &'reservation ActiveStateReservation,
     record: &TransitionRecord,
-) -> Result<ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>, ActiveReblitBootSyncStartedRecoveryAuthorityError> {
+) -> Result<ActiveReblitBootSyncStartedRecoveryAdmission<'reservation>, ActiveReblitBootSyncStartedRecoveryAuthorityError>
+{
     let pair = fixture
         .fixture
         .source
@@ -238,9 +215,7 @@ pub(super) fn capture_boot_sync_started_ready<'reservation>(
     }
 }
 
-pub(super) fn exact_promoted_receipt_state(
-    fixture: &BootRepairFixture,
-) -> db::state::BootPublicationReceiptState {
+pub(super) fn exact_promoted_receipt_state(fixture: &BootRepairFixture) -> db::state::BootPublicationReceiptState {
     let pair = fixture
         .fixture
         .source

@@ -4,8 +4,7 @@ use crate::{
     boot_publication::BootPublicationReceiptFingerprint,
     client::active_reblit_installed_boot_publication_delta::ActiveReblitBootPublicationDeltaAction,
     linux_fs::mount_namespace::{
-        RetainedBootFileMutationFingerprint, RetainedBootFilePublicationOutcome,
-        ValidatedRetainedBootFilePublication,
+        RetainedBootFileMutationFingerprint, RetainedBootFilePublicationOutcome, ValidatedRetainedBootFilePublication,
         ValidatedRetainedBootFileReplacement,
     },
 };
@@ -47,15 +46,9 @@ impl ValidatedActiveReblitBootPublicationEffect {
     pub(in crate::client) const fn action(&self) -> ActiveReblitBootPublicationDeltaAction {
         match self {
             Self::Published { .. } => ActiveReblitBootPublicationDeltaAction::PublishDesired,
-            Self::RetainedOwned { .. } => {
-                ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired
-            }
-            Self::PreservedBorrowed { .. } => {
-                ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired
-            }
-            Self::ReplacedOwned { .. } => {
-                ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired
-            }
+            Self::RetainedOwned { .. } => ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired,
+            Self::PreservedBorrowed { .. } => ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired,
+            Self::ReplacedOwned { .. } => ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired,
         }
     }
 
@@ -93,9 +86,7 @@ impl ValidatedActiveReblitBootPublicationEffect {
         }
     }
 
-    pub(in crate::client) const fn immutable_outcome(
-        &self,
-    ) -> Option<RetainedBootFilePublicationOutcome> {
+    pub(in crate::client) const fn immutable_outcome(&self) -> Option<RetainedBootFilePublicationOutcome> {
         match self {
             Self::Published { evidence, .. }
             | Self::RetainedOwned { evidence, .. }
@@ -104,9 +95,7 @@ impl ValidatedActiveReblitBootPublicationEffect {
         }
     }
 
-    pub(in crate::client) const fn immutable_evidence(
-        &self,
-    ) -> Option<&ValidatedRetainedBootFilePublication> {
+    pub(in crate::client) const fn immutable_evidence(&self) -> Option<&ValidatedRetainedBootFilePublication> {
         match self {
             Self::Published { evidence, .. }
             | Self::RetainedOwned { evidence, .. }
@@ -129,28 +118,22 @@ impl ValidatedActiveReblitBootPublicationEffect {
         }
     }
 
-    pub(in crate::client) const fn replacement_owner(
-        &self,
-    ) -> Option<RetainedBootFileMutationFingerprint> {
+    pub(in crate::client) const fn replacement_owner(&self) -> Option<RetainedBootFileMutationFingerprint> {
         match self {
             Self::ReplacedOwned { evidence, .. } => Some(evidence.owner()),
             _ => None,
         }
     }
 
-    pub(in crate::client) fn replacement_authority(
-        &self,
-    ) -> Option<&ValidatedRetainedBootFileReplacement> {
+    pub(in crate::client) fn replacement_authority(&self) -> Option<&ValidatedRetainedBootFileReplacement> {
         match self {
             Self::ReplacedOwned { evidence, .. } => Some(evidence),
             _ => None,
         }
     }
 
-    pub(in crate::client) fn owner_matches_receipt(
-        &self,
-        receipt: BootPublicationReceiptFingerprint,
-    ) -> bool {
-        self.replacement_owner().is_none_or(|owner| owner.as_bytes() == *receipt.as_bytes())
+    pub(in crate::client) fn owner_matches_receipt(&self, receipt: BootPublicationReceiptFingerprint) -> bool {
+        self.replacement_owner()
+            .is_none_or(|owner| owner.as_bytes() == *receipt.as_bytes())
     }
 }

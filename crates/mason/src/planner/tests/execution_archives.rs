@@ -188,7 +188,7 @@ fn offline_execution_fixture_archives_are_real_locked_and_complete() {
         if name == "factory-override" {
             let factory = recipe
                 .fingerprint
-                .imported_modules
+                .modules
                 .iter()
                 .find(|module| module.logical_name == "factory.glu")
                 .expect("factory-override: local Gluon factory is absent from recipe provenance");
@@ -530,13 +530,13 @@ install -Dm644 build/cast-plugin-output.so \
         }
         sourceful_fixtures += 1;
         let lock_bytes = fs::read(&lock_path).unwrap();
-        let lock = decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes)
+        let lock = evaluate_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes)
             .unwrap_or_else(|error| panic!("{name}: decode source lock: {error:#}"));
         lock.validate_against(&recipe.declaration.sources)
             .unwrap_or_else(|error| panic!("{name}: validate source lock: {error:#}"));
         assert_eq!(
             lock_bytes,
-            encode_source_lock(&lock).into_bytes(),
+            canonical_source_lock(&lock).into_bytes(),
             "{name}: checked-in source lock is not canonical"
         );
         if name == "external-test-vectors" {

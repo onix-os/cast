@@ -10,8 +10,7 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            DurableUsrRollbackActiveReblitCompleteRouteRecord,
-            UsrRollbackActiveReblitCompleteRoutePersistenceError,
+            DurableUsrRollbackActiveReblitCompleteRouteRecord, UsrRollbackActiveReblitCompleteRoutePersistenceError,
             UsrRollbackActiveReblitCompleteRouteSuccessorBindingError,
             arm_after_usr_rollback_active_reblit_complete_route_successor_binding_check_before_reopen,
             arm_before_usr_rollback_active_reblit_complete_route_successor_binding_revalidation,
@@ -28,8 +27,8 @@ use super::{
     super::candidate_test_support::CandidateSource,
     support::{
         CandidateOrigin, Epoch, active_wrapper_path, assert_complete_route_journal_only,
-        assert_exact_no_boot_completion_plan, build_active, capture_complete_route_ready,
-        expected_rollback_complete, persist_candidate_preserved, reset_complete_route_effect_observers,
+        assert_exact_no_boot_completion_plan, build_active, capture_complete_route_ready, expected_rollback_complete,
+        persist_candidate_preserved, reset_complete_route_effect_observers,
     },
 };
 
@@ -101,12 +100,8 @@ fn startup_active_reblit_complete_route_bound_advance_same_byte_replacements_nev
             for candidate_source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
                 for usr_outcome in USR_OUTCOMES {
                     for candidate_outcome in CandidateOrigin::ALL {
-                        let fixture = build_active(
-                            epoch,
-                            candidate_source,
-                            usr_outcome,
-                            CandidateOrigin::AlreadySatisfied,
-                        );
+                        let fixture =
+                            build_active(epoch, candidate_source, usr_outcome, CandidateOrigin::AlreadySatisfied);
                         let source = persist_candidate_preserved(&fixture, candidate_outcome);
                         let successor = expected_rollback_complete(&source);
                         let journal = fixture.open_journal();
@@ -124,10 +119,8 @@ fn startup_active_reblit_complete_route_bound_advance_same_byte_replacements_nev
                         );
                         arm_public_binding_revalidation_callback(boundary, hook);
 
-                        let error = persist_usr_rollback_active_reblit_complete_route_and_reopen(
-                            journal, authority,
-                        )
-                        .unwrap_err();
+                        let error = persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority)
+                            .unwrap_err();
 
                         assert_public_binding_revalidation_callback_consumed();
                         assert!(matches!(
@@ -160,12 +153,7 @@ fn startup_active_reblit_complete_route_same_byte_successor_replacement_fails_sa
         for candidate_source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
             for usr_outcome in USR_OUTCOMES {
                 for candidate_outcome in CandidateOrigin::ALL {
-                    let fixture = build_active(
-                        epoch,
-                        candidate_source,
-                        usr_outcome,
-                        CandidateOrigin::AlreadySatisfied,
-                    );
+                    let fixture = build_active(epoch, candidate_source, usr_outcome, CandidateOrigin::AlreadySatisfied);
                     let source = persist_candidate_preserved(&fixture, candidate_outcome);
                     let successor = expected_rollback_complete(&source);
                     let journal = fixture.open_journal();
@@ -184,8 +172,7 @@ fn startup_active_reblit_complete_route_same_byte_successor_replacement_fails_sa
                     arm_before_usr_rollback_active_reblit_complete_route_successor_binding_revalidation(hook);
 
                     let error =
-                        persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority)
-                            .unwrap_err();
+                        persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority).unwrap_err();
 
                     assert!(matches!(
                         error,
@@ -211,12 +198,7 @@ fn startup_active_reblit_complete_route_same_byte_successor_replacement_fails_re
         for candidate_source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
             for usr_outcome in USR_OUTCOMES {
                 for candidate_outcome in CandidateOrigin::ALL {
-                    let fixture = build_active(
-                        epoch,
-                        candidate_source,
-                        usr_outcome,
-                        CandidateOrigin::AlreadySatisfied,
-                    );
+                    let fixture = build_active(epoch, candidate_source, usr_outcome, CandidateOrigin::AlreadySatisfied);
                     let source = persist_candidate_preserved(&fixture, candidate_outcome);
                     let successor = expected_rollback_complete(&source);
                     let journal = fixture.open_journal();
@@ -228,17 +210,12 @@ fn startup_active_reblit_complete_route_same_byte_successor_replacement_fails_re
                     let namespace_before = fixture.fixture.namespace_snapshot();
                     let hook = same_byte_different_inode_hook(
                         &fixture,
-                        format!(
-                            "active-reopened-{epoch:?}-{candidate_source:?}-{usr_outcome:?}-{candidate_outcome:?}"
-                        ),
+                        format!("active-reopened-{epoch:?}-{candidate_source:?}-{usr_outcome:?}-{candidate_outcome:?}"),
                     );
-                    arm_after_usr_rollback_active_reblit_complete_route_successor_binding_check_before_reopen(
-                        hook,
-                    );
+                    arm_after_usr_rollback_active_reblit_complete_route_successor_binding_check_before_reopen(hook);
 
                     let error =
-                        persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority)
-                            .unwrap_err();
+                        persist_usr_rollback_active_reblit_complete_route_and_reopen(journal, authority).unwrap_err();
 
                     assert!(matches!(
                         error,

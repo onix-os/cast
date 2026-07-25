@@ -10,6 +10,7 @@
 
 mod boot_sync_handoff;
 mod no_boot_commit_decision;
+mod previous_archive;
 
 use std::error::Error as StdError;
 
@@ -19,26 +20,24 @@ use crate::{
     Installation, db,
     state::{self, TransitionId},
     transition_journal::{
-        Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
-        TransitionRecord,
+        Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
 use super::super::{CandidateMetadataProof, Error as IdentityError, StatefulTreeIdentity};
 use super::{
     RootLinksCompleteCoordinator, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
-    UsrExchangeEffectSeal,
-    root_abi_publication::require_published_root_abi_sandwich,
+    UsrExchangeEffectSeal, root_abi_publication::require_published_root_abi_sandwich,
     usr_exchange_intent::UsrExchangeReadiness,
 };
 
+pub(crate) use boot_sync_handoff::{ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal};
 #[cfg(test)]
 pub(super) use no_boot_commit_decision::ActiveReblitNoBootCommitDecisionFailure;
-pub(crate) use no_boot_commit_decision::{
-    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
-};
-pub(crate) use boot_sync_handoff::{
-    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
+pub(crate) use no_boot_commit_decision::{ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal};
+pub(crate) use previous_archive::{
+    PreviousArchiveBootHandoffFailure, PreviousArchiveEffectSeal, PreviousArchiveFailure,
+    PreviousArchivedBootSyncHandoffSeal, PreviousArchivedCoordinator,
 };
 
 const RUN_SYSTEM_TRIGGERS: &str = "run stateful system triggers";
@@ -104,9 +103,7 @@ pub(super) enum BoundValidationStage {
 /// classified as only the predecessor or sole successor whenever possible.
 #[derive(Debug, Error)]
 pub(super) enum BoundSystemTriggerAdvanceFailure {
-    #[error(
-        "bound journal advance failed; fresh canonical evidence proves the durable record is {durable:?}"
-    )]
+    #[error("bound journal advance failed; fresh canonical evidence proves the durable record is {durable:?}")]
     Advance {
         durable: DurableSystemTriggerRecord,
         #[source]
@@ -232,9 +229,7 @@ impl RootLinksCompleteCoordinator {
         } = self;
         let transition_id = coordinator.record.transition_id.clone();
         if matches!(readiness, UsrExchangeReadiness::Archived) {
-            return Err(StatefulSystemTriggerFailure::ArchivedIsolationUnsupported {
-                transition_id,
-            });
+            return Err(StatefulSystemTriggerFailure::ArchivedIsolationUnsupported { transition_id });
         }
 
         let preflight = |source| StatefulSystemTriggerFailure::Preflight {
@@ -253,11 +248,8 @@ impl RootLinksCompleteCoordinator {
             &record_binding,
         )
         .map_err(preflight)?;
-        let started = exact_system_trigger_successor(
-            &coordinator.record,
-            Phase::SystemTriggersStarted,
-            &transition_id,
-        )?;
+        let started =
+            exact_system_trigger_successor(&coordinator.record, Phase::SystemTriggersStarted, &transition_id)?;
         let (coordinator, record_binding) = advance_bound_system_trigger_record(
             coordinator,
             &metadata,
@@ -286,12 +278,13 @@ impl RootLinksCompleteCoordinator {
         })?;
 
         let (installation, isolation_root) = system_trigger_isolation_view(&readiness);
-        let candidate_state = coordinator.candidate_state().map_err(|source| {
-            StatefulSystemTriggerFailure::PreEffectEvidence {
-                transition_id: transition_id.clone(),
-                source,
-            }
-        })?;
+        let candidate_state =
+            coordinator
+                .candidate_state()
+                .map_err(|source| StatefulSystemTriggerFailure::PreEffectEvidence {
+                    transition_id: transition_id.clone(),
+                    source,
+                })?;
         let callback_authority = StatefulSystemTriggerAuthority {
             transition_id: &coordinator.record.transition_id,
             candidate_state,
@@ -316,11 +309,8 @@ impl RootLinksCompleteCoordinator {
             transition_id: transition_id.clone(),
             source,
         })?;
-        let complete = exact_system_trigger_successor(
-            &coordinator.record,
-            Phase::SystemTriggersComplete,
-            &transition_id,
-        )?;
+        let complete =
+            exact_system_trigger_successor(&coordinator.record, Phase::SystemTriggersComplete, &transition_id)?;
         let (coordinator, record_binding) = advance_bound_system_trigger_record(
             coordinator,
             &metadata,
@@ -343,10 +333,7 @@ impl RootLinksCompleteCoordinator {
             &readiness,
             &record_binding,
         )
-        .map_err(|source| StatefulSystemTriggerFailure::FinalEvidence {
-            transition_id,
-            source,
-        })?;
+        .map_err(|source| StatefulSystemTriggerFailure::FinalEvidence { transition_id, source })?;
         Ok(SystemTriggersCompleteCoordinator {
             coordinator,
             metadata,
@@ -415,35 +402,37 @@ fn advance_bound_system_trigger_record(
             stage: BoundValidationStage::SameStore,
             source,
         })?;
-    let successor_binding = match coordinator
-        .identity
-        .journal
-        .advance_record_binding(cast, predecessor_binding, &successor)
-    {
-        Ok(binding) => binding,
-        Err(advance) => {
-            return match reopen_and_classify(
-                coordinator,
-                metadata,
-                provenance,
-                authority,
-                readiness,
-                &predecessor,
-                &successor,
-                None,
-            ) {
-                Ok(ReopenedAdvance::Proven { durable, .. }) => {
-                    Err(BoundSystemTriggerAdvanceFailure::Advance { durable, source: advance })
-                }
-                Ok(ReopenedAdvance::Failed { source, .. }) | Err(source) => {
-                    Err(BoundSystemTriggerAdvanceFailure::AdvanceAndReopen {
-                        advance,
-                        reopen: source,
-                    })
-                }
-            };
-        }
-    };
+    let successor_binding =
+        match coordinator
+            .identity
+            .journal
+            .advance_record_binding(cast, predecessor_binding, &successor)
+        {
+            Ok(binding) => binding,
+            Err(advance) => {
+                return match reopen_and_classify(
+                    coordinator,
+                    metadata,
+                    provenance,
+                    authority,
+                    readiness,
+                    &predecessor,
+                    &successor,
+                    None,
+                ) {
+                    Ok(ReopenedAdvance::Proven { durable, .. }) => Err(BoundSystemTriggerAdvanceFailure::Advance {
+                        durable,
+                        source: advance,
+                    }),
+                    Ok(ReopenedAdvance::Failed { source, .. }) | Err(source) => {
+                        Err(BoundSystemTriggerAdvanceFailure::AdvanceAndReopen {
+                            advance,
+                            reopen: source,
+                        })
+                    }
+                };
+            }
+        };
     coordinator.record = successor.clone();
     before_bound_successor_same_store_validation(successor.phase);
     if let Err(validation) = require_system_trigger_same_store_evidence(
@@ -507,13 +496,11 @@ fn advance_bound_system_trigger_record(
                 actual: Some(predecessor),
             },
         }),
-        Ok(ReopenedAdvance::Failed { durable, source }) => {
-            Err(BoundSystemTriggerAdvanceFailure::Validation {
-                durable,
-                stage: BoundValidationStage::CanonicalReopen,
-                source,
-            })
-        }
+        Ok(ReopenedAdvance::Failed { durable, source }) => Err(BoundSystemTriggerAdvanceFailure::Validation {
+            durable,
+            stage: BoundValidationStage::CanonicalReopen,
+            source,
+        }),
         Err(reopen) => Err(BoundSystemTriggerAdvanceFailure::ValidationAndReopen {
             stage: BoundValidationStage::CanonicalReopen,
             validation: StatefulTransitionCoordinatorError::CanonicalRecordBindingChanged {
@@ -583,19 +570,11 @@ fn reopen_and_classify(
         });
     }
 
-    let binding = coordinator
-        .identity
-        .journal
-        .record_binding(cast, &coordinator.record)?;
+    let binding = coordinator.identity.journal.record_binding(cast, &coordinator.record)?;
     before_reopened_fresh_binding_validation(coordinator.record.phase);
-    if let Err(source) = require_system_trigger_same_store_evidence(
-        &coordinator,
-        metadata,
-        provenance,
-        authority,
-        readiness,
-        &binding,
-    ) {
+    if let Err(source) =
+        require_system_trigger_same_store_evidence(&coordinator, metadata, provenance, authority, readiness, &binding)
+    {
         return Ok(ReopenedAdvance::Failed { durable, source });
     }
     if durable == DurableSystemTriggerRecord::Successor
@@ -681,14 +660,7 @@ fn require_system_trigger_same_store_evidence(
 ) -> Result<(), StatefulTransitionCoordinatorError> {
     let seal = UsrExchangeEffectSeal { _private: () };
     require_same_store_record_binding(coordinator, authority, binding)?;
-    require_published_root_abi_sandwich(
-        coordinator,
-        metadata,
-        provenance,
-        readiness,
-        authority,
-        &seal,
-    )?;
+    require_published_root_abi_sandwich(coordinator, metadata, provenance, readiness, authority, &seal)?;
     require_same_store_record_binding(coordinator, authority, binding)
 }
 
@@ -716,9 +688,7 @@ fn require_same_store_record_binding(
     }
 }
 
-fn system_trigger_isolation_view(
-    readiness: &UsrExchangeReadiness,
-) -> (&Installation, &crate::client::RetainedRootAbi) {
+fn system_trigger_isolation_view(readiness: &UsrExchangeReadiness) -> (&Installation, &crate::client::RetainedRootAbi) {
     match readiness {
         UsrExchangeReadiness::TransactionTriggers(readiness) => readiness.isolation_view(),
         UsrExchangeReadiness::Archived => {

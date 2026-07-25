@@ -15,7 +15,7 @@ restricted Gluon evaluator and Mason.
 
 | Contract | Target module | Owner and responsibility |
 | --- | --- | --- |
-| `PackageSpec` | `stone_recipe::package` | Authored intent returned by a pure Gluon package factory. Validation may inspect only this value and explicit function arguments. |
+| `PackageSpec` | `stone_recipe::package` | Authored intent decoded from a minimal authored record — `cast.authored.v1` in Gluon or a plain table in Lua — and lowered into `PackageSpec` by shared Rust. Validation may inspect only this value and explicit function arguments. |
 | `BuildPolicySpec` | `stone_recipe::build_policy` | Repository-supplied builders, platforms, toolchains, tuning, environments, analyzers, source preparation, and sandbox layout. An explicit manifest composes validated values and total patches through ordered, fingerprinted operations. |
 | `DerivationPlan` | `stone_recipe::derivation` | Canonical, fully resolved build description. Its encoding and derivation ID are library behavior so the executor, tests, and inspection tools share one implementation. |
 
@@ -35,8 +35,16 @@ policy, or outputs.
 
 Implemented:
 
-- `cast.package.v3` is the only public recipe ABI; the retired Gluon modules,
-  evaluator, encoders, and fixtures are removed.
+- `cast.authored.v1` (Gluon) and plain Lua tables are the only public recipe
+  ABI; the retired `cast.package.v3` evaluator, `cast.builders.*` modules,
+  `mk_package`, and the `b.dep`/`b.step`/`b.builder`/`b.override_attrs`
+  patch-ADT surface are removed. Both languages decode the identical minimal
+  `AuthoredPackage` shape and share one Rust lowering
+  (`stone_recipe::package::lower`) for every default and for builder-request
+  expansion; neither language hosts authoring logic, and either can be
+  dropped without losing authoring capability —
+  `crates/stone_recipe/tests/authoring_independence.rs` authors the same
+  package in each language and asserts a byte-identical `PackageSpec`.
 - `stone::relation` is the shared typed relation representation used by Stone,
   Mason, Forge, and `stone_recipe` validation.
 - reusable dependency scopes are ordinary imported Gluon records passed to
@@ -83,23 +91,36 @@ Deliberately unsupported:
 
 ### `PackageSpec`
 
-- Is the concrete result of calling `PackageInputs -> PackageSpec` inside the
-  restricted Gluon VM. Rust never stores or invokes a Gluon closure.
+- Is decoded from a minimal authored record — `cast.authored.v1` inside the
+  restricted Gluon VM, or a plain table inside the restricted Lua VM — into
+  the shared `AuthoredPackage` shape, then lowered into the concrete
+  `PackageSpec` by shared Rust (`stone_recipe::package::lower`). Rust never
+  stores or invokes a Gluon closure, and neither language hosts authoring
+  logic: Gluon and Lua are interchangeable thin syntaxes over the same
+  lowering, proven by `crates/stone_recipe/tests/authoring_independence.rs`,
+  which authors the same package in each language and asserts an identical
+  `PackageSpec`.
 - Contains authored requests and symbolic references, never resolved package
   IDs, repository snapshots, host paths, fetched content, or current time.
 - Uses typed dependency and output references through the shared Stone
   relation model. Authored packages do not carry provider strings.
 - Separates native build, target build, check, and output-specific runtime
   relations.
-- Declares sources, a structural builder contract, hooks, a typed network request,
-  package outputs, and path rules explicitly. Standard builder modules return
-  their symbolic tool capabilities, environment marker, ordered phase graph,
-  and supported hook surface as ordinary package data.
-- Has deterministic defaults in the versioned package ABI, including the
-  initial output set. Those defaults are evaluated into the concrete
-  `PackageSpec`, can be replaced by the factory, and are not policy-layer
-  state. They do not depend on the host, process environment, directory
-  contents, or evaluation order.
+- Declares sources, a structural builder request, hooks, a typed network request,
+  package outputs, and path rules explicitly. An authored package names its
+  builder by request — `a.builder.cmake { flags = [..], run_tests = a.true }`
+  (also `meson`/`cargo`/`autotools`), or an explicit `a.builder.custom
+  BuilderSpec` / `a.builder.shell scripts tools` escape hatch — and shared
+  Rust (`stone_recipe::package::lower_builder`) expands the standard kinds
+  into symbolic tool capabilities, an environment marker, an ordered phase
+  graph, and the supported hook surface.
+- Has deterministic defaults applied by the shared Rust lowering, including
+  the initial output set selected with `a.outputs.default` (Gluon) or simply
+  omitted (Lua). Those defaults are folded into the concrete `PackageSpec`,
+  can be replaced by the authored record — `a.outputs.explicit [..]` or
+  `a.outputs.with_root root` — and are not policy-layer state. They do not
+  depend on the host, process environment, directory contents, or evaluation
+  order.
 - Is validated before any source or dependency resolution begins.
 - Retains the typed network request for a possible future fixed-output ABI, but
   currently rejects `options.networking = true`; frozen builds admit external
@@ -299,11 +320,13 @@ the plan must be resolved again.
 
 ## Breakpoint locations
 
-Standard builder modules now return their typed phase graph directly; Rust does
-not synthesize the sequence. An explicit `Shell` script may still be defined by
-a function, record update, or imported module, so scanning the root `stone.glu`
-text cannot recover an authoritative authored source line. Cast reports the
-stable, one-based line within that evaluated shell script instead.
+The shared Rust builder lowering (`stone_recipe::package::lower_builder`) now
+produces the typed phase graph directly from the authored `BuilderRequest`;
+neither Gluon/Lua nor a synthesized macro sequence builds it. An explicit
+`Shell` script may still be defined by a function, record update, or imported
+module, so scanning the root `stone.glu` text cannot recover an authoritative
+authored source line. Cast reports the stable, one-based line within that
+evaluated shell script instead.
 Interactive breakpoints are rejected when freezing a derivation plan; future
 structured steps may carry Gluon provenance directly, but the executor must
 never guess a source location from configuration syntax.

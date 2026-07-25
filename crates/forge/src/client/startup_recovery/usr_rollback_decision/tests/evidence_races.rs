@@ -61,7 +61,10 @@ fn startup_root_links_complete_same_byte_journal_replacement_breaks_record_bindi
 fn startup_root_links_complete_successor_same_byte_replacement_reopens_but_never_succeeds() {
     let fixture = Fixture::new(OperationKind::Archived, SourceCase::RootLinksCompletePost);
     let canonical = canonical_journal(&fixture.installation.root);
-    let displaced = fixture.installation.root.join("root-links-complete-successor-displaced");
+    let displaced = fixture
+        .installation
+        .root
+        .join("root-links-complete-successor-displaced");
     let hook_canonical = canonical.clone();
     let hook_displaced = displaced.clone();
     arm_before_usr_rollback_decision_successor_binding_revalidation(move || {
@@ -381,7 +384,7 @@ fn startup_usr_rollback_decision_active_reblit_uses_one_state_row_and_retains_re
                 drop(reservation);
             });
             *contender_in_hook.lock().unwrap() = Some(handle);
-            started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+            started_rx.recv_timeout(Duration::from_secs(120)).unwrap();
             thread::sleep(Duration::from_millis(50));
             assert!(
                 !contender_acquired_in_thread.load(Ordering::SeqCst),

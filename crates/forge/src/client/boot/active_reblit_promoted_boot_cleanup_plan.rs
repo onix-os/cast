@@ -6,24 +6,20 @@
 //! deliberately ignores historical runtime witnesses: a later effect owner
 //! must authenticate the live destinations again before using this data.
 
-use std::{
-    collections::{BTreeMap, TryReserveError, btree_map::Entry},
-};
+use std::collections::{BTreeMap, TryReserveError, btree_map::Entry};
 
 use thiserror::Error;
 
 use crate::{
     boot_publication::{
-        BootPublicationDestination, BootPublicationDestinations,
-        BootPublicationOutput, BootPublicationOutputProvenanceClaim,
-        BootPublicationReceiptFingerprint, BootPublicationRoot,
+        BootPublicationDestination, BootPublicationDestinations, BootPublicationOutput,
+        BootPublicationOutputProvenanceClaim, BootPublicationReceiptFingerprint, BootPublicationRoot,
         MAX_BOOT_PUBLICATION_RECEIPT_OUTPUTS,
     },
     db::state::ExactPromotedBootPublicationReceiptChain,
 };
 
-const MAX_PROMOTED_BOOT_CLEANUP_UNION_OUTPUTS: usize =
-    MAX_BOOT_PUBLICATION_RECEIPT_OUTPUTS * 2;
+const MAX_PROMOTED_BOOT_CLEANUP_UNION_OUTPUTS: usize = MAX_BOOT_PUBLICATION_RECEIPT_OUTPUTS * 2;
 
 /// One inert cleanup classification derived from the exact receipt pair.
 ///
@@ -50,21 +46,15 @@ pub(in crate::client) struct ActiveReblitPromotedBootCleanupPlanEntry<'chain> {
 }
 
 impl<'chain> ActiveReblitPromotedBootCleanupPlanEntry<'chain> {
-    pub(in crate::client) const fn disposition(
-        &self,
-    ) -> &ActiveReblitPromotedBootCleanupDisposition {
+    pub(in crate::client) const fn disposition(&self) -> &ActiveReblitPromotedBootCleanupDisposition {
         &self.disposition
     }
 
-    pub(in crate::client) const fn predecessor_output(
-        &self,
-    ) -> &'chain BootPublicationOutput {
+    pub(in crate::client) const fn predecessor_output(&self) -> &'chain BootPublicationOutput {
         self.predecessor_output
     }
 
-    pub(in crate::client) const fn installed_output(
-        &self,
-    ) -> Option<&'chain BootPublicationOutput> {
+    pub(in crate::client) const fn installed_output(&self) -> Option<&'chain BootPublicationOutput> {
         self.installed_output
     }
 }
@@ -81,15 +71,11 @@ pub(in crate::client) struct ActiveReblitPromotedBootCleanupPlan<'chain> {
 }
 
 impl<'chain> ActiveReblitPromotedBootCleanupPlan<'chain> {
-    pub(in crate::client) const fn promoted_receipt(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn promoted_receipt(&self) -> BootPublicationReceiptFingerprint {
         self.promoted_receipt
     }
 
-    pub(in crate::client) fn entries(
-        &self,
-    ) -> &[ActiveReblitPromotedBootCleanupPlanEntry<'chain>] {
+    pub(in crate::client) fn entries(&self) -> &[ActiveReblitPromotedBootCleanupPlanEntry<'chain>] {
         &self.entries
     }
 }
@@ -111,8 +97,7 @@ struct PhysicalOutputPair<'chain> {
     installed: Option<IndexedOutput<'chain>>,
 }
 
-type PhysicalOutputUnion<'chain> =
-    BTreeMap<PhysicalDestinationDomain, BTreeMap<String, PhysicalOutputPair<'chain>>>;
+type PhysicalOutputUnion<'chain> = BTreeMap<PhysicalDestinationDomain, BTreeMap<String, PhysicalOutputPair<'chain>>>;
 
 impl ExactPromotedBootPublicationReceiptChain {
     /// Validate and classify cleanup work represented by this exact chain.
@@ -128,10 +113,7 @@ impl ExactPromotedBootPublicationReceiptChain {
         let installed_outputs = installed.body().outputs();
         let predecessor = self.committed_predecessor_receipt();
         if let Some(predecessor) = predecessor {
-            require_stable_destinations_match(
-                predecessor.body().destinations(),
-                installed.body().destinations(),
-            )?;
+            require_stable_destinations_match(predecessor.body().destinations(), installed.body().destinations())?;
         }
 
         let predecessor_outputs = predecessor.map_or(&[][..], |receipt| receipt.body().outputs());
@@ -140,9 +122,7 @@ impl ExactPromotedBootPublicationReceiptChain {
             .checked_add(predecessor_outputs.len())
             .ok_or(ActiveReblitPromotedBootCleanupPlanError::UnionCountOverflow)?;
         if union_capacity > MAX_PROMOTED_BOOT_CLEANUP_UNION_OUTPUTS {
-            return Err(ActiveReblitPromotedBootCleanupPlanError::UnionOutputLimit {
-                actual: union_capacity,
-            });
+            return Err(ActiveReblitPromotedBootCleanupPlanError::UnionOutputLimit { actual: union_capacity });
         }
 
         let mut predecessor_matches = Vec::new();
@@ -157,34 +137,23 @@ impl ExactPromotedBootPublicationReceiptChain {
         let aliases_esp = installed.body().destinations().aliases_esp();
         let mut union = PhysicalOutputUnion::new();
         insert_installed_outputs(&mut union, installed_outputs, aliases_esp)?;
-        insert_predecessor_outputs(
-            &mut union,
-            predecessor_outputs,
-            aliases_esp,
-            &mut predecessor_matches,
-        )?;
+        insert_predecessor_outputs(&mut union, predecessor_outputs, aliases_esp, &mut predecessor_matches)?;
         require_no_union_hierarchy_conflicts(&union)?;
         require_current_only_provenance(&union)?;
 
         let mut entries = Vec::new();
-        entries
-            .try_reserve_exact(predecessor_outputs.len())
-            .map_err(|source| ActiveReblitPromotedBootCleanupPlanError::Allocation {
+        entries.try_reserve_exact(predecessor_outputs.len()).map_err(|source| {
+            ActiveReblitPromotedBootCleanupPlanError::Allocation {
                 resource: "cleanup plan entries",
                 source,
-            })?;
-        for (predecessor_index, (predecessor_output, installed_index)) in predecessor_outputs
-            .iter()
-            .zip(predecessor_matches)
-            .enumerate()
+            }
+        })?;
+        for (predecessor_index, (predecessor_output, installed_index)) in
+            predecessor_outputs.iter().zip(predecessor_matches).enumerate()
         {
             let installed_output = installed_index.map(|index| &installed_outputs[index]);
-            let disposition = classify_predecessor_output(
-                predecessor_index,
-                predecessor_output,
-                installed_index,
-                installed_output,
-            )?;
+            let disposition =
+                classify_predecessor_output(predecessor_index, predecessor_output, installed_index, installed_output)?;
             entries.push(ActiveReblitPromotedBootCleanupPlanEntry {
                 disposition,
                 predecessor_output,
@@ -219,11 +188,7 @@ fn require_stable_destinations_match(
             },
         ) => {
             require_stable_destination_match("esp", predecessor_esp, installed_esp)?;
-            require_stable_destination_match(
-                "xbootldr",
-                predecessor_xbootldr,
-                installed_xbootldr,
-            )
+            require_stable_destination_match("xbootldr", predecessor_xbootldr, installed_xbootldr)
         }
         _ => Err(ActiveReblitPromotedBootCleanupPlanError::DestinationLayoutMismatch),
     }
@@ -234,12 +199,9 @@ fn require_stable_destination_match(
     predecessor: &BootPublicationDestination,
     installed: &BootPublicationDestination,
 ) -> Result<(), ActiveReblitPromotedBootCleanupPlanError> {
-    if predecessor.partuuid() != installed.partuuid()
-        || predecessor.partition_number() != installed.partition_number()
+    if predecessor.partuuid() != installed.partuuid() || predecessor.partition_number() != installed.partition_number()
     {
-        return Err(ActiveReblitPromotedBootCleanupPlanError::StableDestinationMismatch {
-            destination,
-        });
+        return Err(ActiveReblitPromotedBootCleanupPlanError::StableDestinationMismatch { destination });
     }
     Ok(())
 }
@@ -259,9 +221,7 @@ fn insert_installed_outputs<'chain>(
                 });
             }
             Entry::Occupied(_) => {
-                return Err(ActiveReblitPromotedBootCleanupPlanError::DuplicateInstalledPhysicalKey {
-                    index,
-                });
+                return Err(ActiveReblitPromotedBootCleanupPlanError::DuplicateInstalledPhysicalKey { index });
             }
         }
     }
@@ -286,11 +246,7 @@ fn insert_predecessor_outputs<'chain>(
             Entry::Occupied(mut entry) => {
                 let pair = entry.get_mut();
                 if pair.predecessor.is_some() {
-                    return Err(
-                        ActiveReblitPromotedBootCleanupPlanError::DuplicatePredecessorPhysicalKey {
-                            index,
-                        },
-                    );
+                    return Err(ActiveReblitPromotedBootCleanupPlanError::DuplicatePredecessorPhysicalKey { index });
                 }
                 let installed = pair
                     .installed
@@ -336,9 +292,7 @@ fn require_no_union_hierarchy_conflicts(
             while let Some(separator) = ancestor.rfind('/') {
                 ancestor = &ancestor[..separator];
                 if outputs.contains_key(ancestor) {
-                    return Err(
-                        ActiveReblitPromotedBootCleanupPlanError::CrossReceiptHierarchyConflict,
-                    );
+                    return Err(ActiveReblitPromotedBootCleanupPlanError::CrossReceiptHierarchyConflict);
                 }
             }
         }
@@ -358,14 +312,10 @@ fn require_current_only_provenance(
                 .installed
                 .as_ref()
                 .expect("a predecessor-free union entry is installed");
-            if installed.output.provenance_claim()
-                == BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast
-            {
-                return Err(
-                    ActiveReblitPromotedBootCleanupPlanError::CurrentOnlyOwnershipClaim {
-                        installed_index: installed.index,
-                    },
-                );
+            if installed.output.provenance_claim() == BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast {
+                return Err(ActiveReblitPromotedBootCleanupPlanError::CurrentOnlyOwnershipClaim {
+                    installed_index: installed.index,
+                });
             }
         }
     }
@@ -397,12 +347,10 @@ fn classify_predecessor_output(
             BootPublicationOutputProvenanceClaim::BorrowedFirstAdoption
         };
         if installed.provenance_claim() != expected_claim {
-            return Err(
-                ActiveReblitPromotedBootCleanupPlanError::RetainedProvenanceMismatch {
-                    predecessor_index,
-                    installed_index,
-                },
-            );
+            return Err(ActiveReblitPromotedBootCleanupPlanError::RetainedProvenanceMismatch {
+                predecessor_index,
+                installed_index,
+            });
         }
         return Ok(ActiveReblitPromotedBootCleanupDisposition::NoOp);
     }
@@ -412,9 +360,7 @@ fn classify_predecessor_output(
             installed_index,
         });
     }
-    if installed.provenance_claim()
-        != BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast
-    {
+    if installed.provenance_claim() != BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast {
         return Err(
             ActiveReblitPromotedBootCleanupPlanError::ReplacementProvenanceMismatch {
                 predecessor_index,
@@ -463,9 +409,7 @@ pub(in crate::client) enum ActiveReblitPromotedBootCleanupPlanError {
     StableDestinationMismatch { destination: &'static str },
     #[error("the receipt-chain output count overflows")]
     UnionCountOverflow,
-    #[error(
-        "the receipt-chain union has {actual} outputs, exceeding limit {MAX_PROMOTED_BOOT_CLEANUP_UNION_OUTPUTS}"
-    )]
+    #[error("the receipt-chain union has {actual} outputs, exceeding limit {MAX_PROMOTED_BOOT_CLEANUP_UNION_OUTPUTS}")]
     UnionOutputLimit { actual: usize },
     #[error("installed output {index} duplicates an alias-aware FAT physical key")]
     DuplicateInstalledPhysicalKey { index: usize },
@@ -489,9 +433,7 @@ pub(in crate::client) enum ActiveReblitPromotedBootCleanupPlanError {
         predecessor_index: usize,
         installed_index: usize,
     },
-    #[error(
-        "borrowed predecessor output {predecessor_index} cannot be replaced by installed output {installed_index}"
-    )]
+    #[error("borrowed predecessor output {predecessor_index} cannot be replaced by installed output {installed_index}")]
     BorrowedReplacement {
         predecessor_index: usize,
         installed_index: usize,

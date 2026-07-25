@@ -1,12 +1,8 @@
 //! Real SQLite and journal-update boundaries for invalidation process death.
 
 use crate::{
-    db::state::{
-        ExactFreshTransitionRemovalBoundary, arm_exact_fresh_transition_removal_callback,
-    },
-    transition_journal::{
-        JournalUpdateDurabilityBoundary, arm_journal_update_durability_callback,
-    },
+    db::state::{ExactFreshTransitionRemovalBoundary, arm_exact_fresh_transition_removal_callback},
+    transition_journal::{JournalUpdateDurabilityBoundary, arm_journal_update_durability_callback},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,9 +95,7 @@ impl FreshDbInvalidationProcessBoundary {
     pub(super) fn temporary_contents(self) -> Option<TemporaryRecordContents> {
         match self {
             Self::TemporaryFullySynced => Some(TemporaryRecordContents::Successor),
-            Self::CanonicalExchanged | Self::UpdateFirstDirectorySynced => {
-                Some(TemporaryRecordContents::Source)
-            }
+            Self::CanonicalExchanged | Self::UpdateFirstDirectorySynced => Some(TemporaryRecordContents::Source),
             Self::PreimageValidated
             | Self::ProvenanceDeleted
             | Self::SelectionsDeleted
@@ -134,22 +128,19 @@ impl FreshDbInvalidationProcessBoundary {
                 ExactFreshTransitionRemovalBoundary::CommitReturnedBeforeReconciliation,
                 callback,
             ),
-            Self::TemporaryFullySynced => arm_journal_update_durability_callback(
-                JournalUpdateDurabilityBoundary::TemporaryFullySynced,
-                callback,
-            ),
-            Self::CanonicalExchanged => arm_journal_update_durability_callback(
-                JournalUpdateDurabilityBoundary::CanonicalExchanged,
-                callback,
-            ),
+            Self::TemporaryFullySynced => {
+                arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::TemporaryFullySynced, callback)
+            }
+            Self::CanonicalExchanged => {
+                arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::CanonicalExchanged, callback)
+            }
             Self::UpdateFirstDirectorySynced => arm_journal_update_durability_callback(
                 JournalUpdateDurabilityBoundary::UpdateFirstDirectorySynced,
                 callback,
             ),
-            Self::DisplacedUnlinked => arm_journal_update_durability_callback(
-                JournalUpdateDurabilityBoundary::DisplacedUnlinked,
-                callback,
-            ),
+            Self::DisplacedUnlinked => {
+                arm_journal_update_durability_callback(JournalUpdateDurabilityBoundary::DisplacedUnlinked, callback)
+            }
             Self::UpdateFinalDirectorySynced => arm_journal_update_durability_callback(
                 JournalUpdateDurabilityBoundary::UpdateFinalDirectorySynced,
                 callback,

@@ -14,28 +14,26 @@ use std::fs::File;
 use crate::transition_journal::{Operation, Phase, TransitionRecord};
 
 use super::{
-    CaptureError, InodeWitness, NamespaceFingerprint, NamespaceSnapshot, RootAbiFingerprint,
-    StateIdFingerprint, TreeLocation, UsrFingerprint, WrapperFingerprint,
+    CaptureError, InodeWitness, NamespaceFingerprint, NamespaceSnapshot, RootAbiFingerprint, StateIdFingerprint,
+    TreeLocation, UsrFingerprint, WrapperFingerprint,
 };
 
+pub(in crate::client::startup_reconciliation) use effect::ActiveReblitCommitCleanupExchangeReconciliation;
 #[cfg(test)]
 pub(in crate::client) use effect::{
     ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
-    arm_active_reblit_commit_cleanup_exchange_fault,
-    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
+    arm_active_reblit_commit_cleanup_exchange_fault, arm_before_active_reblit_commit_cleanup_reconciliation_capture,
     reset_active_reblit_commit_cleanup_exchange_attempt_count,
-};
-pub(in crate::client::startup_reconciliation) use effect::ActiveReblitCommitCleanupExchangeReconciliation;
-#[cfg(test)]
-pub(in crate::client) use post_exchange_durability::{
-    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
-    arm_active_reblit_commit_cleanup_durability_fault,
-    reset_active_reblit_commit_cleanup_durability_events,
-    take_active_reblit_commit_cleanup_durability_events,
 };
 pub(in crate::client::startup_reconciliation) use post_exchange_durability::{
     ActiveReblitCommitCleanupDurabilityError, DurableActiveReblitCommitCleanupNamespace,
     PendingActiveReblitCommitCleanupDurability,
+};
+#[cfg(test)]
+pub(in crate::client) use post_exchange_durability::{
+    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
+    arm_active_reblit_commit_cleanup_durability_fault, reset_active_reblit_commit_cleanup_durability_events,
+    take_active_reblit_commit_cleanup_durability_events,
 };
 pub(in crate::client::startup_reconciliation) use pre_exchange_safety::PreparedActiveReblitCommitCleanupExchange;
 pub(in crate::client::startup_reconciliation::activation_namespace) use pre_exchange_safety::RetainedActiveReblitCommitCleanupParents;
@@ -154,8 +152,7 @@ impl ProjectedActiveReblitCommitCleanupNamespace {
         if !matches!(
             record.phase,
             Phase::CommitDecided | Phase::CommitCleanupComplete | Phase::Complete
-        )
-            || record.rollback.is_some()
+        ) || record.rollback.is_some()
         {
             return Err(ActiveReblitCommitCleanupCaptureError::WrongPhase);
         }
@@ -252,10 +249,7 @@ impl ProjectedActiveReblitCommitCleanupNamespace {
         })
     }
 
-    fn require_apply_to_finish(
-        &self,
-        after: &Self,
-    ) -> Result<(), ActiveReblitCommitCleanupEffectError> {
+    fn require_apply_to_finish(&self, after: &Self) -> Result<(), ActiveReblitCommitCleanupEffectError> {
         if self.layout != ActiveReblitCommitCleanupLayout::Apply
             || after.layout != ActiveReblitCommitCleanupLayout::Finish
             || self.wrapper_index != after.wrapper_index
@@ -273,8 +267,7 @@ impl ProjectedActiveReblitCommitCleanupNamespace {
 /// exchange or the zero-exchange Finish suffix.
 #[must_use = "retained ActiveReblit commit-cleanup evidence must remain sealed"]
 #[derive(Debug)]
-pub(in crate::client::startup_reconciliation::activation_namespace) struct RetainedActiveReblitCommitCleanupNamespace
-{
+pub(in crate::client::startup_reconciliation::activation_namespace) struct RetainedActiveReblitCommitCleanupNamespace {
     snapshot: NamespaceSnapshot,
     projection: ProjectedActiveReblitCommitCleanupNamespace,
 }
@@ -295,9 +288,7 @@ impl RetainedActiveReblitCommitCleanupNamespace {
         self.projection.layout
     }
 
-    pub(in crate::client::startup_reconciliation::activation_namespace) fn fingerprint(
-        &self,
-    ) -> &NamespaceFingerprint {
+    pub(in crate::client::startup_reconciliation::activation_namespace) fn fingerprint(&self) -> &NamespaceFingerprint {
         self.snapshot.fingerprint()
     }
 
@@ -331,9 +322,7 @@ fn exact_tree_for_token<'a>(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [previous] => Ok(*previous),
-        _ => Err(ActiveReblitCommitCleanupCaptureError::PreviousCount {
-            actual: matches.len(),
-        }),
+        _ => Err(ActiveReblitCommitCleanupCaptureError::PreviousCount { actual: matches.len() }),
     }
 }
 
@@ -359,9 +348,7 @@ fn exact_retained_wrapper(
     let matches = wrappers.iter().filter(|wrapper| predicate(wrapper)).collect::<Vec<_>>();
     match matches.as_slice() {
         [wrapper] => Ok(*wrapper),
-        _ => Err(ActiveReblitCommitCleanupEffectError::RetainedWrapperCount {
-            actual: matches.len(),
-        }),
+        _ => Err(ActiveReblitCommitCleanupEffectError::RetainedWrapperCount { actual: matches.len() }),
     }
 }
 
@@ -381,9 +368,7 @@ fn exact_retained_previous<'a>(
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [previous] => Ok(*previous),
-        _ => Err(ActiveReblitCommitCleanupEffectError::PreviousCount {
-            actual: matches.len(),
-        }),
+        _ => Err(ActiveReblitCommitCleanupEffectError::PreviousCount { actual: matches.len() }),
     }
 }
 
@@ -418,11 +403,7 @@ fn require_same_device(witnesses: &[InodeWitness]) -> Result<(), ActiveReblitCom
     }
 }
 
-fn clone_descriptor(
-    file: &File,
-    path: &std::path::Path,
-    operation: &'static str,
-) -> Result<File, CaptureError> {
+fn clone_descriptor(file: &File, path: &std::path::Path, operation: &'static str) -> Result<File, CaptureError> {
     file.try_clone().map_err(|source| CaptureError::Io {
         operation,
         path: path.to_owned(),

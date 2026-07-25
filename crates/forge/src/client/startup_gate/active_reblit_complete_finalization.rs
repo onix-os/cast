@@ -15,14 +15,10 @@ use crate::client::{
     active_state_snapshot::ActiveStateReservation,
     startup_gate::ActiveReblitCompleteFinalizationSeal,
     startup_reconciliation::{
-        ActiveReblitCompleteFinalizationAdmission,
-        ActiveReblitCompleteFinalizationAuthority,
+        ActiveReblitCompleteFinalizationAdmission, ActiveReblitCompleteFinalizationAuthority,
         ActiveReblitCompleteFinalizationAuthorityError,
     },
-    startup_recovery::{
-        ActiveReblitCompleteFinalizationError,
-        finalize_active_reblit_complete,
-    },
+    startup_recovery::{ActiveReblitCompleteFinalizationError, finalize_active_reblit_complete},
 };
 
 pub(super) enum Dispatch {
@@ -59,12 +55,8 @@ pub(super) fn dispatch<'reservation>(
         active_state_reservation,
         &record,
     )? {
-        ActiveReblitCompleteFinalizationAdmission::NotApplicable => {
-            Err(Error::ExactCheckpointRejectedAsNotApplicable)
-        }
-        ActiveReblitCompleteFinalizationAdmission::Deferred => {
-            Ok(Dispatch::Handled { journal, record })
-        }
+        ActiveReblitCompleteFinalizationAdmission::NotApplicable => Err(Error::ExactCheckpointRejectedAsNotApplicable),
+        ActiveReblitCompleteFinalizationAdmission::Deferred => Ok(Dispatch::Handled { journal, record }),
         ActiveReblitCompleteFinalizationAdmission::Ready(authority) => {
             let journal = finalize_active_reblit_complete(journal, authority)?;
             Ok(Dispatch::Finalized { journal })

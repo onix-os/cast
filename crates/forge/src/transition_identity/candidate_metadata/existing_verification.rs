@@ -70,19 +70,22 @@ impl CandidateMetadataVerification {
     ) -> Result<CandidateMetadataProof, CandidateMetadataError> {
         let CandidateMetadataOutputs {
             os_release: release_bytes,
-            system_model: snapshot_bytes,
+            system_model: snapshot_output,
         } = outputs;
         let Self { usr, usr_path, lib } = self;
+        snapshot_output.revalidate_authority()?;
 
         lib.require_named(&usr, LIB_NAME)?;
+        require_alternate_declarations_absent(&lib, &snapshot_output)?;
         let release = retain_existing_published(&lib, OS_RELEASE_NAME, &release_bytes, &lib.path.join("os-release"))?;
         after_existing_release_retained();
         lib.require_named(&usr, LIB_NAME)?;
+        require_alternate_declarations_absent(&lib, &snapshot_output)?;
         let snapshot = retain_existing_published(
             &lib,
-            SYSTEM_SNAPSHOT_NAME,
-            &snapshot_bytes,
-            &lib.path.join("system-model.glu"),
+            snapshot_output.file_name(),
+            snapshot_output.bytes(),
+            &snapshot_output.path_in(&lib.path),
         )?;
 
         let proof = CandidateMetadataProof {
@@ -92,7 +95,7 @@ impl CandidateMetadataVerification {
             release,
             release_bytes,
             snapshot,
-            snapshot_bytes,
+            snapshot_output,
         };
         proof.revalidate()?;
         Ok(proof)

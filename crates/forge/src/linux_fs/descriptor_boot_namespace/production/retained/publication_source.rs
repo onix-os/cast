@@ -44,9 +44,11 @@ impl<'request, 'expected, 'source> BoundRetainedBootFileSource<'request, 'expect
         }
         let mut ledger = LiveLedger::new(limits, deadline)?;
         let mut evidence = bind_expected_streams(std::slice::from_ref(&request), expected, &mut ledger)?;
-        let evidence = evidence.pop().ok_or(RetainedBootNamespaceAssessmentError::ObserverProtocol {
-            reason: "single publication source binding omitted its evidence",
-        })?;
+        let evidence = evidence
+            .pop()
+            .ok_or(RetainedBootNamespaceAssessmentError::ObserverProtocol {
+                reason: "single publication source binding omitted its evidence",
+            })?;
         ledger.checkpoint()?;
         Ok(Self {
             request,
@@ -71,9 +73,7 @@ impl<'request, 'expected, 'source> BoundRetainedBootFileSource<'request, 'expect
         )
     }
 
-    pub(in crate::linux_fs) fn terminally_revalidate(
-        &mut self,
-    ) -> Result<(), RetainedBootNamespaceAssessmentError> {
+    pub(in crate::linux_fs) fn terminally_revalidate(&mut self) -> Result<(), RetainedBootNamespaceAssessmentError> {
         terminally_revalidate_expected_streams(
             std::slice::from_ref(&self.request),
             std::slice::from_ref(&self.source),

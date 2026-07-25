@@ -6,10 +6,18 @@
 
 use std::path::{Path, PathBuf};
 
-use gluon_config::{Diagnostic, Evaluator, SourceRoot};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, SourceRoot,
+};
+use gluon_config::Diagnostic;
 use stone_recipe::build_policy::{
-    BuildPolicyConversionError, BuildPolicyEvaluationError, BuildPolicySpec, TargetPolicySpec,
-    layers::{BuildPolicyOperation, BuildPolicyRootEvaluationError},
+    BuildPolicyConversionError, BuildPolicyEvaluator, BuildPolicyPatchSpec, BuildPolicySpec,
+    GluonBuildPolicyEvaluator, LuaBuildPolicyEvaluator, TargetPolicySpec,
+    layers::{
+        BuildPolicyOperation, BuildPolicyRootConversionError,
+        BuildPolicyRootSpec, GluonBuildPolicyRootEvaluator,
+    },
 };
 use stone_recipe::derivation::{
     PolicyLayerProvenance, PolicyProvenance, PolicyTransitionProvenance, policy_composition_identity,
@@ -18,6 +26,8 @@ use thiserror::Error;
 
 use crate::Env;
 
+mod root_declaration;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuildPolicy {
     pub spec: BuildPolicySpec,
@@ -25,32 +35,22 @@ pub struct BuildPolicy {
 }
 
 impl BuildPolicy {
-    const ROOT: &'static str = "policy.glu";
-
     pub fn load(env: &Env) -> Result<Self, Error> {
         Self::load_from(&env.data_dir.join("policy"))
     }
 
     fn load_from(policy_dir: &Path) -> Result<Self, Error> {
-        let source_root = SourceRoot::new(policy_dir).map_err(|source| Error::SourceRoot {
-            path: policy_dir.to_path_buf(),
-            source: Box::new(source),
-        })?;
-        let evaluator = Evaluator::default().with_source_root(source_root.clone());
-        let root_path = policy_dir.join(Self::ROOT);
-        let root_source = source_root
-            .load(Self::ROOT, evaluator.limits().max_source_bytes)
-            .map_err(|source| Error::LoadRoot {
-                path: root_path.clone(),
-                source: Box::new(source),
-            })?;
-        let evaluated_root = stone_recipe::build_policy::layers::evaluate_gluon_with(&evaluator, &root_source)
-            .map_err(|source| Error::EvaluateRoot {
-                path: root_path.clone(),
-                source: Box::new(source),
-            })?;
-
-        let manifest = evaluated_root.root;
+        let root_declaration::LoadedPolicyRoot {
+            path: root_path,
+            source_root,
+            source: root_source,
+            manifest,
+        } = root_declaration::load(policy_dir)?;
+        let root_evaluator =
+            <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<BuildPolicyRootSpec>>::with_source_root(
+                &GluonBuildPolicyRootEvaluator::default(),
+                source_root.clone(),
+            );
         let mut layers = Vec::with_capacity(manifest.layers.len());
         let mut state = None;
         let mut operation_order = 0;
@@ -60,7 +60,6 @@ impl BuildPolicy {
             for (entry_index, entry) in layer.entries.iter().enumerate() {
                 transitions.push(apply_entry(
                     &source_root,
-                    &evaluator,
                     &manifest.name,
                     &layer.name,
                     layer_index,
@@ -83,12 +82,16 @@ impl BuildPolicy {
         })?;
         let identity_inputs = policy_composition_identity(&manifest.name, &layers);
         let finalized_root =
-            stone_recipe::build_policy::layers::evaluate_gluon_with_inputs(&evaluator, &root_source, &identity_inputs)
+            <GluonBuildPolicyRootEvaluator as DeclarationInputEvaluator<BuildPolicyRootSpec>>::evaluate_with_inputs(
+                &root_evaluator,
+                &root_source,
+                &identity_inputs,
+            )
                 .map_err(|source| Error::FinalizeRoot {
                     path: root_path,
                     source: Box::new(source),
                 })?;
-        if finalized_root.root != manifest {
+        if finalized_root.value != manifest {
             return Err(Error::ManifestChanged { policy: manifest.name });
         }
 
@@ -96,7 +99,7 @@ impl BuildPolicy {
             spec,
             provenance: PolicyProvenance {
                 name: manifest.name,
-                root: finalized_root.fingerprint,
+                root: finalized_root.identity,
                 layers,
             },
         })
@@ -128,9 +131,25 @@ impl BuildPolicy {
     }
 }
 
+/// Select the layer language by a layer file's extension, source-rooted so its
+/// (currently unused for `.lua`) imports resolve beneath the policy directory.
+/// A `.lua` layer decodes through the Lua adapter; anything else is Gluon.
+fn build_policy_evaluator_for(origin: &str, source_root: &SourceRoot) -> BuildPolicyEvaluator {
+    let evaluator = if Path::new(origin).extension().and_then(|extension| extension.to_str())
+        == Some("lua")
+    {
+        BuildPolicyEvaluator::Lua(LuaBuildPolicyEvaluator::default())
+    } else {
+        BuildPolicyEvaluator::Gluon(GluonBuildPolicyEvaluator::default())
+    };
+    <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::with_source_root(
+        &evaluator,
+        source_root.clone(),
+    )
+}
+
 fn apply_entry(
     source_root: &SourceRoot,
-    evaluator: &Evaluator,
     policy: &str,
     layer: &str,
     layer_index: usize,
@@ -140,6 +159,7 @@ fn apply_entry(
     origin: &str,
     state: &mut Option<BuildPolicySpec>,
 ) -> Result<PolicyTransitionProvenance, Error> {
+    let evaluator = build_policy_evaluator_for(origin, source_root);
     match operation {
         BuildPolicyOperation::Add if state.is_some() => {
             return Err(Error::InvalidTransition {
@@ -170,7 +190,11 @@ fn apply_entry(
 
     let path = source_root.path().join(origin);
     let source = source_root
-        .load(origin, evaluator.limits().max_source_bytes)
+        .load(
+            origin,
+            <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::limits(&evaluator)
+                .max_source_bytes,
+        )
         .map_err(|source| Error::LoadEntry {
             policy: policy.to_owned(),
             layer: layer.to_owned(),
@@ -185,8 +209,12 @@ fn apply_entry(
 
     let fingerprint = match operation {
         BuildPolicyOperation::Add | BuildPolicyOperation::Replace => {
-            let evaluated = stone_recipe::build_policy::evaluate_gluon_with(evaluator, &source).map_err(|source| {
-                Error::EvaluateEntry {
+            let evaluated =
+                <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicySpec>>::evaluate(
+                    &evaluator,
+                    &source,
+                )
+                .map_err(|source| Error::EvaluateEntry {
                     policy: policy.to_owned(),
                     layer: layer.to_owned(),
                     layer_index,
@@ -195,15 +223,17 @@ fn apply_entry(
                     operation,
                     origin: origin.to_owned(),
                     source: Box::new(source),
-                }
-            })?;
-            *state = Some(evaluated.policy);
-            evaluated.fingerprint
+                })?;
+            *state = Some(evaluated.value);
+            evaluated.identity
         }
         BuildPolicyOperation::Modify => {
             let evaluated =
-                stone_recipe::build_policy::evaluate_patch_gluon_with(evaluator, &source).map_err(|source| {
-                    Error::EvaluateEntry {
+                <BuildPolicyEvaluator as DeclarationEvaluator<BuildPolicyPatchSpec>>::evaluate(
+                    &evaluator,
+                    &source,
+                )
+                .map_err(|source| Error::EvaluateEntry {
                         policy: policy.to_owned(),
                         layer: layer.to_owned(),
                         layer_index,
@@ -212,11 +242,10 @@ fn apply_entry(
                         operation,
                         origin: origin.to_owned(),
                         source: Box::new(source),
-                    }
-                })?;
+                    })?;
             let current = state.take().expect("modify precondition checked");
             let next = evaluated
-                .patch
+                .value
                 .apply_validated(current)
                 .map_err(|source| Error::ApplyPatch {
                     policy: policy.to_owned(),
@@ -229,7 +258,7 @@ fn apply_entry(
                     source: Box::new(source),
                 })?;
             *state = Some(next);
-            evaluated.fingerprint
+            evaluated.identity
         }
     };
 
@@ -258,13 +287,18 @@ pub enum Error {
     EvaluateRoot {
         path: PathBuf,
         #[source]
-        source: Box<BuildPolicyRootEvaluationError>,
+        source: Box<DeclarationEvaluationError<BuildPolicyRootConversionError>>,
     },
+    #[error("load build-policy manifest declaration")]
+    LoadRootDeclaration(
+        #[source]
+        Box<config::declaration::LoadFixedRootDeclarationError<BuildPolicyRootConversionError>>,
+    ),
     #[error("finalize build-policy manifest identity {path:?}")]
     FinalizeRoot {
         path: PathBuf,
         #[source]
-        source: Box<BuildPolicyRootEvaluationError>,
+        source: Box<DeclarationEvaluationError<BuildPolicyRootConversionError>>,
     },
     #[error(
         "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) from `{origin}` is invalid: {reason}"
@@ -306,7 +340,7 @@ pub enum Error {
         operation: BuildPolicyOperation,
         origin: String,
         #[source]
-        source: Box<BuildPolicyEvaluationError>,
+        source: Box<DeclarationEvaluationError<BuildPolicyConversionError>>,
     },
     #[error(
         "policy `{policy}` operation {order}, layer {layer_index} `{layer}` entry {entry_index} ({operation:?}) cannot apply `{origin}`"
@@ -334,20 +368,35 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use fs_err as fs;
     use sha2::{Digest, Sha256};
 
     use super::*;
 
+    /// The shipped manifest — its foundation layer is Lua (`default.lua`).
     const REPOSITORY_MANIFEST: &str = include_str!("../data/policy/policy.glu");
+    /// The shipped Lua policy authority Cast loads.
+    const REPOSITORY_DEFAULT_LUA: &str = include_str!("../data/policy/default.lua");
+    /// The retained Gluon policy + tuning catalogs, kept as the full-parity
+    /// composition-test fixtures and the source for regenerating `default.lua`.
     const REPOSITORY_DEFAULT: &str = include_str!("../data/policy/default.glu");
     const REPOSITORY_TUNING_FLAGS: &str = include_str!("../data/policy/tuning/flags.glu");
     const REPOSITORY_TUNING_GROUPS: &str = include_str!("../data/policy/tuning/groups.glu");
+    /// An explicit Gluon foundation manifest, so composition-mechanics tests keep
+    /// exercising the modular Gluon path (module fingerprints, tuning-byte
+    /// participation) independently of the shipped Lua authority.
+    const GLUON_MANIFEST: &str = "let l = import! cast.build_policy.layers.v1\n\
+l.policy \"aerynos\" [l.layer \"foundation\" [l.add \"default.glu\"]]\n";
 
     fn fixture(manifest: &str) -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("tuning")).unwrap();
         fs::write(root.path().join("policy.glu"), manifest).unwrap();
+        // Both authorities are present; the manifest chooses which is loaded, so
+        // Lua and Gluon manifests both resolve without a same-slot collision.
+        fs::write(root.path().join("default.lua"), REPOSITORY_DEFAULT_LUA).unwrap();
         fs::write(root.path().join("default.glu"), REPOSITORY_DEFAULT).unwrap();
         fs::write(root.path().join("tuning/flags.glu"), REPOSITORY_TUNING_FLAGS).unwrap();
         fs::write(root.path().join("tuning/groups.glu"), REPOSITORY_TUNING_GROUPS).unwrap();
@@ -359,6 +408,63 @@ mod tests {
             "{:x}",
             Sha256::digest(policy_composition_identity(&provenance.name, &provenance.layers))
         )
+    }
+
+    /// The real shipped repository policy — `default.glu` plus the two large
+    /// tuning catalogs it imports (`tuning/flags.glu`, `tuning/groups.glu`) —
+    /// re-encodes to generated Lua and decodes back to an equal spec. This
+    /// pairs those authored Gluon files with the build-policy write path,
+    /// proving a generated-slot switch could reproduce them as `policy.lua`.
+    #[test]
+    fn the_repository_policy_round_trips_through_the_lua_emitter() {
+        let policy = BuildPolicy::repository_for_tests();
+
+        let emitted = stone_recipe::build_policy::encode_lua_policy(&policy.spec);
+        assert!(emitted.starts_with(lua_config::GENERATED_LUA_MARKER));
+
+        let redecoded = LuaBuildPolicyEvaluator::default()
+            .evaluate(&declarative_config::Source::new("policy.lua", &emitted))
+            .expect("emitted repository policy re-decodes");
+        assert_eq!(policy.spec, redecoded);
+    }
+
+    /// One-shot: emit the shipped policy's `default.lua` from the currently
+    /// composed spec, verifying it re-decodes to the same policy before writing.
+    #[test]
+    #[ignore = "one-shot shipped-data conversion tool"]
+    fn generate_lua_policy_default() {
+        let policy_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("data/policy");
+        let policy = BuildPolicy::load_from(&policy_dir).expect("current policy loads");
+
+        let lua = stone_recipe::build_policy::encode_lua_policy(&policy.spec);
+        let redecoded = LuaBuildPolicyEvaluator::default()
+            .evaluate(&declarative_config::Source::new("default.lua", &lua))
+            .expect("emitted default.lua re-decodes");
+        assert_eq!(policy.spec, redecoded);
+
+        fs::write(policy_dir.join("default.lua"), lua).unwrap();
+    }
+
+    fn assert_same_diagnostic(actual: &Diagnostic, expected: &Diagnostic) {
+        assert_eq!(actual.category, expected.category);
+        assert_eq!(actual.limit, expected.limit);
+        assert_eq!(actual.source_name, expected.source_name);
+        assert_eq!(actual.span, expected.span);
+        assert_eq!(actual.message, expected.message);
+        assert_eq!(
+            actual.source().map(ToString::to_string),
+            expected.source().map(ToString::to_string)
+        );
+        assert_eq!(
+            actual
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(std::io::Error::kind),
+            expected
+                .source()
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .map(std::io::Error::kind)
+        );
     }
 
     #[test]
@@ -377,8 +483,8 @@ mod tests {
         assert_eq!(policy.provenance.layers[0].transitions.len(), 1);
         let transition = &policy.provenance.layers[0].transitions[0];
         assert_eq!(transition.operation, BuildPolicyOperation::Add);
-        assert_eq!(transition.origin, "default.glu");
-        assert_eq!(transition.evaluation.root_logical_name, "default.glu");
+        assert_eq!(transition.origin, "default.lua");
+        assert_eq!(transition.evaluation.root_logical_name, "default.lua");
         transition.evaluation.validate().unwrap();
         policy.provenance.root.validate().unwrap();
         assert_ne!(
@@ -389,6 +495,43 @@ mod tests {
             policy.provenance.root.explicit_inputs_sha256,
             composition_digest(&policy.provenance)
         );
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_complete_identity_golden() {
+        let policy = BuildPolicy::repository_for_tests();
+        let root = &policy.provenance.root;
+
+        assert_eq!(root.root_logical_name, "policy.glu");
+        assert_eq!(
+            root.root_source_sha256,
+            "d68e48f2314fd0ffc9e651a630cf982270d140650185ec766522c100991c1603"
+        );
+        assert_eq!(
+            root.modules
+                .iter()
+                .map(|module| (module.logical_name.as_str(), module.sha256.as_str()))
+                .collect::<Vec<_>>(),
+            [(
+                "cast.build_policy.layers.v1",
+                "c70b6d7a4f816d639615f034c84fefb0d3c4918db657c124987f7f37a3bdd064"
+            )]
+        );
+        assert_eq!(root.language.as_str(), "gluon");
+        assert_eq!(root.engine.implementation(), "gluon-vm");
+        assert_eq!(root.engine.version(), "0.18.3");
+        assert_eq!(root.configuration_abi.name(), "cast.configuration");
+        assert_eq!(root.configuration_abi.version(), "1");
+        assert_eq!(root.evaluator_policy.as_str(), "1");
+        assert_eq!(
+            root.explicit_inputs_sha256,
+            "540d2eff1f8acc28ab4f2603f2358c23ae56ebd14ee43e23bb4f38c0c48168dd"
+        );
+        assert_eq!(
+            root.sha256,
+            "3ce322766ab642e15858609088f47279fd264f2fc33226616ad5623a9d639c77"
+        );
+        root.validate().unwrap();
     }
 
     #[test]
@@ -423,41 +566,32 @@ mod tests {
             policy
                 .provenance
                 .root
-                .imported_modules
+                .modules
                 .iter()
                 .any(|module| module.logical_name == "cast.build_policy.layers.v1")
         );
+        // The shipped foundation layer is now the self-contained Lua authority:
+        // it is evaluated by the Lua engine and imports nothing, so its
+        // transition provenance carries no modules (the tuning catalogs are
+        // inlined). The Gluon manifest still binds its own layers ABI module.
         let transition = &policy.provenance.layers[0].transitions[0];
-        assert_eq!(transition.evaluation.root_logical_name, "default.glu");
+        assert_eq!(transition.evaluation.root_logical_name, "default.lua");
         assert_eq!(transition.evaluation.root_source_sha256.len(), 64);
         assert_eq!(transition.evaluation.explicit_inputs_sha256.len(), 64);
         assert_eq!(transition.evaluation.sha256.len(), 64);
-        assert_eq!(transition.evaluation.gluon_version, gluon_config::GLUON_VERSION);
+        assert_eq!(transition.evaluation.engine.version(), lua_config::LUA_VERSION);
         assert_eq!(
-            transition.evaluation.configuration_abi_version,
-            gluon_config::CONFIGURATION_ABI_VERSION
+            transition.evaluation.configuration_abi.version(),
+            lua_config::CONFIGURATION_ABI_VERSION.to_string()
         );
         assert_eq!(
-            transition.evaluation.evaluator_policy_version,
-            gluon_config::EVALUATOR_POLICY_VERSION
+            transition.evaluation.evaluator_policy.as_str(),
+            lua_config::EVALUATOR_POLICY_VERSION.to_string()
         );
         assert!(
-            transition
-                .evaluation
-                .imported_modules
-                .iter()
-                .any(|module| module.logical_name == "cast.build_policy.v5")
+            transition.evaluation.modules.is_empty(),
+            "the Lua foundation authority imports nothing"
         );
-        for expected in ["tuning/flags.glu", "tuning/groups.glu"] {
-            assert!(
-                transition
-                    .evaluation
-                    .imported_modules
-                    .iter()
-                    .any(|module| module.logical_name == expected),
-                "missing repository policy module {expected} from evaluation provenance"
-            );
-        }
     }
 
     #[test]
@@ -625,9 +759,12 @@ b.policy_patch {
 
     #[test]
     fn composed_identity_binds_manifest_order_and_complete_module_fingerprints() {
-        let first_root = fixture(REPOSITORY_MANIFEST);
-        let repeated_root = fixture(REPOSITORY_MANIFEST);
-        let changed_root = fixture(REPOSITORY_MANIFEST);
+        // Gluon composition-mechanics: exercise the modular foundation so a
+        // change to `default.glu`'s bytes alters the transition and composed
+        // identity while the normalized spec is unchanged.
+        let first_root = fixture(GLUON_MANIFEST);
+        let repeated_root = fixture(GLUON_MANIFEST);
+        let changed_root = fixture(GLUON_MANIFEST);
         fs::write(
             changed_root.path().join("default.glu"),
             format!("{REPOSITORY_DEFAULT}\n// identity-only source change\n"),
@@ -659,8 +796,12 @@ b.policy_patch {
             ("tuning/flags.glu", REPOSITORY_TUNING_FLAGS),
             ("tuning/groups.glu", REPOSITORY_TUNING_GROUPS),
         ] {
-            let baseline_root = fixture(REPOSITORY_MANIFEST);
-            let changed_root = fixture(REPOSITORY_MANIFEST);
+            // Gluon composition: `default.glu` imports the tuning modules, so a
+            // tuning-byte change must alter the transition's module fingerprint
+            // and the composed identity. (The shipped Lua authority inlines
+            // tuning; that parity is proved by the round-trip test instead.)
+            let baseline_root = fixture(GLUON_MANIFEST);
+            let changed_root = fixture(GLUON_MANIFEST);
             fs::write(
                 changed_root.path().join(logical_name),
                 format!("{source}\n// identity-only module change\n"),
@@ -672,12 +813,12 @@ b.policy_patch {
             let baseline_transition = &baseline.provenance.layers[0].transitions[0].evaluation;
             let changed_transition = &changed.provenance.layers[0].transitions[0].evaluation;
             let baseline_module = baseline_transition
-                .imported_modules
+                .modules
                 .iter()
                 .find(|module| module.logical_name == logical_name)
                 .unwrap();
             let changed_module = changed_transition
-                .imported_modules
+                .modules
                 .iter()
                 .find(|module| module.logical_name == logical_name)
                 .unwrap();
@@ -702,7 +843,7 @@ b.policy_patch {
             policy
                 .provenance
                 .root
-                .imported_modules
+                .modules
                 .iter()
                 .all(|module| module.logical_name != "ignored.glu")
         );
@@ -711,10 +852,145 @@ b.policy_patch {
                 transition.evaluation.root_logical_name != "ignored.glu"
                     && transition
                         .evaluation
-                        .imported_modules
+                        .modules
                         .iter()
                         .all(|module| module.logical_name != "ignored.glu")
             })
         }));
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_v1_name_and_exact_source_bytes() {
+        let manifest = format!(
+            "{REPOSITORY_MANIFEST}\n// fixed-root discovery identity sentinel\n"
+        );
+        let root = fixture(&manifest);
+        fs::write(
+            root.path().join("policy.lua"),
+            "this unregistered neighbor must never be inspected",
+        )
+        .unwrap();
+
+        let policy = BuildPolicy::load_from(root.path()).unwrap();
+
+        assert_eq!(
+            policy.provenance.root.root_logical_name,
+            root_declaration::POLICY_ROOT_LOGICAL_NAME
+        );
+        assert_eq!(
+            policy.provenance.root.root_source_sha256,
+            format!("{:x}", Sha256::digest(manifest.as_bytes()))
+        );
+        policy.provenance.root.validate().unwrap();
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_symlink_diagnostics() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture(REPOSITORY_MANIFEST);
+        fs::remove_file(root.path().join("policy.glu")).unwrap();
+        fs::write(root.path().join("policy-target.glu"), REPOSITORY_MANIFEST)
+            .unwrap();
+        symlink("policy-target.glu", root.path().join("policy.glu")).unwrap();
+        let expected = SourceRoot::new(root.path())
+            .unwrap()
+            .load(
+                "policy.glu",
+                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                    BuildPolicyRootSpec,
+                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                .max_source_bytes,
+            )
+            .unwrap_err();
+
+        let error = BuildPolicy::load_from(root.path()).unwrap_err();
+
+        match error {
+            Error::LoadRoot { path, source } => {
+                assert_eq!(path, root.path().join("policy.glu"));
+                assert_same_diagnostic(&source, &expected);
+            }
+            error => panic!("expected legacy LoadRoot error, found {error:?}"),
+        }
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_missing_directory_diagnostics() {
+        let temporary = tempfile::tempdir().unwrap();
+        let missing = temporary.path().join("missing-policy-root");
+        let expected = SourceRoot::new(&missing).unwrap_err();
+
+        let error = BuildPolicy::load_from(&missing).unwrap_err();
+
+        match error {
+            Error::SourceRoot { path, source } => {
+                assert_eq!(path, missing);
+                assert_same_diagnostic(&source, &expected);
+            }
+            error => panic!("expected legacy SourceRoot error, found {error:?}"),
+        }
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_missing_manifest_diagnostics() {
+        let root = fixture(REPOSITORY_MANIFEST);
+        fs::remove_file(root.path().join("policy.glu")).unwrap();
+        let expected = SourceRoot::new(root.path())
+            .unwrap()
+            .load(
+                "policy.glu",
+                <GluonBuildPolicyRootEvaluator as DeclarationEvaluator<
+                    BuildPolicyRootSpec,
+                >>::limits(&GluonBuildPolicyRootEvaluator::default())
+                .max_source_bytes,
+            )
+            .unwrap_err();
+
+        let error = BuildPolicy::load_from(root.path()).unwrap_err();
+
+        match error {
+            Error::LoadRoot { path, source } => {
+                assert_eq!(path, root.path().join("policy.glu"));
+                assert_same_diagnostic(&source, &expected);
+            }
+            error => panic!("expected legacy LoadRoot error, found {error:?}"),
+        }
+    }
+
+    #[test]
+    fn registered_root_discovery_accepts_a_symlinked_policy_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture(REPOSITORY_MANIFEST);
+        let links = tempfile::tempdir().unwrap();
+        let linked = links.path().join("policy-root");
+        symlink(root.path(), &linked).unwrap();
+
+        let direct = BuildPolicy::load_from(root.path()).unwrap();
+        let through_link = BuildPolicy::load_from(&linked).unwrap();
+
+        assert_eq!(through_link, direct);
+    }
+
+    #[test]
+    fn registered_root_discovery_preserves_gluon_diagnostics() {
+        let root = fixture("let value = in value");
+
+        let error = BuildPolicy::load_from(root.path()).unwrap_err();
+
+        assert!(matches!(
+            error,
+            Error::EvaluateRoot { path, source }
+                if path == root.path().join("policy.glu")
+                    && matches!(
+                        *source,
+                        DeclarationEvaluationError::Evaluation(Diagnostic {
+                            category: declarative_config::DiagnosticCategory::Parse,
+                            source_name: Some(ref source_name),
+                            ..
+                        }) if source_name == root_declaration::POLICY_ROOT_LOGICAL_NAME
+                    )
+        ));
     }
 }

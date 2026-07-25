@@ -69,12 +69,9 @@ pub(super) fn fixture_for_origin_at_epoch(
             usr_outcome,
             CandidateLayout::Preserved,
         ),
-        CandidateOrigin::AlreadySatisfied => CandidatePreserveFixture::new(
-            OperationKind::NewState,
-            source,
-            usr_outcome,
-            CandidateLayout::Preserved,
-        ),
+        CandidateOrigin::AlreadySatisfied => {
+            CandidatePreserveFixture::new(OperationKind::NewState, source, usr_outcome, CandidateLayout::Preserved)
+        }
     }
 }
 

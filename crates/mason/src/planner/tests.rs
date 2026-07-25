@@ -12,6 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use declarative_config::{DeclarationCodec, DeclarationEvaluator, Source};
 use forge::{
     Provider,
     package::{Meta, Name},
@@ -22,8 +23,8 @@ use stone::{StoneHeaderV1FileType, StoneWriter, relation::Kind as RelationKind};
 use stone_recipe::{
     TuningSpec, UpstreamSpec,
     derivation::{
-        DerivationPlan, FilesystemPolicy, InputOrigin, NetworkMode, OutputRelation, PackageInputSelection,
-        encode_build_lock,
+        BuildLock, DerivationPlan, FilesystemPolicy, GluonBuildLockCodec,
+        InputOrigin, NetworkMode, OutputRelation, PackageInputSelection,
     },
     package::{DependencySpec, PackageSpec, StepSpec},
 };
@@ -38,8 +39,8 @@ use crate::{
     package::{Packager, Publication},
     profile,
     source_lock::{
-        ArchiveResolution, GitResolution, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution, decode_source_lock,
-        encode_source_lock, write_source_lock,
+        ArchiveResolution, GitResolution, GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock, SourceResolution,
+        write_source_lock,
     },
 };
 
@@ -51,6 +52,20 @@ const RUNTIME_REQUEST: &str = "binary(planner-runtime)";
 const EXAMPLE_PROFILE: &str = "planner-example-matrix";
 const EXAMPLE_GIT_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 const EXAMPLE_GIT_MATERIALIZATION_SHA256: &str = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+
+fn canonical_build_lock(lock: &BuildLock) -> String {
+    GluonBuildLockCodec::default().encode(lock).unwrap()
+}
+
+fn canonical_source_lock(lock: &SourceLock) -> String {
+    GluonSourceLockCodec::default().encode(lock).unwrap()
+}
+
+fn evaluate_source_lock(logical_name: &str, bytes: &[u8]) -> Result<SourceLock, Box<dyn StdError>> {
+    let source = std::str::from_utf8(bytes)?;
+    let evaluation = GluonSourceLockCodec::default().evaluate(&Source::new(logical_name, source))?;
+    Ok(evaluation.value)
+}
 const PACKAGE_EXAMPLES: [&str; 64] = [
     "autotools",
     "backend-choice-factory",
@@ -124,6 +139,13 @@ fn write_repository_policy_fixture(data_dir: &Path) {
     fs::write(
         policy_dir.join("policy.glu"),
         include_str!("../../data/policy/policy.glu"),
+    )
+    .unwrap();
+    // The shipped manifest's foundation layer is the Lua authority; the Gluon
+    // sources remain as retained full-parity fixtures.
+    fs::write(
+        policy_dir.join("default.lua"),
+        include_str!("../../data/policy/default.lua"),
     )
     .unwrap();
     fs::write(
@@ -282,30 +304,41 @@ pub(super) fn run_delegated_execution_fixture() -> DelegatedExecutionOutcome {
     bootstrap::run_delegated_execution_fixture()
 }
 
-const RECIPE: &str = r#"let b = import! cast.package.v3
+const RECIPE: &str = r#"let a = import! cast.authored.v1
 
-let scripts = b.scripts {
-    build = b.phase [b.step.shell "printf planner-hermetic > build.log"],
-    .. b.defaults.scripts
+let scripts = a.scripts {
+    build = a.phase [a.step.shell "printf planner-hermetic > build.log"],
+    .. a.empty.scripts
 }
 
 let root = {
-    summary = b.optional.set "Hermetic planner fixture",
-    description = b.optional.set "Hermetic planner fixture",
-    runtime_inputs = [b.dep.binary "planner-runtime"],
-    .. b.output "out"
+    summary = a.optional.set "Hermetic planner fixture",
+    description = a.optional.set "Hermetic planner fixture",
+    runtime_inputs = [a.dep.binary "planner-runtime"],
+    .. a.output "out"
 }
 
 {
-    builder = b.builder.shell scripts [],
-    outputs = b.outputs.with_root "planner-hermetic" root,
-    .. b.mk_package (b.meta {
+    meta = {
         pname = "planner-hermetic",
         version = "1.0.0",
         release = 1,
         homepage = "https://example.invalid/planner-hermetic",
         license = ["MPL-2.0"],
-    })
+    },
+    builder = a.builder.shell scripts [],
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.with_root root,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }
 "#;
 
@@ -696,7 +729,7 @@ fn synthesize_source_lock(recipe_path: &Path) -> (Option<Vec<u8>>, usize) {
     let path = recipe_path.with_file_name(SOURCE_LOCK_FILE_NAME);
     write_source_lock(&path, &lock).unwrap();
     let bytes = fs::read(&path).unwrap();
-    assert_eq!(bytes, encode_source_lock(&lock).into_bytes());
+    assert_eq!(bytes, canonical_source_lock(&lock).into_bytes());
     (Some(bytes), source_count)
 }
 

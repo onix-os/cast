@@ -18,6 +18,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    declaration_migrations (state_id, logical_slot) {
+        state_id -> Integer,
+        logical_slot -> Text,
+        catalog_schema_version -> Integer,
+        state_tree_marker -> Binary,
+        original_language -> Text,
+        original_logical_path -> Text,
+        original_sha256 -> Binary,
+        migrated_language -> Text,
+        migrated_blob_sha256 -> Binary,
+        evaluation_identity -> Binary,
+    }
+}
+
+diesel::table! {
     state (id) {
         id -> Integer,
         #[sql_name = "type"]
@@ -46,12 +61,14 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(declaration_migrations -> state (state_id));
 diesel::joinable!(state_metadata_provenance -> state (state_id));
 diesel::joinable!(state_selections -> state (state_id));
 
 diesel::allow_tables_to_appear_in_same_query!(
     boot_publication_receipt_head,
     boot_publication_receipts,
+    declaration_migrations,
     state,
     state_metadata_provenance,
     state_selections,

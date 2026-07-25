@@ -108,7 +108,10 @@ fn startup_usr_rollback_finalization_returns_the_same_continuously_locked_store(
         assert_eq!(retained.load().unwrap(), None);
         let cast = fixture.installation().retained_mutable_cast_directory().unwrap();
         let error = TransitionJournalStore::try_open_in_retained_cast(cast, &fixture.installation().root).unwrap_err();
-        assert!(matches!(error, crate::transition_journal::StorageError::AcquireLock { .. }));
+        assert!(matches!(
+            error,
+            crate::transition_journal::StorageError::AcquireLock { .. }
+        ));
         drop(retained);
         let independent =
             TransitionJournalStore::try_open_in_retained_cast(cast, &fixture.installation().root).unwrap();

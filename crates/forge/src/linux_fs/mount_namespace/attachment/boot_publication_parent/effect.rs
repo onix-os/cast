@@ -25,11 +25,12 @@ thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn arm_retained_boot_publication_parent_fault(
-    point: FixtureRetainedBootPublicationParentFault,
-) {
+pub(crate) fn arm_retained_boot_publication_parent_fault(point: FixtureRetainedBootPublicationParentFault) {
     PARENT_FAULT.with(|slot| {
-        assert!(slot.replace(Some(point)).is_none(), "boot publication-parent fault already armed");
+        assert!(
+            slot.replace(Some(point)).is_none(),
+            "boot publication-parent fault already armed"
+        );
     });
 }
 
@@ -70,11 +71,11 @@ pub(super) fn emit(point: FixtureRetainedBootPublicationParentCheckpoint) {
 }
 
 pub(super) fn mkdir_report(component_index: usize, result: std::io::Result<()>) -> std::io::Result<()> {
+    #[cfg(not(test))]
+    let _ = component_index;
     #[cfg(test)]
     if result.is_ok()
-        && take_fault(FixtureRetainedBootPublicationParentFault::MkdirReportsErrorAfterApplied {
-            component_index,
-        })
+        && take_fault(FixtureRetainedBootPublicationParentFault::MkdirReportsErrorAfterApplied { component_index })
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Interrupted,
@@ -85,10 +86,10 @@ pub(super) fn mkdir_report(component_index: usize, result: std::io::Result<()>) 
 }
 
 pub(super) fn fail_after_creation(component_index: usize) -> std::io::Result<()> {
+    #[cfg(not(test))]
+    let _ = component_index;
     #[cfg(test)]
-    if take_fault(FixtureRetainedBootPublicationParentFault::AfterCreationBeforeDurability {
-        component_index,
-    }) {
+    if take_fault(FixtureRetainedBootPublicationParentFault::AfterCreationBeforeDurability { component_index }) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Interrupted,
             "injected stop after publication-parent creation",

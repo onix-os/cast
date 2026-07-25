@@ -10,8 +10,7 @@ use crate::client::{
         arm_between_active_reblit_boot_sync_complete_database_captures,
     },
     startup_recovery::{
-        ActiveReblitBootSyncCommitDecisionPersistenceError,
-        ActiveReblitBootSyncCommitDecisionValidationStage,
+        ActiveReblitBootSyncCommitDecisionPersistenceError, ActiveReblitBootSyncCommitDecisionValidationStage,
         DurableActiveReblitBootSyncCommitDecisionRecord,
         arm_after_active_reblit_boot_sync_commit_decision_old_binding_validation,
         arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen,
@@ -25,14 +24,10 @@ use crate::client::{
 
 use super::{
     boot_sync_complete_support::{
-        BootSyncCompleteReadOnlySnapshot, boot_sync_complete_fixture,
-        capture_boot_sync_complete_ready, exact_commit_decided,
-        open_boot_sync_complete_journal, same_byte_different_inode_hook,
+        BootSyncCompleteReadOnlySnapshot, boot_sync_complete_fixture, capture_boot_sync_complete_ready,
+        exact_commit_decided, open_boot_sync_complete_journal, same_byte_different_inode_hook,
     },
-    support::{
-        Epoch, assert_complete_route_journal_only, enter_boot,
-        reset_complete_route_effect_observers,
-    },
+    support::{Epoch, assert_complete_route_journal_only, enter_boot, reset_complete_route_effect_observers},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -62,12 +57,10 @@ impl ValidationHook {
             Self::BeforeReopen | Self::ReopenedOldBinding => {
                 Some(ActiveReblitBootSyncCommitDecisionValidationStage::ReopenedOldBinding)
             }
-            Self::OldBindingBeforeFreshCapture => Some(
-                ActiveReblitBootSyncCommitDecisionValidationStage::ReopenedOldBindingAfterFreshCapture,
-            ),
-            Self::ReopenedFreshBinding => {
-                Some(ActiveReblitBootSyncCommitDecisionValidationStage::ReopenedFreshBinding)
+            Self::OldBindingBeforeFreshCapture => {
+                Some(ActiveReblitBootSyncCommitDecisionValidationStage::ReopenedOldBindingAfterFreshCapture)
             }
+            Self::ReopenedFreshBinding => Some(ActiveReblitBootSyncCommitDecisionValidationStage::ReopenedFreshBinding),
         }
     }
 }
@@ -85,10 +78,7 @@ fn boot_sync_commit_decision_all_six_validation_hooks_reject_same_bytes_on_a_new
             let authority = capture_boot_sync_complete_ready(&fixture, &journal, &reservation);
             let read_only = BootSyncCompleteReadOnlySnapshot::capture(&fixture);
             reset_complete_route_effect_observers();
-            let replacement = same_byte_different_inode_hook(
-                &fixture,
-                &format!("boot-sync-{epoch:?}-{hook:?}"),
-            );
+            let replacement = same_byte_different_inode_hook(&fixture, &format!("boot-sync-{epoch:?}-{hook:?}"));
             match hook {
                 ValidationHook::FinalAuthority => {
                     arm_before_active_reblit_boot_sync_commit_decision_final_revalidation(replacement)
@@ -97,9 +87,7 @@ fn boot_sync_commit_decision_all_six_validation_hooks_reject_same_bytes_on_a_new
                     arm_before_active_reblit_boot_sync_commit_decision_same_store_validation(replacement)
                 }
                 ValidationHook::BeforeReopen => {
-                    arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen(
-                        replacement,
-                    )
+                    arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen(replacement)
                 }
                 ValidationHook::ReopenedOldBinding => {
                     arm_before_active_reblit_boot_sync_commit_decision_reopened_validation(replacement)

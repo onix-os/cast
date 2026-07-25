@@ -674,8 +674,8 @@ fn assert_factory_override_changes_frozen_identity(matrix: &PackageExampleMatrix
     let original = plan_for_build(matrix.env(), matrix.request(example, false), &matrix.output_dir)
         .expect("reuse the original factory-override build lock");
     let original_source = fs::read_to_string(&example.recipe_path).unwrap();
-    const OVERRIDE: &str = "b.dep.pkgconfig \"libressl\"";
-    const CHANGED_OVERRIDE: &str = "b.dep.pkgconfig \"openssl\"";
+    const OVERRIDE: &str = "a.dep.pkgconfig \"libressl\"";
+    const CHANGED_OVERRIDE: &str = "a.dep.pkgconfig \"openssl\"";
     assert_eq!(
         original_source.matches(OVERRIDE).count(),
         1,
@@ -786,7 +786,7 @@ fn checked_in_package_examples_freeze_hermetically_and_reuse_exact_build_locks()
         let first_lock_bytes = fs::read(&first.lock_path).unwrap();
         assert_eq!(
             first_lock_bytes,
-            encode_build_lock(&first.plan.build_lock).into_bytes(),
+            canonical_build_lock(&first.plan.build_lock).into_bytes(),
             "{}: the on-disk build lock must be the canonical encoding of the frozen lock",
             example.name
         );

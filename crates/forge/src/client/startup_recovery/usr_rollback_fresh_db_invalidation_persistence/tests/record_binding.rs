@@ -106,8 +106,8 @@ fn startup_fresh_db_invalidation_bound_advance_same_byte_replacements_never_succ
                             );
                             arm_public_binding_revalidation_callback(boundary, hook);
 
-                            let error = persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority)
-                                .unwrap_err();
+                            let error =
+                                persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority).unwrap_err();
 
                             assert_public_binding_revalidation_callback_consumed();
                             assert!(matches!(
@@ -123,12 +123,7 @@ fn startup_fresh_db_invalidation_bound_advance_same_byte_replacements_never_succ
                                     assert_eq!(fixture.canonical_record(), successor)
                                 }
                             }
-                            assert_invalidation_only(
-                                &fixture,
-                                &database_before,
-                                &namespace_before,
-                                expected_removals,
-                            );
+                            assert_invalidation_only(&fixture, &database_before, &namespace_before, expected_removals);
                         }
                     }
                 }
@@ -157,7 +152,9 @@ fn startup_fresh_db_invalidation_same_byte_successor_replacement_fails_same_stor
                         let expected_removals = usize::from(origin == FreshDbInvalidationOrigin::Applied);
                         let hook = same_byte_different_inode_hook(
                             &fixture,
-                            format!("published-{origin:?}-{historical}-{source:?}-{usr_outcome:?}-{candidate_outcome:?}"),
+                            format!(
+                                "published-{origin:?}-{historical}-{source:?}-{usr_outcome:?}-{candidate_outcome:?}"
+                            ),
                         );
                         arm_before_usr_rollback_fresh_db_invalidation_successor_binding_revalidation(hook);
 
@@ -172,12 +169,7 @@ fn startup_fresh_db_invalidation_same_byte_successor_replacement_fails_same_stor
                             }
                         ));
                         assert_eq!(fixture.canonical_record(), successor);
-                        assert_invalidation_only(
-                            &fixture,
-                            &database_before,
-                            &namespace_before,
-                            expected_removals,
-                        );
+                        assert_invalidation_only(&fixture, &database_before, &namespace_before, expected_removals);
                     }
                 }
             }
@@ -205,7 +197,9 @@ fn startup_fresh_db_invalidation_same_byte_successor_replacement_fails_reopened_
                         let expected_removals = usize::from(origin == FreshDbInvalidationOrigin::Applied);
                         let hook = same_byte_different_inode_hook(
                             &fixture,
-                            format!("reopened-{origin:?}-{historical}-{source:?}-{usr_outcome:?}-{candidate_outcome:?}"),
+                            format!(
+                                "reopened-{origin:?}-{historical}-{source:?}-{usr_outcome:?}-{candidate_outcome:?}"
+                            ),
                         );
                         arm_after_usr_rollback_fresh_db_invalidation_successor_binding_check_before_reopen(hook);
 
@@ -220,12 +214,7 @@ fn startup_fresh_db_invalidation_same_byte_successor_replacement_fails_reopened_
                             }
                         ));
                         assert_eq!(fixture.canonical_record(), successor);
-                        assert_invalidation_only(
-                            &fixture,
-                            &database_before,
-                            &namespace_before,
-                            expected_removals,
-                        );
+                        assert_invalidation_only(&fixture, &database_before, &namespace_before, expected_removals);
                     }
                 }
             }

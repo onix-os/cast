@@ -17,10 +17,7 @@ fn full_alias_preflight_retains_global_states_and_deadline_without_effects() {
             assert_eq!(target.deadline(), plan.input_deadline());
             assert_eq!(domain.requests().len(), plan.publication_count());
             assert_eq!(domain.expected_sources().len(), plan.publication_count());
-            assert_eq!(
-                domain.plan_indices(),
-                (0..plan.publication_count()).collect::<Vec<_>>()
-            );
+            assert_eq!(domain.plan_indices(), (0..plan.publication_count()).collect::<Vec<_>>());
             Ok(support::target_assessment(target, expected_states.to_vec()))
         };
         let admitted = Instant::now();
@@ -38,7 +35,10 @@ fn full_alias_preflight_retains_global_states_and_deadline_without_effects() {
         assert!(debug.contains("descriptors hidden"));
         assert!(!debug.contains("firmware"));
         drop(preflight);
-        assert_eq!(before, render_support::TreeSnapshot::capture(&fixture.installation.root));
+        assert_eq!(
+            before,
+            render_support::TreeSnapshot::capture(&fixture.installation.root)
+        );
     });
 }
 
@@ -91,15 +91,16 @@ fn inherited_deadline_fails_closed_at_each_outer_preflight_boundary() {
 #[test]
 fn collision_and_terminal_topology_drift_fail_after_read_only_assessment() {
     support::with_bound_alias_plan!(|_fixture, topology_fixture, plan| {
-        let mut collision_assess = |_role,
-                                    target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
-                                    domain: &BoundActiveReblitBootNamespaceDomain<'_>| {
-            arm_bound_plan_collision_drift();
-            Ok(support::target_assessment(
-                target,
-                vec![BootNamespaceDestinationState::Absent; domain.plan_indices().len()],
-            ))
-        };
+        let mut collision_assess =
+            |_role,
+             target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
+             domain: &BoundActiveReblitBootNamespaceDomain<'_>| {
+                arm_bound_plan_collision_drift();
+                Ok(support::target_assessment(
+                    target,
+                    vec![BootNamespaceDestinationState::Absent; domain.plan_indices().len()],
+                ))
+            };
         let admitted = Instant::now();
         let mut now = || admitted;
         assert!(matches!(
@@ -108,16 +109,17 @@ fn collision_and_terminal_topology_drift_fail_after_read_only_assessment() {
         ));
 
         let mutated = Cell::new(false);
-        let mut topology_assess = |_role,
-                                   target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
-                                   domain: &BoundActiveReblitBootNamespaceDomain<'_>| {
-            topology_fixture.replace_attachment_identity().unwrap();
-            mutated.set(true);
-            Ok(support::target_assessment(
-                target,
-                vec![BootNamespaceDestinationState::Exact; domain.plan_indices().len()],
-            ))
-        };
+        let mut topology_assess =
+            |_role,
+             target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
+             domain: &BoundActiveReblitBootNamespaceDomain<'_>| {
+                topology_fixture.replace_attachment_identity().unwrap();
+                mutated.set(true);
+                Ok(support::target_assessment(
+                    target,
+                    vec![BootNamespaceDestinationState::Exact; domain.plan_indices().len()],
+                ))
+            };
         let mut now = || admitted;
         let error = plan
             .prepare_boot_publication_preflight_fixture_with(&mut topology_assess, &mut now)

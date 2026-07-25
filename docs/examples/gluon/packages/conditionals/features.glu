@@ -1,8 +1,10 @@
 
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
+// Feature switches are typed values consumed by an ordinary pure function.
+// They can select complete list fields without stringly conditional syntax.
 {
-    documentation = b.boolean.true,
-    tests = b.boolean.true,
-    tls = b.boolean.false,
+    documentation = a.true,
+    tests = a.true,
+    tls = a.false,
 }

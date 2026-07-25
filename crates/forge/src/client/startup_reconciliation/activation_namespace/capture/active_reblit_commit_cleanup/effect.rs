@@ -8,15 +8,14 @@ use crate::linux_fs::renameat2_exchange_once;
 
 use super::{PreparedActiveReblitCommitCleanupExchange, pre_exchange_safety::require_exact_apply};
 
+pub(in crate::client::startup_reconciliation) use reconciliation::ActiveReblitCommitCleanupExchangeReconciliation;
 #[cfg(test)]
 pub(in crate::client) use reconciliation::arm_before_active_reblit_commit_cleanup_reconciliation_capture;
-pub(in crate::client::startup_reconciliation) use reconciliation::ActiveReblitCommitCleanupExchangeReconciliation;
 
 /// Consumed descriptors plus an uninterpreted raw syscall report. Only a
 /// fresh exact namespace capture may classify the semantic outcome.
 #[must_use = "an ActiveReblit cleanup exchange attempt must be reconciled"]
-pub(in crate::client::startup_reconciliation) struct PendingActiveReblitCommitCleanupExchangeReconciliation
-{
+pub(in crate::client::startup_reconciliation) struct PendingActiveReblitCommitCleanupExchangeReconciliation {
     parents: super::RetainedActiveReblitCommitCleanupParents,
     authenticated_apply: super::NamespaceSnapshot,
     authenticated_projection: super::ProjectedActiveReblitCommitCleanupNamespace,
@@ -30,10 +29,8 @@ impl PreparedActiveReblitCommitCleanupExchange {
         self,
         installation: &crate::Installation,
         record: &crate::transition_journal::TransitionRecord,
-    ) -> Result<
-        PendingActiveReblitCommitCleanupExchangeReconciliation,
-        super::ActiveReblitCommitCleanupEffectError,
-    > {
+    ) -> Result<PendingActiveReblitCommitCleanupExchangeReconciliation, super::ActiveReblitCommitCleanupEffectError>
+    {
         require_exact_apply(
             installation,
             record,
@@ -58,12 +55,7 @@ impl PreparedActiveReblitCommitCleanupExchange {
 
 #[cfg(not(test))]
 fn attempt_raw_exchange_once(parents: &super::RetainedActiveReblitCommitCleanupParents) -> io::Result<()> {
-    renameat2_exchange_once(
-        &parents.roots,
-        c"staging",
-        &parents.quarantine,
-        &parents.target_name,
-    )
+    renameat2_exchange_once(&parents.roots, c"staging", &parents.quarantine, &parents.target_name)
 }
 
 #[cfg(test)]
@@ -76,14 +68,8 @@ fn attempt_raw_exchange_once(parents: &super::RetainedActiveReblitCommitCleanupP
                 | ActiveReblitCommitCleanupExchangeFault::SuccessWithoutApply
         )
     );
-    let kernel_result = apply.then(|| {
-        renameat2_exchange_once(
-            &parents.roots,
-            c"staging",
-            &parents.quarantine,
-            &parents.target_name,
-        )
-    });
+    let kernel_result =
+        apply.then(|| renameat2_exchange_once(&parents.roots, c"staging", &parents.quarantine, &parents.target_name));
     match (injected, kernel_result) {
         (Some(ActiveReblitCommitCleanupExchangeFault::ErrorWithoutApply), None) => {
             Err(io::Error::from_raw_os_error(nix::libc::EIO))
@@ -117,7 +103,10 @@ pub(in crate::client) fn arm_active_reblit_commit_cleanup_exchange_fault(
     fault: ActiveReblitCommitCleanupExchangeFault,
 ) {
     EXCHANGE_FAULT.with(|slot| {
-        assert!(slot.replace(Some(fault)).is_none(), "cleanup exchange fault already armed");
+        assert!(
+            slot.replace(Some(fault)).is_none(),
+            "cleanup exchange fault already armed"
+        );
     });
 }
 

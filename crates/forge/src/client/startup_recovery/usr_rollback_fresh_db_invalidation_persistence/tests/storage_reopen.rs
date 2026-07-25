@@ -74,8 +74,8 @@ fn startup_fresh_db_invalidation_persistence_faults_reopen_exact_intent_or_inval
                             };
                             arm();
 
-                            let error = persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority)
-                                .unwrap_err();
+                            let error =
+                                persist_usr_rollback_fresh_db_invalidation_and_reopen(journal, authority).unwrap_err();
 
                             assert_consumed();
                             assert!(matches!(

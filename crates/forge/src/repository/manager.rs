@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use config::declaration::DeclarationEvaluatorSet;
+use declarative_config::DeclarationEvaluator as _;
 use fs_err as fs;
 use futures_util::{StreamExt, stream};
-use gluon_config::Evaluator;
 use url::Url;
 #[cfg(test)]
 use xxhash_rust::xxh3::xxh3_64;
@@ -151,9 +152,10 @@ impl Manager {
             Source::ConfigManager(config) =>
             // Load all configs, default if none exist
             {
+                let evaluators = DeclarationEvaluatorSet::new(repository::RepositoryEvaluator::registered())
+                    .expect("the repository languages register distinct extensions");
                 config
-                    .load_gluon(&Evaluator::default(), &repository::RepositoryCodec)
-                    .map_err(|error| Error::LoadConfig(Box::new(error)))?
+                    .load_declarations(&evaluators)?
                     .into_iter()
                     .map(|loaded| (Some(loaded.path), loaded.value))
                     .collect()
@@ -199,9 +201,11 @@ impl Manager {
         // We save it as a map for easy merging across
         // multiple configuration files
         let map = repository::Map::with([(id.clone(), repository.clone())]);
-        let config_path = config
-            .save_gluon(&id, &map, &repository::RepositoryCodec)
-            .map_err(|error| Error::SaveConfig(Box::new(error)))?;
+        let codec = repository::RepositoryCodec::default();
+        let active_language = codec.language_spec().clone();
+        let evaluators =
+            DeclarationEvaluatorSet::new([codec]).expect("one validated repository adapter has no extension collision");
+        let config_path = config.save_declaration(&id, &map, &evaluators, &active_language)?;
 
         let (db, cache_dir) = open_meta_db(self.source.identifier(), &id, &repository, &self.installation)?;
 
@@ -496,7 +500,14 @@ impl Manager {
 
         // Delete config, only succeeds for configs that live in their
         // own config file w/ matching repo name
-        if config.delete_gluon::<repository::Map>(&repo.id).is_err() {
+        let adapter = repository::RepositoryCodec::default();
+        let active_language = adapter.language_spec().clone();
+        let evaluators = DeclarationEvaluatorSet::new([adapter])
+            .expect("one validated repository adapter has no extension collision");
+        if config
+            .delete_declaration(&repo.id, &evaluators, &active_language)
+            .is_err()
+        {
             return Ok(Removal::ConfigDeleted(false));
         }
         self.repositories.remove(&id);
@@ -524,9 +535,11 @@ impl Manager {
             cached.repository.active = active;
 
             let map = repository::Map::with([(id.clone(), cached.repository.clone())]);
-            config
-                .save_gluon(id, &map, &repository::RepositoryCodec)
-                .map_err(|error| Error::SaveConfig(Box::new(error)))?;
+            let codec = repository::RepositoryCodec::default();
+            let active_language = codec.language_spec().clone();
+            let evaluators = DeclarationEvaluatorSet::new([codec])
+                .expect("one validated repository adapter has no extension collision");
+            config.save_declaration(id, &map, &evaluators, &active_language)?;
         }
 
         Ok(())

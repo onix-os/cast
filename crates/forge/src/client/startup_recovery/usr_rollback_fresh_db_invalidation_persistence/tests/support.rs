@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    Installation, db,
+    Installation,
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackFreshDbInvalidationSeal,
@@ -12,6 +12,7 @@ use crate::{
         },
         startup_recovery::UsrRollbackFreshDbInvalidationEffectSeal,
     },
+    db,
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
     transition_journal::{Phase, RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
@@ -121,10 +122,7 @@ pub(super) fn non_journal_namespace_snapshot(fixture: &FreshDbInvalidationFixtur
     fixture.namespace_snapshot()
 }
 
-pub(super) fn install_persistent_database(
-    fixture: &mut FreshDbInvalidationFixture,
-    origin: FreshDbInvalidationOrigin,
-) {
+pub(super) fn install_persistent_database(fixture: &mut FreshDbInvalidationFixture, origin: FreshDbInvalidationOrigin) {
     let database = open_state_database(&fixture.fixture.fixture.installation);
     let previous = database.add(&[], Some("rollback previous"), None).unwrap().id;
     let candidate = database
@@ -140,11 +138,7 @@ pub(super) fn install_persistent_database(
     assert_eq!(candidate, fixture.fixture.fixture.candidate_state);
     let provenance = db::state::MetadataProvenance::from_outputs(OS_RELEASE, SYSTEM_MODEL);
     database
-        .insert_fresh_metadata_provenance_if_transition_matches(
-            candidate,
-            &fixture.record.transition_id,
-            &provenance,
-        )
+        .insert_fresh_metadata_provenance_if_transition_matches(candidate, &fixture.record.transition_id, &provenance)
         .unwrap();
     if origin == FreshDbInvalidationOrigin::AlreadySatisfied {
         let observation = database
@@ -164,10 +158,7 @@ pub(super) fn install_persistent_database(
 }
 
 pub(super) fn release_handles(mut fixture: FreshDbInvalidationFixture) -> tempfile::TempDir {
-    let retained = std::mem::replace(
-        &mut fixture.fixture.fixture._temporary,
-        private_installation_tempdir(),
-    );
+    let retained = std::mem::replace(&mut fixture.fixture.fixture._temporary, private_installation_tempdir());
     drop(fixture);
     retained
 }

@@ -198,9 +198,7 @@ fn run_before_complete_namespace_capture(
             ActiveReblitBootRepairCompleteCaptureFault::PermissionDenied => {
                 std::io::Error::from_raw_os_error(nix::libc::EACCES)
             }
-            ActiveReblitBootRepairCompleteCaptureFault::Io => {
-                std::io::Error::from_raw_os_error(nix::libc::EIO)
-            }
+            ActiveReblitBootRepairCompleteCaptureFault::Io => std::io::Error::from_raw_os_error(nix::libc::EIO),
             ActiveReblitBootRepairCompleteCaptureFault::Timeout => {
                 return Err(CaptureError::Deadline.into());
             }

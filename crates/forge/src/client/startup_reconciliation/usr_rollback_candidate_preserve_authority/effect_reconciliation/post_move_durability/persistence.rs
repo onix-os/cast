@@ -104,9 +104,7 @@ impl UsrRollbackNewStateCandidatePreserveDurableEffectAuthority<'_> {
             .rollback_successor(Some(self.origin))
             .map_err(UsrRollbackCandidatePreserveRecordAdvanceError::Successor)?;
         if successor.phase != Phase::CandidatePreserved {
-            return Err(UsrRollbackCandidatePreserveRecordAdvanceError::UnexpectedSuccessor {
-                phase: successor.phase,
-            });
+            return Err(UsrRollbackCandidatePreserveRecordAdvanceError::UnexpectedSuccessor { phase: successor.phase });
         }
         let cast = self._effect.installation.retained_mutable_cast_directory()?;
         match journal.advance_record_binding(cast, self._effect.journal_record_binding, &successor) {

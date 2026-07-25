@@ -14,13 +14,11 @@ use crate::client::{
 };
 use crate::linux_fs::{
     descriptor_boot_namespace::{
-        BootNamespaceDestinationState, BootNamespaceRequest,
-        RetainedBootNamespaceExpectedSource,
+        BootNamespaceDestinationState, BootNamespaceRequest, RetainedBootNamespaceExpectedSource,
     },
     mount_namespace::{
-        RetainedBootFilePublicationError, RetainedBootFilePublicationLimits,
-        RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest,
-        RetainedBootPublicationParentError, TaskRootBootNamespaceAssessmentError,
+        RetainedBootFilePublicationError, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
+        RetainedBootFilePublicationRequest, RetainedBootPublicationParentError, TaskRootBootNamespaceAssessmentError,
         ValidatedRetainedBootFilePublication,
     },
 };
@@ -33,8 +31,7 @@ mod fixture;
 
 #[cfg(test)]
 pub(in crate::client) use fixture::{
-    FixtureImmutableLeafAssessmentGuard,
-    arm_fixture_immutable_leaf_assessments,
+    FixtureImmutableLeafAssessmentGuard, arm_fixture_immutable_leaf_assessments,
     fixture_immutable_leaf_assessments_remaining,
 };
 
@@ -123,21 +120,12 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
         let relative_path = output
             .relative_path()
             .to_str()
-            .ok_or(ActiveReblitBootImmutableLeafPublicationError::NonUtf8Path {
-                plan_index,
-            })?;
+            .ok_or(ActiveReblitBootImmutableLeafPublicationError::NonUtf8Path { plan_index })?;
         let path = split_bound_publication_path(relative_path, plan_index)?;
-        let exact_namespace_request = BootNamespaceRequest::new(
-            relative_path,
-            output.expected_length(),
-            output.expected_digest(),
-        );
+        let exact_namespace_request =
+            BootNamespaceRequest::new(relative_path, output.expected_length(), output.expected_digest());
         if namespace_request != exact_namespace_request {
-            return Err(
-                ActiveReblitBootImmutableLeafPublicationError::NamespaceRequestMismatch {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootImmutableLeafPublicationError::NamespaceRequestMismatch { plan_index });
         }
         let leaf_request = RetainedBootFilePublicationRequest::new(
             path.leaf,
@@ -223,11 +211,7 @@ fn reassess_destination_state(
     require_assessment_identity(target, &assessment)?;
     let states = assessment.states();
     if states.len() != 1 {
-        return Err(
-            ActiveReblitBootImmutableLeafPublicationError::NamespaceAssessmentLength {
-                actual: states.len(),
-            },
-        );
+        return Err(ActiveReblitBootImmutableLeafPublicationError::NamespaceAssessmentLength { actual: states.len() });
     }
     Ok(states[0])
 }
@@ -249,31 +233,23 @@ fn split_bound_publication_path(
     plan_index: usize,
 ) -> Result<BoundPublicationPath<'_>, ActiveReblitBootImmutableLeafPublicationError> {
     let mut components = path.split('/');
-    let mut prior = components.next().ok_or(
-        ActiveReblitBootImmutableLeafPublicationError::InvalidPathComponent { plan_index },
-    )?;
+    let mut prior = components
+        .next()
+        .ok_or(ActiveReblitBootImmutableLeafPublicationError::InvalidPathComponent { plan_index })?;
     require_bound_component(prior, plan_index)?;
     let mut parent_components = [""; 15];
     let mut parent_count = 0usize;
     for component in components {
         require_bound_component(component, plan_index)?;
         if parent_count == parent_components.len() {
-            return Err(
-                ActiveReblitBootImmutableLeafPublicationError::PublicationParentDepth {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootImmutableLeafPublicationError::PublicationParentDepth { plan_index });
         }
         parent_components[parent_count] = prior;
         parent_count += 1;
         prior = component;
     }
     if parent_count == 0 {
-        return Err(
-            ActiveReblitBootImmutableLeafPublicationError::MissingPublicationParent {
-                plan_index,
-            },
-        );
+        return Err(ActiveReblitBootImmutableLeafPublicationError::MissingPublicationParent { plan_index });
     }
     Ok(BoundPublicationPath {
         parent_components,
@@ -291,9 +267,7 @@ fn require_bound_component(
         || component.len() > 255
         || component.as_bytes().contains(&0)
     {
-        Err(ActiveReblitBootImmutableLeafPublicationError::InvalidPathComponent {
-            plan_index,
-        })
+        Err(ActiveReblitBootImmutableLeafPublicationError::InvalidPathComponent { plan_index })
     } else {
         Ok(())
     }
@@ -311,14 +285,16 @@ fn require_assessment_identity(
         assessment.destination_mount_id(),
     );
     if expected != found {
-        return Err(ActiveReblitBootImmutableLeafPublicationError::NamespaceAssessmentIdentity {
-            expected_device: expected.0,
-            expected_inode: expected.1,
-            expected_mount_id: expected.2,
-            found_device: found.0,
-            found_inode: found.1,
-            found_mount_id: found.2,
-        });
+        return Err(
+            ActiveReblitBootImmutableLeafPublicationError::NamespaceAssessmentIdentity {
+                expected_device: expected.0,
+                expected_inode: expected.1,
+                expected_mount_id: expected.2,
+                found_device: found.0,
+                found_inode: found.1,
+                found_mount_id: found.2,
+            },
+        );
     }
     Ok(())
 }
@@ -331,14 +307,16 @@ fn require_parent_root_identity(
     let expected = (destination.raw_device(), destination.inode(), target.mount_id());
     let found = (parent.root_device(), parent.root_inode(), parent.root_mount_id());
     if expected != found {
-        return Err(ActiveReblitBootImmutableLeafPublicationError::PublicationParentRootIdentity {
-            expected_device: expected.0,
-            expected_inode: expected.1,
-            expected_mount_id: expected.2,
-            found_device: found.0,
-            found_inode: found.1,
-            found_mount_id: found.2,
-        });
+        return Err(
+            ActiveReblitBootImmutableLeafPublicationError::PublicationParentRootIdentity {
+                expected_device: expected.0,
+                expected_inode: expected.1,
+                expected_mount_id: expected.2,
+                found_device: found.0,
+                found_inode: found.1,
+                found_mount_id: found.2,
+            },
+        );
     }
     Ok(())
 }

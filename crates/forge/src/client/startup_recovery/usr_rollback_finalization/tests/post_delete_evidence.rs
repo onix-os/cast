@@ -10,8 +10,7 @@ use crate::{
             arm_between_usr_rollback_finalization_database_captures,
         },
         startup_recovery::{
-            UsrRollbackFinalizationError, arm_after_usr_rollback_finalization_delete,
-            finalize_usr_rollback,
+            UsrRollbackFinalizationError, arm_after_usr_rollback_finalization_delete, finalize_usr_rollback,
         },
     },
     transition_journal::RollbackActionOutcome,
@@ -69,10 +68,7 @@ fn startup_usr_rollback_finalization_post_delete_evidence_races_never_report_suc
             let error = finalize_usr_rollback(journal, authority).unwrap_err();
 
             assert!(
-                matches!(
-                    error,
-                    UsrRollbackFinalizationError::PostDeleteAuthority(_)
-                ),
+                matches!(error, UsrRollbackFinalizationError::PostDeleteAuthority(_)),
                 "race={race:?}, point={point:?}: {error:?}"
             );
             let observed = fixture.open_journal();

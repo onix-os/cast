@@ -22,29 +22,24 @@ use super::{
     active_reblit_desired_publication::{
         DesiredActiveReblitBootPublication, PreparedActiveReblitDesiredPublicationInventory,
     },
-    active_reblit_mounted_boot_topology::{
-        BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology,
-    },
+    active_reblit_mounted_boot_topology::{BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology},
     active_reblit_publication_plan::{
-        ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot,
-        ActiveReblitBootPublicationPhase, ActiveReblitBootPublicationRole,
+        ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase,
+        ActiveReblitBootPublicationRole,
     },
     boot_content_identity::BootContentIdentity,
 };
 use crate::{
     boot_publication::{
         BootPublicationDestination, BootPublicationDestinations, BootPublicationOutput,
-        BootPublicationOutputProvenanceClaim, BootPublicationOutputRole, BootPublicationSha256,
-        BootPublicationPublicationPhase, BootPublicationRoot,
+        BootPublicationOutputProvenanceClaim, BootPublicationOutputRole, BootPublicationPublicationPhase,
+        BootPublicationRoot, BootPublicationSha256,
     },
     db::state::CurrentExactPromotedBootPublicationReceiptChain,
 };
 
 #[cfg(test)]
-use crate::db::state::{
-    BootPublicationReceiptState,
-    ExactPromotedBootPublicationReceiptChain,
-};
+use crate::db::state::{BootPublicationReceiptState, ExactPromotedBootPublicationReceiptChain};
 
 /// Opaque exact installed chain derived from one strict database snapshot.
 ///
@@ -148,15 +143,11 @@ impl ActiveReblitBootPublicationDeltaRequest {
         &self.relative_path
     }
 
-    pub(in crate::client) const fn desired_expected(
-        &self,
-    ) -> Option<ActiveReblitBootPublicationDeltaExpected> {
+    pub(in crate::client) const fn desired_expected(&self) -> Option<ActiveReblitBootPublicationDeltaExpected> {
         self.desired
     }
 
-    pub(in crate::client) const fn installed_expected(
-        &self,
-    ) -> Option<ActiveReblitBootPublicationDeltaExpected> {
+    pub(in crate::client) const fn installed_expected(&self) -> Option<ActiveReblitBootPublicationDeltaExpected> {
         self.installed
     }
 
@@ -197,15 +188,11 @@ impl ClassifiedActiveReblitBootPublicationDeltaEntry {
         &self.relative_path
     }
 
-    pub(in crate::client) const fn desired_expected(
-        &self,
-    ) -> Option<ActiveReblitBootPublicationDeltaExpected> {
+    pub(in crate::client) const fn desired_expected(&self) -> Option<ActiveReblitBootPublicationDeltaExpected> {
         self.desired_expected
     }
 
-    pub(in crate::client) const fn installed_expected(
-        &self,
-    ) -> Option<ActiveReblitBootPublicationDeltaExpected> {
+    pub(in crate::client) const fn installed_expected(&self) -> Option<ActiveReblitBootPublicationDeltaExpected> {
         self.installed_expected
     }
 
@@ -249,28 +236,21 @@ impl ClassifiedActiveReblitBootPublicationDelta {
                 .insert(key, (index, entry.action, entry.desired_expected))
                 .is_some()
             {
-                return Err(ActiveReblitBootPublicationDeltaError::DuplicateClassifiedKey {
-                    index,
-                });
+                return Err(ActiveReblitBootPublicationDeltaError::DuplicateClassifiedKey { index });
             }
         }
 
         let mut claims = Vec::new();
-        claims
-            .try_reserve_exact(desired.outputs().len())
-            .map_err(|source| ActiveReblitBootPublicationDeltaError::Allocation {
+        claims.try_reserve_exact(desired.outputs().len()).map_err(|source| {
+            ActiveReblitBootPublicationDeltaError::Allocation {
                 resource: "derived receipt provenance claims",
                 source,
-            })?;
+            }
+        })?;
         for (desired_index, output) in desired.outputs().iter().enumerate() {
-            let key = (
-                output.root(),
-                output.relative_path().as_os_str().as_bytes(),
-            );
+            let key = (output.root(), output.relative_path().as_os_str().as_bytes());
             let Some((delta_index, action, classified_expected)) = keyed_entries.remove(&key) else {
-                return Err(ActiveReblitBootPublicationDeltaError::MissingDesiredClassifiedKey {
-                    desired_index,
-                });
+                return Err(ActiveReblitBootPublicationDeltaError::MissingDesiredClassifiedKey { desired_index });
             };
             let Some(claim) = receipt_claim_for_desired_action(action) else {
                 return Err(ActiveReblitBootPublicationDeltaError::StaleActionForDesiredKey {
@@ -302,10 +282,7 @@ impl ClassifiedActiveReblitBootPublicationDelta {
                 delta_index: *delta_index,
             });
         }
-        if let Some((_, (delta_index, _, _))) = keyed_entries
-            .iter()
-            .find(|(_, (_, _, expected))| expected.is_some())
-        {
+        if let Some((_, (delta_index, _, _))) = keyed_entries.iter().find(|(_, (_, _, expected))| expected.is_some()) {
             return Err(ActiveReblitBootPublicationDeltaError::StaleClassifiedExpectation {
                 delta_index: *delta_index,
             });
@@ -345,7 +322,6 @@ impl PreparedActiveReblitBootPublicationDelta {
     pub(in crate::client) fn requests(&self) -> &[ActiveReblitBootPublicationDeltaRequest] {
         &self.requests
     }
-
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -377,14 +353,7 @@ struct DeltaRequestBuilder {
 }
 
 impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
-    BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+    BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 {
     /// Prepare the pure union assessment for the exact bound desired plan.
     ///
@@ -514,19 +483,23 @@ fn prepare_union(
     }
     require_no_union_hierarchy_conflicts(&union)?;
     let mut requests = Vec::new();
-    requests.try_reserve_exact(capacity.min(union.len())).map_err(|source| {
-        ActiveReblitBootPublicationDeltaError::Allocation {
+    requests
+        .try_reserve_exact(capacity.min(union.len()))
+        .map_err(|source| ActiveReblitBootPublicationDeltaError::Allocation {
             resource: "delta union requests",
             source,
-        }
-    })?;
-    requests.extend(union.into_values().map(|entry| ActiveReblitBootPublicationDeltaRequest {
-        root: entry.root,
-        relative_path: entry.relative_path,
-        desired: entry.desired,
-        installed: entry.installed,
-        installed_owned: entry.installed_owned,
-    }));
+        })?;
+    requests.extend(
+        union
+            .into_values()
+            .map(|entry| ActiveReblitBootPublicationDeltaRequest {
+                root: entry.root,
+                relative_path: entry.relative_path,
+                desired: entry.desired,
+                installed: entry.installed,
+                installed_owned: entry.installed_owned,
+            }),
+    );
     Ok(PreparedActiveReblitBootPublicationDelta {
         destination_layout: layout,
         requests,
@@ -579,14 +552,11 @@ fn physical_key(
     })
 }
 
-fn clone_text(
-    value: &str,
-    resource: &'static str,
-) -> Result<Box<str>, ActiveReblitBootPublicationDeltaError> {
+fn clone_text(value: &str, resource: &'static str) -> Result<Box<str>, ActiveReblitBootPublicationDeltaError> {
     let mut cloned = String::new();
-    cloned.try_reserve_exact(value.len()).map_err(|source| {
-        ActiveReblitBootPublicationDeltaError::Allocation { resource, source }
-    })?;
+    cloned
+        .try_reserve_exact(value.len())
+        .map_err(|source| ActiveReblitBootPublicationDeltaError::Allocation { resource, source })?;
     cloned.push_str(value);
     Ok(cloned.into_boxed_str())
 }
@@ -620,8 +590,17 @@ fn destinations_match(
     current: BoundActiveReblitMountedBootTopology<'_>,
 ) -> bool {
     match (installed, current) {
-        (BootPublicationDestinations::BootAliasesEsp { esp: installed }, BoundActiveReblitMountedBootTopology::BootAliasesEsp { esp }) => destination_matches(installed, esp),
-        (BootPublicationDestinations::DistinctXbootldr { esp: installed_esp, xbootldr: installed_xbootldr }, BoundActiveReblitMountedBootTopology::DistinctXbootldr { esp, xbootldr }) => destination_matches(installed_esp, esp) && destination_matches(installed_xbootldr, xbootldr),
+        (
+            BootPublicationDestinations::BootAliasesEsp { esp: installed },
+            BoundActiveReblitMountedBootTopology::BootAliasesEsp { esp },
+        ) => destination_matches(installed, esp),
+        (
+            BootPublicationDestinations::DistinctXbootldr {
+                esp: installed_esp,
+                xbootldr: installed_xbootldr,
+            },
+            BoundActiveReblitMountedBootTopology::DistinctXbootldr { esp, xbootldr },
+        ) => destination_matches(installed_esp, esp) && destination_matches(installed_xbootldr, xbootldr),
         _ => false,
     }
 }
@@ -642,9 +621,7 @@ const fn map_installed_root(root: BootPublicationRoot) -> ActiveReblitBootDestin
     }
 }
 
-const fn map_installed_phase(
-    phase: BootPublicationPublicationPhase,
-) -> ActiveReblitBootPublicationPhase {
+const fn map_installed_phase(phase: BootPublicationPublicationPhase) -> ActiveReblitBootPublicationPhase {
     match phase {
         BootPublicationPublicationPhase::Payload => ActiveReblitBootPublicationPhase::Payload,
         BootPublicationPublicationPhase::Entry => ActiveReblitBootPublicationPhase::Entry,
@@ -689,15 +666,11 @@ pub(in crate::client) enum ActiveReblitBootPublicationDeltaError {
     #[error("desired output {desired_index} has no exact classified delta key")]
     MissingDesiredClassifiedKey { desired_index: usize },
     #[error("classified delta entry {delta_index} uses a stale action for desired output {desired_index}")]
-    StaleActionForDesiredKey {
-        desired_index: usize,
-        delta_index: usize,
-    },
-    #[error("classified delta entry {delta_index} does not bind the exact expected bytes for desired output {desired_index}")]
-    DesiredClassifiedExpectationMismatch {
-        desired_index: usize,
-        delta_index: usize,
-    },
+    StaleActionForDesiredKey { desired_index: usize, delta_index: usize },
+    #[error(
+        "classified delta entry {delta_index} does not bind the exact expected bytes for desired output {desired_index}"
+    )]
+    DesiredClassifiedExpectationMismatch { desired_index: usize, delta_index: usize },
     #[error("classified delta entry {delta_index} is a desired action without an exact desired key")]
     UnmatchedDesiredClassifiedKey { delta_index: usize },
     #[error("stale classified delta entry {delta_index} unexpectedly carries a desired-byte expectation")]
@@ -730,14 +703,13 @@ pub(in crate::client) enum ActiveReblitBootPublicationDeltaError {
     UnownedDifferentDesired { index: usize },
 }
 
-#[path = "active_reblit_installed_boot_publication_delta/live_classification.rs"]
-mod live_classification;
 #[path = "active_reblit_installed_boot_publication_delta/effect_schedule.rs"]
 mod effect_schedule;
+#[path = "active_reblit_installed_boot_publication_delta/live_classification.rs"]
+mod live_classification;
 
 pub(in crate::client) use effect_schedule::{
-    ActiveReblitBootPublicationEffectSchedule,
-    ActiveReblitBootPublicationEffectScheduleError,
+    ActiveReblitBootPublicationEffectSchedule, ActiveReblitBootPublicationEffectScheduleError,
 };
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 use std::{
-    env,
-    fs,
+    env, fs,
     os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -10,16 +9,15 @@ use sha2::{Digest as _, Sha256};
 use xxhash_rust::xxh3::xxh3_128;
 
 use super::active_reblit_mounted_boot_topology::{
-    BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology,
-    PreparedActiveReblitMountedBootTopology,
+    BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology, PreparedActiveReblitMountedBootTopology,
 };
 use crate::{
     Installation,
     linux_fs::{
         descriptor_boot_namespace::RetainedBootNamespaceExpectedSource,
         mount_namespace::{
-            PreparedMountNamespaceAnchor, RetainedBootFilePublicationLimits,
-            RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest,
+            PreparedMountNamespaceAnchor, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
+            RetainedBootFilePublicationRequest,
         },
     },
 };
@@ -28,7 +26,8 @@ const CONFIRMATION: &str = "disposable-vm-gpt-topology-only";
 const RUNTIME_ROOT: &str = "/run/cast-vm-boot-storage";
 const MOUNT_ROOT: &str = "/run/cast-vm-boot-storage/mount";
 const CONSUMED_MARKER: &str = "/run/cast-vm-boot-storage/authorization-v1.consumed";
-const TEST_NAME: &str = "client::disposable_vm_gpt_topology_tests::disposable_vm_authenticates_gpt_boot_topology_and_publishes_real_leaves";
+const TEST_NAME: &str =
+    "client::disposable_vm_gpt_topology_tests::disposable_vm_authenticates_gpt_boot_topology_and_publishes_real_leaves";
 const ALIAS_LEAF: &str = "cast-vm-gpt-alias.efi";
 const DISTINCT_ESP_LEAF: &str = "cast-vm-gpt-distinct-esp.efi";
 const DISTINCT_XBOOTLDR_LEAF: &str = "cast-vm-gpt-distinct-xbootldr.conf";
@@ -62,7 +61,11 @@ fn assert_partuuid(value: &str) {
     assert_eq!(&value[13..14], "-");
     assert_eq!(&value[18..19], "-");
     assert_eq!(&value[23..24], "-");
-    assert!(value.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || byte == b'-'));
+    assert!(
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || byte == b'-')
+    );
 }
 
 fn marker_value<'a>(lines: &'a [&str], key: &str) -> &'a str {
@@ -264,10 +267,8 @@ fn disposable_vm_authenticates_gpt_boot_topology_and_publishes_real_leaves() {
             }
         }
         ("distinct", BoundActiveReblitMountedBootTopology::DistinctXbootldr { esp, xbootldr }) => {
-            let xbootldr_mount = assert_fixed_path(
-                "CAST_VM_GPT_TOPOLOGY_XBOOTLDR_MOUNT",
-                &format!("{MOUNT_ROOT}/xbootldr"),
-            );
+            let xbootldr_mount =
+                assert_fixed_path("CAST_VM_GPT_TOPOLOGY_XBOOTLDR_MOUNT", &format!("{MOUNT_ROOT}/xbootldr"));
             let xbootldr_devnum = parse_devnum(&required("CAST_VM_GPT_TOPOLOGY_XBOOTLDR_DEVNUM"));
             let xbootldr_partuuid = required("CAST_VM_GPT_TOPOLOGY_XBOOTLDR_PARTUUID");
             assert_partuuid(&xbootldr_partuuid);

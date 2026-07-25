@@ -8,14 +8,11 @@ use crate::{
     },
 };
 
-use super::super::{
-    active_state_snapshot::ActiveStateReservation, startup_gate::UsrExchangedRootAbiNormalizationSeal,
-};
+use super::super::{active_state_snapshot::ActiveStateReservation, startup_gate::UsrExchangedRootAbiNormalizationSeal};
 use super::{
-    DatabaseEvidence, InspectionError, UsrExchangedRootAbiNamespaceAdmission,
-    UsrExchangedRootAbiNamespaceError, UsrExchangedRootAbiNamespaceInspection,
-    UsrExchangedRootAbiNamespaceProof, database_ownership_evidence_compatible, inspect_database,
-    metadata_provenance_evidence_compatible,
+    DatabaseEvidence, InspectionError, UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError,
+    UsrExchangedRootAbiNamespaceInspection, UsrExchangedRootAbiNamespaceProof, database_ownership_evidence_compatible,
+    inspect_database, metadata_provenance_evidence_compatible,
 };
 
 pub(in crate::client) enum UsrExchangedRootAbiNormalizationAdmission<'reservation> {
@@ -66,8 +63,7 @@ impl<'reservation> UsrExchangedRootAbiNormalizationAuthority<'reservation> {
 
         let journal_binding = journal.binding();
         require_journal_binding(journal, &journal_binding)?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         // The initial audit was obtained while this same journal guard was
@@ -110,13 +106,9 @@ impl<'reservation> UsrExchangedRootAbiNormalizationAuthority<'reservation> {
             _active_state_reservation: active_state_reservation,
         };
         Ok(if complete {
-            UsrExchangedRootAbiNormalizationAdmission::Synchronize(UsrExchangedRootAbiDurabilityAuthority {
-                retained,
-            })
+            UsrExchangedRootAbiNormalizationAdmission::Synchronize(UsrExchangedRootAbiDurabilityAuthority { retained })
         } else {
-            UsrExchangedRootAbiNormalizationAdmission::Normalize(UsrExchangedRootAbiNormalizationAuthority {
-                retained,
-            })
+            UsrExchangedRootAbiNormalizationAdmission::Normalize(UsrExchangedRootAbiNormalizationAuthority { retained })
         })
     }
 
@@ -126,7 +118,10 @@ impl<'reservation> UsrExchangedRootAbiNormalizationAuthority<'reservation> {
     ) -> Result<(), UsrExchangedRootAbiNormalizationAuthorityError> {
         let mut retained = self.retained;
         retained.revalidate(journal)?;
-        let namespace = retained.namespace.take().expect("normalization authority owns one namespace proof");
+        let namespace = retained
+            .namespace
+            .take()
+            .expect("normalization authority owns one namespace proof");
         let applied = namespace.normalize(&retained.installation, journal, &retained.record, || {
             retained
                 .revalidate_database_and_binding(journal)
@@ -147,7 +142,10 @@ impl<'reservation> UsrExchangedRootAbiDurabilityAuthority<'reservation> {
     ) -> Result<(), UsrExchangedRootAbiNormalizationAuthorityError> {
         let mut retained = self.retained;
         retained.revalidate(journal)?;
-        let namespace = retained.namespace.take().expect("durability authority owns one namespace proof");
+        let namespace = retained
+            .namespace
+            .take()
+            .expect("durability authority owns one namespace proof");
         let durable = namespace.synchronize_complete(&retained.installation, journal, &retained.record, || {
             retained
                 .revalidate_database_and_binding(journal)
@@ -165,12 +163,7 @@ impl RetainedUsrExchangedRootAbiAuthority<'_> {
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrExchangedRootAbiNormalizationAuthorityError> {
         require_journal_binding(journal, &self.journal_binding)?;
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
@@ -182,12 +175,7 @@ impl RetainedUsrExchangedRootAbiAuthority<'_> {
         require_exact_database(&self.database, database_after)?;
         self.installation.revalidate_mutable_namespace()?;
         require_journal_binding(journal, &self.journal_binding)?;
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)
     }
 
     fn revalidate_database_and_binding(
@@ -195,12 +183,7 @@ impl RetainedUsrExchangedRootAbiAuthority<'_> {
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrExchangedRootAbiNormalizationAuthorityError> {
         require_journal_binding(journal, &self.journal_binding)?;
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
@@ -208,12 +191,7 @@ impl RetainedUsrExchangedRootAbiAuthority<'_> {
         require_exact_database(&self.database, database_after)?;
         self.installation.revalidate_mutable_namespace()?;
         require_journal_binding(journal, &self.journal_binding)?;
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)
     }
 }
 
@@ -226,10 +204,12 @@ fn inspect_current_database(
     if database_is_compatible(record, &evidence) {
         Ok(evidence)
     } else {
-        Err(UsrExchangedRootAbiNormalizationAuthorityErrorKind::DatabaseIncompatible {
-            evidence: Box::new(evidence),
-        }
-        .into())
+        Err(
+            UsrExchangedRootAbiNormalizationAuthorityErrorKind::DatabaseIncompatible {
+                evidence: Box::new(evidence),
+            }
+            .into(),
+        )
     }
 }
 
@@ -270,11 +250,7 @@ fn require_journal_record_binding(
     expected: &TransitionJournalRecordBinding,
     record: &TransitionRecord,
 ) -> Result<(), UsrExchangedRootAbiNormalizationAuthorityError> {
-    if journal.has_record_binding(
-        installation.retained_mutable_cast_directory()?,
-        expected,
-        record,
-    )? {
+    if journal.has_record_binding(installation.retained_mutable_cast_directory()?, expected, record)? {
         Ok(())
     } else {
         Err(UsrExchangedRootAbiNormalizationAuthorityErrorKind::JournalRecordBindingMismatch.into())

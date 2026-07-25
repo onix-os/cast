@@ -4,8 +4,7 @@ use std::fs;
 
 use crate::{
     client::{MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal},
-    db,
-    state,
+    db, state,
     transition_journal::Phase,
 };
 

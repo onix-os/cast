@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 umask 077
 
 readonly root="${TOP_DIR:-$(pwd)}"
@@ -15,7 +16,7 @@ readonly commit="4f124a6f438b061a836e332d67e803a69a7bf2d3"
 readonly branch="main"
 readonly identity="cast multiple sources fixture: archive-main+git-protocol-v2+raw-schema-v3"
 
-temporary="$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-multiple-sources-compilers.XXXXXXXX")"
+temporary="$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-multiple-sources-compilers.XXXXXXXX")"
 cleanup() {
     timeout 10s rm -rf -- "$temporary"
 }

@@ -82,9 +82,16 @@ the `root` key, rejects any package or local command-line duplicate, and emits
 the authenticated root token exactly once per kernel.
 
 The recipes under [`packages`](packages) exercise the public
-`cast.package.v3` interface as ordinary, pure Gluon programs. They are
-deliberately small enough to study, but together cover the package shapes
-needed by a declarative userspace.
+`cast.authored.v1` interface as ordinary, pure Gluon programs. `cast.authored.v1`
+is a type-and-constructor layer only: it carries no defaults and no
+builder-to-steps lowering, both of which live once in shared Rust
+(`stone_recipe::package::lower`) and apply identically whether the recipe is
+authored in Gluon or as a plain Lua table. `crates/stone_recipe/tests/authoring_independence.rs`
+authors the same package in both languages and asserts an identical
+`PackageSpec`, so either authoring surface can be dropped without losing any
+authoring behavior. The examples below are deliberately small enough to
+study, but together cover the package shapes needed by a declarative
+userspace.
 
 | Example | What it demonstrates |
 |---|---|
@@ -112,8 +119,8 @@ needed by a declarative userspace.
 | [`backend-choice-factory`](packages/backend-choice-factory/stone.glu) | A closed Gluon variant selecting one mutually exclusive build and runtime backend. |
 | [`release-source-factory`](packages/release-source-factory/stone.glu) | One explicit release record driving package metadata, source identity, and materialization names. |
 | [`service-family-factory`](packages/service-family-factory/stone.glu) | One release and a closed member selector producing an exact daemon, client, or integration closure. |
-| [`release-override`](packages/release-override/stone.glu) | An explicit attribute patch replacing package metadata and the complete source list together. |
-| [`factory-override`](packages/factory-override/stone.glu) | Dependency-argument overrides followed by a typed attribute patch. |
+| [`release-override`](packages/release-override/stone.glu) | A Gluon record update (`{ field = X, .. base }`) over an authored base package, replacing metadata and the complete source list together. |
+| [`factory-override`](packages/factory-override/stone.glu) | A factory-argument override followed by a record update over the authored package it returns. |
 | [`explicit-package-scope`](packages/explicit-package-scope/stone.glu) | Multiple explicit factories receiving one authored capability scope without reflection or recursive package-set magic. |
 | [`explicit-package-set-extension`](packages/explicit-package-set-extension/stone.glu) | A non-recursive package-set extension passed explicitly into a source-less userspace bundle. |
 | [`platform-factory`](packages/platform-factory/stone.glu) | A pure factory receiving explicit platform policy and dependency capabilities from local modules. |

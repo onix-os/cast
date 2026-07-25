@@ -7,15 +7,12 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{self, active_reblit_commit_cleanup},
         startup_reconciliation::{
-            ActiveReblitCommitCleanupDurableAuthority,
-            active_reblit_commit_cleanup_exchange_attempt_count,
+            ActiveReblitCommitCleanupDurableAuthority, active_reblit_commit_cleanup_exchange_attempt_count,
             reset_active_reblit_commit_cleanup_exchange_attempt_count,
         },
         startup_recovery::{
-            ActiveReblitCommitCleanupPersistenceError,
-            ActiveReblitCommitCleanupValidationStage,
-            DurableActiveReblitCommitCleanupRecord,
-            arm_after_active_reblit_commit_cleanup_old_binding_validation,
+            ActiveReblitCommitCleanupPersistenceError, ActiveReblitCommitCleanupValidationStage,
+            DurableActiveReblitCommitCleanupRecord, arm_after_active_reblit_commit_cleanup_old_binding_validation,
             arm_after_active_reblit_commit_cleanup_same_store_check_before_reopen,
             arm_before_active_reblit_commit_cleanup_final_revalidation,
             arm_before_active_reblit_commit_cleanup_fresh_binding_validation,
@@ -25,24 +22,21 @@ use crate::{
         },
     },
     transition_journal::{
-        Phase, TransitionJournalStore, TransitionRecord,
-        arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
-        arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
+        Phase, TransitionJournalStore, TransitionRecord, arm_next_displaced_unlink_fault,
+        arm_next_temporary_sync_fault, arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
         arm_next_update_first_directory_sync_fault, assert_displaced_unlink_fault_consumed,
         assert_temporary_sync_fault_consumed, assert_update_exchange_fault_consumed,
-        assert_update_final_directory_sync_fault_consumed,
-        assert_update_first_directory_sync_fault_consumed,
+        assert_update_final_directory_sync_fault_consumed, assert_update_first_directory_sync_fault_consumed,
     },
 };
 
 use super::{
     boot_sync_complete_support::{
-        exact_promoted_receipt_state, open_boot_sync_complete_journal,
-        same_byte_different_inode_hook,
+        exact_promoted_receipt_state, open_boot_sync_complete_journal, same_byte_different_inode_hook,
     },
     commit_cleanup_effect::{
-        CleanupLayout, capture_apply_pending, capture_finish_pending,
-        commit_decided_fixture, no_boot_commit_decided_fixture,
+        CleanupLayout, capture_apply_pending, capture_finish_pending, commit_decided_fixture,
+        no_boot_commit_decided_fixture,
     },
     support::{Epoch, assert_pending_phase, enter_boot},
 };
@@ -208,12 +202,10 @@ impl BindingHook {
             Self::BeforeReopen | Self::ReopenedOldBinding => {
                 Some(ActiveReblitCommitCleanupValidationStage::ReopenedOldBinding)
             }
-            Self::OldBindingBeforeFreshCapture => Some(
-                ActiveReblitCommitCleanupValidationStage::ReopenedOldBindingAfterFreshCapture,
-            ),
-            Self::ReopenedFreshBinding => {
-                Some(ActiveReblitCommitCleanupValidationStage::ReopenedFreshBinding)
+            Self::OldBindingBeforeFreshCapture => {
+                Some(ActiveReblitCommitCleanupValidationStage::ReopenedOldBindingAfterFreshCapture)
             }
+            Self::ReopenedFreshBinding => Some(ActiveReblitCommitCleanupValidationStage::ReopenedFreshBinding),
         }
     }
 }
@@ -228,23 +220,14 @@ fn cleanup_persistence_all_binding_windows_reject_same_bytes_on_a_new_inode() {
         let reservation = ActiveStateReservation::acquire().unwrap();
         reset_active_reblit_commit_cleanup_exchange_attempt_count();
         let durable = durable_cleanup(&fixture, &journal, &reservation, CleanupLayout::Apply);
-        let replacement = same_byte_different_inode_hook(
-            &fixture,
-            &format!("cleanup-persistence-{hook:?}"),
-        );
+        let replacement = same_byte_different_inode_hook(&fixture, &format!("cleanup-persistence-{hook:?}"));
         match hook {
-            BindingHook::FinalAuthority => {
-                arm_before_active_reblit_commit_cleanup_final_revalidation(replacement)
-            }
-            BindingHook::SameStore => {
-                arm_before_active_reblit_commit_cleanup_same_store_validation(replacement)
-            }
+            BindingHook::FinalAuthority => arm_before_active_reblit_commit_cleanup_final_revalidation(replacement),
+            BindingHook::SameStore => arm_before_active_reblit_commit_cleanup_same_store_validation(replacement),
             BindingHook::BeforeReopen => {
                 arm_after_active_reblit_commit_cleanup_same_store_check_before_reopen(replacement)
             }
-            BindingHook::ReopenedOldBinding => {
-                arm_before_active_reblit_commit_cleanup_reopened_validation(replacement)
-            }
+            BindingHook::ReopenedOldBinding => arm_before_active_reblit_commit_cleanup_reopened_validation(replacement),
             BindingHook::OldBindingBeforeFreshCapture => {
                 arm_after_active_reblit_commit_cleanup_old_binding_validation(replacement)
             }
@@ -269,7 +252,11 @@ fn cleanup_persistence_all_binding_windows_reject_same_bytes_on_a_new_inode() {
         }
         assert_eq!(
             fixture.fixture.canonical_record(),
-            if matches!(hook, BindingHook::FinalAuthority) { source } else { successor }
+            if matches!(hook, BindingHook::FinalAuthority) {
+                source
+            } else {
+                successor
+            }
         );
         assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), 1);
     }
@@ -339,9 +326,7 @@ fn durable_cleanup<'reservation>(
     pending.complete(journal).unwrap()
 }
 
-fn dispatch_cleanup_once(
-    fixture: &super::support::BootRepairFixture,
-) -> TransitionRecord {
+fn dispatch_cleanup_once(fixture: &super::support::BootRepairFixture) -> TransitionRecord {
     let journal = open_boot_sync_complete_journal(fixture);
     let record = journal
         .load()
@@ -371,10 +356,7 @@ fn exact_cleanup_complete(source: &TransitionRecord) -> TransitionRecord {
     successor
 }
 
-fn assert_advance_failure(
-    error: &startup_gate::Error,
-    expected: DurableActiveReblitCommitCleanupRecord,
-) {
+fn assert_advance_failure(error: &startup_gate::Error, expected: DurableActiveReblitCommitCleanupRecord) {
     assert!(matches!(
         error,
         startup_gate::Error::ActiveReblitCommitCleanupDispatch(

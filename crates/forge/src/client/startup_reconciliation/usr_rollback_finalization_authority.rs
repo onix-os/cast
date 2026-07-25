@@ -104,8 +104,7 @@ impl<'reservation> UsrRollbackFinalizationAuthority<'reservation> {
 
         installation.revalidate_mutable_namespace()?;
         let journal_binding = journal.binding();
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database(record, state_db)? {
@@ -118,8 +117,8 @@ impl<'reservation> UsrRollbackFinalizationAuthority<'reservation> {
             &journal_record_binding,
             record,
         ) {
-                Ok(inspection) => inspection,
-                Err(_) => return Ok(UsrRollbackFinalizationAdmission::Deferred),
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(UsrRollbackFinalizationAdmission::Deferred),
         };
         run_between_database_captures();
         let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
@@ -155,32 +154,18 @@ impl<'reservation> UsrRollbackFinalizationAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackFinalizationAuthorityError> {
-        require_journal_record_binding(
-            journal,
-            &self.installation,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(journal, &self.installation, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if database_before != database_after || !rollback_finalization_plan_is_exact(&self.record) {
             return Err(UsrRollbackFinalizationAuthorityErrorKind::FinalizationEvidenceMismatch.into());
         }
-        require_journal_record_binding(
-            journal,
-            &self.installation,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(journal, &self.installation, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }

@@ -1,3 +1,4 @@
+let a = import! cast.authored.v1
 let roles = import! "./roles.glu"
 let make_role = import! "./package.glu"
 

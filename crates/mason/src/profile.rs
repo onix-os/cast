@@ -1,59 +1,32 @@
 // SPDX-FileCopyrightText: 2024 AerynOS Developers
 
-//! Versioned Gluon boundary and domain model for Cast profiles.
+//! Language-neutral domain model and orchestration for Cast profiles.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error as StdError,
-    fmt::{self, Write as _},
+    fmt,
 };
 
-use config::{Config, DecodedGluon, GluonCodec, GluonCodecError};
+use config::{
+    Config,
+    declaration::{
+        DeclarationEvaluatorSet, LoadManagedDeclarationError,
+        SaveManagedDeclarationError,
+    },
+};
 use derive_more::{Debug, Display};
+use declarative_config::DeclarationEvaluator as _;
 use forge::{Repository, repository};
-use gluon_config::{Evaluator, Source as GluonSource};
 use stone_recipe::derivation::ProfileFragmentProvenance;
 use thiserror::Error;
 
 use crate::Env;
 
-/// Version of the embedded profile configuration API.
-pub const PROFILE_ABI_VERSION: u32 = 1;
+mod gluon;
+mod lua;
 
-/// Pure definitions imported by authored fragments as `cast.profile.v1`.
-pub const GLUON_PROFILE_ABI: &str = include_str!("../gluon/profile.glu");
-
-const STANDALONE_GLUON_TYPES: &str = r#"type Optional a =
-    | None
-    | Some a
-
-type Boolean =
-    | False
-    | True
-
-type RepositorySourceSpec =
-    | DirectIndex { uri : String }
-    | RootIndex {
-        base_uri : String,
-        channel : Optional String,
-        version : String,
-        arch : Optional String,
-    }
-
-type RepositorySpec = {
-    id : String,
-    description : Optional String,
-    source : RepositorySourceSpec,
-    priority : Optional Int,
-    enabled : Optional Boolean,
-}
-
-type ProfileSpec = {
-    id : String,
-    repositories : Array RepositorySpec,
-}
-
-"#;
+pub use gluon::ProfileCodec;
 
 /// A unique [`Profile`] identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Display)]
@@ -134,10 +107,6 @@ impl Config for Map {
         "profile".into()
     }
 }
-
-/// Stateless profile configuration codec used by [`config::Manager`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct ProfileCodec;
 
 /// Semantic profile conversion failure with a stable field path.
 #[derive(Debug)]
@@ -235,104 +204,6 @@ enum RepositorySourceSpec {
     },
 }
 
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-enum GluonOptional<T> {
-    None,
-    Some(T),
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-enum GluonBool {
-    False,
-    True,
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-struct GluonProfileSpec {
-    id: String,
-    repositories: Vec<GluonRepositorySpec>,
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-struct GluonRepositorySpec {
-    id: String,
-    description: GluonOptional<String>,
-    source: GluonRepositorySourceSpec,
-    priority: GluonOptional<i64>,
-    enabled: GluonOptional<GluonBool>,
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-enum GluonRepositorySourceSpec {
-    DirectIndex {
-        uri: String,
-    },
-    RootIndex {
-        base_uri: String,
-        channel: GluonOptional<String>,
-        version: String,
-        arch: GluonOptional<String>,
-    },
-}
-
-impl<T> From<GluonOptional<T>> for Option<T> {
-    fn from(value: GluonOptional<T>) -> Self {
-        match value {
-            GluonOptional::None => None,
-            GluonOptional::Some(value) => Some(value),
-        }
-    }
-}
-
-impl From<GluonBool> for bool {
-    fn from(value: GluonBool) -> Self {
-        match value {
-            GluonBool::False => false,
-            GluonBool::True => true,
-        }
-    }
-}
-
-impl From<GluonProfileSpec> for ProfileSpec {
-    fn from(value: GluonProfileSpec) -> Self {
-        Self {
-            id: value.id,
-            repositories: value.repositories.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<GluonRepositorySpec> for RepositorySpec {
-    fn from(value: GluonRepositorySpec) -> Self {
-        Self {
-            id: value.id,
-            description: value.description.into(),
-            source: value.source.into(),
-            priority: value.priority.into(),
-            enabled: Option::<GluonBool>::from(value.enabled).map(Into::into),
-        }
-    }
-}
-
-impl From<GluonRepositorySourceSpec> for RepositorySourceSpec {
-    fn from(value: GluonRepositorySourceSpec) -> Self {
-        match value {
-            GluonRepositorySourceSpec::DirectIndex { uri } => Self::DirectIndex { uri },
-            GluonRepositorySourceSpec::RootIndex {
-                base_uri,
-                channel,
-                version,
-                arch,
-            } => Self::RootIndex {
-                base_uri,
-                channel: channel.into(),
-                version,
-                arch: arch.into(),
-            },
-        }
-    }
-}
-
 impl From<RepositorySpec> for forge::system_model::spec::RepositorySpec {
     fn from(value: RepositorySpec) -> Self {
         let source = match value.source {
@@ -359,35 +230,6 @@ impl From<RepositorySpec> for forge::system_model::spec::RepositorySpec {
             priority: value.priority,
             enabled: value.enabled,
         }
-    }
-}
-
-impl GluonCodec for ProfileCodec {
-    type Config = Map;
-
-    fn decode(
-        &self,
-        evaluator: &Evaluator,
-        source: &GluonSource,
-    ) -> Result<DecodedGluon<Self::Config>, GluonCodecError> {
-        let mut policy = evaluator.import_policy().clone();
-        policy.insert_embedded_module("cast.profile.v1", GLUON_PROFILE_ABI)?;
-        let evaluator = evaluator.clone().with_import_policy(policy);
-        let evaluation = evaluator.evaluate::<Vec<GluonProfileSpec>>(source)?;
-        let fingerprint = evaluation.fingerprint;
-        let profiles = evaluation.value.into_iter().map(Into::into).collect();
-        let value = decode_specs(profiles).map_err(GluonCodecError::conversion)?;
-
-        Ok(DecodedGluon { value, fingerprint })
-    }
-
-    fn encode(&self, config: &Self::Config) -> Result<String, GluonCodecError> {
-        let specs = config
-            .iter()
-            .map(profile_to_spec)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(GluonCodecError::conversion)?;
-        Ok(encode_specs(&specs))
     }
 }
 
@@ -471,115 +313,6 @@ fn repository_to_spec(
     })
 }
 
-fn encode_specs(specs: &[ProfileSpec]) -> String {
-    let mut profiles = specs.iter().collect::<Vec<_>>();
-    profiles.sort_by(|left, right| left.id.cmp(&right.id));
-
-    let mut output = format!("// Canonical standalone ProfileSpec snapshot (ABI {PROFILE_ABI_VERSION}).\n");
-    output.push_str(STANDALONE_GLUON_TYPES);
-    output.push_str("[\n");
-    for profile in profiles {
-        output.push_str("    {\n");
-        writeln!(output, "        id = {},", gluon_string(&profile.id)).unwrap();
-        output.push_str("        repositories = [\n");
-        let mut repositories = profile.repositories.iter().collect::<Vec<_>>();
-        repositories.sort_by(|left, right| left.id.cmp(&right.id));
-        for repository in repositories {
-            output.push_str("            {\n");
-            writeln!(output, "                id = {},", gluon_string(&repository.id)).unwrap();
-            writeln!(
-                output,
-                "                description = {},",
-                gluon_optional_string(repository.description.as_deref())
-            )
-            .unwrap();
-            encode_source(&mut output, &repository.source);
-            writeln!(
-                output,
-                "                priority = {},",
-                gluon_optional_integer(repository.priority)
-            )
-            .unwrap();
-            writeln!(
-                output,
-                "                enabled = {},",
-                gluon_optional_bool(repository.enabled)
-            )
-            .unwrap();
-            output.push_str("            },\n");
-        }
-        output.push_str("        ],\n");
-        output.push_str("    },\n");
-    }
-    output.push_str("]\n");
-    output
-}
-
-fn encode_source(output: &mut String, source: &RepositorySourceSpec) {
-    match source {
-        RepositorySourceSpec::DirectIndex { uri } => {
-            output.push_str("                source = DirectIndex {\n");
-            writeln!(output, "                    uri = {},", gluon_string(uri)).unwrap();
-            output.push_str("                },\n");
-        }
-        RepositorySourceSpec::RootIndex {
-            base_uri,
-            channel,
-            version,
-            arch,
-        } => {
-            output.push_str("                source = RootIndex {\n");
-            writeln!(output, "                    base_uri = {},", gluon_string(base_uri)).unwrap();
-            writeln!(
-                output,
-                "                    channel = {},",
-                gluon_optional_string(channel.as_deref())
-            )
-            .unwrap();
-            writeln!(output, "                    version = {},", gluon_string(version)).unwrap();
-            writeln!(
-                output,
-                "                    arch = {},",
-                gluon_optional_string(arch.as_deref())
-            )
-            .unwrap();
-            output.push_str("                },\n");
-        }
-    }
-}
-
-fn gluon_optional_string(value: Option<&str>) -> String {
-    value.map_or_else(|| "None".to_owned(), |value| format!("Some {}", gluon_string(value)))
-}
-
-fn gluon_optional_integer(value: Option<i64>) -> String {
-    value.map_or_else(|| "None".to_owned(), |value| format!("Some {value}"))
-}
-
-fn gluon_optional_bool(value: Option<bool>) -> String {
-    value.map_or_else(
-        || "None".to_owned(),
-        |value| format!("Some {}", if value { "True" } else { "False" }),
-    )
-}
-
-fn gluon_string(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len() + 2);
-    escaped.push('"');
-    for character in value.chars() {
-        match character {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\r' => escaped.push_str("\\r"),
-            '\t' => escaped.push_str("\\t"),
-            character => escaped.push(character),
-        }
-    }
-    escaped.push('"');
-    escaped
-}
-
 pub struct Manager<'a> {
     pub profiles: Map,
     /// Ordered, portable provenance for every profile fragment before values
@@ -590,12 +323,14 @@ pub struct Manager<'a> {
 
 impl<'a> Manager<'a> {
     pub fn new(env: &'a Env) -> Result<Manager<'a>, Error> {
-        let loaded = env.config.load_gluon(&Evaluator::default(), &ProfileCodec)?;
+        let evaluators = DeclarationEvaluatorSet::new(lua::ProfileEvaluator::registered())
+            .expect("the profile languages register distinct extensions");
+        let loaded = env.config.load_declarations(&evaluators)?;
         let fragments = loaded
             .iter()
             .map(|loaded| ProfileFragmentProvenance {
                 logical_name: loaded.logical_name.clone(),
-                evaluation: loaded.fingerprint.clone(),
+                evaluation: loaded.identity.clone(),
             })
             .collect();
         let profiles = loaded
@@ -646,7 +381,13 @@ impl<'a> Manager<'a> {
 
     pub fn save_profile(&mut self, id: Id, profile: Profile) -> Result<(), Error> {
         let map = Map::with([(id.clone(), profile)]);
-        self.env.config.save_gluon(id, &map, &ProfileCodec)?;
+        let codec = ProfileCodec::default();
+        let active_language = codec.language_spec().clone();
+        let evaluators = DeclarationEvaluatorSet::new([codec])
+            .expect("one validated profile adapter has no extension collision");
+        self.env
+            .config
+            .save_declaration(id, &map, &evaluators, &active_language)?;
 
         // Saving changes both the resolved profile map and the ordered
         // evaluation provenance used by planning. Reload them atomically so a
@@ -674,19 +415,23 @@ pub enum Error {
         requested: String,
     },
     #[error("load profiles")]
-    LoadProfiles(#[source] Box<config::LoadGluonError>),
+    LoadProfiles(
+        #[source] Box<LoadManagedDeclarationError<ProfileConversionError>>,
+    ),
     #[error("save profile")]
-    SaveProfile(#[source] Box<config::SaveGluonError>),
+    SaveProfile(
+        #[source] Box<SaveManagedDeclarationError<ProfileConversionError>>,
+    ),
 }
 
-impl From<config::LoadGluonError> for Error {
-    fn from(error: config::LoadGluonError) -> Self {
+impl From<LoadManagedDeclarationError<ProfileConversionError>> for Error {
+    fn from(error: LoadManagedDeclarationError<ProfileConversionError>) -> Self {
         Self::LoadProfiles(Box::new(error))
     }
 }
 
-impl From<config::SaveGluonError> for Error {
-    fn from(error: config::SaveGluonError) -> Self {
+impl From<SaveManagedDeclarationError<ProfileConversionError>> for Error {
+    fn from(error: SaveManagedDeclarationError<ProfileConversionError>) -> Self {
         Self::SaveProfile(Box::new(error))
     }
 }

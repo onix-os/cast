@@ -19,13 +19,11 @@ use crate::{
         active_reblit_publication_plan::ACTIVE_REBLIT_BOOT_OUTPUT_MODE,
     },
     linux_fs::mount_namespace::{
-        RevalidatedTaskRootedAttachment,
-        RetainedBootFileAppliedSidecarCleanupState,
-        RetainedBootFileMutationFingerprint, RetainedBootFilePublicationLimits,
-        RetainedBootFilePublicationRequest, RetainedBootFileReplacementError,
-        RetainedBootFileReplacementRequest, RetainedBootFileStaleCleanupRequest,
-        RetainedBootFileStaleCleanupState, RetainedBootPublicationParent,
-        RetainedBootPublicationParentError, ValidatedRetainedBootFileReplacement,
+        RetainedBootFileAppliedSidecarCleanupState, RetainedBootFileMutationFingerprint,
+        RetainedBootFilePublicationLimits, RetainedBootFilePublicationRequest, RetainedBootFileReplacementError,
+        RetainedBootFileReplacementRequest, RetainedBootFileStaleCleanupRequest, RetainedBootFileStaleCleanupState,
+        RetainedBootPublicationParent, RetainedBootPublicationParentError, RevalidatedTaskRootedAttachment,
+        ValidatedRetainedBootFileReplacement,
     },
 };
 
@@ -39,8 +37,7 @@ mod restart;
 
 #[cfg(test)]
 pub(in crate::client) use fixture::{
-    FixtureOwnedCleanupTargetGuard, arm_fixture_owned_cleanup_targets,
-    fixture_owned_cleanup_targets_remaining,
+    FixtureOwnedCleanupTargetGuard, arm_fixture_owned_cleanup_targets, fixture_owned_cleanup_targets_remaining,
 };
 
 /// Exact result of one sealed post-promotion cleanup operation.
@@ -58,10 +55,7 @@ pub(in crate::client) enum ActiveReblitBootOwnedCleanupOutcome {
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootOwnedCleanupError {
     #[error("restart cleanup entry {entry_index} is outside the exact plan of {entry_count} entries")]
-    RestartEntryIndex {
-        entry_index: usize,
-        entry_count: usize,
-    },
+    RestartEntryIndex { entry_index: usize, entry_count: usize },
     #[error("the startup cleanup seal belongs to a different promoted receipt")]
     RestartSealReceiptMismatch,
     #[error("the live receipt-validated targets belong to a different promoted receipt")]
@@ -109,7 +103,9 @@ pub(in crate::client) enum ActiveReblitBootOwnedCleanupError {
         #[source]
         source: RetainedBootFileReplacementError,
     },
-    #[error("reconciled replacement authority differs from the retained historical authority for plan output {plan_index}")]
+    #[error(
+        "reconciled replacement authority differs from the retained historical authority for plan output {plan_index}"
+    )]
     ReplacementAuthorityMismatch { plan_index: usize },
     #[error("remove the reconciled applied replacement rollback for plan output {plan_index}")]
     ReplacementCleanup {
@@ -144,20 +140,10 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
         output: &BoundActiveReblitBlsPublication<'_, '_>,
         historical: &ValidatedRetainedBootFileReplacement,
     ) -> Result<ActiveReblitBootOwnedCleanupOutcome, ActiveReblitBootOwnedCleanupError> {
-        let path = validate_historical_replacement(
-            plan_index,
-            output,
-            historical,
-            cleanup_owner(cleanup_seal),
-        )?;
+        let path = validate_historical_replacement(plan_index, output, historical, cleanup_owner(cleanup_seal))?;
         #[cfg(test)]
         if let Some(fixture_target) = fixture::take(self) {
-            return fixture_target.reconcile_and_cleanup_replacement(
-                self,
-                plan_index,
-                &path,
-                historical,
-            );
+            return fixture_target.reconcile_and_cleanup_replacement(self, plan_index, &path, historical);
         }
         reconcile_and_cleanup_replacement_at(
             &self.attachment,
@@ -185,13 +171,7 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
         let owner = cleanup_owner(cleanup_seal);
         #[cfg(test)]
         if let Some(fixture_target) = fixture::take(self) {
-            return fixture_target.reconcile_and_cleanup_stale(
-                self,
-                delta_index,
-                &path,
-                expected,
-                owner,
-            );
+            return fixture_target.reconcile_and_cleanup_stale(self, delta_index, &path, expected, owner);
         }
         reconcile_and_cleanup_stale_at(
             &self.attachment,
@@ -220,12 +200,7 @@ fn reconcile_and_cleanup_replacement_at(
             index: plan_index,
             source,
         })?;
-    require_parent_root_identity(
-        target_identity,
-        &parent,
-        "replacement",
-        plan_index,
-    )?;
+    require_parent_root_identity(target_identity, &parent, "replacement", plan_index)?;
 
     let request = historical_replacement_request(path.leaf, historical);
     match parent
@@ -234,35 +209,19 @@ fn reconcile_and_cleanup_replacement_at(
             RetainedBootFilePublicationLimits::default(),
             deadline,
         )
-        .map_err(|source| {
-            ActiveReblitBootOwnedCleanupError::ReplacementReconciliation {
-                plan_index,
-                source,
-            }
-        })?
+        .map_err(|source| ActiveReblitBootOwnedCleanupError::ReplacementReconciliation { plan_index, source })?
     {
         RetainedBootFileAppliedSidecarCleanupState::AlreadyClean => {
             Ok(ActiveReblitBootOwnedCleanupOutcome::AlreadyClean)
         }
         RetainedBootFileAppliedSidecarCleanupState::Pending(recovered) => {
             if &recovered != historical {
-                return Err(
-                    ActiveReblitBootOwnedCleanupError::ReplacementAuthorityMismatch {
-                        plan_index,
-                    },
-                );
+                return Err(ActiveReblitBootOwnedCleanupError::ReplacementAuthorityMismatch { plan_index });
             }
             parent
                 .cleanup_replaced_boot_file_sidecar_until(recovered, deadline)
-                .map_err(|source| {
-                    ActiveReblitBootOwnedCleanupError::ReplacementCleanup {
-                        plan_index,
-                        source,
-                    }
-                })?;
-            Ok(
-                ActiveReblitBootOwnedCleanupOutcome::RemovedReplacementRollback,
-            )
+                .map_err(|source| ActiveReblitBootOwnedCleanupError::ReplacementCleanup { plan_index, source })?;
+            Ok(ActiveReblitBootOwnedCleanupOutcome::RemovedReplacementRollback)
         }
     }
 }
@@ -293,17 +252,8 @@ fn reconcile_and_cleanup_stale_at(
     );
     let request = RetainedBootFileStaleCleanupRequest::new(stale, owner);
     let state = parent
-        .reconcile_stale_boot_file_cleanup_until(
-            request,
-            RetainedBootFilePublicationLimits::default(),
-            deadline,
-        )
-        .map_err(|source| {
-            ActiveReblitBootOwnedCleanupError::StaleReconciliation {
-                delta_index,
-                source,
-            }
-        })?;
+        .reconcile_stale_boot_file_cleanup_until(request, RetainedBootFilePublicationLimits::default(), deadline)
+        .map_err(|source| ActiveReblitBootOwnedCleanupError::StaleReconciliation { delta_index, source })?;
     let recovered = match state {
         RetainedBootFileStaleCleanupState::AlreadyClean => {
             return Ok(ActiveReblitBootOwnedCleanupOutcome::AlreadyClean);
@@ -313,10 +263,7 @@ fn reconcile_and_cleanup_stale_at(
     };
     parent
         .cleanup_authenticated_stale_boot_file_until(recovered, deadline)
-        .map_err(|source| ActiveReblitBootOwnedCleanupError::StaleCleanup {
-            delta_index,
-            source,
-        })?;
+        .map_err(|source| ActiveReblitBootOwnedCleanupError::StaleCleanup { delta_index, source })?;
     Ok(ActiveReblitBootOwnedCleanupOutcome::RemovedOwnedStale)
 }
 
@@ -332,55 +279,34 @@ fn validate_historical_replacement<'path>(
             found: output.mode(),
         });
     }
-    let relative_path = output.relative_path().to_str().ok_or(
-        ActiveReblitBootOwnedCleanupError::ReplacementNonUtf8Path {
-            plan_index,
-        },
-    )?;
+    let relative_path = output
+        .relative_path()
+        .to_str()
+        .ok_or(ActiveReblitBootOwnedCleanupError::ReplacementNonUtf8Path { plan_index })?;
     let path = split_cleanup_path(relative_path, "replacement", plan_index)?;
     if historical.canonical_leaf() != path.leaf {
-        return Err(ActiveReblitBootOwnedCleanupError::ReplacementLeafIdentity {
-            plan_index,
-        });
+        return Err(ActiveReblitBootOwnedCleanupError::ReplacementLeafIdentity { plan_index });
     }
     if historical.replacement_length() != output.expected_length()
         || historical.replacement_xxh3() != output.expected_digest()
-        || historical.replacement_sha256()
-            != *output.expected_content_identity().as_bytes()
+        || historical.replacement_sha256() != *output.expected_content_identity().as_bytes()
     {
-        return Err(
-            ActiveReblitBootOwnedCleanupError::ReplacementDesiredIdentity {
-                plan_index,
-            },
-        );
+        return Err(ActiveReblitBootOwnedCleanupError::ReplacementDesiredIdentity { plan_index });
     }
     if historical.installed_length() == historical.replacement_length()
         && historical.installed_xxh3() == historical.replacement_xxh3()
         && historical.installed_sha256() == historical.replacement_sha256()
     {
-        return Err(
-            ActiveReblitBootOwnedCleanupError::IdenticalReplacementContent {
-                plan_index,
-            },
-        );
+        return Err(ActiveReblitBootOwnedCleanupError::IdenticalReplacementContent { plan_index });
     }
     if historical.installed_file_inode() == 0
         || historical.replacement_file_inode() == 0
-        || historical.installed_file_inode()
-            == historical.replacement_file_inode()
+        || historical.installed_file_inode() == historical.replacement_file_inode()
     {
-        return Err(
-            ActiveReblitBootOwnedCleanupError::ReplacementFileIdentity {
-                plan_index,
-            },
-        );
+        return Err(ActiveReblitBootOwnedCleanupError::ReplacementFileIdentity { plan_index });
     }
     if historical.owner() != owner {
-        return Err(
-            ActiveReblitBootOwnedCleanupError::ReplacementOwnerMismatch {
-                plan_index,
-            },
-        );
+        return Err(ActiveReblitBootOwnedCleanupError::ReplacementOwnerMismatch { plan_index });
     }
     Ok(path)
 }
@@ -401,19 +327,11 @@ fn historical_replacement_request<'leaf>(
         historical.replacement_xxh3(),
         historical.replacement_sha256(),
     );
-    RetainedBootFileReplacementRequest::new(
-        installed,
-        replacement,
-        historical.owner(),
-    )
+    RetainedBootFileReplacementRequest::new(installed, replacement, historical.owner())
 }
 
-fn cleanup_owner(
-    seal: &ActiveReblitBootPromotedCleanupSeal,
-) -> RetainedBootFileMutationFingerprint {
-    RetainedBootFileMutationFingerprint::new(
-        *seal.promoted_receipt().as_bytes(),
-    )
+fn cleanup_owner(seal: &ActiveReblitBootPromotedCleanupSeal) -> RetainedBootFileMutationFingerprint {
+    RetainedBootFileMutationFingerprint::new(*seal.promoted_receipt().as_bytes())
 }
 
 fn require_parent_root_identity(
@@ -426,12 +344,7 @@ fn require_parent_root_identity(
         || parent.root_inode() != target.inode
         || parent.root_mount_id() != target.mount_id
     {
-        Err(
-            ActiveReblitBootOwnedCleanupError::PublicationParentRootIdentity {
-                kind,
-                index,
-            },
-        )
+        Err(ActiveReblitBootOwnedCleanupError::PublicationParentRootIdentity { kind, index })
     } else {
         Ok(())
     }
@@ -445,9 +358,7 @@ struct OwnedCleanupTargetIdentity {
 }
 
 impl OwnedCleanupTargetIdentity {
-    fn from_publication_target(
-        target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
-    ) -> Self {
+    fn from_publication_target(target: &RevalidatedActiveReblitBootPublicationTarget<'_>) -> Self {
         let destination = target.destination();
         Self {
             device: destination.raw_device(),
@@ -483,32 +394,23 @@ fn split_cleanup_path<'path>(
     index: usize,
 ) -> Result<OwnedCleanupPath<'path>, ActiveReblitBootOwnedCleanupError> {
     let mut components = path.split('/');
-    let mut prior = components.next().ok_or(
-        ActiveReblitBootOwnedCleanupError::InvalidPathComponent {
-            kind,
-            index,
-        },
-    )?;
+    let mut prior = components
+        .next()
+        .ok_or(ActiveReblitBootOwnedCleanupError::InvalidPathComponent { kind, index })?;
     require_component(prior, kind, index)?;
     let mut parent_components = [""; 15];
     let mut parent_count = 0usize;
     for component in components {
         require_component(component, kind, index)?;
         if parent_count == parent_components.len() {
-            return Err(ActiveReblitBootOwnedCleanupError::ParentDepth {
-                kind,
-                index,
-            });
+            return Err(ActiveReblitBootOwnedCleanupError::ParentDepth { kind, index });
         }
         parent_components[parent_count] = prior;
         parent_count += 1;
         prior = component;
     }
     if parent_count == 0 {
-        return Err(ActiveReblitBootOwnedCleanupError::MissingParent {
-            kind,
-            index,
-        });
+        return Err(ActiveReblitBootOwnedCleanupError::MissingParent { kind, index });
     }
     Ok(OwnedCleanupPath {
         parent_components,
@@ -527,10 +429,7 @@ fn require_component(
         || component.len() > 255
         || component.as_bytes().contains(&0)
     {
-        Err(ActiveReblitBootOwnedCleanupError::InvalidPathComponent {
-            kind,
-            index,
-        })
+        Err(ActiveReblitBootOwnedCleanupError::InvalidPathComponent { kind, index })
     } else {
         Ok(())
     }

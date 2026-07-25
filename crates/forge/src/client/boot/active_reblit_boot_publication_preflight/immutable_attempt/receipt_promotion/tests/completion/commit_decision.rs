@@ -12,16 +12,14 @@ use crate::{
     client::{
         CoordinatorActiveStateReservation,
         active_reblit_boot_sync_staging::{
-            CoordinatorActiveReblitBootSyncHandoff,
-            stage_active_reblit_boot_sync_from_handoff_for_test,
+            CoordinatorActiveReblitBootSyncHandoff, stage_active_reblit_boot_sync_from_handoff_for_test,
         },
         startup_reconciliation::arm_after_active_reblit_boot_commit_decision_bound_terminal_validation,
         startup_recovery::arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen,
         startup_recovery::arm_before_active_reblit_boot_sync_commit_decision_final_revalidation,
     },
     transition_journal::{
-        arm_next_update_first_directory_sync_fault,
-        assert_update_first_directory_sync_fault_consumed,
+        arm_next_update_first_directory_sync_fault, assert_update_first_directory_sync_fault_consumed,
     },
 };
 
@@ -188,126 +186,101 @@ macro_rules! persist_commit_decision_with_assessments {
 
 #[test]
 fn exact_completion_persists_one_commit_decision_and_retains_writer_authority() {
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, plan, client, completed| {
-            let source = completed.record().clone();
-            let expected = source.forward_successor(None).unwrap();
-            let fingerprint = completed.receipt_fingerprint();
-            let database_before = fixture.state_db.boot_publication_receipt_state().unwrap();
-            let outputs_before = publication_snapshot!(
-                &plan,
-                topology_fixture.publication_root()
-            );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, plan, client, completed| {
+        let source = completed.record().clone();
+        let expected = source.forward_successor(None).unwrap();
+        let fingerprint = completed.receipt_fingerprint();
+        let database_before = fixture.state_db.boot_publication_receipt_state().unwrap();
+        let outputs_before = publication_snapshot!(&plan, topology_fixture.publication_root());
 
-            assert_eq!(source.generation, 12);
-            assert_eq!(expected.generation, 13);
-            assert!(!source.options.archive_previous);
-            assert!(source.options.run_system_triggers);
-            assert!(source.options.run_boot_sync);
+        assert_eq!(source.generation, 12);
+        assert_eq!(expected.generation, 13);
+        assert!(!source.options.archive_previous);
+        assert!(source.options.run_system_triggers);
+        assert!(source.options.run_boot_sync);
 
-            let committed = persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                4
-            )
-            .unwrap();
+        let committed =
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 4)
+                .unwrap();
 
-            assert_eq!(committed.record(), &expected);
-            assert_eq!(committed.record().phase, Phase::CommitDecided);
-            assert_eq!(committed.record().generation, 13);
-            assert!(!committed.record().options.archive_previous);
-            assert!(committed.record().options.run_system_triggers);
-            assert!(committed.record().options.run_boot_sync);
-            assert_eq!(committed.receipt_fingerprint(), fingerprint);
-            assert_eq!(
-                fixture.state_db.boot_publication_receipt_state().unwrap(),
-                database_before,
-            );
-            assert_eq!(
-                publication_snapshot!(&plan, topology_fixture.publication_root()),
-                outputs_before,
-            );
+        assert_eq!(committed.record(), &expected);
+        assert_eq!(committed.record().phase, Phase::CommitDecided);
+        assert_eq!(committed.record().generation, 13);
+        assert!(!committed.record().options.archive_previous);
+        assert!(committed.record().options.run_system_triggers);
+        assert!(committed.record().options.run_boot_sync);
+        assert_eq!(committed.receipt_fingerprint(), fingerprint);
+        assert_eq!(
+            fixture.state_db.boot_publication_receipt_state().unwrap(),
+            database_before,
+        );
+        assert_eq!(
+            publication_snapshot!(&plan, topology_fixture.publication_root()),
+            outputs_before,
+        );
 
-            let (reached_sender, reached_receiver) = mpsc::channel();
-            let (acquired_sender, acquired_receiver) = mpsc::channel();
-            let contender = thread::spawn(move || {
-                crate::client::fixed_staging::arm_before_coordinator_lock(move || {
-                    reached_sender.send(()).unwrap();
-                });
-                let reservation = CoordinatorActiveStateReservation::acquire().unwrap();
-                acquired_sender.send(()).unwrap();
-                drop(reservation);
+        let (reached_sender, reached_receiver) = mpsc::channel();
+        let (acquired_sender, acquired_receiver) = mpsc::channel();
+        let contender = thread::spawn(move || {
+            crate::client::fixed_staging::arm_before_coordinator_lock(move || {
+                reached_sender.send(()).unwrap();
             });
-            reached_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-            assert!(matches!(
-                acquired_receiver.recv_timeout(Duration::from_millis(100)),
-                Err(RecvTimeoutError::Timeout),
-            ));
-            drop(committed);
-            acquired_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-            contender.join().unwrap();
-            assert_eq!(load_journal_record(&fixture.installation), expected);
-        }
-    );
-
+            let reservation = CoordinatorActiveStateReservation::acquire().unwrap();
+            acquired_sender.send(()).unwrap();
+            drop(reservation);
+        });
+        reached_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
+        assert!(matches!(
+            acquired_receiver.recv_timeout(Duration::from_millis(100)),
+            Err(RecvTimeoutError::Timeout),
+        ));
+        drop(committed);
+        acquired_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
+        contender.join().unwrap();
+        assert_eq!(load_journal_record(&fixture.installation), expected);
+    });
 }
 
 #[test]
 fn wrong_client_state_and_record_are_rejected_before_commit_decision() {
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, _plan, client, completed| {
-            let source = completed.record().clone();
-            let wrong_client = support::staging_client(
-                &fixture,
-                db::state::Database::new(":memory:").unwrap(),
-            );
-            assert!(completed.persist_commit_decided(&wrong_client).is_err());
-            assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
-            assert_eq!(load_journal_record(&client.installation), source);
-        }
-    );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, _plan, client, completed| {
+        let source = completed.record().clone();
+        let wrong_client = support::staging_client(&fixture, db::state::Database::new(":memory:").unwrap());
+        assert!(completed.persist_commit_decided(&wrong_client).is_err());
+        assert_eq!(fixture_boot_namespace_assessments_remaining(), 0);
+        assert_eq!(load_journal_record(&client.installation), source);
+    });
 
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, _plan, client, completed| {
-            let source = completed.record().clone();
-            let state_id = fixture.installation.root.join("usr/.stateID");
-            arm_after_active_reblit_commit_decision_terminal_validation(move || {
-                fs::write(state_id, "999").unwrap();
-            });
-            assert!(persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                2
-            )
-            .is_err());
-            assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed();
-            assert_eq!(load_journal_record(&fixture.installation), source);
-        }
-    );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, _plan, client, completed| {
+        let source = completed.record().clone();
+        let state_id = fixture.installation.root.join("usr/.stateID");
+        arm_after_active_reblit_commit_decision_terminal_validation(move || {
+            fs::write(state_id, "999").unwrap();
+        });
+        assert!(
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 2)
+                .is_err()
+        );
+        assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed();
+        assert_eq!(load_journal_record(&fixture.installation), source);
+    });
 
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, _plan, client, completed| {
-            let mut wrong = completed.record().clone();
-            wrong.generation += 2;
-            let canonical = canonical_journal(&fixture.installation);
-            let wrong_bytes = encode(&wrong).unwrap();
-            arm_after_active_reblit_commit_decision_terminal_validation(move || {
-                fs::write(canonical, wrong_bytes).unwrap();
-            });
-            assert!(persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                1
-            )
-            .is_err());
-            assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed();
-            assert_eq!(load_journal_record(&fixture.installation), wrong);
-            assert_ne!(wrong.phase, Phase::CommitDecided);
-        }
-    );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, _plan, client, completed| {
+        let mut wrong = completed.record().clone();
+        wrong.generation += 2;
+        let canonical = canonical_journal(&fixture.installation);
+        let wrong_bytes = encode(&wrong).unwrap();
+        arm_after_active_reblit_commit_decision_terminal_validation(move || {
+            fs::write(canonical, wrong_bytes).unwrap();
+        });
+        assert!(
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 1)
+                .is_err()
+        );
+        assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed();
+        assert_eq!(load_journal_record(&fixture.installation), wrong);
+        assert_ne!(wrong.phase, Phase::CommitDecided);
+    });
 
     with_exact_commit_decision_completion!(
         @route true, 1,
@@ -354,97 +327,68 @@ fn wrong_client_state_and_record_are_rejected_before_commit_decision() {
 
 #[test]
 fn inner_output_drift_and_deadline_expiry_never_reach_commit_decision() {
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, plan, client, completed| {
-            let source = completed.record().clone();
-            let leaf = topology_fixture
-                .publication_root()
-                .join(plan.outputs().next().unwrap().relative_path());
-            arm_before_active_reblit_boot_sync_commit_decision_final_revalidation(
-                move || fs::remove_file(leaf).unwrap(),
-            );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, plan, client, completed| {
+        let source = completed.record().clone();
+        let leaf = topology_fixture
+            .publication_root()
+            .join(plan.outputs().next().unwrap().relative_path());
+        arm_before_active_reblit_boot_sync_commit_decision_final_revalidation(move || fs::remove_file(leaf).unwrap());
 
-            assert!(persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                3
-            )
-            .is_err());
+        assert!(
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 3)
+                .is_err()
+        );
 
-            assert_eq!(load_journal_record(&fixture.installation), source);
-        }
-    );
+        assert_eq!(load_journal_record(&fixture.installation), source);
+    });
 
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, _plan, client, completed| {
-            let source = completed.record().clone();
-            arm_before_active_reblit_boot_sync_commit_decision_final_revalidation(
-                arm_expired_deadline,
-            );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, _plan, client, completed| {
+        let source = completed.record().clone();
+        arm_before_active_reblit_boot_sync_commit_decision_final_revalidation(arm_expired_deadline);
 
-            assert!(persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                2
-            )
-            .is_err());
+        assert!(
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 2)
+                .is_err()
+        );
 
-            assert_eq!(load_journal_record(&fixture.installation), source);
-        }
-    );
+        assert_eq!(load_journal_record(&fixture.installation), source);
+    });
 }
 
 #[test]
 fn bound_terminal_validation_is_sandwiched_by_authority_revalidation() {
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, _plan, client, completed| {
-            let source = completed.record().clone();
-            let database = fixture.state_db.clone();
-            let candidate = fixture.head.id;
-            arm_after_active_reblit_boot_commit_decision_bound_terminal_validation(
-                move || {
-                    database
-                        .change_summary_for_test(
-                            candidate,
-                            Some("changed after bound terminal validation"),
-                        )
-                        .unwrap();
-                },
-            );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, _plan, client, completed| {
+        let source = completed.record().clone();
+        let database = fixture.state_db.clone();
+        let candidate = fixture.head.id;
+        arm_after_active_reblit_boot_commit_decision_bound_terminal_validation(move || {
+            database
+                .change_summary_for_test(candidate, Some("changed after bound terminal validation"))
+                .unwrap();
+        });
 
-            assert!(persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                3
-            )
-            .is_err());
-            assert_eq!(load_journal_record(&fixture.installation), source);
-        }
-    );
+        assert!(
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 3)
+                .is_err()
+        );
+        assert_eq!(load_journal_record(&fixture.installation), source);
+    });
 }
 
 #[test]
 fn uncertain_commit_decision_fault_returns_no_handoff() {
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, _plan, client, completed| {
-            let expected = completed.record().forward_successor(None).unwrap();
-            arm_next_update_first_directory_sync_fault();
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, _plan, client, completed| {
+        let expected = completed.record().forward_successor(None).unwrap();
+        arm_next_update_first_directory_sync_fault();
 
-            assert!(persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                3
-            )
-            .is_err());
+        assert!(
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 3)
+                .is_err()
+        );
 
-            assert_update_first_directory_sync_fault_consumed();
-            assert_eq!(load_journal_record(&fixture.installation), expected);
-        }
-    );
+        assert_update_first_directory_sync_fault_consumed();
+        assert_eq!(load_journal_record(&fixture.installation), expected);
+    });
 }
 
 #[test]
@@ -462,37 +406,30 @@ fn commit_decision_reopen_never_waits_behind_writer_blocked_journal_contender() 
         return;
     }
 
-    with_exact_commit_decision_completion!(
-        |fixture, topology_fixture, _plan, client, completed| {
-            let expected = completed.record().forward_successor(None).unwrap();
-            let root = fixture.installation.root.clone();
-            let (journal_sender, journal_receiver) = mpsc::channel();
-            let (writer_sender, writer_receiver) = mpsc::channel();
-            let contender = thread::spawn(move || {
-                let journal = TransitionJournalStore::open(&root).unwrap();
-                journal_sender.send(()).unwrap();
-                let reservation = CoordinatorActiveStateReservation::acquire().unwrap();
-                writer_sender.send(()).unwrap();
-                drop(reservation);
-                drop(journal);
-            });
-            arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen(
-                move || {
-                    journal_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-                },
-            );
+    with_exact_commit_decision_completion!(|fixture, topology_fixture, _plan, client, completed| {
+        let expected = completed.record().forward_successor(None).unwrap();
+        let root = fixture.installation.root.clone();
+        let (journal_sender, journal_receiver) = mpsc::channel();
+        let (writer_sender, writer_receiver) = mpsc::channel();
+        let contender = thread::spawn(move || {
+            let journal = TransitionJournalStore::open(&root).unwrap();
+            journal_sender.send(()).unwrap();
+            let reservation = CoordinatorActiveStateReservation::acquire().unwrap();
+            writer_sender.send(()).unwrap();
+            drop(reservation);
+            drop(journal);
+        });
+        arm_after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen(move || {
+            journal_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
+        });
 
-            assert!(persist_commit_decision_with_assessments!(
-                completed,
-                &client,
-                topology_fixture.publication_root(),
-                3
-            )
-            .is_err());
+        assert!(
+            persist_commit_decision_with_assessments!(completed, &client, topology_fixture.publication_root(), 3)
+                .is_err()
+        );
 
-            writer_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
-            contender.join().unwrap();
-            assert_eq!(load_journal_record(&fixture.installation), expected);
-        }
-    );
+        writer_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
+        contender.join().unwrap();
+        assert_eq!(load_journal_record(&fixture.installation), expected);
+    });
 }

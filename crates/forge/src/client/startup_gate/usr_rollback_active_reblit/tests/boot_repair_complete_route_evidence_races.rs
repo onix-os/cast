@@ -6,8 +6,7 @@ use crate::{
     client::{
         startup_gate,
         startup_reconciliation::{
-            RecoveryBlocker,
-            arm_before_usr_rollback_active_reblit_boot_repair_complete_fresh_namespace_capture,
+            RecoveryBlocker, arm_before_usr_rollback_active_reblit_boot_repair_complete_fresh_namespace_capture,
             arm_between_usr_rollback_active_reblit_boot_repair_complete_database_captures,
         },
         startup_recovery::arm_before_usr_rollback_active_reblit_boot_repair_complete_final_revalidation,
@@ -115,10 +114,7 @@ fn startup_active_reblit_boot_repair_complete_rejects_database_provenance_journa
     assert_no_effects();
 }
 
-fn exact_complete_fixture(
-    epoch: Epoch,
-    outcome: BootRepairOutcome,
-) -> super::support::BootRepairFixture {
+fn exact_complete_fixture(epoch: Epoch, outcome: BootRepairOutcome) -> super::support::BootRepairFixture {
     let fixture = build_boot_sync_started(epoch, BootSyncStartedLayout::Post);
     let preserved = drive_boot_sync_started_to_candidate_preserved(
         &fixture,

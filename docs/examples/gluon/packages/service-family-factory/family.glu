@@ -1,4 +1,4 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 type Member =
     | Daemon
@@ -12,13 +12,13 @@ let select = \member ->
         flag = "-DBUILD_MEMBER=daemon",
         summary = "Relay background service",
         runtime_inputs = [
-            b.dep.package "systemd",
-            b.dep.soname "libssl.so.3",
+            a.dep.package "systemd",
+            a.dep.soname "libssl.so.3",
         ],
         paths = [
-            b.path.exe "/usr/sbin/relay-daemon",
-            b.path.any "/usr/lib/systemd/system/relay-daemon.service",
-            b.path.any "/usr/share/defaults/relay-daemon",
+            a.path.exe "/usr/sbin/relay-daemon",
+            a.path.any "/usr/lib/systemd/system/relay-daemon.service",
+            a.path.any "/usr/share/defaults/relay-daemon",
         ],
     }
     | Client -> {
@@ -26,12 +26,12 @@ let select = \member ->
         flag = "-DBUILD_MEMBER=client",
         summary = "Relay command-line client",
         runtime_inputs = [
-            b.dep.soname "libssl.so.3",
-            b.dep.package "ca-certificates",
+            a.dep.soname "libssl.so.3",
+            a.dep.package "ca-certificates",
         ],
         paths = [
-            b.path.exe "/usr/bin/relayctl",
-            b.path.any "/usr/share/man/man1/relayctl.1",
+            a.path.exe "/usr/bin/relayctl",
+            a.path.any "/usr/share/man/man1/relayctl.1",
         ],
     }
     | Integration -> {
@@ -39,12 +39,12 @@ let select = \member ->
         flag = "-DBUILD_MEMBER=integration",
         summary = "Relay declarative integration assets",
         runtime_inputs = [
-            b.dep.package "relay-daemon",
-            b.dep.package "systemd",
+            a.dep.package "relay-daemon",
+            a.dep.package "systemd",
         ],
         paths = [
-            b.path.any "/usr/lib/sysusers.d/relay.conf",
-            b.path.any "/usr/lib/tmpfiles.d/relay.conf",
+            a.path.any "/usr/lib/sysusers.d/relay.conf",
+            a.path.any "/usr/lib/tmpfiles.d/relay.conf",
         ],
     }
 

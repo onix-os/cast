@@ -2,9 +2,7 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackResumeRouteSeal,
-        startup_reconciliation::{
-            RecoveryBlocker, UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority,
-        },
+        startup_reconciliation::{RecoveryBlocker, UsrRollbackResumeRouteAdmission, UsrRollbackResumeRouteAuthority},
     },
     transition_journal::{
         InitialRollbackAction, Phase, RecoveryDisposition, RollbackObservations, TransitionJournalStore,
@@ -39,7 +37,11 @@ fn startup_root_links_complete_post_routes_exactly_across_operations_and_epochs(
             let error = fixture.enter();
             let pending = pending(&error);
 
-            assert_eq!(pending.phase(), Phase::ReverseExchangeIntent, "{kind:?} historical={historical}");
+            assert_eq!(
+                pending.phase(),
+                Phase::ReverseExchangeIntent,
+                "{kind:?} historical={historical}"
+            );
             assert_eq!(
                 pending.disposition(),
                 RecoveryDisposition::ResumeRollback {
@@ -87,7 +89,11 @@ fn startup_root_links_complete_pre_layout_defers_pending_reverse_plan_across_ope
             let error = fixture.enter();
             let pending = pending(&error);
 
-            assert_eq!(pending.phase(), Phase::RollbackDecided, "{kind:?} historical={historical}");
+            assert_eq!(
+                pending.phase(),
+                Phase::RollbackDecided,
+                "{kind:?} historical={historical}"
+            );
             assert!(
                 pending.blockers().contains(&RecoveryBlocker::PhaseNamespaceConflict),
                 "{kind:?} historical={historical}: {:?}",
@@ -95,8 +101,16 @@ fn startup_root_links_complete_pre_layout_defers_pending_reverse_plan_across_ope
             );
             assert_eq!(fixture.canonical_bytes(), before, "{kind:?} historical={historical}");
             assert_eq!(fixture.canonical_record(), decision, "{kind:?} historical={historical}");
-            assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} historical={historical}");
-            assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} historical={historical}");
+            assert_eq!(
+                fixture.namespace_snapshot(),
+                namespace_before,
+                "{kind:?} historical={historical}"
+            );
+            assert_eq!(
+                fixture.database_snapshot(),
+                database_before,
+                "{kind:?} historical={historical}"
+            );
         }
     }
 }
@@ -134,12 +148,7 @@ fn startup_root_links_complete_post_layout_defers_codec_valid_wrong_plans_across
                 } else {
                     Fixture::new(kind, SourceCase::RootLinksCompletePost)
                 };
-                let decision = persist_root_links_decision_with_actions(
-                    &fixture,
-                    usr_exchange,
-                    candidate,
-                    fresh_db,
-                );
+                let decision = persist_root_links_decision_with_actions(&fixture, usr_exchange, candidate, fresh_db);
                 assert_route_deferred(&fixture, &decision);
                 let before = fixture.canonical_bytes();
                 let namespace_before = fixture.namespace_snapshot();
@@ -178,10 +187,7 @@ fn startup_root_links_complete_post_layout_defers_codec_valid_wrong_plans_across
     }
 }
 
-fn persist_root_links_decision(
-    fixture: &Fixture,
-    usr_exchange: InitialRollbackAction,
-) -> TransitionRecord {
+fn persist_root_links_decision(fixture: &Fixture, usr_exchange: InitialRollbackAction) -> TransitionRecord {
     persist_root_links_decision_with_actions(
         fixture,
         usr_exchange,
@@ -206,11 +212,9 @@ fn persist_root_links_decision_with_actions(
             fresh_db: (fixture.kind == OperationKind::NewState).then_some(fresh_db),
         })
         .unwrap();
-    let journal = TransitionJournalStore::open_retained(
-        fixture.installation.root_directory(),
-        &fixture.installation.root,
-    )
-    .unwrap();
+    let journal =
+        TransitionJournalStore::open_retained(fixture.installation.root_directory(), &fixture.installation.root)
+            .unwrap();
     journal.advance(&fixture.source, &decision).unwrap();
     drop(journal);
     assert_eq!(fixture.canonical_record(), decision);
@@ -218,11 +222,9 @@ fn persist_root_links_decision_with_actions(
 }
 
 fn assert_route_deferred(fixture: &Fixture, decision: &TransitionRecord) {
-    let journal = TransitionJournalStore::open_retained(
-        fixture.installation.root_directory(),
-        &fixture.installation.root,
-    )
-    .unwrap();
+    let journal =
+        TransitionJournalStore::open_retained(fixture.installation.root_directory(), &fixture.installation.root)
+            .unwrap();
     let reservation = ActiveStateReservation::acquire().unwrap();
     let seal = UsrRollbackResumeRouteSeal::new_for_test();
     let in_flight = fixture.database.audit_in_flight_transition().unwrap();

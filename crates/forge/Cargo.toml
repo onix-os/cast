@@ -19,6 +19,7 @@ testing = []
 config = { path = "../../crates/config" }
 container = { path = "../../crates/container" }
 dag = { path = "../../crates/dag" }
+declarative_config = { path = "../../crates/declarative_config" }
 stone = { path = "../../crates/stone" }
 triggers = { path = "../../crates/triggers" }
 tui = { path = "../../crates/tui" }
@@ -48,6 +49,7 @@ nix.workspace = true
 os-info.workspace = true
 rayon.workspace = true
 reqwest.workspace = true
+lua_config = { path = "../../crates/lua_config" }
 serde.workspace = true
 serde_json.workspace = true
 similar.workspace = true

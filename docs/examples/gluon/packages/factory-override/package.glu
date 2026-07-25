@@ -1,25 +1,29 @@
-
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
 
 \deps ->
-    let base = b.mk_package (b.meta {
-        pname = "override-client",
-        version = "8.2.0",
-        release = 1,
-        homepage = "https://example.invalid/override-client",
-        license = ["MPL-2.0"],
-    })
     {
-        builder = cmake.builder {
-            flags = ["-DUSE_SYSTEM_LIBRARIES=ON"],
-            .. cmake.defaults
+        meta = {
+            pname = "override-client",
+            version = "8.2.0",
+            release = 1,
+            homepage = "https://example.invalid/override-client",
+            license = ["MPL-2.0"],
         },
-        build_inputs = [deps.compression, deps.tls],
+        builder = a.builder.cmake { flags = ["-DUSE_SYSTEM_LIBRARIES=ON"], run_tests = a.true },
         sources = [
-            b.source.archive
+            a.source.archive
                 "https://example.invalid/override-client-8.2.0.tar.xz"
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ],
-        .. base
+        native_build_inputs = [],
+        build_inputs = [deps.compression, deps.tls],
+        check_inputs = [],
+        outputs = a.outputs.default,
+        options = a.unset,
+        profiles = [],
+        architectures = [],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }

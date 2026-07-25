@@ -263,8 +263,9 @@ fn export_filename(id: state::Id, hostname: Option<&str>) -> String {
     }
 }
 
-fn snapshot_content(system_model: &SystemModel) -> &str {
-    system_model.encoded()
+fn snapshot_content(system_model: &SystemModel) -> String {
+    crate::system_model::encode_snapshot(system_model)
+        .expect("an owned system model always has a canonical snapshot encoding")
 }
 
 /// Emit a state description for the TUI
@@ -389,10 +390,9 @@ mod tests {
             [Provider::package_name("alpha")].into_iter().collect(),
         );
         let content = snapshot_content(&model);
-        let evaluated =
-            system_model::gluon::evaluate_generated_snapshot(&Source::new("system-model.glu", content)).unwrap();
+        let evaluated = system_model::evaluate_snapshot(&Source::new("system-model.glu", content.clone())).unwrap();
 
-        assert!(content.starts_with(system_model::spec::GENERATED_GLUON_MARKER));
+        assert!(content.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
         assert!(!content.contains("import!"));
         assert!(evaluated.packages.contains(&Provider::package_name("alpha")));
     }

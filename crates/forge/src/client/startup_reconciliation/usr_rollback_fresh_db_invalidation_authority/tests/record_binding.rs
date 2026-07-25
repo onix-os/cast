@@ -10,8 +10,7 @@ use crate::{
         startup_reconciliation::{
             UsrRollbackFreshDbInvalidationAdmission,
             arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture,
-            arm_between_usr_rollback_fresh_db_invalidation_database_captures,
-            fresh_db_invalidation_removal_call_count,
+            arm_between_usr_rollback_fresh_db_invalidation_database_captures, fresh_db_invalidation_removal_call_count,
         },
         startup_recovery::UsrRollbackFreshDbInvalidationEffectSeal,
     },
@@ -64,9 +63,9 @@ fn startup_fresh_db_invalidation_capture_rejects_same_byte_source_inode_replacem
         let journal = fixture.open_journal();
         let reservation = ActiveStateReservation::acquire().unwrap();
         let canonical_before = fixture.canonical_bytes();
-        arm_between_usr_rollback_fresh_db_invalidation_database_captures(
-            same_byte_different_inode_hook(&fixture, "capture"),
-        );
+        arm_between_usr_rollback_fresh_db_invalidation_database_captures(same_byte_different_inode_hook(
+            &fixture, "capture",
+        ));
 
         assert!(matches!(
             fixture.capture(&journal, &reservation).unwrap(),
@@ -96,17 +95,19 @@ fn startup_fresh_db_invalidation_effect_rejects_same_byte_source_inode_replaceme
         match row {
             FreshRowLayout::Present => {
                 let authority = fixture.capture_apply(&journal, &reservation);
-                arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture(
-                    same_byte_different_inode_hook(&fixture, "effect-apply"),
-                );
+                arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture(same_byte_different_inode_hook(
+                    &fixture,
+                    "effect-apply",
+                ));
                 assert!(authority.reconcile(&seal, &journal).is_err());
                 fixture.assert_exact_present();
             }
             FreshRowLayout::JointlyAbsent => {
                 let authority = fixture.capture_finish(&journal, &reservation);
-                arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture(
-                    same_byte_different_inode_hook(&fixture, "effect-finish"),
-                );
+                arm_before_usr_rollback_fresh_db_invalidation_fresh_namespace_capture(same_byte_different_inode_hook(
+                    &fixture,
+                    "effect-finish",
+                ));
                 assert!(authority.reconcile(&seal, &journal).is_err());
                 fixture.assert_exact_joint_absence();
             }
@@ -126,9 +127,10 @@ fn startup_fresh_db_invalidation_effect_rejects_same_byte_source_inode_replaceme
     let journal = fixture.open_journal();
     let reservation = ActiveStateReservation::acquire().unwrap();
     let authority = fixture.capture_apply(&journal, &reservation);
-    arm_after_exact_fresh_transition_removal_attempt_before_reconciliation(
-        same_byte_different_inode_hook(&fixture, "post-removal"),
-    );
+    arm_after_exact_fresh_transition_removal_attempt_before_reconciliation(same_byte_different_inode_hook(
+        &fixture,
+        "post-removal",
+    ));
     let seal = UsrRollbackFreshDbInvalidationEffectSeal::new_for_test();
 
     assert!(authority.reconcile(&seal, &journal).is_err());

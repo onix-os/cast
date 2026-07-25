@@ -2,6 +2,7 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 if [ "$#" -ne 2 ]; then
     printf 'usage: %s <absolute-proof-path> <canonical-git-commit>\n' "$0" >&2
     exit 2
@@ -70,7 +71,7 @@ command -v cmp >/dev/null 2>&1 || {
 }
 
 umask 077
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixture-proof-validator.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-fixture-proof-validator.XXXXXXXXXXXX")
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM

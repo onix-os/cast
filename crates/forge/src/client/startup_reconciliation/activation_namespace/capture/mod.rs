@@ -46,26 +46,6 @@ pub(in crate::client::startup_reconciliation::activation_namespace) use active_r
     PendingActiveReblitCandidatePreservePostExchangeDurability, PreparedActiveReblitCandidatePreserveExchange,
     ProjectedActiveReblitCandidatePreserveNamespace, RetainedActiveReblitCandidatePreserveParents,
 };
-pub(in crate::client::startup_reconciliation::activation_namespace) use active_reblit_commit_cleanup::{
-    ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupLayout,
-    RetainedActiveReblitCommitCleanupNamespace,
-};
-pub(in crate::client::startup_reconciliation) use active_reblit_commit_cleanup::{
-    ActiveReblitCommitCleanupDurabilityError, ActiveReblitCommitCleanupEffectError,
-    ActiveReblitCommitCleanupExchangeReconciliation, DurableActiveReblitCommitCleanupNamespace,
-    PendingActiveReblitCommitCleanupDurability, PreparedActiveReblitCommitCleanupExchange,
-};
-#[cfg(test)]
-pub(in crate::client) use active_reblit_commit_cleanup::{
-    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
-    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
-    arm_active_reblit_commit_cleanup_durability_fault,
-    arm_active_reblit_commit_cleanup_exchange_fault,
-    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
-    reset_active_reblit_commit_cleanup_durability_events,
-    reset_active_reblit_commit_cleanup_exchange_attempt_count,
-    take_active_reblit_commit_cleanup_durability_events,
-};
 #[cfg(test)]
 pub(in crate::client) use active_reblit_candidate_preserve::{
     ActiveReblitCandidatePreserveExchangeFault, ActiveReblitCandidatePreservePostExchangeDurabilityEvent,
@@ -83,6 +63,23 @@ pub(in crate::client) use active_reblit_candidate_preserve::{
     reset_active_reblit_candidate_preserve_exchange_attempt_count,
     reset_active_reblit_candidate_preserve_post_exchange_durability_events,
     take_active_reblit_candidate_preserve_post_exchange_durability_events,
+};
+pub(in crate::client::startup_reconciliation::activation_namespace) use active_reblit_commit_cleanup::{
+    ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupLayout, RetainedActiveReblitCommitCleanupNamespace,
+};
+pub(in crate::client::startup_reconciliation) use active_reblit_commit_cleanup::{
+    ActiveReblitCommitCleanupDurabilityError, ActiveReblitCommitCleanupEffectError,
+    ActiveReblitCommitCleanupExchangeReconciliation, DurableActiveReblitCommitCleanupNamespace,
+    PendingActiveReblitCommitCleanupDurability, PreparedActiveReblitCommitCleanupExchange,
+};
+#[cfg(test)]
+pub(in crate::client) use active_reblit_commit_cleanup::{
+    ActiveReblitCommitCleanupDurabilityEvent, ActiveReblitCommitCleanupDurabilityFaultPoint,
+    ActiveReblitCommitCleanupExchangeFault, active_reblit_commit_cleanup_exchange_attempt_count,
+    arm_active_reblit_commit_cleanup_durability_fault, arm_active_reblit_commit_cleanup_exchange_fault,
+    arm_before_active_reblit_commit_cleanup_reconciliation_capture,
+    reset_active_reblit_commit_cleanup_durability_events, reset_active_reblit_commit_cleanup_exchange_attempt_count,
+    take_active_reblit_commit_cleanup_durability_events,
 };
 pub(in crate::client::startup_reconciliation::activation_namespace) use archived_candidate_preserve::{
     AppliedArchivedCandidatePreserveMoveReconciliation, ArchivedCandidatePreserveCaptureError,
@@ -119,7 +116,6 @@ pub(in crate::client) use archived_candidate_preserve::{
     take_archived_candidate_preserve_target_durability_events,
 };
 use model::*;
-use root_entries::*;
 pub(super) use model::{NamespaceSnapshot, StateIdObservation, TreeLocation, UsrFingerprint, WrapperFingerprint};
 pub(in crate::client::startup_reconciliation::activation_namespace) use new_state_candidate_preserve::DurableNewStateCandidatePreservePostMoveNamespace;
 pub(super) use new_state_candidate_preserve::{
@@ -194,6 +190,7 @@ pub(in crate::client) use reverse_exchange::{
     arm_reverse_exchange_durability_fault, reset_reverse_exchange_durability_events,
     take_reverse_exchange_durability_events,
 };
+use root_entries::*;
 use wrappers::*;
 
 const MAX_NAMESPACE_ENTRIES: usize = 1_024;
@@ -273,10 +270,7 @@ pub(super) fn capture_snapshot(
         .map(|residue| residue.fingerprint.clone());
     let fingerprint = NamespaceFingerprint {
         root: root_witness,
-        root_entries: root_entries
-            .iter()
-            .map(|entry| entry.fingerprint.clone())
-            .collect(),
+        root_entries: root_entries.iter().map(|entry| entry.fingerprint.clone()).collect(),
         roots: roots_witness,
         quarantine: quarantine_witness,
         epoch: epoch_after,

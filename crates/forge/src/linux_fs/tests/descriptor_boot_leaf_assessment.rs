@@ -9,9 +9,8 @@ use sha2::{Digest as _, Sha256};
 use xxhash_rust::xxh3::xxh3_128;
 
 use crate::linux_fs::mount_namespace::{
-    FixtureRetainedBootLeafAssessmentHookGuard, PreparedMountNamespaceAnchor,
-    PreparedTaskRootedAttachment, RetainedBootLeafAssessmentError,
-    RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
+    FixtureRetainedBootLeafAssessmentHookGuard, PreparedMountNamespaceAnchor, PreparedTaskRootedAttachment,
+    RetainedBootLeafAssessmentError, RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
     RetainedBootLeafAssessmentState, ValidatedRetainedBootLeafAssessment,
     arm_retained_boot_leaf_assessment_terminal_rebind_hook,
 };
@@ -56,7 +55,12 @@ impl AssessmentFixture {
         parents: &[&str],
         request: RetainedBootLeafAssessmentRequest<'_>,
     ) -> Result<ValidatedRetainedBootLeafAssessment, RetainedBootLeafAssessmentError> {
-        self.assess_with(parents, request, RetainedBootLeafAssessmentLimits::default(), deadline())
+        self.assess_with(
+            parents,
+            request,
+            RetainedBootLeafAssessmentLimits::default(),
+            deadline(),
+        )
     }
 
     fn assess_with(
@@ -82,12 +86,7 @@ impl AssessmentFixture {
 }
 
 fn request(bytes: &[u8]) -> RetainedBootLeafAssessmentRequest<'static> {
-    RetainedBootLeafAssessmentRequest::new(
-        LEAF,
-        bytes.len() as u64,
-        xxh3_128(bytes),
-        Sha256::digest(bytes).into(),
-    )
+    RetainedBootLeafAssessmentRequest::new(LEAF, bytes.len() as u64, xxh3_128(bytes), Sha256::digest(bytes).into())
 }
 
 fn deadline() -> Instant {
@@ -142,7 +141,10 @@ fn missing_leaf_is_absent_but_binds_the_existing_retained_parent() {
     assert_eq!(evidence.assessment_root_inode(), root.ino());
     assert_eq!(evidence.retained_parent_device(), Some(parent.dev()));
     assert_eq!(evidence.retained_parent_inode(), Some(parent.ino()));
-    assert_eq!(evidence.retained_parent_mount_id(), Some(evidence.assessment_root_mount_id()));
+    assert_eq!(
+        evidence.retained_parent_mount_id(),
+        Some(evidence.assessment_root_mount_id())
+    );
     assert_eq!(evidence.exact_file_device(), None);
 }
 
@@ -268,7 +270,10 @@ fn leaf_and_parent_substitution_windows_are_rejected() {
         });
     let error = parent_fixture.assess(&["EFI"], request(EXPECTED)).unwrap_err();
     drop(guard);
-    assert!(matches!(error, RetainedBootLeafAssessmentError::ParentRevalidation { .. }));
+    assert!(matches!(
+        error,
+        RetainedBootLeafAssessmentError::ParentRevalidation { .. }
+    ));
 }
 
 #[test]

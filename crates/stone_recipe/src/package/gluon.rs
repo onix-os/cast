@@ -1,25 +1,30 @@
 //! Gluon evaluation boundary for package declarations.
 
-use gluon_config::{Diagnostic, EvaluationFingerprint, Evaluator, Source};
-use thiserror::Error;
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator,
+    DeclarationInputEvaluator, EvaluationDeadline,
+    Evaluation as DeclarationEvaluation,
+    LanguageSpec, Limits, SourceRoot,
+};
+use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, Source};
 
 use super::{
-    BuilderEnvironmentSpec, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec, MetaSpec, OutputRef, OutputSpec,
-    PackageConversionError, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec, ProgramSpec, StepSpec,
-    SupportedHooksSpec,
+    AuthoredPackage, BuilderEnvironmentSpec, BuilderRequest, BuilderSpec, BuiltProgramSpec, DependencySpec, HooksSpec,
+    MetaSpec, OutputRef, OutputSpec, PackageConversionError, PackageRef, PackageSpec, PhaseSpec, PhasesSpec, ProfileSpec,
+    ProgramSpec, StepSpec, SupportedHooksSpec, default_output_set_with_root, lower,
 };
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, ToolchainSpec, TuningSpec, UpstreamSpec};
 
-/// Version of the package-function ABI.
-pub const PACKAGE_ABI_VERSION: u32 = 3;
-
-/// Pure Gluon definitions exposed as `cast.package.v3`.
-pub const GLUON_PACKAGE_ABI: &str = include_str!("../../gluon/package.glu");
-
-pub const GLUON_CMAKE_BUILDER_ABI: &str = include_str!("../../gluon/builders/cmake.glu");
-pub const GLUON_MESON_BUILDER_ABI: &str = include_str!("../../gluon/builders/meson.glu");
-pub const GLUON_CARGO_BUILDER_ABI: &str = include_str!("../../gluon/builders/cargo.glu");
-pub const GLUON_AUTOTOOLS_BUILDER_ABI: &str = include_str!("../../gluon/builders/autotools.glu");
+/// The types-only authoring prelude exposed as `cast.authored.v1`.
+///
+/// This is *not* an ABI: it carries no defaults and no builder logic — only the
+/// type + constructor layer (deps, sources, steps, programs, paths, tuning, the
+/// `BuilderRequest` kinds, and the `Custom` builder escape hatch) an author needs
+/// to write the minimal [`AuthoredPackage`] record that the shared Rust [`lower`]
+/// then completes. Because Gluon records are structurally typed (no field may be
+/// omitted), a Gluon recipe names every field explicitly and selects a Rust
+/// default with `unset`; the shared lowering — not this module — owns defaults.
+pub const GLUON_AUTHORED_PRELUDE: &str = include_str!("../../gluon/authored.glu");
 
 const GLUON_PURE_TYPES: &str = r#"type Bool =
     | False
@@ -41,20 +46,123 @@ type Ordering =
 { Bool, Option, Result, Ordering }
 "#;
 
-/// A normalized package-v3 value returned by restricted Gluon evaluation.
+/// Stateful Gluon package adapter with every package ABI fixed at construction.
+///
+/// The adapter implements the ordinary declaration role for authored packages
+/// without a source lock and the explicit-input role for callers which bind
+/// exact generated lock bytes into fingerprint v1.
 #[derive(Debug, Clone)]
-pub struct EvaluatedPackage {
-    pub package: PackageSpec,
-    pub fingerprint: EvaluationFingerprint,
+pub struct GluonPackageEvaluator {
+    engine: GluonEngine,
 }
 
-/// Failure to evaluate or validate a package factory result.
-#[derive(Debug, Error)]
-pub enum PackageEvaluationError {
-    #[error(transparent)]
-    Evaluation(#[from] Diagnostic),
-    #[error(transparent)]
-    Conversion(#[from] PackageConversionError),
+impl Default for GluonPackageEvaluator {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
+}
+
+impl GluonPackageEvaluator {
+    pub fn new(limits: Limits) -> Self {
+        Self::from_engine(GluonEngine::new(limits))
+            .expect("the embedded package and builder ABIs are valid and unique")
+    }
+
+    fn from_engine(engine: GluonEngine) -> Result<Self, Diagnostic> {
+        let mut import_policy = engine.import_policy().clone();
+        import_policy.enable_array_primitives();
+        import_policy.enable_string_primitives();
+        import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
+        import_policy.insert_embedded_module("cast.authored.v1", GLUON_AUTHORED_PRELUDE)?;
+        Ok(Self {
+            engine: engine.with_import_policy(import_policy),
+        })
+    }
+
+    /// Decode a *minimal-form* authored recipe (a native Gluon record importing
+    /// `cast.authored.v1`) into the language-agnostic [`AuthoredPackage`], and
+    /// lower it through shared Rust — threading explicit inputs and the
+    /// evaluation identity exactly as the legacy path does. No authoring logic
+    /// runs in Gluon.
+    fn evaluate_authored_package(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<PackageSpec, EvaluationIdentity>,
+        DeclarationEvaluationError<PackageConversionError>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_with_inputs_within::<GluonAuthoredPackage>(source, explicit_inputs, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        let package = lower(AuthoredPackage::from(evaluation.value));
+        package
+            .validate()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value: package,
+            identity: evaluation.identity,
+        })
+    }
+
+    /// Decode a minimal-form authored recipe into its [`PackageSpec`]. Test and
+    /// tooling entry point; the production path decodes through the same
+    /// [`Self::evaluate_authored_package`].
+    pub fn evaluate_authored(
+        &self,
+        source: &Source,
+    ) -> Result<PackageSpec, DeclarationEvaluationError<PackageConversionError>> {
+        let deadline = EvaluationDeadline::start(self.engine.limits().timeout);
+        Ok(self
+            .evaluate_authored_package(source, &[], deadline)?
+            .value)
+    }
+}
+
+impl DeclarationEvaluator<PackageSpec> for GluonPackageEvaluator {
+    type Identity = EvaluationIdentity;
+    type Error = PackageConversionError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<PackageSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_authored_package(source, &[], deadline)
+    }
+}
+
+impl DeclarationInputEvaluator<PackageSpec> for GluonPackageEvaluator {
+    fn evaluate_with_inputs_within(
+        &self,
+        source: &Source,
+        explicit_inputs: &[u8],
+        deadline: EvaluationDeadline,
+        ) -> Result<
+        DeclarationEvaluation<PackageSpec, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        self.evaluate_authored_package(source, explicit_inputs, deadline)
+    }
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -67,24 +175,6 @@ enum GluonOptional<T> {
 enum GluonBool {
     False,
     True,
-}
-
-#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
-struct GluonPackageSpec {
-    meta: GluonMetaSpec,
-    builder: GluonBuilderSpec,
-    hooks: GluonHooksSpec,
-    native_build_inputs: Vec<GluonDependencySpec>,
-    build_inputs: Vec<GluonDependencySpec>,
-    check_inputs: Vec<GluonDependencySpec>,
-    outputs: Vec<GluonOutputSpec>,
-    options: GluonOptionsSpec,
-    profiles: Vec<GluonProfileSpec>,
-    sources: Vec<GluonUpstreamSpec>,
-    architectures: Vec<String>,
-    tuning: Vec<GluonNamedTuningSpec>,
-    emul32: GluonBool,
-    mold: GluonBool,
 }
 
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
@@ -324,23 +414,123 @@ impl From<GluonBool> for bool {
     }
 }
 
-impl From<GluonPackageSpec> for PackageSpec {
-    fn from(spec: GluonPackageSpec) -> Self {
+/// The Gluon encoding of a [`BuilderRequest`] — the minimal builder authoring
+/// surface. The standard build systems are typed ADT variants (constructed via
+/// the `cast.authored.v1` prelude); the `Custom` data escape hatch is authored
+/// as a complete [`BuilderSpec`] and so does not appear here.
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonBuilderRequest {
+    Cmake { flags: Vec<String>, run_tests: GluonBool },
+    Meson { flags: Vec<String>, run_tests: GluonBool },
+    Cargo {
+        features: Vec<String>,
+        binaries: Vec<String>,
+        run_tests: GluonBool,
+    },
+    Autotools { flags: Vec<String>, run_tests: GluonBool },
+    Custom(GluonBuilderSpec),
+}
+
+impl From<GluonBuilderRequest> for BuilderRequest {
+    fn from(request: GluonBuilderRequest) -> Self {
+        match request {
+            GluonBuilderRequest::Cmake { flags, run_tests } => BuilderRequest::Cmake {
+                flags,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderRequest::Meson { flags, run_tests } => BuilderRequest::Meson {
+                flags,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderRequest::Cargo {
+                features,
+                binaries,
+                run_tests,
+            } => BuilderRequest::Cargo {
+                features,
+                binaries,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderRequest::Autotools { flags, run_tests } => BuilderRequest::Autotools {
+                flags,
+                run_tests: run_tests.into(),
+            },
+            GluonBuilderRequest::Custom(spec) => BuilderRequest::Custom(Box::new(spec.into())),
+        }
+    }
+}
+
+/// The Gluon encoding of the authored output-set choice. A dedicated type
+/// (rather than [`GluonOptional`]) is required because [`GluonOutputSpec`]
+/// carries its own optional fields, and nesting `Optional` within `Optional`
+/// defeats Gluon's unifier. `DefaultOutputs` selects the shared default set.
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+enum GluonOutputsChoice {
+    DefaultOutputs,
+    ExplicitOutputs(Vec<GluonOutputSpec>),
+    WithRoot(GluonOutputSpec),
+}
+
+impl GluonOutputsChoice {
+    /// Resolve the authored output choice into the explicit list, or `None` for
+    /// the default split-output set. `WithRoot` overlays an authored root onto
+    /// the default set, which requires the package name.
+    fn resolve(self, pname: &str) -> Option<Vec<OutputSpec>> {
+        match self {
+            GluonOutputsChoice::DefaultOutputs => None,
+            GluonOutputsChoice::ExplicitOutputs(outputs) => {
+                Some(outputs.into_iter().map(Into::into).collect())
+            }
+            GluonOutputsChoice::WithRoot(root) => {
+                Some(default_output_set_with_root(pname, root.into()))
+            }
+        }
+    }
+}
+
+/// The Gluon encoding of an [`AuthoredPackage`] — the minimal, language-agnostic
+/// authoring surface. Every optional (`outputs`, `options`, `hooks`) is an
+/// [`GluonOptional`]: `unset` selects the shared package-ABI default that the
+/// Rust [`lower`] fills. This is the Gluon half of the proof that authoring
+/// lives in shared Rust rather than in a config language.
+#[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
+struct GluonAuthoredPackage {
+    meta: GluonMetaSpec,
+    builder: GluonBuilderRequest,
+    sources: Vec<GluonUpstreamSpec>,
+    native_build_inputs: Vec<GluonDependencySpec>,
+    build_inputs: Vec<GluonDependencySpec>,
+    check_inputs: Vec<GluonDependencySpec>,
+    outputs: GluonOutputsChoice,
+    options: GluonOptional<GluonOptionsSpec>,
+    profiles: Vec<GluonProfileSpec>,
+    architectures: Vec<String>,
+    tuning: Vec<GluonNamedTuningSpec>,
+    emul32: GluonBool,
+    mold: GluonBool,
+    hooks: GluonOptional<GluonHooksSpec>,
+}
+
+impl From<GluonAuthoredPackage> for AuthoredPackage {
+    fn from(package: GluonAuthoredPackage) -> Self {
+        let outputs = package.outputs.resolve(&package.meta.pname);
         Self {
-            meta: spec.meta.into(),
-            builder: spec.builder.into(),
-            hooks: spec.hooks.into(),
-            native_build_inputs: spec.native_build_inputs.into_iter().map(Into::into).collect(),
-            build_inputs: spec.build_inputs.into_iter().map(Into::into).collect(),
-            check_inputs: spec.check_inputs.into_iter().map(Into::into).collect(),
-            outputs: spec.outputs.into_iter().map(Into::into).collect(),
-            options: spec.options.into(),
-            profiles: spec.profiles.into_iter().map(Into::into).collect(),
-            sources: spec.sources.into_iter().map(Into::into).collect(),
-            architectures: spec.architectures,
-            tuning: spec.tuning.into_iter().map(Into::into).collect(),
-            emul32: spec.emul32.into(),
-            mold: spec.mold.into(),
+            meta: package.meta.into(),
+            builder: package.builder.into(),
+            sources: package.sources.into_iter().map(Into::into).collect(),
+            native_build_inputs: package.native_build_inputs.into_iter().map(Into::into).collect(),
+            build_inputs: package.build_inputs.into_iter().map(Into::into).collect(),
+            check_inputs: package.check_inputs.into_iter().map(Into::into).collect(),
+            outputs,
+            options: Option::<GluonOptionsSpec>::from(package.options).map(Into::into),
+            profiles: package.profiles.into_iter().map(Into::into).collect(),
+            architectures: package.architectures,
+            tuning: package.tuning.into_iter().map(Into::into).collect(),
+            emul32: package.emul32.into(),
+            mold: package.mold.into(),
+            hooks: Option::<GluonHooksSpec>::from(package.hooks)
+                .map(Into::into)
+                .unwrap_or_default(),
         }
     }
 }
@@ -626,40 +816,4 @@ impl From<GluonNamedTuningSpec> for NamedTuningSpec {
             value: spec.value.into(),
         }
     }
-}
-
-/// Evaluate a v3 package with the restricted default evaluator.
-pub fn evaluate_gluon(source: &Source) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    evaluate_gluon_with(&Evaluator::default(), source)
-}
-
-/// Evaluate a v3 package with caller-selected limits and source root.
-pub fn evaluate_gluon_with(evaluator: &Evaluator, source: &Source) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    evaluate_gluon_with_inputs(evaluator, source, &[])
-}
-
-/// Evaluate a v3 package and bind lock bytes into its fingerprint.
-pub fn evaluate_gluon_with_inputs(
-    evaluator: &Evaluator,
-    source: &Source,
-    explicit_inputs: &[u8],
-) -> Result<EvaluatedPackage, PackageEvaluationError> {
-    let mut import_policy = evaluator.import_policy().clone();
-    import_policy.enable_array_primitives();
-    import_policy.enable_string_primitives();
-    import_policy.insert_embedded_module("std.types", GLUON_PURE_TYPES)?;
-    import_policy.insert_embedded_module("cast.package.v3", GLUON_PACKAGE_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.cmake.v2", GLUON_CMAKE_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.meson.v2", GLUON_MESON_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.cargo.v2", GLUON_CARGO_BUILDER_ABI)?;
-    import_policy.insert_embedded_module("cast.builders.autotools.v2", GLUON_AUTOTOOLS_BUILDER_ABI)?;
-    let evaluator = evaluator.clone().with_import_policy(import_policy);
-    let evaluation = evaluator.evaluate_with_inputs::<GluonPackageSpec>(source, explicit_inputs)?;
-    let package = PackageSpec::from(evaluation.value);
-    package.validate()?;
-
-    Ok(EvaluatedPackage {
-        package,
-        fingerprint: evaluation.fingerprint,
-    })
 }

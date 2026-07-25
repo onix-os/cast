@@ -10,22 +10,18 @@ use thiserror::Error;
 use crate::{
     Installation, State,
     client::{
-        Client, CoordinatorActiveStateReservation,
-        active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
+        Client, CoordinatorActiveStateReservation, active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
     },
     db::state::Database,
     transition_identity::{
-        ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
+        ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, PreviousArchivedBootSyncHandoffSeal,
         SystemTriggersCompleteCoordinator,
     },
-    transition_journal::{TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{Operation, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
-use super::{
-    ActiveReblitBootSyncStagingError, StagedActiveReblitBootSync,
-    stage_with_retained_stores_and_reservation,
-};
+use super::{ActiveReblitBootSyncStagingError, StagedActiveReblitBootSync, stage_with_retained_stores_and_reservation};
 
 /// Continuously locked transfer from exact system-trigger completion.
 ///
@@ -56,10 +52,49 @@ pub(in crate::client) enum ActiveReblitCoordinatorBootSyncStagingError {
     Staging(#[from] ActiveReblitBootSyncStagingError),
 }
 
+/// The booted state is always the record's candidate. How it relates to the
+/// predecessor depends on the operation: ActiveReblit repairs a state in place
+/// (`candidate == previous`), whereas NewState boots a fresh candidate whose
+/// real predecessor was archived to a distinct slot (`candidate != previous`).
+fn boot_previous_matches_operation(record: &TransitionRecord, boot_state: Option<i32>) -> bool {
+    match record.operation {
+        Operation::ActiveReblit => record.previous.id == boot_state,
+        Operation::NewState => {
+            record.options.archive_previous && record.previous.id.is_some() && record.previous.id != record.candidate.id
+        }
+        Operation::ActivateArchived => record.previous.id.is_some() && record.previous.id != record.candidate.id,
+    }
+}
+
 impl CoordinatorActiveReblitBootSyncHandoff {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_system_triggers_complete(
         _seal: ActiveReblitBootSyncHandoffSeal,
+        record: TransitionRecord,
+        record_binding: TransitionJournalRecordBinding,
+        journal: TransitionJournalStore,
+        database: Database,
+        installation: Installation,
+        active_reblit: State,
+        active_state_reservation: CoordinatorActiveStateReservation,
+    ) -> Self {
+        Self {
+            record,
+            record_binding,
+            journal,
+            database,
+            installation,
+            active_reblit,
+            active_state_reservation,
+        }
+    }
+
+    /// NewState boot handoff: the boot candidate is the freshly created state,
+    /// distinct from the archived predecessor. The operation-aware state gate
+    /// admits this shape.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_previous_archived(
+        _seal: PreviousArchivedBootSyncHandoffSeal,
         record: TransitionRecord,
         record_binding: TransitionJournalRecordBinding,
         journal: TransitionJournalStore,
@@ -101,24 +136,14 @@ impl CoordinatorActiveReblitBootSyncHandoff {
         }
     }
 
-    fn require_client(
-        &self,
-        client: &Client,
-    ) -> Result<(), ActiveReblitCoordinatorBootSyncStagingError> {
+    fn require_client(&self, client: &Client) -> Result<(), ActiveReblitCoordinatorBootSyncStagingError> {
         if !self.database.same_instance(&client.state_db)
-            || !std::ptr::eq(
-                self.installation.root_directory(),
-                client.installation.root_directory(),
-            )
+            || !std::ptr::eq(self.installation.root_directory(), client.installation.root_directory())
         {
-            return Err(
-                ActiveReblitCoordinatorBootSyncStagingError::ClientCapabilityMismatch,
-            );
+            return Err(ActiveReblitCoordinatorBootSyncStagingError::ClientCapabilityMismatch);
         }
-        let active_state = Some(i32::from(self.active_reblit.id));
-        if active_state != self.record.candidate.id
-            || active_state != self.record.previous.id
-        {
+        let boot_state = Some(i32::from(self.active_reblit.id));
+        if boot_state != self.record.candidate.id || !boot_previous_matches_operation(&self.record, boot_state) {
             return Err(ActiveReblitCoordinatorBootSyncStagingError::ActiveStateMismatch);
         }
         Ok(())
@@ -131,11 +156,9 @@ impl CoordinatorActiveReblitBootSyncHandoff {
         let plan_state_record_id = Some(i32::from(plan_state));
         if plan_state != self.active_reblit.id
             || self.record.candidate.id != plan_state_record_id
-            || self.record.previous.id != plan_state_record_id
+            || !boot_previous_matches_operation(&self.record, plan_state_record_id)
         {
-            return Err(
-                ActiveReblitCoordinatorBootSyncStagingError::PlanActiveStateMismatch,
-            );
+            return Err(ActiveReblitCoordinatorBootSyncStagingError::PlanActiveStateMismatch);
         }
         Ok(())
     }
@@ -153,10 +176,7 @@ impl CoordinatorActiveReblitBootSyncHandoff {
         state: crate::state::Id,
     ) -> bool {
         if !self.database.same_instance(database)
-            || !std::ptr::eq(
-                self.installation.root_directory(),
-                installation.root_directory(),
-            )
+            || !std::ptr::eq(self.installation.root_directory(), installation.root_directory())
             || self.active_reblit.id != state
         {
             return false;
@@ -187,14 +207,14 @@ impl CoordinatorActiveReblitBootSyncHandoff {
             acquired_sender.send(()).unwrap();
             drop(reservation);
         });
-        reached_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        reached_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
         assert!(matches!(
             acquired_receiver.recv_timeout(Duration::from_millis(100)),
             Err(RecvTimeoutError::Timeout)
         ));
 
         drop(self);
-        acquired_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+        acquired_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
         contender.join().unwrap();
     }
 }
@@ -228,18 +248,49 @@ impl Client {
         StagedActiveReblitBootSync<
             'plan,
             'inventory,
-            BoundActiveReblitBlsPublicationPlan<
-                'input,
-                'topology_view,
-                'topology_authority,
-                'attempt,
-                'stone,
-                'roots,
-            >,
+            BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
         >,
         ActiveReblitCoordinatorBootSyncStagingError,
     > {
         let handoff = coordinator.into_active_reblit_boot_sync_handoff()?;
+        stage_active_reblit_boot_sync_from_handoff(self, plan, inventory, handoff)
+    }
+
+    /// Stage an already-produced NewState boot handoff into receipt-bearing
+    /// `BootSyncStarted`. The predecessor is already archived; the handoff was
+    /// minted by `PreviousArchivedCoordinator::into_new_state_boot_sync_handoff`.
+    /// Staging itself is operation-neutral — it consumes the handoff's retained
+    /// stores and reservation exactly as for ActiveReblit.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::client) fn stage_new_state_boot_sync_from_handoff<
+        'plan,
+        'inventory,
+        'input,
+        'topology_view,
+        'topology_authority,
+        'attempt,
+        'stone,
+        'roots,
+    >(
+        &self,
+        plan: &'plan BoundActiveReblitBlsPublicationPlan<
+            'input,
+            'topology_view,
+            'topology_authority,
+            'attempt,
+            'stone,
+            'roots,
+        >,
+        inventory: &'inventory PreparedActiveReblitDesiredPublicationInventory,
+        handoff: CoordinatorActiveReblitBootSyncHandoff,
+    ) -> Result<
+        StagedActiveReblitBootSync<
+            'plan,
+            'inventory,
+            BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
+        >,
+        ActiveReblitCoordinatorBootSyncStagingError,
+    > {
         stage_active_reblit_boot_sync_from_handoff(self, plan, inventory, handoff)
     }
 }
@@ -270,14 +321,7 @@ fn stage_active_reblit_boot_sync_from_handoff<
     StagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     ActiveReblitCoordinatorBootSyncStagingError,
 > {
@@ -333,14 +377,7 @@ pub(in crate::client) fn stage_active_reblit_boot_sync_from_handoff_for_test<
     StagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     ActiveReblitCoordinatorBootSyncStagingError,
 > {

@@ -8,36 +8,30 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
-            archived_candidate_preserve_move_attempt_count,
-            reset_archived_candidate_preserve_move_attempt_count,
+            archived_candidate_preserve_move_attempt_count, reset_archived_candidate_preserve_move_attempt_count,
         },
     },
     transition_journal::{
-        PublicBindingRevalidationBoundary, RollbackActionOutcome,
-        arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed,
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, arm_public_binding_revalidation_callback,
+        assert_public_binding_revalidation_callback_consumed,
     },
 };
 
+use super::super::candidate_test_support::{CandidatePreserveFixture, CandidateSource};
 use super::super::{
-    DurableUsrRollbackArchivedCandidatePreserveRecord,
-    UsrRollbackArchivedCandidatePreservePersistenceError,
+    DurableUsrRollbackArchivedCandidatePreserveRecord, UsrRollbackArchivedCandidatePreservePersistenceError,
     UsrRollbackArchivedCandidatePreserveSuccessorBindingError,
     arm_after_usr_rollback_archived_candidate_preserve_successor_binding_check_before_reopen,
     arm_before_usr_rollback_archived_candidate_preserve_successor_binding_revalidation,
     persist_usr_rollback_archived_candidate_preserve_and_reopen,
 };
-use super::super::candidate_test_support::{CandidatePreserveFixture, CandidateSource};
 use super::support::{
     CandidateOrigin, Epoch, assert_preserved, durable_authority, expected_candidate_preserved, fixture_for_origin,
     non_journal_namespace_snapshot,
 };
 
 fn canonical_journal(fixture: &CandidatePreserveFixture) -> std::path::PathBuf {
-    fixture
-        .fixture
-        .installation
-        .root
-        .join(".cast/journal/state-transition")
+    fixture.fixture.installation.root.join(".cast/journal/state-transition")
 }
 
 fn inode_identity(path: &Path) -> (u64, u64) {
@@ -45,10 +39,7 @@ fn inode_identity(path: &Path) -> (u64, u64) {
     (metadata.dev(), metadata.ino())
 }
 
-fn same_byte_different_inode_hook(
-    fixture: &CandidatePreserveFixture,
-    label: String,
-) -> impl FnOnce() + 'static {
+fn same_byte_different_inode_hook(fixture: &CandidatePreserveFixture, label: String) -> impl FnOnce() + 'static {
     let canonical = canonical_journal(fixture);
     let displaced = fixture
         .fixture
@@ -117,8 +108,7 @@ fn startup_archived_candidate_preserve_bound_advance_same_byte_replacements_neve
                         );
                         arm_public_binding_revalidation_callback(boundary, hook);
 
-                        let result =
-                            persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, authority);
+                        let result = persist_usr_rollback_archived_candidate_preserve_and_reopen(journal, authority);
                         drop(reservation);
                         let error = result.unwrap_err();
 
@@ -196,7 +186,8 @@ fn startup_archived_candidate_preserve_same_byte_successor_replacement_after_pub
 }
 
 #[test]
-fn startup_archived_candidate_preserve_same_byte_successor_replacement_after_same_store_binding_fails_reopened_binding() {
+fn startup_archived_candidate_preserve_same_byte_successor_replacement_after_same_store_binding_fails_reopened_binding()
+{
     for epoch in Epoch::ALL {
         for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
             for origin in CandidateOrigin::ALL {

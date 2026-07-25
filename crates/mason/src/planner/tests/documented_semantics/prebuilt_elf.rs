@@ -42,7 +42,7 @@ pub(super) fn assert_semantics(declaration: &PackageSpec, plan: &DerivationPlan)
         assert!(
             plan.provenance
                 .recipe
-                .imported_modules
+                .modules
                 .iter()
                 .any(|imported| imported.logical_name == module),
             "prebuilt ELF plan lost imported module {module}"

@@ -4,8 +4,8 @@ use crate::{
     client::{
         boot::{boot_synchronize_attempt_count, reset_boot_synchronize_attempt_count},
         startup_reconciliation::{
-            active_reblit_candidate_preserve_exchange_attempt_count,
-            fresh_db_invalidation_removal_call_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
+            active_reblit_candidate_preserve_exchange_attempt_count, fresh_db_invalidation_removal_call_count,
+            reset_active_reblit_candidate_preserve_exchange_attempt_count,
         },
     },
     transition_identity::{reset_retained_exchange_syscall_count, retained_exchange_syscall_count},

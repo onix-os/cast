@@ -2,8 +2,9 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd -P)
-work=$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-make-shell-test.XXXXXXXXXXXX")
+work=$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-make-shell-test.XXXXXXXXXXXX")
 cleanup() {
     timeout 10s rm -rf -- "$work"
 }

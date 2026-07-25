@@ -12,8 +12,8 @@ use crate::{
 };
 
 use super::support::{
-    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_complete_persistence_advance,
-    candidate_move_count, enter_route, reset_candidate_observers,
+    CandidateOutcome, CandidateSource, Epoch, RouteFixture, assert_complete_persistence_advance, candidate_move_count,
+    enter_route, reset_candidate_observers,
 };
 
 #[derive(Clone, Copy)]

@@ -12,7 +12,9 @@ use crate::{
     },
 };
 
-use super::test_fixture::{BootSyncStartedLayout, DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, SourceCase};
+use super::test_fixture::{
+    BootSyncStartedLayout, DatabaseSnapshot, Fixture, NamespaceEntry, OperationKind, SourceCase,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CandidateSource {
@@ -23,23 +25,11 @@ pub(super) enum CandidateSource {
 
 impl CandidateSource {
     pub(super) const ALL: [Self; 2] = [Self::Intent, Self::Exchanged];
-    pub(super) const THROUGH_CANDIDATE_PRESERVED: [Self; 3] = [
-        Self::Intent,
-        Self::Exchanged,
-        Self::RootLinksComplete,
-    ];
+    pub(super) const THROUGH_CANDIDATE_PRESERVED: [Self; 3] = [Self::Intent, Self::Exchanged, Self::RootLinksComplete];
     #[allow(dead_code)] // path-included legacy suites intentionally stop before invalidation
-    pub(super) const THROUGH_FRESH_DB_INVALIDATED: [Self; 3] = [
-        Self::Intent,
-        Self::Exchanged,
-        Self::RootLinksComplete,
-    ];
+    pub(super) const THROUGH_FRESH_DB_INVALIDATED: [Self; 3] = [Self::Intent, Self::Exchanged, Self::RootLinksComplete];
     #[allow(dead_code)] // path-included later suites deliberately retain narrower axes
-    pub(super) const THROUGH_ROLLBACK_COMPLETE: [Self; 3] = [
-        Self::Intent,
-        Self::Exchanged,
-        Self::RootLinksComplete,
-    ];
+    pub(super) const THROUGH_ROLLBACK_COMPLETE: [Self; 3] = [Self::Intent, Self::Exchanged, Self::RootLinksComplete];
 
     fn fixture_source(self) -> SourceCase {
         match self {
@@ -98,12 +88,7 @@ impl CandidatePreserveFixture {
     ) -> Self {
         let fixture = Fixture::active_reblit_boot_sync_started(BootSyncStartedLayout::Post, historical);
         super::test_fixture::install_root_abi(&fixture.installation.root);
-        Self::build(
-            fixture,
-            OperationKind::ActiveReblit,
-            usr_reverse_outcome,
-            layout,
-        )
+        Self::build(fixture, OperationKind::ActiveReblit, usr_reverse_outcome, layout)
     }
 
     fn build(

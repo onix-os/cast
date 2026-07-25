@@ -1,11 +1,6 @@
 //! RootLinks-only same-boot process-death proof for generation-12 finalization.
 
-use std::{
-    ffi::OsString,
-    fs,
-    os::unix::fs::MetadataExt as _,
-    path::Path,
-};
+use std::{ffi::OsString, fs, os::unix::fs::MetadataExt as _, path::Path};
 
 use crate::{
     Installation, State,
@@ -14,10 +9,6 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         boot::{boot_synchronize_attempt_count, reset_boot_synchronize_attempt_count},
         snapshot_startup_recovery_namespace,
-        startup_reconciliation::{
-            active_reblit_candidate_preserve_exchange_attempt_count, fresh_db_invalidation_removal_call_count,
-            reset_active_reblit_candidate_preserve_exchange_attempt_count,
-        },
         startup_gate::{
             CleanSystemStartup,
             root_links_terminal_process_harness::{
@@ -25,6 +16,10 @@ use crate::{
                 RawRecordState, RootLinksDeleteScenario, RootLinksSnapshot, TerminalOperation,
                 assert_clean_holds_journal_lock, assert_clean_store_reopens, forbid_journal_update, kill_self,
             },
+        },
+        startup_reconciliation::{
+            active_reblit_candidate_preserve_exchange_attempt_count, fresh_db_invalidation_removal_call_count,
+            reset_active_reblit_candidate_preserve_exchange_attempt_count,
         },
         startup_recovery::arm_before_usr_rollback_activate_archived_finalization_final_revalidation,
     },
@@ -256,7 +251,10 @@ fn run_final_recovery(
     }
 
     assert_zero_effects();
-    assert_eq!(ArchivedDatabaseEvidence::capture(system.state_db(), terminal), database_before);
+    assert_eq!(
+        ArchivedDatabaseEvidence::capture(system.state_db(), terminal),
+        database_before
+    );
     assert_eq!(snapshot_startup_recovery_namespace(&case.root), namespace_before);
     root_links.assert_unchanged(&case.root);
     assert_archived_topology(&case.root, terminal);
@@ -278,7 +276,10 @@ fn assert_exact_terminal(record: &TransitionRecord, epoch: ProcessEpoch) {
     let rollback = record.rollback.as_ref().unwrap();
     assert_eq!(rollback.source, ForwardPhase::RootLinksComplete);
     assert_eq!(rollback.usr_exchange, recorded_action(epoch_outcome(epoch)));
-    assert_eq!(rollback.candidate.action, recorded_candidate_action(candidate_outcome(epoch)));
+    assert_eq!(
+        rollback.candidate.action,
+        recorded_candidate_action(candidate_outcome(epoch))
+    );
     assert_eq!(rollback.previous_archive, RollbackAction::NotRequired);
     assert_eq!(rollback.candidate.disposition, AbortDisposition::Rearchive);
     assert_eq!(rollback.fresh_db, RollbackAction::NotRequired);
@@ -314,9 +315,23 @@ fn assert_archived_topology(root: &Path, record: &TransitionRecord) {
     let mut expected = vec![OsString::from("usr"), slot.file_name().unwrap().to_owned()];
     expected.sort();
     assert_eq!(names, expected);
-    assert!(fs::read_dir(root.join(CAST_NAME).join("root/staging")).unwrap().next().is_none());
-    assert!(!root.join(CAST_NAME).join("quarantine").join(record.quarantine_name.as_str()).exists());
-    assert_eq!(fs::read_to_string(root.join("usr/.stateID")).unwrap(), previous.to_string());
+    assert!(
+        fs::read_dir(root.join(CAST_NAME).join("root/staging"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    assert!(
+        !root
+            .join(CAST_NAME)
+            .join("quarantine")
+            .join(record.quarantine_name.as_str())
+            .exists()
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("usr/.stateID")).unwrap(),
+        previous.to_string()
+    );
 }
 
 fn epoch_outcome(epoch: ProcessEpoch) -> RollbackActionOutcome {

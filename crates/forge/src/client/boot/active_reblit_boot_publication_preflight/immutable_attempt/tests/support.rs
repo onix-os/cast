@@ -7,10 +7,7 @@ pub(super) fn set_safe_directory(path: &Path) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-pub(super) fn set_safe_publication_parents(
-    root: &Path,
-    relative_path: &Path,
-) {
+pub(super) fn set_safe_publication_parents(root: &Path, relative_path: &Path) {
     set_safe_directory(root);
     let mut directory = root.to_owned();
     for component in relative_path.parent().unwrap().components() {
@@ -41,10 +38,7 @@ pub(super) fn preparing_record() -> TransitionRecord {
         TransitionId::parse("0123456789abcdef0123456789abcdef").unwrap(),
         RuntimeEpoch {
             boot_id: BootId::parse("01234567-89ab-4cde-8f01-23456789abcd").unwrap(),
-            mount_namespace: MountNamespaceIdentity {
-                st_dev: 30,
-                inode: 31,
-            },
+            mount_namespace: MountNamespaceIdentity { st_dev: 30, inode: 31 },
         },
         Operation::ActiveReblit,
         Some(42),
@@ -73,22 +67,14 @@ pub(super) fn preparing_record() -> TransitionRecord {
 
 pub(super) fn exact_boot_sync_journal(
     installation: &Installation,
-) -> (
-    TransitionJournalStore,
-    TransitionRecord,
-    TransitionJournalRecordBinding,
-) {
+) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
     exact_boot_sync_journal_for_state(installation, None)
 }
 
 pub(super) fn exact_boot_sync_journal_for_state(
     installation: &Installation,
     state: Option<state::Id>,
-) -> (
-    TransitionJournalStore,
-    TransitionRecord,
-    TransitionJournalRecordBinding,
-) {
+) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
     let mut predecessor = preparing_record();
     if let Some(state) = state {
         predecessor.candidate.id = Some(i32::from(state));
@@ -102,20 +88,10 @@ pub(super) fn exact_boot_sync_journal_for_commit_decision_route(
     state: state::Id,
     run_system_triggers: bool,
     pre_boot_generation_offset: u64,
-) -> (
-    TransitionJournalStore,
-    TransitionRecord,
-    TransitionJournalRecordBinding,
-) {
-    let candidate_store = crate::tree_marker::TreeMarkerStore::open_path(
-        &installation.root.join("usr"),
-    )
-    .unwrap();
+) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
+    let candidate_store = crate::tree_marker::TreeMarkerStore::open_path(&installation.root.join("usr")).unwrap();
     let candidate_marker = candidate_store.adopt_or_create_before_journal().unwrap();
-    let previous_store = crate::tree_marker::TreeMarkerStore::open_path(
-        &installation.staging_path("usr"),
-    )
-    .unwrap();
+    let previous_store = crate::tree_marker::TreeMarkerStore::open_path(&installation.staging_path("usr")).unwrap();
     let previous_marker = previous_store.adopt_or_create_before_journal().unwrap();
 
     let mut predecessor = preparing_record();
@@ -129,22 +105,14 @@ pub(super) fn exact_boot_sync_journal_for_commit_decision_route(
     predecessor.previous.tree_token = previous_marker.token().clone();
     predecessor.previous.usr_runtime_identity =
         RuntimeTreeIdentity::capture_directory(previous_store.retained_directory()).unwrap();
-    persist_exact_boot_sync_journal(
-        installation,
-        predecessor,
-        pre_boot_generation_offset,
-    )
+    persist_exact_boot_sync_journal(installation, predecessor, pre_boot_generation_offset)
 }
 
 fn persist_exact_boot_sync_journal(
     installation: &Installation,
     mut predecessor: TransitionRecord,
     pre_boot_generation_offset: u64,
-) -> (
-    TransitionJournalStore,
-    TransitionRecord,
-    TransitionJournalRecordBinding,
-) {
+) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
     let cast = installation.retained_mutable_cast_directory().unwrap();
     let journal = TransitionJournalStore::open_in_retained_cast(cast, &installation.root).unwrap();
     journal.create(&predecessor).unwrap();
@@ -165,10 +133,7 @@ fn persist_exact_boot_sync_journal(
     };
     assert_eq!(predecessor.phase, expected_phase);
     if pre_boot_generation_offset != 0 {
-        predecessor.generation = predecessor
-            .generation
-            .checked_add(pre_boot_generation_offset)
-            .unwrap();
+        predecessor.generation = predecessor.generation.checked_add(pre_boot_generation_offset).unwrap();
         fs::write(
             installation.root.join(".cast/journal/state-transition"),
             crate::transition_journal::encode(&predecessor).unwrap(),
@@ -197,11 +162,7 @@ pub(super) fn commit_decision_fixture() -> render_support::RenderFixture {
     );
     fixture
         .state_db
-        .insert_fresh_metadata_provenance_if_transition_matches(
-            exact.id,
-            &source.transition_id,
-            &provenance,
-        )
+        .insert_fresh_metadata_provenance_if_transition_matches(exact.id, &source.transition_id, &provenance)
         .unwrap();
     fixture
         .state_db
@@ -209,11 +170,7 @@ pub(super) fn commit_decision_fixture() -> render_support::RenderFixture {
         .unwrap();
     fixture.state_db.remove(&fixture.head.id).unwrap();
 
-    fs::write(
-        fixture.installation.root.join("usr/.stateID"),
-        exact.id.to_string(),
-    )
-    .unwrap();
+    fs::write(fixture.installation.root.join("usr/.stateID"), exact.id.to_string()).unwrap();
     fixture.installation.active_state = Some(exact.id);
     fixture.head = exact;
 
@@ -242,19 +199,12 @@ pub(super) fn commit_decision_fixture() -> render_support::RenderFixture {
     ];
     for (name, target) in ROOT_ABI {
         symlink(target, fixture.installation.root.join(name)).unwrap();
-        symlink(
-            target,
-            fixture.installation.isolation_dir().join(name),
-        )
-        .unwrap();
+        symlink(target, fixture.installation.isolation_dir().join(name)).unwrap();
     }
     fixture
 }
 
-pub(super) fn staging_client(
-    fixture: &render_support::RenderFixture,
-    state_db: db::state::Database,
-) -> Client {
+pub(super) fn staging_client(fixture: &render_support::RenderFixture, state_db: db::state::Database) -> Client {
     let repositories = repository::Manager::with_explicit(
         "immutable-publication-attempt-test",
         repository::Map::default(),

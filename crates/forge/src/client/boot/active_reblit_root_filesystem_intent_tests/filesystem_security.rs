@@ -29,6 +29,43 @@ fn missing_machine_local_intent_is_a_hard_error_without_fallback() {
 }
 
 #[test]
+fn only_registered_extensions_occupy_the_fixed_slot() {
+    let fixture = Fixture::new();
+    let unknown = fixture.root.join("etc/cast/root-filesystem.txt");
+    fs::write(&unknown, "not a registered declaration").unwrap();
+    fs::set_permissions(&unknown, fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(matches!(
+        fixture.prepare(),
+        Err(ActiveReblitRootFilesystemIntentError::Missing { path }) if path == fixture.source_path()
+    ));
+
+    fixture.write_root(ROOT_LOCATOR);
+    let prepared = fixture.prepare().unwrap();
+    assert_eq!(
+        prepared.revalidate(&fixture.installation).unwrap().kernel_argument(),
+        format!("root={ROOT_LOCATOR}")
+    );
+}
+
+#[test]
+fn a_lua_source_at_the_fixed_slot_is_discovered_revalidated_and_normalized() {
+    let fixture = Fixture::new();
+    let lua_path = fixture.root.join("etc/cast/root-filesystem.lua");
+    fs::write(&lua_path, format!("return {{ root = \"{ROOT_LOCATOR}\" }}\n")).unwrap();
+    fs::set_permissions(&lua_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+    let prepared = fixture.prepare().unwrap();
+    let revalidated = prepared.revalidate(&fixture.installation).unwrap();
+    assert_eq!(revalidated.kernel_argument(), format!("root={ROOT_LOCATOR}"));
+    // The fixed slot has one canonical logical name regardless of engine, and
+    // the Lua declaration imports nothing.
+    let fingerprint = revalidated.fingerprint();
+    assert_eq!(fingerprint.root_logical_name, "etc/cast/root-filesystem.glu");
+    assert!(fingerprint.modules.is_empty());
+}
+
+#[test]
 fn symlink_fifo_socket_and_hardlink_sources_are_rejected_without_blocking() {
     let symlink_fixture = Fixture::new();
     let target = symlink_fixture.root.join("root-source-target");

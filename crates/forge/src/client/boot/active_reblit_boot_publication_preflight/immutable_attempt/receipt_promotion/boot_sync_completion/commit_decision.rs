@@ -11,8 +11,7 @@ use crate::{
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_boot_publication_preflight::ActiveReblitBootSyncCommitDecisionSeal,
         active_reblit_boot_sync_staging::{
-            CommittedStagedActiveReblitBootSync,
-            CommittedStagedActiveReblitBootSyncValidationError,
+            CommittedStagedActiveReblitBootSync, CommittedStagedActiveReblitBootSyncValidationError,
             CompletedStagedActiveReblitCommitDecisionError,
         },
     },
@@ -21,12 +20,9 @@ use crate::{
 };
 
 use super::{
-    ActiveReblitBootPostCompletionValidationError,
-    ActiveReblitBootTerminalEvidenceValidationError,
-    CompletedExactActiveReblitBootPublication,
-    ValidatedActiveReblitBootPublicationEffect,
-    validate_completed_terminal_sandwich,
-    validate_exact_terminal_evidence_snapshot,
+    ActiveReblitBootPostCompletionValidationError, ActiveReblitBootTerminalEvidenceValidationError,
+    CompletedExactActiveReblitBootPublication, ValidatedActiveReblitBootPublicationEffect,
+    validate_completed_terminal_sandwich, validate_exact_terminal_evidence_snapshot,
 };
 
 /// One-origin final terminal validation consumed immediately before the bound
@@ -34,20 +30,12 @@ use super::{
 ///
 /// The callback is private, non-cloneable, and one-shot so no lower layer can
 /// manufacture or replay terminal publication authority.
-pub(in crate::client) struct ActiveReblitBootCommitDecisionFinalValidation<
-    'validation,
-> {
-    callback: Box<
-        dyn FnOnce()
-                -> Result<Instant, ActiveReblitBootPostCompletionValidationError>
-            + 'validation,
-    >,
+pub(in crate::client) struct ActiveReblitBootCommitDecisionFinalValidation<'validation> {
+    callback: Box<dyn FnOnce() -> Result<Instant, ActiveReblitBootPostCompletionValidationError> + 'validation>,
 }
 
 impl ActiveReblitBootCommitDecisionFinalValidation<'_> {
-    pub(in crate::client) fn validate(
-        self,
-    ) -> Result<Instant, ActiveReblitBootPostCompletionValidationError> {
+    pub(in crate::client) fn validate(self) -> Result<Instant, ActiveReblitBootPostCompletionValidationError> {
         (self.callback)()
     }
 }
@@ -71,14 +59,7 @@ pub(in crate::client) struct ActiveReblitBootCommitDecisionHandoff<
     committed: CommittedStagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     database_outcome: BootPublicationReceiptPromotionOutcome,
     publication_count: usize,
@@ -88,9 +69,7 @@ pub(in crate::client) struct ActiveReblitBootCommitDecisionHandoff<
     evidence: Vec<ValidatedActiveReblitBootPublicationEffect>,
 }
 
-impl std::fmt::Debug
-    for ActiveReblitBootCommitDecisionHandoff<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for ActiveReblitBootCommitDecisionHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ActiveReblitBootCommitDecisionHandoff")
@@ -107,15 +86,11 @@ impl ActiveReblitBootCommitDecisionHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.committed.record()
     }
 
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.committed.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn database_outcome(
-        &self,
-    ) -> BootPublicationReceiptPromotionOutcome {
+    pub(in crate::client) const fn database_outcome(&self) -> BootPublicationReceiptPromotionOutcome {
         self.database_outcome
     }
 
@@ -135,23 +110,12 @@ impl ActiveReblitBootCommitDecisionHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.replaced_count
     }
 
-    pub(in crate::client) fn evidence(
-        &self,
-    ) -> &[ValidatedActiveReblitBootPublicationEffect] {
+    pub(in crate::client) fn evidence(&self) -> &[ValidatedActiveReblitBootPublicationEffect] {
         &self.evidence
     }
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     CompletedExactActiveReblitBootPublication<
         'plan,
         'inventory,
@@ -183,13 +147,17 @@ where
         >,
         ActiveReblitBootCommitDecisionError,
     > {
-        let retained_plan = self.completed.revalidate_against(client)
-            .map_err(|source| ActiveReblitBootCommitDecisionError::PreAdvance(
-                ActiveReblitBootPostCompletionValidationError::CompletedStagedEvidence {
-                    checkpoint: "commit-decision admission",
-                    source,
-                },
-            ))?
+        let retained_plan = self
+            .completed
+            .revalidate_against(client)
+            .map_err(|source| {
+                ActiveReblitBootCommitDecisionError::PreAdvance(
+                    ActiveReblitBootPostCompletionValidationError::CompletedStagedEvidence {
+                        checkpoint: "commit-decision admission",
+                        source,
+                    },
+                )
+            })?
             .plan();
         validate_completed_terminal_sandwich(
             &self.completed,
@@ -240,12 +208,12 @@ where
                     &evidence,
                     "bound commit-decision advance",
                 )
-                .map_err(|source| {
-                    ActiveReblitBootPostCompletionValidationError::TerminalEvidence {
+                .map_err(
+                    |source| ActiveReblitBootPostCompletionValidationError::TerminalEvidence {
                         checkpoint: "bound commit-decision advance",
                         source,
-                    }
-                })?;
+                    },
+                )?;
                 Ok(retained_plan.input_deadline())
             }),
         };
@@ -301,7 +269,9 @@ fn validate_committed_terminal_sandwich<
 where
     'input: 'plan,
 {
-    handoff.committed.revalidate_against(client)
+    handoff
+        .committed
+        .revalidate_against(client)
         .map_err(ActiveReblitBootCommitDecisionPostAdvanceError::CommittedEvidence)?;
     if !std::ptr::eq(handoff.committed.plan(), retained_plan) {
         return Err(ActiveReblitBootCommitDecisionPostAdvanceError::PlanMismatch);
@@ -317,21 +287,18 @@ where
         "post-commit-decision handoff",
     )
     .map_err(ActiveReblitBootCommitDecisionPostAdvanceError::TerminalEvidence)?;
-    handoff.committed.revalidate_against(client)
+    handoff
+        .committed
+        .revalidate_against(client)
         .map_err(ActiveReblitBootCommitDecisionPostAdvanceError::CommittedEvidence)
 }
 
 #[path = "commit_decision/commit_cleanup.rs"]
 mod commit_cleanup;
 pub(in crate::client) use commit_cleanup::{
-    ActiveReblitBootCompleteError,
-    ActiveReblitBootCompleteHandoff,
-    ActiveReblitBootCompletePostAdvanceError,
-    ActiveReblitBootCommitCleanupCompleteHandoff,
-    ActiveReblitBootFinalizationError,
-    ActiveReblitBootFinalizedHandoff,
-    ActiveReblitBootCommitCleanupError,
-    ActiveReblitBootCommitCleanupPostAdvanceError,
+    ActiveReblitBootCommitCleanupCompleteHandoff, ActiveReblitBootCommitCleanupError,
+    ActiveReblitBootCommitCleanupPostAdvanceError, ActiveReblitBootCompleteError, ActiveReblitBootCompleteHandoff,
+    ActiveReblitBootCompletePostAdvanceError, ActiveReblitBootFinalizationError, ActiveReblitBootFinalizedHandoff,
 };
 
 #[derive(Debug, Error)]
@@ -347,17 +314,11 @@ pub(in crate::client) enum ActiveReblitBootCommitDecisionError {
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootCommitDecisionPostAdvanceError {
     #[error("revalidate retained committed staging evidence")]
-    CommittedEvidence(
-        #[source]
-        CommittedStagedActiveReblitBootSyncValidationError,
-    ),
+    CommittedEvidence(#[source] CommittedStagedActiveReblitBootSyncValidationError),
     #[error("the committed staging authority returned a different retained plan")]
     PlanMismatch,
     #[error("revalidate exact terminal output and topology evidence")]
-    TerminalEvidence(
-        #[source]
-        ActiveReblitBootTerminalEvidenceValidationError,
-    ),
+    TerminalEvidence(#[source] ActiveReblitBootTerminalEvidenceValidationError),
 }
 
 #[cfg(test)]
@@ -367,9 +328,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_after_active_reblit_commit_decision_terminal_validation(
-    hook: impl FnOnce() + 'static,
-) {
+pub(in crate::client) fn arm_after_active_reblit_commit_decision_terminal_validation(hook: impl FnOnce() + 'static) {
     AFTER_TERMINAL_VALIDATION.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });
@@ -378,7 +337,10 @@ pub(in crate::client) fn arm_after_active_reblit_commit_decision_terminal_valida
 #[cfg(test)]
 pub(in crate::client) fn assert_after_active_reblit_commit_decision_terminal_validation_hook_consumed() {
     AFTER_TERMINAL_VALIDATION.with(|slot| {
-        assert!(slot.borrow().is_none(), "commit-decision terminal hook was not consumed");
+        assert!(
+            slot.borrow().is_none(),
+            "commit-decision terminal hook was not consumed"
+        );
     });
 }
 

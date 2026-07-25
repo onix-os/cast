@@ -14,14 +14,13 @@ use crate::{
     state::{self, TransitionId},
 };
 
+use super::super::{CandidateMetadataError, CandidateMetadataOutputs, StatefulTreeIdentity};
 use super::{
-    PreparedStatefulTransitionCoordinator, StatefulTransitionRequest,
-    SystemTriggersCompleteCoordinator,
+    PreparedStatefulTransitionCoordinator, StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
     system_triggers::StatefulSystemTriggerAuthority,
     transaction_isolation::require_pre_journal_active_reblit_installation,
     transaction_triggers::StatefulTransactionTriggerAuthority,
 };
-use super::super::{CandidateMetadataError, CandidateMetadataOutputs, StatefulTreeIdentity};
 
 type BoxedForwardError = Box<dyn StdError + Send + Sync + 'static>;
 
@@ -93,9 +92,7 @@ impl<'authority> ActiveReblitTransactionTriggerView<'authority> {
         (self.candidate_usr, self.candidate_usr_path)
     }
 
-    pub(crate) const fn retained_isolation_root(
-        &self,
-    ) -> (&'authority Installation, &'authority RetainedRootAbi) {
+    pub(crate) const fn retained_isolation_root(&self) -> (&'authority Installation, &'authority RetainedRootAbi) {
         (self.installation, self.isolation_root)
     }
 }
@@ -134,11 +131,7 @@ impl<'authority> ActiveReblitSystemTriggerView<'authority> {
 
     pub(crate) const fn retained_view(
         &self,
-    ) -> (
-        &'authority Installation,
-        &'authority File,
-        &'authority RetainedRootAbi,
-    ) {
+    ) -> (&'authority Installation, &'authority File, &'authority RetainedRootAbi) {
         (self.installation, self.candidate_usr, self.isolation_root)
     }
 }
@@ -148,13 +141,7 @@ impl<'authority> ActiveReblitSystemTriggerView<'authority> {
 ///
 /// System triggers are mandatory. Boot applicability remains a caller decision
 /// made before the first journal record is created.
-pub(crate) fn execute_active_reblit_forward<
-    TxError,
-    SystemError,
-    DeriveMetadata,
-    TransactionTrigger,
-    SystemTrigger,
->(
+pub(crate) fn execute_active_reblit_forward<TxError, SystemError, DeriveMetadata, TransactionTrigger, SystemTrigger>(
     identity: StatefulTreeIdentity,
     authority: JournalUsrExchangeAuthority,
     state: state::Id,
@@ -167,8 +154,7 @@ where
     TxError: StdError + Send + Sync + 'static,
     SystemError: StdError + Send + Sync + 'static,
     DeriveMetadata: FnOnce(Option<&[u8]>) -> Result<CandidateMetadataOutputs, CandidateMetadataError>,
-    TransactionTrigger:
-        for<'authority> FnOnce(ActiveReblitTransactionTriggerView<'authority>) -> Result<(), TxError>,
+    TransactionTrigger: for<'authority> FnOnce(ActiveReblitTransactionTriggerView<'authority>) -> Result<(), TxError>,
     SystemTrigger: for<'authority> FnOnce(ActiveReblitSystemTriggerView<'authority>) -> Result<(), SystemError>,
 {
     require_pre_journal_active_reblit_installation(&identity, authority.installation(), state)
@@ -214,8 +200,6 @@ where
         .publish_root_abi()
         .map_err(|source| ActiveReblitForwardError::at("root ABI publication", source))?;
     root_links
-        .run_system_triggers(|inner| {
-            system_trigger(ActiveReblitSystemTriggerView::from_authority(inner))
-        })
+        .run_system_triggers(|inner| system_trigger(ActiveReblitSystemTriggerView::from_authority(inner)))
         .map_err(|source| ActiveReblitForwardError::at("system triggers", source))
 }

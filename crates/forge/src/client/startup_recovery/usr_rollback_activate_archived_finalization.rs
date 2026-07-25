@@ -9,13 +9,12 @@
 use thiserror::Error;
 
 use crate::transition_journal::{
-    Operation, Phase, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
-    TransitionJournalStore,
+    Operation, Phase, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState, TransitionJournalStore,
 };
 
 use super::super::startup_reconciliation::{
-    UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority,
-    UsrRollbackActivateArchivedFinalizationAuthority, UsrRollbackActivateArchivedFinalizationAuthorityError,
+    UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority, UsrRollbackActivateArchivedFinalizationAuthority,
+    UsrRollbackActivateArchivedFinalizationAuthorityError,
 };
 
 #[cfg(test)]
@@ -58,17 +57,16 @@ fn reconcile_bound_delete(
                 .map_err(UsrRollbackActivateArchivedFinalizationError::PostDeleteAuthority)?;
             Ok(journal)
         }
-        Err(delete @ TransitionJournalRecordDeleteError::Storage {
-            state: TransitionJournalRecordDeleteState::Absent,
-            ..
-        }) => match after_delete.revalidate_after_journal_delete(&journal) {
+        Err(
+            delete @ TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::Absent,
+                ..
+            },
+        ) => match after_delete.revalidate_after_journal_delete(&journal) {
             Ok(()) => Err(UsrRollbackActivateArchivedFinalizationError::Delete(delete)),
-            Err(verification) => Err(
-                UsrRollbackActivateArchivedFinalizationError::DeleteAndPostDeleteAuthority {
-                    delete,
-                    verification,
-                },
-            ),
+            Err(verification) => {
+                Err(UsrRollbackActivateArchivedFinalizationError::DeleteAndPostDeleteAuthority { delete, verification })
+            }
         },
         Err(source) => Err(UsrRollbackActivateArchivedFinalizationError::Delete(source)),
     }
@@ -86,9 +84,7 @@ pub(in crate::client) enum UsrRollbackActivateArchivedFinalizationError {
     Delete(#[source] TransitionJournalRecordDeleteError),
     #[error("revalidate exact ActivateArchived evidence and public absence after terminal deletion")]
     PostDeleteAuthority(#[source] UsrRollbackActivateArchivedFinalizationAuthorityError),
-    #[error(
-        "exact ActivateArchived terminal deletion failed ({delete}) and post-delete absence evidence also failed"
-    )]
+    #[error("exact ActivateArchived terminal deletion failed ({delete}) and post-delete absence evidence also failed")]
     DeleteAndPostDeleteAuthority {
         delete: TransitionJournalRecordDeleteError,
         #[source]
@@ -105,9 +101,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(crate) fn arm_before_usr_rollback_activate_archived_finalization_final_revalidation(
-    hook: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_before_usr_rollback_activate_archived_finalization_final_revalidation(hook: impl FnOnce() + 'static) {
     BEFORE_FINAL_AUTHORITY_REVALIDATION.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

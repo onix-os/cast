@@ -1,37 +1,47 @@
+let a = import! cast.authored.v1
 
-let b = import! cast.package.v3
-
-let scripts = b.scripts {
-    setup = b.phase [b.step.shell_with {
-        interpreter = b.program.binary "bash",
-        declared_programs = [b.program.binary "touch"],
+let scripts = a.scripts {
+    setup = a.phase [a.step.shell_with {
+        interpreter = a.program.binary "bash",
+        declared_programs = [a.program.binary "touch"],
         script = "for f in a b c d e f g h; do touch $f; done",
     }],
-    build = b.phase [b.step.shell "for f in a b c d e f g h; do echo $f >> build.log; done"],
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "install"],
+    build = a.phase [a.step.shell "for f in a b c d e f g h; do echo $f >> build.log; done"],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "install"],
             script = r#"install -Dm00644 build.log "${CAST_INSTALL_ROOT}${CAST_LIBEXECDIR}/build.log""#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
 let root = {
-    summary = b.optional.set "Concurrency test for Cast",
-    description = b.optional.set "Concurrency test for Cast",
-    .. b.output "out"
+    summary = a.optional.set "Concurrency test for Cast",
+    description = a.optional.set "Concurrency test for Cast",
+    .. a.output "out"
 }
 
 {
-    builder = b.builder.shell scripts [],
-    outputs = b.outputs.with_root "cast-concurrency-test" root,
-    .. b.mk_package (b.meta {
+    meta = {
         pname = "cast-concurrency-test",
         version = "1",
         release = 1,
         homepage = "https://github.com/bresilla/os-tools",
         license = ["MPL-2.0"],
-    })
+    },
+    builder = a.builder.shell scripts [],
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.with_root root,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

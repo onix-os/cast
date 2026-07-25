@@ -28,20 +28,27 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
+use config::declaration::{RegisteredLanguages, TypedDeclarationEvaluatorSet};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
+    LanguageSpec, Limits, Source, SourceRoot,
+};
+use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
 
 use crate::{Installation, installation};
 
 use self::{
     filesystem::{RetainedBootTopologySource, capture_source, revalidate_source},
-    gluon::EvaluatedBootTopologyIntent,
+    gluon::GluonBootTopologyIntentEvaluator,
 };
 
 #[path = "active_reblit_boot_topology_intent/filesystem.rs"]
 mod filesystem;
 #[path = "active_reblit_boot_topology_intent/gluon.rs"]
 mod gluon;
+#[path = "active_reblit_boot_topology_intent/lua.rs"]
+mod lua;
 
 const KIB: usize = 1024;
 const MAX_BOOT_TOPOLOGY_SOURCE_BYTES: usize = 64 * KIB;
@@ -59,7 +66,7 @@ pub(in crate::client) struct PreparedActiveReblitBootTopologyIntent {
     source: RetainedBootTopologySource,
     source_text: Box<str>,
     value: ActiveReblitBootTopologyIntentValue,
-    fingerprint: EvaluationFingerprint,
+    fingerprint: EvaluationIdentity,
     #[cfg(test)]
     preparation_work: usize,
 }
@@ -218,18 +225,19 @@ impl PreparedActiveReblitBootTopologyIntent {
     where
         F: FnOnce(),
     {
-        let bytes = revalidate_source(installation, &self.source, budget)?;
+        let languages = registered_declaration_languages();
+        let bytes = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&bytes)?;
         let source_text =
             std::str::from_utf8(&bytes).map_err(|source| ActiveReblitBootTopologyIntentError::InvalidUtf8 {
                 path: budget.source_path.clone(),
                 source,
             })?;
-        let evaluated = gluon::evaluate(source_text, budget)?;
+        let evaluated = evaluate_declaration(source_text, self.source.language(), self.source.logical_name(), budget)?;
         self.require_exact_evaluation(&evaluated)?;
 
         before_terminal_rebind();
-        let terminal = revalidate_source(installation, &self.source, budget)?;
+        let terminal = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&terminal)
     }
 
@@ -246,9 +254,9 @@ impl PreparedActiveReblitBootTopologyIntent {
 
     fn require_exact_evaluation(
         &self,
-        evaluated: &EvaluatedBootTopologyIntent,
+        evaluated: &DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, EvaluationIdentity>,
     ) -> Result<(), ActiveReblitBootTopologyIntentError> {
-        if evaluated.value == self.value && evaluated.fingerprint == self.fingerprint {
+        if evaluated.value == self.value && evaluated.identity == self.fingerprint {
             Ok(())
         } else {
             Err(ActiveReblitBootTopologyIntentError::Changed {
@@ -269,7 +277,7 @@ impl RevalidatedActiveReblitBootTopologyIntent<'_> {
         self.intent.value.bound()
     }
 
-    pub(in crate::client) fn fingerprint(&self) -> &EvaluationFingerprint {
+    pub(in crate::client) fn fingerprint(&self) -> &EvaluationIdentity {
         &self.intent.fingerprint
     }
 }
@@ -452,7 +460,8 @@ where
     G: FnOnce(),
 {
     revalidate_installation_root(installation, budget)?;
-    let (source, bytes) = capture_source(installation, budget)?;
+    let languages = registered_declaration_languages();
+    let (source, bytes) = capture_source(installation, &languages, budget)?;
     let source_text = std::str::from_utf8(&bytes)
         .map_err(|source| ActiveReblitBootTopologyIntentError::InvalidUtf8 {
             path: boot_topology_intent_path(installation),
@@ -460,12 +469,12 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = gluon::evaluate(&source_text, budget)?;
+    let evaluated = evaluate_declaration(&source_text, source.language(), source.logical_name(), budget)?;
     let prepared = PreparedActiveReblitBootTopologyIntent {
         source,
         source_text,
         value: evaluated.value,
-        fingerprint: evaluated.fingerprint,
+        fingerprint: evaluated.identity,
         #[cfg(test)]
         preparation_work: 0,
     };
@@ -477,6 +486,93 @@ where
         ..prepared
     };
     Ok(prepared)
+}
+
+/// One registered boot-topology declaration language, selected by the fixed
+/// source's extension. Both engines reach the identical validated intent value
+/// through the shared assembly; the conversion error type is shared.
+enum BootTopologyIntentEvaluator<'budget> {
+    Gluon(GluonBootTopologyIntentEvaluator<'budget>),
+    Lua(lua::LuaBootTopologyIntentEvaluator<'budget>),
+}
+
+impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for BootTopologyIntentEvaluator<'_> {
+    type Identity = EvaluationIdentity;
+    type Error = ActiveReblitBootTopologyIntentError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        match self {
+            Self::Gluon(evaluator) => {
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::language_spec(evaluator)
+            }
+            Self::Lua(evaluator) => {
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::language_spec(evaluator)
+            }
+        }
+    }
+
+    fn limits(&self) -> Limits {
+        match self {
+            Self::Gluon(evaluator) => DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator),
+            Self::Lua(evaluator) => DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::limits(evaluator),
+        }
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        match self {
+            Self::Gluon(evaluator) => Self::Gluon(
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::with_source_root(evaluator, source_root),
+            ),
+            Self::Lua(evaluator) => Self::Lua(
+                DeclarationEvaluator::<ActiveReblitBootTopologyIntentValue>::with_source_root(evaluator, source_root),
+            ),
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        match self {
+            Self::Gluon(evaluator) => evaluator.evaluate_within(source, deadline),
+            Self::Lua(evaluator) => evaluator.evaluate_within(source, deadline),
+        }
+    }
+}
+
+fn evaluate_declaration(
+    source_text: &str,
+    language: &LanguageSpec,
+    logical_name: &str,
+    budget: &BootTopologyIntentBudget,
+) -> Result<
+    DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, EvaluationIdentity>,
+    ActiveReblitBootTopologyIntentError,
+> {
+    let evaluators = TypedDeclarationEvaluatorSet::new([
+        BootTopologyIntentEvaluator::Gluon(GluonBootTopologyIntentEvaluator::new(budget)?),
+        BootTopologyIntentEvaluator::Lua(lua::LuaBootTopologyIntentEvaluator::new(budget)?),
+    ])
+    .expect("the boot-topology adapters register distinct extensions");
+    let evaluator = evaluators
+        .get(language)
+        .ok_or(ActiveReblitBootTopologyIntentError::EvaluationContract {
+            reason: "boot-topology source language has no registered evaluator",
+        })?;
+    let source = Source::new(logical_name, source_text);
+    evaluator.evaluate(&source).map_err(|error| match error {
+        DeclarationEvaluationError::Evaluation(source) => ActiveReblitBootTopologyIntentError::Evaluation(source),
+        DeclarationEvaluationError::Conversion(source) => source,
+    })
+}
+
+fn registered_declaration_languages() -> RegisteredLanguages {
+    RegisteredLanguages::new([gluon::language_spec(), lua::language_spec()])
+        .expect("the production boot-topology languages register distinct extensions")
 }
 
 fn revalidate_installation_root(
@@ -544,7 +640,7 @@ pub(in crate::client) enum ActiveReblitBootTopologyIntentError {
     #[error(transparent)]
     Evaluation(#[from] gluon_config::Diagnostic),
     #[error(transparent)]
-    EvaluationFingerprint(#[from] EvaluationFingerprintValidationError),
+    EvaluationIdentity(#[from] EvaluationIdentityValidationError),
     #[error("unsafe boot-topology intent inode at `{}`: {reason}", path.display())]
     UnsafeInode { path: PathBuf, reason: &'static str },
     #[error("boot-topology intent changed at `{}`: {reason}", path.display())]

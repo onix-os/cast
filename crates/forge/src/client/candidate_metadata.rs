@@ -9,7 +9,7 @@ use std::{fs::File, path::Path};
 
 use super::Error;
 use crate::{
-    SystemModel,
+    SystemModel, system_model,
     transition_identity::{
         ArchivedStateRepairIdentity, CandidateMetadataError, CandidateMetadataOutputs,
         CandidateMetadataProof as CoreCandidateMetadataProof, CandidateMetadataPublication, RetainedCandidateUsr,
@@ -143,7 +143,13 @@ pub(super) fn derive_outputs(
     snapshot: &SystemModel,
 ) -> Result<CandidateMetadataOutputs, CandidateMetadataError> {
     let os_release = render_os_release(os_info);
-    CandidateMetadataOutputs::from_policy(os_release.into_bytes(), snapshot.encoded().as_bytes().to_vec())
+    let encoded = system_model::encode_snapshot(snapshot)
+        .expect("an owned system model always has a canonical snapshot encoding");
+    CandidateMetadataOutputs::from_policy(
+        os_release.into_bytes(),
+        system_model::snapshot_authorities(),
+        encoded.into_bytes(),
+    )
 }
 
 fn render_os_release(os_info: Option<&[u8]>) -> String {
@@ -260,7 +266,10 @@ ID_LIKE=\"linux\"\n";
 
     #[test]
     fn invalid_os_info_derives_generic_release_and_exact_snapshot_bytes() {
-        assert_policy_outputs(Some(br#"{"os-info-version": "invalid"}"#), GENERIC_OS_RELEASE.as_bytes());
+        assert_policy_outputs(
+            Some(br#"{"os-info-version": "invalid"}"#),
+            GENERIC_OS_RELEASE.as_bytes(),
+        );
     }
 
     #[test]
@@ -274,6 +283,39 @@ ID_LIKE=\"linux\"\n";
     }
 
     #[test]
+    fn generated_snapshot_output_uses_exact_registered_authority_marker_and_name() {
+        let snapshot = snapshot();
+        let outputs = derive_outputs(None, &snapshot).unwrap();
+        let expected = system_model::snapshot_authorities();
+
+        assert_eq!(outputs.system_model_authorities(), &expected);
+        assert_eq!(outputs.system_model_authority(), expected.active_authority(),);
+        assert_eq!(outputs.system_model_name(), c"system-model.glu");
+        assert_eq!(
+            outputs.system_model_authority().ownership_marker(),
+            system_model::gluon::GENERATED_GLUON_MARKER.as_bytes(),
+        );
+        assert!(
+            outputs
+                .system_model()
+                .starts_with(outputs.system_model_authority().ownership_marker())
+        );
+
+        let error = CandidateMetadataOutputs::from_policy(
+            GENERIC_OS_RELEASE.as_bytes(),
+            expected,
+            b"authored system declaration\n",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            CandidateMetadataError::MissingGeneratedDeclarationMarker {
+                ref name,
+            } if name == "system-model.glu"
+        ));
+    }
+
+    #[test]
     fn retained_decoration_publishes_the_same_bytes_as_the_pure_policy() {
         let temporary = tempfile::tempdir().unwrap();
         let usr_path = temporary.path().join("usr");
@@ -281,11 +323,7 @@ ID_LIKE=\"linux\"\n";
         fs::create_dir(usr_path.join("lib")).unwrap();
         fs::set_permissions(usr_path.join("lib"), fs::Permissions::from_mode(0o755)).unwrap();
         fs::write(usr_path.join("lib/os-info.json"), VALID_OS_INFO).unwrap();
-        fs::set_permissions(
-            usr_path.join("lib/os-info.json"),
-            fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
+        fs::set_permissions(usr_path.join("lib/os-info.json"), fs::Permissions::from_mode(0o644)).unwrap();
         let usr = File::open(&usr_path).unwrap();
         let snapshot = snapshot();
         let expected = derive_outputs(Some(VALID_OS_INFO), &snapshot).unwrap();

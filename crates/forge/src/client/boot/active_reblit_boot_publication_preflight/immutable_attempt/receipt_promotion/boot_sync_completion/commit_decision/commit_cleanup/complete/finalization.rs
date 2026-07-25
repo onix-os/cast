@@ -9,22 +9,16 @@ use crate::{
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_boot_publication_preflight::ActiveReblitBootCompleteFinalizationSeal,
         active_reblit_boot_sync_staging::{
-            CompleteStagedActiveReblitFinalizationError,
-            CompleteStagedActiveReblitBootSyncValidationError,
-            FinalizedStagedActiveReblitBootSync,
-            FinalizedStagedActiveReblitBootSyncValidationError,
+            CompleteStagedActiveReblitBootSyncValidationError, CompleteStagedActiveReblitFinalizationError,
+            FinalizedStagedActiveReblitBootSync, FinalizedStagedActiveReblitBootSyncValidationError,
         },
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
     },
-    db::state::{
-        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
-    },
+    db::state::{BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome},
     transition_journal::TransitionRecord,
 };
 
-use super::{
-    ActiveReblitBootCompleteHandoff, ValidatedActiveReblitBootPublicationEffect,
-};
+use super::{ActiveReblitBootCompleteHandoff, ValidatedActiveReblitBootPublicationEffect};
 
 /// Clean terminal handoff produced only after the exact retained generation-15
 /// journal binding has been deleted and fully revalidated. It retains every
@@ -43,14 +37,7 @@ pub(in crate::client) struct ActiveReblitBootFinalizedHandoff<
     finalized: FinalizedStagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     database_outcome: BootPublicationReceiptPromotionOutcome,
     publication_count: usize,
@@ -60,9 +47,7 @@ pub(in crate::client) struct ActiveReblitBootFinalizedHandoff<
     evidence: Vec<ValidatedActiveReblitBootPublicationEffect>,
 }
 
-impl std::fmt::Debug
-    for ActiveReblitBootFinalizedHandoff<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for ActiveReblitBootFinalizedHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ActiveReblitBootFinalizedHandoff")
@@ -79,15 +64,11 @@ impl ActiveReblitBootFinalizedHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.finalized.complete_record()
     }
 
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.finalized.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn database_outcome(
-        &self,
-    ) -> BootPublicationReceiptPromotionOutcome {
+    pub(in crate::client) const fn database_outcome(&self) -> BootPublicationReceiptPromotionOutcome {
         self.database_outcome
     }
 
@@ -107,35 +88,20 @@ impl ActiveReblitBootFinalizedHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.replaced_count
     }
 
-    pub(in crate::client) const fn inventory(
-        &self,
-    ) -> &PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(&self) -> &PreparedActiveReblitDesiredPublicationInventory {
         self.finalized.inventory()
     }
 
-    pub(in crate::client) const fn staging_outcome(
-        &self,
-    ) -> BootPublicationReceiptStageOutcome {
+    pub(in crate::client) const fn staging_outcome(&self) -> BootPublicationReceiptStageOutcome {
         self.finalized.staging_outcome()
     }
 
-    pub(in crate::client) fn evidence(
-        &self,
-    ) -> &[ValidatedActiveReblitBootPublicationEffect] {
+    pub(in crate::client) fn evidence(&self) -> &[ValidatedActiveReblitBootPublicationEffect] {
         &self.evidence
     }
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     ActiveReblitBootCompleteHandoff<
         'plan,
         'inventory,

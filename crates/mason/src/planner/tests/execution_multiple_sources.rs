@@ -145,7 +145,7 @@ fn validate_multiple_sources_contract(package: &PackageSpec, lock: &SourceLock) 
 fn multiple_sources_contract_fixture() -> (PackageSpec, SourceLock) {
     let package = execution_fixture_package_directory("multiple-sources");
     let recipe = crate::Recipe::load_authored(package.join("stone.glu")).unwrap();
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )

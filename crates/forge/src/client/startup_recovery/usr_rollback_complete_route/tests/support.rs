@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::{
-    Installation, db,
+    Installation,
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackCompleteRouteSeal,
@@ -14,6 +14,7 @@ use crate::{
             UsrRollbackFreshDbInvalidationEffectSeal, persist_usr_rollback_fresh_db_invalidation_and_reopen,
         },
     },
+    db,
     installation::DatabaseKind,
     test_support::private_installation_tempdir,
     transition_journal::{Phase, RollbackAction, RollbackActionOutcome, TransitionJournalStore, TransitionRecord},
@@ -251,11 +252,7 @@ pub(super) fn install_persistent_joint_absence_database(fixture: &mut RouteFixtu
     assert_eq!(candidate, fixture.fixture.fixture.fixture.candidate_state);
     let provenance = db::state::MetadataProvenance::from_outputs(OS_RELEASE, SYSTEM_MODEL);
     database
-        .insert_fresh_metadata_provenance_if_transition_matches(
-            candidate,
-            &fixture.source.transition_id,
-            &provenance,
-        )
+        .insert_fresh_metadata_provenance_if_transition_matches(candidate, &fixture.source.transition_id, &provenance)
         .unwrap();
     let observation = database
         .inspect_exact_fresh_transition(candidate, &fixture.source.transition_id)

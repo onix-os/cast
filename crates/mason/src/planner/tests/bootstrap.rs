@@ -8,15 +8,16 @@ use std::{
 
 use forge::package::Meta;
 use fs_err as fs;
-use gluon_config::{DiagnosticCategory, Evaluator, ImportPolicy, LimitKind, Limits, SourceRoot};
+use gluon_config::{DiagnosticCategory, GluonEngine, ImportPolicy, LimitKind, Limits, SourceRoot};
 use sha2::{Digest, Sha256};
 use stone::{StoneDecodeLimits, StoneDecodedPayload, StoneHeader, StoneHeaderV1FileType};
 use url::Url;
 
 use super::{
     EXECUTION_FIXTURES, Env, HEADER_ONLY_CHECK_SCRIPT, HEADER_ONLY_INSTALL_SCRIPT, Planned, Publication, Request,
-    SOURCE_DATE_EPOCH, TARGET, WriteOutcome, container_capability_unavailable, copy_package_directory,
-    encode_build_lock, error_chain, execute_and_publish, execution_capability_required, plan_for_build, profile,
+    SOURCE_DATE_EPOCH, TARGET, WriteOutcome, canonical_build_lock,
+    container_capability_unavailable, copy_package_directory, error_chain,
+    execute_and_publish, execution_capability_required, plan_for_build, profile,
 };
 
 #[path = "bootstrap/bundle.rs"]
@@ -233,7 +234,7 @@ fn package_store() -> PathBuf {
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/bootstrap-fixtures/packages"))
 }
 
-fn bootstrap_closure_evaluator(source_root: SourceRoot) -> Evaluator {
+fn bootstrap_closure_evaluator(source_root: SourceRoot) -> GluonEngine {
     let mut import_policy = ImportPolicy::new();
     import_policy.enable_array_primitives();
     let limits = Limits {
@@ -243,7 +244,7 @@ fn bootstrap_closure_evaluator(source_root: SourceRoot) -> Evaluator {
         max_import_graph_bytes: MAX_BOOTSTRAP_GLUON_IMPORT_GRAPH_BYTES,
         ..Limits::default()
     };
-    Evaluator::new(limits)
+    GluonEngine::new(limits)
         .with_source_root(source_root)
         .with_import_policy(import_policy)
 }
@@ -262,13 +263,16 @@ fn load_bootstrap_closure() -> BootstrapClosure {
 #[test]
 fn bootstrap_closure_fingerprints_every_functional_data_module() {
     let evaluation = evaluate_bootstrap_closure();
-    evaluation.fingerprint.validate().unwrap();
-    let imported = evaluation
-        .fingerprint
-        .imported_modules
+    evaluation.identity.validate().unwrap();
+    let mut imported = evaluation
+        .identity
+        .modules
         .iter()
         .map(|module| module.logical_name.as_str())
         .collect::<Vec<_>>();
+    // v2 identity orders modules by their canonical graph identity; assert
+    // membership independent of that ordering.
+    imported.sort_unstable();
     assert_eq!(
         imported,
         [

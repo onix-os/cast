@@ -136,7 +136,7 @@ fn run_execution_fixtures_from_contentful_closure() -> DelegatedExecutionOutcome
             .unwrap_or_else(|error| panic!("{name}: read first build.lock.glu observation: {error}"));
         assert_eq!(
             first_lock,
-            encode_build_lock(&first.plan.build_lock).into_bytes(),
+            canonical_build_lock(&first.plan.build_lock).into_bytes(),
             "{name}: first build.lock.glu presentation does not encode the frozen lock"
         );
         let input_snapshot = ExecutionInputSnapshot::capture(recipe, &first.lock_path);
@@ -311,7 +311,7 @@ fn all_execution_fixtures_resolve_exactly_the_pinned_real_stone_closure() {
         let canonical_plan = first.plan.canonical_bytes();
         let derivation_id = first.plan.derivation_id();
         let lock_bytes = fs::read(&first.lock_path).unwrap();
-        assert_eq!(lock_bytes, encode_build_lock(&first.plan.build_lock).into_bytes());
+        assert_eq!(lock_bytes, canonical_build_lock(&first.plan.build_lock).into_bytes());
         let locked = plan_for_build(matrix.env(), matrix.request(recipe, false), &matrix.output_dir)
             .unwrap_or_else(|error| panic!("{name}: reuse contentful build lock: {error:#}"));
         assert_eq!(locked.lock_outcome, None);

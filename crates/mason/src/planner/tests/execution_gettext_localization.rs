@@ -302,7 +302,7 @@ fn validate_gettext_assets(snapshot: &GettextSnapshot) -> Result<(), String> {
 fn gettext_contract_fixture() -> (PackageSpec, SourceLock, PathBuf) {
     let package_root = execution_fixture_package_directory("gettext-localization");
     let recipe = crate::Recipe::load_authored(package_root.join("stone.glu")).unwrap();
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )
@@ -314,7 +314,7 @@ fn gettext_contract_fixture() -> (PackageSpec, SourceLock, PathBuf) {
 
 fn assert_gettext_fixture_contract(package: &PackageSpec, source_tree: &Path) {
     let package_root = execution_fixture_package_directory("gettext-localization");
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )

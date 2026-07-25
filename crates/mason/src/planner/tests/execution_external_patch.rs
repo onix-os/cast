@@ -58,7 +58,7 @@ fn hooks_patch_external_source_contract_fails_closed() {
     let package = execution_fixture_package_directory("hooks-patch");
     let recipe = crate::Recipe::load_authored(&package.join("stone.glu")).unwrap();
     let lock_bytes = fs::read(package.join(SOURCE_LOCK_FILE_NAME)).unwrap();
-    let lock = decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes).unwrap();
+    let lock = evaluate_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes).unwrap();
     validate_hooks_patch_source_contract(&recipe.declaration.sources, &lock).unwrap();
 
     let mut missing = lock.clone();

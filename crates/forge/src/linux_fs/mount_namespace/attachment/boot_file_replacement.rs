@@ -19,25 +19,28 @@
 //! preserved and rejected; an uncooperative same-credential writer in the
 //! final compare/syscall window remains outside this primitive's contract.
 
-use std::{ffi::{CStr, CString}, fs::File, io, time::Instant};
+use std::{
+    ffi::{CStr, CString},
+    fs::File,
+    io,
+    time::Instant,
+};
 
 use sha2::{Digest as _, Sha256};
 
 use super::{
     boot_file_publication::{
-        AttachmentIdentity, RetainedBootFilePublicationError,
-        RetainedBootFilePublicationLimits, RetainedBootFilePublicationRequest,
-        RetainedBootFilePublicationTarget,
-        destination::{self, FileIdentity}, effect as publication_effect,
-        validate_request as validate_publication_request,
+        AttachmentIdentity, RetainedBootFilePublicationError, RetainedBootFilePublicationLimits,
+        RetainedBootFilePublicationRequest, RetainedBootFilePublicationTarget,
+        destination::{self, FileIdentity},
+        effect as publication_effect, validate_request as validate_publication_request,
     },
     boot_publication_parent::RetainedBootPublicationParent,
 };
 use crate::linux_fs::{
     RETAINED_BOOT_FILE_PRIVATE_PREFIX,
     descriptor_boot_namespace::{
-        BootNamespaceRequest, BoundRetainedBootFileSource,
-        RetainedBootNamespaceExpectedSource,
+        BootNamespaceRequest, BoundRetainedBootFileSource, RetainedBootNamespaceExpectedSource,
     },
     sync_filesystem_until,
 };
@@ -52,25 +55,20 @@ mod model;
 mod recovery;
 
 pub(crate) use error::RetainedBootFileReplacementError;
-pub(crate) use model::{
-    AuthenticatedRetainedBootFileStaleCleanup, RetainedBootFileMutationFingerprint,
-    RetainedBootFileAppliedSidecarCleanupState,
-    RetainedBootFileRestoredSidecarCleanupState,
-    RetainedBootFileReplacementRequest, RetainedBootFileStaleCleanupOutcome,
-    RetainedBootFileStaleCleanupRequest, RetainedBootFileStaleCleanupState,
-    RetainedBootFileSidecarCleanupOutcome, ValidatedRetainedBootFileReplacement,
-    ValidatedRetainedBootFileRestoration,
-};
 use model::ExactContent;
+pub(crate) use model::{
+    AuthenticatedRetainedBootFileStaleCleanup, RetainedBootFileAppliedSidecarCleanupState,
+    RetainedBootFileMutationFingerprint, RetainedBootFileReplacementRequest,
+    RetainedBootFileRestoredSidecarCleanupState, RetainedBootFileSidecarCleanupOutcome,
+    RetainedBootFileStaleCleanupOutcome, RetainedBootFileStaleCleanupRequest, RetainedBootFileStaleCleanupState,
+    ValidatedRetainedBootFileReplacement, ValidatedRetainedBootFileRestoration,
+};
 
 #[cfg(test)]
 pub(crate) use effect::{
-    arm_after_boot_file_sidecar_unlink_callback,
-    arm_after_stale_boot_file_detach_callback,
-    arm_boot_file_exchange_error_after_applied,
-    arm_boot_file_replacement_stop_before_exchange,
-    arm_boot_file_sidecar_stop_after_unlink,
-    arm_stale_boot_file_detach_error_after_applied,
+    arm_after_boot_file_sidecar_unlink_callback, arm_after_stale_boot_file_detach_callback,
+    arm_boot_file_exchange_error_after_applied, arm_boot_file_replacement_stop_before_exchange,
+    arm_boot_file_sidecar_stop_after_unlink, arm_stale_boot_file_detach_error_after_applied,
     arm_stale_boot_file_stop_after_detach,
 };
 
@@ -97,22 +95,12 @@ impl RetainedBootPublicationParent<'_, '_> {
         let parent = open_parent(self, destination, deadline)?;
         require_absent(&parent, &names.sidecar, deadline)?;
 
-        let (installed_file, installed_identity) = destination::open_and_verify(
-            &parent,
-            &names.canonical,
-            request.installed(),
-            destination,
-            deadline,
-        )
-        .map_err(|source| publication("authenticating the installed boot file", source))?;
+        let (installed_file, installed_identity) =
+            destination::open_and_verify(&parent, &names.canonical, request.installed(), destination, deadline)
+                .map_err(|source| publication("authenticating the installed boot file", source))?;
 
-        let replacement_file = destination::create_private_exclusive(
-            &parent,
-            &names.sidecar,
-            destination,
-            deadline,
-        )
-        .map_err(|source| RetainedBootFileReplacementError::PrivateStageCreation { source })?;
+        let replacement_file = destination::create_private_exclusive(&parent, &names.sidecar, destination, deadline)
+            .map_err(|source| RetainedBootFileReplacementError::PrivateStageCreation { source })?;
         let source_request = BootNamespaceRequest::new(
             request.replacement().canonical_leaf(),
             request.replacement().expected_length(),
@@ -125,10 +113,12 @@ impl RetainedBootPublicationParent<'_, '_> {
             limits.retained_namespace,
             deadline,
         )
-        .map_err(|source| publication(
-            "binding the exact boot-file replacement source",
-            RetainedBootFilePublicationError::Source { source },
-        ))?;
+        .map_err(|source| {
+            publication(
+                "binding the exact boot-file replacement source",
+                RetainedBootFilePublicationError::Source { source },
+            )
+        })?;
         publication_effect::stream_expected_source(
             &mut source,
             &replacement_file,
@@ -137,13 +127,9 @@ impl RetainedBootPublicationParent<'_, '_> {
             deadline,
         )
         .map_err(|source| publication("streaming the exact boot-file replacement", source))?;
-        let replacement_identity = destination::verify_open_file(
-            &replacement_file,
-            request.replacement(),
-            destination,
-            deadline,
-        )
-        .map_err(|source| publication("verifying the exact boot-file replacement", source))?;
+        let replacement_identity =
+            destination::verify_open_file(&replacement_file, request.replacement(), destination, deadline)
+                .map_err(|source| publication("verifying the exact boot-file replacement", source))?;
         destination::require_named_identity(&parent, &names.sidecar, replacement_identity, deadline)
             .map_err(|source| publication("binding the private boot-file replacement", source))?;
 
@@ -276,16 +262,8 @@ impl RetainedBootPublicationParent<'_, '_> {
             PairState::Applied,
             deadline,
         )?;
-        self.require_publication_parent_until(
-            "terminally revalidating the applied boot-file replacement",
-            deadline,
-        )
-        .map_err(|source| {
-            publication(
-                "terminally revalidating the applied boot-file replacement",
-                source,
-            )
-        })?;
+        self.require_publication_parent_until("terminally revalidating the applied boot-file replacement", deadline)
+            .map_err(|source| publication("terminally revalidating the applied boot-file replacement", source))?;
         require_pair(
             &parent,
             &names,
@@ -641,7 +619,10 @@ fn deterministic_sidecar_leaf(request: RetainedBootFileReplacementRequest<'_>) -
         digest.update(content.expected_xxh3().to_le_bytes());
         digest.update(content.expected_sha256());
     }
-    format!("{RETAINED_BOOT_FILE_PRIVATE_PREFIX}{}.replace", hex::encode(digest.finalize()))
+    format!(
+        "{RETAINED_BOOT_FILE_PRIVATE_PREFIX}{}.replace",
+        hex::encode(digest.finalize())
+    )
 }
 
 fn deterministic_stale_cleanup_leaf(request: RetainedBootFileStaleCleanupRequest<'_>) -> String {
@@ -653,7 +634,10 @@ fn deterministic_stale_cleanup_leaf(request: RetainedBootFileStaleCleanupRequest
     digest.update(request.stale().expected_length().to_le_bytes());
     digest.update(request.stale().expected_xxh3().to_le_bytes());
     digest.update(request.stale().expected_sha256());
-    format!("{RETAINED_BOOT_FILE_PRIVATE_PREFIX}{}.stale", hex::encode(digest.finalize()))
+    format!(
+        "{RETAINED_BOOT_FILE_PRIVATE_PREFIX}{}.stale",
+        hex::encode(digest.finalize())
+    )
 }
 
 fn authority(
@@ -683,7 +667,9 @@ fn authority_request(authority: &ValidatedRetainedBootFileReplacement) -> Retain
     )
 }
 
-fn authority_names(authority: &ValidatedRetainedBootFileReplacement) -> Result<Names, RetainedBootFileReplacementError> {
+fn authority_names(
+    authority: &ValidatedRetainedBootFileReplacement,
+) -> Result<Names, RetainedBootFileReplacementError> {
     Ok(Names {
         canonical: component(&authority.canonical_leaf)?,
         sidecar: component(&authority.sidecar_leaf)?,
@@ -707,7 +693,8 @@ fn open_parent(
     destination: AttachmentIdentity,
     deadline: Instant,
 ) -> Result<File, RetainedBootFileReplacementError> {
-    target.require_publication_parent_until("opening exact boot-file replacement", deadline)
+    target
+        .require_publication_parent_until("opening exact boot-file replacement", deadline)
         .map_err(|source| publication("opening exact boot-file replacement", source))?;
     destination::open_parent_io(target.publication_parent(), destination, deadline)
         .map_err(|source| publication("opening replacement parent alias", source))
@@ -792,9 +779,7 @@ fn reconcile_unlink(
         (Some(found), Err(source)) if found == expected => {
             Err(RetainedBootFileReplacementError::UnlinkNotApplied { source })
         }
-        (Some(found), Ok(())) if found == expected => {
-            Err(RetainedBootFileReplacementError::UnlinkSuccessUnreconciled)
-        }
+        (Some(found), Ok(())) if found == expected => Err(RetainedBootFileReplacementError::UnlinkSuccessUnreconciled),
         _ => Err(RetainedBootFileReplacementError::UnlinkAmbiguous),
     }
 }
@@ -843,11 +828,7 @@ fn open_exact(
         .map_err(|source| publication(action, source))
 }
 
-fn require_absent(
-    parent: &File,
-    name: &CStr,
-    deadline: Instant,
-) -> Result<(), RetainedBootFileReplacementError> {
+fn require_absent(parent: &File, name: &CStr, deadline: Instant) -> Result<(), RetainedBootFileReplacementError> {
     match destination::observe_named_identity(parent, name, deadline) {
         Ok(None) => Ok(()),
         Ok(Some(_)) => Err(RetainedBootFileReplacementError::PrivateSidecarOccupied),
@@ -862,16 +843,19 @@ fn synchronize_files(
 ) -> Result<(), RetainedBootFileReplacementError> {
     for file in files {
         checkpoint(deadline)?;
-        file.sync_all().map_err(|source| RetainedBootFileReplacementError::Filesystem {
-            action: "synchronizing an exact boot-file replacement inode",
-            source,
-        })?;
+        file.sync_all()
+            .map_err(|source| RetainedBootFileReplacementError::Filesystem {
+                action: "synchronizing an exact boot-file replacement inode",
+                source,
+            })?;
     }
     checkpoint(deadline)?;
-    parent.sync_all().map_err(|source| RetainedBootFileReplacementError::Filesystem {
-        action: "synchronizing the retained boot-file replacement parent",
-        source,
-    })?;
+    parent
+        .sync_all()
+        .map_err(|source| RetainedBootFileReplacementError::Filesystem {
+            action: "synchronizing the retained boot-file replacement parent",
+            source,
+        })?;
     sync_filesystem_until(parent, deadline).map_err(|source| RetainedBootFileReplacementError::Filesystem {
         action: "synchronizing the retained boot filesystem after replacement",
         source,
@@ -884,17 +868,21 @@ fn component(leaf: &str) -> Result<CString, RetainedBootFileReplacementError> {
     if bytes.is_empty()
         || bytes.len() > 255
         || matches!(bytes, b"." | b"..")
-        || !bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-'))
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'-'))
     {
         return Err(publication(
             "validating one boot-file replacement component",
             RetainedBootFilePublicationError::InvalidCanonicalLeaf,
         ));
     }
-    CString::new(bytes).map_err(|_| publication(
-        "validating one boot-file replacement component",
-        RetainedBootFilePublicationError::InvalidCanonicalLeaf,
-    ))
+    CString::new(bytes).map_err(|_| {
+        publication(
+            "validating one boot-file replacement component",
+            RetainedBootFilePublicationError::InvalidCanonicalLeaf,
+        )
+    })
 }
 
 fn checkpoint(deadline: Instant) -> Result<(), RetainedBootFileReplacementError> {
@@ -905,9 +893,6 @@ fn checkpoint(deadline: Instant) -> Result<(), RetainedBootFileReplacementError>
     }
 }
 
-fn publication(
-    action: &'static str,
-    source: RetainedBootFilePublicationError,
-) -> RetainedBootFileReplacementError {
+fn publication(action: &'static str, source: RetainedBootFilePublicationError) -> RetainedBootFileReplacementError {
     RetainedBootFileReplacementError::Publication { action, source }
 }

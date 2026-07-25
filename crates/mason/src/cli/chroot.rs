@@ -21,7 +21,7 @@ use thiserror::Error;
 pub struct Command {
     #[arg(
         default_value = "./stone.glu",
-        help = "Path to a stone.glu recipe file or recipe directory"
+        help = "Path to a stone.glu or stone.lua recipe file or recipe directory"
     )]
     recipe: PathBuf,
 }

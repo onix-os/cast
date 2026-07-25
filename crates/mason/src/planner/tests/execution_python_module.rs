@@ -327,7 +327,7 @@ fn validate_python_module_assets(snapshot: &PythonModuleSnapshot) -> Result<(), 
 fn python_module_contract_fixture() -> (PackageSpec, SourceLock, PathBuf) {
     let package_root = execution_fixture_package_directory("python-module");
     let recipe = crate::Recipe::load_authored(package_root.join("stone.glu")).unwrap();
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )
@@ -339,7 +339,7 @@ fn python_module_contract_fixture() -> (PackageSpec, SourceLock, PathBuf) {
 
 fn assert_python_module_fixture_contract(package: &PackageSpec, source_tree: &Path) {
     let package_root = execution_fixture_package_directory("python-module");
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package_root.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )

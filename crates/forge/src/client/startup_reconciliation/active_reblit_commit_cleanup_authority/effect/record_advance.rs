@@ -1,21 +1,22 @@
 //! Bound `CommitDecided` to `CommitCleanupComplete` record advance.
 
 use crate::{
-    Installation, db,
+    Installation,
     client::active_state_snapshot::{ActiveStateReservation, ActiveStateSnapshot},
+    db,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
-use super::{ActiveReblitCommitCleanupDurableAuthority, ActiveReblitCommitCleanupEffectError};
 use super::super::{
     ActiveReblitCommitCleanupAuthorityError, ActiveReblitCommitCleanupAuthorityErrorKind,
     ActiveReblitCommitCleanupCommonEvidence, ActiveReblitCommitCleanupDatabaseEvidence,
-    ActiveReblitCommitCleanupRouteEvidence, inspect_current_database, record_plan_is_exact,
-    require_exact_active_state, require_exact_database,
+    ActiveReblitCommitCleanupRouteEvidence, inspect_current_database, record_plan_is_exact, require_exact_active_state,
+    require_exact_database,
 };
+use super::{ActiveReblitCommitCleanupDurableAuthority, ActiveReblitCommitCleanupEffectError};
 use crate::client::startup_reconciliation::activation_namespace::DurableActiveReblitCommitCleanupNamespace;
 
 /// Evidence which survives the sole bound advance but grants no second
@@ -53,11 +54,7 @@ impl<'reservation> ActiveReblitCommitCleanupDurableAuthority<'reservation> {
         ActiveReblitCommitCleanupRecordAdvanceError,
     > {
         self.revalidate(journal)?;
-        if !exact_cleanup_complete_successor(
-            &self.evidence.record,
-            successor,
-            &self.evidence.database.route,
-        )? {
+        if !exact_cleanup_complete_successor(&self.evidence.record, successor, &self.evidence.database.route)? {
             return Err(ActiveReblitCommitCleanupRecordAdvanceError::UnexpectedSuccessor);
         }
 
@@ -97,12 +94,7 @@ impl ActiveReblitCommitCleanupPostAdvanceAuthority<'_> {
         successor_binding: &TransitionJournalRecordBinding,
         successor: &TransitionRecord,
     ) -> Result<(), ActiveReblitCommitCleanupEffectError> {
-        self.revalidate_successor(
-            journal,
-            successor_binding,
-            successor,
-            SuccessorBindingMode::SameStore,
-        )
+        self.revalidate_successor(journal, successor_binding, successor, SuccessorBindingMode::SameStore)
     }
 
     pub(in crate::client) fn revalidate_successor_reopened(
@@ -111,12 +103,7 @@ impl ActiveReblitCommitCleanupPostAdvanceAuthority<'_> {
         successor_binding: &TransitionJournalRecordBinding,
         successor: &TransitionRecord,
     ) -> Result<(), ActiveReblitCommitCleanupEffectError> {
-        self.revalidate_successor(
-            journal,
-            successor_binding,
-            successor,
-            SuccessorBindingMode::Reopened,
-        )
+        self.revalidate_successor(journal, successor_binding, successor, SuccessorBindingMode::Reopened)
     }
 
     fn revalidate_successor(
@@ -126,20 +113,10 @@ impl ActiveReblitCommitCleanupPostAdvanceAuthority<'_> {
         successor: &TransitionRecord,
         binding_mode: SuccessorBindingMode,
     ) -> Result<(), ActiveReblitCommitCleanupEffectError> {
-        require_exact_successor_binding(
-            &self.installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
-        let exact = exact_cleanup_complete_successor(
-            &self.completed_record,
-            successor,
-            &self.database.route,
-        )
-        .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::Record)
-        .map_err(ActiveReblitCommitCleanupAuthorityError::from)?;
+        require_exact_successor_binding(&self.installation, journal, successor_binding, successor, binding_mode)?;
+        let exact = exact_cleanup_complete_successor(&self.completed_record, successor, &self.database.route)
+            .map_err(ActiveReblitCommitCleanupAuthorityErrorKind::Record)
+            .map_err(ActiveReblitCommitCleanupAuthorityError::from)?;
         if !exact {
             return Err(ActiveReblitCommitCleanupAuthorityError::from(
                 ActiveReblitCommitCleanupAuthorityErrorKind::UnexpectedSuccessor,
@@ -154,8 +131,7 @@ impl ActiveReblitCommitCleanupPostAdvanceAuthority<'_> {
             inspect_current_database(successor, &self.database.route, &self.state_db)?,
         )?;
         require_exact_active_state(successor, &self.installation, &self.active_state)?;
-        self.namespace
-            .revalidate(&self.installation, &self.completed_record)?;
+        self.namespace.revalidate(&self.installation, &self.completed_record)?;
         let database_after = require_exact_database(
             &self.database,
             inspect_current_database(successor, &self.database.route, &self.state_db)?,
@@ -167,13 +143,7 @@ impl ActiveReblitCommitCleanupPostAdvanceAuthority<'_> {
             )
             .into());
         }
-        require_exact_successor_binding(
-            &self.installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_binding(&self.installation, journal, successor_binding, successor, binding_mode)?;
         self.installation
             .revalidate_mutable_namespace()
             .map_err(ActiveReblitCommitCleanupAuthorityError::from)?;
@@ -199,9 +169,7 @@ fn exact_cleanup_complete_successor(
             completed_pair == Some(*pair) && successor_pair == Some(*pair)
         }
         ActiveReblitCommitCleanupRouteEvidence::NoBoot { .. } => {
-            completed_pair.is_none()
-                && successor_pair.is_none()
-                && successor.generation == 12
+            completed_pair.is_none() && successor_pair.is_none() && successor.generation == 12
         }
     };
     Ok(record_plan_is_exact(completed, route)
@@ -232,12 +200,9 @@ fn require_exact_successor_binding(
     let cast = installation.retained_mutable_cast_directory()?;
     let exact = match mode {
         SuccessorBindingMode::SameStore => {
-            journal.has_record_store_binding(binding)
-                && journal.has_record_binding(cast, binding, successor)?
+            journal.has_record_store_binding(binding) && journal.has_record_binding(cast, binding, successor)?
         }
-        SuccessorBindingMode::Reopened => {
-            journal.has_reopened_record_binding(cast, binding, successor)?
-        }
+        SuccessorBindingMode::Reopened => journal.has_reopened_record_binding(cast, binding, successor)?,
     };
     if exact {
         Ok(())

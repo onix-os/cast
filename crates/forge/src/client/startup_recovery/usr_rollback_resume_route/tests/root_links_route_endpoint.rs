@@ -6,9 +6,8 @@ use crate::{
         boot::{boot_synchronize_attempt_count, reset_boot_synchronize_attempt_count},
         startup_gate::CleanSystemStartup,
         startup_reconciliation::{
-            active_reblit_candidate_preserve_exchange_attempt_count,
-            archived_candidate_preserve_move_attempt_count, fresh_db_invalidation_removal_call_count,
-            reset_active_reblit_candidate_preserve_exchange_attempt_count,
+            active_reblit_candidate_preserve_exchange_attempt_count, archived_candidate_preserve_move_attempt_count,
+            fresh_db_invalidation_removal_call_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
             reset_archived_candidate_preserve_move_attempt_count,
         },
     },
@@ -96,7 +95,11 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
             let candidate_route_entry = fixture.enter();
             let candidate_intent = restored.rollback_successor(None).unwrap();
             assert_eq!(candidate_intent.phase, Phase::CandidatePreserveIntent, "{case}");
-            assert_eq!(pending(&candidate_route_entry).phase(), Phase::CandidatePreserveIntent, "{case}");
+            assert_eq!(
+                pending(&candidate_route_entry).phase(),
+                Phase::CandidatePreserveIntent,
+                "{case}"
+            );
             assert!(pending(&candidate_route_entry).blockers().is_empty(), "{case}");
             assert_eq!(fixture.canonical_record(), candidate_intent, "{case}");
             assert_ne!(fixture.canonical_bytes(), restored_bytes, "{case}");
@@ -109,7 +112,11 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
             prepare_archived_candidate_prefix(&fixture, &candidate_intent);
             let mut candidate_entry = fixture.enter();
             if kind == OperationKind::NewState {
-                assert_eq!(pending(&candidate_entry).phase(), Phase::CandidatePreserveIntent, "{case}");
+                assert_eq!(
+                    pending(&candidate_entry).phase(),
+                    Phase::CandidatePreserveIntent,
+                    "{case}"
+                );
                 assert_eq!(fixture.canonical_record(), candidate_intent, "{case}");
                 assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
                 assert_eq!(fixture.database_snapshot(), database_before, "{case}");
@@ -179,10 +186,9 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
                     assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
                     assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
                     assert!(matches!(
-                        fixture.database.inspect_exact_fresh_transition(
-                            fixture.candidate_state,
-                            &invalidated.transition_id,
-                        ),
+                        fixture
+                            .database
+                            .inspect_exact_fresh_transition(fixture.candidate_state, &invalidated.transition_id,),
                         Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
                     ));
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
@@ -201,10 +207,9 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
                     assert_eq!(retained_exchange_syscall_count(), 1, "{case}");
                     assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
                     assert!(matches!(
-                        fixture.database.inspect_exact_fresh_transition(
-                            fixture.candidate_state,
-                            &invalidated.transition_id,
-                        ),
+                        fixture
+                            .database
+                            .inspect_exact_fresh_transition(fixture.candidate_state, &invalidated.transition_id,),
                         Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
                     ));
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");
@@ -227,10 +232,9 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
                     assert_eq!(fresh_db_invalidation_removal_call_count(), 1, "{case}");
                     assert_eq!(fixture.database_snapshot(), terminal_database, "{case}");
                     assert!(matches!(
-                        fixture.database.inspect_exact_fresh_transition(
-                            fixture.candidate_state,
-                            &rollback_complete.transition_id,
-                        ),
+                        fixture
+                            .database
+                            .inspect_exact_fresh_transition(fixture.candidate_state, &rollback_complete.transition_id,),
                         Ok(crate::db::state::ExactFreshTransitionObservation::JointlyAbsent(_))
                     ));
                     assert_eq!(fixture.namespace_snapshot(), preserved_namespace, "{case}");

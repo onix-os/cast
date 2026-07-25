@@ -271,7 +271,11 @@ mod tests {
             match fs::symlink_metadata("/sys") {
                 Err(source) if source.kind() == io::ErrorKind::NotFound => {}
                 Err(source) => return Err(source),
-                Ok(_) => return Err(io::Error::other("ephemeral system trigger unexpectedly inherited sysfs")),
+                Ok(_) => {
+                    return Err(io::Error::other(
+                        "ephemeral system trigger unexpectedly inherited sysfs",
+                    ));
+                }
             }
 
             let mut devices = fs::read_dir("/dev")?
@@ -486,7 +490,9 @@ mod tests {
         ) {
             Ok(())
         } else {
-            Err(io::Error::other(format!("unexpected {path_role} write result: {source}")))
+            Err(io::Error::other(format!(
+                "unexpected {path_role} write result: {source}"
+            )))
         }
     }
 }

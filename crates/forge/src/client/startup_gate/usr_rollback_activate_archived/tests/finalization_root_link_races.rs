@@ -14,9 +14,8 @@ use crate::transition_journal::RollbackActionOutcome;
 use super::{
     super::candidate_test_support::CandidateSource,
     support::{
-        CandidateOutcome, Epoch, RouteFixture, assert_canonical_absent,
-        assert_finalization_dispatch_error, assert_pending_phase, candidate_move_count, enter_route,
-        persist_rollback_complete, reset_candidate_observers,
+        CandidateOutcome, Epoch, RouteFixture, assert_canonical_absent, assert_finalization_dispatch_error,
+        assert_pending_phase, candidate_move_count, enter_route, persist_rollback_complete, reset_candidate_observers,
     },
 };
 
@@ -86,15 +85,9 @@ fn startup_activate_archived_finalization_root_links_rejects_all_five_link_races
 
 fn arm_at(seam: EvidenceSeam, hook: impl FnOnce() + 'static) {
     match seam {
-        EvidenceSeam::Capture => {
-            arm_between_usr_rollback_activate_archived_finalization_database_captures(hook)
-        }
-        EvidenceSeam::FinalAdmission => {
-            arm_before_usr_rollback_activate_archived_finalization_final_revalidation(hook)
-        }
-        EvidenceSeam::PostDelete => {
-            arm_after_usr_rollback_activate_archived_finalization_delete(hook)
-        }
+        EvidenceSeam::Capture => arm_between_usr_rollback_activate_archived_finalization_database_captures(hook),
+        EvidenceSeam::FinalAdmission => arm_before_usr_rollback_activate_archived_finalization_final_revalidation(hook),
+        EvidenceSeam::PostDelete => arm_after_usr_rollback_activate_archived_finalization_delete(hook),
     }
 }
 

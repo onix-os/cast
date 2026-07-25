@@ -12,20 +12,15 @@ use crate::client::{
         ActiveReblitCommitCleanupAdmission, ActiveReblitCommitCleanupApplyReconciliation,
         ActiveReblitCommitCleanupAuthority, ActiveReblitCommitCleanupDurabilityEvent,
         ActiveReblitCommitCleanupDurabilityFaultPoint, ActiveReblitCommitCleanupExchangeFault,
-        ActiveReblitCommitCleanupPendingDurabilityAuthority,
-        active_reblit_commit_cleanup_exchange_attempt_count,
-        arm_active_reblit_commit_cleanup_durability_fault,
-        arm_active_reblit_commit_cleanup_exchange_fault,
+        ActiveReblitCommitCleanupPendingDurabilityAuthority, active_reblit_commit_cleanup_exchange_attempt_count,
+        arm_active_reblit_commit_cleanup_durability_fault, arm_active_reblit_commit_cleanup_exchange_fault,
         arm_before_active_reblit_commit_cleanup_reconciliation_capture,
         reset_active_reblit_commit_cleanup_durability_events,
-        reset_active_reblit_commit_cleanup_exchange_attempt_count,
-        take_active_reblit_commit_cleanup_durability_events,
+        reset_active_reblit_commit_cleanup_exchange_attempt_count, take_active_reblit_commit_cleanup_durability_events,
     },
 };
 use crate::state::TransitionId;
-use crate::transition_journal::{
-    Operation, Phase, TransitionJournalStore, encode,
-};
+use crate::transition_journal::{Operation, Phase, TransitionJournalStore, encode};
 
 use super::{
     super::test_fixture::{Fixture, OperationKind, stage_test_boot_publication_receipts},
@@ -71,11 +66,7 @@ pub(super) fn no_boot_commit_decided_fixture(
     assert_eq!(fixture.fixture.source.generation, 10);
     fixture.fixture.source.options.run_boot_sync = false;
     fs::write(
-        fixture
-            .fixture
-            .installation
-            .root
-            .join(".cast/journal/state-transition"),
+        fixture.fixture.installation.root.join(".cast/journal/state-transition"),
         encode(&fixture.fixture.source).unwrap(),
     )
     .unwrap();
@@ -109,7 +100,11 @@ pub(super) fn no_boot_commit_decided_fixture(
 fn exchange_cleanup_wrappers(fixture: &BootRepairFixture) {
     let staging = fixture.fixture.installation.root.join(".cast/root/staging");
     let replacement = fixture.fixture.active_reblit_reservation.as_ref().unwrap();
-    let temporary = fixture.fixture.installation.root.join(".cast/root/.cleanup-effect-swap");
+    let temporary = fixture
+        .fixture
+        .installation
+        .root
+        .join(".cast/root/.cleanup-effect-swap");
     fs::rename(&staging, &temporary).unwrap();
     fs::rename(replacement, &staging).unwrap();
     fs::rename(&temporary, replacement).unwrap();
@@ -283,7 +278,10 @@ fn apply_and_finish_use_the_same_exact_durability_suffix() {
                 durable.revalidate(&journal).unwrap();
                 assert_exact_suffix(&fixture, take_active_reblit_commit_cleanup_durability_events());
                 assert_eq!(fixture.fixture.database_snapshot(), database_before);
-                assert_eq!(fixture.fixture.database.boot_publication_receipt_state().unwrap(), receipt_before);
+                assert_eq!(
+                    fixture.fixture.database.boot_publication_receipt_state().unwrap(),
+                    receipt_before
+                );
                 assert_eq!(fixture.fixture.canonical_record(), fixture.fixture.source);
                 assert_eq!(active_reblit_commit_cleanup_exchange_attempt_count(), expected_attempts);
             }
@@ -331,10 +329,7 @@ fn post_exchange_durability_fault_reenters_finish_without_second_exchange() {
     }
 }
 
-fn assert_exact_suffix(
-    fixture: &BootRepairFixture,
-    events: Vec<ActiveReblitCommitCleanupDurabilityEvent>,
-) {
+fn assert_exact_suffix(fixture: &BootRepairFixture, events: Vec<ActiveReblitCommitCleanupDurabilityEvent>) {
     assert_eq!(events.len(), 6);
     let target = fixture.fixture.active_reblit_reservation.as_ref().unwrap();
     let previous = identity(&target.join("usr"));
@@ -342,12 +337,25 @@ fn assert_exact_suffix(
     let replacement = identity(&fixture.fixture.installation.root.join(".cast/root/staging"));
     let roots = identity(&fixture.fixture.installation.root.join(".cast/root"));
     let quarantine = identity(&fixture.fixture.installation.root.join(".cast/quarantine"));
-    assert!(matches!(events[0], ActiveReblitCommitCleanupDurabilityEvent::PreviousTreeSynced { device, inode } if (device, inode) == previous));
-    assert!(matches!(events[1], ActiveReblitCommitCleanupDurabilityEvent::PreviousWrapperSynced { device, inode } if (device, inode) == previous_wrapper));
-    assert!(matches!(events[2], ActiveReblitCommitCleanupDurabilityEvent::ReplacementWrapperSynced { device, inode } if (device, inode) == replacement));
-    assert!(matches!(events[3], ActiveReblitCommitCleanupDurabilityEvent::RootsParentSynced { device, inode } if (device, inode) == roots));
-    assert!(matches!(events[4], ActiveReblitCommitCleanupDurabilityEvent::QuarantineParentSynced { device, inode } if (device, inode) == quarantine));
-    assert!(matches!(events[5], ActiveReblitCommitCleanupDurabilityEvent::FinalFinishProven));
+    assert!(
+        matches!(events[0], ActiveReblitCommitCleanupDurabilityEvent::PreviousTreeSynced { device, inode } if (device, inode) == previous)
+    );
+    assert!(
+        matches!(events[1], ActiveReblitCommitCleanupDurabilityEvent::PreviousWrapperSynced { device, inode } if (device, inode) == previous_wrapper)
+    );
+    assert!(
+        matches!(events[2], ActiveReblitCommitCleanupDurabilityEvent::ReplacementWrapperSynced { device, inode } if (device, inode) == replacement)
+    );
+    assert!(
+        matches!(events[3], ActiveReblitCommitCleanupDurabilityEvent::RootsParentSynced { device, inode } if (device, inode) == roots)
+    );
+    assert!(
+        matches!(events[4], ActiveReblitCommitCleanupDurabilityEvent::QuarantineParentSynced { device, inode } if (device, inode) == quarantine)
+    );
+    assert!(matches!(
+        events[5],
+        ActiveReblitCommitCleanupDurabilityEvent::FinalFinishProven
+    ));
 }
 
 fn identity(path: &std::path::Path) -> (u64, u64) {

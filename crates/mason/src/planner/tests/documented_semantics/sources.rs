@@ -1,13 +1,13 @@
 use std::path::Path;
 
-use gluon_config::{Evaluator, Source, SourceRoot};
+use declarative_config::{DeclarationEvaluator, Source, SourceRoot};
 use stone_recipe::{
     UpstreamSpec,
     derivation::{
         CollectionRulePlan, DerivationPlan, InputOrigin, JobExecutableRole, JobStepSection, LockedSource, NetworkMode,
         PackageInputSelection, PathRuleKind, StepPlan,
     },
-    package::{PackageSpec, StepSpec, evaluate_gluon_with},
+    package::{GluonPackageEvaluator, PackageSpec, StepSpec},
 };
 
 use super::{assert_x86_64_platform, dependency_names};
@@ -145,18 +145,21 @@ fn assert_disabled_factory_variant() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../docs/examples/gluon/packages/optional-component-source-graph");
     let source_root = SourceRoot::new(&root).expect("open optional component example source root");
-    let evaluator = Evaluator::default().with_source_root(source_root);
+    let evaluator = DeclarationEvaluator::<PackageSpec>::with_source_root(
+        &GluonPackageEvaluator::default(),
+        source_root,
+    );
     let source = Source::new(
         "disabled.glu",
-        r#"let b = import! cast.package.v3
+        r#"let a = import! cast.authored.v1
 let make_package = import! "./package.glu"
 
-make_package { component = b.boolean.false }
+make_package { component = a.false }
 "#,
     );
-    let disabled = evaluate_gluon_with(&evaluator, &source)
+    let disabled = DeclarationEvaluator::<PackageSpec>::evaluate(&evaluator, &source)
         .expect("evaluate the disabled optional component factory variant")
-        .package;
+        .value;
 
     assert_eq!(disabled.meta.pname, "optional-source-graph");
     assert!(disabled.native_build_inputs.is_empty());

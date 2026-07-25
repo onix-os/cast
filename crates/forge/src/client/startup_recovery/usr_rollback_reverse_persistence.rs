@@ -17,8 +17,7 @@ use crate::{
 };
 
 use super::super::startup_reconciliation::{
-    UsrRollbackReverseAuthorityError, UsrRollbackReverseDurableEffectAuthority,
-    UsrRollbackReverseRecordAdvanceError,
+    UsrRollbackReverseAuthorityError, UsrRollbackReverseDurableEffectAuthority, UsrRollbackReverseRecordAdvanceError,
 };
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
@@ -134,12 +133,8 @@ pub(in crate::client) fn persist_usr_rollback_reverse_and_reopen(
             binding: successor_binding,
         } => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
-                let exact = revalidate_reopened_reverse_binding(
-                    &installation,
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                );
+                let exact =
+                    revalidate_reopened_reverse_binding(&installation, &reopened, &successor_binding, &successor);
                 drop(successor_binding);
                 match exact {
                     Ok(true) => Ok((reopened, successor)),
@@ -222,10 +217,7 @@ pub(in crate::client) fn persist_usr_rollback_reverse_and_reopen(
                     reopen: unexpected_record(&source_record, &successor, actual),
                 })
             }
-            Err(reopen) => Err(UsrRollbackReversePersistenceError::SuccessorRecordBindingAndReopen {
-                binding,
-                reopen,
-            }),
+            Err(reopen) => Err(UsrRollbackReversePersistenceError::SuccessorRecordBindingAndReopen { binding, reopen }),
         },
     }
 }
@@ -312,9 +304,7 @@ fn before_usr_rollback_reverse_successor_binding_revalidation() {
 fn before_usr_rollback_reverse_successor_binding_revalidation() {}
 
 #[cfg(test)]
-pub(crate) fn arm_after_usr_rollback_reverse_successor_binding_check_before_reopen(
-    hook: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_after_usr_rollback_reverse_successor_binding_check_before_reopen(hook: impl FnOnce() + 'static) {
     AFTER_SUCCESSOR_BINDING_CHECK_BEFORE_REOPEN.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

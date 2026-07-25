@@ -9,14 +9,12 @@
 use crate::{
     client::{
         active_reblit_mounted_boot_topology::{
-            ActiveReblitBootOwnedCleanupError,
-            ActiveReblitMountedBootTopologyCaptureError,
+            ActiveReblitBootOwnedCleanupError, ActiveReblitMountedBootTopologyCaptureError,
             PreparedActiveReblitMountedBootTopology,
         },
         active_reblit_promoted_boot_cleanup_plan::ActiveReblitPromotedBootCleanupDisposition,
         startup_reconciliation::{
-            ActiveReblitBootSyncStartedRecoveryAuthority,
-            ActiveReblitBootSyncStartedRecoveryAuthorityError,
+            ActiveReblitBootSyncStartedRecoveryAuthority, ActiveReblitBootSyncStartedRecoveryAuthorityError,
         },
         startup_recovery::{
             ActiveReblitBootSyncStartedCompletionPersistenceError,
@@ -33,8 +31,7 @@ pub(super) fn recover_promoted_cleanup_and_complete(
     authority: ActiveReblitBootSyncStartedRecoveryAuthority<'_>,
 ) -> Result<Dispatch, Error> {
     authority.revalidate(&journal)?;
-    let preparation =
-        PreparedActiveReblitMountedBootTopology::prepare(authority.installation());
+    let preparation = PreparedActiveReblitMountedBootTopology::prepare(authority.installation());
     let post_preparation_authority = authority.revalidate(&journal);
     let prepared = match (preparation, post_preparation_authority) {
         (Ok(prepared), Ok(())) => prepared,
@@ -43,10 +40,7 @@ pub(super) fn recover_promoted_cleanup_and_complete(
             return Err(Error::PostPreparationAuthority(source));
         }
         (Err(topology), Err(authority)) => {
-            return Err(Error::PreparationAndAuthority {
-                topology,
-                authority,
-            });
+            return Err(Error::PreparationAndAuthority { topology, authority });
         }
     };
 
@@ -60,15 +54,11 @@ pub(super) fn recover_promoted_cleanup_and_complete(
             return Err(Error::PostTopologyAuthority(source));
         }
         (Err(topology), Err(authority)) => {
-            return Err(Error::TopologyAndAuthority {
-                topology,
-                authority,
-            });
+            return Err(Error::TopologyAndAuthority { topology, authority });
         }
     };
 
-    let targets = authority
-        .revalidate_promoted_receipt_targets(&journal, &topology)?;
+    let targets = authority.revalidate_promoted_receipt_targets(&journal, &topology)?;
     let cleanup_plan = authority.cleanup_plan(&journal)?;
     for (entry_index, entry) in cleanup_plan.entries().iter().enumerate() {
         match entry.disposition() {
@@ -90,10 +80,7 @@ pub(super) fn recover_promoted_cleanup_and_complete(
                         return Err(Error::PostCleanupAuthority(source));
                     }
                     (Err(cleanup), Err(authority)) => {
-                        return Err(Error::CleanupAndPostCleanupAuthority {
-                            cleanup,
-                            authority,
-                        });
+                        return Err(Error::CleanupAndPostCleanupAuthority { cleanup, authority });
                     }
                 }
             }
@@ -106,10 +93,7 @@ pub(super) fn recover_promoted_cleanup_and_complete(
     drop(topology);
     drop(prepared);
 
-    let (journal, record) =
-        persist_active_reblit_boot_sync_started_completion_and_reopen(
-            journal, authority,
-        )?;
+    let (journal, record) = persist_active_reblit_boot_sync_started_completion_and_reopen(journal, authority)?;
     Ok(Dispatch::Handled { journal, record })
 }
 
@@ -120,9 +104,7 @@ pub(in crate::client) enum Error {
     #[error("prepare mounted boot topology for promoted restart cleanup")]
     PrepareTopology(#[source] ActiveReblitMountedBootTopologyCaptureError),
     #[error("revalidate restart authority after mounted boot-topology preparation")]
-    PostPreparationAuthority(
-        #[source] ActiveReblitBootSyncStartedRecoveryAuthorityError,
-    ),
+    PostPreparationAuthority(#[source] ActiveReblitBootSyncStartedRecoveryAuthorityError),
     #[error("mounted boot-topology preparation and its closing authority revalidation both failed: {authority}")]
     PreparationAndAuthority {
         #[source]
@@ -132,9 +114,7 @@ pub(in crate::client) enum Error {
     #[error("revalidate mounted boot topology for promoted restart cleanup")]
     RevalidateTopology(#[source] ActiveReblitMountedBootTopologyCaptureError),
     #[error("revalidate restart authority after mounted boot-topology revalidation")]
-    PostTopologyAuthority(
-        #[source] ActiveReblitBootSyncStartedRecoveryAuthorityError,
-    ),
+    PostTopologyAuthority(#[source] ActiveReblitBootSyncStartedRecoveryAuthorityError),
     #[error("mounted boot-topology revalidation and its closing authority revalidation both failed: {authority}")]
     TopologyAndAuthority {
         #[source]
@@ -144,9 +124,7 @@ pub(in crate::client) enum Error {
     #[error("reconcile one receipt-owned promoted restart cleanup entry")]
     Cleanup(#[from] ActiveReblitBootOwnedCleanupError),
     #[error("revalidate restart authority after receipt-owned cleanup")]
-    PostCleanupAuthority(
-        #[source] ActiveReblitBootSyncStartedRecoveryAuthorityError,
-    ),
+    PostCleanupAuthority(#[source] ActiveReblitBootSyncStartedRecoveryAuthorityError),
     #[error("receipt-owned cleanup and its closing authority revalidation both failed: {authority}")]
     CleanupAndPostCleanupAuthority {
         #[source]
@@ -154,7 +132,5 @@ pub(in crate::client) enum Error {
         authority: ActiveReblitBootSyncStartedRecoveryAuthorityError,
     },
     #[error("persist exact promoted restart cleanup as BootSyncComplete")]
-    Persistence(
-        #[from] ActiveReblitBootSyncStartedCompletionPersistenceError,
-    ),
+    Persistence(#[from] ActiveReblitBootSyncStartedCompletionPersistenceError),
 }

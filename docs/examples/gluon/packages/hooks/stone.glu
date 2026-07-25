@@ -1,37 +1,52 @@
+let a = import! cast.authored.v1
 
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
-
-let base = b.mk_package (b.meta {
-    pname = "hooked-library",
-    version = "5.3.0",
-    release = 1,
-    homepage = "https://example.invalid/hooked-library",
-    license = ["Apache-2.0"],
-})
-
+// The authored form names every field of the package record directly and selects
+// a shared-Rust default with `unset` / `outputs.default`. Custom hooks are wrapped
+// with `a.some.hooks`, built on top of `a.empty.hooks` for the phases left alone.
 {
-    builder = cmake.builder {
-        flags = ["-DBUILD_TESTING=ON"],
-        .. cmake.defaults
+    meta = {
+        pname = "hooked-library",
+        version = "5.3.0",
+        release = 1,
+        homepage = "https://example.invalid/hooked-library",
+        license = ["Apache-2.0"],
     },
-    hooks = b.hooks {
+    builder = a.builder.cmake { flags = ["-DBUILD_TESTING=ON"], run_tests = a.true },
+    sources = [
+        a.source.archive
+            "https://example.invalid/hooked-library-5.3.0.tar.gz"
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    ],
+    native_build_inputs = [
+        a.dep.binary "patch",
+        a.dep.binary "strip-nondeterminism",
+    ],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.some.hooks (a.hooks {
         pre_setup = [
-            b.step.run (b.program.binary "patch") ["-p1", "-i", "compat.patch"],
+            a.step.run (a.program.binary "patch") ["-p1", "-i", "compat.patch"],
         ],
         post_build = [
-            b.step.run (b.program.binary "strip-nondeterminism") ["build/generated.dat"],
+            a.step.run (a.program.binary "strip-nondeterminism") ["build/generated.dat"],
         ],
         pre_check = [
-            b.step.shell r#"test -d "${CAST_BUILDER_DIR}"
+            a.step.shell r#"test -d "${CAST_BUILDER_DIR}"
 test -f "${CAST_BUILDER_DIR}/CMakeCache.txt""#,
         ],
         post_install = [
-            b.step.shell_with {
-                interpreter = b.program.binary "bash",
+            a.step.shell_with {
+                interpreter = a.program.binary "bash",
                 declared_programs = [
-                    b.program.binary "install",
-                    b.program.binary "ln",
+                    a.program.binary "install",
+                    a.program.binary "ln",
                 ],
                 script = r#"
 install -Dm644 packaging/hooked.conf "${CAST_INSTALL_ROOT}${CAST_DATADIR}/hooked/hooked.conf"
@@ -39,16 +54,6 @@ ln -s hooked "${CAST_INSTALL_ROOT}${CAST_BINDIR}/hooked-compat"
 "#,
             },
         ],
-        .. b.defaults.hooks
-    },
-    native_build_inputs = [
-        b.dep.binary "patch",
-        b.dep.binary "strip-nondeterminism",
-    ],
-    sources = [
-        b.source.archive
-            "https://example.invalid/hooked-library-5.3.0.tar.gz"
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    ],
-    .. base
+        .. a.empty.hooks
+    }),
 }

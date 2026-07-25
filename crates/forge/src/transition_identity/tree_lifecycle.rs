@@ -67,11 +67,7 @@ impl CandidateNameAuthority {
 }
 
 impl RetainedCandidateName {
-    fn open(
-        &self,
-        installation: &Installation,
-        diagnostic_path: &Path,
-    ) -> Result<TreeMarkerStore, Error> {
+    fn open(&self, installation: &Installation, diagnostic_path: &Path) -> Result<TreeMarkerStore, Error> {
         match self {
             Self::Pathname => TreeMarkerStore::open_path(diagnostic_path).map_err(Error::from),
             Self::Staging(staging) => {
@@ -224,6 +220,8 @@ impl StatefulTreeIdentity {
     /// Coordinator-only archived-candidate preparation.  Writer authority is
     /// already held, so journal acquisition must fail rather than wait if a
     /// contender wins the handoff gap.
+    // Forward scaffolding for the Phase 1 coordinator routes (D0.4).
+    #[allow(dead_code)]
     pub(crate) fn prepare_usr_exchange_candidate(
         installation: &Installation,
         state_db: &db::state::Database,
@@ -263,6 +261,8 @@ impl StatefulTreeIdentity {
 
     /// Coordinator-only active-reblit preparation with nonblocking journal
     /// acquisition under writer-first authority.
+    // Forward scaffolding for the Phase 1 coordinator routes (D0.4).
+    #[allow(dead_code)]
     pub(crate) fn prepare_usr_exchange_active_reblit_candidate(
         installation: &Installation,
         state_db: &db::state::Database,

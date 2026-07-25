@@ -53,8 +53,7 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let namespace_inspection = match UsrRollbackResumeRouteNamespaceInspection::begin(installation, journal, record)
         {
@@ -102,12 +101,7 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackResumeRouteAuthorityError> {
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
@@ -117,12 +111,7 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         if !route_evidence_is_exact(&self.record, self.namespace.layout()) {
             return Err(UsrRollbackResumeRouteAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -157,59 +146,55 @@ fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
         matches!(
             rollback.source,
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        )
-            || matches!(
-                (record.operation, record.phase, rollback.source, record.generation),
-                (
-                    Operation::NewState,
-                    Phase::RollbackDecided,
-                    ForwardPhase::SystemTriggersStarted,
-                    12,
-                )
-                    | (
-                        Operation::NewState,
-                        Phase::RollbackDecided,
-                        ForwardPhase::SystemTriggersComplete,
-                        13,
-                    )
-                    | (
-                        Operation::NewState,
-                        Phase::UsrRestored,
-                        ForwardPhase::SystemTriggersStarted,
-                        14,
-                    )
-                    | (
-                        Operation::NewState,
-                        Phase::UsrRestored,
-                        ForwardPhase::SystemTriggersComplete,
-                        15,
-                    )
-                    | (
-                        Operation::ActiveReblit,
-                        Phase::RollbackDecided,
-                        ForwardPhase::SystemTriggersStarted,
-                        10,
-                    )
-                    | (
-                        Operation::ActiveReblit,
-                        Phase::RollbackDecided,
-                        ForwardPhase::SystemTriggersComplete,
-                        11,
-                    )
-                    | (
-                        Operation::ActiveReblit,
-                        Phase::UsrRestored,
-                        ForwardPhase::SystemTriggersStarted,
-                        12,
-                    )
-                    | (
-                        Operation::ActiveReblit,
-                        Phase::UsrRestored,
-                        ForwardPhase::SystemTriggersComplete,
-                        13,
-                    )
+        ) || matches!(
+            (record.operation, record.phase, rollback.source, record.generation),
+            (
+                Operation::NewState,
+                Phase::RollbackDecided,
+                ForwardPhase::SystemTriggersStarted,
+                12,
+            ) | (
+                Operation::NewState,
+                Phase::RollbackDecided,
+                ForwardPhase::SystemTriggersComplete,
+                13,
+            ) | (
+                Operation::NewState,
+                Phase::RollbackDecided,
+                ForwardPhase::PreviousArchived,
+                15,
+            ) | (
+                Operation::NewState,
+                Phase::UsrRestored,
+                ForwardPhase::SystemTriggersStarted,
+                14,
+            ) | (
+                Operation::NewState,
+                Phase::UsrRestored,
+                ForwardPhase::SystemTriggersComplete,
+                15,
+            ) | (
+                Operation::ActiveReblit,
+                Phase::RollbackDecided,
+                ForwardPhase::SystemTriggersStarted,
+                10,
+            ) | (
+                Operation::ActiveReblit,
+                Phase::RollbackDecided,
+                ForwardPhase::SystemTriggersComplete,
+                11,
+            ) | (
+                Operation::ActiveReblit,
+                Phase::UsrRestored,
+                ForwardPhase::SystemTriggersStarted,
+                12,
+            ) | (
+                Operation::ActiveReblit,
+                Phase::UsrRestored,
+                ForwardPhase::SystemTriggersComplete,
+                13,
             )
-            || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
+        ) || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
     })
 }
 
@@ -235,7 +220,19 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
         return false;
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
-    if rollback.previous_archive != RollbackAction::NotRequired
+    // NewState may have archived its predecessor before crashing; that plan
+    // restores it (Pending) as the first rollback action. Every other operation
+    // archives nothing, so its predecessor rollback stays NotRequired.
+    let previous_archive_is_exact = match record.operation {
+        Operation::NewState => matches!(
+            rollback.previous_archive,
+            RollbackAction::NotRequired | RollbackAction::Pending
+        ),
+        Operation::ActivateArchived | Operation::ActiveReblit => {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
+    };
+    if !previous_archive_is_exact
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
             != if boot_source {

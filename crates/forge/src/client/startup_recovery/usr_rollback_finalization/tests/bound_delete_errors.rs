@@ -6,8 +6,7 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_recovery::{
-            UsrRollbackFinalizationError, arm_after_usr_rollback_finalization_delete,
-            finalize_usr_rollback,
+            UsrRollbackFinalizationError, arm_after_usr_rollback_finalization_delete, finalize_usr_rollback,
         },
     },
     transition_journal::{

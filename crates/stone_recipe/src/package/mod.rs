@@ -1,19 +1,25 @@
-//! Typed package declarations for the `cast.package.v3` Gluon ABI.
+//! Typed package declarations for the language-agnostic `cast.authored.v1` ABI.
 //!
-//! A package factory is evaluated completely inside Gluon and produces one
-//! concrete [`PackageSpec`]. This module deliberately contains values only:
-//! Rust never receives or retains a Gluon closure or a second recipe model.
+//! A recipe — in Gluon or Lua — is decoded into the minimal [`AuthoredPackage`]
+//! and lowered by shared Rust ([`lower`]) into one concrete [`PackageSpec`].
+//! Authoring defaults and builder lowering live in Rust, not in a config
+//! language, so either language can author a complete package on its own. This
+//! module deliberately contains values only: Rust never receives or retains a
+//! config-language closure or a second recipe model.
 
 use crate::{NamedTuningSpec, OptionsSpec, PathSpec, UpstreamSpec};
 use stone::relation::{Dependency, Kind as RelationKind, ParseError, Provider};
 
-pub use self::gluon::{
-    EvaluatedPackage, GLUON_AUTOTOOLS_BUILDER_ABI, GLUON_CARGO_BUILDER_ABI, GLUON_CMAKE_BUILDER_ABI,
-    GLUON_MESON_BUILDER_ABI, GLUON_PACKAGE_ABI, PACKAGE_ABI_VERSION, PackageEvaluationError, evaluate_gluon,
-    evaluate_gluon_with, evaluate_gluon_with_inputs,
-};
+pub use self::gluon::{GLUON_AUTHORED_PRELUDE, GluonPackageEvaluator};
 
+mod authored;
+pub use authored::{AuthoredPackage, default_output_set_with_root, lower};
+mod builder_lowering;
+pub use builder_lowering::{BuilderRequest, lower_builder};
 mod gluon;
+mod lua;
+
+pub use lua::{LuaPackageEvaluator, RecipeMigrationDecision, authorize_recipe_migration, encode_lua_recipe};
 mod validation;
 
 pub(crate) use validation::valid_package_name;
@@ -41,7 +47,7 @@ pub struct PackageSpec {
 }
 
 /// Package identity and user-facing source metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct MetaSpec {
     pub pname: String,
     pub version: String,
@@ -152,8 +158,10 @@ pub struct HooksSpec {
 }
 
 /// One repository-owned environment layer selected by a pure builder module.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BuilderEnvironmentSpec {
+    #[serde(rename = "cmake")]
     CMake,
     Meson,
     Cargo,
@@ -161,7 +169,7 @@ pub enum BuilderEnvironmentSpec {
 }
 
 /// Hook phases accepted by one structural builder contract.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
 pub struct SupportedHooksSpec {
     pub setup: bool,
     pub build: bool,
@@ -238,13 +246,13 @@ pub struct OutputSpec {
 }
 
 /// A symbolic package name supplied to a package factory.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct PackageRef {
     pub name: String,
 }
 
 /// A named output of a symbolic package.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 pub struct OutputRef {
     pub package: PackageRef,
     pub output: String,
@@ -282,7 +290,7 @@ pub struct ProgramSpec {
 ///
 /// Scripts use [`StepSpec::Shell`]; a descriptor-executed shebang is rejected
 /// without falling back to its mutable public pathname.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct BuiltProgramSpec {
     pub path: String,
 }

@@ -106,6 +106,21 @@ impl LayoutAlternative {
             None
         }
     }
+
+    /// Like `usr_exchange_layout`, but a `PreviousArchived` layout also counts
+    /// as a completed (Post) exchange: its candidate is already live, so the
+    /// `/usr` exchange still needs reversing during rollback. The archived
+    /// predecessor is handled by a separate previous-archive rollback action,
+    /// so this is used only by the rollback decision/resume/reverse proofs — the
+    /// plain `usr_exchange_layout` keeps returning `None` for every other
+    /// caller that must fail closed on a non-exchange layout.
+    pub(super) fn rollback_usr_exchange_layout(self) -> Option<UsrExchangeLayout> {
+        if self == PREVIOUS_ARCHIVED {
+            Some(UsrExchangeLayout::Post)
+        } else {
+            self.usr_exchange_layout()
+        }
+    }
 }
 
 const PRE_EXCHANGE: LayoutAlternative = LayoutAlternative {

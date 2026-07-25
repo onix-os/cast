@@ -1,12 +1,12 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
-let bash = b.program.binary "bash"
-let go = b.program.binary "go"
-let install = b.program.binary "install"
+let bash = a.program.binary "bash"
+let go = a.program.binary "go"
+let install = a.program.binary "install"
 
-let phases = b.scripts {
-    setup = b.phase [
-        b.step.shell_with {
+let phases = a.scripts {
+    setup = a.phase [
+        a.step.shell_with {
             interpreter = bash,
             declared_programs = [],
             script = r#"test -s go.mod
@@ -21,8 +21,8 @@ while IFS= read -r line; do
 done < go.mod"#,
         },
     ],
-    build = b.phase [
-        b.step.shell_with {
+    build = a.phase [
+        a.step.shell_with {
             interpreter = bash,
             declared_programs = [go],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
@@ -47,8 +47,8 @@ go telemetry off
 go build -mod=vendor -trimpath -buildvcs=false -ldflags='-buildid= -s -w' -o cast-go-module-fixture ./cmd/cast-go-module-fixture"#,
         },
     ],
-    check = b.phase [
-        b.step.shell_with {
+    check = a.phase [
+        a.step.shell_with {
             interpreter = bash,
             declared_programs = [go],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
@@ -72,57 +72,64 @@ export GOAMD64=v1
 go telemetry off
 go test -mod=vendor -trimpath -count=1 ./..."#,
         },
-        b.step.run_built
-            (b.program.built "cast-go-module-fixture")
+        a.step.run_built
+            (a.program.built "cast-go-module-fixture")
             ["--self-test"],
     ],
-    install = b.phase [
-        b.step.shell_with {
+    install = a.phase [
+        a.step.shell_with {
             interpreter = bash,
             declared_programs = [install],
             script = r#"install -Dm755 cast-go-module-fixture "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-go-module-fixture"
 install -Dm644 LICENSE "${CAST_INSTALL_ROOT}${CAST_DATADIR}/licenses/cast-go-module-fixture/LICENSE""#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
-let root = b.output_with {
-    summary = b.optional.set "Pinned offline Go module fixture",
-    description = b.optional.set "A reproducible static Go executable built exclusively from an exact self-authored vendor tree.",
+let root = a.output_with {
+    summary = a.optional.set "Pinned offline Go module fixture",
+    description = a.optional.set "A reproducible static Go executable built exclusively from an exact self-authored vendor tree.",
     runtime_inputs = [],
     paths = [
-        b.path.exe "/usr/bin/cast-go-module-fixture",
-        b.path.any "/usr/share/licenses/cast-go-module-fixture/LICENSE",
+        a.path.exe "/usr/bin/cast-go-module-fixture",
+        a.path.any "/usr/share/licenses/cast-go-module-fixture/LICENSE",
     ],
-    .. b.output "out"
+    .. a.output "out"
 }
 
-let base = b.mk_package (b.meta {
-    pname = "cast-go-module-fixture",
-    version = "1.0.0",
-    release = 1,
-    homepage = "https://fixtures.invalid/cast-go-module-fixture",
-    license = ["MIT"],
-})
-
 {
-    builder = b.builder.custom phases [
-        b.dep.binary "bash",
-        b.dep.binary "go",
-        b.dep.binary "install",
+    meta = {
+        pname = "cast-go-module-fixture",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://fixtures.invalid/cast-go-module-fixture",
+        license = ["MIT"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.binary "bash",
+        a.dep.binary "go",
+        a.dep.binary "install",
     ],
-    outputs = [root],
     sources = [
-        b.source.archive_with {
+        a.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-go-module-fixture-1.0.0.tar.zst",
             hash = "f4c4eb74304956e3f3e650d2004c78a39c4d4c009e447b9c28b3819370dbc78f",
-            rename = b.optional.set "cast-go-module-fixture.tar.zst",
-            strip_dirs = b.optional.set 1,
-            unpack = b.boolean.true,
-            unpack_dir = b.optional.set "cast-go-module-fixture",
+            rename = a.optional.set "cast-go-module-fixture.tar.zst",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "cast-go-module-fixture",
         },
     ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

@@ -1,11 +1,11 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
-let bash = b.program.binary "bash"
-let python = b.program.binary "python3"
+let bash = a.program.binary "bash"
+let python = a.program.binary "python3"
 
-let phases = b.scripts {
-    setup = b.phase [
-        b.step.shell_with {
+let phases = a.scripts {
+    setup = a.phase [
+        a.step.shell_with {
             interpreter = bash,
             declared_programs = [],
             script = r#"test -s pyproject.toml
@@ -18,8 +18,8 @@ test ! -e setup.cfg
 test ! -e tox.ini"#,
         },
     ],
-    build = b.phase [
-        b.step.shell_with {
+    build = a.phase [
+        a.step.shell_with {
             interpreter = bash,
             declared_programs = [python],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
@@ -34,20 +34,8 @@ test "${wheels[0]}" = dist/cast_python_module_fixture-1.0.0-py3-none-any.whl
 test -s "${wheels[0]}""#,
         },
     ],
-    check = b.phase [
-        b.step.shell_with {
-            interpreter = bash,
-            declared_programs = [python],
-            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
-export PYTHONHASHSEED=0
-export PYTHONDONTWRITEBYTECODE=1
-umask 022
-python3 -m pytest -q
-PYTHONPATH=src python3 -m cast_python_module_fixture --self-test"#,
-        },
-    ],
-    install = b.phase [
-        b.step.shell_with {
+    install = a.phase [
+        a.step.shell_with {
             interpreter = bash,
             declared_programs = [python],
             script = r#"export HOME="${CAST_BUILD_ROOT}/home"
@@ -61,54 +49,71 @@ test -s "${staged_purelib}/cast_python_module_fixture-1.0.0.dist-info/METADATA"
 PYTHONPATH="${staged_purelib}" "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-python-module-fixture" --self-test"#,
         },
     ],
-    .. b.defaults.scripts
-}
-
-let root = b.output_with {
-    summary = b.optional.set "Pinned offline PEP 517 Python module fixture",
-    description = b.optional.set "A reproducible pure-Python wheel built, tested, installed, and packaged from one exact self-authored source archive.",
-    runtime_inputs = [
-        b.dep.binary "python3",
-        b.dep.python "typing-extensions",
-    ],
-    paths = [
-        b.path.exe "/usr/bin/cast-python-module-fixture",
-        b.path.any "/usr/lib/python*/site-packages/cast_python_module_fixture",
-        b.path.any "/usr/lib/python*/site-packages/cast_python_module_fixture-1.0.0.dist-info",
-    ],
-    .. b.output "out"
-}
-
-let base = b.mk_package (b.meta {
-    pname = "cast-python-module-fixture",
-    version = "1.0.0",
-    release = 1,
-    homepage = "https://fixtures.invalid/cast-python-module-fixture",
-    license = ["MIT"],
-})
-
-{
-    builder = b.builder.custom phases [
-        b.dep.binary "bash",
-        b.dep.binary "python3",
-    ],
-    native_build_inputs = [
-        b.dep.python "build",
-        b.dep.python "installer",
-        b.dep.python "setuptools",
-    ],
-    check_inputs = [b.dep.python "pytest"],
-    outputs = [root],
-    sources = [
-        b.source.archive_with {
-            url = "https://fixtures.invalid/sources/cast-python-module-fixture-1.0.0.tar",
-            hash = "c21e8157b3119a2453aa76de45672b7c8f63a761c973d4fdbd20893958b402f7",
-            rename = b.optional.set "cast-python-module-fixture.tar",
-            strip_dirs = b.optional.set 1,
-            unpack = b.boolean.true,
-            unpack_dir = b.optional.set "cast-python-module-fixture",
+    check = a.phase [
+        a.step.shell_with {
+            interpreter = bash,
+            declared_programs = [python],
+            script = r#"export HOME="${CAST_BUILD_ROOT}/home"
+export PYTHONHASHSEED=0
+export PYTHONDONTWRITEBYTECODE=1
+umask 022
+python3 -m pytest -q
+PYTHONPATH=src python3 -m cast_python_module_fixture --self-test"#,
         },
     ],
+    workload = a.phase [],
+}
+
+let root = {
+    summary = a.optional.set "Pinned offline PEP 517 Python module fixture",
+    description = a.optional.set "A reproducible pure-Python wheel built, tested, installed, and packaged from one exact self-authored source archive.",
+    runtime_inputs = [
+        a.dep.binary "python3",
+        a.dep.python "typing-extensions",
+    ],
+    paths = [
+        a.path.exe "/usr/bin/cast-python-module-fixture",
+        a.path.any "/usr/lib/python*/site-packages/cast_python_module_fixture",
+        a.path.any "/usr/lib/python*/site-packages/cast_python_module_fixture-1.0.0.dist-info",
+    ],
+    .. a.output "out"
+}
+
+{
+    meta = {
+        pname = "cast-python-module-fixture",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://fixtures.invalid/cast-python-module-fixture",
+        license = ["MIT"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.binary "bash",
+        a.dep.binary "python3",
+    ],
+    sources = [
+        a.source.archive_with {
+            url = "https://fixtures.invalid/sources/cast-python-module-fixture-1.0.0.tar",
+            hash = "c21e8157b3119a2453aa76de45672b7c8f63a761c973d4fdbd20893958b402f7",
+            rename = a.optional.set "cast-python-module-fixture.tar",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "cast-python-module-fixture",
+        },
+    ],
+    native_build_inputs = [
+        a.dep.python "build",
+        a.dep.python "installer",
+        a.dep.python "setuptools",
+    ],
+    build_inputs = [],
+    check_inputs = [a.dep.python "pytest"],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

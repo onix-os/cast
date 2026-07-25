@@ -13,8 +13,7 @@ use crate::client::startup_reconciliation::activation_namespace::capture::{
 
 /// Exact fresh Finish evidence produced only by a classified Apply exchange.
 #[must_use = "applied ActiveReblit cleanup still requires durability"]
-pub(in crate::client::startup_reconciliation) struct AppliedActiveReblitCommitCleanupExchange
-{
+pub(in crate::client::startup_reconciliation) struct AppliedActiveReblitCommitCleanupExchange {
     parents: RetainedActiveReblitCommitCleanupParents,
     fresh_finish: NamespaceSnapshot,
     fresh_finish_projection: ProjectedActiveReblitCommitCleanupNamespace,
@@ -31,18 +30,13 @@ impl AppliedActiveReblitCommitCleanupExchange {
             fresh_finish_projection,
             _raw_report: _,
         } = self;
-        super::super::PendingActiveReblitCommitCleanupDurability::new(
-            parents,
-            fresh_finish,
-            fresh_finish_projection,
-        )
+        super::super::PendingActiveReblitCommitCleanupDurability::new(parents, fresh_finish, fresh_finish_projection)
     }
 }
 
 /// Fresh-evidence result of one consumed cleanup exchange capability.
 #[must_use = "a reconciled ActiveReblit cleanup exchange must be handled"]
-pub(in crate::client::startup_reconciliation) enum ActiveReblitCommitCleanupExchangeReconciliation
-{
+pub(in crate::client::startup_reconciliation) enum ActiveReblitCommitCleanupExchangeReconciliation {
     Applied(AppliedActiveReblitCommitCleanupExchange),
     NotApplied,
     Ambiguous,
@@ -84,14 +78,12 @@ impl PendingActiveReblitCommitCleanupExchangeReconciliation {
                 {
                     return ActiveReblitCommitCleanupExchangeReconciliation::Ambiguous;
                 }
-                ActiveReblitCommitCleanupExchangeReconciliation::Applied(
-                    AppliedActiveReblitCommitCleanupExchange {
-                        parents,
-                        fresh_finish: snapshot,
-                        fresh_finish_projection: projection,
-                        _raw_report: raw_report,
-                    },
-                )
+                ActiveReblitCommitCleanupExchangeReconciliation::Applied(AppliedActiveReblitCommitCleanupExchange {
+                    parents,
+                    fresh_finish: snapshot,
+                    fresh_finish_projection: projection,
+                    _raw_report: raw_report,
+                })
             }
             ClassifiedFreshNamespace::NotApplied => {
                 if parents
@@ -103,9 +95,7 @@ impl PendingActiveReblitCommitCleanupExchangeReconciliation {
                 let _raw_report = raw_report;
                 ActiveReblitCommitCleanupExchangeReconciliation::NotApplied
             }
-            ClassifiedFreshNamespace::Ambiguous => {
-                ActiveReblitCommitCleanupExchangeReconciliation::Ambiguous
-            }
+            ClassifiedFreshNamespace::Ambiguous => ActiveReblitCommitCleanupExchangeReconciliation::Ambiguous,
         }
     }
 }
@@ -150,9 +140,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_before_active_reblit_commit_cleanup_reconciliation_capture(
-    hook: impl FnOnce() + 'static,
-) {
+pub(in crate::client) fn arm_before_active_reblit_commit_cleanup_reconciliation_capture(hook: impl FnOnce() + 'static) {
     BEFORE_RECONCILIATION_CAPTURE.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

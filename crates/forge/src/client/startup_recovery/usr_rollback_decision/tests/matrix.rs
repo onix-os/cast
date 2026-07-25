@@ -11,7 +11,9 @@ use crate::client::{
         UsrRollbackDecisionAdmission, UsrRollbackDecisionAuthority, usr_rollback_decision_source_is_supported_for_test,
     },
 };
-use crate::transition_journal::{BootRollback, ForwardPhase, Phase, RecoveryDisposition, TransitionJournalStore};
+use crate::transition_journal::{
+    BootRollback, ForwardPhase, Phase, RecoveryDisposition, RollbackAction, TransitionJournalStore,
+};
 
 use super::{
     super::{UsrRollbackDecisionPersistenceError, persist_usr_rollback_decision_and_reopen},
@@ -45,6 +47,48 @@ fn startup_usr_rollback_decision_admitted_matrix_persists_exact_plan() {
             fixture.assert_exact_decision(&fixture.canonical_record());
         }
     }
+}
+
+#[test]
+fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
+    // A NewState crash durably at PreviousArchived is not yet auto-recovered:
+    // no dispatcher admits the archive phases, so startup halts fail-safe with
+    // the record intact (RecoveryPending) rather than bricking or panicking.
+    // This pins the exact boundary the predecessor-restore rollback suffix will
+    // close; the prefix phases already auto-roll-back (see the terminal-outcome
+    // matrix test above).
+    // A NewState crash durably at PreviousArchived now auto-recovers by
+    // rollback: the decision admits and persists a plan whose first action is
+    // restoring the archived predecessor. Drive startup repeatedly and record
+    // each phase it advances through.
+    let fixture = Fixture::previous_archived(OperationKind::NewState);
+    assert!(usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+
+    let mut phases = Vec::new();
+    for _ in 0..12 {
+        let error = fixture.enter();
+        let phase = pending(&error).phase();
+        phases.push(phase);
+        if phase == Phase::RollbackComplete {
+            break;
+        }
+    }
+    // Startup admits the archive rollback and routes it to restore the archived
+    // predecessor first: RollbackDecided → PreviousRestoreIntent. The
+    // predecessor-restore dispatcher lands next; until then it holds fail-safe at
+    // PreviousRestoreIntent (record + plan intact) — never a brick.
+    assert_eq!(phases.first(), Some(&Phase::RollbackDecided), "phases={phases:?}");
+    assert!(
+        phases.contains(&Phase::PreviousRestoreIntent),
+        "recovery did not route to the predecessor restore intent: {phases:?}"
+    );
+    let plan = fixture
+        .canonical_record()
+        .rollback
+        .expect("a rollback plan was persisted");
+    assert_eq!(plan.previous_archive, RollbackAction::Pending, "plan={plan:?}");
+    assert_eq!(plan.usr_exchange, RollbackAction::Pending, "plan={plan:?}");
+    assert_eq!(plan.fresh_db, RollbackAction::Pending, "plan={plan:?}");
 }
 
 #[test]
@@ -95,7 +139,11 @@ fn startup_root_links_complete_requires_exact_complete_abi_and_never_republishes
                 assert_eq!(fixture.canonical_bytes(), journal_before, "{kind:?} mask={mask}");
             }
             assert_eq!(usr_exchanged_root_abi_publication_attempts(), 0, "{kind:?} mask={mask}");
-            assert_eq!(usr_exchanged_root_abi_complete_sync_attempts(), 0, "{kind:?} mask={mask}");
+            assert_eq!(
+                usr_exchanged_root_abi_complete_sync_attempts(),
+                0,
+                "{kind:?} mask={mask}"
+            );
             assert_eq!(fixture.namespace_snapshot(), namespace_before, "{kind:?} mask={mask}");
             assert_eq!(fixture.database_snapshot(), database_before, "{kind:?} mask={mask}");
         }
@@ -176,7 +224,11 @@ fn startup_system_trigger_post_sources_reach_the_exact_terminal_outcome() {
                         Err(error) => {
                             let pending = pending(&error);
                             let record = fixture.canonical_record();
-                            assert_eq!(record.phase, pending.phase(), "{kind:?} {source:?} historical={historical}");
+                            assert_eq!(
+                                record.phase,
+                                pending.phase(),
+                                "{kind:?} {source:?} historical={historical}"
+                            );
                             assert_eq!(record.operation, fixture.source.operation);
                             assert_eq!(record.transition_id, fixture.source.transition_id);
                             assert_eq!(record.creation_epoch, fixture.source.creation_epoch);
@@ -199,7 +251,10 @@ fn startup_system_trigger_post_sources_reach_the_exact_terminal_outcome() {
                     }
                 }
 
-                assert!(clean, "system-trigger rollback did not converge: {kind:?} {source:?} historical={historical}");
+                assert!(
+                    clean,
+                    "system-trigger rollback did not converge: {kind:?} {source:?} historical={historical}"
+                );
                 assert_eq!(observed.first().map(|entry| entry.0), Some(Phase::RollbackDecided));
                 let terminal = last_record.expect("terminal rollback record was observed before deletion");
                 assert_eq!(terminal.phase, Phase::RollbackComplete);

@@ -9,18 +9,13 @@ use std::{
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_gate::{
-            self, ActiveReblitCommitCleanupCompleteSeal,
-            active_reblit_commit_cleanup_complete,
-        },
+        startup_gate::{self, ActiveReblitCommitCleanupCompleteSeal, active_reblit_commit_cleanup_complete},
         startup_reconciliation::{
-            ActiveReblitCommitCleanupCompleteAdmission,
-            ActiveReblitCommitCleanupCompleteAuthority,
+            ActiveReblitCommitCleanupCompleteAdmission, ActiveReblitCommitCleanupCompleteAuthority,
             arm_between_active_reblit_commit_cleanup_complete_database_captures,
         },
         startup_recovery::{
-            ActiveReblitCommitCleanupCompletePersistenceError,
-            ActiveReblitCommitCleanupCompleteValidationStage,
+            ActiveReblitCommitCleanupCompletePersistenceError, ActiveReblitCommitCleanupCompleteValidationStage,
             DurableActiveReblitCommitCleanupCompleteRecord,
             arm_after_active_reblit_commit_cleanup_complete_old_binding_validation,
             arm_after_active_reblit_commit_cleanup_complete_same_store_before_reopen,
@@ -33,25 +28,19 @@ use crate::{
     },
     db,
     transition_journal::{
-        Phase, TransitionJournalStore, TransitionRecord, encode,
-        arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
-        arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
+        Phase, TransitionJournalStore, TransitionRecord, arm_next_displaced_unlink_fault,
+        arm_next_temporary_sync_fault, arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
         arm_next_update_first_directory_sync_fault, assert_displaced_unlink_fault_consumed,
         assert_temporary_sync_fault_consumed, assert_update_exchange_fault_consumed,
-        assert_update_final_directory_sync_fault_consumed,
-        assert_update_first_directory_sync_fault_consumed,
+        assert_update_final_directory_sync_fault_consumed, assert_update_first_directory_sync_fault_consumed, encode,
     },
 };
 
 use super::{
     super::test_fixture::stage_test_boot_publication_receipts,
     boot_sync_complete_support::{open_boot_sync_complete_journal, same_byte_different_inode_hook},
-    commit_cleanup_effect::{
-        CleanupLayout, commit_decided_fixture, no_boot_commit_decided_fixture,
-    },
-    support::{
-        BootRepairFixture, Epoch, assert_pending_phase, enter_boot,
-    },
+    commit_cleanup_effect::{CleanupLayout, commit_decided_fixture, no_boot_commit_decided_fixture},
+    support::{BootRepairFixture, Epoch, assert_pending_phase, enter_boot},
 };
 
 #[test]
@@ -77,10 +66,7 @@ fn completed_cleanup_current_and_historical_reaches_complete_once() {
 fn system_triggered_no_boot_cleanup_reaches_exact_complete_without_receipt_mutation() {
     for epoch in Epoch::ALL {
         for install_unrelated_receipt in [false, true] {
-            let fixture = no_boot_commit_cleanup_complete_fixture(
-                epoch,
-                install_unrelated_receipt,
-            );
+            let fixture = no_boot_commit_cleanup_complete_fixture(epoch, install_unrelated_receipt);
             let source = fixture.fixture.source.clone();
             let successor = exact_complete(&source);
             let database_before = fixture.fixture.database_snapshot();
@@ -129,8 +115,7 @@ fn system_triggered_no_boot_cleanup_reaches_exact_complete_without_receipt_mutat
         trigger_disabled.fixture.source,
     );
 
-    let same_transition_receipt =
-        no_boot_commit_cleanup_complete_fixture(Epoch::Current, false);
+    let same_transition_receipt = no_boot_commit_cleanup_complete_fixture(Epoch::Current, false);
     install_current_transition_receipt(&same_transition_receipt);
     let source = same_transition_receipt.fixture.source.clone();
     let database_before = same_transition_receipt.fixture.database_snapshot();
@@ -150,14 +135,8 @@ fn system_triggered_no_boot_cleanup_reaches_exact_complete_without_receipt_mutat
         )
     ));
     assert_eq!(same_transition_receipt.fixture.canonical_record(), source);
-    assert_eq!(
-        same_transition_receipt.fixture.database_snapshot(),
-        database_before,
-    );
-    assert_eq!(
-        same_transition_receipt.fixture.namespace_snapshot(),
-        namespace_before,
-    );
+    assert_eq!(same_transition_receipt.fixture.database_snapshot(), database_before,);
+    assert_eq!(same_transition_receipt.fixture.namespace_snapshot(), namespace_before,);
     assert_eq!(
         same_transition_receipt
             .fixture
@@ -179,8 +158,7 @@ fn completed_cleanup_bound_advance_reopens_without_mutating_installed_receipt() 
     let ready = capture_ready(&fixture, &journal, &reservation);
 
     let (journal, actual) =
-        persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, ready)
-            .unwrap();
+        persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, ready).unwrap();
 
     assert_eq!(actual, successor);
     assert_eq!(fixture.fixture.canonical_record(), successor);
@@ -284,15 +262,13 @@ impl BindingHook {
         match self {
             Self::FinalAuthority => None,
             Self::SameStore => Some(ActiveReblitCommitCleanupCompleteValidationStage::SameStore),
-            Self::BeforeReopen | Self::ReopenedOldBinding => Some(
-                ActiveReblitCommitCleanupCompleteValidationStage::ReopenedOldBinding,
-            ),
-            Self::OldBindingBeforeFreshCapture => Some(
-                ActiveReblitCommitCleanupCompleteValidationStage::ReopenedOldBindingAfterFreshCapture,
-            ),
-            Self::ReopenedFreshBinding => Some(
-                ActiveReblitCommitCleanupCompleteValidationStage::ReopenedFreshBinding,
-            ),
+            Self::BeforeReopen | Self::ReopenedOldBinding => {
+                Some(ActiveReblitCommitCleanupCompleteValidationStage::ReopenedOldBinding)
+            }
+            Self::OldBindingBeforeFreshCapture => {
+                Some(ActiveReblitCommitCleanupCompleteValidationStage::ReopenedOldBindingAfterFreshCapture)
+            }
+            Self::ReopenedFreshBinding => Some(ActiveReblitCommitCleanupCompleteValidationStage::ReopenedFreshBinding),
         }
     }
 }
@@ -306,10 +282,7 @@ fn complete_persistence_all_binding_windows_reject_same_bytes_on_a_new_inode() {
         let journal = open_boot_sync_complete_journal(&fixture);
         let reservation = ActiveStateReservation::acquire().unwrap();
         let ready = capture_ready(&fixture, &journal, &reservation);
-        let replacement = same_byte_different_inode_hook(
-            &fixture,
-            &format!("cleanup-complete-persistence-{hook:?}"),
-        );
+        let replacement = same_byte_different_inode_hook(&fixture, &format!("cleanup-complete-persistence-{hook:?}"));
         match hook {
             BindingHook::FinalAuthority => {
                 arm_before_active_reblit_commit_cleanup_complete_final_revalidation(replacement)
@@ -331,11 +304,8 @@ fn complete_persistence_all_binding_windows_reject_same_bytes_on_a_new_inode() {
             }
         }
 
-        let error = persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(
-            journal,
-            ready,
-        )
-        .expect_err("same-byte journal inode substitution returned Complete authority");
+        let error = persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, ready)
+            .expect_err("same-byte journal inode substitution returned Complete authority");
 
         match hook.expected_stage() {
             None => assert!(matches!(
@@ -396,11 +366,8 @@ fn completed_cleanup_database_and_namespace_races_fail_closed() {
         fs::set_permissions(staging, fs::Permissions::from_mode(changed_mode)).unwrap();
     });
 
-    let error = persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(
-        journal,
-        ready,
-    )
-    .expect_err("completed cleanup namespace race returned Complete authority");
+    let error = persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, ready)
+        .expect_err("completed cleanup namespace race returned Complete authority");
 
     assert!(matches!(
         error,
@@ -431,11 +398,7 @@ pub(super) fn no_boot_commit_cleanup_complete_fixture(
     epoch: Epoch,
     install_unrelated_receipt: bool,
 ) -> BootRepairFixture {
-    let mut fixture = no_boot_commit_decided_fixture(
-        epoch,
-        CleanupLayout::Finish,
-        install_unrelated_receipt,
-    );
+    let mut fixture = no_boot_commit_decided_fixture(epoch, CleanupLayout::Finish, install_unrelated_receipt);
     let successor = fixture.fixture.source.forward_successor(None).unwrap();
     assert_eq!(successor.phase, Phase::CommitCleanupComplete);
     assert_eq!(successor.generation, 12);
@@ -449,26 +412,13 @@ pub(super) fn no_boot_commit_cleanup_complete_fixture(
 }
 
 pub(super) fn install_current_transition_receipt(fixture: &BootRepairFixture) {
-    stage_test_boot_publication_receipts(
-        &fixture.fixture.database,
-        &fixture.fixture.source.transition_id,
-        false,
-    );
-    let receipt_state = fixture
-        .fixture
-        .database
-        .boot_publication_receipt_state()
-        .unwrap();
-    let pending = receipt_state
-        .pending()
-        .expect("same-transition receipt was staged");
+    stage_test_boot_publication_receipts(&fixture.fixture.database, &fixture.fixture.source.transition_id, false);
+    let receipt_state = fixture.fixture.database.boot_publication_receipt_state().unwrap();
+    let pending = receipt_state.pending().expect("same-transition receipt was staged");
     fixture
         .fixture
         .database
-        .promote_boot_publication_receipt(
-            pending,
-            Instant::now() + Duration::from_secs(30),
-        )
+        .promote_boot_publication_receipt(pending, Instant::now() + Duration::from_secs(30))
         .unwrap();
     let db::state::CurrentExactPromotedBootPublicationReceiptChain::Installed(installed) = fixture
         .fixture
@@ -502,10 +452,7 @@ impl NonReceiptDatabaseSnapshot {
             candidate_ownership: fixture
                 .fixture
                 .database
-                .transition_ownership(
-                    fixture.fixture.candidate_state,
-                    &fixture.fixture.source.transition_id,
-                )
+                .transition_ownership(fixture.fixture.candidate_state, &fixture.fixture.source.transition_id)
                 .unwrap(),
             candidate_provenance: fixture
                 .fixture
@@ -515,10 +462,7 @@ impl NonReceiptDatabaseSnapshot {
             previous_ownership: fixture
                 .fixture
                 .database
-                .transition_ownership(
-                    fixture.fixture.previous_state,
-                    &fixture.fixture.source.transition_id,
-                )
+                .transition_ownership(fixture.fixture.previous_state, &fixture.fixture.source.transition_id)
                 .unwrap(),
             previous_provenance: fixture
                 .fixture
@@ -554,17 +498,12 @@ fn capture_ready<'reservation>(
     }
 }
 
-pub(super) fn installed_receipt_state(
-    fixture: &BootRepairFixture,
-) -> db::state::BootPublicationReceiptState {
+pub(super) fn installed_receipt_state(fixture: &BootRepairFixture) -> db::state::BootPublicationReceiptState {
     let pair = receipt_pair(fixture);
     fixture
         .fixture
         .database
-        .load_exact_promoted_boot_publication_receipt_state(
-            &fixture.fixture.source.transition_id,
-            &pair,
-        )
+        .load_exact_promoted_boot_publication_receipt_state(&fixture.fixture.source.transition_id, &pair)
         .unwrap()
 }
 
@@ -580,9 +519,7 @@ pub(super) fn assert_installed_receipt_promoted(fixture: &BootRepairFixture) {
     assert!(state.pending().is_none());
 }
 
-fn receipt_pair(
-    fixture: &BootRepairFixture,
-) -> crate::boot_publication::BootPublicationReceiptPair {
+fn receipt_pair(fixture: &BootRepairFixture) -> crate::boot_publication::BootPublicationReceiptPair {
     fixture
         .fixture
         .source
@@ -597,10 +534,7 @@ fn exact_complete(source: &TransitionRecord) -> TransitionRecord {
     successor
 }
 
-fn assert_advance_failure(
-    error: &startup_gate::Error,
-    expected: DurableActiveReblitCommitCleanupCompleteRecord,
-) {
+fn assert_advance_failure(error: &startup_gate::Error, expected: DurableActiveReblitCommitCleanupCompleteRecord) {
     assert!(matches!(
         error,
         startup_gate::Error::ActiveReblitCommitCleanupCompleteDispatch(

@@ -197,9 +197,7 @@ pub(super) struct NonJournalNamespaceEntry {
     payload: Vec<u8>,
 }
 
-pub(super) fn non_journal_namespace_snapshot(
-    fixture: &CandidatePreserveFixture,
-) -> Vec<NonJournalNamespaceEntry> {
+pub(super) fn non_journal_namespace_snapshot(fixture: &CandidatePreserveFixture) -> Vec<NonJournalNamespaceEntry> {
     let root = &fixture.fixture.installation.root;
     let mut entries = Vec::new();
     snapshot_non_journal(root, root, &mut entries);

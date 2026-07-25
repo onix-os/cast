@@ -1,0 +1,18 @@
+[package]
+name = "lua_engine_spike"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Phase L0 engine spike only. This crate proves the selected Lua dialect and
+# runtime satisfy Cast's shared evaluator policy before any production
+# `crates/lua_config` adapter exists. It registers no `.lua` discovery and is
+# not depended on by any production crate.
+
+[dependencies]
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+full_moon = { version = "1", features = ["lua54"] }
+
+[lints]
+workspace = true

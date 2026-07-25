@@ -16,10 +16,8 @@ use crate::{
         Client,
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_boot_sync_staging::{
-            ActiveReblitBootSyncCompletePersistenceError,
-            ActiveReblitBootSyncCompleteValidationError,
-            ActiveReblitBootSyncCompletionReconciliationError,
-            CompletedStagedActiveReblitBootSync,
+            ActiveReblitBootSyncCompletePersistenceError, ActiveReblitBootSyncCompleteValidationError,
+            ActiveReblitBootSyncCompletionReconciliationError, CompletedStagedActiveReblitBootSync,
             DurableActiveReblitBootSyncCompletionRecord,
         },
     },
@@ -27,18 +25,14 @@ use crate::{
     transition_journal::TransitionRecord,
 };
 
-use super::{
-    ActiveReblitBootPostPromotionValidationError,
-    ActiveReblitBootTerminalEvidenceValidationError,
-    CleanedPromotedExactActiveReblitBootPublication,
-    PromotedExactActiveReblitBootPublication,
-    require_deadline,
-    validate_exact_terminal_evidence_snapshot,
-};
 use super::super::{
-    ActiveReblitBootSyncCompletionSeal,
-    StagedExactActiveReblitBootPublication,
+    ActiveReblitBootSyncCompletionSeal, StagedExactActiveReblitBootPublication,
     ValidatedActiveReblitBootPublicationEffect,
+};
+use super::{
+    ActiveReblitBootPostPromotionValidationError, ActiveReblitBootTerminalEvidenceValidationError,
+    CleanedPromotedExactActiveReblitBootPublication, PromotedExactActiveReblitBootPublication, require_deadline,
+    validate_exact_terminal_evidence_snapshot,
 };
 
 /// Exact terminal publication whose promoted receipt and journal are durably
@@ -60,14 +54,7 @@ pub(in crate::client) struct CompletedExactActiveReblitBootPublication<
     completed: CompletedStagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     database_outcome: BootPublicationReceiptPromotionOutcome,
     publication_count: usize,
@@ -77,9 +64,7 @@ pub(in crate::client) struct CompletedExactActiveReblitBootPublication<
     evidence: Vec<ValidatedActiveReblitBootPublicationEffect>,
 }
 
-impl std::fmt::Debug
-    for CompletedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for CompletedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CompletedExactActiveReblitBootPublication")
@@ -99,15 +84,11 @@ impl CompletedExactActiveReblitBootPublication<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.completed.record()
     }
 
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.completed.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn database_outcome(
-        &self,
-    ) -> BootPublicationReceiptPromotionOutcome {
+    pub(in crate::client) const fn database_outcome(&self) -> BootPublicationReceiptPromotionOutcome {
         self.database_outcome
     }
 
@@ -179,16 +160,7 @@ pub(in crate::client) enum ActiveReblitBootSyncCompletionError {
     },
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     CleanedPromotedExactActiveReblitBootPublication<
         'plan,
         'inventory,
@@ -225,11 +197,7 @@ where
             .map_err(ActiveReblitBootSyncCompletionError::InitialHandoff)?;
 
         after_initial_completion_handoff();
-        self.validate_completion_handoff(
-            client,
-            Some(retained_plan),
-            "immediate pre-persistence",
-        )
+        self.validate_completion_handoff(client, Some(retained_plan), "immediate pre-persistence")
             .map_err(ActiveReblitBootSyncCompletionError::ImmediateHandoff)?;
 
         before_completion_deadline();
@@ -300,14 +268,16 @@ where
     fn validate_completion_handoff(
         &self,
         client: &Client,
-        expected_plan: Option<&'plan BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >>,
+        expected_plan: Option<
+            &'plan BoundActiveReblitBlsPublicationPlan<
+                'input,
+                'topology_view,
+                'topology_authority,
+                'attempt,
+                'stone,
+                'roots,
+            >,
+        >,
         checkpoint: &'static str,
     ) -> Result<
         &'plan BoundActiveReblitBlsPublicationPlan<
@@ -325,18 +295,13 @@ where
             .terminal
             .staged
             .revalidate_promoted_against(client)
-            .map_err(|source| {
-                ActiveReblitBootPostPromotionValidationError::PromotedStagedEvidence {
-                    checkpoint,
-                    source,
-                }
-            })?;
+            .map_err(
+                |source| ActiveReblitBootPostPromotionValidationError::PromotedStagedEvidence { checkpoint, source },
+            )?;
         let retained_plan = fresh.plan();
         if let Some(expected_plan) = expected_plan {
             if !std::ptr::eq(retained_plan, expected_plan) {
-                return Err(ActiveReblitBootPostPromotionValidationError::PlanMismatch {
-                    checkpoint,
-                });
+                return Err(ActiveReblitBootPostPromotionValidationError::PlanMismatch { checkpoint });
             }
         }
         validate_exact_terminal_evidence_snapshot(
@@ -349,27 +314,17 @@ where
             &self.promoted.terminal.evidence,
             checkpoint,
         )
-        .map_err(|source| {
-            ActiveReblitBootPostPromotionValidationError::TerminalEvidence {
-                checkpoint,
-                source,
-            }
-        })?;
+        .map_err(|source| ActiveReblitBootPostPromotionValidationError::TerminalEvidence { checkpoint, source })?;
         let final_fresh = self
             .promoted
             .terminal
             .staged
             .revalidate_promoted_against(client)
-            .map_err(|source| {
-                ActiveReblitBootPostPromotionValidationError::PromotedStagedEvidence {
-                    checkpoint,
-                    source,
-                }
-            })?;
+            .map_err(
+                |source| ActiveReblitBootPostPromotionValidationError::PromotedStagedEvidence { checkpoint, source },
+            )?;
         if !std::ptr::eq(final_fresh.plan(), retained_plan) {
-            return Err(ActiveReblitBootPostPromotionValidationError::PlanMismatch {
-                checkpoint,
-            });
+            return Err(ActiveReblitBootPostPromotionValidationError::PlanMismatch { checkpoint });
         }
         Ok(retained_plan)
     }
@@ -389,14 +344,7 @@ fn validate_completed_terminal_sandwich<
     completed: &CompletedStagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     client: &Client,
     retained_plan: &'plan BoundActiveReblitBlsPublicationPlan<
@@ -418,15 +366,10 @@ where
     'input: 'plan,
 {
     let fresh = completed.revalidate_against(client).map_err(|source| {
-        ActiveReblitBootPostCompletionValidationError::CompletedStagedEvidence {
-            checkpoint,
-            source,
-        }
+        ActiveReblitBootPostCompletionValidationError::CompletedStagedEvidence { checkpoint, source }
     })?;
     if !std::ptr::eq(fresh.plan(), retained_plan) {
-        return Err(ActiveReblitBootPostCompletionValidationError::PlanMismatch {
-            checkpoint,
-        });
+        return Err(ActiveReblitBootPostCompletionValidationError::PlanMismatch { checkpoint });
     }
     validate_exact_terminal_evidence_snapshot(
         retained_plan,
@@ -438,36 +381,18 @@ where
         evidence,
         checkpoint,
     )
-    .map_err(|source| {
-        ActiveReblitBootPostCompletionValidationError::TerminalEvidence {
-            checkpoint,
-            source,
-        }
-    })?;
+    .map_err(|source| ActiveReblitBootPostCompletionValidationError::TerminalEvidence { checkpoint, source })?;
     let final_fresh = completed.revalidate_against(client).map_err(|source| {
-        ActiveReblitBootPostCompletionValidationError::CompletedStagedEvidence {
-            checkpoint,
-            source,
-        }
+        ActiveReblitBootPostCompletionValidationError::CompletedStagedEvidence { checkpoint, source }
     })?;
     if !std::ptr::eq(final_fresh.plan(), retained_plan) {
-        return Err(ActiveReblitBootPostCompletionValidationError::PlanMismatch {
-            checkpoint,
-        });
+        return Err(ActiveReblitBootPostCompletionValidationError::PlanMismatch { checkpoint });
     }
-    require_deadline(checkpoint, retained_plan.input_deadline()).map_err(|source| {
-        ActiveReblitBootPostCompletionValidationError::TerminalEvidence {
-            checkpoint,
-            source,
-        }
-    })
+    require_deadline(checkpoint, retained_plan.input_deadline())
+        .map_err(|source| ActiveReblitBootPostCompletionValidationError::TerminalEvidence { checkpoint, source })
 }
 
-fn reconcile_post_completion_failure<
-    'plan,
-    'inventory,
-    Plan,
->(
+fn reconcile_post_completion_failure<'plan, 'inventory, Plan>(
     completed: CompletedStagedActiveReblitBootSync<'plan, 'inventory, Plan>,
     validation: ActiveReblitBootPostCompletionValidationError,
 ) -> ActiveReblitBootSyncCompletionError {
@@ -476,12 +401,10 @@ fn reconcile_post_completion_failure<
             durable,
             source: validation,
         },
-        Err(reconciliation) => {
-            ActiveReblitBootSyncCompletionError::PostCompletionAndReconciliation {
-                validation,
-                reconciliation,
-            }
-        }
+        Err(reconciliation) => ActiveReblitBootSyncCompletionError::PostCompletionAndReconciliation {
+            validation,
+            reconciliation,
+        },
     }
 }
 
@@ -518,9 +441,7 @@ fn assert_callback_consumed(
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_after_initial_completion_handoff(
-    callback: impl FnOnce() + 'static,
-) {
+pub(in crate::client) fn arm_after_initial_completion_handoff(callback: impl FnOnce() + 'static) {
     arm_callback(&AFTER_INITIAL_HANDOFF, callback);
 }
 
@@ -530,55 +451,37 @@ pub(in crate::client) fn arm_before_completion_deadline(callback: impl FnOnce() 
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_after_boot_sync_complete_persistence(
-    callback: impl FnOnce() + 'static,
-) {
+pub(in crate::client) fn arm_after_boot_sync_complete_persistence(callback: impl FnOnce() + 'static) {
     arm_callback(&AFTER_COMPLETION_PERSISTENCE, callback);
 }
 
 #[cfg(test)]
-pub(in crate::client) fn arm_before_final_completion_validation(
-    callback: impl FnOnce() + 'static,
-) {
+pub(in crate::client) fn arm_before_final_completion_validation(callback: impl FnOnce() + 'static) {
     arm_callback(&BEFORE_FINAL_COMPLETION_VALIDATION, callback);
 }
 
 #[cfg(test)]
 pub(in crate::client) fn assert_after_initial_completion_handoff_hook_consumed() {
-    assert_callback_consumed(
-        &AFTER_INITIAL_HANDOFF,
-        "after-initial-handoff",
-    );
+    assert_callback_consumed(&AFTER_INITIAL_HANDOFF, "after-initial-handoff");
 }
 
 #[cfg(test)]
 pub(in crate::client) fn assert_before_completion_deadline_hook_consumed() {
-    assert_callback_consumed(
-        &BEFORE_COMPLETION_DEADLINE,
-        "before-deadline",
-    );
+    assert_callback_consumed(&BEFORE_COMPLETION_DEADLINE, "before-deadline");
 }
 
 #[cfg(test)]
 pub(in crate::client) fn assert_after_boot_sync_complete_persistence_hook_consumed() {
-    assert_callback_consumed(
-        &AFTER_COMPLETION_PERSISTENCE,
-        "after-persistence",
-    );
+    assert_callback_consumed(&AFTER_COMPLETION_PERSISTENCE, "after-persistence");
 }
 
 #[cfg(test)]
 pub(in crate::client) fn assert_before_final_completion_validation_hook_consumed() {
-    assert_callback_consumed(
-        &BEFORE_FINAL_COMPLETION_VALIDATION,
-        "before-final-validation",
-    );
+    assert_callback_consumed(&BEFORE_FINAL_COMPLETION_VALIDATION, "before-final-validation");
 }
 
 #[cfg(test)]
-fn run_callback(
-    slot: &'static std::thread::LocalKey<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>,
-) {
+fn run_callback(slot: &'static std::thread::LocalKey<std::cell::RefCell<Option<Box<dyn FnOnce()>>>>) {
     slot.with(|slot| {
         if let Some(callback) = slot.borrow_mut().take() {
             callback();
@@ -621,17 +524,11 @@ fn before_final_completion_validation() {}
 #[path = "boot_sync_completion/commit_decision.rs"]
 mod commit_decision;
 pub(in crate::client) use commit_decision::{
-    ActiveReblitBootCompleteError,
-    ActiveReblitBootCompleteHandoff,
-    ActiveReblitBootCompletePostAdvanceError,
-    ActiveReblitBootCommitCleanupCompleteHandoff,
-    ActiveReblitBootFinalizationError,
-    ActiveReblitBootFinalizedHandoff,
-    ActiveReblitBootCommitCleanupError,
-    ActiveReblitBootCommitCleanupPostAdvanceError,
-    ActiveReblitBootCommitDecisionError,
-    ActiveReblitBootCommitDecisionFinalValidation,
-    ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootCommitCleanupCompleteHandoff, ActiveReblitBootCommitCleanupError,
+    ActiveReblitBootCommitCleanupPostAdvanceError, ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation, ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootCompleteError, ActiveReblitBootCompleteHandoff, ActiveReblitBootCompletePostAdvanceError,
+    ActiveReblitBootFinalizationError, ActiveReblitBootFinalizedHandoff,
 };
 #[cfg(test)]
 pub(in crate::client) use commit_decision::{

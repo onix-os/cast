@@ -16,8 +16,8 @@ use super::{
     support::{
         CandidateOrigin, Epoch, WRAPPER_INDEX, active_wrapper_path, assert_canonical_absent,
         assert_complete_route_journal_only, assert_no_candidate_effects, assert_pending_phase, build_active,
-        build_other, enter_candidate, enter_clean_candidate, expected_rollback_complete,
-        persist_candidate_preserved, reset_candidate_effect_observers, reset_complete_route_effect_observers,
+        build_other, enter_candidate, enter_clean_candidate, expected_rollback_complete, persist_candidate_preserved,
+        reset_candidate_effect_observers, reset_complete_route_effect_observers,
     },
 };
 

@@ -8,9 +8,7 @@
 
 use crate::{
     Installation,
-    transition_journal::{
-        StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
-    },
+    transition_journal::{StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{

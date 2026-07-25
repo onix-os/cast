@@ -109,27 +109,43 @@ struct Package {
 mod tests {
     use std::collections::BTreeSet;
 
+    use declarative_config::DeclarationCodec;
     use fs_err as fs;
 
     use super::*;
     use crate::Recipe;
-    use crate::source_lock::{SOURCE_LOCK_FILE_NAME, SourceLock, encode_source_lock};
+    use crate::source_lock::{GluonSourceLockCodec, SOURCE_LOCK_FILE_NAME, SourceLock};
 
-    const RECIPE_SOURCE: &str = r#"let cast = import! cast.package.v3
-cast.mk_package (cast.meta {
-    pname = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = "https://example.invalid",
-    license = ["MPL-2.0"],
-})
+    const RECIPE_SOURCE: &str = r#"let a = import! cast.authored.v1
+{
+    meta = {
+        pname = "example",
+        version = "1.2.3",
+        release = 1,
+        homepage = "https://example.invalid",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
 "#;
 
     #[test]
     fn emitted_recipe_aggregate_and_derivation_id_follow_plan_provenance() {
         let root = tempfile::tempdir().unwrap();
         fs::write(root.path().join("stone.glu"), RECIPE_SOURCE).unwrap();
-        let lock = encode_source_lock(&SourceLock::default());
+        let lock = GluonSourceLockCodec::default().encode(&SourceLock::default()).unwrap();
         let lock_path = root.path().join(SOURCE_LOCK_FILE_NAME);
         fs::write(&lock_path, &lock).unwrap();
 

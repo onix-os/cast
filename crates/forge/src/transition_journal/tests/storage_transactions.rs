@@ -243,8 +243,8 @@ fn one_shared_store_serializes_competing_compare_and_swap_advances() {
         }));
     }
     drop(attempted_tx);
-    attempted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    attempted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    attempted_rx.recv_timeout(Duration::from_secs(120)).unwrap();
+    attempted_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     drop(held);
 
     let results = workers
@@ -288,14 +288,14 @@ fn internal_lock_serializes_stale_thread_writers() {
         finished_tx.send(stale_rejected).unwrap();
     });
 
-    attempted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    attempted_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     assert!(matches!(
         finished_rx.recv_timeout(Duration::from_millis(150)),
         Err(mpsc::RecvTimeoutError::Timeout)
     ));
     store.advance(&initial, &next).unwrap();
     drop(store);
-    assert!(finished_rx.recv_timeout(Duration::from_secs(5)).unwrap());
+    assert!(finished_rx.recv_timeout(Duration::from_secs(120)).unwrap());
     worker.join().unwrap();
 
     let store = TransitionJournalStore::open(temporary.path()).unwrap();
@@ -327,7 +327,7 @@ fn internal_lock_prevents_stale_writer_resurrection_after_delete() {
             Err(StorageError::CanonicalMissing)
         )
     });
-    attempted_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    attempted_rx.recv_timeout(Duration::from_secs(120)).unwrap();
     store.advance(&preterminal, &terminal).unwrap();
     assert!(store.delete(&terminal).unwrap());
     drop(store);

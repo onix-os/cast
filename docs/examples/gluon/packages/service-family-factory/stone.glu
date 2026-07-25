@@ -1,3 +1,4 @@
+let a = import! cast.authored.v1
 let family = import! "./family.glu"
 let make_member = import! "./package.glu"
 let release = import! "./release.glu"

@@ -1,11 +1,10 @@
+let a = import! cast.authored.v1
 
-let b = import! cast.package.v3
-
-let phases = b.scripts {
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "install"],
+let phases = {
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "install"],
             script = r#"
 install -Dm644 integration/device-broker.service "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/systemd/system/device-broker.service"
 install -Dm644 integration/device-broker.sysusers "${CAST_INSTALL_ROOT}${CAST_LIBDIR}/sysusers.d/device-broker.conf"
@@ -15,43 +14,55 @@ install -Dm644 integration/io.example.DeviceBroker.rules "${CAST_INSTALL_ROOT}${
 "#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
-let root = b.output_with {
-    summary = b.optional.set "Device broker operating-system integration",
-    description = b.optional.set "Service, identity, volatile-state, device-access, and authorization declarations for device-broker.",
+let root = {
+    summary = a.optional.set "Device broker operating-system integration",
+    description = a.optional.set "Service, identity, volatile-state, device-access, and authorization declarations for device-broker.",
     runtime_inputs = [
-        b.dep.package "device-broker",
-        b.dep.package "polkit",
-        b.dep.package "systemd",
+        a.dep.package "device-broker",
+        a.dep.package "polkit",
+        a.dep.package "systemd",
     ],
     paths = [
-        b.path.any "/usr/lib/systemd/system/device-broker.service",
-        b.path.any "/usr/lib/sysusers.d/device-broker.conf",
-        b.path.any "/usr/lib/tmpfiles.d/device-broker.conf",
-        b.path.any "/usr/lib/udev/rules.d/70-device-broker.rules",
-        b.path.any "/usr/share/polkit-1/rules.d/io.example.DeviceBroker.rules",
+        a.path.any "/usr/lib/systemd/system/device-broker.service",
+        a.path.any "/usr/lib/sysusers.d/device-broker.conf",
+        a.path.any "/usr/lib/tmpfiles.d/device-broker.conf",
+        a.path.any "/usr/lib/udev/rules.d/70-device-broker.rules",
+        a.path.any "/usr/share/polkit-1/rules.d/io.example.DeviceBroker.rules",
     ],
-    .. b.output "out"
+    .. a.output "out"
 }
 
-let base = b.mk_package (b.meta {
-    pname = "device-broker-integration",
-    version = "1.4.0",
-    release = 2,
-    homepage = "https://example.invalid/device-broker",
-    license = ["MPL-2.0"],
-})
-
 {
-    builder = b.builder.custom phases [b.dep.binary "install"],
-    outputs = [root],
+    meta = {
+        pname = "device-broker-integration",
+        version = "1.4.0",
+        release = 2,
+        homepage = "https://example.invalid/device-broker",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.custom {
+        required_tools = [a.dep.binary "install"],
+        environment = [],
+        phases = phases,
+        supported_hooks = a.hook_support.all,
+    },
     sources = [
-        b.source.archive
+        a.source.archive
             "https://example.invalid/device-broker-integration-1.4.0.tar.xz"
             "9abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345678",
     ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [ root ],
+    options = a.unset,
+    profiles = [],
     architectures = ["native"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

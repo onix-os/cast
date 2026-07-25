@@ -1,23 +1,22 @@
-
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 let pname = "vector-math"
 
 // This builder spells out preprocessing, compilation, linking, validation,
 // and installation. No implicit build-system probe decides which tools run.
-let phases = b.scripts {
-    setup = b.phase [
-        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+let phases = a.scripts {
+    setup = a.phase [
+        a.step.run (a.program.binary "mkdir") ["-p", "build"],
     ],
-    build = b.phase [
-        b.step.run
-            (b.program.binary "cc")
+    build = a.phase [
+        a.step.run
+            (a.program.binary "cc")
             ["-E", "-I", "include", "src/vector.c", "-o", "build/vector.i"],
-        b.step.run
-            (b.program.binary "cc")
+        a.step.run
+            (a.program.binary "cc")
             ["-fPIC", "-O2", "-c", "build/vector.i", "-o", "build/vector.o"],
-        b.step.run
-            (b.program.binary "cc")
+        a.step.run
+            (a.program.binary "cc")
             [
                 "-shared",
                 "-Wl,-soname,libvector-math.so.1",
@@ -25,8 +24,8 @@ let phases = b.scripts {
                 "-o",
                 "build/libvector-math.so.1.0.0",
             ],
-        b.step.run
-            (b.program.binary "cc")
+        a.step.run
+            (a.program.binary "cc")
             [
                 "-I",
                 "include",
@@ -36,12 +35,12 @@ let phases = b.scripts {
                 "build/vector-calc",
             ],
     ],
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
             declared_programs = [
-                b.program.binary "install",
-                b.program.binary "ln",
+                a.program.binary "install",
+                a.program.binary "ln",
             ],
             script = r#"
 install -Dm755 build/vector-calc "${CAST_INSTALL_ROOT}${CAST_BINDIR}/vector-calc"
@@ -52,58 +51,65 @@ install -Dm644 include/vector-math.h "${CAST_INSTALL_ROOT}${CAST_PREFIX}/include
 "#,
         },
     ],
-    check = b.phase [
-        b.step.run (b.program.binary "test") ["-s", "build/libvector-math.so.1.0.0"],
-        b.step.run (b.program.binary "test") ["-x", "build/vector-calc"],
+    check = a.phase [
+        a.step.run (a.program.binary "test") ["-s", "build/libvector-math.so.1.0.0"],
+        a.step.run (a.program.binary "test") ["-x", "build/vector-calc"],
     ],
-    .. b.defaults.scripts
+    workload = a.phase [],
 }
 
-let root = b.output_with {
-    summary = b.optional.set "Vector calculation command-line tool",
-    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
-    paths = [b.path.exe "/usr/bin/vector-calc"],
-    .. b.output "out"
+let root = {
+    summary = a.optional.set "Vector calculation command-line tool",
+    runtime_inputs = [a.dep.output (a.package_ref pname) "libs"],
+    paths = [a.path.exe "/usr/bin/vector-calc"],
+    .. a.output "out"
 }
 
-let libraries = b.output_with {
-    summary = b.optional.set "Vector math runtime library",
-    paths = [b.path.any "/usr/lib/libvector-math.so.*"],
-    .. b.output "libs"
+let libraries = {
+    summary = a.optional.set "Vector math runtime library",
+    paths = [a.path.any "/usr/lib/libvector-math.so.*"],
+    .. a.output "libs"
 }
 
-let development = b.output_with {
-    summary = b.optional.set "Vector math headers and link-time library",
-    runtime_inputs = [b.dep.output (b.package_ref pname) "libs"],
+let development = {
+    summary = a.optional.set "Vector math headers and link-time library",
+    runtime_inputs = [a.dep.output (a.package_ref pname) "libs"],
     paths = [
-        b.path.any "/usr/include/vector-math",
-        b.path.symlink "/usr/lib/libvector-math.so",
+        a.path.any "/usr/include/vector-math",
+        a.path.symlink "/usr/lib/libvector-math.so",
     ],
-    .. b.output "devel"
+    .. a.output "devel"
 }
-
-let base = b.mk_package (b.meta {
-    pname,
-    version = "3.2.0",
-    release = 1,
-    homepage = "https://example.invalid/vector-math",
-    license = ["BSD-2-Clause"],
-})
 
 {
-    builder = b.builder.custom phases [
-        b.dep.binary "mkdir",
-        b.dep.binary "cc",
-        b.dep.binary "install",
-        b.dep.binary "ln",
-        b.dep.binary "test",
+    meta = {
+        pname,
+        version = "3.2.0",
+        release = 1,
+        homepage = "https://example.invalid/vector-math",
+        license = ["BSD-2-Clause"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.binary "mkdir",
+        a.dep.binary "cc",
+        a.dep.binary "install",
+        a.dep.binary "ln",
+        a.dep.binary "test",
     ],
-    outputs = [root, libraries, development],
     sources = [
-        b.source.archive
+        a.source.archive
             "https://example.invalid/vector-math-3.2.0.tar.xz"
             "6789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345",
     ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root, libraries, development],
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64", "aarch64"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

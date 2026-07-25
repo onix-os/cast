@@ -22,7 +22,7 @@
 	mason-build-context-test mason-build-tuning-test mason-recipe-explanation-test \
 	mason-upstream-git-cache-test mason-build-root-test mason-profile-test \
 	mason-planner-bootstrap-test mason-policy-test \
-	config-gluon-store-test gitwrap-repository-fs-test gitwrap-all-test \
+	config-declaration-store-test gitwrap-repository-fs-test gitwrap-all-test \
 	forge-repository-manager-test \
 	forge-security-fixture-test
 
@@ -509,7 +509,7 @@ stone-recipe-package-validation-test:
 	timeout 900s $(CARGO) test -p stone_recipe --lib "package::tests::" -- --test-threads=1; \
 	abi_listed="$$( timeout 300s $(CARGO) test -p stone_recipe --test package_v3 -- --list )"; \
 	abi_count="$$( timeout 10s grep -c ': test$$' <<<"$$abi_listed" )"; \
-	timeout 10s test "$$abi_count" = 21; \
+	timeout 10s test "$$abi_count" = 22; \
 	timeout 900s $(CARGO) test -p stone_recipe --test package_v3 -- --test-threads=1
 
 stone-recipe-build-policy-validation-test:
@@ -524,7 +524,7 @@ stone-recipe-build-policy-contract-test:
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --test build_policy -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^[^:][^:]*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 32; \
+	timeout 10s test "$$count" = 33; \
 	timeout 10s grep -Fqx 'build_policy_v5_is_a_hard_abi_boundary_and_v4_is_retired: test' <<<"$$listed"; \
 	timeout 900s $(CARGO) test -p stone_recipe --test build_policy -- --test-threads=1
 
@@ -533,7 +533,7 @@ stone-recipe-build-policy-patch-test:
 	listed="$$( timeout 300s $(CARGO) test -p stone_recipe --test build_policy_patch -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^[^:][^:]*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 7; \
+	timeout 10s test "$$count" = 8; \
 	timeout 900s $(CARGO) test -p stone_recipe --test build_policy_patch -- --test-threads=1
 
 tools-buildinfo-semantic-fingerprint-test:
@@ -817,7 +817,7 @@ mason-profile-test:
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^profile::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 9; \
+	timeout 10s test "$$count" = 10; \
 	timeout 900s $(CARGO) test -p mason --lib "profile::tests::" -- --test-threads=1
 
 mason-planner-bootstrap-test:
@@ -847,15 +847,12 @@ mason-policy-test:
 	listed="$$( timeout 300s $(CARGO) test -p mason --lib -- --list )"; \
 	timeout 10s grep -q . <<<"$$listed"; \
 	count="$$( timeout 10s grep -c '^policy::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 11; \
+	timeout 10s test "$$count" = 18; \
 	timeout 900s $(CARGO) test -p mason --lib "policy::tests::" -- --test-threads=1
 
-config-gluon-store-test:
-	@set -eu; \
-	listed="$$( timeout 300s $(CARGO) test -p config --lib -- --list )"; \
-	count="$$( timeout 10s grep -c '^gluon::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 28; \
-	timeout 900s $(CARGO) test -p config --lib "gluon::tests::" -- --test-threads=1
+config-declaration-store-test: config-declaration-storage-test \
+	config-declaration-manager-test config-rooted-declaration-loader-test \
+	config-fixed-root-declaration-loader-test
 
 gitwrap-repository-fs-test:
 	@set -eu; \
@@ -898,7 +895,7 @@ forge-repository-manager-test:
 	@set -eu; \
 	listed="$$( timeout 300s $(CARGO) test -p forge --lib -- --list )"; \
 	count="$$( timeout 10s grep -c '^repository::manager::tests::.*: test$$' <<<"$$listed" )"; \
-	timeout 10s test "$$count" = 19; \
+	timeout 10s test "$$count" = 20; \
 	timeout 900s $(CARGO) test -p forge --lib "repository::manager::tests::" -- --test-threads=1
 
 forge-security-fixture-test:

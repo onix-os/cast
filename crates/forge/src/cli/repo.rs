@@ -17,8 +17,8 @@ use url::Url;
 
 /// Control flow for the subcommands
 enum Action {
-    // Root
-    List,
+    // Root, canonical (emit the generated Gluon fragment instead of the summary)
+    List(bool),
     // Root, Id, Url, Comment, Root index enabled options
     Add(String, Url, String, Priority, Option<RootIndexOptions>),
     // Root, Id
@@ -79,7 +79,14 @@ pub fn command() -> Command {
             Command::new("list")
                 .visible_alias("lr")
                 .about("List system software repositories")
-                .long_about("List all of the system repositories and their status"),
+                .long_about("List all of the system repositories and their status")
+                .arg(
+                    Arg::new("canonical")
+                        .long("canonical")
+                        .alias("gluon")
+                        .action(ArgAction::SetTrue)
+                        .help("Emit the canonical generated Gluon fragment instead of the human summary"),
+                ),
         )
         .subcommand(
             Command::new("remove")
@@ -115,7 +122,7 @@ pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> R
     let manager = client.into_repository_manager();
 
     let handler = match args.subcommand() {
-        Some(("list", _)) => Action::List,
+        Some(("list", cmd_args)) => Action::List(cmd_args.get_flag("canonical")),
         Some(("update", cmd_args)) => Action::Update(cmd_args.get_one::<String>("NAME").cloned()),
         Some((command, _)) if system_intent_path.is_some() => {
             return Err(Error::SystemIntentDisallowed {
@@ -138,7 +145,7 @@ pub fn handle(args: &ArgMatches, installation: Installation, verbose: bool) -> R
 
     // dispatch to runtime handler function
     match handler {
-        Action::List => list(manager),
+        Action::List(canonical) => list(manager, canonical),
         Action::Add(name, uri, comment, priority, root_index_options) => {
             add(manager, name, uri, comment, priority, root_index_options)
         }
@@ -189,8 +196,17 @@ fn add(
 }
 
 /// List the repositories and pretty print them
-fn list(manager: repository::Manager) -> Result<(), Error> {
+fn list(manager: repository::Manager, canonical: bool) -> Result<(), Error> {
     let configured_repos = manager.list();
+
+    // `--canonical` emits the round-trippable generated Gluon authority fragment
+    // (an empty repo set still yields a valid empty authority); the default view
+    // stays the human-readable summary below.
+    if canonical {
+        print!("{}", repository::gluon::encode_configured(configured_repos)?);
+        return Ok(());
+    }
+
     if configured_repos.len() == 0 {
         println!("No repositories have been configured yet");
         return Ok(());
@@ -203,8 +219,6 @@ fn list(manager: repository::Manager) -> Result<(), Error> {
             String::new()
         };
 
-        // TODO: Print the canonical Gluon fragment for each repository. The
-        // human-readable summary remains useful, but is not round-trippable.
         match &repo.source {
             repository::Source::DirectIndex(uri) => println!(" - {id} = {uri} [{}]{disabled}", repo.priority),
             repository::Source::RootIndex(repository::RootIndexSource {
@@ -311,6 +325,8 @@ pub enum Error {
     Client(#[from] client::Error),
     #[error("repo manager")]
     RepositoryManager(#[from] repository::manager::Error),
+    #[error("encode canonical repositories")]
+    RepositoryEncode(#[from] repository::RepositoryConversionError),
     #[error(
         "`cast repo {command}` is not allowed while authored Gluon system intent is active; edit repositories in {path:?}"
     )]

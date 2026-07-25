@@ -2,7 +2,11 @@
 
 use std::time::Duration;
 
-use gluon_config::{EvaluationFingerprint, Evaluator, ImportPolicy, Limits, Source};
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
+    LanguageSpec, Limits, Source, SourceRoot,
+};
+use gluon_config::{EvaluationIdentity, GluonEngine, ImportPolicy};
 
 use super::{
     ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
@@ -22,6 +26,10 @@ const MAX_MOUNT_POINT_COMPONENTS: usize = 128;
 const MAX_MOUNT_POINT_COMPONENT_BYTES: usize = 255;
 const MAX_MOUNT_POINT_DIAGNOSTIC_BYTES: usize = 256;
 
+pub(super) fn language_spec() -> LanguageSpec {
+    GluonEngine::default().language_spec().clone()
+}
+
 #[derive(Debug, gluon_codegen::Getable, gluon_codegen::VmType)]
 struct GluonBootTopologyIntent {
     esp: GluonPartitionSelector,
@@ -40,50 +48,93 @@ struct GluonPartitionSelector {
     mount_point: String,
 }
 
-pub(super) struct EvaluatedBootTopologyIntent {
-    pub(super) value: ActiveReblitBootTopologyIntentValue,
-    pub(super) fingerprint: EvaluationFingerprint,
+/// Stateful Gluon adapter for the closed boot-topology declaration.
+///
+/// The adapter borrows the caller-owned absolute budget so the neutral typed
+/// evaluation boundary cannot replace ActiveReblit's deadline with a fresh
+/// relative timeout. Descriptor retention and source revalidation remain in
+/// the fixed-path loader which owns that stronger authority.
+pub(super) struct GluonBootTopologyIntentEvaluator<'budget> {
+    engine: GluonEngine,
+    budget: &'budget BootTopologyIntentBudget,
 }
 
-pub(super) fn evaluate(
-    source_text: &str,
-    budget: &BootTopologyIntentBudget,
-) -> Result<EvaluatedBootTopologyIntent, ActiveReblitBootTopologyIntentError> {
-    budget.require_deadline()?;
-    let remaining = budget.remaining_duration()?;
-    let mut limits = Limits::default();
-    limits.max_source_bytes = budget.policy.max_source_bytes;
-    limits.max_explicit_input_bytes = 0;
-    limits.max_imported_file_bytes = BOOT_TOPOLOGY_ABI.len();
-    limits.max_imports = 1;
-    limits.max_import_graph_bytes = budget
-        .policy
-        .max_source_bytes
-        .checked_add(BOOT_TOPOLOGY_ABI.len())
-        .ok_or(ActiveReblitBootTopologyIntentError::EvaluationContract {
-            reason: "source and embedded ABI byte bound overflowed",
-        })?;
-    limits.timeout = remaining.min(MAX_EVALUATION_TIME);
+impl<'budget> GluonBootTopologyIntentEvaluator<'budget> {
+    pub(super) fn new(budget: &'budget BootTopologyIntentBudget) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+        budget.require_deadline()?;
+        let remaining = budget.remaining_duration()?;
+        let mut limits = Limits::default();
+        limits.max_source_bytes = budget.policy.max_source_bytes;
+        limits.max_explicit_input_bytes = 0;
+        limits.max_imported_file_bytes = BOOT_TOPOLOGY_ABI.len();
+        limits.max_imports = 1;
+        limits.max_import_graph_bytes = budget
+            .policy
+            .max_source_bytes
+            .checked_add(BOOT_TOPOLOGY_ABI.len())
+            .ok_or(ActiveReblitBootTopologyIntentError::EvaluationContract {
+                reason: "source and embedded ABI byte bound overflowed",
+            })?;
+        limits.timeout = remaining.min(MAX_EVALUATION_TIME);
 
-    let mut imports = ImportPolicy::new();
-    imports.insert_embedded_module(BOOT_TOPOLOGY_ABI_NAME, BOOT_TOPOLOGY_ABI)?;
-    let evaluator = Evaluator::new(limits).with_import_policy(imports);
-    let source = Source::new(SOURCE_LOGICAL_NAME, source_text);
-    let evaluation = evaluator.evaluate::<GluonBootTopologyIntent>(&source)?;
-    budget.require_deadline()?;
-    require_fingerprint_contract(&evaluation.fingerprint)?;
-
-    let value = ActiveReblitBootTopologyIntentValue::try_from(evaluation.value)?;
-    budget.require_deadline()?;
-    Ok(EvaluatedBootTopologyIntent {
-        value,
-        fingerprint: evaluation.fingerprint,
-    })
+        let mut imports = ImportPolicy::new();
+        imports.insert_embedded_module(BOOT_TOPOLOGY_ABI_NAME, BOOT_TOPOLOGY_ABI)?;
+        Ok(Self {
+            engine: GluonEngine::new(limits).with_import_policy(imports),
+            budget,
+        })
+    }
 }
 
-fn require_fingerprint_contract(
-    fingerprint: &EvaluationFingerprint,
-) -> Result<(), ActiveReblitBootTopologyIntentError> {
+impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for GluonBootTopologyIntentEvaluator<'_> {
+    type Identity = EvaluationIdentity;
+    type Error = ActiveReblitBootTopologyIntentError;
+
+    fn language_spec(&self) -> &LanguageSpec {
+        self.engine.language_spec()
+    }
+
+    fn limits(&self) -> Limits {
+        self.engine.limits()
+    }
+
+    fn with_source_root(&self, source_root: SourceRoot) -> Self {
+        Self {
+            engine: self.engine.clone().with_source_root(source_root),
+            budget: self.budget,
+        }
+    }
+
+    fn evaluate_within(
+        &self,
+        source: &Source,
+        deadline: EvaluationDeadline,
+    ) -> Result<
+        DeclarationEvaluation<ActiveReblitBootTopologyIntentValue, Self::Identity>,
+        DeclarationEvaluationError<Self::Error>,
+    > {
+        let evaluation = self
+            .engine
+            .evaluate_within::<GluonBootTopologyIntent>(source, deadline)
+            .map_err(DeclarationEvaluationError::Evaluation)?;
+        self.budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_fingerprint_contract(&evaluation.identity).map_err(DeclarationEvaluationError::Conversion)?;
+
+        let value = ActiveReblitBootTopologyIntentValue::try_from(evaluation.value)
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        self.budget
+            .require_deadline()
+            .map_err(DeclarationEvaluationError::Conversion)?;
+        Ok(DeclarationEvaluation {
+            value,
+            identity: evaluation.identity,
+        })
+    }
+}
+
+fn require_fingerprint_contract(fingerprint: &EvaluationIdentity) -> Result<(), ActiveReblitBootTopologyIntentError> {
     fingerprint.validate()?;
     if fingerprint.root_logical_name != SOURCE_LOGICAL_NAME {
         return Err(ActiveReblitBootTopologyIntentError::EvaluationContract {
@@ -95,8 +146,7 @@ fn require_fingerprint_contract(
             reason: "boot-topology evaluation admitted explicit external inputs",
         });
     }
-    if fingerprint.imported_modules.len() != 1 || fingerprint.imported_modules[0].logical_name != BOOT_TOPOLOGY_ABI_NAME
-    {
+    if fingerprint.modules.len() != 1 || fingerprint.modules[0].logical_name != BOOT_TOPOLOGY_ABI_NAME {
         return Err(ActiveReblitBootTopologyIntentError::EvaluationContract {
             reason: "boot-topology intent must import exactly cast.boot_topology.v2",
         });
@@ -104,44 +154,72 @@ fn require_fingerprint_contract(
     Ok(())
 }
 
+/// Engine-neutral boot destination selection, decoded from either engine before
+/// the shared canonicalization and cross-selector checks run.
+pub(super) enum BootTargetInput {
+    AliasEsp,
+    DistinctXbootldr { partuuid: String, mount_point: String },
+}
+
 impl TryFrom<GluonBootTopologyIntent> for ActiveReblitBootTopologyIntentValue {
     type Error = ActiveReblitBootTopologyIntentError;
 
     fn try_from(value: GluonBootTopologyIntent) -> Result<Self, Self::Error> {
-        let esp = validated_partition_selector("esp.partuuid", "esp.mount_point", value.esp)?;
         let boot = match value.boot {
-            GluonBootTarget::AliasEsp => ActiveReblitBootTopologyTarget::AliasEsp,
-            GluonBootTarget::DistinctXbootldr(selector) => {
-                let xbootldr = validated_partition_selector("xbootldr.partuuid", "xbootldr.mount_point", selector)?;
-                if xbootldr.partuuid == esp.partuuid {
-                    return Err(invalid_partuuid(
-                        "xbootldr.partuuid",
-                        &xbootldr.partuuid,
-                        "distinct ESP and XBOOTLDR PARTUUIDs must not be equal",
-                    ));
-                }
-                if xbootldr.mount_point_hint == esp.mount_point_hint {
-                    return Err(invalid_mount_point_selector(
-                        "xbootldr.mount_point",
-                        &xbootldr.mount_point_hint,
-                        "distinct ESP and XBOOTLDR mount-point selectors must not be equal",
-                    ));
-                }
-                ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr)
-            }
+            GluonBootTarget::AliasEsp => BootTargetInput::AliasEsp,
+            GluonBootTarget::DistinctXbootldr(selector) => BootTargetInput::DistinctXbootldr {
+                partuuid: selector.partuuid,
+                mount_point: selector.mount_point,
+            },
         };
-        Ok(Self { esp, boot })
+        assemble_boot_topology(value.esp.partuuid, value.esp.mount_point, boot)
     }
+}
+
+/// Shared, engine-neutral assembly: canonicalize the ESP and boot selectors and
+/// enforce the distinct-target cross-checks. Both the Gluon and Lua adapters
+/// decode their own DTOs into raw strings and a [`BootTargetInput`], then call
+/// this so equivalent sources reach the identical validated intent value.
+pub(super) fn assemble_boot_topology(
+    esp_partuuid: String,
+    esp_mount_point: String,
+    boot: BootTargetInput,
+) -> Result<ActiveReblitBootTopologyIntentValue, ActiveReblitBootTopologyIntentError> {
+    let esp = validated_partition_selector("esp.partuuid", "esp.mount_point", esp_partuuid, esp_mount_point)?;
+    let boot = match boot {
+        BootTargetInput::AliasEsp => ActiveReblitBootTopologyTarget::AliasEsp,
+        BootTargetInput::DistinctXbootldr { partuuid, mount_point } => {
+            let xbootldr =
+                validated_partition_selector("xbootldr.partuuid", "xbootldr.mount_point", partuuid, mount_point)?;
+            if xbootldr.partuuid == esp.partuuid {
+                return Err(invalid_partuuid(
+                    "xbootldr.partuuid",
+                    &xbootldr.partuuid,
+                    "distinct ESP and XBOOTLDR PARTUUIDs must not be equal",
+                ));
+            }
+            if xbootldr.mount_point_hint == esp.mount_point_hint {
+                return Err(invalid_mount_point_selector(
+                    "xbootldr.mount_point",
+                    &xbootldr.mount_point_hint,
+                    "distinct ESP and XBOOTLDR mount-point selectors must not be equal",
+                ));
+            }
+            ActiveReblitBootTopologyTarget::DistinctXbootldr(xbootldr)
+        }
+    };
+    Ok(ActiveReblitBootTopologyIntentValue { esp, boot })
 }
 
 fn validated_partition_selector(
     partuuid_field: &'static str,
     mount_point_field: &'static str,
-    value: GluonPartitionSelector,
+    partuuid: String,
+    mount_point: String,
 ) -> Result<ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError> {
     Ok(ActiveReblitBootPartitionSelector {
-        partuuid: canonical_partuuid(partuuid_field, value.partuuid)?,
-        mount_point_hint: lexical_mount_point_hint(mount_point_field, value.mount_point)?,
+        partuuid: canonical_partuuid(partuuid_field, partuuid)?,
+        mount_point_hint: lexical_mount_point_hint(mount_point_field, mount_point)?,
     })
 }
 
@@ -270,4 +348,26 @@ fn invalid_mount_point_selector(
         actual_bytes: value.len(),
         reason,
     }
+}
+
+#[cfg(test)]
+pub(super) fn gluon_value_for_test(
+    esp_partuuid: &str,
+    esp_mount_point: &str,
+    xbootldr: Option<(&str, &str)>,
+) -> Result<ActiveReblitBootTopologyIntentValue, ActiveReblitBootTopologyIntentError> {
+    let intent = GluonBootTopologyIntent {
+        esp: GluonPartitionSelector {
+            partuuid: esp_partuuid.to_owned(),
+            mount_point: esp_mount_point.to_owned(),
+        },
+        boot: match xbootldr {
+            None => GluonBootTarget::AliasEsp,
+            Some((partuuid, mount_point)) => GluonBootTarget::DistinctXbootldr(GluonPartitionSelector {
+                partuuid: partuuid.to_owned(),
+                mount_point: mount_point.to_owned(),
+            }),
+        },
+    };
+    ActiveReblitBootTopologyIntentValue::try_from(intent)
 }

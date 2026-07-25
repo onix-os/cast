@@ -1,34 +1,40 @@
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
 let matrix = import! "./matrix.glu"
 
 \storage telemetry ->
     let selected = matrix.select storage telemetry
-    let base = b.mk_package (b.meta {
-        pname = "matrix-service",
-        version = "2.0.0",
-        release = 1,
-        homepage = "https://example.invalid/matrix-service",
-        license = ["MPL-2.0"],
-    })
     {
-        builder = cmake.builder {
-            flags = selected.flags,
-            run_tests = b.boolean.true,
+        meta = {
+            pname = "matrix-service",
+            version = "2.0.0",
+            release = 1,
+            homepage = "https://example.invalid/matrix-service",
+            license = ["MPL-2.0"],
         },
-        build_inputs = selected.build_inputs,
-        outputs = [
-            b.output_with {
-                runtime_inputs = selected.runtime_inputs,
-                paths = [b.path.any "*"],
-                .. b.output "out"
-            },
-        ],
+        builder = a.builder.cmake {
+            flags = selected.flags,
+            run_tests = a.true,
+        },
         sources = [
-            b.source.archive
+            a.source.archive
                 "https://example.invalid/matrix-service-2.0.0.tar.xz"
                 "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
         ],
+        native_build_inputs = [],
+        build_inputs = selected.build_inputs,
+        check_inputs = [],
+        outputs = a.outputs.explicit [
+            {
+                runtime_inputs = selected.runtime_inputs,
+                paths = [a.path.any "*"],
+                .. a.output "out"
+            },
+        ],
+        options = a.unset,
+        profiles = [],
         architectures = ["native"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }

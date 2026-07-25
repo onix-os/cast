@@ -1,8 +1,8 @@
 
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 {
-    code_generator = b.dep.binary "protocol-compiler",
-    compression = b.dep.pkgconfig "zlib",
-    crypto = b.dep.pkgconfig "openssl",
+    code_generator = a.dep.binary "protocol-compiler",
+    compression = a.dep.pkgconfig "zlib",
+    crypto = a.dep.pkgconfig "openssl",
 }

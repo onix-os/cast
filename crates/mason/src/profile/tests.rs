@@ -3,10 +3,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use config::{LoadGluonError, SaveGluonError};
+use config::declaration::{
+    DeclarationEvaluatorSet, LoadManagedDeclarationError,
+    SaveDeclarationError, SaveManagedDeclarationError,
+};
+use declarative_config::{
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
+};
 use fs_err as fs;
+use gluon_config::Source as GluonSource;
 
 use super::*;
+
+#[path = "tests/normalized_value_golden.rs"]
+mod normalized_value_golden;
 
 fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_root: &Path) {
     fragment.evaluation.validate().unwrap();
@@ -15,7 +25,7 @@ fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_
     assert!(
         fragment
             .evaluation
-            .imported_modules
+            .modules
             .iter()
             .all(|module| !Path::new(&module.logical_name).is_absolute())
     );
@@ -26,7 +36,7 @@ fn assert_portable_complete_fragment(fragment: &ProfileFragmentProvenance, host_
     assert!(
         fragment
             .evaluation
-            .imported_modules
+            .modules
             .iter()
             .all(|module| !module.logical_name.contains(host_root.as_ref()))
     );
@@ -60,10 +70,12 @@ fn conversion_error(source: String) -> (PathBuf, String) {
     let temporary = tempfile::tempdir().unwrap();
     let path = temporary.path().join("profile.d/invalid.glu");
     write(&path, &source);
+    let evaluators =
+        DeclarationEvaluatorSet::new([ProfileCodec::default()]).unwrap();
     let error = config::Manager::custom(temporary.path())
-        .load_gluon(&Evaluator::default(), &ProfileCodec)
+        .load_declarations(&evaluators)
         .expect_err("profile should be invalid");
-    let LoadGluonError::Conversion {
+    let LoadManagedDeclarationError::Conversion {
         path: error_path,
         source,
     } = error
@@ -71,6 +83,48 @@ fn conversion_error(source: String) -> (PathBuf, String) {
         panic!("expected conversion error");
     };
     (error_path, source.to_string())
+}
+
+#[test]
+fn manager_loads_a_lua_profile_fragment_by_extension() {
+    let temporary = tempfile::tempdir().unwrap();
+    let path = temporary.path().join("profile.d/authored.lua");
+    write(
+        &path,
+        r#"
+return {
+    {
+        id = "test",
+        repositories = {
+            {
+                id = "local",
+                description = { kind = "none" },
+                source = { kind = "direct_index", uri = "file:///var/cache/local.index" },
+                priority = { kind = "none" },
+                enabled = { kind = "none" },
+            },
+        },
+    },
+}
+"#,
+    );
+
+    let env = environment(temporary.path());
+    let manager = Manager::new(&env).unwrap();
+    assert_eq!(
+        manager
+            .fragments
+            .iter()
+            .map(|fragment| fragment.logical_name.as_str())
+            .collect::<Vec<_>>(),
+        ["authored"]
+    );
+    let repositories = manager.repositories(&Id::new("test")).unwrap();
+    let local = repositories.get(&repository::Id::new("local")).unwrap();
+    let repository::Source::DirectIndex(uri) = &local.source else {
+        panic!("expected direct repository source");
+    };
+    assert_eq!(uri.as_str(), "file:///var/cache/local.index");
 }
 
 #[test]
@@ -104,7 +158,7 @@ fn manager_loads_direct_root_and_repository_defaults() {
     assert!(
         fragment
             .evaluation
-            .imported_modules
+            .modules
             .iter()
             .any(|module| module.logical_name == "cast.profile.v1")
     );
@@ -180,7 +234,18 @@ fn active_root_indexes_must_match_the_selected_build_architecture() {
 
 #[test]
 fn invalid_url_version_and_priority_report_exact_fields() {
-    let (path, error) = conversion_error(single_profile(r#"cast.repository.direct "broken" "not a url""#));
+    let invalid_url = single_profile(r#"cast.repository.direct "broken" "not a url""#);
+    let typed_error = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &ProfileCodec::default(),
+        &GluonSource::new("invalid.glu", invalid_url.clone()),
+    )
+    .expect_err("invalid domain value must remain a conversion error");
+    assert!(matches!(
+        typed_error,
+        DeclarationEvaluationError::Conversion(_)
+    ));
+
+    let (path, error) = conversion_error(invalid_url);
     assert!(path.ends_with("profile.d/invalid.glu"));
     assert!(error.contains("profiles[0].repositories[0].source.uri"));
 
@@ -208,6 +273,16 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
     write(&path, "let value = in value");
     let env = environment(temporary.path());
 
+    let typed_error = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &ProfileCodec::default(),
+        &GluonSource::new("profile.d/malformed.glu", "let value = in value"),
+    )
+    .expect_err("malformed source must remain an evaluation error");
+    assert!(matches!(
+        typed_error,
+        DeclarationEvaluationError::Evaluation(_)
+    ));
+
     let error = match Manager::new(&env) {
         Ok(_) => panic!("malformed profile should fail"),
         Err(error) => error,
@@ -215,7 +290,7 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
     let Error::LoadProfiles(error) = error else {
         panic!("expected visible evaluation error");
     };
-    let LoadGluonError::Evaluation {
+    let LoadManagedDeclarationError::Evaluation {
         path: error_path,
         source,
     } = *error
@@ -229,39 +304,46 @@ fn malformed_fragment_is_returned_by_the_manager_with_its_path() {
 
 #[test]
 fn generated_save_is_deterministic_standalone_and_loadable() {
-    let evaluator = Evaluator::default();
-    let decoded = ProfileCodec
-        .decode(
-            &evaluator,
-            &GluonSource::new(
-                "authored.glu",
-                authored(
-                    r#"cast.profiles [
+    let codec = ProfileCodec::default();
+    let source = GluonSource::new(
+        "authored.glu",
+        authored(
+            r#"cast.profiles [
     cast.profile "z-profile" [
         cast.repository.root "z-root" "https://packages.example.test" "stream/volatile",
         cast.repository.direct "a-direct" "file:///var/cache/local.index",
     ],
     cast.profile "a-profile" [],
 ]"#,
-                ),
-            ),
-        )
-        .unwrap();
-    let first = ProfileCodec.encode(&decoded.value).unwrap();
-    let repeated = ProfileCodec.encode(&decoded.value).unwrap();
+        ),
+    );
+    let typed = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(&codec, &source).unwrap();
+
+    let first = <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
+    let repeated = <ProfileCodec as DeclarationCodec<Map>>::encode(&codec, &typed.value).unwrap();
     assert_eq!(first, repeated);
     assert!(first.find("id = \"a-profile\"").unwrap() < first.find("id = \"z-profile\"").unwrap());
     assert!(first.find("id = \"a-direct\"").unwrap() < first.find("id = \"z-root\"").unwrap());
 
     let temporary = tempfile::tempdir().unwrap();
     let manager = config::Manager::custom(temporary.path());
-    let path = manager.save_gluon("generated", &decoded.value, &ProfileCodec).unwrap();
+    let active_language = codec.language_spec().clone();
+    let evaluators = DeclarationEvaluatorSet::new([codec]).unwrap();
+    let path = manager
+        .save_declaration(
+            "generated",
+            &typed.value,
+            &evaluators,
+            &active_language,
+        )
+        .unwrap();
     let generated = fs::read_to_string(path).unwrap();
-    assert!(generated.starts_with(config::GENERATED_GLUON_MARKER));
-    assert!(generated.contains("type ProfileSpec ="));
-    assert!(!generated.contains("import!"));
+    assert_eq!(
+        generated.as_bytes(),
+        include_bytes!("../../../../tests/fixtures/gluon/goldens/profile-fragment.glu")
+    );
 
-    let loaded = manager.load_gluon(&evaluator, &ProfileCodec).unwrap();
+    let loaded = manager.load_declarations(&evaluators).unwrap();
     assert_eq!(loaded.len(), 1);
     assert!(loaded[0].value.get(&Id::new("a-profile")).is_some());
     assert!(loaded[0].value.get(&Id::new("z-profile")).is_some());
@@ -274,12 +356,26 @@ fn generated_save_refuses_to_overwrite_an_authored_fragment() {
     let source = authored("cast.profiles [cast.profile \"owned\" []]");
     write(&path, &source);
     let manager = config::Manager::custom(temporary.path());
-    let loaded = manager.load_gluon(&Evaluator::default(), &ProfileCodec).unwrap();
+    let codec = ProfileCodec::default();
+    let evaluators = DeclarationEvaluatorSet::new([codec.clone()]).unwrap();
+    let loaded = manager.load_declarations(&evaluators).unwrap();
 
     let error = manager
-        .save_gluon("owned", &loaded[0].value, &ProfileCodec)
+        .save_declaration(
+            "owned",
+            &loaded[0].value,
+            &evaluators,
+            codec.language_spec(),
+        )
         .expect_err("authored fragment must be protected");
-    assert!(matches!(error, SaveGluonError::AuthoredFragment { path: ref error_path } if error_path == &path));
+    assert!(matches!(
+        error,
+        SaveManagedDeclarationError::Storage {
+            source: SaveDeclarationError::AuthoredDeclaration {
+                path: ref error_path,
+            },
+        } if error_path == &path
+    ));
     assert_eq!(fs::read_to_string(path).unwrap(), source);
 }
 
@@ -356,16 +452,16 @@ fn saving_a_profile_refreshes_values_and_provenance_together() {
 
 #[test]
 fn repository_owned_default_profile_is_valid_gluon() {
-    let decoded = ProfileCodec
-        .decode(
-            &Evaluator::default(),
-            &GluonSource::new(
-                "default-x86_64.glu",
-                include_str!("../../data/profile.d/default-x86_64.glu"),
-            ),
-        )
-        .unwrap();
-    let profile = decoded.value.get(&Id::new("default-x86_64")).unwrap();
+    let source = GluonSource::new(
+        "default-x86_64.glu",
+        include_str!("../../data/profile.d/default-x86_64.glu"),
+    );
+    let evaluated = <ProfileCodec as DeclarationEvaluator<Map>>::evaluate(
+        &ProfileCodec::default(),
+        &source,
+    )
+    .unwrap();
+    let profile = evaluated.value.get(&Id::new("default-x86_64")).unwrap();
     let volatile = profile.repositories.get(&repository::Id::new("volatile")).unwrap();
     assert_eq!(volatile.description, "AerynOS volatile stream (CDN)");
     assert!(volatile.active);

@@ -2,6 +2,7 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 mode=write
 case "${1-}" in
     '') ;;
@@ -13,7 +14,7 @@ root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
 tree="$root/tests/fixtures/gluon/execution/source-trees/cast-font-family-fixture-1.0.0"
 source_file="$tree/source/generate_cast_aster_fixture.rs"
 tracked="$tree/fonts"
-temporary=$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-font-family-generator.XXXXXXXX")
+temporary=$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-font-family-generator.XXXXXXXX")
 
 cleanup() {
     timeout 30s rm -rf "$temporary"

@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt as _,
-    path::Path,
-};
+use std::{fs, os::unix::fs::PermissionsExt as _, path::Path};
 
 use crate::{
     Installation,
@@ -392,11 +388,7 @@ pub(super) fn install_persistent_selected_fresh_database(fixture: &mut FreshDbIn
     assert_eq!(database.get(candidate).unwrap().selections, selections);
     let provenance = db::state::MetadataProvenance::from_outputs(OS_RELEASE, SYSTEM_MODEL);
     database
-        .insert_fresh_metadata_provenance_if_transition_matches(
-            candidate,
-            &fixture.record.transition_id,
-            &provenance,
-        )
+        .insert_fresh_metadata_provenance_if_transition_matches(candidate, &fixture.record.transition_id, &provenance)
         .unwrap();
     let old = std::mem::replace(&mut fixture.fixture.fixture.database, database);
     drop(old);

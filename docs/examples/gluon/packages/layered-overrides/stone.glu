@@ -1,3 +1,4 @@
+let a = import! cast.authored.v1
 let base = import! "./package.glu"
 let layers = import! "./layers.glu"
 

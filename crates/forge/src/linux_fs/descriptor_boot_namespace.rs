@@ -48,6 +48,7 @@ pub(crate) use observer::{
     BootNamespaceLookup, BootNamespaceNodeIdentity, BootNamespaceNodeKind, BootNamespaceObservationBoundary,
     BootNamespaceRegularWitness,
 };
+pub(in crate::linux_fs) use production::BoundRetainedBootFileSource;
 #[cfg(test)]
 pub(crate) use production::{
     FixtureFailedOpenDescriptorSlotUsage, FixtureRetainedBootNamespaceProtocolEvent,
@@ -64,4 +65,3 @@ pub(crate) use production::{
     RetainedBootNamespaceAssessmentError, RetainedBootNamespaceAssessmentLimits, RetainedBootNamespaceExpectedSource,
     ValidatedRetainedBootNamespaceAssessment, assess_retained_boot_namespace_until,
 };
-pub(in crate::linux_fs) use production::BoundRetainedBootFileSource;

@@ -22,8 +22,7 @@ use crate::client::{
         ActiveReblitBootSyncCompleteAuthorityError,
     },
     startup_recovery::{
-        ActiveReblitBootSyncCommitDecisionPersistenceError,
-        persist_active_reblit_boot_sync_commit_decision_and_reopen,
+        ActiveReblitBootSyncCommitDecisionPersistenceError, persist_active_reblit_boot_sync_commit_decision_and_reopen,
     },
 };
 
@@ -64,13 +63,10 @@ pub(super) fn dispatch<'reservation>(
         &record,
     )?;
     match admission {
-        ActiveReblitBootSyncCompleteAdmission::NotApplicable => {
-            Err(Error::ExactCheckpointRejectedAsNotApplicable)
-        }
+        ActiveReblitBootSyncCompleteAdmission::NotApplicable => Err(Error::ExactCheckpointRejectedAsNotApplicable),
         ActiveReblitBootSyncCompleteAdmission::Deferred => Ok(Dispatch::Handled { journal, record }),
         ActiveReblitBootSyncCompleteAdmission::Ready(authority) => {
-            let (journal, record) =
-                persist_active_reblit_boot_sync_commit_decision_and_reopen(journal, authority)?;
+            let (journal, record) = persist_active_reblit_boot_sync_commit_decision_and_reopen(journal, authority)?;
             Ok(Dispatch::Handled { journal, record })
         }
     }

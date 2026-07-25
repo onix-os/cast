@@ -14,9 +14,8 @@ use crate::{
 };
 
 use super::{
-    Error as ClientError, RetainedRootAbi, RootAbiPreflight,
-    active_state_authority::ActiveStateAuthority, active_state_authority::AppliedActiveStateWriterAuthority,
-    active_state_snapshot::ActiveStateReservation,
+    Error as ClientError, RetainedRootAbi, RootAbiPreflight, active_state_authority::ActiveStateAuthority,
+    active_state_authority::AppliedActiveStateWriterAuthority, active_state_snapshot::ActiveStateReservation,
 };
 
 #[derive(Debug, Error)]
@@ -279,6 +278,9 @@ impl JournalUsrExchangeAuthorityPreflight {
 
     /// Prepare an archived-state identity under the same nonblocking journal
     /// handoff used by every coordinator-owned exchange operation.
+    // Forward scaffolding for the Phase 1 ActivateArchived/NewState coordinator
+    // routes (plans/future_impl.md D0.4).
+    #[allow(dead_code)]
     pub(crate) fn prepare_candidate(
         self,
         state_db: &crate::db::state::Database,
@@ -299,6 +301,8 @@ impl JournalUsrExchangeAuthorityPreflight {
 
     /// Prepare an active-reblit identity under the same nonblocking journal
     /// handoff used by every coordinator-owned exchange operation.
+    // Forward scaffolding for the Phase 1 coordinator routes (D0.4).
+    #[allow(dead_code)]
     pub(crate) fn prepare_active_reblit_identity(
         self,
         state_db: &crate::db::state::Database,

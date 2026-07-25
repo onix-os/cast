@@ -43,10 +43,8 @@ const ROOT_ABI: [(&str, &str); 5] = [
     ("lib64", "usr/lib"),
 ];
 
-const USR_OUTCOMES: [RollbackActionOutcome; 2] = [
-    RollbackActionOutcome::Applied,
-    RollbackActionOutcome::AlreadySatisfied,
-];
+const USR_OUTCOMES: [RollbackActionOutcome; 2] =
+    [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied];
 
 #[derive(Clone, Copy, Debug)]
 enum RootAbiMutation {
@@ -106,10 +104,7 @@ fn assert_exact_root_abi_mutation(
     mutation: RootAbiMutation,
     label: &str,
 ) {
-    let selected_index = ROOT_ABI
-        .iter()
-        .position(|(name, _)| *name == selected_name)
-        .unwrap();
+    let selected_index = ROOT_ABI.iter().position(|(name, _)| *name == selected_name).unwrap();
     for (index, (_, expected_target)) in ROOT_ABI.into_iter().enumerate() {
         let original = before[index]
             .as_ref()
@@ -125,7 +120,11 @@ fn assert_exact_root_abi_mutation(
         RootAbiMutation::Missing => assert!(after[selected_index].is_none(), "{label}"),
         RootAbiMutation::WrongTarget => {
             let changed = after[selected_index].as_ref().unwrap();
-            assert_eq!(changed.target, PathBuf::from(format!("usr/wrong-{selected_name}")), "{label}");
+            assert_eq!(
+                changed.target,
+                PathBuf::from(format!("usr/wrong-{selected_name}")),
+                "{label}"
+            );
             assert_eq!(changed.device, original.device, "{label}");
             assert_ne!(changed.inode, original.inode, "{label}");
             assert_eq!(changed.mode, original.mode, "{label}");
@@ -210,56 +209,34 @@ fn startup_active_reblit_complete_route_root_links_rejects_all_root_abi_mutation
                             let source = persist_candidate_preserved(&fixture, candidate_outcome);
                             let journal = fixture.open_journal();
                             let reservation = ActiveStateReservation::acquire().unwrap();
-                            let canonical_before = fs::read(
-                                fixture.fixture.installation.root.join(".cast/journal/state-transition"),
-                            )
-                            .unwrap();
+                            let canonical_before =
+                                fs::read(fixture.fixture.installation.root.join(".cast/journal/state-transition"))
+                                    .unwrap();
                             let database_before = fixture.fixture.database_snapshot();
                             let root = fixture.fixture.installation.root.clone();
                             let root_abi_before = root_abi_snapshot(&root);
-                            let case = format!(
-                                "{seam:?} {epoch:?} {usr_outcome:?} {candidate_outcome:?} {name} {mutation:?}"
-                            );
-                            assert_exact_no_boot_completion_plan(
-                                &source,
-                                CandidateSource::RootLinksComplete,
-                            );
+                            let case =
+                                format!("{seam:?} {epoch:?} {usr_outcome:?} {candidate_outcome:?} {name} {mutation:?}");
+                            assert_exact_no_boot_completion_plan(&source, CandidateSource::RootLinksComplete);
                             reset_complete_route_effect_observers();
-                            let hook = root_abi_mutation_hook(
-                                &fixture,
-                                name,
-                                target,
-                                mutation,
-                                case.clone(),
-                            );
+                            let hook = root_abi_mutation_hook(&fixture, name, target, mutation, case.clone());
 
                             match seam {
                                 RootAbiSeam::CaptureSandwich => {
                                     arm_between_usr_rollback_active_reblit_complete_route_database_captures(hook);
                                     assert!(matches!(
-                                        capture_complete_route(
-                                            &fixture,
-                                            &journal,
-                                            &reservation,
-                                            &source,
-                                        )
-                                        .unwrap(),
+                                        capture_complete_route(&fixture, &journal, &reservation, &source,).unwrap(),
                                         UsrRollbackActiveReblitCompleteRouteAdmission::Deferred
                                     ));
                                 }
                                 RootAbiSeam::FinalRevalidation => {
-                                    let authority = capture_complete_route_ready(
-                                        &fixture,
-                                        &journal,
-                                        &reservation,
-                                        &source,
-                                    );
+                                    let authority =
+                                        capture_complete_route_ready(&fixture, &journal, &reservation, &source);
                                     arm_before_usr_rollback_active_reblit_complete_route_final_revalidation(hook);
-                                    let error =
-                                        persist_usr_rollback_active_reblit_complete_route_and_reopen(
-                                            journal, authority,
-                                        )
-                                        .unwrap_err();
+                                    let error = persist_usr_rollback_active_reblit_complete_route_and_reopen(
+                                        journal, authority,
+                                    )
+                                    .unwrap_err();
                                     assert!(matches!(
                                         error,
                                         UsrRollbackActiveReblitCompleteRoutePersistenceError::Authority(_)
@@ -268,14 +245,8 @@ fn startup_active_reblit_complete_route_root_links_rejects_all_root_abi_mutation
                             }
 
                             assert_eq!(
-                                fs::read(
-                                    fixture
-                                        .fixture
-                                        .installation
-                                        .root
-                                        .join(".cast/journal/state-transition"),
-                                )
-                                .unwrap(),
+                                fs::read(fixture.fixture.installation.root.join(".cast/journal/state-transition"),)
+                                    .unwrap(),
                                 canonical_before,
                                 "{case}"
                             );

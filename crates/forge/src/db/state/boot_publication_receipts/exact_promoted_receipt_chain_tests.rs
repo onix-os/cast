@@ -1,18 +1,16 @@
 use std::time::{Duration, Instant};
 
 use diesel::{
-    Connection as _, ExpressionMethods as _, QueryDsl as _, RunQueryDsl as _,
-    SqliteConnection, connection::SimpleConnection as _,
+    Connection as _, ExpressionMethods as _, QueryDsl as _, RunQueryDsl as _, SqliteConnection,
+    connection::SimpleConnection as _,
 };
 
 use super::*;
 use crate::boot_publication::{
-    BootPublicationDestination, BootPublicationDestinations,
-    BootPublicationHistoricalRuntimeWitness, BootPublicationOutput,
-    BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
-    BootPublicationPublicationPhase, BootPublicationReceiptBody,
-    BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
-    prepare_boot_publication_receipt,
+    BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
+    BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
+    BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationRoot, BootPublicationSha256,
+    BootPublicationXxh3, prepare_boot_publication_receipt,
 };
 
 const ESP_PARTUUID: &str = "11111111-2222-3333-4444-555555555555";
@@ -77,34 +75,22 @@ fn stage_and_promote(database: &Database, receipt: &CanonicalBootPublicationRece
     stage(database, receipt);
     assert_eq!(
         database
-            .promote_boot_publication_receipt(
-                receipt,
-                Instant::now() + Duration::from_secs(60),
-            )
+            .promote_boot_publication_receipt(receipt, Instant::now() + Duration::from_secs(60),)
             .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
 }
 
 fn receipt_row_count(database: &Database) -> i64 {
-    database.conn.exec(|connection| {
-        boot_publication_receipts::table
-            .count()
-            .get_result(connection)
-            .unwrap()
-    })
+    database
+        .conn
+        .exec(|connection| boot_publication_receipts::table.count().get_result(connection).unwrap())
 }
 
-fn stored_body(
-    database: &Database,
-    fingerprint: BootPublicationReceiptFingerprint,
-) -> Vec<u8> {
+fn stored_body(database: &Database, fingerprint: BootPublicationReceiptFingerprint) -> Vec<u8> {
     database.conn.exec(|connection| {
         boot_publication_receipts::table
-            .filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(fingerprint.as_bytes().as_slice()),
-            )
+            .filter(boot_publication_receipts::receipt_sha256.eq(fingerprint.as_bytes().as_slice()))
             .select(boot_publication_receipts::canonical_body)
             .first(connection)
             .unwrap()
@@ -128,11 +114,7 @@ fn current_chain_admits_only_a_strictly_empty_database() {
     });
     assert!(matches!(
         orphaned.load_current_exact_promoted_boot_publication_receipt_chain(),
-        Err(
-            CurrentExactPromotedBootPublicationReceiptChainError::ReceiptBodiesWithoutCommittedHead {
-                count: 1,
-            }
-        )
+        Err(CurrentExactPromotedBootPublicationReceiptChainError::ReceiptBodiesWithoutCommittedHead { count: 1 })
     ));
 }
 
@@ -151,10 +133,7 @@ fn current_chain_derives_the_installed_identity_and_predecessor_from_storage() {
         panic!("a committed receipt must load as installed");
     };
     assert_eq!(chain.installed_receipt(), &installed);
-    assert_eq!(
-        chain.committed_predecessor_receipt(),
-        Some(&predecessor),
-    );
+    assert_eq!(chain.committed_predecessor_receipt(), Some(&predecessor),);
 }
 
 #[test]
@@ -201,14 +180,10 @@ fn current_chain_rejects_dangling_and_mismatched_immutable_bodies() {
     let foreign_transition = transition('8');
     mismatched.conn.exec(|connection| {
         let changed = diesel::update(
-            boot_publication_receipts::table.filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(installed.fingerprint().as_bytes().as_slice()),
-            ),
+            boot_publication_receipts::table
+                .filter(boot_publication_receipts::receipt_sha256.eq(installed.fingerprint().as_bytes().as_slice())),
         )
-        .set(
-            boot_publication_receipts::transition_id.eq(foreign_transition.as_str()),
-        )
+        .set(boot_publication_receipts::transition_id.eq(foreign_transition.as_str()))
         .execute(connection)
         .unwrap();
         assert_eq!(changed, 1);
@@ -230,10 +205,7 @@ fn exact_chain_loads_a_promoted_installed_receipt_without_a_predecessor() {
     stage_and_promote(&database, &installed);
 
     let chain = database
-        .load_exact_promoted_boot_publication_receipt_chain(
-            installed.body().transition_id(),
-            &receipt_pair(&installed),
-        )
+        .load_exact_promoted_boot_publication_receipt_chain(installed.body().transition_id(), &receipt_pair(&installed))
         .unwrap();
 
     assert_eq!(chain.installed_receipt(), &installed);
@@ -249,26 +221,17 @@ fn exact_chain_returns_both_immutable_canonical_receipts() {
     stage_and_promote(&database, &installed);
 
     let chain = database
-        .load_exact_promoted_boot_publication_receipt_chain(
-            installed.body().transition_id(),
-            &receipt_pair(&installed),
-        )
+        .load_exact_promoted_boot_publication_receipt_chain(installed.body().transition_id(), &receipt_pair(&installed))
         .unwrap();
 
     assert_eq!(chain.installed_receipt(), &installed);
-    assert_eq!(
-        chain.committed_predecessor_receipt(),
-        Some(&predecessor),
-    );
+    assert_eq!(chain.committed_predecessor_receipt(), Some(&predecessor),);
     assert_eq!(
         chain.installed_receipt().canonical_body(),
         stored_body(&database, installed.fingerprint()),
     );
     assert_eq!(
-        chain
-            .committed_predecessor_receipt()
-            .unwrap()
-            .canonical_body(),
+        chain.committed_predecessor_receipt().unwrap().canonical_body(),
         stored_body(&database, predecessor.fingerprint()),
     );
 }
@@ -294,10 +257,7 @@ fn exact_chain_rejects_pending_and_mismatched_compact_correlations() {
     let exact_pair = receipt_pair(&installed);
 
     assert!(matches!(
-        database.load_exact_promoted_boot_publication_receipt_chain(
-            &transition('9'),
-            &exact_pair,
-        ),
+        database.load_exact_promoted_boot_publication_receipt_chain(&transition('9'), &exact_pair,),
         Err(ExactPromotedBootPublicationReceiptStateError::TransitionMismatch { .. })
     ));
     let wrong_predecessor = BootPublicationReceiptPair {
@@ -305,15 +265,9 @@ fn exact_chain_rejects_pending_and_mismatched_compact_correlations() {
         pending: installed.fingerprint(),
     };
     assert!(matches!(
-        database.load_exact_promoted_boot_publication_receipt_chain(
-            installed.body().transition_id(),
-            &wrong_predecessor,
-        ),
-        Err(
-            ExactPromotedBootPublicationReceiptStateError::CommittedPredecessorMismatch {
-                ..
-            }
-        )
+        database
+            .load_exact_promoted_boot_publication_receipt_chain(installed.body().transition_id(), &wrong_predecessor,),
+        Err(ExactPromotedBootPublicationReceiptStateError::CommittedPredecessorMismatch { .. })
     ));
 }
 
@@ -400,10 +354,7 @@ fn current_chain_loader_is_read_only_and_uses_no_exclusive_lock() {
         panic!("a committed receipt must load as installed");
     };
     assert_eq!(chain.installed_receipt(), &installed);
-    assert_eq!(
-        chain.committed_predecessor_receipt(),
-        Some(&predecessor),
-    );
+    assert_eq!(chain.committed_predecessor_receipt(), Some(&predecessor),);
 
     independent_reader.batch_execute("ROLLBACK").unwrap();
     assert_eq!(database.boot_publication_receipt_state().unwrap(), state_before);

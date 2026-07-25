@@ -155,7 +155,7 @@ fn validate_external_test_vectors_contract(
 fn external_test_vectors_contract_fixture() -> (PackageSpec, SourceLock, Vec<u8>) {
     let package = execution_fixture_package_directory("external-test-vectors");
     let recipe = crate::Recipe::load_authored(package.join("stone.glu")).unwrap();
-    let lock = decode_source_lock(
+    let lock = evaluate_source_lock(
         SOURCE_LOCK_FILE_NAME,
         &fs::read(package.join(SOURCE_LOCK_FILE_NAME)).unwrap(),
     )

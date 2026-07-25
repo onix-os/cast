@@ -22,6 +22,7 @@ mod active_reblit_forward;
 mod active_reblit_reservation;
 mod candidate_preparation;
 mod error;
+mod new_state_forward;
 mod request;
 mod root_abi_publication;
 mod system_triggers;
@@ -33,12 +34,12 @@ mod usr_exchange_intent;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-use active_reblit_reservation::ActiveReblitReservationFailure;
 pub(crate) use active_reblit_forward::{
     ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
     execute_active_reblit_forward,
 };
+#[cfg(test)]
+use active_reblit_reservation::ActiveReblitReservationFailure;
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{
     PreparedActiveReblitReservationCoordinator, PreparedArchivedTransitionCoordinator,
@@ -47,14 +48,17 @@ pub(crate) use candidate_preparation::{
 };
 use candidate_preparation::{TransactionTriggerOperationReadiness, TransactionTriggerReadiness};
 pub(crate) use error::StatefulTransitionCoordinatorError;
+pub(crate) use new_state_forward::{
+    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView, execute_new_state_forward,
+};
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[allow(unused_imports)] // contract-only until the next durable forward phase is implemented
 pub(crate) use root_abi_publication::RootLinksCompleteCoordinator;
 #[allow(unused_imports)] // contract-only until live lifecycle wiring consumes this suffix
 pub(crate) use system_triggers::{
-    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
-    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
-    SystemTriggersCompleteCoordinator,
+    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, ActiveReblitNoBootCompletionFailure,
+    ActiveReblitNoBootTailSeal, PreviousArchiveBootHandoffFailure, PreviousArchiveEffectSeal, PreviousArchiveFailure,
+    PreviousArchivedBootSyncHandoffSeal, PreviousArchivedCoordinator, SystemTriggersCompleteCoordinator,
 };
 #[cfg(test)]
 use transaction_isolation::TransactionIsolationAbiFailure;

@@ -87,15 +87,9 @@ fn startup_active_reblit_finalization_root_links_rejects_all_five_link_races_at_
 
 fn arm_at(seam: EvidenceSeam, hook: impl FnOnce() + 'static) {
     match seam {
-        EvidenceSeam::Capture => {
-            arm_between_usr_rollback_active_reblit_finalization_database_captures(hook)
-        }
-        EvidenceSeam::FinalAdmission => {
-            arm_before_usr_rollback_active_reblit_finalization_final_revalidation(hook)
-        }
-        EvidenceSeam::PostDelete => {
-            arm_after_usr_rollback_active_reblit_finalization_delete(hook)
-        }
+        EvidenceSeam::Capture => arm_between_usr_rollback_active_reblit_finalization_database_captures(hook),
+        EvidenceSeam::FinalAdmission => arm_before_usr_rollback_active_reblit_finalization_final_revalidation(hook),
+        EvidenceSeam::PostDelete => arm_after_usr_rollback_active_reblit_finalization_delete(hook),
     }
 }
 

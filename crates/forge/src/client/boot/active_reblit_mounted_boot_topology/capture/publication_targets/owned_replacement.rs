@@ -18,16 +18,13 @@ use crate::{
     },
     linux_fs::{
         descriptor_boot_namespace::{
-            BootNamespaceDestinationState, BootNamespaceRequest,
-            RetainedBootNamespaceExpectedSource,
+            BootNamespaceDestinationState, BootNamespaceRequest, RetainedBootNamespaceExpectedSource,
         },
         mount_namespace::{
-            RetainedBootFileMutationFingerprint, RetainedBootFilePublicationLimits,
-            RetainedBootFilePublicationRequest, RetainedBootFileReplacementError,
-            RetainedBootFileReplacementRequest, RetainedBootLeafAssessmentError,
-            RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
-            RetainedBootLeafAssessmentState, RetainedBootPublicationParent,
-            RetainedBootPublicationParentError, TaskRootBootNamespaceAssessmentError,
+            RetainedBootFileMutationFingerprint, RetainedBootFilePublicationLimits, RetainedBootFilePublicationRequest,
+            RetainedBootFileReplacementError, RetainedBootFileReplacementRequest, RetainedBootLeafAssessmentError,
+            RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState,
+            RetainedBootPublicationParent, RetainedBootPublicationParentError, TaskRootBootNamespaceAssessmentError,
             ValidatedRetainedBootFileReplacement, ValidatedRetainedBootLeafAssessment,
         },
     },
@@ -43,10 +40,8 @@ mod validation;
 
 #[cfg(test)]
 pub(in crate::client) use fixture::{
-    FixtureOwnedReplacementAssessmentGuard,
-    arm_fixture_owned_replacement_assessments,
-    fixture_owned_replacement_assessments_remaining,
-    fixture_owned_replacement_validations_remaining,
+    FixtureOwnedReplacementAssessmentGuard, arm_fixture_owned_replacement_assessments,
+    fixture_owned_replacement_assessments_remaining, fixture_owned_replacement_validations_remaining,
 };
 
 /// Failure while replacing one exact receipt-owned output through an opaque
@@ -139,59 +134,36 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
                 found: output.mode(),
             });
         }
-        let relative_path = output.relative_path().to_str().ok_or(
-            ActiveReblitBootOwnedLeafReplacementError::NonUtf8Path { plan_index },
-        )?;
+        let relative_path = output
+            .relative_path()
+            .to_str()
+            .ok_or(ActiveReblitBootOwnedLeafReplacementError::NonUtf8Path { plan_index })?;
         let path = split_bound_replacement_path(relative_path, plan_index)?;
-        let exact_namespace_request = BootNamespaceRequest::new(
-            relative_path,
-            output.expected_length(),
-            output.expected_digest(),
-        );
+        let exact_namespace_request =
+            BootNamespaceRequest::new(relative_path, output.expected_length(), output.expected_digest());
         if namespace_request != exact_namespace_request {
-            return Err(
-                ActiveReblitBootOwnedLeafReplacementError::NamespaceRequestMismatch {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootOwnedLeafReplacementError::NamespaceRequestMismatch { plan_index });
         }
         if !expected_matches_output(desired_expected, output) {
-            return Err(
-                ActiveReblitBootOwnedLeafReplacementError::DesiredIdentityMismatch {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootOwnedLeafReplacementError::DesiredIdentityMismatch { plan_index });
         }
         if desired_expected == installed_expected {
-            return Err(
-                ActiveReblitBootOwnedLeafReplacementError::IdenticalInstalledAndDesired {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootOwnedLeafReplacementError::IdenticalInstalledAndDesired { plan_index });
         }
 
         let desired = publication_request(path.leaf, desired_expected);
         let installed = publication_request(path.leaf, installed_expected);
         #[cfg(test)]
-        let fixture_assessment = fixture::take(
-            self,
-            namespace_request,
-            expected_source,
-        );
+        let fixture_assessment = fixture::take(self, namespace_request, expected_source);
         #[cfg(test)]
         let desired_state = match &fixture_assessment {
             Some(assessment) => assessment.state(),
             None => reassess_desired_state(self, namespace_request, expected_source)?,
         };
         #[cfg(not(test))]
-        let desired_state =
-            reassess_desired_state(self, namespace_request, expected_source)?;
+        let desired_state = reassess_desired_state(self, namespace_request, expected_source)?;
         if desired_state != BootNamespaceDestinationState::Different {
-            return Err(
-                ActiveReblitBootOwnedLeafReplacementError::DestinationNotDifferent {
-                    found: desired_state,
-                },
-            );
+            return Err(ActiveReblitBootOwnedLeafReplacementError::DestinationNotDifferent { found: desired_state });
         }
 
         #[cfg(test)]
@@ -205,18 +177,13 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
                 self.deadline,
             )?;
             if evidence.canonical_leaf() != path.leaf {
-                return Err(
-                    ActiveReblitBootOwnedLeafReplacementError::ReplacementLeafIdentity,
-                );
+                return Err(ActiveReblitBootOwnedLeafReplacementError::ReplacementLeafIdentity);
             }
             if evidence.installed_file_inode() == 0
                 || evidence.replacement_file_inode() == 0
-                || evidence.installed_file_inode()
-                    == evidence.replacement_file_inode()
+                || evidence.installed_file_inode() == evidence.replacement_file_inode()
             {
-                return Err(
-                    ActiveReblitBootOwnedLeafReplacementError::ReplacementFileIdentity,
-                );
+                return Err(ActiveReblitBootOwnedLeafReplacementError::ReplacementFileIdentity);
             }
             return Ok(evidence);
         }
@@ -235,12 +202,7 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
                 self.deadline,
             )
             .map_err(ActiveReblitBootOwnedLeafReplacementError::InstalledAssessment)?;
-        require_installed_assessment(
-            self,
-            &path,
-            installed_expected,
-            &installed_assessment,
-        )?;
+        require_installed_assessment(self, &path, installed_expected, &installed_assessment)?;
 
         let parent = self
             .attachment
@@ -248,11 +210,7 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
             .map_err(ActiveReblitBootOwnedLeafReplacementError::PublicationParent)?;
         require_parent_identity(self, &parent, &installed_assessment)?;
 
-        let request = RetainedBootFileReplacementRequest::new(
-            installed,
-            desired,
-            mutation_owner(_effect_seal),
-        );
+        let request = RetainedBootFileReplacementRequest::new(installed, desired, mutation_owner(_effect_seal));
         let evidence = parent
             .replace_exact_boot_file_until(
                 request,
@@ -286,9 +244,7 @@ fn publication_request(
     )
 }
 
-fn mutation_owner(
-    effect_seal: &ActiveReblitBootPublicationEffectSeal,
-) -> RetainedBootFileMutationFingerprint {
+fn mutation_owner(effect_seal: &ActiveReblitBootPublicationEffectSeal) -> RetainedBootFileMutationFingerprint {
     RetainedBootFileMutationFingerprint::new(*effect_seal.pending_receipt().as_bytes())
 }
 
@@ -313,35 +269,25 @@ fn reassess_desired_state(
         )
         .map_err(ActiveReblitBootOwnedLeafReplacementError::NamespaceReassessment)?;
     let destination = target.destination();
-    let expected = (
-        destination.raw_device(),
-        destination.inode(),
-        target.mount_id(),
-    );
+    let expected = (destination.raw_device(), destination.inode(), target.mount_id());
     let found = (
         assessment.destination_device(),
         assessment.destination_inode(),
         assessment.destination_mount_id(),
     );
     if expected != found {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::NamespaceAssessmentIdentity {
-                expected_device: expected.0,
-                expected_inode: expected.1,
-                expected_mount_id: expected.2,
-                found_device: found.0,
-                found_inode: found.1,
-                found_mount_id: found.2,
-            },
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::NamespaceAssessmentIdentity {
+            expected_device: expected.0,
+            expected_inode: expected.1,
+            expected_mount_id: expected.2,
+            found_device: found.0,
+            found_inode: found.1,
+            found_mount_id: found.2,
+        });
     }
     let states = assessment.states();
     if states.len() != 1 {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::NamespaceAssessmentLength {
-                actual: states.len(),
-            },
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::NamespaceAssessmentLength { actual: states.len() });
     }
     Ok(states[0])
 }
@@ -362,24 +308,16 @@ fn require_installed_assessment(
         || assessment.assessment_root_inode() != destination.inode()
         || assessment.assessment_root_mount_id() != target.mount_id()
     {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentRootIdentity,
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentRootIdentity);
     }
-    if assessment.canonical_leaf() != path.leaf
-        || !assessment.parent_components().eq(path.parents().iter().copied())
-    {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentPathIdentity,
-        );
+    if assessment.canonical_leaf() != path.leaf || !assessment.parent_components().eq(path.parents().iter().copied()) {
+        return Err(ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentPathIdentity);
     }
     if assessment.expected_length() != installed.length()
         || assessment.expected_xxh3() != installed.checksum()
         || assessment.expected_sha256() != *installed.content_identity().as_bytes()
     {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentContentIdentity,
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentContentIdentity);
     }
     let exact_file = (
         assessment.exact_file_device(),
@@ -389,9 +327,7 @@ fn require_installed_assessment(
     if !matches!(exact_file, (Some(device), Some(inode), Some(mount_id))
         if device == destination.raw_device() && inode != 0 && mount_id == target.mount_id())
     {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentFileIdentity,
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::InstalledAssessmentFileIdentity);
     }
     Ok(())
 }
@@ -406,17 +342,13 @@ fn require_parent_identity(
         || parent.root_inode() != destination.inode()
         || parent.root_mount_id() != target.mount_id()
     {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::PublicationParentRootIdentity,
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::PublicationParentRootIdentity);
     }
     if assessment.retained_parent_device() != Some(parent.destination_device())
         || assessment.retained_parent_inode() != Some(parent.destination_inode())
         || assessment.retained_parent_mount_id() != Some(parent.destination_mount_id())
     {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::PublicationParentIdentityChanged,
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::PublicationParentIdentityChanged);
     }
     Ok(())
 }
@@ -438,31 +370,23 @@ fn split_bound_replacement_path(
     plan_index: usize,
 ) -> Result<BoundReplacementPath<'_>, ActiveReblitBootOwnedLeafReplacementError> {
     let mut components = path.split('/');
-    let mut prior = components.next().ok_or(
-        ActiveReblitBootOwnedLeafReplacementError::InvalidPathComponent { plan_index },
-    )?;
+    let mut prior = components
+        .next()
+        .ok_or(ActiveReblitBootOwnedLeafReplacementError::InvalidPathComponent { plan_index })?;
     require_bound_component(prior, plan_index)?;
     let mut parent_components = [""; 15];
     let mut parent_count = 0usize;
     for component in components {
         require_bound_component(component, plan_index)?;
         if parent_count == parent_components.len() {
-            return Err(
-                ActiveReblitBootOwnedLeafReplacementError::PublicationParentDepth {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootOwnedLeafReplacementError::PublicationParentDepth { plan_index });
         }
         parent_components[parent_count] = prior;
         parent_count += 1;
         prior = component;
     }
     if parent_count == 0 {
-        return Err(
-            ActiveReblitBootOwnedLeafReplacementError::MissingPublicationParent {
-                plan_index,
-            },
-        );
+        return Err(ActiveReblitBootOwnedLeafReplacementError::MissingPublicationParent { plan_index });
     }
     Ok(BoundReplacementPath {
         parent_components,
@@ -480,11 +404,7 @@ fn require_bound_component(
         || component.len() > 255
         || component.as_bytes().contains(&0)
     {
-        Err(
-            ActiveReblitBootOwnedLeafReplacementError::InvalidPathComponent {
-                plan_index,
-            },
-        )
+        Err(ActiveReblitBootOwnedLeafReplacementError::InvalidPathComponent { plan_index })
     } else {
         Ok(())
     }

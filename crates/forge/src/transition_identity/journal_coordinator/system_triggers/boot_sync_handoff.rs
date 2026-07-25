@@ -15,8 +15,8 @@ use crate::{
     transition_journal::{Operation, Phase, TransitionRecord},
 };
 
-use super::{SystemTriggersCompleteCoordinator, require_system_trigger_same_store_evidence};
 use super::super::{StatefulTransitionCoordinator, StatefulTransitionCoordinatorError};
+use super::{SystemTriggersCompleteCoordinator, require_system_trigger_same_store_evidence};
 
 const HAND_OFF_ACTIVE_REBLIT_BOOT_SYNC: &str = "hand off active reblit boot synchronization";
 
@@ -27,9 +27,7 @@ pub(crate) struct ActiveReblitBootSyncHandoffSeal {
 
 #[derive(Debug, Error)]
 pub(crate) enum ActiveReblitBootSyncHandoffFailure {
-    #[error(
-        "transition {transition_id} is not exact ActiveReblit SystemTriggersComplete generation 10 boot authority"
-    )]
+    #[error("transition {transition_id} is not exact ActiveReblit SystemTriggersComplete generation 10 boot authority")]
     SourceContract { transition_id: TransitionId },
     #[error("transition {transition_id} failed boot-staging handoff preflight")]
     Preflight {
@@ -54,14 +52,9 @@ impl SystemTriggersCompleteCoordinator {
         let transition_id = coordinator.record.transition_id.clone();
         let active_reblit = authority.active_reblit().cloned();
         if !exact_active_reblit_boot_source(&coordinator.record)
-            || active_reblit
-                .as_ref()
-                .map(|state| i32::from(state.id))
-                != coordinator.record.candidate.id
+            || active_reblit.as_ref().map(|state| i32::from(state.id)) != coordinator.record.candidate.id
         {
-            return Err(ActiveReblitBootSyncHandoffFailure::SourceContract {
-                transition_id,
-            });
+            return Err(ActiveReblitBootSyncHandoffFailure::SourceContract { transition_id });
         }
         let active_reblit = active_reblit.expect("exact ActiveReblit source retained its state");
 
@@ -70,10 +63,7 @@ impl SystemTriggersCompleteCoordinator {
             source,
         };
         coordinator
-            .require_phase(
-                Phase::SystemTriggersComplete,
-                HAND_OFF_ACTIVE_REBLIT_BOOT_SYNC,
-            )
+            .require_phase(Phase::SystemTriggersComplete, HAND_OFF_ACTIVE_REBLIT_BOOT_SYNC)
             .map_err(preflight)?;
         require_system_trigger_same_store_evidence(
             &coordinator,

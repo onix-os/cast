@@ -9,8 +9,7 @@
 use crate::{
     Installation,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore,
+        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
         TransitionRecord,
     },
 };
@@ -148,13 +147,7 @@ impl ActiveReblitBootSyncStartedNamespaceProof {
         binding_mode: SuccessorBindingMode,
     ) -> Result<(), ActiveReblitBootSyncStartedNamespaceError> {
         require_exact_boot_sync_complete_successor(started, successor)?;
-        require_exact_successor_journal(
-            installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_journal(installation, journal, successor_binding, successor, binding_mode)?;
         installation.revalidate_mutable_namespace()?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
@@ -171,13 +164,7 @@ impl ActiveReblitBootSyncStartedNamespaceProof {
         require_exact_layout(started, &fresh, self.layout)?;
         require_exact_successor_layout(successor, &fresh, self.layout)?;
 
-        require_exact_successor_journal(
-            installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_journal(installation, journal, successor_binding, successor, binding_mode)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
@@ -283,19 +270,13 @@ fn require_exact_successor_journal(
     successor: &TransitionRecord,
     binding_mode: SuccessorBindingMode,
 ) -> Result<(), ActiveReblitBootSyncStartedNamespaceError> {
-    if matches!(binding_mode, SuccessorBindingMode::SameStore)
-        && !journal.has_record_store_binding(successor_binding)
-    {
+    if matches!(binding_mode, SuccessorBindingMode::SameStore) && !journal.has_record_store_binding(successor_binding) {
         return Err(ActiveReblitBootSyncStartedNamespaceError::JournalChanged);
     }
     let cast = installation.retained_mutable_cast_directory()?;
     let exact = match binding_mode {
-        SuccessorBindingMode::SameStore => {
-            journal.has_record_binding(cast, successor_binding, successor)?
-        }
-        SuccessorBindingMode::Reopened => {
-            journal.has_reopened_record_binding(cast, successor_binding, successor)?
-        }
+        SuccessorBindingMode::SameStore => journal.has_record_binding(cast, successor_binding, successor)?,
+        SuccessorBindingMode::Reopened => journal.has_reopened_record_binding(cast, successor_binding, successor)?,
     };
     if exact {
         Ok(())
@@ -332,9 +313,7 @@ pub(in crate::client::startup_reconciliation) fn active_reblit_boot_sync_started
     error: &ActiveReblitBootSyncStartedNamespaceError,
 ) -> bool {
     match error {
-        ActiveReblitBootSyncStartedNamespaceError::Capture(source) => {
-            capture_error_is_structural(source)
-        }
+        ActiveReblitBootSyncStartedNamespaceError::Capture(source) => capture_error_is_structural(source),
         ActiveReblitBootSyncStartedNamespaceError::Policy(_)
         | ActiveReblitBootSyncStartedNamespaceError::WrongSource => true,
         ActiveReblitBootSyncStartedNamespaceError::WrongSuccessor

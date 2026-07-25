@@ -14,20 +14,26 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gluon_config::{EvaluationFingerprint, EvaluationFingerprintValidationError};
+use config::declaration::RegisteredLanguages;
+use declarative_config::{
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, LanguageSpec, Source,
+};
+use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
 
 use crate::{Installation, installation};
 
 use self::{
     filesystem::{RetainedRootFilesystemSource, capture_source, revalidate_source},
-    gluon::EvaluatedRootFilesystemIntent,
+    gluon::GluonRootFilesystemIntentEvaluator,
 };
 
 #[path = "active_reblit_root_filesystem_intent/filesystem.rs"]
 mod filesystem;
 #[path = "active_reblit_root_filesystem_intent/gluon.rs"]
 mod gluon;
+#[path = "active_reblit_root_filesystem_intent/lua.rs"]
+mod lua;
 #[path = "active_reblit_root_filesystem_intent/normalization.rs"]
 mod normalization;
 
@@ -55,7 +61,7 @@ pub(in crate::client) struct PreparedActiveReblitRootFilesystemIntent {
     source: RetainedRootFilesystemSource,
     source_text: Box<str>,
     value: RootFilesystemIntentValue,
-    fingerprint: EvaluationFingerprint,
+    fingerprint: EvaluationIdentity,
     #[cfg(test)]
     preparation_work: usize,
 }
@@ -159,18 +165,19 @@ impl PreparedActiveReblitRootFilesystemIntent {
     where
         F: FnOnce(),
     {
-        let bytes = revalidate_source(installation, &self.source, budget)?;
+        let languages = registered_declaration_languages();
+        let bytes = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&bytes)?;
         let source_text =
             std::str::from_utf8(&bytes).map_err(|source| ActiveReblitRootFilesystemIntentError::InvalidUtf8 {
                 path: budget.source_path.clone(),
                 source,
             })?;
-        let evaluated = gluon::evaluate(source_text, budget)?;
+        let evaluated = evaluate_declaration(source_text, self.source.language(), self.source.logical_name(), budget)?;
         self.require_exact_evaluation(&evaluated)?;
 
         before_terminal_rebind();
-        let terminal = revalidate_source(installation, &self.source, budget)?;
+        let terminal = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&terminal)
     }
 
@@ -187,9 +194,9 @@ impl PreparedActiveReblitRootFilesystemIntent {
 
     fn require_exact_evaluation(
         &self,
-        evaluated: &EvaluatedRootFilesystemIntent,
+        evaluated: &DeclarationEvaluation<RootFilesystemIntentValue, EvaluationIdentity>,
     ) -> Result<(), ActiveReblitRootFilesystemIntentError> {
-        if evaluated.value == self.value && evaluated.fingerprint == self.fingerprint {
+        if evaluated.value == self.value && evaluated.identity == self.fingerprint {
             Ok(())
         } else {
             Err(ActiveReblitRootFilesystemIntentError::Changed {
@@ -211,7 +218,7 @@ impl RevalidatedActiveReblitRootFilesystemIntent<'_> {
         &self.intent.value.kernel_argument
     }
 
-    pub(in crate::client) fn fingerprint(&self) -> &EvaluationFingerprint {
+    pub(in crate::client) fn fingerprint(&self) -> &EvaluationIdentity {
         &self.intent.fingerprint
     }
 }
@@ -404,7 +411,8 @@ where
     G: FnOnce(),
 {
     revalidate_installation_root(installation, budget)?;
-    let (source, bytes) = capture_source(installation, budget)?;
+    let languages = registered_declaration_languages();
+    let (source, bytes) = capture_source(installation, &languages, budget)?;
     let source_text = std::str::from_utf8(&bytes)
         .map_err(|source| ActiveReblitRootFilesystemIntentError::InvalidUtf8 {
             path: root_filesystem_intent_path(installation),
@@ -412,12 +420,12 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = gluon::evaluate(&source_text, budget)?;
+    let evaluated = evaluate_declaration(&source_text, source.language(), source.logical_name(), budget)?;
     let prepared = PreparedActiveReblitRootFilesystemIntent {
         source,
         source_text,
         value: evaluated.value,
-        fingerprint: evaluated.fingerprint,
+        fingerprint: evaluated.identity,
         #[cfg(test)]
         preparation_work: 0,
     };
@@ -430,6 +438,46 @@ where
     };
     budget.require_deadline()?;
     Ok(prepared)
+}
+
+fn evaluate_declaration(
+    source_text: &str,
+    language: &LanguageSpec,
+    logical_name: &str,
+    budget: &mut RootFilesystemIntentBudget,
+) -> Result<DeclarationEvaluation<RootFilesystemIntentValue, EvaluationIdentity>, ActiveReblitRootFilesystemIntentError>
+{
+    // The root-filesystem normalization takes `&mut budget`, so the matching
+    // evaluator is constructed by language rather than held together in a set:
+    // two engines cannot borrow the budget mutably at once.
+    let source = Source::new(logical_name, source_text);
+    if language == &gluon::language_spec() {
+        GluonRootFilesystemIntentEvaluator::new(budget)?
+            .evaluate(&source)
+            .map_err(lift_evaluation_error)
+    } else if language == &lua::language_spec() {
+        lua::LuaRootFilesystemIntentEvaluator::new(budget)?
+            .evaluate(&source)
+            .map_err(lift_evaluation_error)
+    } else {
+        Err(ActiveReblitRootFilesystemIntentError::EvaluationContract {
+            reason: "root-filesystem source language has no registered evaluator",
+        })
+    }
+}
+
+fn lift_evaluation_error(
+    error: DeclarationEvaluationError<ActiveReblitRootFilesystemIntentError>,
+) -> ActiveReblitRootFilesystemIntentError {
+    match error {
+        DeclarationEvaluationError::Evaluation(source) => ActiveReblitRootFilesystemIntentError::Evaluation(source),
+        DeclarationEvaluationError::Conversion(source) => source,
+    }
+}
+
+fn registered_declaration_languages() -> RegisteredLanguages {
+    RegisteredLanguages::new([gluon::language_spec(), lua::language_spec()])
+        .expect("the production root-filesystem languages register distinct extensions")
 }
 
 fn revalidate_installation_root(
@@ -496,7 +544,7 @@ pub(in crate::client) enum ActiveReblitRootFilesystemIntentError {
     #[error(transparent)]
     Evaluation(#[from] gluon_config::Diagnostic),
     #[error(transparent)]
-    EvaluationFingerprint(#[from] EvaluationFingerprintValidationError),
+    EvaluationIdentity(#[from] EvaluationIdentityValidationError),
     #[error("unsafe root-filesystem intent inode at `{}`: {reason}", path.display())]
     UnsafeInode { path: PathBuf, reason: &'static str },
     #[error("root-filesystem intent changed at `{}`: {reason}", path.display())]

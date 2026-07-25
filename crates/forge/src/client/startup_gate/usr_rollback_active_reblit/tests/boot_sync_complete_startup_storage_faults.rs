@@ -4,24 +4,20 @@ use crate::{
     client::{
         startup_gate::{self, active_reblit_boot_sync_complete},
         startup_recovery::{
-            ActiveReblitBootSyncCommitDecisionPersistenceError,
-            DurableActiveReblitBootSyncCommitDecisionRecord,
+            ActiveReblitBootSyncCommitDecisionPersistenceError, DurableActiveReblitBootSyncCommitDecisionRecord,
         },
     },
     transition_journal::{
-        Phase, arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
-        arm_next_update_exchange_fault, arm_next_update_final_directory_sync_fault,
-        arm_next_update_first_directory_sync_fault, assert_displaced_unlink_fault_consumed,
-        assert_temporary_sync_fault_consumed, assert_update_exchange_fault_consumed,
-        assert_update_final_directory_sync_fault_consumed,
+        Phase, arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault, arm_next_update_exchange_fault,
+        arm_next_update_final_directory_sync_fault, arm_next_update_first_directory_sync_fault,
+        assert_displaced_unlink_fault_consumed, assert_temporary_sync_fault_consumed,
+        assert_update_exchange_fault_consumed, assert_update_final_directory_sync_fault_consumed,
         assert_update_first_directory_sync_fault_consumed,
     },
 };
 
 use super::{
-    boot_sync_complete_support::{
-        BootSyncCompleteReadOnlySnapshot, boot_sync_complete_fixture, exact_commit_decided,
-    },
+    boot_sync_complete_support::{BootSyncCompleteReadOnlySnapshot, boot_sync_complete_fixture, exact_commit_decided},
     support::{
         Epoch, assert_complete_route_journal_only, assert_pending_phase, enter_boot,
         reset_complete_route_effect_observers,
@@ -115,10 +111,7 @@ fn startup_boot_sync_complete_all_five_journal_faults_classify_and_converge_with
     assert_eq!(cases, 10);
 }
 
-fn assert_persistence_advance(
-    error: &startup_gate::Error,
-    expected: DurableActiveReblitBootSyncCommitDecisionRecord,
-) {
+fn assert_persistence_advance(error: &startup_gate::Error, expected: DurableActiveReblitBootSyncCommitDecisionRecord) {
     assert!(
         matches!(
             error,

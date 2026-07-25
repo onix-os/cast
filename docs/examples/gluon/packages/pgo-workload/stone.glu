@@ -1,51 +1,57 @@
+let a = import! cast.authored.v1
 
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
-
-let base = b.mk_package (b.meta {
-    pname = "vector-search",
-    version = "5.0.0",
-    release = 1,
-    homepage = "https://example.invalid/vector-search",
-    license = ["Apache-2.0"],
-})
-
+// A non-empty workload makes profile generation part of the structural
+// phase graph. The local just-built executable trains against checked-in
+// corpus data without gaining network access.
 {
-    builder = cmake.builder {
+    meta = {
+        pname = "vector-search",
+        version = "5.0.0",
+        release = 1,
+        homepage = "https://example.invalid/vector-search",
+        license = ["Apache-2.0"],
+    },
+    builder = a.builder.cmake {
         flags = [
             "-DBUILD_BENCHMARKS=ON",
             "-DBUILD_TESTING=ON",
         ],
-        run_tests = b.boolean.true,
+        run_tests = a.true,
     },
-    // A non-empty workload makes profile generation part of the structural
-    // phase graph. The local just-built executable trains against checked-in
-    // corpus data without gaining network access.
-    hooks = b.hooks {
-        pre_workload = [
-            b.step.run_built
-                (b.program.built "aerynos-builddir/vector-search")
-                ["--train", "training/corpus.txt"],
-        ],
-        .. b.defaults.hooks
-    },
-    options = b.options {
-        cspgo = b.boolean.true,
-        samplepgo = b.boolean.true,
-        debug = b.boolean.false,
-        .. b.defaults.options
-    },
-    tuning = [
-        b.named "harden" b.tuning.enable,
-        b.named "lto" (b.tuning.config "thin"),
-        b.named "optimize" (b.tuning.config "speed"),
-    ],
     sources = [
-        b.source.archive
+        a.source.archive
             "https://example.invalid/vector-search-5.0.0.tar.xz"
             "56789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234",
     ],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.some.options (a.options {
+        toolchain = a.toolchain.llvm,
+        cspgo = a.true,
+        samplepgo = a.true,
+        debug = a.false,
+        strip = a.true,
+        networking = a.false,
+        compressman = a.false,
+        lastrip = a.true,
+    }),
+    profiles = [],
     architectures = ["x86_64", "aarch64"],
-    mold = b.boolean.true,
-    .. base
+    tuning = [
+        a.named "harden" a.tuning.enable,
+        a.named "lto" (a.tuning.config "thin"),
+        a.named "optimize" (a.tuning.config "speed"),
+    ],
+    emul32 = a.false,
+    mold = a.true,
+    hooks = a.some.hooks (a.hooks {
+        pre_workload = [
+            a.step.run_built
+                (a.program.built "aerynos-builddir/vector-search")
+                ["--train", "training/corpus.txt"],
+        ],
+        .. a.empty.hooks
+    }),
 }

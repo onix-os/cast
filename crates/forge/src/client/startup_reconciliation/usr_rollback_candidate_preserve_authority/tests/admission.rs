@@ -86,12 +86,7 @@ fn exercise_root_abi_binding_races() {
                                     layout,
                                 )
                             } else {
-                                CandidatePreserveFixture::new(
-                                    kind,
-                                    CandidateSource::RootLinksComplete,
-                                    outcome,
-                                    layout,
-                                )
+                                CandidatePreserveFixture::new(kind, CandidateSource::RootLinksComplete, outcome, layout)
                             };
                             let journal = fixture.open_journal();
                             let reservation = ActiveStateReservation::acquire().unwrap();
@@ -99,12 +94,7 @@ fn exercise_root_abi_binding_races() {
                             let journal_before = fixture.fixture.canonical_bytes();
                             let database_before = fixture.fixture.database_snapshot();
                             let root_abi_before = root_abi_snapshot(&fixture.fixture.installation.root);
-                            apply_root_abi_race(
-                                &fixture.fixture.installation.root,
-                                link_name,
-                                link_target,
-                                race,
-                            );
+                            apply_root_abi_race(&fixture.fixture.installation.root, link_name, link_target, race);
 
                             let rejected = match admission {
                                 UsrRollbackCandidatePreserveAdmission::Apply(authority) => {

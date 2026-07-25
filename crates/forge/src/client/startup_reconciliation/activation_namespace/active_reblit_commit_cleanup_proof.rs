@@ -24,14 +24,11 @@ use crate::{
 use super::{
     active_reblit_boot_repair_started_error_classification::capture_error_is_structural,
     capture::{
-        ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupEffectError,
-        ActiveReblitCommitCleanupLayout, CaptureError, NamespaceSnapshot,
-        PendingActiveReblitCommitCleanupDurability, PreparedActiveReblitCommitCleanupExchange,
-        RetainedActiveReblitCommitCleanupNamespace, capture_snapshot,
+        ActiveReblitCommitCleanupCaptureError, ActiveReblitCommitCleanupEffectError, ActiveReblitCommitCleanupLayout,
+        CaptureError, NamespaceSnapshot, PendingActiveReblitCommitCleanupDurability,
+        PreparedActiveReblitCommitCleanupExchange, RetainedActiveReblitCommitCleanupNamespace, capture_snapshot,
     },
-    policy::{
-        CandidatePlace, LayoutAlternative, NamespacePolicyConflict, PreviousPlace, assess_snapshot_layout,
-    },
+    policy::{CandidatePlace, LayoutAlternative, NamespacePolicyConflict, PreviousPlace, assess_snapshot_layout},
 };
 
 /// First half of the stable namespace sandwich.
@@ -115,20 +112,16 @@ impl ActiveReblitCommitCleanupNamespaceInspection {
 
         Ok(match self.layout {
             ActiveReblitCommitCleanupLayout::Apply => {
-                ActiveReblitCommitCleanupNamespaceProof::Apply(
-                    ActiveReblitCommitCleanupApplyNamespaceProof {
-                        before: self.before,
-                        after,
-                    },
-                )
+                ActiveReblitCommitCleanupNamespaceProof::Apply(ActiveReblitCommitCleanupApplyNamespaceProof {
+                    before: self.before,
+                    after,
+                })
             }
             ActiveReblitCommitCleanupLayout::Finish => {
-                ActiveReblitCommitCleanupNamespaceProof::Finish(
-                    ActiveReblitCommitCleanupFinishNamespaceProof {
-                        before: self.before,
-                        after,
-                    },
-                )
+                ActiveReblitCommitCleanupNamespaceProof::Finish(ActiveReblitCommitCleanupFinishNamespaceProof {
+                    before: self.before,
+                    after,
+                })
             }
         })
     }
@@ -305,10 +298,8 @@ fn revalidate_namespace_only(
     require_retained_layout(before, layout)?;
     require_retained_layout(after, layout)?;
     run_before_fresh_namespace_capture();
-    let fresh = RetainedActiveReblitCommitCleanupNamespace::capture(
-        capture_snapshot(installation, expected)?,
-        expected,
-    )?;
+    let fresh =
+        RetainedActiveReblitCommitCleanupNamespace::capture(capture_snapshot(installation, expected)?, expected)?;
     fresh.revalidate(expected)?;
     require_matching_fingerprints(before, &fresh)?;
     require_retained_layout(&fresh, layout)?;
@@ -330,9 +321,7 @@ fn exact_layout(
 fn classify_layout(layout: LayoutAlternative) -> Option<ActiveReblitCommitCleanupLayout> {
     match (layout.candidate, layout.previous) {
         (CandidatePlace::Live, PreviousPlace::Staging) => Some(ActiveReblitCommitCleanupLayout::Apply),
-        (CandidatePlace::Live, PreviousPlace::ActiveReblitWrapper) => {
-            Some(ActiveReblitCommitCleanupLayout::Finish)
-        }
+        (CandidatePlace::Live, PreviousPlace::ActiveReblitWrapper) => Some(ActiveReblitCommitCleanupLayout::Finish),
         _ => None,
     }
 }
@@ -496,9 +485,7 @@ mod classification_tests {
     #[test]
     fn only_stable_shape_mismatches_may_defer() {
         assert!(active_reblit_commit_cleanup_namespace_error_is_mismatch(
-            &ActiveReblitCommitCleanupNamespaceError::Policy(
-                NamespacePolicyConflict::ActiveReblitWrapper,
-            ),
+            &ActiveReblitCommitCleanupNamespaceError::Policy(NamespacePolicyConflict::ActiveReblitWrapper,),
         ));
         assert!(active_reblit_commit_cleanup_namespace_error_is_mismatch(
             &ActiveReblitCommitCleanupNamespaceError::WrongSource,

@@ -148,7 +148,7 @@ pub(super) fn assert_semantics(
         assert!(
             plan.provenance
                 .recipe
-                .imported_modules
+                .modules
                 .iter()
                 .any(|imported| imported.logical_name == module),
             "independent vendor plan lost imported module {module}"
@@ -304,7 +304,7 @@ fn freeze_variant(
     (evaluated.recipe.declaration.clone(), planned.plan)
 }
 
-const APPLICATION_VARIANT: &str = r#"let b = import! cast.package.v3
+const APPLICATION_VARIANT: &str = r#"let a = import! cast.authored.v1
 let make_package = import! "./package.glu"
 let sources = import! "./sources.glu"
 
@@ -313,20 +313,20 @@ make_package {
         url = "https://example.invalid/vendor-note-next.tar.zst",
         digest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         unpack_dir = "application",
-        lock = b.source.archive_with {
+        lock = a.source.archive_with {
             url = "https://example.invalid/vendor-note-next.tar.zst",
             hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            rename = b.optional.set "vendor-note-next.tar.zst",
-            strip_dirs = b.optional.set 1,
-            unpack = b.boolean.true,
-            unpack_dir = b.optional.set "application",
+            rename = a.optional.set "vendor-note-next.tar.zst",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "application",
         },
     },
     .. sources
 }
 "#;
 
-const VENDOR_VARIANT: &str = r#"let b = import! cast.package.v3
+const VENDOR_VARIANT: &str = r#"let a = import! cast.authored.v1
 let make_package = import! "./package.glu"
 let sources = import! "./sources.glu"
 
@@ -335,13 +335,13 @@ make_package {
         url = "https://example.invalid/vendor-note-cargo-vendor-next.tar.zst",
         digest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         unpack_dir = "vendor",
-        lock = b.source.archive_with {
+        lock = a.source.archive_with {
             url = "https://example.invalid/vendor-note-cargo-vendor-next.tar.zst",
             hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            rename = b.optional.set "vendor-note-cargo-vendor-next.tar.zst",
-            strip_dirs = b.optional.set 1,
-            unpack = b.boolean.true,
-            unpack_dir = b.optional.set "vendor",
+            rename = a.optional.set "vendor-note-cargo-vendor-next.tar.zst",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "vendor",
         },
     },
     .. sources

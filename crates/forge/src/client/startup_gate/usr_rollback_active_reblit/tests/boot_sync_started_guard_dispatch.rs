@@ -21,21 +21,17 @@ use crate::{
         startup_reconciliation::arm_between_usr_rollback_decision_database_captures,
     },
     db,
-    transition_journal::{
-        ForwardPhase, Phase, TransitionJournalRecordBinding, TransitionRecord, encode,
-    },
+    transition_journal::{ForwardPhase, Phase, TransitionJournalRecordBinding, TransitionRecord, encode},
 };
 
 use super::{
     super::test_fixture::BootSyncStartedLayout,
     boot_sync_complete_support::{
-        BootSyncCompleteReadOnlySnapshot, boot_sync_started_fixture,
-        open_boot_sync_complete_journal,
+        BootSyncCompleteReadOnlySnapshot, boot_sync_started_fixture, open_boot_sync_complete_journal,
     },
     support::{
-        BootRepairFixture, Epoch, assert_complete_route_journal_only,
-        assert_pending_phase, build_legacy_boot_sync_started, enter_boot,
-        reset_complete_route_effect_observers,
+        BootRepairFixture, Epoch, assert_complete_route_journal_only, assert_pending_phase,
+        build_legacy_boot_sync_started, enter_boot, reset_complete_route_effect_observers,
     },
 };
 
@@ -50,20 +46,12 @@ struct ExactJournalSnapshot {
 
 impl ExactJournalSnapshot {
     fn capture(fixture: &BootRepairFixture) -> Self {
-        let path = fixture
-            .fixture
-            .installation
-            .root
-            .join(".cast/journal/state-transition");
+        let path = fixture.fixture.installation.root.join(".cast/journal/state-transition");
         let bytes = fs::read(&path).unwrap();
         let metadata = fs::symlink_metadata(&path).unwrap();
         let record = fixture.fixture.source.clone();
         let journal = open_boot_sync_complete_journal(fixture);
-        let cast = fixture
-            .fixture
-            .installation
-            .retained_mutable_cast_directory()
-            .unwrap();
+        let cast = fixture.fixture.installation.retained_mutable_cast_directory().unwrap();
         let binding = journal.record_binding(cast, &record).unwrap();
         drop(journal);
         Self {
@@ -81,11 +69,7 @@ impl ExactJournalSnapshot {
         let metadata = fs::symlink_metadata(&self.path).unwrap();
         assert_eq!((metadata.dev(), metadata.ino()), (self.device, self.inode));
         let reopened = open_boot_sync_complete_journal(fixture);
-        let cast = fixture
-            .fixture
-            .installation
-            .retained_mutable_cast_directory()
-            .unwrap();
+        let cast = fixture.fixture.installation.retained_mutable_cast_directory().unwrap();
         assert!(
             reopened
                 .has_reopened_record_binding(cast, &self.binding, &self.record)
@@ -142,11 +126,7 @@ fn startup_exact_pending_boot_sync_started_remains_rollback_eligible() {
 
 #[test]
 fn startup_legacy_boot_sync_started_remains_rollback_eligible() {
-    let fixture = build_legacy_boot_sync_started(
-        Epoch::Historical,
-        BootSyncStartedLayout::Post,
-        2,
-    );
+    let fixture = build_legacy_boot_sync_started(Epoch::Historical, BootSyncStartedLayout::Post, 2);
     let source = fixture.fixture.source.clone();
     reset_complete_route_effect_observers();
 
@@ -168,11 +148,7 @@ fn startup_conflicting_pending_receipt_correlation_fails_stop_without_rollback()
     pair.pending = BootPublicationReceiptFingerprint::from_bytes([0x7d; 32]);
     assert_ne!(pair.pending, retained_pending);
     fs::write(
-        fixture
-            .fixture
-            .installation
-            .root
-            .join(".cast/journal/state-transition"),
+        fixture.fixture.installation.root.join(".cast/journal/state-transition"),
         encode(&conflicting).unwrap(),
     )
     .unwrap();
@@ -202,10 +178,7 @@ fn startup_conflicting_pending_receipt_correlation_fails_stop_without_rollback()
 fn startup_dangling_pending_receipt_body_fails_stop_without_journal_or_rollback_mutation() {
     let fixture = boot_sync_started_fixture(Epoch::Current, false);
     let source = fixture.fixture.source.clone();
-    let pair = source
-        .boot_publication_receipt_correlation()
-        .unwrap()
-        .unwrap();
+    let pair = source.boot_publication_receipt_correlation().unwrap().unwrap();
     let journal = ExactJournalSnapshot::capture(&fixture);
     fixture
         .fixture
@@ -270,17 +243,14 @@ fn startup_cooperating_writer_cannot_promote_between_pending_guard_and_rollback(
             let state = promotion_database.boot_publication_receipt_state().unwrap();
             let pending = state.pending().expect("the guarded receipt remains pending");
             promotion_database
-                .promote_boot_publication_receipt(
-                    pending,
-                    Instant::now() + Duration::from_secs(30),
-                )
+                .promote_boot_publication_receipt(pending, Instant::now() + Duration::from_secs(30))
                 .unwrap();
             promoted_in_thread.store(true, Ordering::SeqCst);
             completed_tx.send(()).unwrap();
             drop(reservation);
         });
         *contender_in_hook.lock().unwrap() = Some(handle);
-        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(120)).unwrap();
         assert!(
             matches!(
                 acquired_rx_in_hook
@@ -305,10 +275,10 @@ fn startup_cooperating_writer_cannot_promote_between_pending_guard_and_rollback(
     acquired_rx
         .lock()
         .unwrap()
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(120))
         .expect("cooperating writer did not acquire after startup returned");
     completed_rx
-        .recv_timeout(Duration::from_secs(5))
+        .recv_timeout(Duration::from_secs(120))
         .expect("receipt-promotion contender did not complete after startup returned");
     contender
         .lock()

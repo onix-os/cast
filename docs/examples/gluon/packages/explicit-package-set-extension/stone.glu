@@ -1,3 +1,4 @@
+let a = import! cast.authored.v1
 let scope = import! "./scope.glu"
 let make_bundle = import! "./package.glu"
 

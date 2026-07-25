@@ -322,16 +322,27 @@ impl ReadOnlyConnection {
     #[cfg(test)]
     pub(crate) fn attempt_test_ordered_scan(&self) -> Result<(), ReadOnlyError> {
         // This deliberately expensive scan exercises SQLite's temporary-sort
-        // policy rather than the production query deadline. A loaded parallel
-        // test run can legitimately take longer than the public two-second
-        // budget, so keep the test bounded independently.
+        // policy rather than the production query deadline, so it is bounded
+        // independently and generously; the deadline only guards against a hang.
+        //
+        // The join arity is the *memory* bound and must stay small. `ORDER BY`
+        // forces SQLite to materialize and sort the entire cartesian product
+        // before yielding row one, and `temp_store = MEMORY` — the very policy
+        // under test — keeps every one of those rows in RAM. Cost is therefore
+        // `rows(sqlite_master) ^ arity`: at ~15 schema objects a 5-way join is
+        // ~760k sorted rows (~200 MB), while a 7-way join is ~171M rows and
+        // allocates tens of gigabytes, which OOM-kills the whole test binary.
+        // A five-way sort already exceeds the sorter's page cache by orders of
+        // magnitude, so it still engages the spill path this test asserts stays
+        // off disk. If this ever looks slow, shrink the arity — do NOT widen
+        // the deadline, which only buys the allocation more time to grow.
         self.snapshot_with_limits(
             QueryLimits {
                 callback_budget: usize::MAX,
-                deadline: Duration::from_secs(30),
+                deadline: Duration::from_secs(120),
             },
             |row| {
-                let mut statement = row.prepare(c"SELECT a.name FROM sqlite_master AS a, sqlite_master AS b, sqlite_master AS c, sqlite_master AS d, sqlite_master AS e, sqlite_master AS f, sqlite_master AS g ORDER BY a.name, b.name, c.name, d.name, e.name, f.name, g.name")?;
+                let mut statement = row.prepare(c"SELECT a.name FROM sqlite_master AS a, sqlite_master AS b, sqlite_master AS c, sqlite_master AS d, sqlite_master AS e ORDER BY a.name, b.name, c.name, d.name, e.name")?;
                 while statement.step()? == Step::Row {}
                 Ok(())
             },

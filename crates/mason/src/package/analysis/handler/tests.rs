@@ -557,9 +557,13 @@ fn symlink_and_fifo_never_become_analyzer_inputs() {
     let fifo_root = tempfile::tempdir().unwrap();
     let fifo = fifo_root.path().join("input.pc");
     mkfifo(&fifo, Mode::S_IRUSR | Mode::S_IWUSR).unwrap();
-    let fifo_info = collect_path(fifo_root.path(), &fifo);
+    // A FIFO is refused during collection itself and never even becomes a
+    // PathInfo, so it can never reach analyzer-input verification.
     let started = Instant::now();
-    assert!(VerifiedAnalyzerInput::from_path_info(&fifo_info, 64).is_err());
+    let mut collector = Collector::new(fifo_root.path());
+    collector.add_rule("*", "fixture", PathRuleKind::Any).unwrap();
+    let mut hasher = StoneDigestWriterHasher::new();
+    assert!(collector.path(&fifo, &mut hasher).is_err());
     assert!(started.elapsed() < Duration::from_secs(1));
 }
 

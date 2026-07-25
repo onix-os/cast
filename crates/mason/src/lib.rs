@@ -3,7 +3,7 @@ pub use self::env::Env;
 pub use self::paths::Paths;
 pub use self::policy::BuildPolicy;
 pub use self::profile::Profile;
-pub use self::recipe::Recipe;
+pub use self::recipe::{Recipe, RecipeMigration, migrate_recipe_to_lua};
 pub use self::timing::Timing;
 
 mod architecture;
@@ -15,6 +15,7 @@ mod container;
 mod draft;
 mod env;
 mod executor;
+mod generated_declaration;
 mod generated_lock;
 mod linux_fs;
 mod package;

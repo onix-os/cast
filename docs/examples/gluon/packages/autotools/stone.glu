@@ -1,26 +1,31 @@
-
-let b = import! cast.package.v3
-let autotools = import! cast.builders.autotools.v2
-
-let base = b.mk_package (b.meta {
-    pname = "autotools-hello",
-    version = "2.4.1",
-    release = 1,
-    homepage = "https://example.invalid/autotools-hello",
-    license = ["GPL-3.0-or-later"],
-})
+let a = import! cast.authored.v1
 
 {
-    builder = autotools.builder {
-        flags = ["--disable-static", "--enable-shared"],
-        run_tests = b.boolean.true,
+    meta = {
+        pname = "autotools-hello",
+        version = "2.4.1",
+        release = 1,
+        homepage = "https://example.invalid/autotools-hello",
+        license = ["GPL-3.0-or-later"],
     },
-    native_build_inputs = [b.dep.binary "pkgconf"],
+    builder = a.builder.autotools {
+        flags = ["--disable-static", "--enable-shared"],
+        run_tests = a.true,
+    },
     sources = [
-        b.source.archive
+        a.source.archive
             "https://example.invalid/autotools-hello-2.4.1.tar.xz"
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ],
+    native_build_inputs = [a.dep.binary "pkgconf"],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64", "aarch64"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

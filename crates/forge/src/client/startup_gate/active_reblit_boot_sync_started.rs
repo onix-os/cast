@@ -14,8 +14,7 @@ use crate::client::{
     active_state_snapshot::ActiveStateReservation,
     startup_gate::ActiveReblitBootSyncStartedCleanupSeal,
     startup_reconciliation::{
-        ActiveReblitBootSyncStartedRecoveryAdmission,
-        ActiveReblitBootSyncStartedRecoveryAuthority,
+        ActiveReblitBootSyncStartedRecoveryAdmission, ActiveReblitBootSyncStartedRecoveryAuthority,
         ActiveReblitBootSyncStartedRecoveryAuthorityError,
     },
 };
@@ -40,19 +39,13 @@ pub(super) fn dispatch<'reservation>(
     journal: TransitionJournalStore,
     record: TransitionRecord,
 ) -> Result<Dispatch, Error> {
-    if record.operation != Operation::ActiveReblit
-        || record.phase != Phase::BootSyncStarted
-    {
+    if record.operation != Operation::ActiveReblit || record.phase != Phase::BootSyncStarted {
         return Ok(Dispatch::Unhandled { journal, record });
     }
-    let Some(receipt_pair) = record
-        .boot_publication_receipt_correlation()
-        .map_err(Error::Record)?
-    else {
+    let Some(receipt_pair) = record.boot_publication_receipt_correlation().map_err(Error::Record)? else {
         return Ok(Dispatch::Unhandled { journal, record });
     };
-    let cleanup_seal =
-        ActiveReblitBootSyncStartedCleanupSeal::new(receipt_pair.pending);
+    let cleanup_seal = ActiveReblitBootSyncStartedCleanupSeal::new(receipt_pair.pending);
     match ActiveReblitBootSyncStartedRecoveryAuthority::capture(
         cleanup_seal,
         installation,
@@ -64,15 +57,10 @@ pub(super) fn dispatch<'reservation>(
         ActiveReblitBootSyncStartedRecoveryAdmission::NotApplicable => {
             Err(Error::ExactCheckpointRejectedAsNotApplicable)
         }
-        ActiveReblitBootSyncStartedRecoveryAdmission::RollbackEligible => {
-            Ok(Dispatch::Unhandled { journal, record })
-        }
-        ActiveReblitBootSyncStartedRecoveryAdmission::Deferred => {
-            Ok(Dispatch::Handled { journal, record })
-        }
+        ActiveReblitBootSyncStartedRecoveryAdmission::RollbackEligible => Ok(Dispatch::Unhandled { journal, record }),
+        ActiveReblitBootSyncStartedRecoveryAdmission::Deferred => Ok(Dispatch::Handled { journal, record }),
         ActiveReblitBootSyncStartedRecoveryAdmission::Ready(authority) => {
-            recovery::recover_promoted_cleanup_and_complete(journal, authority)
-                .map_err(Error::Recovery)
+            recovery::recover_promoted_cleanup_and_complete(journal, authority).map_err(Error::Recovery)
         }
     }
 }

@@ -21,12 +21,8 @@ pub(in crate::client::startup_reconciliation) fn start_namespace_error_is_struct
     error: &UsrRollbackActiveReblitBootRepairStartNamespaceError,
 ) -> bool {
     match error {
-        UsrRollbackActiveReblitBootRepairStartNamespaceError::Capture(source) => {
-            capture_error_is_structural(source)
-        }
-        UsrRollbackActiveReblitBootRepairStartNamespaceError::Topology(source) => {
-            topology_error_is_structural(source)
-        }
+        UsrRollbackActiveReblitBootRepairStartNamespaceError::Capture(source) => capture_error_is_structural(source),
+        UsrRollbackActiveReblitBootRepairStartNamespaceError::Topology(source) => topology_error_is_structural(source),
         UsrRollbackActiveReblitBootRepairStartNamespaceError::Journal(_)
         | UsrRollbackActiveReblitBootRepairStartNamespaceError::Installation(_) => false,
         UsrRollbackActiveReblitBootRepairStartNamespaceError::JournalChanged
@@ -39,9 +35,7 @@ pub(in crate::client::startup_reconciliation) fn complete_namespace_error_is_str
     error: &UsrRollbackActiveReblitBootRepairCompleteNamespaceError,
 ) -> bool {
     match error {
-        UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Capture(source) => {
-            capture_error_is_structural(source)
-        }
+        UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Capture(source) => capture_error_is_structural(source),
         UsrRollbackActiveReblitBootRepairCompleteNamespaceError::Topology(source) => {
             topology_error_is_structural(source)
         }

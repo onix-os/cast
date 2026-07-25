@@ -502,6 +502,8 @@ pub enum Error {
 mod tests {
     use std::{path::Path, process::Command};
 
+    use declarative_config::{DeclarationEvaluator, Source};
+
     use crate::upstream::StoredGit;
     use crate::upstream::plain::StoredPlain;
 
@@ -514,22 +516,41 @@ mod tests {
     const SECOND_MATERIALIZATION_SHA256: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     const AUTHORED_SOURCE_FIXTURE: &str = include_str!("../../../tests/fixtures/gluon/authored-source.glu");
 
+    fn evaluate_source_lock(bytes: &[u8]) -> SourceLock {
+        let source = std::str::from_utf8(bytes).unwrap();
+        source_lock::GluonSourceLockCodec::default()
+            .evaluate(&Source::new(SOURCE_LOCK_FILE_NAME, source))
+            .unwrap()
+            .value
+    }
+
     fn gluon_two_git_recipe(first_url: &str, second_url: &str) -> String {
         format!(
-            r#"let cast = import! cast.package.v3
-let base = cast.mk_package (cast.meta {{
-    pname = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = "https://example.com",
-    license = ["MPL-2.0"],
-}})
+            r#"let a = import! cast.authored.v1
 {{
+    meta = {{
+        pname = "example",
+        version = "1.2.3",
+        release = 1,
+        homepage = "https://example.com",
+        license = ["MPL-2.0"],
+    }},
+    builder = a.builder.custom a.empty.builder,
     sources = [
-        cast.source.git "{first_url}" "main",
-        cast.source.git "{second_url}" "stable",
+        a.source.git "{first_url}" "main",
+        a.source.git "{second_url}" "stable",
     ],
-    .. base
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }}"#
         )
     }
@@ -800,7 +821,7 @@ let base = cast.mk_package (cast.meta {{
         assert_eq!(fs::read_to_string(&recipe_path).unwrap(), authored);
 
         let lock_bytes = fs::read(&lock_path).unwrap();
-        let lock = source_lock::decode_source_lock(SOURCE_LOCK_FILE_NAME, &lock_bytes).unwrap();
+        let lock = evaluate_source_lock(&lock_bytes);
         assert_eq!(lock.sources.len(), 2);
         assert!(matches!(
             &lock.sources[1],
@@ -862,11 +883,8 @@ let base = cast.mk_package (cast.meta {{
         ];
 
         write_resolved_source_lock(&recipe, &stored).unwrap();
-        let lock = source_lock::decode_source_lock(
-            SOURCE_LOCK_FILE_NAME,
-            &fs::read(directory.path().join(SOURCE_LOCK_FILE_NAME)).unwrap(),
-        )
-        .unwrap();
+        let lock_bytes = fs::read(directory.path().join(SOURCE_LOCK_FILE_NAME)).unwrap();
+        let lock = evaluate_source_lock(&lock_bytes);
 
         assert!(matches!(
             &lock.sources[0],

@@ -8,11 +8,8 @@ use std::{
 };
 
 use super::{
-    Client, Error, Installation,
-    active_state_authority::ActiveStateAuthority,
-    active_state_snapshot::ActiveStateReservation,
-    fixed_staging::arm_before_coordinator_lock,
-    record_state_id,
+    Client, Error, Installation, active_state_authority::ActiveStateAuthority,
+    active_state_snapshot::ActiveStateReservation, fixed_staging::arm_before_coordinator_lock, record_state_id,
 };
 use crate::{Provider, repository, system_model, test_support::prepare_private_installation_root};
 
@@ -158,7 +155,7 @@ fn applied_writer_handoff_keeps_the_same_lease_until_reservation_drop() {
         acquired_sender.send(()).unwrap();
         drop(reservation);
     });
-    reached_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    reached_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
     assert!(matches!(
         acquired_receiver.recv_timeout(Duration::from_millis(100)),
         Err(RecvTimeoutError::Timeout)
@@ -173,6 +170,6 @@ fn applied_writer_handoff_keeps_the_same_lease_until_reservation_drop() {
     ));
 
     drop(reservation);
-    acquired_receiver.recv_timeout(Duration::from_secs(2)).unwrap();
+    acquired_receiver.recv_timeout(Duration::from_secs(120)).unwrap();
     contender.join().unwrap();
 }

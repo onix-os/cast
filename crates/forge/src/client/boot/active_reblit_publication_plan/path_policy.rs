@@ -4,12 +4,12 @@
 //! parent. Canonical plan components reserve that prefix case-insensitively so
 //! no output can alias this or another request's deterministic private stage.
 
-use std::{os::unix::ffi::OsStrExt as _, path::{Path, PathBuf}};
-
-use super::{
-    ActiveReblitBootPublicationPlanError, MAX_ACTIVE_REBLIT_BOOT_FAT_COMPONENT_BYTES,
-    PublicationPlanBudget,
+use std::{
+    os::unix::ffi::OsStrExt as _,
+    path::{Path, PathBuf},
 };
+
+use super::{ActiveReblitBootPublicationPlanError, MAX_ACTIVE_REBLIT_BOOT_FAT_COMPONENT_BYTES, PublicationPlanBudget};
 use crate::linux_fs::is_retained_boot_file_private_component;
 
 pub(super) fn require_normalized_relative_path(
@@ -64,10 +64,12 @@ pub(super) fn require_normalized_relative_path(
             return Err(ActiveReblitBootPublicationPlanError::NonAsciiPathComponent { path: path.to_owned() });
         }
         if is_retained_boot_file_private_component(component) {
-            return Err(ActiveReblitBootPublicationPlanError::ReservedPrivatePublicationComponent {
-                path: path.to_owned(),
-                component: component.to_owned(),
-            });
+            return Err(
+                ActiveReblitBootPublicationPlanError::ReservedPrivatePublicationComponent {
+                    path: path.to_owned(),
+                    component: component.to_owned(),
+                },
+            );
         }
         if component.len() > MAX_ACTIVE_REBLIT_BOOT_FAT_COMPONENT_BYTES {
             return Err(ActiveReblitBootPublicationPlanError::FatComponentByteLimit {

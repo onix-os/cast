@@ -16,16 +16,14 @@ use crate::{
     },
 };
 
+use super::super::{
+    DurableUsrRollbackReverseRecord, UsrRollbackReversePersistenceError, UsrRollbackReverseSuccessorBindingError,
+    arm_after_usr_rollback_reverse_successor_binding_check_before_reopen,
+    arm_before_usr_rollback_reverse_successor_binding_revalidation, persist_usr_rollback_reverse_and_reopen,
+};
 use super::support::{
     Fixture, OperationKind, ReverseLayout, SourceCase, durable_authority, expected_usr_restored,
     non_journal_namespace_snapshot,
-};
-use super::super::{
-    DurableUsrRollbackReverseRecord, UsrRollbackReversePersistenceError,
-    UsrRollbackReverseSuccessorBindingError,
-    arm_after_usr_rollback_reverse_successor_binding_check_before_reopen,
-    arm_before_usr_rollback_reverse_successor_binding_revalidation,
-    persist_usr_rollback_reverse_and_reopen,
 };
 
 type StorageFault = (fn(), fn(), DurableUsrRollbackReverseRecord);
@@ -58,11 +56,7 @@ const STORAGE_FAULTS: [StorageFault; 5] = [
     ),
 ];
 
-fn fixture(
-    kind: OperationKind,
-    outcome: RollbackActionOutcome,
-    historical: bool,
-) -> Fixture {
+fn fixture(kind: OperationKind, outcome: RollbackActionOutcome, historical: bool) -> Fixture {
     Fixture::for_effect_source(
         kind,
         SourceCase::RootLinksCompletePost,
@@ -75,11 +69,7 @@ fn fixture(
 }
 
 fn canonical_journal(fixture: &Fixture) -> PathBuf {
-    fixture
-        .fixture
-        .installation
-        .root
-        .join(".cast/journal/state-transition")
+    fixture.fixture.installation.root.join(".cast/journal/state-transition")
 }
 
 fn inode_identity(path: &Path) -> (u64, u64) {
@@ -139,11 +129,14 @@ fn startup_root_links_reverse_all_bound_update_faults_reopen_exact_record_across
                     let error = persist_usr_rollback_reverse_and_reopen(journal, authority).unwrap_err();
 
                     assert_consumed();
-                    assert!(matches!(
-                        &error,
-                        UsrRollbackReversePersistenceError::Advance { durable, .. }
-                            if *durable == expected_durable
-                    ), "{case}: {error:?}");
+                    assert!(
+                        matches!(
+                            &error,
+                            UsrRollbackReversePersistenceError::Advance { durable, .. }
+                                if *durable == expected_durable
+                        ),
+                        "{case}: {error:?}"
+                    );
                     match expected_durable {
                         DurableUsrRollbackReverseRecord::Source => {
                             assert_eq!(fixture.fixture.canonical_record(), fixture.record, "{case}")

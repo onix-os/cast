@@ -1,0 +1,24 @@
+[package]
+name = "lua_config"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+# The Lua declaration engine: a second adapter over the shared
+# `declarative_config` contracts. It owns only Lua parsing/profile validation,
+# literal-import extraction, restricted VM construction, capability policy,
+# limit/deadline mapping, and bounded value-tree decoding. It must not own
+# source discovery, graph limits, identity encoding, persistence, or domain
+# meaning — those remain in the shared core.
+
+[dependencies]
+declarative_config = { path = "../declarative_config" }
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize"] }
+full_moon = { version = "1", features = ["lua54"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

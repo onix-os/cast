@@ -20,22 +20,16 @@ use thiserror::Error;
 
 use crate::linux_fs::{
     descriptor_boot_namespace::BootNamespaceDestinationState,
-    mount_namespace::{
-        TaskRootBootNamespaceAssessmentError,
-        ValidatedTaskRootBootNamespaceAssessment,
-    },
+    mount_namespace::{TaskRootBootNamespaceAssessmentError, ValidatedTaskRootBootNamespaceAssessment},
 };
 
 use super::{
     active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
     active_reblit_boot_namespace_inputs::{
-        ActiveReblitBootNamespaceInputError,
-        BoundActiveReblitBootNamespaceDomain,
-        BoundActiveReblitBootNamespaceInputs,
+        ActiveReblitBootNamespaceInputError, BoundActiveReblitBootNamespaceDomain, BoundActiveReblitBootNamespaceInputs,
     },
     active_reblit_mounted_boot_topology::{
-        ActiveReblitBootPublicationTargetsError, BootTargetRole,
-        RevalidatedActiveReblitBootPublicationTarget,
+        ActiveReblitBootPublicationTargetsError, BootTargetRole, RevalidatedActiveReblitBootPublicationTarget,
         RevalidatedActiveReblitBootPublicationTargets,
     },
 };
@@ -45,8 +39,7 @@ use super::{
 mod fixture_assessment;
 #[cfg(test)]
 pub(in crate::client) use fixture_assessment::{
-    FixtureBootNamespaceAssessment,
-    arm as arm_fixture_boot_namespace_assessments,
+    FixtureBootNamespaceAssessment, arm as arm_fixture_boot_namespace_assessments,
 };
 #[path = "active_reblit_boot_publication_preflight/assessment_seal.rs"]
 mod assessment_seal;
@@ -56,43 +49,26 @@ mod delta_classification;
 mod immutable_attempt;
 
 pub(in crate::client) use assessment_seal::{
-    ActiveReblitBootPublicationAssessmentSeal,
-    SealedActiveReblitBootPublicationDesiredState,
+    ActiveReblitBootPublicationAssessmentSeal, SealedActiveReblitBootPublicationDesiredState,
 };
 
-#[allow(unused_imports)] // mixed evidence is named by VM and cleanup validation slices
-pub(in crate::client) use immutable_attempt::{
-    ActiveReblitBootCompleteFinalizationSeal,
-    ActiveReblitBootPublicationEffectSeal,
-    ActiveReblitBootPromotedCleanupSeal,
-    ActiveReblitCommitCleanupCompleteSeal,
-    ActiveReblitCommitCleanupSeal,
-    ActiveReblitBootSyncCommitDecisionSeal,
-    ActiveReblitBootSyncCompletionSeal,
-    ActiveReblitBootImmutablePublicationAttemptError,
-    StagedExactActiveReblitBootPublication,
-    ValidatedActiveReblitBootPublicationEffect,
-};
 #[allow(unused_imports)] // completed authority is retained for commit coordination
 pub(in crate::client) use immutable_attempt::{
-    ActiveReblitBootCompleteError,
-    ActiveReblitBootCompleteHandoff,
-    ActiveReblitBootCompletePostAdvanceError,
-    ActiveReblitBootPromotedCleanupError,
-    ActiveReblitBootCommitCleanupCompleteHandoff,
-    ActiveReblitBootFinalizationError,
-    ActiveReblitBootFinalizedHandoff,
-    ActiveReblitBootCommitCleanupError,
-    ActiveReblitBootCommitCleanupPostAdvanceError,
-    ActiveReblitBootCommitDecisionError,
-    ActiveReblitBootCommitDecisionFinalValidation,
-    ActiveReblitBootCommitDecisionHandoff,
-    ActiveReblitBootPostCompletionValidationError,
-    ActiveReblitBootSyncCompletionError,
-    ActiveReblitBootReceiptPromotionError,
-    CleanedPromotedExactActiveReblitBootPublication,
-    CompletedExactActiveReblitBootPublication,
+    ActiveReblitBootCommitCleanupCompleteHandoff, ActiveReblitBootCommitCleanupError,
+    ActiveReblitBootCommitCleanupPostAdvanceError, ActiveReblitBootCommitDecisionError,
+    ActiveReblitBootCommitDecisionFinalValidation, ActiveReblitBootCommitDecisionHandoff,
+    ActiveReblitBootCompleteError, ActiveReblitBootCompleteHandoff, ActiveReblitBootCompletePostAdvanceError,
+    ActiveReblitBootFinalizationError, ActiveReblitBootFinalizedHandoff, ActiveReblitBootPostCompletionValidationError,
+    ActiveReblitBootPromotedCleanupError, ActiveReblitBootReceiptPromotionError, ActiveReblitBootSyncCompletionError,
+    CleanedPromotedExactActiveReblitBootPublication, CompletedExactActiveReblitBootPublication,
     PromotedExactActiveReblitBootPublication,
+};
+#[allow(unused_imports)] // mixed evidence is named by VM and cleanup validation slices
+pub(in crate::client) use immutable_attempt::{
+    ActiveReblitBootCompleteFinalizationSeal, ActiveReblitBootImmutablePublicationAttemptError,
+    ActiveReblitBootPromotedCleanupSeal, ActiveReblitBootPublicationEffectSeal, ActiveReblitBootSyncCommitDecisionSeal,
+    ActiveReblitBootSyncCompletionSeal, ActiveReblitCommitCleanupCompleteSeal, ActiveReblitCommitCleanupSeal,
+    StagedExactActiveReblitBootPublication, ValidatedActiveReblitBootPublicationEffect,
 };
 
 /// Exact read-only inputs retained for one later publication attempt.
@@ -123,9 +99,7 @@ pub(in crate::client) struct RevalidatedActiveReblitBootPublicationPreflight<
     assessment_seal: ActiveReblitBootPublicationAssessmentSeal<'plan>,
 }
 
-impl std::fmt::Debug
-    for RevalidatedActiveReblitBootPublicationPreflight<'_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for RevalidatedActiveReblitBootPublicationPreflight<'_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("RevalidatedActiveReblitBootPublicationPreflight")
@@ -187,9 +161,7 @@ pub(in crate::client) enum ActiveReblitBootPublicationPreflightError {
         #[source]
         source: TaskRootBootNamespaceAssessmentError,
     },
-    #[error(
-        "the {role:?} namespace assessment returned {states} states for {indices} retained plan indices"
-    )]
+    #[error("the {role:?} namespace assessment returned {states} states for {indices} retained plan indices")]
     AssessmentLengthMismatch {
         role: BootTargetRole,
         states: usize,
@@ -207,9 +179,7 @@ pub(in crate::client) enum ActiveReblitBootPublicationPreflightError {
         found_inode: u64,
         found_mount_id: u64,
     },
-    #[error(
-        "the {role:?} namespace domain plan index {plan_index} is outside the {publication_count}-output plan"
-    )]
+    #[error("the {role:?} namespace domain plan index {plan_index} is outside the {publication_count}-output plan")]
     PlanIndexOutOfRange {
         role: BootTargetRole,
         plan_index: usize,
@@ -317,22 +287,8 @@ impl BootPublicationNamespaceAssessment {
     }
 }
 
-impl<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
-    BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
+    BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 {
     /// Retain and read-only preflight every output in this exact bound plan.
     ///
@@ -367,7 +323,8 @@ impl<
             BootTargetRole,
             &RevalidatedActiveReblitBootPublicationTarget<'_>,
             &BoundActiveReblitBootNamespaceDomain<'_>,
-        ) -> Result<BootPublicationNamespaceAssessment, ActiveReblitBootPublicationPreflightError>,
+        )
+            -> Result<BootPublicationNamespaceAssessment, ActiveReblitBootPublicationPreflightError>,
         now: &mut impl FnMut() -> Instant,
     ) -> Result<
         RevalidatedActiveReblitBootPublicationPreflight<
@@ -393,12 +350,8 @@ impl<
             .revalidate_publication_targets()
             .map_err(|source| ActiveReblitBootPublicationPreflightError::InitialTargets { source })?;
         require_target_deadline("initial target capture", deadline, &targets)?;
-        let initial_states = assess_bound_namespaces_with(
-            &targets,
-            &namespace_inputs,
-            self.publication_count(),
-            assess,
-        )?;
+        let initial_states =
+            assess_bound_namespaces_with(&targets, &namespace_inputs, self.publication_count(), assess)?;
         require_deadline("after namespace assessment", deadline, now)?;
 
         if !self.collision_domains_still_match() {
@@ -429,7 +382,8 @@ impl<
             BootTargetRole,
             &RevalidatedActiveReblitBootPublicationTarget<'_>,
             &BoundActiveReblitBootNamespaceDomain<'_>,
-        ) -> Result<BootPublicationNamespaceAssessment, ActiveReblitBootPublicationPreflightError>,
+        )
+            -> Result<BootPublicationNamespaceAssessment, ActiveReblitBootPublicationPreflightError>,
         now: &mut impl FnMut() -> Instant,
     ) -> Result<
         RevalidatedActiveReblitBootPublicationPreflight<
@@ -462,10 +416,7 @@ fn assess_one_bound_namespace(
     target
         .assess_boot_namespace(domain.requests(), domain.expected_sources())
         .map(BootPublicationNamespaceAssessment::Retained)
-        .map_err(|source| ActiveReblitBootPublicationPreflightError::NamespaceAssessment {
-            role,
-            source,
-        })
+        .map_err(|source| ActiveReblitBootPublicationPreflightError::NamespaceAssessment { role, source })
 }
 
 fn assess_bound_namespaces_with(
@@ -492,43 +443,26 @@ fn assess_bound_namespaces_with(
             BoundActiveReblitBootNamespaceInputs::BootAliasesEsp { shared },
         ) => assess_domain_with(BootTargetRole::Esp, esp, shared, &mut states, assess)?,
         (
-            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr {
-                esp,
-                xbootldr,
-            },
+            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr { esp, xbootldr },
             BoundActiveReblitBootNamespaceInputs::DistinctXbootldr {
                 esp: esp_inputs,
                 xbootldr: xbootldr_inputs,
             },
         ) => {
             assess_domain_with(BootTargetRole::Esp, esp, esp_inputs, &mut states, assess)?;
-            assess_domain_with(
-                BootTargetRole::Xbootldr,
-                xbootldr,
-                xbootldr_inputs,
-                &mut states,
-                assess,
-            )?;
+            assess_domain_with(BootTargetRole::Xbootldr, xbootldr, xbootldr_inputs, &mut states, assess)?;
         }
         _ => {
-            return Err(
-                ActiveReblitBootPublicationPreflightError::DestinationLayoutMismatch,
-            );
+            return Err(ActiveReblitBootPublicationPreflightError::DestinationLayoutMismatch);
         }
     }
 
     close_global_states(states)
 }
 
-fn require_publication_count(
-    expected: usize,
-    actual: usize,
-) -> Result<(), ActiveReblitBootPublicationPreflightError> {
+fn require_publication_count(expected: usize, actual: usize) -> Result<(), ActiveReblitBootPublicationPreflightError> {
     if actual != expected {
-        Err(ActiveReblitBootPublicationPreflightError::PublicationCountMismatch {
-            expected,
-            actual,
-        })
+        Err(ActiveReblitBootPublicationPreflightError::PublicationCountMismatch { expected, actual })
     } else {
         Ok(())
     }
@@ -543,9 +477,7 @@ fn close_global_states(
         .map_err(|source| ActiveReblitBootPublicationPreflightError::StateAllocation { source })?;
     for (plan_index, state) in states.into_iter().enumerate() {
         let Some(state) = state else {
-            return Err(ActiveReblitBootPublicationPreflightError::MissingPlanIndex {
-                plan_index,
-            });
+            return Err(ActiveReblitBootPublicationPreflightError::MissingPlanIndex { plan_index });
         };
         closed.push(state);
     }
@@ -554,16 +486,10 @@ fn close_global_states(
 
 fn retained_publication_count(inputs: &BoundActiveReblitBootNamespaceInputs<'_>) -> usize {
     match inputs {
-        BoundActiveReblitBootNamespaceInputs::BootAliasesEsp { shared } => {
-            shared.plan_indices().len()
+        BoundActiveReblitBootNamespaceInputs::BootAliasesEsp { shared } => shared.plan_indices().len(),
+        BoundActiveReblitBootNamespaceInputs::DistinctXbootldr { esp, xbootldr } => {
+            esp.plan_indices().len().saturating_add(xbootldr.plan_indices().len())
         }
-        BoundActiveReblitBootNamespaceInputs::DistinctXbootldr {
-            esp,
-            xbootldr,
-        } => esp
-            .plan_indices()
-            .len()
-            .saturating_add(xbootldr.plan_indices().len()),
     }
 }
 
@@ -588,24 +514,16 @@ fn assess_domain_with(
     let expected = domain.expected_sources();
     let indices = domain.plan_indices();
     if requests.len() != expected.len() || requests.len() != indices.len() {
-        return Err(
-            ActiveReblitBootPublicationPreflightError::DomainBindingLengthMismatch {
-                role,
-                requests: requests.len(),
-                sources: expected.len(),
-                indices: indices.len(),
-            },
-        );
+        return Err(ActiveReblitBootPublicationPreflightError::DomainBindingLengthMismatch {
+            role,
+            requests: requests.len(),
+            sources: expected.len(),
+            indices: indices.len(),
+        });
     }
 
     let assessment = assess(role, target, domain)?;
-    merge_domain_assessment(
-        role,
-        target_identity(target),
-        indices,
-        &assessment,
-        global_states,
-    )
+    merge_domain_assessment(role, target_identity(target), indices, &assessment, global_states)
 }
 
 fn merge_domain_assessment(
@@ -617,13 +535,11 @@ fn merge_domain_assessment(
 ) -> Result<(), ActiveReblitBootPublicationPreflightError> {
     require_assessment_identity(role, expected_identity, assessment)?;
     if assessment.states().len() != indices.len() {
-        return Err(
-            ActiveReblitBootPublicationPreflightError::AssessmentLengthMismatch {
-                role,
-                states: assessment.states().len(),
-                indices: indices.len(),
-            },
-        );
+        return Err(ActiveReblitBootPublicationPreflightError::AssessmentLengthMismatch {
+            role,
+            states: assessment.states().len(),
+            indices: indices.len(),
+        });
     }
 
     let mut previous = None;
@@ -646,11 +562,7 @@ fn merge_domain_assessment(
         }
         previous = Some(plan_index);
         if global_states[plan_index].is_some() {
-            return Err(
-                ActiveReblitBootPublicationPreflightError::DuplicatePlanIndex {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootPublicationPreflightError::DuplicatePlanIndex { plan_index });
         }
         global_states[plan_index] = Some(state);
     }
@@ -664,24 +576,20 @@ fn require_assessment_identity(
 ) -> Result<(), ActiveReblitBootPublicationPreflightError> {
     let found = assessment.identity();
     if expected != found {
-        return Err(
-            ActiveReblitBootPublicationPreflightError::AssessmentIdentityMismatch {
-                role,
-                expected_device: expected.device,
-                expected_inode: expected.inode,
-                expected_mount_id: expected.mount_id,
-                found_device: found.device,
-                found_inode: found.inode,
-                found_mount_id: found.mount_id,
-            },
-        );
+        return Err(ActiveReblitBootPublicationPreflightError::AssessmentIdentityMismatch {
+            role,
+            expected_device: expected.device,
+            expected_inode: expected.inode,
+            expected_mount_id: expected.mount_id,
+            found_device: found.device,
+            found_inode: found.inode,
+            found_mount_id: found.mount_id,
+        });
     }
     Ok(())
 }
 
-fn target_identity(
-    target: &RevalidatedActiveReblitBootPublicationTarget<'_>,
-) -> BootPublicationAssessmentIdentity {
+fn target_identity(target: &RevalidatedActiveReblitBootPublicationTarget<'_>) -> BootPublicationAssessmentIdentity {
     let destination = target.destination();
     BootPublicationAssessmentIdentity {
         device: destination.raw_device(),
@@ -696,12 +604,8 @@ fn require_same_target_set(
 ) -> Result<(), ActiveReblitBootPublicationPreflightError> {
     match (initial, terminal) {
         (
-            RevalidatedActiveReblitBootPublicationTargets::BootAliasesEsp {
-                esp: initial_esp,
-            },
-            RevalidatedActiveReblitBootPublicationTargets::BootAliasesEsp {
-                esp: terminal_esp,
-            },
+            RevalidatedActiveReblitBootPublicationTargets::BootAliasesEsp { esp: initial_esp },
+            RevalidatedActiveReblitBootPublicationTargets::BootAliasesEsp { esp: terminal_esp },
         ) => require_same_target(BootTargetRole::Esp, initial_esp, terminal_esp),
         (
             RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr {
@@ -713,20 +617,10 @@ fn require_same_target_set(
                 xbootldr: terminal_xbootldr,
             },
         ) => {
-            require_same_target(
-                BootTargetRole::Esp,
-                initial_esp,
-                terminal_esp,
-            )?;
-            require_same_target(
-                BootTargetRole::Xbootldr,
-                initial_xbootldr,
-                terminal_xbootldr,
-            )
+            require_same_target(BootTargetRole::Esp, initial_esp, terminal_esp)?;
+            require_same_target(BootTargetRole::Xbootldr, initial_xbootldr, terminal_xbootldr)
         }
-        _ => Err(
-            ActiveReblitBootPublicationPreflightError::TerminalTargetLayoutMismatch,
-        ),
+        _ => Err(ActiveReblitBootPublicationPreflightError::TerminalTargetLayoutMismatch),
     }
 }
 
@@ -747,10 +641,7 @@ fn require_same_target(
         terminal_destination.inode(),
         terminal.mount_id(),
     );
-    if initial.role() != role
-        || terminal.role() != role
-        || initial_identity != terminal_identity
-    {
+    if initial.role() != role || terminal.role() != role || initial_identity != terminal_identity {
         return Err(
             ActiveReblitBootPublicationPreflightError::TerminalTargetIdentityMismatch {
                 role,
@@ -789,10 +680,7 @@ fn require_deadline(
     now: &mut impl FnMut() -> Instant,
 ) -> Result<(), ActiveReblitBootPublicationPreflightError> {
     if now() > deadline {
-        Err(ActiveReblitBootPublicationPreflightError::DeadlineExceeded {
-            checkpoint,
-            deadline,
-        })
+        Err(ActiveReblitBootPublicationPreflightError::DeadlineExceeded { checkpoint, deadline })
     } else {
         Ok(())
     }

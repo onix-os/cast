@@ -8,6 +8,48 @@ fn exchanged_stateful_identity(fixture: &StatefulTransitionFixture) -> StatefulT
     identity
 }
 
+/// The retained archive attempt is per-identity, in-memory state, so a handle
+/// that did not perform the archive cannot compensate for it. This pins the
+/// property that blocks a startup-recovery restore: after a reboot the
+/// recovering process has, by definition, no attempt of its own, so the
+/// PreviousRestore rollback dispatcher needs a recovery-side attempt adoption
+/// rebuilt from on-disk evidence — a journal-aware guard alone is not enough.
+#[test]
+fn a_fresh_identity_after_the_archive_cannot_restore_the_previous_tree() {
+    let fixture = stateful_transition_fixture(false);
+    let installation = &fixture.client.installation;
+    let archived = installation.root_path(fixture.previous.id.to_string()).join("usr");
+    let staged_usr = installation.staging_path("usr");
+
+    // Archive, then drop the identity that did it. Its retained attempt and its
+    // blocking journal lease die with it — precisely the post-reboot state a
+    // startup-recovery process wakes up in.
+    {
+        let identity = exchanged_stateful_identity(&fixture);
+        identity.archive_previous(installation, fixture.previous.id).unwrap();
+    }
+    let archived_inode = fs::symlink_metadata(&archived).unwrap().ino();
+
+    // The ordinary preparation route is not merely unable to compensate — it
+    // cannot produce an identity at all. It pins the staged candidate, and the
+    // archive moved the predecessor out of staging, so nothing remains there.
+    let prepared = fixture
+        .client
+        .prepare_stateful_tree_identity(&staged_usr, fixture.candidate.id);
+    let error = prepared
+        .err()
+        .expect("preparation cannot succeed once the archive emptied staging");
+    assert!(
+        format!("{error:?}").contains("staging/usr") && format!("{error:?}").contains("NotFound"),
+        "expected the missing staged tree to block preparation, got {error:?}",
+    );
+    assert_eq!(
+        fs::symlink_metadata(&archived).unwrap().ino(),
+        archived_inode,
+        "the failed preparation left the archived predecessor exactly in place",
+    );
+}
+
 #[test]
 fn retained_previous_moves_reconcile_before_and_after_rename_faults() {
     let fixture = stateful_transition_fixture(false);

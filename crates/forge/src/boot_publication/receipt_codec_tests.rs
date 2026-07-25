@@ -75,10 +75,7 @@ fn destination(partuuid: &str, partition_number: u32, inode: u64, minor: u32) ->
 fn body(fixture: &Fixture) -> BootPublicationReceiptBody {
     let esp = destination(fixture.esp_partuuid, fixture.esp_partition, fixture.esp_inode, 1);
     let destinations = if fixture.distinct {
-        BootPublicationDestinations::distinct_xbootldr(
-            esp,
-            destination(XBOOTLDR_PARTUUID, 2, 202, 2),
-        )
+        BootPublicationDestinations::distinct_xbootldr(esp, destination(XBOOTLDR_PARTUUID, 2, 202, 2))
     } else {
         BootPublicationDestinations::boot_aliases_esp(esp)
     };
@@ -114,7 +111,10 @@ fn canonical_receipt_round_trips_exact_body_bytes_and_identity() {
     let prepared = prepared(&Fixture::default());
     let decoded = decode_boot_publication_receipt(prepared.canonical_body()).unwrap();
     assert_eq!(decoded, prepared);
-    assert_eq!(decoded.body().transition_id().as_str(), "00112233445566778899aabbccddeeff");
+    assert_eq!(
+        decoded.body().transition_id().as_str(),
+        "00112233445566778899aabbccddeeff"
+    );
     assert_eq!(decoded.body().outputs()[0].relative_path(), "EFI/cast/vmlinuz");
 }
 

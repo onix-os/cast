@@ -24,10 +24,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-mod boot_namespace;
 mod boot_file_publication;
 mod boot_file_replacement;
 mod boot_leaf_assessment;
+mod boot_namespace;
 mod boot_publication_parent;
 mod capture;
 mod device;
@@ -35,56 +35,45 @@ mod filesystem;
 mod gpt_device;
 mod selector;
 
-pub(crate) use boot_namespace::{TaskRootBootNamespaceAssessmentError, ValidatedTaskRootBootNamespaceAssessment};
-pub(crate) use boot_file_publication::{
-    RetainedBootFilePublicationError, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
-    RetainedBootFilePublicationRequest, ValidatedRetainedBootFilePublication,
-};
-pub(crate) use boot_file_replacement::{
-    AuthenticatedRetainedBootFileStaleCleanup, RetainedBootFileMutationFingerprint,
-    RetainedBootFileAppliedSidecarCleanupState,
-    RetainedBootFileRestoredSidecarCleanupState,
-    RetainedBootFileStaleCleanupOutcome, RetainedBootFileStaleCleanupRequest,
-    RetainedBootFileStaleCleanupState,
-    RetainedBootFileReplacementError,
-    RetainedBootFileReplacementRequest, RetainedBootFileSidecarCleanupOutcome,
-    ValidatedRetainedBootFileReplacement, ValidatedRetainedBootFileRestoration,
-};
-pub(crate) use boot_leaf_assessment::{
-    RetainedBootLeafAssessmentError, RetainedBootLeafAssessmentLimits,
-    RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState,
-    ValidatedRetainedBootLeafAssessment,
-};
-pub(crate) use boot_publication_parent::{
-    RetainedBootPublicationParent, RetainedBootPublicationParentError,
-};
 #[cfg(test)]
 pub(crate) use boot_file_publication::{
     FixtureRetainedBootFilePublicationFault, arm_retained_boot_file_private_name_substitution,
     arm_retained_boot_file_publication_fault,
 };
+pub(crate) use boot_file_publication::{
+    RetainedBootFilePublicationError, RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome,
+    RetainedBootFilePublicationRequest, ValidatedRetainedBootFilePublication,
+};
+pub(crate) use boot_file_replacement::{
+    AuthenticatedRetainedBootFileStaleCleanup, RetainedBootFileAppliedSidecarCleanupState,
+    RetainedBootFileMutationFingerprint, RetainedBootFileReplacementError, RetainedBootFileReplacementRequest,
+    RetainedBootFileRestoredSidecarCleanupState, RetainedBootFileSidecarCleanupOutcome,
+    RetainedBootFileStaleCleanupOutcome, RetainedBootFileStaleCleanupRequest, RetainedBootFileStaleCleanupState,
+    ValidatedRetainedBootFileReplacement, ValidatedRetainedBootFileRestoration,
+};
 #[cfg(test)]
 pub(crate) use boot_file_replacement::{
-    arm_after_boot_file_sidecar_unlink_callback,
-    arm_after_stale_boot_file_detach_callback,
-    arm_boot_file_exchange_error_after_applied,
-    arm_boot_file_replacement_stop_before_exchange,
-    arm_boot_file_sidecar_stop_after_unlink,
-    arm_stale_boot_file_detach_error_after_applied,
+    arm_after_boot_file_sidecar_unlink_callback, arm_after_stale_boot_file_detach_callback,
+    arm_boot_file_exchange_error_after_applied, arm_boot_file_replacement_stop_before_exchange,
+    arm_boot_file_sidecar_stop_after_unlink, arm_stale_boot_file_detach_error_after_applied,
     arm_stale_boot_file_stop_after_detach,
 };
 #[cfg(test)]
 pub(crate) use boot_leaf_assessment::{
-    FixtureRetainedBootLeafAssessmentHookGuard,
-    arm_retained_boot_leaf_assessment_terminal_rebind_hook,
+    FixtureRetainedBootLeafAssessmentHookGuard, arm_retained_boot_leaf_assessment_terminal_rebind_hook,
 };
+pub(crate) use boot_leaf_assessment::{
+    RetainedBootLeafAssessmentError, RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
+    RetainedBootLeafAssessmentState, ValidatedRetainedBootLeafAssessment,
+};
+pub(crate) use boot_namespace::{TaskRootBootNamespaceAssessmentError, ValidatedTaskRootBootNamespaceAssessment};
 #[cfg(test)]
 pub(crate) use boot_publication_parent::{
     FixtureRetainedBootPublicationParentCheckpoint, FixtureRetainedBootPublicationParentFault,
-    arm_retained_boot_publication_parent_checkpoint_hook,
-    arm_retained_boot_publication_parent_fault, validate_fixture_boot_publication_parent_identity,
-    validate_fixture_boot_publication_parent_policy,
+    arm_retained_boot_publication_parent_checkpoint_hook, arm_retained_boot_publication_parent_fault,
+    validate_fixture_boot_publication_parent_identity, validate_fixture_boot_publication_parent_policy,
 };
+pub(crate) use boot_publication_parent::{RetainedBootPublicationParent, RetainedBootPublicationParentError};
 use capture::{AttachmentCapture, capture_twice, require_capture_matches};
 pub(crate) use device::{TaskRootDevtmpfsAttachmentAuthenticationError, ValidatedTaskRootDevtmpfsAttachmentEvidence};
 use filesystem::{AttachmentLimits, directory_witness, duplicate_directory, require_same_directory};
@@ -103,9 +92,10 @@ use super::{
 use crate::linux_fs::descriptor_devtmpfs_filesystem::{
     DevtmpfsDescriptorAuthenticationError, ValidatedDevtmpfsSameMountDescriptorEvidence,
 };
+#[cfg(test)]
+use crate::linux_fs::gpt_partition_role::GptPartitionRole;
 use crate::linux_fs::{
     descriptor_boot_filesystem::{BootFilesystemAuthenticationError, ValidatedBootFilesystemDescriptorEvidence},
-    gpt_partition_role::GptPartitionRole,
     mountinfo_devtmpfs_policy::ValidatedDevtmpfsMountInfoPolicy,
     sysfs_block::SysfsDeviceNumber,
 };

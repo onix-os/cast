@@ -91,8 +91,7 @@ fn handoff_for_test(
     record: TransitionRecord,
     record_binding: TransitionJournalRecordBinding,
 ) -> CoordinatorActiveReblitBootSyncHandoff {
-    let active_state_reservation =
-        CoordinatorActiveStateReservation::acquire().unwrap();
+    let active_state_reservation = CoordinatorActiveStateReservation::acquire().unwrap();
     CoordinatorActiveReblitBootSyncHandoff::from_parts_for_test(
         record,
         record_binding,
@@ -108,67 +107,31 @@ fn handoff_for_test(
 fn coordinator_handoff_stages_exact_state_and_rejects_same_installation_cross_state_plan() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_client_bound_staging_plan!(|fixture, client, plan, inventory| {
-        let (journal, predecessor, binding) = exact_boot_sync_journal_for_state(
-            &fixture.installation,
-            Some(fixture.head.id),
-        );
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal_for_state(&fixture.installation, Some(fixture.head.id));
         assert_eq!(plan.global_state(), fixture.head.id);
         assert_eq!(predecessor.phase, Phase::SystemTriggersComplete);
         assert_eq!(predecessor.generation, 10);
-        let handoff = handoff_for_test(
-            &fixture,
-            fixture.head.clone(),
-            journal,
-            predecessor,
-            binding,
-        );
+        let handoff = handoff_for_test(&fixture, fixture.head.clone(), journal, predecessor, binding);
 
-        let staged = stage_active_reblit_boot_sync_from_handoff_for_test(
-            &client,
-            &plan,
-            &inventory,
-            handoff,
-        )
-        .unwrap();
+        let staged = stage_active_reblit_boot_sync_from_handoff_for_test(&client, &plan, &inventory, handoff).unwrap();
 
         assert_eq!(staged.record().phase, Phase::BootSyncStarted);
-        assert_eq!(
-            staged.record().candidate.id,
-            Some(i32::from(fixture.head.id)),
-        );
-        assert_eq!(
-            staged.record().previous.id,
-            Some(i32::from(fixture.head.id)),
-        );
+        assert_eq!(staged.record().candidate.id, Some(i32::from(fixture.head.id)),);
+        assert_eq!(staged.record().previous.id, Some(i32::from(fixture.head.id)),);
         assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
     });
 
     with_client_bound_staging_plan!(|fixture, client, plan, inventory| {
-        let other_state = fixture
-            .state_db
-            .add(&[], Some("cross-state handoff"), None)
-            .unwrap();
+        let other_state = fixture.state_db.add(&[], Some("cross-state handoff"), None).unwrap();
         assert_ne!(plan.global_state(), other_state.id);
-        let (journal, predecessor, binding) = exact_boot_sync_journal_for_state(
-            &fixture.installation,
-            Some(other_state.id),
-        );
+        let (journal, predecessor, binding) =
+            exact_boot_sync_journal_for_state(&fixture.installation, Some(other_state.id));
         let expected = predecessor.clone();
-        let handoff = handoff_for_test(
-            &fixture,
-            other_state,
-            journal,
-            predecessor,
-            binding,
-        );
+        let handoff = handoff_for_test(&fixture, other_state, journal, predecessor, binding);
 
-        let error = stage_active_reblit_boot_sync_from_handoff_for_test(
-            &client,
-            &plan,
-            &inventory,
-            handoff,
-        )
-        .unwrap_err();
+        let error =
+            stage_active_reblit_boot_sync_from_handoff_for_test(&client, &plan, &inventory, handoff).unwrap_err();
 
         assert!(matches!(
             error,

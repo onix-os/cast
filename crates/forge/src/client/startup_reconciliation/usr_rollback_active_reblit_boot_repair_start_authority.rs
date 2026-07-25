@@ -8,8 +8,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
@@ -20,14 +20,10 @@ use super::super::{
 use super::{
     ActiveReblitBootRepairDatabaseEvidence, ActiveReblitBootRepairDatabaseInspection,
     ActiveReblitBootRepairEvidenceError, UsrRollbackActiveReblitBootRepairStartNamespaceError,
-    UsrRollbackActiveReblitBootRepairStartNamespaceInspection,
-    UsrRollbackActiveReblitBootRepairStartNamespaceProof,
-    active_reblit_pending_boot_repair_plan_is_exact,
-    capture_active_reblit_boot_repair_active_state,
-    inspect_active_reblit_boot_repair_database,
-    require_exact_active_reblit_boot_repair_active_state,
-    require_exact_active_reblit_boot_repair_database,
-    start_namespace_error_is_structural,
+    UsrRollbackActiveReblitBootRepairStartNamespaceInspection, UsrRollbackActiveReblitBootRepairStartNamespaceProof,
+    active_reblit_pending_boot_repair_plan_is_exact, capture_active_reblit_boot_repair_active_state,
+    inspect_active_reblit_boot_repair_database, require_exact_active_reblit_boot_repair_active_state,
+    require_exact_active_reblit_boot_repair_database, start_namespace_error_is_structural,
 };
 
 pub(in crate::client) enum UsrRollbackActiveReblitBootRepairStartAdmission<'system, 'reservation> {
@@ -68,8 +64,7 @@ impl<'system, 'reservation> UsrRollbackActiveReblitBootRepairStartAuthority<'sys
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let database_before = match inspect_active_reblit_boot_repair_database(record, state_db)? {
             ActiveReblitBootRepairDatabaseInspection::Exact(database) => database,
@@ -91,12 +86,7 @@ impl<'system, 'reservation> UsrRollbackActiveReblitBootRepairStartAuthority<'sys
             }
             Err(source) => return Err(source.into()),
         };
-        let namespace = match namespace_inspection.finish(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        ) {
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(source) if start_namespace_error_is_structural(&source) => {
                 return Ok(UsrRollbackActiveReblitBootRepairStartAdmission::Deferred);
@@ -134,12 +124,7 @@ impl<'system, 'reservation> UsrRollbackActiveReblitBootRepairStartAuthority<'sys
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackActiveReblitBootRepairStartAuthorityError> {
-        require_journal_record_binding(
-            self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(self.installation, journal, &self.journal_record_binding, &self.record)?;
         let installation = self.installation;
         installation.revalidate_mutable_namespace()?;
         let database_before = require_exact_active_reblit_boot_repair_database(
@@ -147,12 +132,8 @@ impl<'system, 'reservation> UsrRollbackActiveReblitBootRepairStartAuthority<'sys
             inspect_active_reblit_boot_repair_database(&self.record, self.state_db)?,
         )?;
         require_exact_active_reblit_boot_repair_active_state(&self.record, installation, &self.active_state)?;
-        self.namespace.revalidate(
-            installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after = require_exact_active_reblit_boot_repair_database(
             &self.database,
             inspect_active_reblit_boot_repair_database(&self.record, self.state_db)?,
@@ -163,12 +144,7 @@ impl<'system, 'reservation> UsrRollbackActiveReblitBootRepairStartAuthority<'sys
         {
             return Err(UsrRollbackActiveReblitBootRepairStartAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
-        require_journal_record_binding(
-            installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(installation, journal, &self.journal_record_binding, &self.record)?;
         installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -207,9 +183,7 @@ fn require_journal_record_binding(
     record: &TransitionRecord,
 ) -> Result<(), UsrRollbackActiveReblitBootRepairStartAuthorityError> {
     if !journal.has_record_store_binding(binding) {
-        return Err(
-            UsrRollbackActiveReblitBootRepairStartAuthorityErrorKind::JournalRecordBindingMismatch.into(),
-        );
+        return Err(UsrRollbackActiveReblitBootRepairStartAuthorityErrorKind::JournalRecordBindingMismatch.into());
     }
     let cast = installation.retained_mutable_cast_directory()?;
     if journal.has_record_binding(cast, binding, record)? {

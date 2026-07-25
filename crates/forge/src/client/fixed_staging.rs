@@ -549,9 +549,15 @@ impl Client {
 
 pub(super) fn lock_coordinator() -> Result<MutexGuard<'static, ()>, super::Error> {
     before_coordinator_lock();
-    FIXED_STAGING_COORDINATOR
+    // The coordinator guards only a serialization token, never shared mutable
+    // state, so a prior holder that panicked cannot have left inconsistent data
+    // behind. Recover the poisoned guard (as the asset cache already does)
+    // rather than failing every later fixed-staging operation for the rest of
+    // the process; each operation revalidates the retained fixed-staging state
+    // itself.
+    Ok(FIXED_STAGING_COORDINATOR
         .lock()
-        .map_err(|_| super::Error::FixedStagingCoordinatorPoisoned)
+        .unwrap_or_else(|poison| poison.into_inner()))
 }
 
 fn open_directory(

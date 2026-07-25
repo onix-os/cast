@@ -9,7 +9,7 @@ pub mod upstream;
 #[cfg(test)]
 mod test {
     use super::*;
-    use gluon_config::Source as GluonSource;
+    use declarative_config::{DeclarationEvaluator, Source};
 
     #[test]
     fn evaluate_repository_gluon_fixtures() {
@@ -37,12 +37,16 @@ mod test {
         ];
 
         for (logical_name, input) in inputs {
-            let evaluated = package::evaluate_gluon(&GluonSource::new(logical_name, input)).unwrap();
-            evaluated.package.validate().unwrap();
+            let evaluated = DeclarationEvaluator::<package::PackageSpec>::evaluate(
+                &package::GluonPackageEvaluator::default(),
+                &Source::new(logical_name, input),
+            )
+            .unwrap();
+            evaluated.value.validate().unwrap();
             if logical_name == "tests/fixtures/llvm-stone.glu" {
                 assert_eq!(
                     evaluated
-                        .package
+                        .value
                         .builder
                         .required_tools()
                         .iter()

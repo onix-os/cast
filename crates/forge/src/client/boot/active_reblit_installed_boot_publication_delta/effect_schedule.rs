@@ -16,8 +16,7 @@ use crate::client::{
 };
 
 use super::{
-    ActiveReblitBootPublicationDeltaAction,
-    ActiveReblitBootPublicationDeltaExpected,
+    ActiveReblitBootPublicationDeltaAction, ActiveReblitBootPublicationDeltaExpected,
     ClassifiedActiveReblitBootPublicationDelta,
 };
 
@@ -52,15 +51,11 @@ impl ActiveReblitBootPublicationEffectScheduleEntry {
         self.action
     }
 
-    pub(in crate::client) const fn desired_expected(
-        &self,
-    ) -> ActiveReblitBootPublicationDeltaExpected {
+    pub(in crate::client) const fn desired_expected(&self) -> ActiveReblitBootPublicationDeltaExpected {
         self.desired_expected
     }
 
-    pub(in crate::client) const fn installed_expected(
-        &self,
-    ) -> Option<ActiveReblitBootPublicationDeltaExpected> {
+    pub(in crate::client) const fn installed_expected(&self) -> Option<ActiveReblitBootPublicationDeltaExpected> {
         self.installed_expected
     }
 }
@@ -72,9 +67,7 @@ pub(in crate::client) struct ActiveReblitBootPublicationEffectSchedule {
 }
 
 impl ActiveReblitBootPublicationEffectSchedule {
-    pub(in crate::client) fn entries(
-        &self,
-    ) -> &[ActiveReblitBootPublicationEffectScheduleEntry] {
+    pub(in crate::client) fn entries(&self) -> &[ActiveReblitBootPublicationEffectScheduleEntry] {
         &self.entries
     }
 }
@@ -95,10 +88,7 @@ pub(in crate::client) enum ActiveReblitBootPublicationEffectScheduleError {
     #[error("desired plan output {plan_index} matches more than one classified root/path entry")]
     DuplicateDesiredEntry { plan_index: usize },
     #[error("classified entry {delta_index} does not retain the exact bytes for desired output {plan_index}")]
-    DesiredIdentityMismatch {
-        plan_index: usize,
-        delta_index: usize,
-    },
+    DesiredIdentityMismatch { plan_index: usize, delta_index: usize },
     #[error("classified entry {delta_index} for desired output {plan_index} has stale action {action:?}")]
     StaleActionForDesired {
         plan_index: usize,
@@ -125,10 +115,7 @@ impl ClassifiedActiveReblitBootPublicationDelta {
     pub(in crate::client) fn prepare_effect_schedule(
         &self,
         plan: &BoundActiveReblitBlsPublicationPlan<'_, '_, '_, '_, '_, '_>,
-    ) -> Result<
-        ActiveReblitBootPublicationEffectSchedule,
-        ActiveReblitBootPublicationEffectScheduleError,
-    > {
+    ) -> Result<ActiveReblitBootPublicationEffectSchedule, ActiveReblitBootPublicationEffectScheduleError> {
         let mut consumed = Vec::new();
         consumed.try_reserve_exact(self.entries.len()).map_err(|source| {
             ActiveReblitBootPublicationEffectScheduleError::Allocation {
@@ -139,38 +126,30 @@ impl ClassifiedActiveReblitBootPublicationDelta {
         consumed.resize(self.entries.len(), false);
 
         let mut schedule = Vec::new();
-        schedule
-            .try_reserve_exact(plan.publication_count())
-            .map_err(|source| ActiveReblitBootPublicationEffectScheduleError::Allocation {
+        schedule.try_reserve_exact(plan.publication_count()).map_err(|source| {
+            ActiveReblitBootPublicationEffectScheduleError::Allocation {
                 resource: "canonical boot effect schedule",
                 source,
-            })?;
+            }
+        })?;
 
         for (plan_index, output) in plan.outputs().enumerate() {
-            let path = output.relative_path().to_str().ok_or(
-                ActiveReblitBootPublicationEffectScheduleError::NonUtf8DesiredPath {
-                    plan_index,
-                },
-            )?;
+            let path = output
+                .relative_path()
+                .to_str()
+                .ok_or(ActiveReblitBootPublicationEffectScheduleError::NonUtf8DesiredPath { plan_index })?;
             let mut exact_match = None;
             for (delta_index, entry) in self.entries.iter().enumerate() {
-                if entry.root == output.root()
-                    && entry.relative_path.as_bytes() == path.as_bytes()
-                {
+                if entry.root == output.root() && entry.relative_path.as_bytes() == path.as_bytes() {
                     if exact_match.replace(delta_index).is_some() {
-                        return Err(
-                            ActiveReblitBootPublicationEffectScheduleError::DuplicateDesiredEntry {
-                                plan_index,
-                            },
-                        );
+                        return Err(ActiveReblitBootPublicationEffectScheduleError::DuplicateDesiredEntry {
+                            plan_index,
+                        });
                     }
                 }
             }
-            let delta_index = exact_match.ok_or(
-                ActiveReblitBootPublicationEffectScheduleError::MissingDesiredEntry {
-                    plan_index,
-                },
-            )?;
+            let delta_index = exact_match
+                .ok_or(ActiveReblitBootPublicationEffectScheduleError::MissingDesiredEntry { plan_index })?;
             let entry = &self.entries[delta_index];
             let desired_expected = ActiveReblitBootPublicationDeltaExpected {
                 checksum: output.expected_digest(),
@@ -203,18 +182,12 @@ impl ClassifiedActiveReblitBootPublicationDelta {
             });
         }
 
-        for (delta_index, (entry, consumed)) in
-            self.entries.iter().zip(consumed).enumerate()
-        {
+        for (delta_index, (entry, consumed)) in self.entries.iter().zip(consumed).enumerate() {
             if consumed {
                 continue;
             }
             if entry.desired_expected.is_some() {
-                return Err(
-                    ActiveReblitBootPublicationEffectScheduleError::UnconsumedDesiredEntry {
-                        delta_index,
-                    },
-                );
+                return Err(ActiveReblitBootPublicationEffectScheduleError::UnconsumedDesiredEntry { delta_index });
             }
             if !matches!(
                 entry.action,
@@ -229,11 +202,7 @@ impl ClassifiedActiveReblitBootPublicationDelta {
                 );
             }
             if entry.installed_expected.is_none() {
-                return Err(
-                    ActiveReblitBootPublicationEffectScheduleError::StaleIdentityMissing {
-                        delta_index,
-                    },
-                );
+                return Err(ActiveReblitBootPublicationEffectScheduleError::StaleIdentityMissing { delta_index });
             }
         }
 
@@ -255,32 +224,24 @@ fn validate_desired_action(
             if installed == Some(desired) {
                 Ok(())
             } else {
-                Err(
-                    ActiveReblitBootPublicationEffectScheduleError::RetainedOwnedIdentityMismatch {
-                        plan_index,
-                    },
-                )
+                Err(ActiveReblitBootPublicationEffectScheduleError::RetainedOwnedIdentityMismatch { plan_index })
             }
         }
         ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired => {
             if installed.is_some_and(|installed| installed != desired) {
                 Ok(())
             } else {
-                Err(
-                    ActiveReblitBootPublicationEffectScheduleError::ReplacementIdentityMismatch {
-                        plan_index,
-                    },
-                )
+                Err(ActiveReblitBootPublicationEffectScheduleError::ReplacementIdentityMismatch { plan_index })
             }
         }
         ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion
-        | ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale => Err(
-            ActiveReblitBootPublicationEffectScheduleError::StaleActionForDesired {
+        | ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale => {
+            Err(ActiveReblitBootPublicationEffectScheduleError::StaleActionForDesired {
                 plan_index,
                 delta_index,
                 action,
-            },
-        ),
+            })
+        }
     }
 }
 
@@ -301,38 +262,39 @@ mod tests {
     fn closed_desired_dispatch_requires_exact_old_and_new_identities() {
         let old = expected(1);
         let new = expected(2);
-        assert!(validate_desired_action(
-            0,
-            4,
-            ActiveReblitBootPublicationDeltaAction::PublishDesired,
-            new,
-            None,
-        )
-        .is_ok());
-        assert!(validate_desired_action(
-            1,
-            5,
-            ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired,
-            new,
-            Some(old),
-        )
-        .is_ok());
-        assert!(validate_desired_action(
-            2,
-            6,
-            ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired,
-            new,
-            Some(new),
-        )
-        .is_ok());
-        assert!(validate_desired_action(
-            3,
-            7,
-            ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired,
-            new,
-            Some(old),
-        )
-        .is_ok());
+        assert!(
+            validate_desired_action(0, 4, ActiveReblitBootPublicationDeltaAction::PublishDesired, new, None,).is_ok()
+        );
+        assert!(
+            validate_desired_action(
+                1,
+                5,
+                ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired,
+                new,
+                Some(old),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_desired_action(
+                2,
+                6,
+                ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired,
+                new,
+                Some(new),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_desired_action(
+                3,
+                7,
+                ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired,
+                new,
+                Some(old),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -346,9 +308,7 @@ mod tests {
                 exact,
                 Some(exact),
             ),
-            Err(ActiveReblitBootPublicationEffectScheduleError::StaleActionForDesired {
-                ..
-            }),
+            Err(ActiveReblitBootPublicationEffectScheduleError::StaleActionForDesired { .. }),
         ));
         assert!(matches!(
             validate_desired_action(
@@ -358,11 +318,7 @@ mod tests {
                 exact,
                 Some(exact),
             ),
-            Err(
-                ActiveReblitBootPublicationEffectScheduleError::ReplacementIdentityMismatch {
-                    ..
-                }
-            ),
+            Err(ActiveReblitBootPublicationEffectScheduleError::ReplacementIdentityMismatch { .. }),
         ));
     }
 }

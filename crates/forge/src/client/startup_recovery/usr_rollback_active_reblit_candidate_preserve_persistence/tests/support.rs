@@ -25,9 +25,7 @@ use super::super::candidate_test_support::{
     CandidateLayout, CandidatePreserveFixture, CandidateSource, active_reblit_wrapper_path,
 };
 
-pub(super) use super::super::candidate_test_support::{
-    CandidatePreserveFixture as Fixture, capture_record,
-};
+pub(super) use super::super::candidate_test_support::{CandidatePreserveFixture as Fixture, capture_record};
 pub(super) use super::super::test_fixture::OperationKind;
 
 pub(super) const WRAPPER_INDEX: usize = 13;

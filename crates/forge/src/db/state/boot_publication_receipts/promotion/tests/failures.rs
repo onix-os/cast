@@ -25,10 +25,7 @@ fn missing_foreign_and_conflicting_preimages_fail_without_mutation() {
 
     let same_transition_other_body = receipt('7', None, 0x72);
     assert!(matches!(
-        database.promote_boot_publication_receipt(
-            &same_transition_other_body,
-            promotion_deadline(),
-        ),
+        database.promote_boot_publication_receipt(&same_transition_other_body, promotion_deadline(),),
         Err(BootPublicationReceiptPromotionError::PendingFingerprintMismatch { .. })
     ));
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
@@ -52,10 +49,7 @@ fn conditional_and_terminal_races_roll_back_to_the_exact_pending_state() {
     stage(&before_race, &first);
     let before = before_race.boot_publication_receipt_state().unwrap();
     arm_before_head_update(|connection| {
-        replace_pending_fingerprint(
-            connection,
-            BootPublicationReceiptFingerprint::from_bytes([0x92; 32]),
-        );
+        replace_pending_fingerprint(connection, BootPublicationReceiptFingerprint::from_bytes([0x92; 32]));
     });
     assert!(matches!(
         before_race.promote_boot_publication_receipt(&first, promotion_deadline()),
@@ -68,10 +62,7 @@ fn conditional_and_terminal_races_roll_back_to_the_exact_pending_state() {
     stage(&after_race, &second);
     let before = after_race.boot_publication_receipt_state().unwrap();
     arm_after_head_update_before_commit(|connection| {
-        replace_committed_fingerprint(
-            connection,
-            BootPublicationReceiptFingerprint::from_bytes([0xa2; 32]),
-        );
+        replace_committed_fingerprint(connection, BootPublicationReceiptFingerprint::from_bytes([0xa2; 32]));
     });
     assert!(matches!(
         after_race.promote_boot_publication_receipt(&second, promotion_deadline()),
@@ -128,15 +119,17 @@ fn genuine_commit_failure_reconciles_the_rolled_back_pending_state() {
             .unwrap();
     });
 
-    let result =
-        database.promote_boot_publication_receipt(&pending, promotion_deadline());
-    assert!(matches!(
-        &result,
-        Err(BootPublicationReceiptPromotionError::CommitReport {
-            durable: BootPublicationReceiptPromotionDurableState::Pending,
-            ..
-        })
-    ), "{result:?}");
+    let result = database.promote_boot_publication_receipt(&pending, promotion_deadline());
+    assert!(
+        matches!(
+            &result,
+            Err(BootPublicationReceiptPromotionError::CommitReport {
+                durable: BootPublicationReceiptPromotionDurableState::Pending,
+                ..
+            })
+        ),
+        "{result:?}"
+    );
     assert_eq!(database.boot_publication_receipt_state().unwrap(), before);
     assert_eq!(
         database

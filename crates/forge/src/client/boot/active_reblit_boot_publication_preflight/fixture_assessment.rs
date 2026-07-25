@@ -11,21 +11,14 @@ use std::{
 use crate::{
     client::{
         active_reblit_boot_namespace_inputs::BoundActiveReblitBootNamespaceDomain,
-        active_reblit_mounted_boot_topology::{
-            BootTargetRole, RevalidatedActiveReblitBootPublicationTarget,
-        },
+        active_reblit_mounted_boot_topology::{BootTargetRole, RevalidatedActiveReblitBootPublicationTarget},
     },
-    linux_fs::{
-        descriptor_boot_namespace::{
-            BootNamespaceAssessmentLimits, RetainedBootNamespaceAssessmentLimits,
-            assess_retained_boot_namespace_until,
-        },
+    linux_fs::descriptor_boot_namespace::{
+        BootNamespaceAssessmentLimits, RetainedBootNamespaceAssessmentLimits, assess_retained_boot_namespace_until,
     },
 };
 
-use super::{
-    BootPublicationNamespaceAssessment, target_identity,
-};
+use super::{BootPublicationNamespaceAssessment, target_identity};
 
 pub(in crate::client) enum FixtureBootNamespaceMutation {
     RemoveFile(PathBuf),
@@ -37,10 +30,7 @@ impl FixtureBootNamespaceMutation {
     fn apply(self) {
         match self {
             Self::RemoveFile(path) => fs::remove_file(path).expect("remove fixture publication leaf"),
-            Self::ReplaceFileIdentity {
-                canonical,
-                displaced,
-            } => {
+            Self::ReplaceFileIdentity { canonical, displaced } => {
                 let bytes = fs::read(&canonical).expect("read fixture journal record");
                 let mode = fs::metadata(&canonical)
                     .expect("inspect fixture journal record")
@@ -51,10 +41,7 @@ impl FixtureBootNamespaceMutation {
                 fs::set_permissions(&canonical, fs::Permissions::from_mode(mode))
                     .expect("restore fixture journal mode");
             }
-            Self::ReplaceDirectoryIdentity {
-                canonical,
-                displaced,
-            } => {
+            Self::ReplaceDirectoryIdentity { canonical, displaced } => {
                 let mode = fs::metadata(&canonical)
                     .expect("inspect fixture topology directory")
                     .permissions()
@@ -139,12 +126,7 @@ pub(super) fn take(
     }
     let root = OpenOptions::new()
         .read(true)
-        .custom_flags(
-            nix::libc::O_PATH
-                | nix::libc::O_DIRECTORY
-                | nix::libc::O_CLOEXEC
-                | nix::libc::O_NOFOLLOW,
-        )
+        .custom_flags(nix::libc::O_PATH | nix::libc::O_DIRECTORY | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
         .open(&directive.root)
         .expect("open fixture publication root");
     let metadata = root.metadata().expect("inspect fixture publication root");
