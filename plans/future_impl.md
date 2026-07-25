@@ -526,6 +526,40 @@ legacy route has always left the tree there, and no coordinated route exercised
 this path until 2026-07-26. But it rewrites an asserted contract, so confirm the
 intent before changing it.
 
+### 1.2a ActivateArchived — what already exists  · survey 2026-07-26
+
+**Smaller than E:L suggests: the coordinator prefix already supports it.**
+
+- `NewStateRequest`/`request.rs:28,73-79` already builds an
+  `Operation::ActivateArchived` record.
+- `candidate_preparation.rs` handles the operation throughout (:131, :195, :220)
+  and yields a dedicated `PreparedArchivedTransitionCoordinator` typestate.
+- That typestate already persists `/usr` exchange intent
+  (`usr_exchange_intent.rs:94`), so the exchange, root-links and system-trigger
+  phases — which are shared — are reachable today.
+
+**What is missing:**
+
+1. `execute_activate_archived_forward`, mirroring `execute_new_state_forward`
+   (226 lines). It should be *shorter*: no fresh allocation, because the state
+   row already exists — that is the whole point of activating an archived state.
+2. Terminal-chain admission. `exact_new_state_terminal_source` gates on
+   `Operation::NewState`, so the chain built in §1.1b/§1.1c rejects
+   ActivateArchived records today.
+
+**The terminal chain should generalize rather than be rebuilt.** An
+ActivateArchived record has the same terminal shape as an archiving NewState —
+`archive_previous`, candidate ≠ previous, both non-null — so the existing
+`NewStateTerminalStep` machinery (admission, advance, same-store/reopened
+revalidation, finalize) should serve it by widening the operation predicate,
+exactly as `commit_layouts` already serves all three operations. Verify against
+`policy.rs:264-269`, which maps `PreviousOrigin` per operation and already
+covers the archived case.
+
+**Sequence:** widen the terminal predicate first (small, testable in isolation
+against a hand-built record), then write the forward driver, then wire
+`state_planning.rs:115` off `commit_stateful_staging`.
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has
