@@ -42,11 +42,11 @@ fn canonical_round_trip_covers_every_phase() {
 }
 
 #[test]
-fn canonical_v1_full_frame_and_json_order_are_locked_by_golden_bytes() {
+fn canonical_full_frame_and_json_order_are_locked_by_golden_bytes() {
     const GOLDEN_JSON_WITH_NEWLINE: &[u8] =
-        include_bytes!("../../../../../tests/fixtures/transition-journal-v1-rollback-decided.json");
+        include_bytes!("../../../../../tests/fixtures/transition-journal-rollback-decided.json");
     const GOLDEN_HEX_WITH_NEWLINE: &[u8] =
-        include_bytes!("../../../../../tests/fixtures/transition-journal-v1-rollback-decided.hex");
+        include_bytes!("../../../../../tests/fixtures/transition-journal-rollback-decided.hex");
     assert_eq!(GOLDEN_JSON_WITH_NEWLINE.last(), Some(&b'\n'));
     assert_eq!(GOLDEN_HEX_WITH_NEWLINE.last(), Some(&b'\n'));
     let golden_json = &GOLDEN_JSON_WITH_NEWLINE[..GOLDEN_JSON_WITH_NEWLINE.len() - 1];
@@ -62,9 +62,9 @@ fn canonical_v1_full_frame_and_json_order_are_locked_by_golden_bytes() {
     }
     assert!(pairs.remainder().is_empty());
 
-    let mut source = new_state_record(Phase::BootSyncStarted);
-    source.version = PAYLOAD_VERSION_V1;
-    source.boot_publication_receipts = None;
+    // A `BootSyncStarted` record carries its receipt correlation; the earlier
+    // receipt-less shape was only representable by the deleted legacy version.
+    let source = new_state_record(Phase::BootSyncStarted);
     let value = rollback_decided(&source);
     assert_eq!(encode(&value).unwrap(), golden_frame);
     assert_eq!(&golden_frame[HEADER_SIZE..], golden_json);
@@ -118,60 +118,6 @@ fn unknown_frame_and_payload_versions_are_rejected() {
         decode(&unknown),
         Err(CodecError::UnsupportedPayloadVersion(version)) if version == unknown_version
     ));
-}
-
-#[test]
-fn payload_v1_remains_decodable_but_cannot_enter_v2_boot_success_domain() {
-    let current = encode(&record(Phase::Preparing)).unwrap();
-    let v1 = replace_payload(&current, |payload| {
-        payload.replacen(
-            &format!("\"version\":{PAYLOAD_VERSION}"),
-            &format!("\"version\":{PAYLOAD_VERSION_V1}"),
-            1,
-        )
-    });
-    let decoded_v1 = decode(&v1).unwrap();
-    assert_eq!(decoded_v1.version, PAYLOAD_VERSION_V1);
-    assert_eq!(encode(&decoded_v1).unwrap(), v1);
-    let mut silent_upgrade = decoded_v1.forward_successor(None).unwrap();
-    silent_upgrade.version = PAYLOAD_VERSION;
-    assert!(matches!(
-        validate_advance(&decoded_v1, &silent_upgrade),
-        Err(CodecError::ImmutableTransitionDataChanged)
-    ));
-
-    let mut v1_complete = record(Phase::BootRepairComplete);
-    v1_complete.version = PAYLOAD_VERSION_V1;
-    v1_complete.boot_publication_receipts = None;
-    assert!(matches!(
-        encode(&v1_complete),
-        Err(CodecError::PayloadVersionPhaseMismatch {
-            version: PAYLOAD_VERSION_V1,
-            phase: Phase::BootRepairComplete,
-        })
-    ));
-
-    let started = valid_rollback_record(Phase::BootRepairStarted);
-    for (outcome, status) in [
-        (BootRepairOutcome::Applied, BootRollback::Applied),
-        (
-            BootRepairOutcome::AlreadySatisfied,
-            BootRollback::AlreadySatisfied,
-        ),
-    ] {
-        let v2_complete = started.boot_repair_complete_successor(outcome).unwrap();
-        let mut v1_resolved = v2_complete.boot_repair_rollback_complete_successor().unwrap();
-        assert_eq!(v1_resolved.phase, Phase::RollbackComplete);
-        v1_resolved.version = PAYLOAD_VERSION_V1;
-        v1_resolved.boot_publication_receipts = None;
-        assert!(matches!(
-            encode(&v1_resolved),
-            Err(CodecError::PayloadVersionBootRollbackMismatch {
-                version: PAYLOAD_VERSION_V1,
-                status: actual,
-            }) if actual == status
-        ));
-    }
 }
 
 #[test]

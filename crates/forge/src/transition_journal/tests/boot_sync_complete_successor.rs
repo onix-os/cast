@@ -39,23 +39,6 @@ fn typed_boot_sync_complete_successor_preserves_exact_v3_receipt_pair() {
 }
 
 #[test]
-fn typed_boot_sync_complete_successor_rejects_legacy_payload_versions() {
-    let expected_pair = boot_publication_receipts();
-
-    for version in [PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2] {
-        let mut legacy = reblit_record(Phase::BootSyncStarted);
-        legacy.version = version;
-        legacy.boot_publication_receipts = None;
-        encode(&legacy).unwrap();
-
-        assert!(matches!(
-            legacy.boot_sync_complete_successor(expected_pair),
-            Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(actual)) if actual == version
-        ));
-    }
-}
-
-#[test]
 fn typed_boot_sync_complete_successor_rejects_each_receipt_pair_mismatch() {
     let started = reblit_record(Phase::BootSyncStarted);
     let exact = started.boot_publication_receipt_correlation().unwrap().unwrap();

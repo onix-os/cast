@@ -12,7 +12,7 @@ use crate::{
         },
     },
     state,
-    transition_journal::{Phase, encode},
+    transition_journal::Phase,
 };
 
 use super::{
@@ -158,30 +158,6 @@ fn exact_system_triggered_no_boot_authorities_preserve_unrelated_receipts() {
 
 #[test]
 fn stable_receipt_selection_and_wrapper_mismatches_defer() {
-    let mut legacy = commit_decided_fixture(Epoch::Current, CleanupLayout::Apply);
-    legacy.fixture.source.version = 2;
-    legacy.fixture.source.boot_publication_receipts = None;
-    fs::write(
-        legacy.fixture.installation.root.join(".cast/journal/state-transition"),
-        encode(&legacy.fixture.source).unwrap(),
-    )
-    .unwrap();
-    let journal = open_boot_sync_complete_journal(&legacy);
-    let reservation = ActiveStateReservation::acquire().unwrap();
-    assert!(matches!(
-        ActiveReblitCommitCleanupAuthority::capture(
-            &legacy.fixture.installation,
-            &journal,
-            &legacy.fixture.database,
-            &reservation,
-            &legacy.fixture.source,
-        )
-        .unwrap(),
-        ActiveReblitCommitCleanupAdmission::Deferred
-    ));
-    drop(reservation);
-    drop(journal);
-
     let mut wrong_selection = commit_decided_fixture(Epoch::Current, CleanupLayout::Apply);
     let other = state::Id::from(i32::from(wrong_selection.fixture.candidate_state) + 100);
     wrong_selection.fixture.installation.active_state = Some(other);

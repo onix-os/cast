@@ -70,7 +70,7 @@ pub(crate) use successors::{BootRepairOutcome, InitialRollbackAction, RollbackAc
 #[cfg(test)]
 use codec::{
     CHECKSUM_END, FRAME_VERSION, HEADER_SIZE, MAGIC, MAGIC_END, MAX_QUARANTINE_NAME_BYTES, PAYLOAD_FORMAT,
-    PAYLOAD_VERSION, PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2, VERSION_END, checksum, enforce_record_size,
+    PAYLOAD_VERSION, VERSION_END, checksum, enforce_record_size,
 };
 #[cfg(test)]
 use store::{

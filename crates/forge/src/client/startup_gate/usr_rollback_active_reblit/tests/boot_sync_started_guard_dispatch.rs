@@ -25,13 +25,12 @@ use crate::{
 };
 
 use super::{
-    super::test_fixture::BootSyncStartedLayout,
     boot_sync_complete_support::{
         BootSyncCompleteReadOnlySnapshot, boot_sync_started_fixture, open_boot_sync_complete_journal,
     },
     support::{
-        BootRepairFixture, Epoch, assert_complete_route_journal_only, assert_pending_phase,
-        build_legacy_boot_sync_started, enter_boot, reset_complete_route_effect_observers,
+        BootRepairFixture, Epoch, assert_complete_route_journal_only, assert_pending_phase, enter_boot,
+        reset_complete_route_effect_observers,
     },
 };
 
@@ -121,21 +120,6 @@ fn startup_exact_pending_boot_sync_started_remains_rollback_eligible() {
     assert_eq!(decided.generation, source.generation + 1);
     assert_eq!(decided.rollback.as_ref().unwrap().source, ForwardPhase::BootSyncStarted);
     read_only.assert_unchanged(&fixture);
-    assert_complete_route_journal_only();
-}
-
-#[test]
-fn startup_legacy_boot_sync_started_remains_rollback_eligible() {
-    let fixture = build_legacy_boot_sync_started(Epoch::Historical, BootSyncStartedLayout::Post, 2);
-    let source = fixture.fixture.source.clone();
-    reset_complete_route_effect_observers();
-
-    let error = enter_boot(&fixture);
-
-    assert_pending_phase(&error, Phase::RollbackDecided);
-    let decided = fixture.fixture.canonical_record();
-    assert_eq!(decided.generation, source.generation + 1);
-    assert_eq!(decided.rollback.as_ref().unwrap().source, ForwardPhase::BootSyncStarted);
     assert_complete_route_journal_only();
 }
 

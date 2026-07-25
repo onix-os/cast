@@ -1,5 +1,5 @@
 use super::{
-    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION, PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2},
+    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION},
     model::{
         AbortDisposition, BootRollback, ForwardPhase, MountNamespaceIdentity, Operation, Phase, PreviousOrigin,
         RollbackAction, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity, TransitionRecord,
@@ -134,24 +134,8 @@ impl TransitionRecord {
         if self.format != PAYLOAD_FORMAT {
             return Err(CodecError::UnsupportedPayloadFormat(self.format.clone()));
         }
-        if !matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION_V2 | PAYLOAD_VERSION) {
+        if self.version != PAYLOAD_VERSION {
             return Err(CodecError::UnsupportedPayloadVersion(self.version));
-        }
-        if self.version == PAYLOAD_VERSION_V1 {
-            if self.phase == Phase::BootRepairComplete {
-                return Err(CodecError::PayloadVersionPhaseMismatch {
-                    version: self.version,
-                    phase: self.phase,
-                });
-            }
-            if let Some(status @ (BootRollback::Applied | BootRollback::AlreadySatisfied)) =
-                self.rollback.as_ref().map(|rollback| rollback.boot)
-            {
-                return Err(CodecError::PayloadVersionBootRollbackMismatch {
-                    version: self.version,
-                    status,
-                });
-            }
         }
         if self.generation == 0 {
             return Err(CodecError::ZeroGeneration);
@@ -200,14 +184,6 @@ impl TransitionRecord {
     }
 
     fn validate_boot_publication_receipts(&self, layout_phase: ForwardPhase) -> Result<(), CodecError> {
-        if matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION_V2) {
-            return if self.boot_publication_receipts.is_none() {
-                Ok(())
-            } else {
-                Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(self.version))
-            };
-        }
-
         let required = self.options.run_boot_sync && layout_phase.ordinal() >= ForwardPhase::BootSyncStarted.ordinal();
         if self.boot_publication_receipts.is_some() == required {
             Ok(())
@@ -739,8 +715,9 @@ pub(super) fn validate_advance(expected: &TransitionRecord, next: &TransitionRec
     if expected.transition_id != next.transition_id {
         return Err(CodecError::TransitionChanged);
     }
-    let receipt_entry = expected.version == PAYLOAD_VERSION
-        && expected.boot_publication_receipts.is_none()
+    // Receipts may appear exactly once, entering at `BootSyncStarted`. Any other
+    // change to them is illegal.
+    let receipt_entry = expected.boot_publication_receipts.is_none()
         && next.boot_publication_receipts.is_some()
         && next.phase == Phase::BootSyncStarted;
     if expected.boot_publication_receipts != next.boot_publication_receipts && !receipt_entry {
