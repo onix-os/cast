@@ -338,3 +338,140 @@ fn advance_archive_completion_record(
     require_same_store_record_binding(&coordinator, authority, &successor_binding)?;
     Ok((coordinator, successor_binding))
 }
+
+/// Retained capabilities handed to the terminal tail when a NewState
+/// transition commits without publishing boot entries.
+pub(crate) struct NewStateNoBootCommitDecisionHandoff {
+    pub(crate) journal: crate::transition_journal::TransitionJournalStore,
+    pub(crate) state_database: db::state::Database,
+    pub(crate) installation: crate::Installation,
+    pub(crate) record: TransitionRecord,
+    pub(crate) active_state_reservation: crate::client::CoordinatorActiveStateReservation,
+}
+
+impl PreviousArchivedCoordinator {
+    /// Advance a non-bootable NewState transition from `PreviousArchived`
+    /// straight to `CommitDecided`, skipping boot publication.
+    ///
+    /// The phase model already permits this: `PreviousArchived` advances to
+    /// `CommitDecided` whenever `run_boot_sync` is unset. A candidate that
+    /// publishes no kernel is the ordinary reason — see
+    /// `plans/future_impl.md` §1.1a, which fixes `run_boot_sync` before the
+    /// record is written so this path is reachable at all.
+    ///
+    /// Only the record binding is revalidated: the predecessor tree legitimately
+    /// left staging during the archive, so the tree/root-ABI sandwich no longer
+    /// describes this namespace.
+    // Forward scaffolding: consumed once Slice 5 wires the coordinated route live.
+    #[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+    pub(crate) fn commit_new_state_without_boot(
+        self,
+    ) -> Result<NewStateNoBootCommitDecisionHandoff, PreviousArchiveNoBootFailure> {
+        let Self {
+            coordinator,
+            metadata,
+            provenance,
+            authority,
+            readiness,
+            record_binding,
+        } = self;
+        let transition_id = coordinator.record.transition_id.clone();
+
+        if !exact_new_state_no_boot_source(&coordinator.record) {
+            return Err(PreviousArchiveNoBootFailure::SourceContract { transition_id });
+        }
+        let preflight = |source| PreviousArchiveNoBootFailure::Preflight {
+            transition_id: transition_id.clone(),
+            source,
+        };
+        coordinator
+            .require_phase(Phase::PreviousArchived, COMMIT_NEW_STATE_WITHOUT_BOOT)
+            .map_err(preflight)?;
+        require_same_store_record_binding(&coordinator, &authority, &record_binding).map_err(preflight)?;
+
+        let successor = coordinator
+            .record
+            .forward_successor(None)
+            .map_err(StatefulTransitionCoordinatorError::from)
+            .map_err(preflight)?;
+        if successor.phase != Phase::CommitDecided {
+            return Err(PreviousArchiveNoBootFailure::SuccessorContract {
+                transition_id,
+                actual_phase: successor.phase,
+            });
+        }
+
+        let (coordinator, record_binding) =
+            advance_archive_completion_record(coordinator, &authority, record_binding, successor).map_err(
+                |source| PreviousArchiveNoBootFailure::Advance {
+                    transition_id: transition_id.clone(),
+                    source,
+                },
+            )?;
+        require_same_store_record_binding(&coordinator, &authority, &record_binding).map_err(|source| {
+            PreviousArchiveNoBootFailure::Preflight {
+                transition_id: transition_id.clone(),
+                source,
+            }
+        })?;
+
+        let installation = authority.installation().clone();
+        let active_state_reservation = authority.into_active_state_reservation();
+        drop(record_binding);
+        drop(metadata);
+        let _ = provenance;
+        drop(readiness);
+        let StatefulTransitionCoordinator { identity, record } = coordinator;
+        let crate::transition_identity::StatefulTreeIdentity {
+            journal,
+            state_database,
+            ..
+        } = identity;
+        Ok(NewStateNoBootCommitDecisionHandoff {
+            journal,
+            state_database,
+            installation,
+            record,
+            active_state_reservation,
+        })
+    }
+}
+
+const COMMIT_NEW_STATE_WITHOUT_BOOT: &str = "commit new state without boot";
+
+/// A NewState transition that archived its predecessor and carries no bootable
+/// payload, so it commits directly from `PreviousArchived`.
+fn exact_new_state_no_boot_source(record: &TransitionRecord) -> bool {
+    record.operation == crate::transition_journal::Operation::NewState
+        && record.phase == Phase::PreviousArchived
+        && record.rollback.is_none()
+        && record.options.archive_previous
+        && !record.options.run_boot_sync
+        && record.boot_publication_receipts.is_none()
+        && record.candidate.id.is_some()
+        && record.previous.id.is_some()
+        && record.candidate.id != record.previous.id
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum PreviousArchiveNoBootFailure {
+    #[error("transition {transition_id} is not an exact no-boot NewState commit source")]
+    SourceContract { transition_id: TransitionId },
+    #[error("transition {transition_id}: preflight for the no-boot NewState commit")]
+    Preflight {
+        transition_id: TransitionId,
+        #[source]
+        source: StatefulTransitionCoordinatorError,
+    },
+    #[error("transition {transition_id}: no-boot NewState successor is phase {actual_phase:?}, not commit-decided")]
+    SuccessorContract {
+        transition_id: TransitionId,
+        actual_phase: Phase,
+    },
+    #[error("transition {transition_id}: advance the no-boot NewState commit decision")]
+    Advance {
+        transition_id: TransitionId,
+        #[source]
+        source: BoxedAdvanceError,
+    },
+}

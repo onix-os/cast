@@ -86,6 +86,14 @@ impl Client {
             active_state,
         } = candidate;
 
+        // Boot applicability must be known before the journal record is written,
+        // because `run_boot_sync` is fixed at creation and validation later
+        // requires receipts exactly when it is set. NewState's row does not exist
+        // yet, so the candidate's selections stand in as the prospective head
+        // (`plans/future_impl.md` §1.1a).
+        let applicability_deadline = deadline_after(BOOT_PUBLICATION_TIMEOUT, "boot applicability deadline")?;
+        let run_boot_sync = self.new_state_boot_applicable(selections, previous, applicability_deadline)?;
+
         let preflight = JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, None)
             .map_err(|source| LiveNewStateBootError::at("pre-journal client authority", source))?;
         let candidate_path = self.installation.staging_path("usr");
@@ -100,7 +108,7 @@ impl Client {
             NewStatePrevious::Active(previous),
             selections,
             summary,
-            true,
+            run_boot_sync,
             |os_info| candidate_metadata::derive_outputs(os_info, &system_snapshot),
             |view| {
                 let (candidate_usr, candidate_usr_path) = view.retained_candidate_usr();
@@ -262,3 +270,93 @@ fn deadline_after(duration: Duration, stage: &'static str) -> Result<Instant, Li
         .checked_add(duration)
         .ok_or_else(|| LiveNewStateBootError::at(stage, DeadlineOverflow))
 }
+
+/// Bounds for the pre-allocation layout query. Generous: this reads only the
+/// candidate's own packages, not a whole retained chain.
+const PROSPECTIVE_LAYOUT_BOUNDS: crate::db::layout::QueryBounds = crate::db::layout::QueryBounds {
+    max_rows: 262_144,
+    max_string_bytes: 64 * 1024 * 1024,
+};
+
+impl Client {
+    /// Decide `run_boot_sync` for a NewState transition **before** its state row
+    /// exists, so the journal record is correct at creation.
+    ///
+    /// The candidate's selections stand in as the prospective head; the retained
+    /// tail comes from the current active state's projection, truncated exactly
+    /// as allocating a head would truncate it. Reuses the real plan's rules, so
+    /// this answer cannot drift from the post-allocation plan
+    /// (`plans/future_impl.md` §1.1a).
+    #[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+    pub(in crate::client) fn new_state_boot_applicable(
+        &self,
+        selections: &[Selection],
+        previous: state::Id,
+        deadline: Instant,
+    ) -> Result<bool, LiveNewStateBootError> {
+        let candidate_packages = selections
+            .iter()
+            .map(|selection| selection.package.clone())
+            .collect::<Vec<_>>();
+        let candidate_layouts = match self
+            .layout_db
+            .query_bounded(&candidate_packages, PROSPECTIVE_LAYOUT_BOUNDS, || Instant::now() <= deadline)
+            .map_err(|source| LiveNewStateBootError::at("prospective candidate layouts", source))?
+        {
+            crate::db::layout::BoundedQueryOutcome::Complete(layouts) => layouts,
+            bounded => {
+                return Err(LiveNewStateBootError::at(
+                    "prospective candidate layouts",
+                    ProspectiveLayoutsBounded(format!("{bounded:?}")),
+                ));
+            }
+        };
+        let selected = candidate_packages
+            .iter()
+            .map(|package| package.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        // The retained tail the new head would keep, and each state's own
+        // selections/layouts drawn from the current projection.
+        let projection = crate::client::active_reblit_boot_projection::PreparedActiveReblitBootProjection::prepare_until(
+            &self.state_db,
+            &self.layout_db,
+            previous,
+            deadline,
+        )
+        .map_err(|source| LiveNewStateBootError::at("prospective chain projection", source))?;
+        let tail_states = crate::client::active_reblit_boot_projection::prospective_chain_tail(projection.states());
+        let tail_selected = tail_states
+            .iter()
+            .map(|state| {
+                state
+                    .selections
+                    .iter()
+                    .map(|selection| selection.package.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .collect::<Vec<_>>();
+        let chain = tail_states
+            .iter()
+            .zip(tail_selected.iter())
+            .map(|(state, selected)| (state.id, selected, projection.layouts()))
+            .collect::<Vec<_>>();
+
+        match crate::client::active_reblit_boot_projection::assess_prospective_boot_applicability(
+            &candidate_layouts,
+            &selected,
+            &chain,
+            previous,
+            deadline,
+        )
+        .map_err(|source| LiveNewStateBootError::at("prospective boot applicability", source))?
+        {
+            crate::client::active_reblit_boot_projection::ProspectiveBootApplicability::Applicable => Ok(true),
+            crate::client::active_reblit_boot_projection::ProspectiveBootApplicability::NotApplicable(_) => Ok(false),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+#[error("the prospective candidate layout query exceeded its bounds: {0}")]
+struct ProspectiveLayoutsBounded(String);

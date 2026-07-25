@@ -991,7 +991,7 @@ mod tests;
 /// Whether a not-yet-allocated NewState candidate would publish a bootable
 /// plan, decided before its state row exists.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::client) enum ProspectiveBootApplicability {
+pub(crate) enum ProspectiveBootApplicability {
     Applicable,
     NotApplicable(BootAssetPlanNotApplicable),
 }
@@ -1009,7 +1009,7 @@ pub(in crate::client) enum ProspectiveBootApplicability {
 /// head shifts the bounded history by one, so the current projection's oldest
 /// state is evicted and must not be counted — counting it could claim a kernel
 /// the real plan will never see.
-pub(in crate::client) fn assess_prospective_boot_applicability(
+pub(crate) fn assess_prospective_boot_applicability(
     candidate_layouts: &[(package::Id, StonePayloadLayoutRecord)],
     candidate_packages: &BTreeSet<&str>,
     chain: &[(state::Id, &BTreeSet<&str>, &[(package::Id, StonePayloadLayoutRecord)])],
@@ -1051,7 +1051,7 @@ pub(in crate::client) fn assess_prospective_boot_applicability(
 /// The bounded history keeps `MAX_BOOT_HISTORY_STATES` entries, so allocating a
 /// head pushes the current chain down by one and drops its oldest entry. Taking
 /// that prefix keeps the probe's view identical to the post-allocation plan's.
-pub(in crate::client) fn prospective_chain_tail<'a>(current: &'a [crate::State]) -> &'a [crate::State] {
+pub(crate) fn prospective_chain_tail<'a>(current: &'a [crate::State]) -> &'a [crate::State] {
     let keep = crate::db::state::MAX_BOOT_HISTORY_STATES.min(current.len());
     &current[..keep]
 }
