@@ -4,8 +4,7 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use super::model::{
-    AbortDisposition, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin, RollbackAction,
-    TransitionRecord,
+    AbortDisposition, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin, RollbackAction, TransitionRecord,
 };
 
 pub(super) const MAX_QUARANTINE_NAME_BYTES: usize = 128;

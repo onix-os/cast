@@ -16,8 +16,7 @@ use crate::{
     db::state::Database,
     transition_identity::{
         ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, NewStateUnarchivedBootSyncHandoffSeal,
-        PreviousArchivedBootSyncHandoffSeal,
-        SystemTriggersCompleteCoordinator,
+        PreviousArchivedBootSyncHandoffSeal, SystemTriggersCompleteCoordinator,
     },
     transition_journal::{Operation, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };

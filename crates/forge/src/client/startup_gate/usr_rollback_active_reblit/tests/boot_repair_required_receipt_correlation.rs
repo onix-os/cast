@@ -24,9 +24,8 @@ use super::{
     support::{
         BootRepairFixture, CandidateOrigin, Epoch, UsrRestoreOrigin, assert_boot_required_capture_authority_error,
         assert_boot_required_persistence_authority_error, assert_no_boot_synchronize_attempts,
-        assert_no_candidate_effects, build_boot_sync_started,
-        drive_boot_sync_started_to_candidate_preserved, enter_boot,
-        reset_boot_synchronize_observer, reset_candidate_effect_observers,
+        assert_no_candidate_effects, build_boot_sync_started, drive_boot_sync_started_to_candidate_preserved,
+        enter_boot, reset_boot_synchronize_observer, reset_candidate_effect_observers,
     },
 };
 
@@ -75,7 +74,6 @@ fn startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preser
         assert_no_candidate_effects();
         assert_no_boot_synchronize_attempts();
     }
-
 }
 
 #[test]

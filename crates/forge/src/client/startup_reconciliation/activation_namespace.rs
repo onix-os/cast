@@ -15,6 +15,7 @@
 
 mod activate_archived_complete_route_proof;
 mod activate_archived_finalization_proof;
+mod activation_terminal_proof;
 mod active_reblit_boot_repair_complete_proof;
 mod active_reblit_boot_repair_required_proof;
 mod active_reblit_boot_repair_start_proof;
@@ -30,7 +31,6 @@ mod capture;
 mod decision_proof;
 mod fresh_db_invalidation_proof;
 mod fresh_db_invalidation_route_proof;
-mod new_state_terminal_proof;
 mod parent_durability;
 mod policy;
 mod resume_route_proof;
@@ -127,6 +127,7 @@ pub(super) use active_reblit_finalization_proof::{
     UsrRollbackActiveReblitFinalizationNamespaceProof,
 };
 
+pub(super) use activation_terminal_proof::{ActivationTerminalNamespaceInspection, ActivationTerminalNamespaceProof};
 pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;
 pub(super) use candidate_preserve_proof::UsrRollbackNewStateTargetNormalizeNamespaceReconciliation;
 #[cfg(test)]
@@ -260,7 +261,6 @@ pub(super) use fresh_db_invalidation_route_proof::{
     UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
     UsrRollbackFreshDbInvalidationRouteNamespaceProof,
 };
-pub(super) use new_state_terminal_proof::{NewStateTerminalNamespaceInspection, NewStateTerminalNamespaceProof};
 pub(super) use policy::UsrExchangeLayout;
 use policy::{LayoutAlternative, NamespacePolicyConflict, assess_snapshot_layout};
 #[cfg(test)]

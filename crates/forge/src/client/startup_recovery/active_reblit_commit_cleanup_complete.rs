@@ -15,7 +15,6 @@ use crate::{
     },
 };
 
-use super::reopened_advance::{ReopenedDurableRecord, classify_reopened_record};
 use super::super::startup_reconciliation::{
     ActiveReblitCommitCleanupDurableAuthority, ActiveReblitCommitCleanupEffectError,
     ActiveReblitCommitCleanupPostAdvanceAuthority, ActiveReblitCommitCleanupRecordAdvanceError,
@@ -23,6 +22,7 @@ use super::super::startup_reconciliation::{
 use super::canonical_journal_reopen::{
     CanonicalJournalReopenError, reopen_canonical_journal, try_reopen_canonical_journal,
 };
+use super::reopened_advance::{ReopenedDurableRecord, classify_reopened_record};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum DurableActiveReblitCommitCleanupRecord {

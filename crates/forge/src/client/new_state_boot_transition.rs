@@ -212,7 +212,7 @@ impl Client {
         record: crate::transition_journal::TransitionRecord,
         reservation: &crate::client::active_state_snapshot::ActiveStateReservation,
     ) -> Result<(), LiveNewStateBootError> {
-        let journal = crate::client::startup_recovery::finish_new_state_after_commit(
+        let journal = crate::client::startup_recovery::finish_activation_after_commit(
             journal,
             &self.state_db,
             &self.installation,
@@ -394,7 +394,9 @@ impl Client {
             .collect::<Vec<_>>();
         let candidate_layouts = match self
             .layout_db
-            .query_bounded(&candidate_packages, PROSPECTIVE_LAYOUT_BOUNDS, || Instant::now() <= deadline)
+            .query_bounded(&candidate_packages, PROSPECTIVE_LAYOUT_BOUNDS, || {
+                Instant::now() <= deadline
+            })
             .map_err(|source| LiveNewStateBootError::at("prospective candidate layouts", source))?
         {
             crate::db::layout::BoundedQueryOutcome::Complete(layouts) => layouts,
@@ -445,7 +447,10 @@ impl Client {
                 (
                     state.id,
                     selected,
-                    projection.as_ref().expect("a tail exists only with a projection").layouts(),
+                    projection
+                        .as_ref()
+                        .expect("a tail exists only with a projection")
+                        .layouts(),
                 )
             })
             .collect::<Vec<_>>();

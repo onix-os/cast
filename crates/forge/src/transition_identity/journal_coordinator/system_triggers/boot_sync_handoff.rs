@@ -181,11 +181,12 @@ impl SystemTriggersCompleteCoordinator {
             state_database,
             ..
         } = identity;
-        let boot_candidate = state_database.get(candidate_id).map_err(|_| {
-            ActiveReblitBootSyncHandoffFailure::SourceContract {
-                transition_id: transition_id.clone(),
-            }
-        })?;
+        let boot_candidate =
+            state_database
+                .get(candidate_id)
+                .map_err(|_| ActiveReblitBootSyncHandoffFailure::SourceContract {
+                    transition_id: transition_id.clone(),
+                })?;
         Ok(
             CoordinatorActiveReblitBootSyncHandoff::from_unarchived_system_triggers_complete(
                 NewStateUnarchivedBootSyncHandoffSeal { _private: () },
