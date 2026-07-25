@@ -467,9 +467,25 @@ accepted; without it, only `completed` = `{candidate: Live, previous: Absent}`.
 So the route passes the first terminal step and fails the second — exactly the
 observed behaviour.
 
-**The expected end state is confirmed by an existing test:**
-`activation_namespace/tests.rs:790` does
-`fs::remove_dir_all(installation.staging_path("usr"))` for the synthesized case.
+**The contract is explicitly asserted, not incidental.**
+`activation_namespace/tests.rs:780-795` walks exactly this: synthesized previous
+in staging passes at `CommitDecided`, **fails with `PhaseLayout` at
+`CommitCleanupComplete`**, and passes both once `staging/usr` is removed. So the
+policy is deliberate — the route is what is missing a step, and the observed
+defer is the policy working as designed.
+
+**Note the legacy route never hits this**: it has no journal and therefore no
+phase-layout checks at all, which is why a first install has always left the
+synthesized tree behind without complaint.
+
+**Shape of the fix — treat it as a real durability effect.** Disposal must go
+through `StatefulTreeIdentity`, which retains descriptors on the previous store;
+it cannot be a bare `remove_dir_all`. Mirror `archive_previous`: a journal-guarded
+primitive that disposes of the synthesized-empty previous, invoked on the
+unarchived tails between the exchange and the terminal phases. Removing a tree is
+the most destructive primitive in the crate, so it wants the same retained-
+descriptor discipline, fault-injection points and reconciliation as the archive
+move — not a shortcut because the tree happens to be empty.
 
 **Fix:** the coordinated first-install route must remove the synthesized-empty
 previous tree after the exchange and before the terminal phases — the step the
