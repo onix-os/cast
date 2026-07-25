@@ -194,6 +194,11 @@ impl Fixture {
             .installation
             .root_path(fixture.previous_state.to_string());
         fs::create_dir_all(&slot).unwrap();
+        // The state slot must present safe (non-group/other-writable)
+        // permissions, matching a coordinator-created archive slot; a bare
+        // `create_dir_all` inherits the ambient umask, which the namespace layout
+        // classification rejects when the process is not root.
+        crate::test_support::prepare_private_installation_root(&slot);
         fs::rename(&staged, slot.join("usr")).unwrap();
         assert_eq!(fixture.source.phase, Phase::PreviousArchived);
         assert!(fixture.source.options.archive_previous);

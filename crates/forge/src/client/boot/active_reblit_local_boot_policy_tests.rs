@@ -31,6 +31,11 @@ impl Fixture {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("root");
         fs::create_dir(&root).unwrap();
+        // The installation root must present safe (non-group/other-writable)
+        // permissions; a bare `create_dir` inherits the ambient umask, which the
+        // root-directory validation rejects when the process is not root. Mirror
+        // the shared `test_installation` setup so these tests run outside the VM.
+        crate::test_support::prepare_private_installation_root(&root);
         let installation = Installation::open(&root, None).unwrap();
         Self {
             _temporary: temporary,

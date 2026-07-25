@@ -5,6 +5,10 @@ use crate::client::self_upgrade::{Error as SelfUpgradeError, self_upgrade as run
 fn ephemeral_self_upgrade_returns_a_typed_error_without_mutating_either_root() {
     let installation = tempfile::tempdir().unwrap();
     let destination = tempfile::tempdir().unwrap();
+    // The ephemeral materialization target must present safe (non-group/other-
+    // writable) permissions; a bare tempdir inherits the ambient umask, which
+    // the materialization-target guard rejects when not running as root.
+    crate::test_support::prepare_private_installation_root(destination.path());
     let installation_sentinel = installation.path().join("installation-sentinel");
     fs::write(&installation_sentinel, b"installation remains").unwrap();
 
