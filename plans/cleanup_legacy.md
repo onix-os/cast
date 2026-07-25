@@ -1,8 +1,8 @@
 # Legacy cleanup — audit and phased removal plan
 
-**Status:** plan; nothing removed yet
+**Status:** §1 and §5 complete, §6 triaged; §§2-4 blocked on Phase 1
 **Audit date:** 2026-07-25
-**Planned against:** `feature/feature_plan` at `0bf2c75a`
+**Planned against:** `feature/feature_plan` at `0bf2c75a`; executed on `feature/cleanup_legacy`
 **Premise:** `os-tools` is unreleased with no installed base, so **no
 backward compatibility is owed to anything**. Formats change directly; old
 shapes get deleted rather than tolerated. See also `plans/future_impl.md`.
