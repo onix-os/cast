@@ -193,7 +193,7 @@ possible.
 route at all and must be built before the legacy path can be deleted
 (`plans/cleanup_legacy.md` §2).
 
-### 1.1b NewState commit-cleanup authority  · E:L R:high · **blocks Slice 5**
+### 1.1b NewState commit-cleanup route  · E:M R:high · **blocks Slice 5**
 
 **Found 2026-07-25 by tracing the tail; not previously known.** Both coordinated
 NewState paths reach `Complete` through
@@ -221,12 +221,35 @@ never caught it because it stops earlier at `NewStateBootNotApplicable` — the
 very error §1.1a removes, so fixing §1.1a alone would have walked straight into
 this.
 
-**Shape.** Same structural problem catalogued for Slice 4 recovery: these
-authorities encode ActiveReblit's state model (`candidate == previous`, no
-archive) deep in their admission logic, not merely at the entry gate. Commit
-cleanup needs a NewState-shaped authority modelling fresh-candidate +
-archived-predecessor — a full authority stack (~500 lines, the class of
-`usr_rollback_reverse_authority`), not a gate relaxation.
+**Shape — SMALLER than a mirror (traced further, 2026-07-25).** An earlier draft
+of this entry called for a full ~500-800 line NewState authority mirroring
+`active_reblit_commit_cleanup_authority.rs`. That is wrong, because the thing
+ActiveReblit's cleanup *does* has no NewState counterpart:
+
+- The cleanup effect is a staging-wrapper **exchange**
+  (`.../effect.rs:51` → `prepare_exchange` / `attempt_exchange_once`).
+- That wrapper rotation is set up by `prepare_active_reblit_staging_rotation`,
+  which the legacy path gates on
+  `candidate_origin == StatefulCandidateOrigin::ActiveReblit`
+  (`core/stateful_transition.rs:142`). ActiveReblit needs it because candidate
+  and previous are the *same* state, so it activates through a replacement
+  wrapper. **NewState never rotates a wrapper** — its candidate came from
+  staging into `/usr` and its predecessor went to its own state slot.
+
+So NewState has **nothing to reconcile** at `CommitDecided`. But the phase chain
+is mandatory — `CommitDecided → CommitCleanupComplete → Complete`
+(`validation.rs:511-512`) — so it still must *traverse* the phase.
+
+**Therefore build a no-effect cleanup route**, not a parallel authority: admit
+NewState at `CommitDecided` and advance the record to `CommitCleanupComplete`
+without an exchange attempt, in the spirit of the existing
+`ActiveReblitCommitCleanupRoutePlan::NoBoot` variant. Keep the record-binding
+and database revalidation sandwiches; drop only the namespace exchange. Revised
+estimate: **E:M**, not E:L.
+
+The 8 ActiveReblit-specific predicates (`capture`, `capture_with_record_binding`,
+`exact_route_plan`, `record_plan_is_exact`) still all need a NewState branch, so
+this is not a one-line gate relaxation either.
 
 **Ordering:** build this **before** wiring §1.1a. Wiring the probe first yields
 a route that gets further and then fails at cleanup — strictly worse than
