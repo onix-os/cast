@@ -193,7 +193,7 @@ possible.
 route at all and must be built before the legacy path can be deleted
 (`plans/cleanup_legacy.md` §2).
 
-### 1.1b NewState commit-cleanup route  · E:M-L R:high · **blocks Slice 5**
+### 1.1b NewState commit-cleanup route  · E:M R:high · **blocks Slice 5**
 
 **Found 2026-07-25 by tracing the tail; not previously known.** Both coordinated
 NewState paths reach `Complete` through
@@ -258,14 +258,28 @@ The obstacle is the typestate above it:
 `DurableActiveReblitCommitCleanupNamespace` (`.../effect.rs:44-47`), and the
 only way to obtain one is `complete()` on a namespace that has *already
 exchanged* (`.../effect.rs:120-133`). A no-exchange route therefore cannot
-produce the existing durable type. Either:
+produce the existing durable type. **Resolved: NewState must not reuse this namespace machinery at all.** Both
+options first considered (enum the durable namespace; or clone the type) assume
+NewState needs *some* namespace evidence. It does not.
+`DurableActiveReblitCommitCleanupNamespace` holds `parents` (retained wrapper
+descriptors from the exchange), `final_finish` and `final_projection` — all
+wrapper-shaped concepts with no NewState counterpart, since NewState performs no
+exchange and rotates no wrapper.
 
-- make the durable namespace an enum (`Exchanged` | `NothingToExchange`), so one
-  persistence path serves both — smaller, but edits a crash-verified typestate; or
-- give NewState its own durable type plus a sibling persistence function —
-  larger, but leaves the ActiveReblit typestate untouched.
+So build a small, self-contained `new_state_commit_cleanup` authority whose
+evidence is **record binding + database only**, with no namespace member:
 
-Pick deliberately; this is the decision that sets the real size.
+- admission: `Operation::NewState`, `Phase::CommitDecided`, `rollback.is_none()`,
+  `options.archive_previous`, candidate ≠ previous, receipt correlation
+  consistent with `run_boot_sync`
+- durable authority: holds that evidence; nothing to reconcile
+- persistence: sibling of
+  `persist_active_reblit_commit_cleanup_complete_retaining_binding`, calling
+  `forward_successor(None)` → `CommitCleanupComplete` (already neutral)
+
+This touches **no** ActiveReblit typestate, so the crash-verified path is
+untouched and its tests keep their meaning. That is why the estimate is E:M
+rather than E:L, and it is the shape to build.
 
 The 8 ActiveReblit-specific predicates (`capture`, `capture_with_record_binding`,
 `exact_route_plan`, `record_plan_is_exact`) still all need a NewState branch, so
