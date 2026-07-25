@@ -331,6 +331,46 @@ this is not a one-line gate relaxation either.
 a route that gets further and then fails at cleanup — strictly worse than
 today's honest `NewStateBootNotApplicable`.
 
+### 1.1c NewState terminal tail — the full authority chain  · E:XL R:high
+
+**Found 2026-07-25 by walking the tail; this resizes Phase 1.1.** §1.1b treated
+commit cleanup as *the* ActiveReblit-gated step blocking NewState. It is one of
+**four**. Every authority the terminal tail traverses gates on
+`Operation::ActiveReblit`, and each carries its own namespace evidence shaped
+around ActiveReblit's wrapper rotation:
+
+| authority | lines | `Operation::ActiveReblit` gates | NewState analog |
+|---|---|---|---|
+| `ActiveReblitBootSyncCompleteAuthority` | 820 | 3 | needed |
+| `ActiveReblitCommitCleanupAuthority` | 801 | 4 | **built** (`a9bdc13a`…`d33a8856`) |
+| `ActiveReblitCommitCleanupCompleteAuthority` | 812 | 4 | needed |
+| `ActiveReblitCompleteFinalizationAuthority` | 762 | 3 | needed |
+
+Both tails route through them — the boot tail via `capture_retained_binding`
+(`boot_sync_complete_persistence/…`), the no-boot tail via `capture`
+(`startup_gate/live_active_reblit_no_boot.rs:72,119,143`).
+
+**So reaching `Complete` on the coordinated NewState route needs roughly three
+more authority stacks (~2400 lines), not one.** Each repeats the §1.1b design
+question — *what namespace evidence does NewState actually need here?* — and the
+§1.1b answer ("none: NewState rotates no wrapper") will not simply carry over.
+`ActiveReblitCommitCleanupCompleteAuthority` holds an
+`ActiveReblitCommitCleanupFinishNamespaceProof`, and the NewState equivalent must
+prove something real about `/usr` being the candidate with the predecessor
+archived — a different shape, not an absence.
+
+**Consequence for sequencing.** Slice 5 cannot wire the coordinated route live
+until this chain exists; wiring earlier produces a route that runs further and
+then fails deeper, which is worse than today's honest early error. The
+`cleanup_legacy.md` §2 blocker therefore stands well beyond §1.1a/§1.1b.
+
+**Recommended approach before writing any of it:** decide once whether these
+authorities are genuinely per-operation or whether the operation-specific part
+is only their *evidence*, with the admission/advance/persistence skeleton shared
+— the question §1.1b answered locally by keeping the skeleton and dropping the
+namespace member. Answering it once, up front, is what stops this becoming four
+near-duplicate 800-line files.
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has
