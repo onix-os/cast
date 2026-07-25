@@ -295,16 +295,33 @@ revalidation against the reopened journal, fresh binding recapture, multi-stage
 validation, storage-failure reconciliation, and fault-injection hooks. Copying it
 for NewState would fork the most safety-critical code in the crate.
 
-It only ever calls a small, trait-shaped surface on its authority:
-`revalidate`, `record`, `installation`, `advance_record_binding`, and on the
-post-advance value `revalidate_successor_same_store` /
-`revalidate_successor_reopened`. **Extract that as a trait and make the
-persistence function generic**, with both authorities implementing it — the same
-"one implementation of the rule" principle applied in §1.1a. The ActiveReblit
-crash-matrix tests then guard the shared path for both operations.
+The *method* surface it calls is small and trait-shaped — `revalidate`,
+`record`, `installation`, `advance_record_binding`, plus
+`revalidate_successor_same_store` / `revalidate_successor_reopened` on the
+post-advance value. **The NewState authority now implements all of it**
+(`a9bdc13a`, `891e12dc`, `dcfbbb51`), so the authority side of §1.1b is done.
 
-The NewState authority still needs `revalidate_successor_reopened` to satisfy
-that trait; everything else is already in place.
+**But genericizing the persistence function is more invasive than that surface
+suggests** (measured 2026-07-25): nine ActiveReblit-specific *types* are threaded
+through its body and signature —
+`ActiveReblitCommitCleanupDurableAuthority`, `…PostAdvanceAuthority`,
+`…Record`, `…ValidationStage`, and the `…EffectError`, `…FreshBindingError`,
+`…PersistenceError`, `…RecordAdvanceError`, `…ReopenError` error types. A generic
+version must abstract over all nine, which is a substantial refactor of
+crash-matrix-verified durability code, not a small trait extraction.
+
+**Decide with the crash matrix runnable** (the VM at `192.168.122.148` is
+reachable — confirmed 2026-07-25):
+
+- **(a) Genericize anyway**, using the ActiveReblit crash matrix as the net. One
+  implementation of reopen/recapture/storage-failure reconciliation forever.
+  Higher up-front risk, lower long-term risk.
+- **(b) NewState-specific persistence**, sharing only leaf helpers. Lower
+  up-front risk, but forks the crate's most safety-critical logic into two
+  copies that must stay identical.
+
+Prefer (a) if the crash matrix can be run against both operations; otherwise the
+fork in (b) is the kind of duplication that rots.
 
 The 8 ActiveReblit-specific predicates (`capture`, `capture_with_record_binding`,
 `exact_route_plan`, `record_plan_is_exact`) still all need a NewState branch, so
