@@ -894,4 +894,6 @@ pub enum Error {
     Sync(#[source] Box<sync::Error>),
     #[error("Gluon system intent doesn't exist at {0:?}")]
     ImportSystemIntentDoesntExist(PathBuf),
+    #[error("journal-coordinated new state")]
+    CoordinatedNewState(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
