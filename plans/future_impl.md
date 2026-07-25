@@ -331,7 +331,7 @@ this is not a one-line gate relaxation either.
 a route that gets further and then fails at cleanup — strictly worse than
 today's honest `NewStateBootNotApplicable`.
 
-### 1.1c NewState terminal tail — the full authority chain  · E:XL R:high
+### 1.1c NewState terminal tail — the full authority chain  · E:L R:high
 
 **Found 2026-07-25 by walking the tail; this resizes Phase 1.1.** §1.1b treated
 commit cleanup as *the* ActiveReblit-gated step blocking NewState. It is one of
@@ -364,12 +364,29 @@ until this chain exists; wiring earlier produces a route that runs further and
 then fails deeper, which is worse than today's honest early error. The
 `cleanup_legacy.md` §2 blocker therefore stands well beyond §1.1a/§1.1b.
 
-**Recommended approach before writing any of it:** decide once whether these
-authorities are genuinely per-operation or whether the operation-specific part
-is only their *evidence*, with the admission/advance/persistence skeleton shared
-— the question §1.1b answered locally by keeping the skeleton and dropping the
-namespace member. Answering it once, up front, is what stops this becoming four
-near-duplicate 800-line files.
+**Question answered (2026-07-25) — the namespace modelling already exists, so
+the NewState analogs are far smaller than the ActiveReblit files.**
+
+The blocking worry was that each analog would need new namespace modelling. It
+does not. `policy.rs::commit_layouts` (:261-276) is **record-driven and
+operation-general**: for `PreviousOrigin::ActiveState` — exactly NewState's
+archive case — it already yields `{candidate: Live, previous: Archived}` for
+`CommitDecided`, `CommitCleanupComplete` and `Complete` (:255-256). And
+`assess_snapshot_layout` (:147) validates a snapshot against those alternatives
+using only the record's own tree tokens.
+
+So a NewState terminal authority validates its namespace with the **generic**
+snapshot+policy machinery. What it must *not* reuse is
+`ProjectedActiveReblitCommitCleanupNamespace`, which rejects non-ActiveReblit
+outright (`capture/active_reblit_commit_cleanup.rs:149`) and is built from
+`wrapper_index` / `target_name` / `CommitCleanupInvariant` — it tracks a wrapper
+identity through an exchange.
+
+**That exchange-tracking is why the ActiveReblit files are 762-820 lines, and
+NewState does none of it.** Expect analogs closer to the ~200-line shape of
+`new_state_commit_cleanup_authority.rs` than to their ActiveReblit namesakes:
+admission on the record, generic layout assessment, bound advance, successor
+revalidation. Revised estimate **E:L, not E:XL**.
 
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
