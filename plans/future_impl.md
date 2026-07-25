@@ -281,6 +281,31 @@ This touches **no** ActiveReblit typestate, so the crash-verified path is
 untouched and its tests keep their meaning. That is why the estimate is E:M
 rather than E:L, and it is the shape to build.
 
+**Status: authority side SHIPPED** (`a9bdc13a`, `891e12dc`) —
+`new_state_commit_cleanup_authority.rs`: admission gate, bracketing database
+captures, record-binding checks, `advance_record_binding` to
+`CommitCleanupComplete`, and a post-advance authority proving the published
+successor. No namespace member anywhere; ~200 lines; zero production warnings.
+
+**Remaining: the persistence sibling — make it generic, do NOT duplicate it.**
+`persist_active_reblit_commit_cleanup_complete_inner`
+(`startup_recovery/active_reblit_commit_cleanup_complete.rs:79`) is ~300 lines of
+durability-critical logic: blocking vs non-blocking journal reopen, successor
+revalidation against the reopened journal, fresh binding recapture, multi-stage
+validation, storage-failure reconciliation, and fault-injection hooks. Copying it
+for NewState would fork the most safety-critical code in the crate.
+
+It only ever calls a small, trait-shaped surface on its authority:
+`revalidate`, `record`, `installation`, `advance_record_binding`, and on the
+post-advance value `revalidate_successor_same_store` /
+`revalidate_successor_reopened`. **Extract that as a trait and make the
+persistence function generic**, with both authorities implementing it — the same
+"one implementation of the rule" principle applied in §1.1a. The ActiveReblit
+crash-matrix tests then guard the shared path for both operations.
+
+The NewState authority still needs `revalidate_successor_reopened` to satisfy
+that trait; everything else is already in place.
+
 The 8 ActiveReblit-specific predicates (`capture`, `capture_with_record_binding`,
 `exact_route_plan`, `record_plan_is_exact`) still all need a NewState branch, so
 this is not a one-line gate relaxation either.
