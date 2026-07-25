@@ -634,6 +634,35 @@ That leaves D1.3 a genuine two-way choice, with the middle option removed:
 The narrow durability need and the cost of a second forward chain both point at
 the marker; the journal buys little here beyond uniformity.
 
+### Decisions resolved 2026-07-26
+
+**D1.5 — first install (no predecessor): relax the namespace policy.**
+A `SynthesizedEmpty` previous may remain *present* at `CommitCleanupComplete`
+and `Complete`. The competing option — having cleanup remove the synthesized
+tree — would carve an exception into the no-unlink discipline
+(`previous_tree_move.rs:658`), which is currently absolute; that discipline is
+worth more than the tidiness of an empty staging slot. Rewrites the contract
+asserted at `activation_namespace/tests.rs:780-795`. Consequence: a first
+install leaves an empty staging tree behind until the next transition reuses
+the slot. Unblocks routing the no-previous case off `apply_stateful_candidate`.
+
+**Staging order for `ActivateArchived`: inside the journal, as a durable phase.**
+Moving the archived tree into staging becomes a journaled phase rather than an
+untracked pre-step, so a crash is recoverable from the record. The rejected
+alternative (matching legacy, move outside the journal) ships sooner but leaves
+an orphaned staging tree with no record pointing at it after a crash between the
+move and the journal write — a permanent known-orphan window, which is exactly
+the class of defect this epic exists to remove. Cost: the phase model gains an
+archived-staging phase, and every phase-driven consumer (`forward_layouts`,
+`expected_forward_generation`, successors, validation) must handle it.
+
+**D1.3 — archived repair: a lighter durable marker, not a journal record.**
+Sized to the actual need — survive a crash between "metadata published to
+candidate row" and "publication committed". Since archived repair never crosses
+the `/usr`/boot boundary, none of the journal's exchange/boot/rollback machinery
+applies, and a second forward chain would impose cost on every phase-driven
+consumer for no gain beyond uniformity. See the narrowing note under §1.3.
+
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
 ActiveReblit forward cleanup/finalization is already journal-durable+resumable
 (`recovery.rs:45` RollForward + startup dispatch). NewState/ActivateArchived
