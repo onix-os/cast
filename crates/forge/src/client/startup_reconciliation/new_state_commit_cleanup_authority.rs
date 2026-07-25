@@ -94,6 +94,10 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
         &self.record
     }
 
+    pub(in crate::client) fn installation(&self) -> &Installation {
+        &self.installation
+    }
+
     /// Repeat the exact admission evidence. Callers must invoke this
     /// immediately before persisting the successor.
     pub(in crate::client) fn revalidate(
