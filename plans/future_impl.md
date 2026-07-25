@@ -448,13 +448,27 @@ exactly this, which is how it was found.
 arm) until this is resolved. Replacing an active state is unaffected and is
 already coordinated.
 
-**Where to look:** `NewStateCommitCleanupAuthority::capture` returns `Deferred`
-from two places — the `database != database_after` comparison and the
-`NewStateTerminalNamespaceInspection` begin/finish. Instrument which one fires
-for a no-predecessor record at `CommitCleanupComplete`. A likely candidate is
-the database evidence: `inspect_database` treats `Operation::NewState`
-specially, and a first install's in-flight/ownership shape differs from a
-replacement's.
+**First, make it diagnosable.** `capture` has *three* `Deferred` returns and all
+three discard the reason (`Err(_) =>` at the namespace `begin` and `finish`, plus
+the `database != database_after` comparison). That is why the failure says only
+"Deferred". Carrying the reason — even just in the `Debug` output — should come
+before any fix attempt; an authority this hard to reach is not one to debug by
+guessing.
+
+**Leading hypothesis: the namespace proof, not the database.** For a first
+install the record's previous origin is `SynthesizedEmpty`, and
+`policy::commit_layouts` maps that to `PreviousPlace::Absent` — the namespace
+must show *no* previous tree. But a synthesized-empty previous is a real empty
+`/usr` that the transition created, so it may still be present in the snapshot
+under the record's previous tree token. If so, `assess_snapshot_layout` rejects
+the layout and the proof defers.
+
+That also explains why the archive case works: it maps to
+`PreviousPlace::Archived`, and the predecessor genuinely is in its state slot.
+
+Check `trees_for_token(snapshot, record.previous.tree_token)` for a first-install
+record at `CommitCleanupComplete` before assuming the database evidence is at
+fault.
 
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
