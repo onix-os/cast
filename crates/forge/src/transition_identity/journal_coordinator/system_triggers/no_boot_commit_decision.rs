@@ -231,3 +231,157 @@ impl ActiveReblitNoBootCommitDecisionHandoff {
         &self.journal
     }
 }
+
+/// Retained capabilities for a NewState transition that neither archives a
+/// predecessor nor publishes boot entries.
+pub(crate) struct NewStateUnarchivedNoBootHandoff {
+    pub(crate) journal: TransitionJournalStore,
+    pub(crate) state_database: db::state::Database,
+    pub(crate) installation: Installation,
+    pub(crate) record: TransitionRecord,
+    pub(crate) active_state_reservation: CoordinatorActiveStateReservation,
+}
+
+impl SystemTriggersCompleteCoordinator {
+    /// Commit a NewState transition that has **no predecessor to archive** and
+    /// no bootable payload, straight from `SystemTriggersComplete`.
+    ///
+    /// This is the first-install shape: `SynthesizedEmpty` or `Unmanaged`
+    /// previous, so the record carries `archive_previous = false` and the
+    /// `PreviousArchiveIntent`/`PreviousArchived` phases never occur. The phase
+    /// model already routes `SystemTriggersComplete -> CommitDecided` when
+    /// neither archive nor boot applies.
+    ///
+    /// Distinct from `commit_active_reblit_without_boot`, which requires
+    /// `candidate == previous` — the in-place repair shape a fresh install is
+    /// not (`plans/future_impl.md` §1.1a).
+    // Forward scaffolding: consumed once Slice 5 wires the coordinated route live.
+    #[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+    pub(crate) fn commit_new_state_unarchived_without_boot(
+        self,
+    ) -> Result<NewStateUnarchivedNoBootHandoff, NewStateUnarchivedNoBootFailure> {
+        let Self {
+            coordinator,
+            metadata,
+            provenance,
+            authority,
+            readiness,
+            record_binding,
+        } = self;
+        let transition_id = coordinator.record.transition_id.clone();
+
+        if !exact_new_state_unarchived_no_boot_source(&coordinator.record) {
+            return Err(NewStateUnarchivedNoBootFailure::SourceContract { transition_id });
+        }
+        let preflight = |source| NewStateUnarchivedNoBootFailure::Preflight {
+            transition_id: transition_id.clone(),
+            source,
+        };
+        coordinator
+            .require_phase(Phase::SystemTriggersComplete, COMMIT_NEW_STATE_UNARCHIVED)
+            .map_err(preflight)?;
+        require_system_trigger_same_store_evidence(
+            &coordinator,
+            &metadata,
+            &provenance,
+            &authority,
+            &readiness,
+            &record_binding,
+        )
+        .map_err(preflight)?;
+
+        let successor = coordinator
+            .record
+            .forward_successor(None)
+            .map_err(StatefulTransitionCoordinatorError::from)
+            .map_err(preflight)?;
+        if successor.phase != Phase::CommitDecided {
+            return Err(NewStateUnarchivedNoBootFailure::SuccessorContract {
+                transition_id,
+                actual_phase: successor.phase,
+            });
+        }
+
+        // The tree topology is intact here — nothing left staging — so the full
+        // bound advance applies, unlike the post-archive completion.
+        let (coordinator, record_binding) = advance_bound_system_trigger_record(
+            coordinator,
+            &metadata,
+            &provenance,
+            &authority,
+            &readiness,
+            record_binding,
+            successor,
+        )
+        .map_err(|source| NewStateUnarchivedNoBootFailure::Persistence {
+            transition_id: transition_id.clone(),
+            source: Box::new(source),
+        })?;
+        require_system_trigger_same_store_evidence(
+            &coordinator,
+            &metadata,
+            &provenance,
+            &authority,
+            &readiness,
+            &record_binding,
+        )
+        .map_err(preflight)?;
+
+        let installation = authority.installation().clone();
+        let active_state_reservation = authority.into_active_state_reservation();
+        drop(record_binding);
+        drop(metadata);
+        let _ = provenance;
+        drop(readiness);
+        let StatefulTransitionCoordinator { identity, record } = coordinator;
+        let StatefulTreeIdentity {
+            journal,
+            state_database,
+            ..
+        } = identity;
+        Ok(NewStateUnarchivedNoBootHandoff {
+            journal,
+            state_database,
+            installation,
+            record,
+            active_state_reservation,
+        })
+    }
+}
+
+const COMMIT_NEW_STATE_UNARCHIVED: &str = "commit unarchived new state without boot";
+
+/// A NewState transition with no predecessor to archive and nothing to boot.
+fn exact_new_state_unarchived_no_boot_source(record: &TransitionRecord) -> bool {
+    record.operation == Operation::NewState
+        && record.phase == Phase::SystemTriggersComplete
+        && record.rollback.is_none()
+        && !record.options.archive_previous
+        && !record.options.run_boot_sync
+        && record.boot_publication_receipts.is_none()
+        && record.candidate.id.is_some()
+        && record.previous.id.is_none()
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum NewStateUnarchivedNoBootFailure {
+    #[error("transition {transition_id} is not an exact unarchived no-boot NewState source")]
+    SourceContract { transition_id: TransitionId },
+    #[error("transition {transition_id}: preflight for the unarchived no-boot NewState commit")]
+    Preflight {
+        transition_id: TransitionId,
+        #[source]
+        source: StatefulTransitionCoordinatorError,
+    },
+    #[error("transition {transition_id}: successor is phase {actual_phase:?}, not commit-decided")]
+    SuccessorContract {
+        transition_id: TransitionId,
+        actual_phase: Phase,
+    },
+    #[error("transition {transition_id}: persist the unarchived no-boot commit decision")]
+    Persistence {
+        transition_id: TransitionId,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+}
