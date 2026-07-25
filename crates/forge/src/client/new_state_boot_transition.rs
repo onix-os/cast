@@ -73,7 +73,7 @@ impl Client {
     pub(in crate::client) fn apply_new_state_candidate(
         &self,
         candidate: fixed_staging::StatefulCandidate,
-        previous: state::Id,
+        previous: Option<state::Id>,
         selections: &[Selection],
         summary: &str,
         system_snapshot: SystemModel,
@@ -93,6 +93,12 @@ impl Client {
         // (`plans/future_impl.md` §1.1a).
         let applicability_deadline = deadline_after(BOOT_PUBLICATION_TIMEOUT, "boot applicability deadline")?;
         let run_boot_sync = self.new_state_boot_applicable(selections, previous, applicability_deadline)?;
+        // A predecessor is archived as the rollback anchor; a first install has
+        // none, so the archive phases never occur.
+        let journal_previous = match previous {
+            Some(previous) => NewStatePrevious::Active(previous),
+            None => NewStatePrevious::SynthesizedEmpty,
+        };
 
         let preflight = JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, None)
             .map_err(|source| LiveNewStateBootError::at("pre-journal client authority", source))?;
@@ -105,7 +111,7 @@ impl Client {
             identity,
             authority,
             &self.state_db,
-            NewStatePrevious::Active(previous),
+            journal_previous,
             selections,
             summary,
             run_boot_sync,
@@ -306,7 +312,7 @@ impl Client {
     pub(in crate::client) fn new_state_boot_applicable(
         &self,
         selections: &[Selection],
-        previous: state::Id,
+        previous: Option<state::Id>,
         deadline: Instant,
     ) -> Result<bool, LiveNewStateBootError> {
         let candidate_packages = selections
@@ -331,16 +337,24 @@ impl Client {
             .map(|package| package.as_str())
             .collect::<std::collections::BTreeSet<_>>();
 
-        // The retained tail the new head would keep, and each state's own
-        // selections/layouts drawn from the current projection.
-        let projection = crate::client::active_reblit_boot_projection::PreparedActiveReblitBootProjection::prepare_until(
-            &self.state_db,
-            &self.layout_db,
-            previous,
-            deadline,
-        )
-        .map_err(|source| LiveNewStateBootError::at("prospective chain projection", source))?;
-        let tail_states = crate::client::active_reblit_boot_projection::prospective_chain_tail(projection.states());
+        // A first install has no retained chain, so the candidate alone decides
+        // applicability. Replacing an active state inherits the tail the new head
+        // would keep.
+        let projection = match previous {
+            Some(previous) => Some(
+                crate::client::active_reblit_boot_projection::PreparedActiveReblitBootProjection::prepare_until(
+                    &self.state_db,
+                    &self.layout_db,
+                    previous,
+                    deadline,
+                )
+                .map_err(|source| LiveNewStateBootError::at("prospective chain projection", source))?,
+            ),
+            None => None,
+        };
+        let tail_states = projection.as_ref().map_or(&[][..], |projection| {
+            crate::client::active_reblit_boot_projection::prospective_chain_tail(projection.states())
+        });
         let tail_selected = tail_states
             .iter()
             .map(|state| {
@@ -354,14 +368,22 @@ impl Client {
         let chain = tail_states
             .iter()
             .zip(tail_selected.iter())
-            .map(|(state, selected)| (state.id, selected, projection.layouts()))
+            .map(|(state, selected)| {
+                (
+                    state.id,
+                    selected,
+                    projection.as_ref().expect("a tail exists only with a projection").layouts(),
+                )
+            })
             .collect::<Vec<_>>();
 
         match crate::client::active_reblit_boot_projection::assess_prospective_boot_applicability(
             &candidate_layouts,
             &selected,
             &chain,
-            previous,
+            // Diagnostic label only: the candidate's row does not exist yet, so
+            // errors are attributed to the predecessor when there is one.
+            previous.unwrap_or_default(),
             deadline,
         )
         .map_err(|source| LiveNewStateBootError::at("prospective boot applicability", source))?

@@ -425,7 +425,7 @@ fn apply_new_state_candidate_forwards_archives_and_commits_without_boot() {
     let committed = client
         .apply_new_state_candidate(
             candidate,
-            previous.id,
+            Some(previous.id),
             &[Selection::explicit(package)],
             "new state forward candidate",
             generated_system_snapshot("candidate-package"),

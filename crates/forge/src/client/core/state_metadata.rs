@@ -1,12 +1,25 @@
+// The journal-coordinated route replaced this for `new_state`
+// (`plans/future_impl.md` §1.1a, Slice 5). It is deliberately retained, not
+// deleted: `plans/cleanup_legacy.md` §2 keeps the legacy path until the
+// coordinated route passes the full crash matrix, and ActivateArchived still
+// drives `commit_stateful_staging` from here.
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 const STATE_TREE_DIRECTORY_MODE: u32 = 0o755;
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 const STATE_ID_MODE: u32 = 0o644;
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 const STATE_ID_TEMPORARY_MODE: u32 = 0o600;
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 const STATE_ID_NAME: &str = ".stateID";
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 const STATE_ID_TEMPORARY_NAME: &str = ".cast-state-id.tmp";
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 const STATE_ID_C_NAME: &CStr = c".stateID";
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 const STATE_ID_TEMPORARY_C_NAME: &CStr = c".cast-state-id.tmp";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 struct StateMetadataDirectoryWitness {
     device: u64,
     inode: u64,
@@ -26,12 +39,14 @@ impl StateMetadataDirectoryWitness {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 struct StateMetadataDirectory {
     path: PathBuf,
     file: std::fs::File,
     witness: StateMetadataDirectoryWitness,
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn record_state_id(root: &Path, state: state::Id) -> Result<(), Error> {
     let root_path = state_metadata_absolute_path(root)?;
     let root = open_or_create_state_metadata_root(&root_path)?;
@@ -51,6 +66,7 @@ fn record_state_id(root: &Path, state: state::Id) -> Result<(), Error> {
 /// materialization. No pathname is reopened as write authority; the returned
 /// `/usr` descriptor is the same inode subsequently handed to tree-identity
 /// preparation.
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn record_state_id_retained(
     root: &fixed_staging::RetainedFixedStaging,
     candidate_usr: &std::fs::File,
@@ -87,6 +103,7 @@ fn record_state_id_retained(
     Ok(())
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn revalidate_fixed_staging(
     retained: Option<&fixed_staging::RetainedFixedStaging>,
     installation: &Installation,
@@ -100,6 +117,7 @@ fn revalidate_fixed_staging(
         })
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn state_metadata_absolute_path(path: &Path) -> io::Result<PathBuf> {
     if path.as_os_str().is_empty() {
         return Err(io::Error::new(
@@ -128,6 +146,7 @@ fn state_metadata_absolute_path(path: &Path) -> io::Result<PathBuf> {
     Ok(normalized)
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn open_or_create_state_metadata_root(path: &Path) -> Result<StateMetadataDirectory, Error> {
     match open_absolute_state_metadata_path(path) {
         Ok(pinned) => {
@@ -179,6 +198,7 @@ fn open_or_create_state_metadata_root(path: &Path) -> Result<StateMetadataDirect
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn open_or_create_state_metadata_directory(
     parent: &std::fs::File,
     name: &OsStr,
@@ -226,6 +246,7 @@ fn open_or_create_state_metadata_directory(
     Ok(directory)
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn normalize_recoverable_state_metadata_directory(
     file: &std::fs::File,
     path: &Path,
@@ -249,6 +270,7 @@ fn normalize_recoverable_state_metadata_directory(
     Ok(witness)
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn open_absolute_state_metadata_path(path: &Path) -> io::Result<std::fs::File> {
     open_state_metadata_at(
         AT_FDCWD,
@@ -257,6 +279,7 @@ fn open_absolute_state_metadata_path(path: &Path) -> io::Result<std::fs::File> {
     )
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn open_absolute_state_metadata_directory(path: &Path) -> io::Result<std::fs::File> {
     open_state_metadata_at(
         AT_FDCWD,
@@ -269,6 +292,7 @@ fn open_absolute_state_metadata_directory(path: &Path) -> io::Result<std::fs::Fi
     )
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn open_state_metadata_at(parent: RawFd, path: &Path, flags: i32) -> io::Result<std::fs::File> {
     let resolve = if path.is_absolute() {
         (nix::libc::RESOLVE_NO_MAGICLINKS | nix::libc::RESOLVE_NO_SYMLINKS) as u64
@@ -281,6 +305,7 @@ fn open_state_metadata_at(parent: RawFd, path: &Path, flags: i32) -> io::Result<
     openat2_frozen(parent, path, flags, resolve).map(|file| file.into_parts().0)
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn mkdirat_state_metadata(parent: RawFd, name: &CStr, mode: u32) -> io::Result<bool> {
     loop {
         // SAFETY: parent is a live directory descriptor and name is one
@@ -298,6 +323,7 @@ fn mkdirat_state_metadata(parent: RawFd, name: &CStr, mode: u32) -> io::Result<b
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn require_fresh_state_metadata_directory(file: &std::fs::File, path: &Path, requested_mode: u32) -> io::Result<()> {
     let metadata = file.metadata()?;
     let mode = metadata.mode() & 0o7777;
@@ -318,6 +344,7 @@ fn require_fresh_state_metadata_directory(file: &std::fs::File, path: &Path, req
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn state_metadata_directory_witness(file: &std::fs::File, path: &Path) -> io::Result<StateMetadataDirectoryWitness> {
     let metadata = file.metadata()?;
     let witness = StateMetadataDirectoryWitness::from_metadata(&metadata);
@@ -341,6 +368,7 @@ fn state_metadata_directory_witness(file: &std::fs::File, path: &Path) -> io::Re
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn require_state_metadata_directory(parent: &std::fs::File, expected: &StateMetadataDirectory) -> Result<(), Error> {
     if state_metadata_directory_witness(&expected.file, &expected.path)? != expected.witness {
         return Err(io::Error::other(format!(
@@ -374,6 +402,7 @@ fn require_state_metadata_directory(parent: &std::fs::File, expected: &StateMeta
     Ok(())
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn require_named_state_metadata_root(path: &Path, expected: &StateMetadataDirectory) -> Result<(), Error> {
     if state_metadata_directory_witness(&expected.file, path)? != expected.witness {
         return Err(io::Error::other(format!("retained state metadata root changed: {}", path.display())).into());
@@ -387,6 +416,7 @@ fn require_named_state_metadata_root(path: &Path, expected: &StateMetadataDirect
     Ok(())
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn write_state_id(usr: &StateMetadataDirectory, contents: &[u8]) -> Result<(), Error> {
     let marker_path = usr.path.join(STATE_ID_NAME);
     let temporary_path = usr.path.join(STATE_ID_TEMPORARY_NAME);
@@ -429,6 +459,7 @@ fn write_state_id(usr: &StateMetadataDirectory, contents: &[u8]) -> Result<(), E
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn open_existing_state_id(usr: &StateMetadataDirectory, marker_path: &Path) -> Result<Option<(u64, u64)>, Error> {
     let probe = match open_state_metadata_at(
         usr.file.as_raw_fd(),
@@ -450,6 +481,7 @@ fn open_existing_state_id(usr: &StateMetadataDirectory, marker_path: &Path) -> R
     Ok(Some(identity))
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn prepare_state_id_temporary(
     usr: &StateMetadataDirectory,
     temporary_path: &Path,
@@ -502,6 +534,7 @@ fn prepare_state_id_temporary(
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn require_expected_state_id_name(
     usr: &StateMetadataDirectory,
     expected: Option<(u64, u64)>,
@@ -533,6 +566,7 @@ fn require_expected_state_id_name(
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn rename_state_id_temporary(directory: RawFd, replace: bool) -> io::Result<()> {
     let flags = if replace { 0 } else { RENAME_NOREPLACE };
     loop {
@@ -559,6 +593,7 @@ fn rename_state_id_temporary(directory: RawFd, replace: bool) -> io::Result<()> 
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn require_state_id_temporary_inode(file: &std::fs::File, path: &Path) -> io::Result<(u64, u64)> {
     let metadata = file.metadata()?;
     let mode = metadata.mode() & 0o7777;
@@ -582,6 +617,7 @@ fn require_state_id_temporary_inode(file: &std::fs::File, path: &Path) -> io::Re
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn require_state_id_inode(file: &std::fs::File, path: &Path) -> io::Result<(u64, u64)> {
     let metadata = file.metadata()?;
     let mode = metadata.mode() & 0o7777;
@@ -604,6 +640,7 @@ fn require_state_id_inode(file: &std::fs::File, path: &Path) -> io::Result<(u64,
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn require_complete_state_id(
     file: &std::fs::File,
     path: &Path,
@@ -627,6 +664,7 @@ fn require_complete_state_id(
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn truncate_state_id(file: &std::fs::File) -> io::Result<()> {
     loop {
         // SAFETY: file is a retained writable regular-file descriptor.
@@ -640,6 +678,7 @@ fn truncate_state_id(file: &std::fs::File) -> io::Result<()> {
     }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn write_state_id_bytes(file: &std::fs::File, contents: &[u8]) -> io::Result<()> {
     let mut written = 0;
     while written != contents.len() {
@@ -653,11 +692,13 @@ fn write_state_id_bytes(file: &std::fs::File, contents: &[u8]) -> io::Result<()>
     Ok(())
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn effective_user_id() -> u32 {
     // SAFETY: geteuid has no arguments and cannot fail.
     unsafe { nix::libc::geteuid() }
 }
 
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn generate_system_snapshot(
     current: Option<LoadedSystemModel>,
     repositories: &repository::Manager,
@@ -688,6 +729,7 @@ fn generate_system_snapshot(
 }
 
 #[cfg(test)]
+#[allow(dead_code)] // retained legacy state-metadata route pending the crash matrix (cleanup_legacy §2)
 fn record_system_snapshot(root: &Path, system_snapshot: SystemModel) -> Result<(), Error> {
     let path = system_model::snapshot_path(root);
     let dir = path.parent().expect("system snapshot path has a parent");

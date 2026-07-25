@@ -179,32 +179,22 @@ impl Client {
                 let old_state = candidate.active_state.active();
                 candidate.active_state.revalidate(&self.installation)?;
 
-                match old_state {
-                    // Replacing an active state: the journal-coordinated route
-                    // owns the whole transition and allocates the state row
-                    // inside its durable prefix, so a crash can never orphan the
-                    // row from its transition (`plans/future_impl.md` §1.1a).
-                    Some(previous) => {
-                        let state = self
-                            .apply_new_state_candidate(
-                                candidate,
-                                previous,
-                                selections,
-                                &summary.to_string(),
-                                system_snapshot,
-                            )
-                            .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
-                        Ok(Some(state))
-                    }
-                    // First install: no predecessor to archive. The coordinator
-                    // supports this shape but the client-level composition is
-                    // not built yet, so it keeps the legacy route until then.
-                    None => {
-                        let state = self.state_db.add(selections, Some(&summary.to_string()), None)?;
-                        self.apply_stateful_candidate(candidate, &state, None, system_snapshot)?;
-                        Ok(Some(state))
-                    }
-                }
+                // The journal-coordinated route owns the whole transition and
+                // allocates the state row inside its durable prefix, so a crash
+                // can never orphan the row from its transition. It handles both
+                // shapes: replacing an active state, whose predecessor becomes
+                // the archived rollback anchor, and a first install with no
+                // predecessor at all (`plans/future_impl.md` §1.1a).
+                let state = self
+                    .apply_new_state_candidate(
+                        candidate,
+                        old_state,
+                        selections,
+                        &summary.to_string(),
+                        system_snapshot,
+                    )
+                    .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
+                Ok(Some(state))
             }
             Scope::Ephemeral { destination } => {
                 let candidate = self.materialize_ephemeral_candidate(selections.iter().map(|s| &s.package))?;
