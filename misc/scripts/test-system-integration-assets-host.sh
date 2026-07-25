@@ -5,13 +5,14 @@
 # authorization, boot, transaction, rollback, or Nix-compatibility proof.
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
 archive="$fixture_root/archives/cast-system-integration-assets-fixture-1.0.0.tar"
 authored="$fixture_root/source-trees/cast-system-integration-assets-fixture-1.0.0"
 expected_sha256=27d04653529db216023599d2f6122f503acb59e0ebe26c5bce351dc970d58113
 
-temporary=$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-system-integration-host.XXXXXXXX")
+temporary=$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-system-integration-host.XXXXXXXX")
 cleanup() {
     timeout 30s rm -rf "$temporary"
 }

@@ -2,6 +2,7 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 mode=write
 case "${1-}" in
     '') ;;
@@ -193,7 +194,7 @@ test "$git_source_tree_count" -eq 1 || {
 }
 
 if [ "$mode" = check ]; then
-    check_root=$(timeout 30s mktemp -d "${TMPDIR:-/tmp}/cast-execution-fixtures.XXXXXX")
+    check_root=$(timeout 30s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-execution-fixtures.XXXXXX")
 fi
 
 vendored_package="$source_root/cast-cargo-vendored-fixture-1.0.0/vendor/cast-fixture-greeting-0.1.0"
@@ -370,7 +371,7 @@ git_fixture=cast-multiple-sources-protocol-1.0.0
 git_source="$git_source_root/$git_fixture"
 git_bundle=cast-multiple-sources-protocol-1.0.0.bundle
 git_output="$git_bundle_root/$git_bundle"
-git_work=$(timeout 30s mktemp -d "${TMPDIR:-/tmp}/cast-execution-git.XXXXXX")
+git_work=$(timeout 30s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-execution-git.XXXXXX")
 git_repository="$git_work/repository"
 git_home="$git_work/home"
 git_xdg="$git_work/xdg"

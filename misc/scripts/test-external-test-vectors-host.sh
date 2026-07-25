@@ -4,6 +4,7 @@
 # corpus with host CMake/CTest in a disposable directory. It is not a Stone,
 # container, transaction, rollback, boot, or Nix-compatibility proof.
 set -eu
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 umask 022
 
 root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
@@ -41,7 +42,7 @@ for required_tool in "$cmake_bin" "$ctest_bin" "$ninja_bin" "$fixture_cc"; do
     }
 done
 
-temporary=$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-external-test-vectors-host.XXXXXXXX")
+temporary=$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-external-test-vectors-host.XXXXXXXX")
 cleanup() {
     timeout 30s chmod -R u+w "$temporary" 2>/dev/null || :
     timeout 30s rm -rf "$temporary"

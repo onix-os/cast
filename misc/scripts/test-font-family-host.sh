@@ -6,6 +6,7 @@
 # rollback, boot, or Nix-compatibility proof.
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
 tree_name=cast-font-family-fixture-1.0.0
@@ -14,7 +15,7 @@ authored="$fixture_root/source-trees/$tree_name"
 font_builder="$root/misc/scripts/build-font-family-fixture-fonts.sh"
 expected_archive_sha256=8710f0728fbde240fd94ce8bce46c4e4d71336b8470416e8da7c0895dc2d700c
 
-temporary=$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-font-family-host.XXXXXXXX")
+temporary=$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-font-family-host.XXXXXXXX")
 cleanup() {
     timeout 30s chmod -R u+w "$temporary" 2>/dev/null || :
     timeout 30s rm -rf "$temporary"

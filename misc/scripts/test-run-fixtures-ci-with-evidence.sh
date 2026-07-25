@@ -2,11 +2,12 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-fixtures-ci-with-evidence.sh"
 proof_generator="$root/misc/scripts/test-support/write-fixtures-ci-proof-v2.sh"
 proof_validator="$root/misc/scripts/validate-fixtures-ci-proof.sh"
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixtures-ci-evidence-test.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-fixtures-ci-evidence-test.XXXXXXXXXXXX")
 canonical_proof="$work/canonical-fixtures-ci-proof.json"
 current_case=initialization
 tracked_runner_pid=

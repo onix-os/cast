@@ -2,10 +2,11 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-delegated-execution-fixture.sh"
 proof_generator="$root/misc/scripts/test-support/write-fixtures-ci-proof-v2.sh"
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-delegated-runner-test.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-delegated-runner-test.XXXXXXXXXXXX")
 tracked_runner_pid=
 tracked_invocation_pid=
 tracked_watchdog_pid=

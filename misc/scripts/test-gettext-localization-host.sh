@@ -6,13 +6,14 @@
 set -euo pipefail
 export LANGUAGE=
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root="$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)"
 fixture_root="$root/tests/fixtures/gluon/execution"
 archive="$fixture_root/archives/cast-gettext-localization-fixture-1.0.0.tar"
 authored="$fixture_root/source-trees/cast-gettext-localization-fixture-1.0.0"
 expected_sha256=1e6b0b3267767853eb622e4155d3c50ecff677f8f3b305f5e4e1470f91fc1e5d
 
-temporary="$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-gettext-localization-host.XXXXXXXX")"
+temporary="$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-gettext-localization-host.XXXXXXXX")"
 cleanup() {
     timeout 30s rm -rf "$temporary"
 }

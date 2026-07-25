@@ -2,9 +2,10 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 stopper="$root/misc/scripts/stop-owned-fixture-unit.sh"
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-owned-unit-stopper-test.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-owned-unit-stopper-test.XXXXXXXXXXXX")
 cleanup() {
     cleanup_status=$?
     trap - EXIT HUP INT TERM

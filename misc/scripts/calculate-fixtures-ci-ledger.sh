@@ -2,6 +2,7 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 if [ "$#" -ne 1 ]; then
     printf 'usage: %s <absolute-entry-ledger-path>\n' "$0" >&2
     exit 2
@@ -81,7 +82,7 @@ done <"$entries"
 [ "$entry_count" -gt 0 ] || fail_entry
 
 umask 077
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixture-ledger.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-fixture-ledger.XXXXXXXXXXXX")
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM

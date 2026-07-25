@@ -2,8 +2,9 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-examples-gate-test.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-examples-gate-test.XXXXXXXXXXXX")
 cleanup() {
     rm -rf "$work"
 }
