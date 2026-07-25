@@ -116,7 +116,17 @@ today would remove shipping functionality outright:
 
 So §2 is gated on Phase 1.1 **Slice 5** (wire NewState live), plus Phase 1.2 and
 1.3 being built from scratch, plus the crash matrix — and per
-`destructive-tests-in-vm`, the crash matrix needs the VM. §§3 and 4 are in turn
+`destructive-tests-in-vm`, the crash matrix needs the VM (which **is** reachable
+at `192.168.122.148`; confirmed 2026-07-25).
+
+**Phase 1 progress toward unblocking this (2026-07-25):** §1.1a's shared
+applicability rules and prospective probe are shipped, and §1.1b's NewState
+commit-cleanup authority is built and tested (admission gate, record advance,
+same-store + reopened successor revalidation). Remaining before Slice 5 can even
+be attempted: §1.1b's persistence step, then wiring §1.1a. A latent bug was also
+found — the coordinated NewState route currently fails at commit cleanup on a
+real system — see `future_impl.md` §1.1b. Full detail there; this section stays
+blocked until Slice 5, 1.2 and 1.3 all land. §§3 and 4 are in turn
 gated on §2: the `Legacy*` guard variants and `legacy_boot_repair` each still
 have live callers inside the legacy route.
 
