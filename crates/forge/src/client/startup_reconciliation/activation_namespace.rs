@@ -30,6 +30,7 @@ mod capture;
 mod decision_proof;
 mod fresh_db_invalidation_proof;
 mod fresh_db_invalidation_route_proof;
+mod new_state_terminal_proof;
 mod parent_durability;
 mod policy;
 mod resume_route_proof;
@@ -259,6 +260,7 @@ pub(super) use fresh_db_invalidation_route_proof::{
     UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
     UsrRollbackFreshDbInvalidationRouteNamespaceProof,
 };
+pub(super) use new_state_terminal_proof::{NewStateTerminalNamespaceInspection, NewStateTerminalNamespaceProof};
 pub(super) use policy::UsrExchangeLayout;
 use policy::{LayoutAlternative, NamespacePolicyConflict, assess_snapshot_layout};
 #[cfg(test)]

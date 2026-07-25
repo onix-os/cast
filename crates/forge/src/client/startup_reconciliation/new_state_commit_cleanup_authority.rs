@@ -22,7 +22,11 @@ use crate::{
 };
 
 use super::super::active_state_snapshot::ActiveStateReservation;
-use super::{DatabaseEvidence, InspectionError, inspect_database};
+use super::{
+    DatabaseEvidence, InspectionError,
+    activation_namespace::{NewStateTerminalNamespaceInspection, NewStateTerminalNamespaceProof},
+    inspect_database,
+};
 
 /// Exact result of read-only NewState commit-cleanup admission.
 // Forward scaffolding: consumed by the coordinated NewState route once Slice 5
@@ -46,6 +50,7 @@ pub(in crate::client) struct NewStateCommitCleanupAuthority<'reservation> {
     state_db: db::state::Database,
     record: TransitionRecord,
     database: DatabaseEvidence,
+    namespace: NewStateTerminalNamespaceProof,
     journal_record_binding: TransitionJournalRecordBinding,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
@@ -71,12 +76,27 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
 
         // Two bracketing database captures must agree, so a concurrent writer
         // cannot slip a different row between admission and use.
+        // The namespace must already be the terminal shape the record implies:
+        // candidate live, predecessor archived. Assessed through the shared
+        // policy, which is record-driven (`plans/future_impl.md` §1.1c).
+        let namespace_inspection =
+            match NewStateTerminalNamespaceInspection::begin(installation, journal, &journal_record_binding, record) {
+                Ok(inspection) => inspection,
+                Err(_) => return Ok(NewStateCommitCleanupAdmission::Deferred),
+            };
+
         let database = inspect_database(record, state_db, initial_in_flight)?;
         let in_flight_after = state_db.audit_in_flight_transition().map_err(InspectionError::from)?;
         let database_after = inspect_database(record, state_db, in_flight_after)?;
         if database != database_after {
             return Ok(NewStateCommitCleanupAdmission::Deferred);
         }
+
+        let namespace =
+            match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
+                Ok(namespace) => namespace,
+                Err(_) => return Ok(NewStateCommitCleanupAdmission::Deferred),
+            };
 
         installation.revalidate_mutable_namespace()?;
         require_binding(installation, journal, &journal_record_binding, record)?;
@@ -85,6 +105,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
             state_db: state_db.clone(),
             record: record.clone(),
             database,
+            namespace,
             journal_record_binding,
             _active_state_reservation: active_state_reservation,
         }))
@@ -117,6 +138,9 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
         if database != self.database {
             return Err(NewStateCommitCleanupAuthorityError::DatabaseChanged);
         }
+        self.namespace
+            .revalidate(&self.installation, &self.record)
+            .map_err(|source| NewStateCommitCleanupAuthorityError::Namespace(Box::new(source)))?;
         self.installation.revalidate_mutable_namespace()?;
         require_binding(&self.installation, journal, &self.journal_record_binding, &self.record)
     }
@@ -146,6 +170,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
             state_db,
             record,
             database,
+            namespace,
             journal_record_binding,
             _active_state_reservation,
         } = self;
@@ -158,6 +183,7 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
                 state_db,
                 completed_record: record,
                 database,
+                namespace,
                 _active_state_reservation,
             },
         ))
@@ -171,6 +197,7 @@ pub(in crate::client) struct NewStateCommitCleanupPostAdvanceAuthority<'reservat
     state_db: db::state::Database,
     completed_record: TransitionRecord,
     database: DatabaseEvidence,
+    namespace: NewStateTerminalNamespaceProof,
     _active_state_reservation: &'reservation ActiveStateReservation,
 }
 
@@ -290,6 +317,8 @@ pub(in crate::client) enum NewStateCommitCleanupAuthorityError {
     UnexpectedSuccessor,
     #[error("the state database changed during admission")]
     DatabaseChanged,
+    #[error("terminal namespace")]
+    Namespace(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("installation: {0}")]
     Installation(#[from] crate::installation::Error),
     #[error("journal: {0}")]
