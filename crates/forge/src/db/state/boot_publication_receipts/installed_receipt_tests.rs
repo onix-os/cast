@@ -6,16 +6,13 @@ use diesel::{ExpressionMethods as _, QueryDsl as _, RunQueryDsl as _};
 
 use super::*;
 use crate::boot_publication::{
-    BootPublicationDestination, BootPublicationDestinations,
-    BootPublicationHistoricalRuntimeWitness, BootPublicationOutput,
-    BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
-    BootPublicationPublicationPhase, BootPublicationReceiptBody,
-    BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
-    prepare_boot_publication_receipt,
+    BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
+    BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
+    BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationRoot, BootPublicationSha256,
+    BootPublicationXxh3, prepare_boot_publication_receipt,
 };
 use crate::db::state::{
-    BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
-    schema::boot_publication_receipts,
+    BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome, schema::boot_publication_receipts,
 };
 
 const ESP_PARTUUID: &str = "11111111-2222-3333-4444-555555555555";
@@ -76,25 +73,16 @@ fn stage_and_promote(database: &Database, receipt: &CanonicalBootPublicationRece
     );
     assert_eq!(
         database
-            .promote_boot_publication_receipt(
-                receipt,
-                Instant::now() + Duration::from_secs(60),
-            )
+            .promote_boot_publication_receipt(receipt, Instant::now() + Duration::from_secs(60),)
             .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
 }
 
-fn stored_body(
-    database: &Database,
-    fingerprint: BootPublicationReceiptFingerprint,
-) -> Vec<u8> {
+fn stored_body(database: &Database, fingerprint: BootPublicationReceiptFingerprint) -> Vec<u8> {
     database.conn.exec(|connection| {
         boot_publication_receipts::table
-            .filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(fingerprint.as_bytes().as_slice()),
-            )
+            .filter(boot_publication_receipts::receipt_sha256.eq(fingerprint.as_bytes().as_slice()))
             .select(boot_publication_receipts::canonical_body)
             .first(connection)
             .unwrap()
@@ -102,12 +90,9 @@ fn stored_body(
 }
 
 fn receipt_count(database: &Database) -> i64 {
-    database.conn.exec(|connection| {
-        boot_publication_receipts::table
-            .count()
-            .get_result(connection)
-            .unwrap()
-    })
+    database
+        .conn
+        .exec(|connection| boot_publication_receipts::table.count().get_result(connection).unwrap())
 }
 
 #[test]
@@ -118,10 +103,7 @@ fn exact_promoted_head_is_the_durable_installed_receipt() {
     let expected = pair(&installed);
 
     let authenticated = database
-        .load_exact_promoted_boot_publication_receipt_state(
-            installed.body().transition_id(),
-            &expected,
-        )
+        .load_exact_promoted_boot_publication_receipt_state(installed.body().transition_id(), &expected)
         .unwrap();
     assert_eq!(authenticated.head().committed(), Some(installed.fingerprint()));
     assert!(authenticated.head().pending().is_none());
@@ -129,17 +111,11 @@ fn exact_promoted_head_is_the_durable_installed_receipt() {
     assert!(authenticated.pending().is_none());
 
     assert!(matches!(
-        database.load_exact_promoted_boot_publication_receipt_state(
-            &transition('b'),
-            &expected,
-        ),
+        database.load_exact_promoted_boot_publication_receipt_state(&transition('b'), &expected,),
         Err(ExactPromotedBootPublicationReceiptStateError::TransitionMismatch { .. })
     ));
     let reauthenticated = database
-        .load_exact_promoted_boot_publication_receipt_state(
-            installed.body().transition_id(),
-            &expected,
-        )
+        .load_exact_promoted_boot_publication_receipt_state(installed.body().transition_id(), &expected)
         .unwrap();
     assert_eq!(reauthenticated, authenticated);
 }
@@ -159,23 +135,20 @@ fn installed_receipt_a_becomes_b_predecessor_and_both_bodies_remain_immutable() 
     );
     let staged_b = database.boot_publication_receipt_state().unwrap();
     assert_eq!(staged_b.head().committed(), Some(installed_a.fingerprint()));
-    assert_eq!(staged_b.receipt_pair_for(installed_b.body().transition_id()), Some(pair(&installed_b)));
+    assert_eq!(
+        staged_b.receipt_pair_for(installed_b.body().transition_id()),
+        Some(pair(&installed_b))
+    );
     assert_eq!(staged_b.pending(), Some(&installed_b));
 
     assert_eq!(
         database
-            .promote_boot_publication_receipt(
-                &installed_b,
-                Instant::now() + Duration::from_secs(60),
-            )
+            .promote_boot_publication_receipt(&installed_b, Instant::now() + Duration::from_secs(60),)
             .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
     let authenticated_b = database
-        .load_exact_promoted_boot_publication_receipt_state(
-            installed_b.body().transition_id(),
-            &pair(&installed_b),
-        )
+        .load_exact_promoted_boot_publication_receipt_state(installed_b.body().transition_id(), &pair(&installed_b))
         .unwrap();
     assert_eq!(authenticated_b.head().committed(), Some(installed_b.fingerprint()));
     assert!(authenticated_b.head().pending().is_none());

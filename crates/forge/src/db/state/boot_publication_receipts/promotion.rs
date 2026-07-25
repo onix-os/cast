@@ -14,10 +14,9 @@ use diesel::{
 use thiserror::Error;
 
 use super::{
-    BootPublicationReceiptFingerprint, BootPublicationReceiptPair,
-    BootPublicationReceiptState, BootPublicationReceiptStateError,
-    CanonicalBootPublicationReceipt, Database, ReceiptReference,
-    TransitionId, load_receipt_state, load_required_receipt,
+    BootPublicationReceiptFingerprint, BootPublicationReceiptPair, BootPublicationReceiptState,
+    BootPublicationReceiptStateError, CanonicalBootPublicationReceipt, Database, ReceiptReference, TransitionId,
+    load_receipt_state, load_required_receipt,
 };
 use crate::db::Error as DatabaseError;
 
@@ -52,9 +51,7 @@ impl Database {
         pair: &BootPublicationReceiptPair,
     ) -> Result<BootPublicationReceiptState, ExactPromotedBootPublicationReceiptStateError> {
         self.conn.exec(|connection| {
-            connection.transaction(|connection| {
-                load_exact_promoted_state(connection, transition_id, pair)
-            })
+            connection.transaction(|connection| load_exact_promoted_state(connection, transition_id, pair))
         })
     }
 
@@ -67,9 +64,9 @@ impl Database {
         &self,
         receipt: &CanonicalBootPublicationReceipt,
     ) -> Result<(), BootPublicationReceiptPromotionError> {
-        let durable = self.conn.exec(|connection| {
-            connection.transaction(|connection| inspect_exact_state(connection, receipt))
-        })?;
+        let durable = self
+            .conn
+            .exec(|connection| connection.transaction(|connection| inspect_exact_state(connection, receipt)))?;
         if durable == BootPublicationReceiptPromotionDurableState::Pending {
             return Err(BootPublicationReceiptPromotionError::RequiredPromotedReceiptStillPending);
         }
@@ -88,9 +85,9 @@ impl Database {
         receipt: &CanonicalBootPublicationReceipt,
         deadline: Instant,
     ) -> Result<BootPublicationReceiptPromotionOutcome, BootPublicationReceiptPromotionError> {
-        let preflight = self.conn.exec(|connection| {
-            connection.transaction(|connection| inspect_exact_state(connection, receipt))
-        })?;
+        let preflight = self
+            .conn
+            .exec(|connection| connection.transaction(|connection| inspect_exact_state(connection, receipt)))?;
         if preflight == BootPublicationReceiptPromotionDurableState::Promoted {
             return Ok(BootPublicationReceiptPromotionOutcome::AlreadyPromoted);
         }
@@ -109,16 +106,12 @@ impl Database {
                 }
                 match classify_durable_state(self, receipt) {
                     Ok(Some(BootPublicationReceiptPromotionDurableState::Promoted)) => Ok(outcome),
-                    Ok(Some(durable)) => Err(
-                        BootPublicationReceiptPromotionError::PostCommitDurableState { durable },
-                    ),
+                    Ok(Some(durable)) => Err(BootPublicationReceiptPromotionError::PostCommitDurableState { durable }),
                     Ok(None) => Err(BootPublicationReceiptPromotionError::PostCommitMismatch),
                     Err(source) => Err(BootPublicationReceiptPromotionError::PostCommitState(source)),
                 }
             }
-            Err(BootPublicationReceiptPromotionError::Database(source))
-                if transaction_body_succeeded =>
-            {
+            Err(BootPublicationReceiptPromotionError::Database(source)) if transaction_body_succeeded => {
                 commit_report_error(self, receipt, source)
             }
             Err(error) => Err(error),
@@ -131,8 +124,7 @@ fn load_exact_promoted_state(
     transition_id: &TransitionId,
     pair: &BootPublicationReceiptPair,
 ) -> Result<BootPublicationReceiptState, ExactPromotedBootPublicationReceiptStateError> {
-    load_exact_promoted_state_with_predecessor(connection, transition_id, pair)
-        .map(|(state, _)| state)
+    load_exact_promoted_state_with_predecessor(connection, transition_id, pair).map(|(state, _)| state)
 }
 
 /// Load the existing exact promoted state together with the canonical body
@@ -147,10 +139,7 @@ pub(super) fn load_exact_promoted_state_with_predecessor(
     transition_id: &TransitionId,
     pair: &BootPublicationReceiptPair,
 ) -> Result<
-    (
-        BootPublicationReceiptState,
-        Option<CanonicalBootPublicationReceipt>,
-    ),
+    (BootPublicationReceiptState, Option<CanonicalBootPublicationReceipt>),
     ExactPromotedBootPublicationReceiptStateError,
 > {
     let state = load_receipt_state(connection)?;
@@ -175,10 +164,12 @@ pub(super) fn load_exact_promoted_state_with_predecessor(
         .committed()
         .ok_or(ExactPromotedBootPublicationReceiptStateError::MissingCommittedBody)?;
     if committed.fingerprint() != pair.pending {
-        return Err(ExactPromotedBootPublicationReceiptStateError::CommittedBodyFingerprintMismatch {
-            expected: pair.pending,
-            actual: committed.fingerprint(),
-        });
+        return Err(
+            ExactPromotedBootPublicationReceiptStateError::CommittedBodyFingerprintMismatch {
+                expected: pair.pending,
+                actual: committed.fingerprint(),
+            },
+        );
     }
     if committed.body().transition_id() != transition_id {
         return Err(ExactPromotedBootPublicationReceiptStateError::TransitionMismatch {
@@ -187,20 +178,16 @@ pub(super) fn load_exact_promoted_state_with_predecessor(
         });
     }
     if committed.body().committed_predecessor() != pair.committed {
-        return Err(ExactPromotedBootPublicationReceiptStateError::CommittedPredecessorMismatch {
-            expected: pair.committed,
-            actual: committed.body().committed_predecessor(),
-        });
+        return Err(
+            ExactPromotedBootPublicationReceiptStateError::CommittedPredecessorMismatch {
+                expected: pair.committed,
+                actual: committed.body().committed_predecessor(),
+            },
+        );
     }
     let predecessor = pair
         .committed
-        .map(|predecessor| {
-            load_required_receipt(
-                connection,
-                ReceiptReference::CommittedPredecessor,
-                predecessor,
-            )
-        })
+        .map(|predecessor| load_required_receipt(connection, ReceiptReference::CommittedPredecessor, predecessor))
         .transpose()?;
 
     Ok((state, predecessor))
@@ -211,9 +198,7 @@ fn promote_receipt(
     receipt: &CanonicalBootPublicationReceipt,
     deadline: Instant,
 ) -> Result<BootPublicationReceiptPromotionOutcome, BootPublicationReceiptPromotionError> {
-    if inspect_exact_state(connection, receipt)?
-        == BootPublicationReceiptPromotionDurableState::Promoted
-    {
+    if inspect_exact_state(connection, receipt)? == BootPublicationReceiptPromotionDurableState::Promoted {
         return Ok(BootPublicationReceiptPromotionOutcome::AlreadyPromoted);
     }
 
@@ -222,9 +207,7 @@ fn promote_receipt(
     require_promotion_deadline(deadline)?;
     let changed = promote_pending_row(connection, receipt.body().transition_id(), &pair)?;
     if changed != 1 {
-        return Err(BootPublicationReceiptPromotionError::HeadUpdateRowMismatch {
-            changed,
-        });
+        return Err(BootPublicationReceiptPromotionError::HeadUpdateRowMismatch { changed });
     }
     after_head_update_before_commit(connection);
 
@@ -235,9 +218,7 @@ fn promote_receipt(
     Ok(BootPublicationReceiptPromotionOutcome::Promoted)
 }
 
-fn require_promotion_deadline(
-    deadline: Instant,
-) -> Result<(), BootPublicationReceiptPromotionError> {
+fn require_promotion_deadline(deadline: Instant) -> Result<(), BootPublicationReceiptPromotionError> {
     if promotion_deadline_now() > deadline {
         return Err(BootPublicationReceiptPromotionError::DeadlineExceeded { deadline });
     }
@@ -297,19 +278,12 @@ fn require_exact_pending(
     Ok(())
 }
 
-fn is_exact_pending(
-    state: &BootPublicationReceiptState,
-    receipt: &CanonicalBootPublicationReceipt,
-) -> bool {
+fn is_exact_pending(state: &BootPublicationReceiptState, receipt: &CanonicalBootPublicationReceipt) -> bool {
     let pair = receipt_pair(receipt);
     state.head().committed() == pair.committed
-        && state
-            .head()
-            .pending()
-            .is_some_and(|pending| {
-                pending.transition_id() == receipt.body().transition_id()
-                    && pending.fingerprint() == receipt.fingerprint()
-            })
+        && state.head().pending().is_some_and(|pending| {
+            pending.transition_id() == receipt.body().transition_id() && pending.fingerprint() == receipt.fingerprint()
+        })
         && state.pending() == Some(receipt)
 }
 
@@ -326,11 +300,7 @@ fn is_exact_promoted(
         return Ok(false);
     }
     if let Some(predecessor) = receipt.body().committed_predecessor() {
-        load_required_receipt(
-            connection,
-            ReceiptReference::CommittedPredecessor,
-            predecessor,
-        )?;
+        load_required_receipt(connection, ReceiptReference::CommittedPredecessor, predecessor)?;
     }
     Ok(true)
 }
@@ -365,17 +335,12 @@ fn commit_report_error(
         });
     }
     match classify_durable_state(database, receipt) {
-        Ok(Some(durable)) => Err(BootPublicationReceiptPromotionError::CommitReport {
-            durable,
-            source,
-        }),
+        Ok(Some(durable)) => Err(BootPublicationReceiptPromotionError::CommitReport { durable, source }),
         Ok(None) => Err(BootPublicationReceiptPromotionError::CommitReportMismatch { source }),
-        Err(reconciliation) => Err(
-            BootPublicationReceiptPromotionError::CommitReportAndReconciliation {
-                commit: source,
-                reconciliation,
-            },
-        ),
+        Err(reconciliation) => Err(BootPublicationReceiptPromotionError::CommitReportAndReconciliation {
+            commit: source,
+            reconciliation,
+        }),
     }
 }
 
@@ -481,12 +446,16 @@ pub(crate) enum BootPublicationReceiptPromotionError {
         #[source]
         source: DatabaseError,
     },
-    #[error("receipt-promotion transaction reported failure and durable state matched neither exact pending nor promoted state")]
+    #[error(
+        "receipt-promotion transaction reported failure and durable state matched neither exact pending nor promoted state"
+    )]
     CommitReportMismatch {
         #[source]
         source: DatabaseError,
     },
-    #[error("receipt-promotion transaction reported failure and a clean SQLite transaction boundary could not be restored")]
+    #[error(
+        "receipt-promotion transaction reported failure and a clean SQLite transaction boundary could not be restored"
+    )]
     CommitReportCleanup {
         report: DatabaseError,
         #[source]
@@ -528,25 +497,16 @@ fn arm_before_head_update(callback: impl FnOnce(&mut SqliteConnection) + 'static
 }
 
 #[cfg(test)]
-fn arm_after_head_update_before_commit(
-    callback: impl FnOnce(&mut SqliteConnection) + 'static,
-) {
+fn arm_after_head_update_before_commit(callback: impl FnOnce(&mut SqliteConnection) + 'static) {
     AFTER_HEAD_UPDATE_BEFORE_COMMIT.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(callback)).is_none());
     });
 }
 
 #[cfg(test)]
-pub(crate) fn arm_boot_publication_receipt_promotion_after_commit_error(
-    source: DatabaseError,
-) {
+pub(crate) fn arm_boot_publication_receipt_promotion_after_commit_error(source: DatabaseError) {
     AFTER_COMMIT_BEFORE_RETURN.with(|slot| {
-        assert!(
-            slot
-                .borrow_mut()
-                .replace(Box::new(move || Err(source)))
-                .is_none(),
-        );
+        assert!(slot.borrow_mut().replace(Box::new(move || Err(source))).is_none(),);
     });
 }
 
@@ -593,9 +553,7 @@ fn after_head_update_before_commit(_: &mut SqliteConnection) {}
 
 #[cfg(test)]
 fn after_commit_before_return() -> Result<(), DatabaseError> {
-    AFTER_COMMIT_BEFORE_RETURN.with(|slot| {
-        slot.borrow_mut().take().map_or(Ok(()), |callback| callback())
-    })
+    AFTER_COMMIT_BEFORE_RETURN.with(|slot| slot.borrow_mut().take().map_or(Ok(()), |callback| callback()))
 }
 
 #[cfg(not(test))]

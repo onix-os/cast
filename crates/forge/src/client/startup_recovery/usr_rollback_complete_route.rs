@@ -80,12 +80,7 @@ pub(in crate::client) fn persist_usr_rollback_complete_route_and_reopen(
     let advance = match authority.advance_record_binding(&journal, &successor) {
         Ok(successor_binding) => {
             before_usr_rollback_complete_route_successor_binding_revalidation();
-            let exact = revalidate_published_route_binding(
-                &installation,
-                &journal,
-                &successor_binding,
-                &successor,
-            );
+            let exact = revalidate_published_route_binding(&installation, &journal, &successor_binding, &successor);
             match exact {
                 Ok(true) => UsrRollbackCompleteRouteAdvanceOutcome::Published(successor_binding),
                 Ok(false) => {
@@ -125,12 +120,7 @@ pub(in crate::client) fn persist_usr_rollback_complete_route_and_reopen(
     match advance {
         UsrRollbackCompleteRouteAdvanceOutcome::Published(successor_binding) => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
-                let exact = revalidate_reopened_route_binding(
-                    &installation,
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                );
+                let exact = revalidate_reopened_route_binding(&installation, &reopened, &successor_binding, &successor);
                 drop(successor_binding);
                 match exact {
                     Ok(true) => Ok((reopened, successor)),
@@ -202,15 +192,16 @@ pub(in crate::client) fn persist_usr_rollback_complete_route_and_reopen(
             }
             Ok((reopened, actual)) => {
                 drop(reopened);
-                Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBindingAndReopen {
-                    binding,
-                    reopen: unexpected_record(&source_record, &successor, actual),
-                })
+                Err(
+                    UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBindingAndReopen {
+                        binding,
+                        reopen: unexpected_record(&source_record, &successor, actual),
+                    },
+                )
             }
-            Err(reopen) => Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBindingAndReopen {
-                binding,
-                reopen,
-            }),
+            Err(reopen) => {
+                Err(UsrRollbackCompleteRoutePersistenceError::SuccessorRecordBindingAndReopen { binding, reopen })
+            }
         },
     }
 }
@@ -299,9 +290,7 @@ fn before_usr_rollback_complete_route_final_revalidation() {
 fn before_usr_rollback_complete_route_final_revalidation() {}
 
 #[cfg(test)]
-pub(crate) fn arm_before_usr_rollback_complete_route_successor_binding_revalidation(
-    hook: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_before_usr_rollback_complete_route_successor_binding_revalidation(hook: impl FnOnce() + 'static) {
     BEFORE_SUCCESSOR_BINDING_REVALIDATION.with(|slot| {
         assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
     });

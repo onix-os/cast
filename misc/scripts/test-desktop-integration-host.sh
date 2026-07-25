@@ -6,13 +6,14 @@
 # atomic update, rollback, boot, or Nix-compatibility proof.
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(timeout 10s dirname -- "$0")/../.." && pwd)
 fixture_root="$root/tests/fixtures/gluon/execution"
 archive="$fixture_root/archives/cast-desktop-integration-fixture-1.0.0.tar"
 authored="$fixture_root/source-trees/cast-desktop-integration-fixture-1.0.0"
 expected_sha256=0f39867b15a8ae8f5386fdc768fd83e2874ac41f6e5c8c8711b5ce9a67887169
 
-temporary=$(timeout 10s mktemp -d "${TMPDIR:-/tmp}/cast-desktop-integration-host.XXXXXXXX")
+temporary=$(timeout 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-desktop-integration-host.XXXXXXXX")
 cleanup() {
     timeout 30s chmod -R u+w "$temporary" 2>/dev/null || :
     timeout 30s rm -rf "$temporary"

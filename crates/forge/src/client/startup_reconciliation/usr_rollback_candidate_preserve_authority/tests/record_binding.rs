@@ -17,12 +17,11 @@ use crate::client::{
         arm_before_archived_candidate_preserve_move_reconciliation_capture,
         arm_before_new_state_candidate_preserve_move_reconciliation_capture,
         arm_before_new_state_target_create_reconciliation_capture,
-        arm_before_new_state_target_normalize_reconciliation_capture,
-        new_state_candidate_preserve_move_attempt_count, new_state_target_create_attempt_count,
-        new_state_target_normalize_attempt_count, reset_active_reblit_candidate_preserve_exchange_attempt_count,
-        reset_archived_candidate_preserve_move_attempt_count,
-        reset_new_state_candidate_preserve_move_attempt_count, reset_new_state_target_create_attempt_count,
-        reset_new_state_target_normalize_attempt_count,
+        arm_before_new_state_target_normalize_reconciliation_capture, new_state_candidate_preserve_move_attempt_count,
+        new_state_target_create_attempt_count, new_state_target_normalize_attempt_count,
+        reset_active_reblit_candidate_preserve_exchange_attempt_count,
+        reset_archived_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
+        reset_new_state_target_create_attempt_count, reset_new_state_target_normalize_attempt_count,
     },
     startup_recovery::UsrRollbackCandidatePreserveEffectSeal,
 };
@@ -85,12 +84,12 @@ impl EffectCase {
                 outcome,
                 CandidateLayout::Staged,
             ),
-            Self::NormalizeTarget => CandidatePreserveFixture::new_state_target_residue_at_epoch(
-                historical, source, outcome, 0o500,
-            ),
-            Self::MoveNewState => CandidatePreserveFixture::new_state_empty_quarantine_prefix_at_epoch(
-                historical, source, outcome,
-            ),
+            Self::NormalizeTarget => {
+                CandidatePreserveFixture::new_state_target_residue_at_epoch(historical, source, outcome, 0o500)
+            }
+            Self::MoveNewState => {
+                CandidatePreserveFixture::new_state_empty_quarantine_prefix_at_epoch(historical, source, outcome)
+            }
             Self::MoveArchived => fixture_at_epoch(
                 historical,
                 OperationKind::Archived,
@@ -112,9 +111,7 @@ impl EffectCase {
         CandidateSource::THROUGH_CANDIDATE_PRESERVED
             .into_iter()
             .map(RecordSourceCase::Candidate)
-            .chain(
-                (self == Self::ExchangeActiveReblit).then_some(RecordSourceCase::BootSyncStarted),
-            )
+            .chain((self == Self::ExchangeActiveReblit).then_some(RecordSourceCase::BootSyncStarted))
     }
 
     fn arm_after_physical_effect(self, hook: impl FnOnce() + 'static) {
@@ -123,9 +120,7 @@ impl EffectCase {
             Self::NormalizeTarget => arm_before_new_state_target_normalize_reconciliation_capture(hook),
             Self::MoveNewState => arm_before_new_state_candidate_preserve_move_reconciliation_capture(hook),
             Self::MoveArchived => arm_before_archived_candidate_preserve_move_reconciliation_capture(hook),
-            Self::ExchangeActiveReblit => {
-                arm_before_active_reblit_candidate_preserve_reconciliation_capture(hook)
-            }
+            Self::ExchangeActiveReblit => arm_before_active_reblit_candidate_preserve_reconciliation_capture(hook),
         }
     }
 }
@@ -382,7 +377,11 @@ fn startup_candidate_preserve_same_byte_predecessor_replacement_before_effect_ne
                     assert_eq!(effect_counts(), [0; 5], "{label}");
                     assert_eq!(fixture.fixture.database_snapshot(), database_before, "{label}");
                     assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before, "{label}");
-                    assert_eq!(root_abi_snapshot(&fixture.fixture.installation.root), root_abi_before, "{label}");
+                    assert_eq!(
+                        root_abi_snapshot(&fixture.fixture.installation.root),
+                        root_abi_before,
+                        "{label}"
+                    );
                     assert_same_byte_replacement(&fixture, identity, &displaced, &bytes);
                     drop(journal);
                     fs::remove_file(displaced).unwrap();
@@ -416,7 +415,11 @@ fn startup_candidate_preserve_same_byte_predecessor_replacement_after_physical_e
 
                     assert_eq!(effect_counts(), expected_effect_counts(case), "{label}");
                     assert_eq!(fixture.fixture.database_snapshot(), database_before, "{label}");
-                    assert_eq!(root_abi_snapshot(&fixture.fixture.installation.root), root_abi_before, "{label}");
+                    assert_eq!(
+                        root_abi_snapshot(&fixture.fixture.installation.root),
+                        root_abi_before,
+                        "{label}"
+                    );
                     assert_same_byte_replacement(&fixture, identity, &displaced, &bytes);
                     assert_post_effect_layout(case, &fixture);
                     drop(journal);
@@ -480,7 +483,11 @@ fn startup_candidate_preparation_restart_authority_rejects_same_bytes_at_a_succe
 
                     assert_eq!(effect_counts(), expected_effect_counts(case), "{label}");
                     assert_eq!(fixture.fixture.database_snapshot(), database_before, "{label}");
-                    assert_eq!(root_abi_snapshot(&fixture.fixture.installation.root), root_abi_before, "{label}");
+                    assert_eq!(
+                        root_abi_snapshot(&fixture.fixture.installation.root),
+                        root_abi_before,
+                        "{label}"
+                    );
                     assert_same_byte_replacement(&fixture, identity, &displaced, &bytes);
                     assert_post_effect_layout(case, &fixture);
                     drop(journal);

@@ -7,15 +7,12 @@
 
 use crate::{
     Installation,
-    transition_journal::{
-        StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
-    },
+    transition_journal::{StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
     candidate_preserve_proof::{
-        UsrRollbackCandidatePreserveNamespaceError,
-        require_exact_active_reblit_boot_repair_required_topology,
+        UsrRollbackCandidatePreserveNamespaceError, require_exact_active_reblit_boot_repair_required_topology,
     },
     capture::{CaptureError, NamespaceSnapshot, capture_snapshot},
 };

@@ -33,27 +33,18 @@ pub(in crate::client) use model::{
     PreparedActiveReblitMountedBootTopology, RevalidatedActiveReblitMountedBootTopology,
 };
 pub(in crate::client) use publication_targets::{
-    ActiveReblitBootImmutableLeafPublicationError,
-    ActiveReblitBootOwnedCleanupError,
-    ActiveReblitBootOwnedCleanupOutcome,
-    ActiveReblitBootOwnedLeafReplacementError,
-    ActiveReblitBootPublicationTargetsError,
-    ActiveReblitBootReceiptTargetValidationError,
-    ReceiptValidatedActiveReblitBootPublicationTargets,
-    RevalidatedActiveReblitBootPublicationTarget,
+    ActiveReblitBootImmutableLeafPublicationError, ActiveReblitBootOwnedCleanupError,
+    ActiveReblitBootOwnedCleanupOutcome, ActiveReblitBootOwnedLeafReplacementError,
+    ActiveReblitBootPublicationTargetsError, ActiveReblitBootReceiptTargetValidationError,
+    ReceiptValidatedActiveReblitBootPublicationTargets, RevalidatedActiveReblitBootPublicationTarget,
     RevalidatedActiveReblitBootPublicationTargets,
 };
 #[cfg(test)]
 pub(in crate::client) use publication_targets::{
-    FixtureImmutableLeafAssessmentGuard,
-    FixtureOwnedCleanupTargetGuard,
-    FixtureOwnedReplacementAssessmentGuard,
-    arm_fixture_immutable_leaf_assessments,
-    arm_fixture_owned_cleanup_targets,
-    arm_fixture_owned_replacement_assessments,
-    fixture_immutable_leaf_assessments_remaining,
-    fixture_owned_cleanup_targets_remaining,
-    fixture_owned_replacement_assessments_remaining,
+    FixtureImmutableLeafAssessmentGuard, FixtureOwnedCleanupTargetGuard, FixtureOwnedReplacementAssessmentGuard,
+    arm_fixture_immutable_leaf_assessments, arm_fixture_owned_cleanup_targets,
+    arm_fixture_owned_replacement_assessments, fixture_immutable_leaf_assessments_remaining,
+    fixture_owned_cleanup_targets_remaining, fixture_owned_replacement_assessments_remaining,
     fixture_owned_replacement_validations_remaining,
 };
 

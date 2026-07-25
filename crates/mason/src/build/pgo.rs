@@ -46,28 +46,47 @@ mod tests {
         fs::write(
             root.path().join("stone.glu"),
             format!(
-                r#"let cast = import! cast.package.v3
-let base = cast.mk_package (cast.meta {{
-    pname = "example", version = "1.0.0", release = 1,
-    homepage = "https://example.invalid", license = ["MPL-2.0"],
-}})
-let scripts = cast.scripts {{
-    workload = cast.phase [cast.step.run (cast.program.binary "run-workload") []],
-    .. cast.defaults.scripts
+                r#"let a = import! cast.authored.v1
+let scripts = a.scripts {{
+    workload = a.phase [a.step.run (a.program.binary "run-workload") []],
+    .. a.empty.scripts
 }}
-let profile = cast.profile_with {{
+let profile = a.profile {{
     name = {target_name:?},
-    builder = cast.builder.shell scripts [],
-    hooks = cast.defaults.hooks,
+    builder = {{
+        required_tools = [],
+        environment = [],
+        phases = scripts,
+        supported_hooks = a.hook_support.all,
+    }},
+    hooks = a.empty.hooks,
     native_build_inputs = [], build_inputs = [], check_inputs = [],
 }}
 {{
-    options = cast.options {{
-        cspgo = cast.boolean.true,
-        .. cast.defaults.options
+    meta = {{
+        pname = "example", version = "1.0.0", release = 1,
+        homepage = "https://example.invalid", license = ["MPL-2.0"],
     }},
+    builder = a.builder.custom a.empty.builder,
+    sources = [],
+    native_build_inputs = [], build_inputs = [], check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.some.options (a.options {{
+        toolchain = a.toolchain.llvm,
+        cspgo = a.true,
+        samplepgo = a.false,
+        debug = a.true,
+        strip = a.true,
+        networking = a.false,
+        compressman = a.false,
+        lastrip = a.true,
+    }}),
     profiles = [profile],
-    .. base
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }}
 "#
             ),

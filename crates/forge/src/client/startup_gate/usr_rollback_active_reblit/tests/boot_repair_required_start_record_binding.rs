@@ -36,11 +36,7 @@ use super::{
 };
 
 fn canonical_journal(fixture: &BootRepairFixture) -> std::path::PathBuf {
-    fixture
-        .fixture
-        .installation
-        .root
-        .join(".cast/journal/state-transition")
+    fixture.fixture.installation.root.join(".cast/journal/state-transition")
 }
 
 fn inode_identity(path: &Path) -> (u64, u64) {

@@ -674,8 +674,8 @@ fn assert_factory_override_changes_frozen_identity(matrix: &PackageExampleMatrix
     let original = plan_for_build(matrix.env(), matrix.request(example, false), &matrix.output_dir)
         .expect("reuse the original factory-override build lock");
     let original_source = fs::read_to_string(&example.recipe_path).unwrap();
-    const OVERRIDE: &str = "b.dep.pkgconfig \"libressl\"";
-    const CHANGED_OVERRIDE: &str = "b.dep.pkgconfig \"openssl\"";
+    const OVERRIDE: &str = "a.dep.pkgconfig \"libressl\"";
+    const CHANGED_OVERRIDE: &str = "a.dep.pkgconfig \"openssl\"";
     assert_eq!(
         original_source.matches(OVERRIDE).count(),
         1,

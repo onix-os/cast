@@ -12,8 +12,7 @@ use crate::{
 
 use super::{
     DatabaseEvidence, UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveAuthorityErrorKind,
-    candidate_preserve_plan_is_exact, inspect_current_database, require_exact_database,
-    require_journal_record_binding,
+    candidate_preserve_plan_is_exact, inspect_current_database, require_exact_database, require_journal_record_binding,
 };
 
 pub(super) fn require_effect_binding(

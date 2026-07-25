@@ -3,33 +3,25 @@
 use thiserror::Error;
 
 use crate::{
-    Installation, state,
-    boot_publication::{
-        BootPublicationReceiptFingerprint, CanonicalBootPublicationReceipt,
-    },
+    Installation,
+    boot_publication::{BootPublicationReceiptFingerprint, CanonicalBootPublicationReceipt},
     client::{
         Client, CoordinatorActiveStateReservation,
         active_reblit_boot_publication_preflight::ActiveReblitBootCompleteFinalizationSeal,
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
         startup_gate::{self, CleanSystemStartup},
         startup_reconciliation::{
-            ActiveReblitCompleteFinalizationAuthority,
-            ActiveReblitCompleteFinalizationAuthorityError,
+            ActiveReblitCompleteFinalizationAuthority, ActiveReblitCompleteFinalizationAuthorityError,
         },
-        startup_recovery::{
-            ActiveReblitCompleteFinalizationError, finalize_active_reblit_complete,
-        },
+        startup_recovery::{ActiveReblitCompleteFinalizationError, finalize_active_reblit_complete},
     },
-    db::state::{
-        BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database,
-    },
-    installation,
+    db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database},
+    installation, state,
     transition_journal::{CodecError, Operation, Phase, TransitionRecord},
 };
 
 use super::{
-    CompleteStagedActiveReblitBootSync, exact_live_options, receipt_pair,
-    same_nonempty_candidate_and_previous,
+    CompleteStagedActiveReblitBootSync, exact_live_options, receipt_pair, same_nonempty_candidate_and_previous,
 };
 
 const ACTIVE_REBLIT_COMPLETE_GENERATION: u64 = 15;
@@ -38,11 +30,7 @@ const ACTIVE_REBLIT_COMPLETE_GENERATION: u64 = 15;
 /// post-delete proof. The original plan, inventory, promoted receipt, locked
 /// journal store, and writer reservation remain continuously owned.
 #[must_use = "clean terminal authority must be returned or deliberately discarded"]
-pub(in crate::client) struct FinalizedStagedActiveReblitBootSync<
-    'plan,
-    'inventory,
-    Plan,
-> {
+pub(in crate::client) struct FinalizedStagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     complete_record: TransitionRecord,
     receipt: CanonicalBootPublicationReceipt,
     plan: &'plan Plan,
@@ -65,16 +53,12 @@ impl<Plan> std::fmt::Debug for FinalizedStagedActiveReblitBootSync<'_, '_, Plan>
     }
 }
 
-impl<'plan, 'inventory, Plan>
-    FinalizedStagedActiveReblitBootSync<'plan, 'inventory, Plan>
-{
+impl<'plan, 'inventory, Plan> FinalizedStagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     pub(in crate::client) const fn complete_record(&self) -> &TransitionRecord {
         &self.complete_record
     }
 
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.receipt.fingerprint()
     }
 
@@ -82,15 +66,11 @@ impl<'plan, 'inventory, Plan>
         self.plan
     }
 
-    pub(in crate::client) const fn inventory(
-        &self,
-    ) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(&self) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
         self.inventory
     }
 
-    pub(in crate::client) const fn staging_outcome(
-        &self,
-    ) -> BootPublicationReceiptStageOutcome {
+    pub(in crate::client) const fn staging_outcome(&self) -> BootPublicationReceiptStageOutcome {
         self.staging_outcome
     }
 
@@ -99,14 +79,9 @@ impl<'plan, 'inventory, Plan>
         client: &Client,
     ) -> Result<(), FinalizedStagedActiveReblitBootSyncValidationError> {
         if !self.database.same_instance(&client.state_db)
-            || !std::ptr::eq(
-                self.installation.root_directory(),
-                client.installation.root_directory(),
-            )
+            || !std::ptr::eq(self.installation.root_directory(), client.installation.root_directory())
         {
-            return Err(
-                FinalizedStagedActiveReblitBootSyncValidationError::ClientCapabilityMismatch,
-            );
+            return Err(FinalizedStagedActiveReblitBootSyncValidationError::ClientCapabilityMismatch);
         }
         let pair = receipt_pair(&self.receipt);
         if self.complete_record.operation != Operation::ActiveReblit
@@ -117,15 +92,12 @@ impl<'plan, 'inventory, Plan>
             || !same_nonempty_candidate_and_previous(&self.complete_record)
             || self.complete_record.boot_publication_receipt_correlation()? != Some(pair)
         {
-            return Err(
-                FinalizedStagedActiveReblitBootSyncValidationError::UnexpectedRecord,
-            );
+            return Err(FinalizedStagedActiveReblitBootSyncValidationError::UnexpectedRecord);
         }
 
         let _clean_startup = &self.clean_startup;
         self.installation.revalidate_mutable_namespace()?;
-        self.database
-            .require_promoted_boot_publication_receipt(&self.receipt)?;
+        self.database.require_promoted_boot_publication_receipt(&self.receipt)?;
         let active_state = self
             .active_state_reservation
             .capture_for_startup_recovery(&self.installation)?;
@@ -136,9 +108,7 @@ impl<'plan, 'inventory, Plan>
                 .expect("checked exact live Complete state"),
         );
         if active_state.active() != Some(expected) {
-            return Err(
-                FinalizedStagedActiveReblitBootSyncValidationError::ActiveSelectionChanged,
-            );
+            return Err(FinalizedStagedActiveReblitBootSyncValidationError::ActiveSelectionChanged);
         }
         active_state.revalidate(&self.installation)?;
         self.installation.revalidate_mutable_namespace()?;
@@ -146,9 +116,7 @@ impl<'plan, 'inventory, Plan>
     }
 }
 
-impl<'plan, 'inventory, Plan>
-    CompleteStagedActiveReblitBootSync<'plan, 'inventory, Plan>
-{
+impl<'plan, 'inventory, Plan> CompleteStagedActiveReblitBootSync<'plan, 'inventory, Plan> {
     /// Consume the retained generation-15 binding through the existing
     /// same-store terminal finalizer. No reopen, retry, or other mutation is
     /// introduced by the live adapter.
@@ -156,10 +124,8 @@ impl<'plan, 'inventory, Plan>
         self,
         client: &Client,
         seal: ActiveReblitBootCompleteFinalizationSeal,
-    ) -> Result<
-        FinalizedStagedActiveReblitBootSync<'plan, 'inventory, Plan>,
-        CompleteStagedActiveReblitFinalizationError,
-    > {
+    ) -> Result<FinalizedStagedActiveReblitBootSync<'plan, 'inventory, Plan>, CompleteStagedActiveReblitFinalizationError>
+    {
         self.revalidate_against(client)
             .map_err(CompleteStagedActiveReblitFinalizationError::CompleteEvidence)?;
 
@@ -188,12 +154,9 @@ impl<'plan, 'inventory, Plan>
         .map_err(CompleteStagedActiveReblitFinalizationError::Authority)?;
         let journal = finalize_active_reblit_complete(journal, authority)
             .map_err(CompleteStagedActiveReblitFinalizationError::Finalization)?;
-        let clean_startup = CleanSystemStartup::admit_clean_after_terminal_finalization(
-            &installation,
-            &database,
-            journal,
-        )
-        .map_err(CompleteStagedActiveReblitFinalizationError::CleanAdmission)?;
+        let clean_startup =
+            CleanSystemStartup::admit_clean_after_terminal_finalization(&installation, &database, journal)
+                .map_err(CompleteStagedActiveReblitFinalizationError::CleanAdmission)?;
 
         let finalized = FinalizedStagedActiveReblitBootSync {
             complete_record,

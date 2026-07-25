@@ -152,10 +152,8 @@ impl Manager {
             Source::ConfigManager(config) =>
             // Load all configs, default if none exist
             {
-                let evaluators = DeclarationEvaluatorSet::new(
-                    repository::RepositoryEvaluator::registered(),
-                )
-                .expect("the repository languages register distinct extensions");
+                let evaluators = DeclarationEvaluatorSet::new(repository::RepositoryEvaluator::registered())
+                    .expect("the repository languages register distinct extensions");
                 config
                     .load_declarations(&evaluators)?
                     .into_iter()
@@ -205,15 +203,9 @@ impl Manager {
         let map = repository::Map::with([(id.clone(), repository.clone())]);
         let codec = repository::RepositoryCodec::default();
         let active_language = codec.language_spec().clone();
-        let evaluators = DeclarationEvaluatorSet::new([codec])
-            .expect("one validated repository adapter has no extension collision");
-        let config_path = config
-            .save_declaration(
-                &id,
-                &map,
-                &evaluators,
-                &active_language,
-            )?;
+        let evaluators =
+            DeclarationEvaluatorSet::new([codec]).expect("one validated repository adapter has no extension collision");
+        let config_path = config.save_declaration(&id, &map, &evaluators, &active_language)?;
 
         let (db, cache_dir) = open_meta_db(self.source.identifier(), &id, &repository, &self.installation)?;
 
@@ -547,13 +539,7 @@ impl Manager {
             let active_language = codec.language_spec().clone();
             let evaluators = DeclarationEvaluatorSet::new([codec])
                 .expect("one validated repository adapter has no extension collision");
-            config
-                .save_declaration(
-                    id,
-                    &map,
-                    &evaluators,
-                    &active_language,
-                )?;
+            config.save_declaration(id, &map, &evaluators, &active_language)?;
         }
 
         Ok(())

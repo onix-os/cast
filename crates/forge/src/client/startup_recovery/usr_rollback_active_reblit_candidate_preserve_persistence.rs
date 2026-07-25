@@ -96,20 +96,21 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_candidate_preserve_a
                 }
                 Err(source) => {
                     drop(successor_binding);
-                    UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::SuccessorBindingFailed {
-                        successor,
-                        source,
-                    }
+                    UsrRollbackActiveReblitCandidatePreserveAdvanceOutcome::SuccessorBindingFailed { successor, source }
                 }
             }
         }
         Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Authority(source)) => {
             drop(journal);
-            return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(source));
+            return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Authority(
+                source,
+            ));
         }
         Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Installation(source)) => {
             drop(journal);
-            return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Installation(source));
+            return Err(UsrRollbackActiveReblitCandidatePreservePersistenceError::Installation(
+                source,
+            ));
         }
         Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Successor(source)) => {
             drop(journal);

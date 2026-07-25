@@ -12,16 +12,14 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::arm_before_usr_rollback_activate_archived_finalization_fresh_namespace_capture,
         startup_recovery::{
-            UsrRollbackActivateArchivedFinalizationError,
-            arm_after_usr_rollback_activate_archived_finalization_delete,
+            UsrRollbackActivateArchivedFinalizationError, arm_after_usr_rollback_activate_archived_finalization_delete,
             arm_before_usr_rollback_activate_archived_finalization_final_revalidation,
             finalize_usr_rollback_activate_archived,
         },
     },
     transition_journal::{
-        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError,
-        TransitionJournalRecordDeleteError, arm_public_binding_revalidation_callback,
-        assert_public_binding_revalidation_callback_consumed, encode,
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, StorageError, TransitionJournalRecordDeleteError,
+        arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed, encode,
     },
 };
 
@@ -134,13 +132,10 @@ fn startup_activate_archived_finalization_bound_delete_never_unlinks_a_last_seam
     let hook_canonical = canonical.clone();
     let hook_displaced = displaced.clone();
     let hook_bytes = exact_bytes.clone();
-    arm_public_binding_revalidation_callback(
-        PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach,
-        move || {
-            fs::rename(&hook_canonical, &hook_displaced).unwrap();
-            write_new_private_file(&hook_canonical, &hook_bytes);
-        },
-    );
+    arm_public_binding_revalidation_callback(PublicBindingRevalidationBoundary::BeforeBoundDeleteDetach, move || {
+        fs::rename(&hook_canonical, &hook_displaced).unwrap();
+        write_new_private_file(&hook_canonical, &hook_bytes);
+    });
     reset_candidate_observers();
 
     let error = finalize_usr_rollback_activate_archived(journal, authority).unwrap_err();
@@ -148,9 +143,9 @@ fn startup_activate_archived_finalization_bound_delete_never_unlinks_a_last_seam
     assert_public_binding_revalidation_callback_consumed();
     assert!(matches!(
         error,
-        UsrRollbackActivateArchivedFinalizationError::Delete(
-            TransitionJournalRecordDeleteError::Detached(StorageError::CanonicalChanged)
-        )
+        UsrRollbackActivateArchivedFinalizationError::Delete(TransitionJournalRecordDeleteError::Detached(
+            StorageError::CanonicalChanged
+        ))
     ));
     assert_eq!(fs::read(displaced).unwrap(), exact_bytes);
     assert!(!canonical.exists());

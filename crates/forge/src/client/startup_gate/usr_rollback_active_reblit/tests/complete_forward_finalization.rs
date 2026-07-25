@@ -6,12 +6,10 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::{
-            self, ActiveReblitCompleteFinalizationSeal, CleanSystemStartup,
-            active_reblit_complete_finalization,
+            self, ActiveReblitCompleteFinalizationSeal, CleanSystemStartup, active_reblit_complete_finalization,
         },
         startup_reconciliation::{
-            ActiveReblitCompleteFinalizationAdmission,
-            ActiveReblitCompleteFinalizationAuthority,
+            ActiveReblitCompleteFinalizationAdmission, ActiveReblitCompleteFinalizationAuthority,
             active_reblit_commit_cleanup_exchange_attempt_count,
             arm_between_active_reblit_complete_finalization_database_captures,
             arm_between_active_reblit_complete_finalization_post_delete_database_captures,
@@ -20,33 +18,27 @@ use crate::{
             take_active_reblit_commit_cleanup_durability_events,
         },
         startup_recovery::{
-            ActiveReblitCompleteFinalizationError,
-            arm_after_active_reblit_complete_finalization_delete,
-            arm_before_active_reblit_complete_finalization_final_revalidation,
-            finalize_active_reblit_complete,
+            ActiveReblitCompleteFinalizationError, arm_after_active_reblit_complete_finalization_delete,
+            arm_before_active_reblit_complete_finalization_final_revalidation, finalize_active_reblit_complete,
         },
     },
     transition_journal::{
-        Phase, TransitionJournalRecordDeleteError,
-        TransitionJournalRecordDeleteState, TransitionJournalStore,
-        arm_next_delete_canonical_unlink_fault,
-        arm_next_delete_directory_sync_fault,
-        assert_delete_canonical_unlink_fault_consumed,
-        assert_delete_directory_sync_fault_consumed, encode,
+        Phase, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState, TransitionJournalStore,
+        arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
+        assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed, encode,
     },
 };
 
 use super::{
     boot_sync_complete_support::{open_boot_sync_complete_journal, same_byte_different_inode_hook},
     commit_cleanup_complete_startup_dispatch::{
-        assert_installed_receipt_promoted, commit_cleanup_complete_fixture,
-        install_current_transition_receipt, no_boot_commit_cleanup_complete_fixture,
+        assert_installed_receipt_promoted, commit_cleanup_complete_fixture, install_current_transition_receipt,
+        no_boot_commit_cleanup_complete_fixture,
     },
     commit_cleanup_effect::{CleanupLayout, commit_decided_fixture},
     support::{
-        BootRepairFixture, Epoch, assert_canonical_absent,
-        assert_complete_route_journal_only, assert_pending_phase, enter_boot,
-        enter_clean_boot, reset_complete_route_effect_observers,
+        BootRepairFixture, Epoch, assert_canonical_absent, assert_complete_route_journal_only, assert_pending_phase,
+        enter_boot, enter_clean_boot, reset_complete_route_effect_observers,
     },
 };
 
@@ -91,11 +83,7 @@ fn system_triggered_no_boot_complete_finalizes_without_receipt_mutation() {
         for install_unrelated_receipt in [false, true] {
             let fixture = no_boot_complete_fixture(epoch, install_unrelated_receipt);
             let states_before = fixture.fixture.database.all().unwrap();
-            let in_flight_before = fixture
-                .fixture
-                .database
-                .audit_in_flight_transition()
-                .unwrap();
+            let in_flight_before = fixture.fixture.database.audit_in_flight_transition().unwrap();
             let namespace_before = fixture.fixture.namespace_snapshot();
             let receipt_chain_before = fixture
                 .fixture
@@ -111,11 +99,7 @@ fn system_triggered_no_boot_complete_finalizes_without_receipt_mutation() {
             assert_eq!(fixture.fixture.source.boot_publication_receipts, None);
             assert_eq!(fixture.fixture.database.all().unwrap(), states_before);
             assert_eq!(
-                fixture
-                    .fixture
-                    .database
-                    .audit_in_flight_transition()
-                    .unwrap(),
+                fixture.fixture.database.audit_in_flight_transition().unwrap(),
                 in_flight_before,
             );
             assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
@@ -174,10 +158,7 @@ fn system_triggered_no_boot_complete_finalizes_without_receipt_mutation() {
         )
     ));
     assert_eq!(same_transition_receipt.fixture.canonical_record(), source);
-    assert_eq!(
-        same_transition_receipt.fixture.database.all().unwrap(),
-        states_before,
-    );
+    assert_eq!(same_transition_receipt.fixture.database.all().unwrap(), states_before,);
     assert_eq!(
         same_transition_receipt
             .fixture
@@ -186,10 +167,7 @@ fn system_triggered_no_boot_complete_finalizes_without_receipt_mutation() {
             .unwrap(),
         in_flight_before,
     );
-    assert_eq!(
-        same_transition_receipt.fixture.namespace_snapshot(),
-        namespace_before,
-    );
+    assert_eq!(same_transition_receipt.fixture.namespace_snapshot(), namespace_before,);
     assert_eq!(
         same_transition_receipt
             .fixture
@@ -242,7 +220,9 @@ fn forward_complete_exact_incompatibilities_stay_pending_without_unrelated_effec
     let complete = cleanup_complete.forward_successor(None).unwrap();
     assert_eq!(complete.phase, Phase::Complete);
     let journal = open_boot_sync_complete_journal(&apply_layout);
-    journal.advance(&apply_layout.fixture.source, &cleanup_complete).unwrap();
+    journal
+        .advance(&apply_layout.fixture.source, &cleanup_complete)
+        .unwrap();
     journal.advance(&cleanup_complete, &complete).unwrap();
     drop(journal);
     apply_layout.fixture.source = complete.clone();
@@ -282,18 +262,19 @@ fn forward_complete_binding_substitution_fails_before_delete_and_converges() {
     let fixture = complete_fixture(Epoch::Current);
     let complete = fixture.fixture.source.clone();
     reset_unrelated_effect_observers();
-    arm_before_active_reblit_complete_finalization_final_revalidation(
-        same_byte_different_inode_hook(&fixture, "forward-complete-finalizer"),
-    );
+    arm_before_active_reblit_complete_finalization_final_revalidation(same_byte_different_inode_hook(
+        &fixture,
+        "forward-complete-finalizer",
+    ));
 
     let error = enter_boot(&fixture);
 
     assert!(matches!(
         error,
         startup_gate::Error::ActiveReblitCompleteFinalizationDispatch(
-            active_reblit_complete_finalization::Error::Finalization(
-                ActiveReblitCompleteFinalizationError::Authority(_),
-            ),
+            active_reblit_complete_finalization::Error::Finalization(ActiveReblitCompleteFinalizationError::Authority(
+                _
+            ),),
         )
     ));
     assert_eq!(fixture.fixture.canonical_record(), complete);
@@ -408,11 +389,7 @@ fn forward_complete_post_delete_database_selection_namespace_and_public_record_r
 
     let capture_namespace = complete_fixture(Epoch::Historical);
     let capture_namespace_record = capture_namespace.fixture.source.clone();
-    let staging = capture_namespace
-        .fixture
-        .installation
-        .root
-        .join(".cast/root/staging");
+    let staging = capture_namespace.fixture.installation.root.join(".cast/root/staging");
     reset_unrelated_effect_observers();
     arm_between_active_reblit_complete_finalization_database_captures(move || {
         fs::set_permissions(staging, fs::Permissions::from_mode(0o755)).unwrap();
@@ -445,43 +422,36 @@ fn forward_complete_post_delete_database_selection_namespace_and_public_record_r
         let complete_bytes = encode(&complete).unwrap();
         reset_unrelated_effect_observers();
         arm_after_active_reblit_complete_finalization_delete(move || {
-            arm_between_active_reblit_complete_finalization_post_delete_database_captures(
-                move || match race {
-                    PostDeleteRace::Database => database
-                        .change_summary_for_test(candidate, Some("post-delete Complete race"))
-                        .unwrap(),
-                    PostDeleteRace::Selection => {
-                        fs::write(
-                            root.join("usr/.stateID"),
-                            (i32::from(candidate) + 100).to_string(),
-                        )
-                        .unwrap();
-                    }
-                    PostDeleteRace::Namespace => {
-                        fs::set_permissions(
-                            root.join(".cast/root/staging"),
-                            fs::Permissions::from_mode(0o755),
-                        )
-                        .unwrap();
-                    }
-                    PostDeleteRace::PublicRecord => {
-                        fs::write(&canonical, complete_bytes).unwrap();
-                        fs::set_permissions(&canonical, fs::Permissions::from_mode(0o600)).unwrap();
-                    }
-                },
-            );
+            arm_between_active_reblit_complete_finalization_post_delete_database_captures(move || match race {
+                PostDeleteRace::Database => database
+                    .change_summary_for_test(candidate, Some("post-delete Complete race"))
+                    .unwrap(),
+                PostDeleteRace::Selection => {
+                    fs::write(root.join("usr/.stateID"), (i32::from(candidate) + 100).to_string()).unwrap();
+                }
+                PostDeleteRace::Namespace => {
+                    fs::set_permissions(root.join(".cast/root/staging"), fs::Permissions::from_mode(0o755)).unwrap();
+                }
+                PostDeleteRace::PublicRecord => {
+                    fs::write(&canonical, complete_bytes).unwrap();
+                    fs::set_permissions(&canonical, fs::Permissions::from_mode(0o600)).unwrap();
+                }
+            });
         });
 
         let error = enter_boot(&fixture);
 
-        assert!(matches!(
-            error,
-            startup_gate::Error::ActiveReblitCompleteFinalizationDispatch(
-                active_reblit_complete_finalization::Error::Finalization(
-                    ActiveReblitCompleteFinalizationError::PostDeleteAuthority(_),
-                ),
-            )
-        ), "unexpected {race:?} result: {error:?}");
+        assert!(
+            matches!(
+                error,
+                startup_gate::Error::ActiveReblitCompleteFinalizationDispatch(
+                    active_reblit_complete_finalization::Error::Finalization(
+                        ActiveReblitCompleteFinalizationError::PostDeleteAuthority(_),
+                    ),
+                )
+            ),
+            "unexpected {race:?} result: {error:?}"
+        );
         if matches!(race, PostDeleteRace::PublicRecord) {
             assert_eq!(fixture.fixture.canonical_record(), complete);
         } else {
@@ -506,14 +476,8 @@ fn complete_fixture(epoch: Epoch) -> BootRepairFixture {
     fixture
 }
 
-fn no_boot_complete_fixture(
-    epoch: Epoch,
-    install_unrelated_receipt: bool,
-) -> BootRepairFixture {
-    let mut fixture = no_boot_commit_cleanup_complete_fixture(
-        epoch,
-        install_unrelated_receipt,
-    );
+fn no_boot_complete_fixture(epoch: Epoch, install_unrelated_receipt: bool) -> BootRepairFixture {
+    let mut fixture = no_boot_commit_cleanup_complete_fixture(epoch, install_unrelated_receipt);
     let complete = fixture.fixture.source.forward_successor(None).unwrap();
     assert_eq!(complete.phase, Phase::Complete);
     assert_eq!(complete.generation, 13);
@@ -547,10 +511,7 @@ fn capture_ready<'reservation>(
     }
 }
 
-fn enter_boot_with_context(
-    fixture: &BootRepairFixture,
-    context: &str,
-) -> startup_gate::Error {
+fn enter_boot_with_context(fixture: &BootRepairFixture, context: &str) -> startup_gate::Error {
     let reservation = ActiveStateReservation::acquire().unwrap();
     match CleanSystemStartup::enter(&fixture.fixture.system, &reservation) {
         Ok(_) => panic!("{context} unexpectedly admitted clean startup"),
@@ -558,9 +519,7 @@ fn enter_boot_with_context(
     }
 }
 
-fn receipt_pair(
-    fixture: &BootRepairFixture,
-) -> crate::boot_publication::BootPublicationReceiptPair {
+fn receipt_pair(fixture: &BootRepairFixture) -> crate::boot_publication::BootPublicationReceiptPair {
     fixture
         .fixture
         .source

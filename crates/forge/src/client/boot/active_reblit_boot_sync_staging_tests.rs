@@ -5,17 +5,12 @@ use std::{
 
 use super::*;
 use crate::{
-    boot_publication::{
-        BootPublicationOutputProvenanceClaim, BootPublicationSha256,
-    },
+    boot_publication::{BootPublicationOutputProvenanceClaim, BootPublicationSha256},
     client::{
-        active_reblit_bls_renderer::{
-            RenderedActiveReblitBlsRequests, arm_bound_plan_collision_drift,
-        },
+        active_reblit_bls_renderer::{RenderedActiveReblitBlsRequests, arm_bound_plan_collision_drift},
         active_reblit_boot_inputs::PreparedActiveReblitStoneBootInputs,
         active_reblit_boot_publication_preflight::{
-            FixtureBootNamespaceAssessment,
-            arm_fixture_boot_namespace_assessments,
+            FixtureBootNamespaceAssessment, arm_fixture_boot_namespace_assessments,
         },
         active_reblit_boot_publication_receipt::BorrowedActiveReblitBootPublicationProvenanceClaim,
         active_reblit_boot_render_inputs::PreparedActiveReblitBootRenderInputs,
@@ -23,23 +18,15 @@ use crate::{
         active_reblit_mounted_boot_topology::{AliasFixture, BootTargetRole},
     },
     db,
-    db::state::{
-        BootPublicationReceiptPromotionError,
-        BootPublicationReceiptPromotionOutcome,
-    },
+    db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptPromotionOutcome},
     repository,
     state::{self, TransitionId},
     transition_journal::{
-        BootId, MountNamespaceIdentity, Previous, PreviousOrigin,
-        QuarantineName, RuntimeEpoch, RuntimeTreeIdentity, TreeToken,
-        arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault,
-        arm_next_update_exchange_fault,
-        arm_next_update_final_directory_sync_fault,
-        arm_next_update_first_directory_sync_fault,
-        assert_displaced_unlink_fault_consumed,
-        assert_temporary_sync_fault_consumed,
-        assert_update_exchange_fault_consumed,
-        assert_update_final_directory_sync_fault_consumed,
+        BootId, MountNamespaceIdentity, Previous, PreviousOrigin, QuarantineName, RuntimeEpoch, RuntimeTreeIdentity,
+        TreeToken, arm_next_displaced_unlink_fault, arm_next_temporary_sync_fault, arm_next_update_exchange_fault,
+        arm_next_update_final_directory_sync_fault, arm_next_update_first_directory_sync_fault,
+        assert_displaced_unlink_fault_consumed, assert_temporary_sync_fault_consumed,
+        assert_update_exchange_fault_consumed, assert_update_final_directory_sync_fault_consumed,
         assert_update_first_directory_sync_fault_consumed,
     },
 };
@@ -52,14 +39,8 @@ fn preparing_record() -> TransitionRecord {
     TransitionRecord::preparing(
         TransitionId::parse("0123456789abcdef0123456789abcdef").unwrap(),
         RuntimeEpoch {
-            boot_id: BootId::parse(
-                "01234567-89ab-4cde-8f01-23456789abcd",
-            )
-            .unwrap(),
-            mount_namespace: MountNamespaceIdentity {
-                st_dev: 30,
-                inode: 31,
-            },
+            boot_id: BootId::parse("01234567-89ab-4cde-8f01-23456789abcd").unwrap(),
+            mount_namespace: MountNamespaceIdentity { st_dev: 30, inode: 31 },
         },
         Operation::ActiveReblit,
         Some(42),
@@ -71,10 +52,7 @@ fn preparing_record() -> TransitionRecord {
         },
         Previous {
             id: Some(42),
-            tree_token: TreeToken::parse(
-                "b".repeat(TreeToken::TEXT_LENGTH),
-            )
-            .unwrap(),
+            tree_token: TreeToken::parse("b".repeat(TreeToken::TEXT_LENGTH)).unwrap(),
             usr_runtime_identity: RuntimeTreeIdentity {
                 st_dev: 10,
                 inode: 13,
@@ -91,28 +69,16 @@ fn preparing_record() -> TransitionRecord {
 
 fn exact_boot_sync_journal(
     installation: &Installation,
-) -> (
-    TransitionJournalStore,
-    TransitionRecord,
-    TransitionJournalRecordBinding,
-) {
+) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
     exact_boot_sync_journal_for_state(installation, None)
 }
 
 fn exact_boot_sync_journal_for_state(
     installation: &Installation,
     state: Option<state::Id>,
-) -> (
-    TransitionJournalStore,
-    TransitionRecord,
-    TransitionJournalRecordBinding,
-) {
+) -> (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding) {
     let cast = installation.retained_mutable_cast_directory().unwrap();
-    let journal = TransitionJournalStore::open_in_retained_cast(
-        cast,
-        &installation.root,
-    )
-    .unwrap();
+    let journal = TransitionJournalStore::open_in_retained_cast(cast, &installation.root).unwrap();
     let mut predecessor = preparing_record();
     if let Some(state) = state {
         predecessor.candidate.id = Some(i32::from(state));
@@ -145,19 +111,14 @@ fn claim_bindings<'inventory>(
             BorrowedActiveReblitBootPublicationProvenanceClaim::new(
                 output.root(),
                 output.relative_path(),
-                BootPublicationSha256::from_bytes(
-                    *output.content_identity().as_bytes(),
-                ),
+                BootPublicationSha256::from_bytes(*output.content_identity().as_bytes()),
                 claim,
             )
         })
         .collect()
 }
 
-fn assert_exact_database_receipt(
-    database: &Database,
-    receipt: &CanonicalBootPublicationReceipt,
-) {
+fn assert_exact_database_receipt(database: &Database, receipt: &CanonicalBootPublicationReceipt) {
     let state = database.boot_publication_receipt_state().unwrap();
     let pending = state.pending().unwrap();
     assert_eq!(pending.fingerprint(), receipt.fingerprint());
@@ -169,26 +130,16 @@ fn assert_exact_database_receipt(
     );
 }
 
-fn assert_exact_journal_record(
-    installation: &Installation,
-    expected: &TransitionRecord,
-) {
+fn assert_exact_journal_record(installation: &Installation, expected: &TransitionRecord) {
     let cast = installation.retained_mutable_cast_directory().unwrap();
-    let reopened = TransitionJournalStore::open_in_retained_cast(
-        cast,
-        &installation.root,
-    )
-    .unwrap();
+    let reopened = TransitionJournalStore::open_in_retained_cast(cast, &installation.root).unwrap();
     assert_eq!(
         reopened.load_revalidated_retained_cast(cast).unwrap(),
         Some(expected.clone()),
     );
 }
 
-fn staging_client(
-    fixture: &support::RenderFixture,
-    state_db: Database,
-) -> Client {
+fn staging_client(fixture: &support::RenderFixture, state_db: Database) -> Client {
     let repositories = repository::Manager::with_explicit(
         "boot-sync-staging-test",
         repository::Map::default(),
@@ -303,8 +254,7 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected = plan
             .prepare_complete_boot_publication_receipt(
                 &inventory,
@@ -337,10 +287,7 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
             staged.record().boot_publication_receipt_correlation().unwrap(),
             Some(receipt_pair(staged.receipt())),
         );
-        assert_eq!(
-            staged.database_outcome(),
-            BootPublicationReceiptStageOutcome::Staged,
-        );
+        assert_eq!(staged.database_outcome(), BootPublicationReceiptStageOutcome::Staged,);
         assert_exact_database_receipt(&fixture.state_db, &expected);
         let fresh = staged.revalidate_against(&client).unwrap();
         assert_eq!(fresh.record(), staged.record());
@@ -348,10 +295,7 @@ fn success_derives_and_stages_exact_receipt_then_retains_successor_binding() {
         assert_eq!(fresh.receipt_fingerprint(), staged.receipt_fingerprint());
         drop(fresh);
         let (journal, record, binding) = staged.into_parts();
-        let cast = fixture
-            .installation
-            .retained_mutable_cast_directory()
-            .unwrap();
+        let cast = fixture.installation.retained_mutable_cast_directory().unwrap();
         assert!(journal.has_record_binding(cast, &binding, &record).unwrap());
         assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
     });
@@ -362,8 +306,7 @@ fn fresh_view_retains_the_exact_original_bound_plan_and_inventory() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let staged = stage_with_retained_stores(
             &fixture.installation,
             &fixture.state_db,
@@ -391,8 +334,7 @@ fn promoted_view_requires_exact_committed_receipt_and_retains_started_binding() 
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let staged = stage_with_retained_stores(
             &fixture.installation,
             &fixture.state_db,
@@ -431,10 +373,7 @@ fn promoted_view_requires_exact_committed_receipt_and_retains_started_binding() 
         drop(fresh);
 
         let (journal, record, binding) = staged.into_parts();
-        let cast = fixture
-            .installation
-            .retained_mutable_cast_directory()
-            .unwrap();
+        let cast = fixture.installation.retained_mutable_cast_directory().unwrap();
         assert!(journal.has_record_binding(cast, &binding, &record).unwrap());
         assert_eq!(record.phase, Phase::BootSyncStarted);
         assert_eq!(crate::client::boot::boot_synchronize_attempt_count(), 0);
@@ -445,19 +384,10 @@ fn promoted_view_requires_exact_committed_receipt_and_retains_started_binding() 
 fn fresh_revalidation_rejects_a_mixed_client_before_reading_effect_evidence() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
-        let mismatched_client = staging_client(
-            &fixture,
-            Database::new(":memory:").unwrap(),
-        );
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let mismatched_client = staging_client(&fixture, Database::new(":memory:").unwrap());
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected = plan
-            .prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &claims,
-            )
+            .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &claims)
             .unwrap();
 
         let staged = stage_with_retained_stores(
@@ -485,15 +415,9 @@ fn fresh_revalidation_rejects_successor_inode_drift_without_boot_effects() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected = plan
-            .prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &claims,
-            )
+            .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &claims)
             .unwrap();
         let staged = stage_with_retained_stores(
             &fixture.installation,
@@ -506,14 +430,8 @@ fn fresh_revalidation_rejects_successor_inode_drift_without_boot_effects() {
         )
         .unwrap();
         let successor = staged.record().clone();
-        let canonical = fixture
-            .installation
-            .root
-            .join(".cast/journal/state-transition");
-        let displaced = fixture
-            .installation
-            .root
-            .join("fresh-validation-displaced-successor");
+        let canonical = fixture.installation.root.join(".cast/journal/state-transition");
+        let displaced = fixture.installation.root.join("fresh-validation-displaced-successor");
         let bytes = fs::read(&canonical).unwrap();
         fs::rename(&canonical, &displaced).unwrap();
         fs::write(&canonical, &bytes).unwrap();
@@ -537,8 +455,7 @@ fn fresh_revalidation_rejects_pending_body_drift_without_boot_effects() {
     crate::client::boot::reset_boot_synchronize_attempt_count();
     with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let staged = stage_with_retained_stores(
             &fixture.installation,
             &fixture.state_db,
@@ -552,9 +469,7 @@ fn fresh_revalidation_rejects_pending_body_drift_without_boot_effects() {
         let successor = staged.record().clone();
         fixture
             .state_db
-            .delete_boot_publication_receipt_body_for_test(
-                staged.receipt_fingerprint(),
-            );
+            .delete_boot_publication_receipt_body_for_test(staged.receipt_fingerprint());
 
         assert!(matches!(
             staged.revalidate_against(&client),
@@ -575,22 +490,13 @@ fn fresh_revalidation_rejects_pending_body_drift_without_boot_effects() {
 #[test]
 fn pending_receipt_requires_recovery_instead_of_direct_staging_retry() {
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected_predecessor = predecessor.clone();
         let expected = plan
-            .prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &claims,
-            )
+            .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &claims)
             .unwrap();
         assert_eq!(
-            fixture
-                .state_db
-                .stage_boot_publication_receipt(&expected)
-                .unwrap(),
+            fixture.state_db.stage_boot_publication_receipt(&expected).unwrap(),
             BootPublicationReceiptStageOutcome::Staged,
         );
 
@@ -618,8 +524,7 @@ fn pending_receipt_requires_recovery_instead_of_direct_staging_retry() {
 fn fresh_view_retains_authenticated_inert_delta_and_internal_claims() {
     with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
         let client = staging_client(&fixture, fixture.state_db.clone());
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
 
         let staged = stage_with_retained_stores(
             &fixture.installation,
@@ -639,20 +544,26 @@ fn fresh_view_retains_authenticated_inert_delta_and_internal_claims() {
             .derive_receipt_provenance_claims(&inventory)
             .unwrap();
 
-        assert!(claims.iter().copied().all(|claim| {
-            claim.claim() == BootPublicationOutputProvenanceClaim::UnclaimedAbsent
-        }));
-        assert!(fresh.classified_delta().entries().iter().all(|entry| {
-            entry.action() == ActiveReblitBootPublicationDeltaAction::PublishDesired
-        }));
+        assert!(
+            claims
+                .iter()
+                .copied()
+                .all(|claim| { claim.claim() == BootPublicationOutputProvenanceClaim::UnclaimedAbsent })
+        );
+        assert!(
+            fresh
+                .classified_delta()
+                .entries()
+                .iter()
+                .all(|entry| { entry.action() == ActiveReblitBootPublicationDeltaAction::PublishDesired })
+        );
     });
 }
 
 #[test]
 fn cross_installation_bound_plan_is_rejected_before_database_staging() {
     with_cross_installation_staging_plan!(|fixture, plan, inventory, _claims| {
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected_predecessor = predecessor.clone();
 
         let error = stage_with_retained_stores(
@@ -678,39 +589,22 @@ fn cross_installation_bound_plan_is_rejected_before_database_staging() {
                 .pending()
                 .is_none(),
         );
-        assert_exact_journal_record(
-            &fixture.installation,
-            &expected_predecessor,
-        );
+        assert_exact_journal_record(&fixture.installation, &expected_predecessor);
     });
 }
 
 #[test]
 fn orphan_immutable_receipt_body_cannot_be_reinterpreted_as_first_adoption() {
     with_bound_staging_plan!(|fixture, plan, inventory, _claims| {
-        let conflicting_claims = claim_bindings(
-            &inventory,
-            BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast,
-        );
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let conflicting_claims =
+            claim_bindings(&inventory, BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected_predecessor = predecessor.clone();
         let conflict = plan
-            .prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &conflicting_claims,
-            )
+            .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &conflicting_claims)
             .unwrap();
-        fixture
-            .state_db
-            .stage_boot_publication_receipt(&conflict)
-            .unwrap();
-        fixture
-            .state_db
-            .clear_boot_publication_receipt_head_for_test()
-            .unwrap();
+        fixture.state_db.stage_boot_publication_receipt(&conflict).unwrap();
+        fixture.state_db.clear_boot_publication_receipt_head_for_test().unwrap();
 
         let error = stage_with_retained_stores(
             &fixture.installation,
@@ -729,36 +623,22 @@ fn orphan_immutable_receipt_body_cannot_be_reinterpreted_as_first_adoption() {
                 CurrentExactPromotedBootPublicationReceiptChainError::ReceiptBodiesWithoutCommittedHead { .. },
             ),
         ));
-        assert_exact_journal_record(
-            &fixture.installation,
-            &expected_predecessor,
-        );
+        assert_exact_journal_record(&fixture.installation, &expected_predecessor);
     });
 }
 
 #[test]
 fn dangling_pending_body_fails_database_admission_before_advancing() {
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected_predecessor = predecessor.clone();
         let expected = plan
-            .prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &claims,
-            )
+            .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &claims)
             .unwrap();
+        fixture.state_db.stage_boot_publication_receipt(&expected).unwrap();
         fixture
             .state_db
-            .stage_boot_publication_receipt(&expected)
-            .unwrap();
-        fixture
-            .state_db
-            .delete_boot_publication_receipt_body_for_test(
-                expected.fingerprint(),
-            );
+            .delete_boot_publication_receipt_body_for_test(expected.fingerprint());
 
         let error = stage_with_retained_stores(
             &fixture.installation,
@@ -775,10 +655,7 @@ fn dangling_pending_body_fails_database_admission_before_advancing() {
             error,
             ActiveReblitBootSyncStagingError::CurrentInstalledChain(_),
         ));
-        assert_exact_journal_record(
-            &fixture.installation,
-            &expected_predecessor,
-        );
+        assert_exact_journal_record(&fixture.installation, &expected_predecessor);
     });
 }
 
@@ -786,14 +663,7 @@ fn dangling_pending_body_fails_database_admission_before_advancing() {
 fn every_journal_update_fault_is_classified_as_exact_predecessor_or_successor() {
     type FaultArm = fn();
     type FaultAssert = fn();
-    let cases: [
-        (
-            FaultArm,
-            FaultAssert,
-            DurableActiveReblitBootSyncRecord,
-        );
-        5
-    ] = [
+    let cases: [(FaultArm, FaultAssert, DurableActiveReblitBootSyncRecord); 5] = [
         (
             arm_next_temporary_sync_fault,
             assert_temporary_sync_fault_consumed,
@@ -823,15 +693,9 @@ fn every_journal_update_fault_is_classified_as_exact_predecessor_or_successor() 
 
     for (arm, assert_consumed, durable) in cases {
         with_bound_staging_plan!(|fixture, plan, inventory, claims| {
-            let (journal, predecessor, binding) =
-                exact_boot_sync_journal(&fixture.installation);
+            let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
             let expected = plan
-                .prepare_complete_boot_publication_receipt(
-                    &inventory,
-                    &predecessor,
-                    None,
-                    &claims,
-                )
+                .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &claims)
                 .unwrap();
             arm();
 
@@ -862,38 +726,22 @@ fn every_journal_update_fault_is_classified_as_exact_predecessor_or_successor() 
 #[test]
 fn post_advance_successor_inode_substitution_is_fail_stop_boot_sync_started() {
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected = plan
-            .prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &claims,
-            )
+            .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &claims)
             .unwrap();
         let successor = predecessor
             .boot_sync_started_successor(receipt_pair(&expected))
             .unwrap();
-        let canonical = fixture
-            .installation
-            .root
-            .join(".cast/journal/state-transition");
-        let displaced = fixture
-            .installation
-            .root
-            .join("boot-sync-successor-displaced");
+        let canonical = fixture.installation.root.join(".cast/journal/state-transition");
+        let displaced = fixture.installation.root.join("boot-sync-successor-displaced");
         let callback_canonical = canonical.clone();
         let callback_displaced = displaced.clone();
         arm_after_successful_advance_before_validation(move || {
             let bytes = fs::read(&callback_canonical).unwrap();
             fs::rename(&callback_canonical, &callback_displaced).unwrap();
             fs::write(&callback_canonical, bytes).unwrap();
-            fs::set_permissions(
-                &callback_canonical,
-                fs::Permissions::from_mode(0o600),
-            )
-            .unwrap();
+            fs::set_permissions(&callback_canonical, fs::Permissions::from_mode(0o600)).unwrap();
         });
 
         let error = stage_with_retained_stores(
@@ -911,8 +759,7 @@ fn post_advance_successor_inode_substitution_is_fail_stop_boot_sync_started() {
             error,
             ActiveReblitBootSyncStagingError::PostAdvanceValidation {
                 durable: DurableActiveReblitBootSyncRecord::BootSyncStarted,
-                validation:
-                    ActiveReblitBootSyncPostAdvanceValidationError::SuccessorBindingChanged,
+                validation: ActiveReblitBootSyncPostAdvanceValidationError::SuccessorBindingChanged,
             },
         ));
         assert_eq!(fs::read(&canonical).unwrap(), fs::read(&displaced).unwrap());
@@ -930,20 +777,12 @@ fn post_advance_successor_inode_substitution_is_fail_stop_boot_sync_started() {
 #[test]
 fn bound_plan_drift_after_staging_never_reaches_boot_sync_started() {
     with_bound_staging_plan!(|fixture, plan, inventory, claims| {
-        let (journal, predecessor, binding) =
-            exact_boot_sync_journal(&fixture.installation);
+        let (journal, predecessor, binding) = exact_boot_sync_journal(&fixture.installation);
         let expected_predecessor = predecessor.clone();
         let expected = plan
-            .prepare_complete_boot_publication_receipt(
-                &inventory,
-                &predecessor,
-                None,
-                &claims,
-            )
+            .prepare_complete_boot_publication_receipt(&inventory, &predecessor, None, &claims)
             .unwrap();
-        arm_after_receipt_stage_before_final_rederivation(
-            arm_bound_plan_collision_drift,
-        );
+        arm_after_receipt_stage_before_final_rederivation(arm_bound_plan_collision_drift);
 
         let error = stage_with_retained_stores(
             &fixture.installation,
@@ -963,10 +802,7 @@ fn bound_plan_drift_after_staging_never_reaches_boot_sync_started() {
             ),
         ));
         assert_exact_database_receipt(&fixture.state_db, &expected);
-        assert_exact_journal_record(
-            &fixture.installation,
-            &expected_predecessor,
-        );
+        assert_exact_journal_record(&fixture.installation, &expected_predecessor);
     });
 }
 

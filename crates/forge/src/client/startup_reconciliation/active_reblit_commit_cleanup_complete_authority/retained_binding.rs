@@ -1,22 +1,18 @@
 //! Live retained-binding adapter for exact generation-14 completion.
 
 use crate::{
-    Installation, db,
+    Installation,
     client::{
         active_reblit_boot_publication_preflight::ActiveReblitCommitCleanupCompleteSeal,
         active_state_snapshot::ActiveStateReservation,
     },
-    transition_journal::{
-        Operation, Phase, TransitionJournalRecordBinding, TransitionJournalStore,
-        TransitionRecord,
-    },
+    db,
+    transition_journal::{Operation, Phase, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
-    ActiveReblitCommitCleanupCompleteAuthority,
-    ActiveReblitCommitCleanupCompleteAuthorityError,
-    ActiveReblitCommitCleanupCompleteAuthorityErrorKind,
-    ActiveReblitCommitCleanupCompleteCapture,
+    ActiveReblitCommitCleanupCompleteAuthority, ActiveReblitCommitCleanupCompleteAuthorityError,
+    ActiveReblitCommitCleanupCompleteAuthorityErrorKind, ActiveReblitCommitCleanupCompleteCapture,
     same_nonempty_candidate_and_previous,
 };
 
@@ -31,10 +27,8 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
         active_state_reservation: &'reservation ActiveStateReservation,
         record: &TransitionRecord,
         journal_record_binding: TransitionJournalRecordBinding,
-    ) -> Result<
-        ActiveReblitCommitCleanupCompleteAuthority<'reservation>,
-        ActiveReblitCommitCleanupCompleteAuthorityError,
-    > {
+    ) -> Result<ActiveReblitCommitCleanupCompleteAuthority<'reservation>, ActiveReblitCommitCleanupCompleteAuthorityError>
+    {
         let receipt_pair = record
             .boot_publication_receipt_correlation()
             .map_err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::Record)?;
@@ -49,8 +43,7 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
             || !same_nonempty_candidate_and_previous(record)
         {
             return Err(
-                ActiveReblitCommitCleanupCompleteAuthorityErrorKind::RetainedCommitCleanupCompleteRejected
-                    .into(),
+                ActiveReblitCommitCleanupCompleteAuthorityErrorKind::RetainedCommitCleanupCompleteRejected.into(),
             );
         }
 
@@ -65,10 +58,9 @@ impl ActiveReblitCommitCleanupCompleteAuthority<'_> {
             ActiveReblitCommitCleanupCompleteCapture::Ready(authority) => Ok(authority),
             ActiveReblitCommitCleanupCompleteCapture::NotApplicable
             | ActiveReblitCommitCleanupCompleteCapture::Deferred
-            | ActiveReblitCommitCleanupCompleteCapture::Apply => Err(
-                ActiveReblitCommitCleanupCompleteAuthorityErrorKind::RetainedCommitCleanupCompleteRejected
-                    .into(),
-            ),
+            | ActiveReblitCommitCleanupCompleteCapture::Apply => {
+                Err(ActiveReblitCommitCleanupCompleteAuthorityErrorKind::RetainedCommitCleanupCompleteRejected.into())
+            }
         }
     }
 }

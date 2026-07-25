@@ -3,16 +3,14 @@ use std::time::{Duration, Instant};
 use super::*;
 use crate::{
     boot_publication::{
-        BootPublicationDestination, BootPublicationDestinations,
-        BootPublicationHistoricalRuntimeWitness, BootPublicationOutput,
-        BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
-        BootPublicationPublicationPhase, BootPublicationReceiptBody,
-        BootPublicationRoot, BootPublicationSha256, BootPublicationXxh3,
-        CanonicalBootPublicationReceipt, prepare_boot_publication_receipt,
+        BootPublicationDestination, BootPublicationDestinations, BootPublicationHistoricalRuntimeWitness,
+        BootPublicationOutput, BootPublicationOutputProvenanceClaim, BootPublicationOutputRole,
+        BootPublicationPublicationPhase, BootPublicationReceiptBody, BootPublicationRoot, BootPublicationSha256,
+        BootPublicationXxh3, CanonicalBootPublicationReceipt, prepare_boot_publication_receipt,
     },
     db::state::{
-        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
-        Database, ExactPromotedBootPublicationReceiptChain,
+        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome, Database,
+        ExactPromotedBootPublicationReceiptChain,
     },
     state::TransitionId,
 };
@@ -36,11 +34,7 @@ fn witness(seed: u64, partition_minor: u32) -> BootPublicationHistoricalRuntimeW
     )
 }
 
-fn alias_destinations(
-    partuuid: &str,
-    partition_number: u32,
-    runtime_seed: u64,
-) -> BootPublicationDestinations {
+fn alias_destinations(partuuid: &str, partition_number: u32, runtime_seed: u64) -> BootPublicationDestinations {
     BootPublicationDestinations::boot_aliases_esp(BootPublicationDestination::new(
         partuuid,
         partition_number,
@@ -78,11 +72,7 @@ fn distinct_destinations(runtime_seed: u64) -> BootPublicationDestinations {
     )
 }
 
-fn payload(
-    path: &str,
-    content: u8,
-    claim: BootPublicationOutputProvenanceClaim,
-) -> BootPublicationOutput {
+fn payload(path: &str, content: u8, claim: BootPublicationOutputProvenanceClaim) -> BootPublicationOutput {
     output(
         BootPublicationRoot::Boot,
         BootPublicationPublicationPhase::Payload,
@@ -93,11 +83,7 @@ fn payload(
     )
 }
 
-fn fallback_bootloader(
-    path: &str,
-    content: u8,
-    claim: BootPublicationOutputProvenanceClaim,
-) -> BootPublicationOutput {
+fn fallback_bootloader(path: &str, content: u8, claim: BootPublicationOutputProvenanceClaim) -> BootPublicationOutput {
     output(
         BootPublicationRoot::Esp,
         BootPublicationPublicationPhase::Bootloader,
@@ -157,10 +143,7 @@ fn promote(database: &Database, receipt: &CanonicalBootPublicationReceipt) {
     );
     assert_eq!(
         database
-            .promote_boot_publication_receipt(
-                receipt,
-                Instant::now() + Duration::from_secs(60),
-            )
+            .promote_boot_publication_receipt(receipt, Instant::now() + Duration::from_secs(60),)
             .unwrap(),
         BootPublicationReceiptPromotionOutcome::Promoted,
     );
@@ -249,9 +232,7 @@ fn classifies_noop_replacement_owned_stale_and_unowned_preserve() {
     );
     let chain = promoted_chain(Some(&predecessor), &installed);
 
-    let plan = chain
-        .prepare_active_reblit_promoted_boot_cleanup_plan()
-        .unwrap();
+    let plan = chain.prepare_active_reblit_promoted_boot_cleanup_plan().unwrap();
     assert_eq!(plan.promoted_receipt(), installed.fingerprint());
     assert_eq!(plan.entries().len(), 4);
     assert!(matches!(
@@ -275,10 +256,7 @@ fn classifies_noop_replacement_owned_stale_and_unowned_preserve() {
         "EFI/Linux/keep.efi"
     );
     assert_eq!(
-        plan.entries()[1]
-            .installed_output()
-            .unwrap()
-            .relative_path(),
+        plan.entries()[1].installed_output().unwrap().relative_path(),
         "EFI/Linux/replace.efi"
     );
     assert!(plan.entries()[2].installed_output().is_none());
@@ -328,9 +306,7 @@ fn first_receipt_has_no_cleanup_and_rejects_false_prior_ownership() {
     let chain = promoted_chain(None, &false_owned);
     assert!(matches!(
         chain.prepare_active_reblit_promoted_boot_cleanup_plan(),
-        Err(ActiveReblitPromotedBootCleanupPlanError::CurrentOnlyOwnershipClaim {
-            installed_index: 0
-        })
+        Err(ActiveReblitPromotedBootCleanupPlanError::CurrentOnlyOwnershipClaim { installed_index: 0 })
     ));
 }
 
@@ -360,9 +336,7 @@ fn historical_runtime_drift_does_not_change_stable_destination_identity() {
     );
     let chain = promoted_chain(Some(&predecessor), &installed);
 
-    let plan = chain
-        .prepare_active_reblit_promoted_boot_cleanup_plan()
-        .unwrap();
+    let plan = chain.prepare_active_reblit_promoted_boot_cleanup_plan().unwrap();
     assert!(matches!(
         plan.entries()[0].disposition(),
         ActiveReblitPromotedBootCleanupDisposition::NoOp
@@ -384,11 +358,7 @@ fn destination_layout_partuuid_and_partition_number_mismatches_fail_closed() {
     );
     for (digit, destinations, expected_layout_mismatch) in [
         ('8', distinct_destinations(8), true),
-        (
-            '9',
-            alias_destinations(OTHER_ESP_PARTUUID, 1, 9),
-            false,
-        ),
+        ('9', alias_destinations(OTHER_ESP_PARTUUID, 1, 9), false),
         ('a', alias_destinations(ESP_PARTUUID, 2, 10), false),
     ] {
         let installed = receipt(
@@ -412,9 +382,7 @@ fn destination_layout_partuuid_and_partition_number_mismatches_fail_closed() {
         } else {
             assert!(matches!(
                 result,
-                Err(ActiveReblitPromotedBootCleanupPlanError::StableDestinationMismatch {
-                    destination: "esp"
-                })
+                Err(ActiveReblitPromotedBootCleanupPlanError::StableDestinationMismatch { destination: "esp" })
             ));
         }
     }
@@ -516,9 +484,7 @@ fn aliases_share_cross_root_keys_while_distinct_destinations_do_not() {
     let chain = promoted_chain(Some(&alias_predecessor), &alias_installed);
     assert!(matches!(
         chain.prepare_active_reblit_promoted_boot_cleanup_plan(),
-        Err(ActiveReblitPromotedBootCleanupPlanError::CrossReceiptPhysicalKeyMismatch {
-            ..
-        })
+        Err(ActiveReblitPromotedBootCleanupPlanError::CrossReceiptPhysicalKeyMismatch { .. })
     ));
 
     let distinct_predecessor = receipt(
@@ -544,9 +510,7 @@ fn aliases_share_cross_root_keys_while_distinct_destinations_do_not() {
         )],
     );
     let chain = promoted_chain(Some(&distinct_predecessor), &distinct_installed);
-    let plan = chain
-        .prepare_active_reblit_promoted_boot_cleanup_plan()
-        .unwrap();
+    let plan = chain.prepare_active_reblit_promoted_boot_cleanup_plan().unwrap();
     assert!(matches!(
         plan.entries()[0].disposition(),
         ActiveReblitPromotedBootCleanupDisposition::DeleteOwnedStale

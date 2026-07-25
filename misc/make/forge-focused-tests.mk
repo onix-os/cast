@@ -317,7 +317,7 @@ forge-ephemeral-candidate-metadata-test:
 		client::tests::ephemeral_candidate_metadata::target_or_usr_substitution_between_phases_cannot_reach_replacement_system_triggers \
 		client::postblit::retained_ephemeral::tests::retained_ephemeral_phase_policies_keep_transaction_etc_read_only \
 		client::postblit::retained_ephemeral::tests::transaction_container_mounts_usr_read_write_and_etc_read_only \
-		client::postblit::retained_ephemeral::tests::system_container_mounts_usr_and_etc_read_write \
+		client::postblit::retained_ephemeral::tests::system_container_uses_writable_candidate_binds_inside_a_read_only_minimal_root \
 		client::postblit::retained_ephemeral::tests::public_root_usr_and_etc_substitution_fails_closed_before_payload \
 		client::postblit::retained_ephemeral::tests::container_rejects_an_isolation_root_substitution \
 		client::postblit::retained_ephemeral::tests::retained_ephemeral_system_scope_never_uses_live_root_direct_execution \

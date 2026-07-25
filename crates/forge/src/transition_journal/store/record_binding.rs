@@ -5,22 +5,20 @@ use std::ffi::CString;
 
 use thiserror::Error;
 
-use super::{
-    DurabilityCheckpoint, PublicBindingRevalidationBoundary, StorageFaultPoint,
-    TransitionJournalStore, durability_checkpoint, public_binding_revalidation_boundary, storage_fault,
-};
 use super::super::{
-    CANONICAL_NAME, DirectoryPolicy, LOCK_NAME, StorageError, TransitionRecord, delete_name,
-    directory_entries, encode, inode_identity, open_existing_directory, read_bounded, renameat2, unlinkat,
-    validation::validate_advance,
+    CANONICAL_NAME, DirectoryPolicy, LOCK_NAME, StorageError, TransitionRecord, delete_name, directory_entries, encode,
+    inode_identity, open_existing_directory, read_bounded, renameat2, unlinkat, validation::validate_advance,
+};
+use super::{
+    DurabilityCheckpoint, PublicBindingRevalidationBoundary, StorageFaultPoint, TransitionJournalStore,
+    durability_checkpoint, public_binding_revalidation_boundary, storage_fault,
 };
 
 mod deadline_advance;
 #[cfg(test)]
 pub(crate) use deadline_advance::{
     ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
-    arm_bound_advance_before_final_deadline_callback,
-    assert_bound_advance_before_expired_cleanup_callback_consumed,
+    arm_bound_advance_before_final_deadline_callback, assert_bound_advance_before_expired_cleanup_callback_consumed,
     assert_bound_advance_before_final_deadline_callback_consumed,
 };
 
@@ -147,8 +145,8 @@ impl TransitionJournalStore {
         let Some(loaded) = self.load_pinned_revalidated_retained_cast_locked(cast_directory)? else {
             return Ok(false);
         };
-        let retained = inode_identity(&expected.canonical)
-            .map_err(|source| StorageError::ValidateCanonical { source })?;
+        let retained =
+            inode_identity(&expected.canonical).map_err(|source| StorageError::ValidateCanonical { source })?;
         Ok(loaded.record == expected.record && loaded.record == *record && loaded.identity == retained)
     }
 
@@ -170,8 +168,8 @@ impl TransitionJournalStore {
         let loaded = self
             .load_pinned_revalidated_retained_cast_locked(cast_directory)?
             .ok_or(StorageError::CanonicalChanged)?;
-        let retained = inode_identity(&expected.canonical)
-            .map_err(|source| StorageError::ValidateCanonical { source })?;
+        let retained =
+            inode_identity(&expected.canonical).map_err(|source| StorageError::ValidateCanonical { source })?;
         if loaded.record != expected.record || loaded.identity != retained {
             return Err(StorageError::CanonicalChanged);
         }
@@ -331,13 +329,8 @@ impl TransitionJournalStore {
             ));
         }
         public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeBoundDeletePrivateUnlink);
-        match self.classify_bound_record_delete_layout_locked(
-            cast_directory,
-            &expected,
-            record,
-            &loaded,
-            &private_name,
-        ) {
+        match self.classify_bound_record_delete_layout_locked(cast_directory, &expected, record, &loaded, &private_name)
+        {
             Ok(BoundRecordDeleteLayout::ExactDetached) => {}
             Ok(_) => {
                 return Err(TransitionJournalRecordDeleteError::Detached(
@@ -407,7 +400,7 @@ impl TransitionJournalStore {
             &private_name,
             Some(PublicBindingRevalidationBoundary::BeforeBoundDeletePublicationFinalBinding),
         )
-            .map_err(TransitionJournalRecordDeleteError::PostDelete)?;
+        .map_err(TransitionJournalRecordDeleteError::PostDelete)?;
         drop(expected);
         match pending_detach_error {
             Some(source) => Err(TransitionJournalRecordDeleteError::Storage {
@@ -428,16 +421,8 @@ impl TransitionJournalStore {
         storage: StorageError,
         unlink_applied: bool,
     ) -> TransitionJournalRecordDeleteError {
-        public_binding_revalidation_boundary(
-            PublicBindingRevalidationBoundary::BeforeBoundDeleteFailureReconciliation,
-        );
-        match self.classify_bound_record_delete_layout_locked(
-            cast_directory,
-            expected,
-            record,
-            loaded,
-            private_name,
-        ) {
+        public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeBoundDeleteFailureReconciliation);
+        match self.classify_bound_record_delete_layout_locked(cast_directory, expected, record, loaded, private_name) {
             Ok(BoundRecordDeleteLayout::ExactSource) => self.finish_reconciled_delete_state(
                 cast_directory,
                 expected,
@@ -448,18 +433,16 @@ impl TransitionJournalStore {
                 TransitionJournalRecordDeleteState::ExactSource,
                 unlink_applied,
             ),
-            Ok(BoundRecordDeleteLayout::Absent) => {
-                self.finish_reconciled_delete_state(
-                    cast_directory,
-                    expected,
-                    record,
-                    loaded,
-                    private_name,
-                    storage,
-                    TransitionJournalRecordDeleteState::Absent,
-                    unlink_applied,
-                )
-            }
+            Ok(BoundRecordDeleteLayout::Absent) => self.finish_reconciled_delete_state(
+                cast_directory,
+                expected,
+                record,
+                loaded,
+                private_name,
+                storage,
+                TransitionJournalRecordDeleteState::Absent,
+                unlink_applied,
+            ),
             Ok(BoundRecordDeleteLayout::ExactDetached) => {
                 let restore = renameat2(
                     self.directory.as_raw_fd(),
@@ -576,16 +559,8 @@ impl TransitionJournalStore {
         private_name: &CStr,
         storage: StorageError,
     ) -> TransitionJournalRecordDeleteError {
-        public_binding_revalidation_boundary(
-            PublicBindingRevalidationBoundary::BeforeBoundDeleteFailureReconciliation,
-        );
-        match self.classify_bound_record_delete_layout_locked(
-            cast_directory,
-            expected,
-            record,
-            loaded,
-            private_name,
-        ) {
+        public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeBoundDeleteFailureReconciliation);
+        match self.classify_bound_record_delete_layout_locked(cast_directory, expected, record, loaded, private_name) {
             Ok(BoundRecordDeleteLayout::ExactSource) => TransitionJournalRecordDeleteError::Storage {
                 state: TransitionJournalRecordDeleteState::ExactSource,
                 source: storage,
@@ -680,8 +655,7 @@ impl TransitionJournalStore {
     ) -> Result<BoundRecordDeleteLayout, StorageError> {
         let scan = open_existing_directory(&journal, c".", &self.path, DirectoryPolicy::ExactPrivate)
             .map_err(|source| StorageError::RevalidateJournalEntrySet { source })?;
-        let names = directory_entries(&scan)
-            .map_err(|source| StorageError::RevalidateJournalEntrySet { source })?;
+        let names = directory_entries(&scan).map_err(|source| StorageError::RevalidateJournalEntrySet { source })?;
         let lock_count = names
             .iter()
             .filter(|name| name.as_bytes() == LOCK_NAME.to_bytes())
@@ -733,10 +707,8 @@ impl TransitionJournalStore {
         let Some(mut file) = self.open_named(name)? else {
             return Ok(BoundRecordDeleteNameState::Absent);
         };
-        let identity = inode_identity(&file)
-            .map_err(|source| StorageError::ValidateCanonical { source })?;
-        let framed = read_bounded(&mut file)
-            .map_err(|source| StorageError::ReadCanonical { source })?;
+        let identity = inode_identity(&file).map_err(|source| StorageError::ValidateCanonical { source })?;
+        let framed = read_bounded(&mut file).map_err(|source| StorageError::ReadCanonical { source })?;
         if identity == loaded.identity && framed == loaded.framed {
             Ok(BoundRecordDeleteNameState::Exact)
         } else {
@@ -757,8 +729,7 @@ fn require_loaded_record_binding(
     record: &TransitionRecord,
     loaded: &super::LoadedRecord,
 ) -> Result<(), StorageError> {
-    let retained = inode_identity(&expected.canonical)
-        .map_err(|source| StorageError::ValidateCanonical { source })?;
+    let retained = inode_identity(&expected.canonical).map_err(|source| StorageError::ValidateCanonical { source })?;
     if expected.record != *record || loaded.record != *record || loaded.identity != retained {
         return Err(StorageError::CanonicalChanged);
     }
@@ -784,7 +755,10 @@ pub(crate) fn arm_bound_delete_private_name_callback(callback: impl FnOnce(CStri
 #[cfg(test)]
 pub(crate) fn assert_bound_delete_private_name_callback_consumed() {
     BOUND_DELETE_PRIVATE_NAME_CALLBACK.with(|armed| {
-        assert!(armed.borrow().is_none(), "bound-delete private-name callback was not reached");
+        assert!(
+            armed.borrow().is_none(),
+            "bound-delete private-name callback was not reached"
+        );
     });
 }
 

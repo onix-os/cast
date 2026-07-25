@@ -12,8 +12,8 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackActivateArchivedFinalizationSeal,
         startup_reconciliation::{
-            arm_between_usr_rollback_activate_archived_finalization_database_captures,
             UsrRollbackActivateArchivedFinalizationAdmission, UsrRollbackActivateArchivedFinalizationAuthority,
+            arm_between_usr_rollback_activate_archived_finalization_database_captures,
         },
     },
     transition_journal::RollbackActionOutcome,
@@ -222,9 +222,7 @@ fn replace_with_same_bytes(canonical: &Path, displaced: &Path, bytes: &[u8]) {
         .mode(0o600)
         .open(canonical)
         .unwrap();
-    replacement
-        .set_permissions(fs::Permissions::from_mode(0o600))
-        .unwrap();
+    replacement.set_permissions(fs::Permissions::from_mode(0o600)).unwrap();
     replacement.write_all(bytes).unwrap();
     replacement.sync_all().unwrap();
 }

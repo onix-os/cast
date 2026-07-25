@@ -41,31 +41,20 @@ pub(in crate::client) use model::{
 
 #[allow(unused_imports)] // consumed by the pure renderer and later durable publisher
 pub(in crate::client) use capture::{
-    ActiveReblitBootImmutableLeafPublicationError,
-    ActiveReblitBootOwnedCleanupError,
-    ActiveReblitBootOwnedCleanupOutcome,
-    ActiveReblitBootOwnedLeafReplacementError,
-    ActiveReblitBootPublicationTargetsError,
-    ActiveReblitBootReceiptTargetValidationError,
-    ActiveReblitMountedBootTopologyCaptureError,
-    PreparedActiveReblitMountedBootTopology,
-    ReceiptValidatedActiveReblitBootPublicationTargets,
-    RevalidatedActiveReblitBootPublicationTarget,
-    RevalidatedActiveReblitBootPublicationTargets,
-    RevalidatedActiveReblitMountedBootTopology,
+    ActiveReblitBootImmutableLeafPublicationError, ActiveReblitBootOwnedCleanupError,
+    ActiveReblitBootOwnedCleanupOutcome, ActiveReblitBootOwnedLeafReplacementError,
+    ActiveReblitBootPublicationTargetsError, ActiveReblitBootReceiptTargetValidationError,
+    ActiveReblitMountedBootTopologyCaptureError, PreparedActiveReblitMountedBootTopology,
+    ReceiptValidatedActiveReblitBootPublicationTargets, RevalidatedActiveReblitBootPublicationTarget,
+    RevalidatedActiveReblitBootPublicationTargets, RevalidatedActiveReblitMountedBootTopology,
 };
 #[cfg(test)]
 #[allow(unused_imports)] // guard lifetime is held through type inference by aggregate tests
 pub(in crate::client) use capture::{
-    FixtureImmutableLeafAssessmentGuard,
-    FixtureOwnedCleanupTargetGuard,
-    FixtureOwnedReplacementAssessmentGuard,
-    arm_fixture_immutable_leaf_assessments,
-    arm_fixture_owned_cleanup_targets,
-    arm_fixture_owned_replacement_assessments,
-    fixture_immutable_leaf_assessments_remaining,
-    fixture_owned_cleanup_targets_remaining,
-    fixture_owned_replacement_assessments_remaining,
+    FixtureImmutableLeafAssessmentGuard, FixtureOwnedCleanupTargetGuard, FixtureOwnedReplacementAssessmentGuard,
+    arm_fixture_immutable_leaf_assessments, arm_fixture_owned_cleanup_targets,
+    arm_fixture_owned_replacement_assessments, fixture_immutable_leaf_assessments_remaining,
+    fixture_owned_cleanup_targets_remaining, fixture_owned_replacement_assessments_remaining,
     fixture_owned_replacement_validations_remaining,
 };
 

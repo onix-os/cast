@@ -11,8 +11,8 @@ pub use self::signal::Signal;
 pub use self::state::State;
 pub use self::system_model::SystemModel;
 
-pub mod cli;
 pub(crate) mod boot_publication;
+pub mod cli;
 pub mod client;
 pub mod db;
 #[allow(dead_code)] // L8 blob substrate; consumed by the migration-bridge slice

@@ -9,8 +9,7 @@ use thiserror::Error;
 
 use crate::{
     boot_publication::{
-        BootPublicationReceiptFingerprint, BootPublicationReceiptPair,
-        CanonicalBootPublicationReceipt,
+        BootPublicationReceiptFingerprint, BootPublicationReceiptPair, CanonicalBootPublicationReceipt,
     },
     client::{
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
@@ -28,13 +27,7 @@ use super::{Client, StagedActiveReblitBootSync};
 /// Private fields prevent sibling components from manufacturing this view or
 /// reaching the retained plan without first passing promoted cross-store
 /// validation. It carries no mutation or journal-advance authority.
-pub(in crate::client) struct FreshPromotedStagedActiveReblitBootSync<
-    'staged,
-    'client,
-    'plan,
-    'inventory,
-    Plan,
-> {
+pub(in crate::client) struct FreshPromotedStagedActiveReblitBootSync<'staged, 'client, 'plan, 'inventory, Plan> {
     staged: &'staged StagedActiveReblitBootSync<'plan, 'inventory, Plan>,
     _client: &'client Client,
 }
@@ -51,29 +44,16 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
         &'staged self,
         client: &'client Client,
     ) -> Result<
-        FreshPromotedStagedActiveReblitBootSync<
-            'staged,
-            'client,
-            'plan,
-            'inventory,
-            Plan,
-        >,
+        FreshPromotedStagedActiveReblitBootSync<'staged, 'client, 'plan, 'inventory, Plan>,
         ActiveReblitBootSyncPromotedValidationError,
     > {
         if !self.database.same_instance(&client.state_db)
-            || !std::ptr::eq(
-                self.installation.root_directory(),
-                client.installation.root_directory(),
-            )
+            || !std::ptr::eq(self.installation.root_directory(), client.installation.root_directory())
         {
-            return Err(
-                ActiveReblitBootSyncPromotedValidationError::ClientCapabilityMismatch,
-            );
+            return Err(ActiveReblitBootSyncPromotedValidationError::ClientCapabilityMismatch);
         }
         if !self.journal.has_record_store_binding(&self.record_binding) {
-            return Err(
-                ActiveReblitBootSyncPromotedValidationError::JournalCapabilityMismatch,
-            );
+            return Err(ActiveReblitBootSyncPromotedValidationError::JournalCapabilityMismatch);
         }
 
         self.installation
@@ -88,9 +68,7 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
             .has_record_binding(cast, &self.record_binding, &self.record)
             .map_err(ActiveReblitBootSyncPromotedValidationError::Journal)?
         {
-            return Err(
-                ActiveReblitBootSyncPromotedValidationError::BootSyncStartedBindingChanged,
-            );
+            return Err(ActiveReblitBootSyncPromotedValidationError::BootSyncStartedBindingChanged);
         }
         self.require_exact_promoted_journal_record()?;
 
@@ -106,9 +84,7 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
             .has_record_binding(cast, &self.record_binding, &self.record)
             .map_err(ActiveReblitBootSyncPromotedValidationError::Journal)?
         {
-            return Err(
-                ActiveReblitBootSyncPromotedValidationError::BootSyncStartedBindingChanged,
-            );
+            return Err(ActiveReblitBootSyncPromotedValidationError::BootSyncStartedBindingChanged);
         }
         Ok(FreshPromotedStagedActiveReblitBootSync {
             staged: self,
@@ -116,9 +92,7 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
         })
     }
 
-    fn require_exact_promoted_journal_record(
-        &self,
-    ) -> Result<(), ActiveReblitBootSyncPromotedValidationError> {
+    fn require_exact_promoted_journal_record(&self) -> Result<(), ActiveReblitBootSyncPromotedValidationError> {
         // `pending` is the journal codec's name for the successor receipt. It
         // remains in BootSyncStarted after the database head is promoted.
         let expected = BootPublicationReceiptPair {
@@ -134,17 +108,13 @@ impl<'plan, 'inventory, Plan> StagedActiveReblitBootSync<'plan, 'inventory, Plan
             || &self.record.transition_id != self.receipt.body().transition_id()
             || actual != Some(expected)
         {
-            return Err(
-                ActiveReblitBootSyncPromotedValidationError::RecordReceiptMismatch,
-            );
+            return Err(ActiveReblitBootSyncPromotedValidationError::RecordReceiptMismatch);
         }
         Ok(())
     }
 }
 
-impl<'plan, 'inventory, Plan>
-    FreshPromotedStagedActiveReblitBootSync<'_, '_, 'plan, 'inventory, Plan>
-{
+impl<'plan, 'inventory, Plan> FreshPromotedStagedActiveReblitBootSync<'_, '_, 'plan, 'inventory, Plan> {
     pub(in crate::client) const fn record(&self) -> &TransitionRecord {
         self.staged.record()
     }
@@ -161,18 +131,14 @@ impl<'plan, 'inventory, Plan>
         self.staged.plan
     }
 
-    pub(in crate::client) const fn inventory(
-        &self,
-    ) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(&self) -> &'inventory PreparedActiveReblitDesiredPublicationInventory {
         self.staged.inventory
     }
 
     /// Borrow the sealed staging-time action set after proving this exact
     /// receipt is the promoted head. The action data grants no cleanup
     /// authority by itself.
-    pub(in crate::client) const fn classified_delta(
-        &self,
-    ) -> &ClassifiedActiveReblitBootPublicationDelta {
+    pub(in crate::client) const fn classified_delta(&self) -> &ClassifiedActiveReblitBootPublicationDelta {
         &self.staged.classified_delta
     }
 }

@@ -8,20 +8,14 @@
 use thiserror::Error;
 
 use crate::{
-    boot_publication::{
-        BootPublicationDestination, BootPublicationDestinations,
-    },
+    boot_publication::{BootPublicationDestination, BootPublicationDestinations},
     db::state::ExactPromotedBootPublicationReceiptChain,
 };
 
+use super::super::super::{BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology};
 use super::{
-    ActiveReblitBootPublicationTargetsError,
-    ReceiptValidatedActiveReblitBootPublicationTargets,
+    ActiveReblitBootPublicationTargetsError, ReceiptValidatedActiveReblitBootPublicationTargets,
     RevalidatedActiveReblitMountedBootTopology,
-};
-use super::super::super::{
-    BoundActiveReblitMountedBootTarget,
-    BoundActiveReblitMountedBootTopology,
 };
 
 impl RevalidatedActiveReblitMountedBootTopology<'_> {
@@ -30,10 +24,8 @@ impl RevalidatedActiveReblitMountedBootTopology<'_> {
     pub(in crate::client) fn revalidate_promoted_receipt_targets<'view>(
         &'view self,
         chain: &ExactPromotedBootPublicationReceiptChain,
-    ) -> Result<
-        ReceiptValidatedActiveReblitBootPublicationTargets<'view>,
-        ActiveReblitBootReceiptTargetValidationError,
-    > {
+    ) -> Result<ReceiptValidatedActiveReblitBootPublicationTargets<'view>, ActiveReblitBootReceiptTargetValidationError>
+    {
         let receipt = chain.installed_receipt();
         let destinations = receipt.body().destinations();
         let stable = StableLiveBootDestinations::from_topology(self.topology());
@@ -41,10 +33,7 @@ impl RevalidatedActiveReblitMountedBootTopology<'_> {
         let targets = self
             .revalidate_publication_targets()
             .map_err(ActiveReblitBootReceiptTargetValidationError::Targets)?;
-        require_stable_destinations(
-            StableLiveBootDestinations::from_topology(self.topology()),
-            destinations,
-        )?;
+        require_stable_destinations(StableLiveBootDestinations::from_topology(self.topology()), destinations)?;
 
         let aliases_esp = destinations.aliases_esp();
         if aliases_esp
@@ -53,9 +42,7 @@ impl RevalidatedActiveReblitMountedBootTopology<'_> {
                 super::RevalidatedActiveReblitBootPublicationTargets::BootAliasesEsp { .. }
             )
         {
-            return Err(
-                ActiveReblitBootReceiptTargetValidationError::TargetShapeMismatch,
-            );
+            return Err(ActiveReblitBootReceiptTargetValidationError::TargetShapeMismatch);
         }
 
         Ok(ReceiptValidatedActiveReblitBootPublicationTargets {
@@ -86,15 +73,10 @@ enum StableLiveBootDestinations<'topology> {
 impl<'topology> StableLiveBootDestinations<'topology> {
     fn from_topology(topology: BoundActiveReblitMountedBootTopology<'topology>) -> Self {
         match topology {
-            BoundActiveReblitMountedBootTopology::BootAliasesEsp { esp } => {
-                Self::BootAliasesEsp {
-                    esp: StableLiveBootDestination::from_target(esp),
-                }
-            }
-            BoundActiveReblitMountedBootTopology::DistinctXbootldr {
-                esp,
-                xbootldr,
-            } => Self::DistinctXbootldr {
+            BoundActiveReblitMountedBootTopology::BootAliasesEsp { esp } => Self::BootAliasesEsp {
+                esp: StableLiveBootDestination::from_target(esp),
+            },
+            BoundActiveReblitMountedBootTopology::DistinctXbootldr { esp, xbootldr } => Self::DistinctXbootldr {
                 esp: StableLiveBootDestination::from_target(esp),
                 xbootldr: StableLiveBootDestination::from_target(xbootldr),
             },
@@ -118,15 +100,10 @@ fn require_stable_destinations(
     match (topology, destinations) {
         (
             StableLiveBootDestinations::BootAliasesEsp { esp },
-            BootPublicationDestinations::BootAliasesEsp {
-                esp: receipt_esp,
-            },
+            BootPublicationDestinations::BootAliasesEsp { esp: receipt_esp },
         ) => require_stable_destination("esp", esp, receipt_esp),
         (
-            StableLiveBootDestinations::DistinctXbootldr {
-                esp,
-                xbootldr,
-            },
+            StableLiveBootDestinations::DistinctXbootldr { esp, xbootldr },
             BootPublicationDestinations::DistinctXbootldr {
                 esp: receipt_esp,
                 xbootldr: receipt_xbootldr,
@@ -144,14 +121,8 @@ fn require_stable_destination(
     live: StableLiveBootDestination<'_>,
     receipt: &BootPublicationDestination,
 ) -> Result<(), ActiveReblitBootReceiptTargetValidationError> {
-    if live.partuuid != receipt.partuuid()
-        || live.partition_number != receipt.partition_number()
-    {
-        Err(
-            ActiveReblitBootReceiptTargetValidationError::StableIdentityMismatch {
-                destination,
-            },
-        )
+    if live.partuuid != receipt.partuuid() || live.partition_number != receipt.partition_number() {
+        Err(ActiveReblitBootReceiptTargetValidationError::StableIdentityMismatch { destination })
     } else {
         Ok(())
     }

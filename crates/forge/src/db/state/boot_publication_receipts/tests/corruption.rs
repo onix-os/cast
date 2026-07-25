@@ -40,10 +40,8 @@ fn tampered_noncanonical_and_hash_mismatched_bodies_fail_closed() {
     database.stage_boot_publication_receipt(&original).unwrap();
     database.conn.exec(|connection| {
         diesel::update(
-            boot_publication_receipts::table.filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(original.fingerprint().as_bytes().as_slice()),
-            ),
+            boot_publication_receipts::table
+                .filter(boot_publication_receipts::receipt_sha256.eq(original.fingerprint().as_bytes().as_slice())),
         )
         .set(boot_publication_receipts::canonical_body.eq(replacement.canonical_body()))
         .execute(connection)
@@ -62,10 +60,8 @@ fn tampered_noncanonical_and_hash_mismatched_bodies_fail_closed() {
     noncanonical.extend_from_slice(original.canonical_body());
     database.conn.exec(|connection| {
         diesel::update(
-            boot_publication_receipts::table.filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(original.fingerprint().as_bytes().as_slice()),
-            ),
+            boot_publication_receipts::table
+                .filter(boot_publication_receipts::receipt_sha256.eq(original.fingerprint().as_bytes().as_slice())),
         )
         .set(boot_publication_receipts::canonical_body.eq(noncanonical))
         .execute(connection)
@@ -83,17 +79,17 @@ fn tampered_noncanonical_and_hash_mismatched_bodies_fail_closed() {
 fn mistyped_and_oversized_bodies_fail_before_typed_body_loading() {
     let mistyped = Database::new(":memory:").unwrap();
     let mistyped_receipt = receipt('b', None, 0xb1);
-    mistyped
-        .stage_boot_publication_receipt(&mistyped_receipt)
-        .unwrap();
+    mistyped.stage_boot_publication_receipt(&mistyped_receipt).unwrap();
     mistyped.conn.exec(|connection| {
-        connection.batch_execute("PRAGMA ignore_check_constraints = ON").unwrap();
-        diesel::sql_query(
-            "UPDATE boot_publication_receipts SET canonical_body = CAST(canonical_body AS TEXT)",
-        )
-        .execute(connection)
-        .unwrap();
-        connection.batch_execute("PRAGMA ignore_check_constraints = OFF").unwrap();
+        connection
+            .batch_execute("PRAGMA ignore_check_constraints = ON")
+            .unwrap();
+        diesel::sql_query("UPDATE boot_publication_receipts SET canonical_body = CAST(canonical_body AS TEXT)")
+            .execute(connection)
+            .unwrap();
+        connection
+            .batch_execute("PRAGMA ignore_check_constraints = OFF")
+            .unwrap();
     });
     assert!(matches!(
         mistyped.boot_publication_receipt_state(),
@@ -106,17 +102,17 @@ fn mistyped_and_oversized_bodies_fail_before_typed_body_loading() {
 
     let oversized = Database::new(":memory:").unwrap();
     let oversized_receipt = receipt('c', None, 0xc1);
-    oversized
-        .stage_boot_publication_receipt(&oversized_receipt)
-        .unwrap();
+    oversized.stage_boot_publication_receipt(&oversized_receipt).unwrap();
     oversized.conn.exec(|connection| {
-        connection.batch_execute("PRAGMA ignore_check_constraints = ON").unwrap();
-        diesel::sql_query(
-            "UPDATE boot_publication_receipts SET canonical_body = zeroblob(16777217)",
-        )
-        .execute(connection)
-        .unwrap();
-        connection.batch_execute("PRAGMA ignore_check_constraints = OFF").unwrap();
+        connection
+            .batch_execute("PRAGMA ignore_check_constraints = ON")
+            .unwrap();
+        diesel::sql_query("UPDATE boot_publication_receipts SET canonical_body = zeroblob(16777217)")
+            .execute(connection)
+            .unwrap();
+        connection
+            .batch_execute("PRAGMA ignore_check_constraints = OFF")
+            .unwrap();
     });
     assert!(matches!(
         oversized.boot_publication_receipt_state(),
@@ -131,9 +127,7 @@ fn mistyped_and_oversized_bodies_fail_before_typed_body_loading() {
 fn row_head_transition_and_pending_predecessor_linkage_is_exact() {
     let row_transition = Database::new(":memory:").unwrap();
     let row_receipt = receipt('d', None, 0xd1);
-    row_transition
-        .stage_boot_publication_receipt(&row_receipt)
-        .unwrap();
+    row_transition.stage_boot_publication_receipt(&row_receipt).unwrap();
     row_transition.conn.exec(|connection| {
         diesel::update(boot_publication_receipts::table)
             .set(boot_publication_receipts::transition_id.eq(transition('e').as_str()))

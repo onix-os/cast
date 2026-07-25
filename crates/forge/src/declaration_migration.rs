@@ -17,8 +17,7 @@ use gluon_config::GLUON_GENERATED_MARKER;
 use sha2::{Digest as _, Sha256};
 
 use crate::db::state::{
-    CATALOG_SCHEMA_VERSION, Database, DeclarationMigrationCommit, DeclarationMigrationError,
-    DeclarationMigrationRow,
+    CATALOG_SCHEMA_VERSION, Database, DeclarationMigrationCommit, DeclarationMigrationError, DeclarationMigrationRow,
 };
 
 const BLOB_STORE_RELATIVE: &str = ".cast/declaration-migrations/v1";
@@ -171,9 +170,7 @@ pub(crate) enum BridgeError {
         "committed declaration migration for slot {logical_slot:?} no longer binds the authenticated state-tree marker"
     )]
     StateTreeMarkerDrift { logical_slot: String },
-    #[error(
-        "committed declaration migration for slot {logical_slot:?} no longer matches the original source hash"
-    )]
+    #[error("committed declaration migration for slot {logical_slot:?} no longer matches the original source hash")]
     OriginalSourceDrift { logical_slot: String },
     #[error("enumerate generated Gluon authorities beneath a mutable store root")]
     Enumeration(#[source] io::Error),
@@ -190,8 +187,8 @@ pub(crate) fn migrate_declaration(
     request: DeclarationMigrationRequest,
 ) -> Result<DeclarationMigrationCommit, BridgeError> {
     let blob_address = blobs.write(&request.converted_bytes)?;
-    let migrated_blob_sha256 = hex::decode(&blob_address)
-        .expect("the blob store returns a lowercase hex content address");
+    let migrated_blob_sha256 =
+        hex::decode(&blob_address).expect("the blob store returns a lowercase hex content address");
 
     let row = DeclarationMigrationRow {
         state_id: request.state_id,
@@ -438,11 +435,8 @@ pub(crate) fn collect_unreferenced_blobs(
     database: &Database,
     blobs: &DeclarationMigrationBlobStore,
 ) -> Result<Vec<String>, BridgeError> {
-    let referenced: std::collections::HashSet<String> = database
-        .referenced_migration_blobs()?
-        .iter()
-        .map(hex::encode)
-        .collect();
+    let referenced: std::collections::HashSet<String> =
+        database.referenced_migration_blobs()?.iter().map(hex::encode).collect();
 
     let mut collected = Vec::new();
     for address in blobs.addresses()? {
@@ -684,7 +678,10 @@ mod tests {
         let before = migration_completion_report(&database, &blobs, &required, &roots).unwrap();
         assert!(!before.is_complete());
         assert_eq!(before.state_readiness.missing, required);
-        assert_eq!(before.remaining_generated_gluon_authorities, vec![generated_glu.clone()]);
+        assert_eq!(
+            before.remaining_generated_gluon_authorities,
+            vec![generated_glu.clone()]
+        );
 
         // Migrate the state slot and surrender the store's `.glu` authority.
         migrate_declaration(&database, &blobs, request(state_id, b"return {}\n")).unwrap();
@@ -703,10 +700,7 @@ mod tests {
         let state_id = state_id(&database);
         let migrated_slot = "etc/cast/system.glu".to_owned();
         let unmigrated_slot = "etc/cast/other.glu".to_owned();
-        let required = vec![
-            (state_id, migrated_slot.clone()),
-            (state_id, unmigrated_slot.clone()),
-        ];
+        let required = vec![(state_id, migrated_slot.clone()), (state_id, unmigrated_slot.clone())];
 
         let orphan = blobs.write(b"orphan residue\n").unwrap();
         migrate_declaration(&database, &blobs, request(state_id, b"return {}\n")).unwrap();
@@ -729,15 +723,15 @@ mod tests {
         let fragments = root.path().join("repo.d");
         fs::create_dir_all(&fragments).unwrap();
         // A generated Gluon authority (what a migration must eliminate).
-        fs::write(
-            fragments.join("main.glu"),
-            format!("{GLUON_GENERATED_MARKER}[]\n"),
-        )
-        .unwrap();
+        fs::write(fragments.join("main.glu"), format!("{GLUON_GENERATED_MARKER}[]\n")).unwrap();
         // A generated Lua authority (the migration target) and an authored
         // `.glu` with no generated marker — neither is a remaining generated
         // Gluon authority.
-        fs::write(fragments.join("main.lua"), format!("{GENERATED_LUA_MARKER}return {{}}\n")).unwrap();
+        fs::write(
+            fragments.join("main.lua"),
+            format!("{GENERATED_LUA_MARKER}return {{}}\n"),
+        )
+        .unwrap();
         fs::write(fragments.join("authored.glu"), "[]\n").unwrap();
 
         let remaining = generated_gluon_authorities(root.path()).unwrap();
@@ -824,10 +818,8 @@ mod tests {
         let marker = vec![1u8; 32];
         let original = vec![2u8; 32];
         assert_eq!(
-            resolve_migrated_blob_revalidated(
-                &database, &blobs, state_id, "etc/cast/system.glu", &marker, &original,
-            )
-            .unwrap(),
+            resolve_migrated_blob_revalidated(&database, &blobs, state_id, "etc/cast/system.glu", &marker, &original,)
+                .unwrap(),
             Some(converted.to_vec())
         );
     }
@@ -866,15 +858,11 @@ mod tests {
         let wrong = vec![0u8; 32];
 
         assert!(matches!(
-            resolve_migrated_blob_revalidated(
-                &database, &blobs, state_id, "etc/cast/system.glu", &wrong, &original,
-            ),
+            resolve_migrated_blob_revalidated(&database, &blobs, state_id, "etc/cast/system.glu", &wrong, &original,),
             Err(BridgeError::StateTreeMarkerDrift { .. })
         ));
         assert!(matches!(
-            resolve_migrated_blob_revalidated(
-                &database, &blobs, state_id, "etc/cast/system.glu", &marker, &wrong,
-            ),
+            resolve_migrated_blob_revalidated(&database, &blobs, state_id, "etc/cast/system.glu", &marker, &wrong,),
             Err(BridgeError::OriginalSourceDrift { .. })
         ));
     }

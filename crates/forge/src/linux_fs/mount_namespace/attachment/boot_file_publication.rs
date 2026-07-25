@@ -44,18 +44,15 @@ use std::{ffi::CString, fs::File, io, time::Instant};
 
 use sha2::{Digest as _, Sha256};
 
-use super::{
-    PRODUCTION_LIMITS, RevalidatedTaskRootedAttachment,
-    capture::require_capture_matches,
-};
 use super::super::filesystem::Operation;
+use super::{PRODUCTION_LIMITS, RevalidatedTaskRootedAttachment, capture::require_capture_matches};
 use crate::linux_fs::{
+    RETAINED_BOOT_FILE_PRIVATE_PREFIX,
     descriptor_boot_namespace::{
         BootNamespaceDestinationState, BootNamespaceRequest, BoundRetainedBootFileSource,
         RetainedBootNamespaceExpectedSource, assess_retained_boot_namespace_until,
     },
-    RETAINED_BOOT_FILE_PRIVATE_PREFIX, is_retained_boot_file_private_component, renameat2_noreplace_once,
-    sync_filesystem_until,
+    is_retained_boot_file_private_component, renameat2_noreplace_once, sync_filesystem_until,
 };
 
 #[path = "boot_file_publication/destination.rs"]
@@ -68,8 +65,8 @@ mod error;
 mod model;
 
 use destination::{FileIdentity, ReconciledMove};
-use effect::{checkpoint, fault};
 pub(crate) use effect::FixtureRetainedBootFilePublicationFault;
+use effect::{checkpoint, fault};
 pub(crate) use error::RetainedBootFilePublicationError;
 pub(crate) use model::{
     RetainedBootFilePublicationLimits, RetainedBootFilePublicationOutcome, RetainedBootFilePublicationRequest,
@@ -77,9 +74,7 @@ pub(crate) use model::{
 };
 
 #[cfg(test)]
-pub(crate) use effect::{
-    arm_retained_boot_file_private_name_substitution, arm_retained_boot_file_publication_fault,
-};
+pub(crate) use effect::{arm_retained_boot_file_private_name_substitution, arm_retained_boot_file_publication_fault};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct AttachmentIdentity {
     pub(super) device: u64,
@@ -361,8 +356,10 @@ impl<Target: RetainedBootFilePublicationTarget + ?Sized> RetainedBootFilePublish
                 "injected error reported after the no-replace move applied",
             ));
         }
-        match (destination::reconcile_move(parent, private_name, canonical_name, private_identity, deadline)?, rename_result)
-        {
+        match (
+            destination::reconcile_move(parent, private_name, canonical_name, private_identity, deadline)?,
+            rename_result,
+        ) {
             (ReconciledMove::Applied, _) => {}
             (ReconciledMove::NotApplied, Err(source)) => {
                 return Err(RetainedBootFilePublicationError::RenameNotApplied { source });
@@ -469,8 +466,7 @@ impl<Target: RetainedBootFilePublicationTarget + ?Sized> RetainedBootFilePublish
             BootNamespaceDestinationState::Absent,
             RetainedBootFilePublicationError::DifferentPrivateResidue,
         )?;
-        let (_canonical, found) =
-            destination::open_and_verify(parent, canonical_name, request, attachment, deadline)?;
+        let (_canonical, found) = destination::open_and_verify(parent, canonical_name, request, attachment, deadline)?;
         if found != expected_file {
             return Err(RetainedBootFilePublicationError::DestinationIdentityChanged {
                 action: "terminally rebinding the canonical boot-file inode",
@@ -508,9 +504,9 @@ impl<Target: RetainedBootFilePublicationTarget + ?Sized> RetainedBootFilePublish
             deadline,
         )
         .map_err(|source| RetainedBootFilePublicationError::Namespace { action, source })?;
-        let observed = assessment.observed_root_identity().ok_or(
-            RetainedBootFilePublicationError::DestinationIdentityChanged { action },
-        )?;
+        let observed = assessment
+            .observed_root_identity()
+            .ok_or(RetainedBootFilePublicationError::DestinationIdentityChanged { action })?;
         let expected = self.target.publication_parent_identity();
         if observed.device != expected.device
             || observed.inode != expected.inode
@@ -619,7 +615,10 @@ fn deterministic_private_leaf(request: RetainedBootFilePublicationRequest<'_>) -
     digest.update(request.expected_length().to_le_bytes());
     digest.update(request.expected_xxh3().to_le_bytes());
     digest.update(request.expected_sha256());
-    format!("{RETAINED_BOOT_FILE_PRIVATE_PREFIX}{}.stage", hex::encode(digest.finalize()))
+    format!(
+        "{RETAINED_BOOT_FILE_PRIVATE_PREFIX}{}.stage",
+        hex::encode(digest.finalize())
+    )
 }
 
 fn require_state(

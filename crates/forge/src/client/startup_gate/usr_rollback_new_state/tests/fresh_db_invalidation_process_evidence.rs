@@ -13,9 +13,7 @@ use crate::{
     transition_journal::{TransitionJournalStore, TransitionRecord},
 };
 
-use super::fresh_db_invalidation_process_boundaries::{
-    FreshDbInvalidationProcessBoundary, TemporaryRecordContents,
-};
+use super::fresh_db_invalidation_process_boundaries::{FreshDbInvalidationProcessBoundary, TemporaryRecordContents};
 
 const CAST_NAME: &str = ".cast";
 const DATABASE_DIRECTORY: &str = ".cast/db";
@@ -75,14 +73,8 @@ impl FreshDatabaseEvidence {
     pub(super) fn assert_recovered(&self, database: &db::state::Database, record: &TransitionRecord) {
         assert_eq!(database.all().unwrap(), vec![self.previous.clone()]);
         assert_eq!(database.audit_in_flight_transition().unwrap(), None);
-        assert_eq!(
-            database.metadata_provenance(self.previous.id).unwrap(),
-            None
-        );
-        assert_eq!(
-            database.metadata_provenance(self.candidate.id).unwrap(),
-            None
-        );
+        assert_eq!(database.metadata_provenance(self.previous.id).unwrap(), None);
+        assert_eq!(database.metadata_provenance(self.candidate.id).unwrap(), None);
         assert_joint_absence(database, record);
     }
 }
@@ -136,11 +128,7 @@ impl PublicJournalIdentity {
         assert_eq!(actual.lock, self.lock);
     }
 
-    pub(super) fn assert_crash_identity(
-        self,
-        actual: Self,
-        boundary: FreshDbInvalidationProcessBoundary,
-    ) {
+    pub(super) fn assert_crash_identity(self, actual: Self, boundary: FreshDbInvalidationProcessBoundary) {
         self.assert_same_anchors(actual);
         if boundary.canonical_is_source() {
             assert_eq!(actual.canonical, self.canonical);
@@ -174,10 +162,12 @@ impl RawJournalInventory {
             .cloned()
             .collect::<Vec<_>>();
         assert!(temporaries.len() <= 1, "unexpected raw temporary inventory: {names:?}");
-        assert_eq!(names.len(), 2 + temporaries.len(), "unexpected raw journal names: {names:?}");
-        let temporary = temporaries
-            .first()
-            .map(|name| fs::read(journal.join(name)).unwrap());
+        assert_eq!(
+            names.len(),
+            2 + temporaries.len(),
+            "unexpected raw journal names: {names:?}"
+        );
+        let temporary = temporaries.first().map(|name| fs::read(journal.join(name)).unwrap());
         Self {
             canonical: fs::read(journal.join(CANONICAL_NAME)).unwrap(),
             temporary,

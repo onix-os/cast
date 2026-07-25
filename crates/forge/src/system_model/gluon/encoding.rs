@@ -106,10 +106,7 @@ pub(super) fn source_fingerprint(source: &str) -> Option<String> {
     source
         .lines()
         .find_map(|line| line.strip_prefix(SOURCE_FINGERPRINT_PREFIX))
-        .filter(|fingerprint| {
-            fingerprint.len() == 64
-                && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
+        .filter(|fingerprint| fingerprint.len() == 64 && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .map(ToOwned::to_owned)
 }
 
@@ -117,9 +114,7 @@ pub(super) fn with_source_fingerprint(generated: &str, source_fingerprint: &str)
     let generated = generated
         .strip_prefix(GENERATED_GLUON_MARKER)
         .expect("Cast-generated system snapshots always carry the generated marker");
-    format!(
-        "{GENERATED_GLUON_MARKER}{SOURCE_FINGERPRINT_PREFIX}{source_fingerprint}\n{generated}"
-    )
+    format!("{GENERATED_GLUON_MARKER}{SOURCE_FINGERPRINT_PREFIX}{source_fingerprint}\n{generated}")
 }
 
 fn encode_repository_source(output: &mut String, source: &RepositorySourceSpec) {

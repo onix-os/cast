@@ -1,63 +1,74 @@
+
 let arrays = import! std.array.prim
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
+let { Bool } = import! cast.authored.v1
+
+// `Bool` is destructured from the authored prelude so its `True`/`False`
+// constructors are in scope for plain `if`/`then`/`else`, matching the type
+// used by `features.component`.
+let when = \condition values ->
+    if condition then values else []
 
 \features ->
-    let base = b.mk_package (b.meta {
-        pname = "optional-source-graph",
-        version = "3.0.0",
-        release = 1,
-        homepage = "https://example.invalid/optional-source-graph",
-        license = ["Apache-2.0"],
-    })
-
-    let primary_source = b.source.archive_with {
+    let primary_source = a.source.archive_with {
         url = "https://example.invalid/optional-source-graph-3.0.0.tar.xz",
         hash = "1111111111111111111111111111111111111111111111111111111111111111",
-        rename = b.optional.set "optional-source-graph.tar.xz",
-        strip_dirs = b.optional.set 1,
-        unpack = b.boolean.true,
-        unpack_dir = b.optional.set "application",
+        rename = a.optional.set "optional-source-graph.tar.xz",
+        strip_dirs = a.optional.set 1,
+        unpack = a.true,
+        unpack_dir = a.optional.set "application",
     }
 
-    let component_source = b.source.archive_with {
+    let component_source = a.source.archive_with {
         url = "https://example.invalid/optional-source-graph-components-3.0.0.tar.xz",
         hash = "2222222222222222222222222222222222222222222222222222222222222222",
-        rename = b.optional.set "optional-source-graph-components.tar.xz",
-        strip_dirs = b.optional.set 1,
-        unpack = b.boolean.true,
-        unpack_dir = b.optional.set "components",
+        rename = a.optional.set "optional-source-graph-components.tar.xz",
+        strip_dirs = a.optional.set 1,
+        unpack = a.true,
+        unpack_dir = a.optional.set "components",
     }
 
-    let root = b.output_with {
-        paths = [b.path.any "*"],
-        .. b.output "out"
+    let root = {
+        paths = [a.path.any "*"],
+        .. a.output "out"
     }
 
-    let components = b.output_with {
-        summary = b.optional.set "Optional source-graph components",
-        paths = [b.path.any "/usr/share/optional-source-graph/components"],
-        .. b.output "components"
+    let components = {
+        summary = a.optional.set "Optional source-graph components",
+        paths = [a.path.any "/usr/share/optional-source-graph/components"],
+        .. a.output "components"
     }
 
     {
-        builder = b.builder.custom b.defaults.scripts [],
-        hooks = b.hooks {
-            pre_setup = b.boolean.when features.component [
-                b.step.run
-                    (b.program.binary "component-preparer")
-                    ["--source", "../components"],
-            ],
-            .. b.defaults.hooks
+        meta = {
+            pname = "optional-source-graph",
+            version = "3.0.0",
+            release = 1,
+            homepage = "https://example.invalid/optional-source-graph",
+            license = ["Apache-2.0"],
         },
-        native_build_inputs = b.boolean.when
-            features.component
-            [b.dep.binary "component-preparer"],
-        outputs = arrays.append
-            [root]
-            (b.boolean.when features.component [components]),
+        builder = a.builder.custom a.empty.builder,
         sources = arrays.append
             [primary_source]
-            (b.boolean.when features.component [component_source]),
+            (when features.component [component_source]),
+        native_build_inputs = when features.component [a.dep.binary "component-preparer"],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit (arrays.append
+            [root]
+            (when features.component [components])),
+        options = a.unset,
+        profiles = [],
         architectures = ["native"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.some.hooks (a.hooks {
+            pre_setup = when features.component [
+                a.step.run
+                    (a.program.binary "component-preparer")
+                    ["--source", "../components"],
+            ],
+            .. a.empty.hooks
+        }),
     }

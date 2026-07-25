@@ -69,8 +69,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
         let namespace_inspection = match UsrRollbackFreshDbInvalidationRouteNamespaceInspection::begin(
             installation,
@@ -92,12 +91,7 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         if !database_is_exact(record, &database_after) || database != database_after {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
         }
-        let namespace = match namespace_inspection.finish(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        ) {
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred),
         };
@@ -124,32 +118,18 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackFreshDbInvalidationRouteAuthorityError> {
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_after)?;
         if !route_plan_is_exact(&self.record) {
             return Err(UsrRollbackFreshDbInvalidationRouteAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -230,13 +210,12 @@ fn system_trigger_candidate_preserved_source_is_exact(record: &TransitionRecord)
             Phase::CandidatePreserved,
             ForwardPhase::SystemTriggersStarted,
             16,
+        ) | (
+            Operation::NewState,
+            Phase::CandidatePreserved,
+            ForwardPhase::SystemTriggersComplete,
+            17,
         )
-            | (
-                Operation::NewState,
-                Phase::CandidatePreserved,
-                ForwardPhase::SystemTriggersComplete,
-                17,
-            )
     )
 }
 

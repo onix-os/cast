@@ -13,9 +13,7 @@ use sha2::{Digest as _, Sha256};
 use xxhash_rust::xxh3::Xxh3;
 
 use super::{
-    AttachmentIdentity,
-    effect::checkpoint,
-    error::RetainedBootFilePublicationError,
+    AttachmentIdentity, effect::checkpoint, error::RetainedBootFilePublicationError,
     model::RetainedBootFilePublicationRequest,
 };
 use crate::linux_fs::{controlled_resolution, descriptor_mount_id_until, openat2_file_until};
@@ -71,11 +69,7 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn create_private_exclusive
     let file = openat2_file_until(
         parent.as_raw_fd(),
         name,
-        nix::libc::O_RDWR
-            | nix::libc::O_CREAT
-            | nix::libc::O_EXCL
-            | nix::libc::O_CLOEXEC
-            | nix::libc::O_NOFOLLOW,
+        nix::libc::O_RDWR | nix::libc::O_CREAT | nix::libc::O_EXCL | nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW,
         0o644,
         controlled_resolution(),
         deadline,
@@ -156,17 +150,18 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn verify_open_file(
     deadline: Instant,
 ) -> Result<FileIdentity, RetainedBootFilePublicationError> {
     checkpoint(deadline)?;
-    let opening = file.metadata().map_err(|source| RetainedBootFilePublicationError::Filesystem {
-        action: "observing opening boot-file metadata",
-        source,
-    })?;
+    let opening = file
+        .metadata()
+        .map_err(|source| RetainedBootFilePublicationError::Filesystem {
+            action: "observing opening boot-file metadata",
+            source,
+        })?;
     require_regular_metadata(&opening, request, expected_parent)?;
-    let mount_id = descriptor_mount_id_until(file, deadline).map_err(|source| {
-        RetainedBootFilePublicationError::Filesystem {
+    let mount_id =
+        descriptor_mount_id_until(file, deadline).map_err(|source| RetainedBootFilePublicationError::Filesystem {
             action: "observing boot-file attachment mount ID",
             source,
-        }
-    })?;
+        })?;
     if mount_id != expected_parent.mount_id {
         return Err(RetainedBootFilePublicationError::DestinationIdentityChanged {
             action: "matching boot-file mount ID",
@@ -194,11 +189,11 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn verify_open_file(
         }
         xxh3.update(&buffer[..found]);
         sha256.update(&buffer[..found]);
-        offset = offset.checked_add(found as u64).ok_or(
-            RetainedBootFilePublicationError::ContentIdentityMismatch {
+        offset = offset
+            .checked_add(found as u64)
+            .ok_or(RetainedBootFilePublicationError::ContentIdentityMismatch {
                 field: "destination offset",
-            },
-        )?;
+            })?;
     }
     let mut probe = [0u8; 1];
     if pread_once(file, request.expected_length(), &mut probe).map_err(|source| {
@@ -223,10 +218,12 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn verify_open_file(
             field: "destination SHA-256",
         });
     }
-    let closing = file.metadata().map_err(|source| RetainedBootFilePublicationError::Filesystem {
-        action: "observing closing boot-file metadata",
-        source,
-    })?;
+    let closing = file
+        .metadata()
+        .map_err(|source| RetainedBootFilePublicationError::Filesystem {
+            action: "observing closing boot-file metadata",
+            source,
+        })?;
     if metadata_identity(&opening) != metadata_identity(&closing)
         || opening.len() != closing.len()
         || opening.permissions().mode() != closing.permissions().mode()
@@ -297,19 +294,20 @@ pub(in crate::linux_fs::mount_namespace::attachment) fn observe_named_identity(
             });
         }
     };
-    let metadata = file.metadata().map_err(|source| RetainedBootFilePublicationError::Filesystem {
-        action: "observing one boot-file publication inode",
-        source,
-    })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| RetainedBootFilePublicationError::Filesystem {
+            action: "observing one boot-file publication inode",
+            source,
+        })?;
     if !metadata.file_type().is_file() {
         return Err(RetainedBootFilePublicationError::RenameAmbiguous);
     }
-    let mount_id = descriptor_mount_id_until(&file, deadline).map_err(|source| {
-        RetainedBootFilePublicationError::Filesystem {
+    let mount_id =
+        descriptor_mount_id_until(&file, deadline).map_err(|source| RetainedBootFilePublicationError::Filesystem {
             action: "observing one boot-file publication mount ID",
             source,
-        }
-    })?;
+        })?;
     Ok(Some(FileIdentity {
         device: metadata.dev(),
         inode: metadata.ino(),
@@ -323,7 +321,9 @@ fn require_attachment_identity(
     action: &'static str,
     deadline: Instant,
 ) -> Result<(), RetainedBootFilePublicationError> {
-    let metadata = file.metadata().map_err(|source| RetainedBootFilePublicationError::Filesystem { action, source })?;
+    let metadata = file
+        .metadata()
+        .map_err(|source| RetainedBootFilePublicationError::Filesystem { action, source })?;
     let mount_id = descriptor_mount_id_until(file, deadline)
         .map_err(|source| RetainedBootFilePublicationError::Filesystem { action, source })?;
     if !metadata.file_type().is_dir()

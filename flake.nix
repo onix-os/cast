@@ -16,7 +16,10 @@
           inherit system;
           overlays = [ (import rust-overlay) ];
         };
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        # Pin an exact stable release rather than the moving `stable.latest`, so
+        # the toolchain (and therefore rustfmt's formatting) is reproducible and
+        # does not drift every time upstream stable advances.
+        rustToolchain = pkgs.rust-bin.stable."1.94.1".default.override {
           extensions = [ "rust-src" "rustfmt" "clippy" ];
         };
         python =
@@ -94,6 +97,17 @@
           CXX = "${pkgs.clang}/bin/clang++";
           LOCALE_ARCHIVE = pkgs.lib.optionalString pkgs.stdenv.isLinux "${pkgs.glibcLocales}/lib/locale/locale-archive";
           RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+
+          # Own the rustfmt policy in the flake rather than a checked-in
+          # rustfmt.toml (per project decision). The wide-line house style keeps
+          # ~98% of long lines intact, so an explicit `cargo fmt` matches the
+          # existing code instead of reflowing the whole tree. The generated
+          # rustfmt.toml is gitignored; only enter it via `nix develop`.
+          shellHook = ''
+            if [ -f "$PWD/flake.nix" ]; then
+              printf 'max_width = 120\n' > "$PWD/rustfmt.toml"
+            fi
+          '';
         };
       }
     );

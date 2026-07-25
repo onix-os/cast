@@ -82,10 +82,7 @@ fn assert_exact_root_abi_mutation(
     mutation: RootAbiMutation,
     label: &str,
 ) {
-    let selected_index = ROOT_ABI
-        .iter()
-        .position(|(name, _)| *name == selected_name)
-        .unwrap();
+    let selected_index = ROOT_ABI.iter().position(|(name, _)| *name == selected_name).unwrap();
     for (index, (_, expected_target)) in ROOT_ABI.into_iter().enumerate() {
         let original = before[index]
             .as_ref()
@@ -101,7 +98,11 @@ fn assert_exact_root_abi_mutation(
         RootAbiMutation::Missing => assert!(after[selected_index].is_none(), "{label}"),
         RootAbiMutation::WrongTarget => {
             let changed = after[selected_index].as_ref().unwrap();
-            assert_eq!(changed.target, PathBuf::from(format!("usr/wrong-{selected_name}")), "{label}");
+            assert_eq!(
+                changed.target,
+                PathBuf::from(format!("usr/wrong-{selected_name}")),
+                "{label}"
+            );
             assert_eq!(changed.device, original.device, "{label}");
             assert_ne!(changed.inode, original.inode, "{label}");
             assert_eq!(changed.mode, original.mode, "{label}");
@@ -188,13 +189,7 @@ fn startup_root_links_fresh_db_route_capture_rejects_all_root_abi_mutations() {
                         let case = format!(
                             "capture historical={historical} {usr_outcome:?} {candidate_outcome:?} {name} {mutation:?}"
                         );
-                        let hook = root_abi_mutation_hook(
-                            &fixture,
-                            name,
-                            target,
-                            mutation,
-                            case.clone(),
-                        );
+                        let hook = root_abi_mutation_hook(&fixture, name, target, mutation, case.clone());
                         arm_between_usr_rollback_fresh_db_invalidation_route_database_captures(hook);
 
                         assert!(matches!(
@@ -241,20 +236,13 @@ fn startup_root_links_fresh_db_route_final_revalidation_rejects_all_root_abi_mut
                         let case = format!(
                             "final historical={historical} {usr_outcome:?} {candidate_outcome:?} {name} {mutation:?}"
                         );
-                        let hook = root_abi_mutation_hook(
-                            &fixture,
-                            name,
-                            target,
-                            mutation,
-                            case.clone(),
-                        );
+                        let hook = root_abi_mutation_hook(&fixture, name, target, mutation, case.clone());
                         arm_before_usr_rollback_fresh_db_invalidation_route_final_revalidation(move || {
                             arm_before_usr_rollback_fresh_db_invalidation_route_fresh_namespace_capture(hook);
                         });
 
-                        let error =
-                            persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)
-                                .unwrap_err();
+                        let error = persist_usr_rollback_fresh_db_invalidation_route_and_reopen(journal, authority)
+                            .unwrap_err();
 
                         assert!(matches!(
                             error,

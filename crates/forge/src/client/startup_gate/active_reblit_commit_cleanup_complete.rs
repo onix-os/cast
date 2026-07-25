@@ -15,8 +15,7 @@ use crate::client::{
     active_state_snapshot::ActiveStateReservation,
     startup_gate::ActiveReblitCommitCleanupCompleteSeal,
     startup_reconciliation::{
-        ActiveReblitCommitCleanupCompleteAdmission,
-        ActiveReblitCommitCleanupCompleteAuthority,
+        ActiveReblitCommitCleanupCompleteAdmission, ActiveReblitCommitCleanupCompleteAuthority,
         ActiveReblitCommitCleanupCompleteAuthorityError,
     },
     startup_recovery::{
@@ -44,9 +43,7 @@ pub(super) fn dispatch<'reservation>(
     journal: TransitionJournalStore,
     record: TransitionRecord,
 ) -> Result<Dispatch, Error> {
-    if record.operation != Operation::ActiveReblit
-        || record.phase != Phase::CommitCleanupComplete
-    {
+    if record.operation != Operation::ActiveReblit || record.phase != Phase::CommitCleanupComplete {
         return Ok(Dispatch::Unhandled { journal, record });
     }
 
@@ -75,8 +72,7 @@ fn persist_complete(
     journal: TransitionJournalStore,
     authority: ActiveReblitCommitCleanupCompleteAuthority<'_>,
 ) -> Result<Dispatch, Error> {
-    let (journal, record) =
-        persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, authority)?;
+    let (journal, record) = persist_active_reblit_commit_cleanup_complete_to_complete_and_reopen(journal, authority)?;
     Ok(Dispatch::Handled { journal, record })
 }
 

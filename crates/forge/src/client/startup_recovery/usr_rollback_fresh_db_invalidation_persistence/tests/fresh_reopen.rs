@@ -1,9 +1,7 @@
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_reconciliation::{
-            UsrRollbackFreshDbInvalidationAdmission, fresh_db_invalidation_removal_call_count,
-        },
+        startup_reconciliation::{UsrRollbackFreshDbInvalidationAdmission, fresh_db_invalidation_removal_call_count},
         startup_recovery::{
             DurableUsrRollbackFreshDbInvalidationRecord, UsrRollbackFreshDbInvalidationEffectSeal,
             UsrRollbackFreshDbInvalidationPersistenceError, persist_usr_rollback_fresh_db_invalidation_and_reopen,
@@ -61,7 +59,10 @@ fn startup_fresh_db_invalidation_source_durable_fresh_handle_reopen_uses_zero_re
                         let candidate = fixture.fixture.fixture.candidate_state;
                         let retained = release_handles(fixture);
                         let fresh = FreshInvalidationHandles::open(retained.path());
-                        assert_eq!(fresh.record.phase, crate::transition_journal::Phase::FreshDbInvalidationIntent);
+                        assert_eq!(
+                            fresh.record.phase,
+                            crate::transition_journal::Phase::FreshDbInvalidationIntent
+                        );
                         let all_before = fresh.database.all().unwrap();
                         let in_flight_before = fresh.database.audit_in_flight_transition().unwrap();
                         let provenance_before = fresh.database.metadata_provenance(candidate).unwrap();
@@ -104,7 +105,8 @@ fn startup_fresh_db_invalidation_successor_durable_fresh_handle_reopen_skips_inv
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     for candidate_outcome in CandidateResult::ALL {
                         executions += 1;
-                        let mut fixture = fixture_for_origin(origin, historical, source, usr_outcome, candidate_outcome);
+                        let mut fixture =
+                            fixture_for_origin(origin, historical, source, usr_outcome, candidate_outcome);
                         install_persistent_database(&mut fixture, origin);
                         let journal = fixture.open_journal();
                         let reservation = ActiveStateReservation::acquire().unwrap();
@@ -144,7 +146,10 @@ fn startup_fresh_db_invalidation_successor_durable_fresh_handle_reopen_skips_inv
                         assert_eq!(fresh.journal.load().unwrap(), Some(expected));
                         assert_eq!(fresh.database.all().unwrap(), all_before);
                         assert_eq!(fresh.database.audit_in_flight_transition().unwrap(), in_flight_before);
-                        assert_eq!(fresh.database.metadata_provenance(candidate).unwrap(), provenance_before);
+                        assert_eq!(
+                            fresh.database.metadata_provenance(candidate).unwrap(),
+                            provenance_before
+                        );
                         assert_eq!(fresh_db_invalidation_removal_call_count(), removals_before_reopen);
                     }
                 }

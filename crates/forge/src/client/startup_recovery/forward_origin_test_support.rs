@@ -213,9 +213,7 @@ pub(crate) fn snapshot_startup_recovery_namespace(root: &Path) -> Vec<StartupRec
     entries
 }
 
-pub(crate) fn snapshot_startup_recovery_namespace_without_root_abi(
-    root: &Path,
-) -> Vec<StartupRecoveryNamespaceEntry> {
+pub(crate) fn snapshot_startup_recovery_namespace_without_root_abi(root: &Path) -> Vec<StartupRecoveryNamespaceEntry> {
     snapshot_startup_recovery_namespace(root)
         .into_iter()
         .filter(|entry| {

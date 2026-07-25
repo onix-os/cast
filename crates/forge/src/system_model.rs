@@ -8,15 +8,10 @@ use std::{
 };
 
 use config::declaration::{
-    LoadFixedRootDeclarationError, RootDeclarationDiscoveryError,
-    RootDeclarationSlot, TypedDeclarationEvaluatorSet,
-    RegisteredGeneratedDeclarationAuthorities,
-    load_fixed_root_declaration,
+    LoadFixedRootDeclarationError, RegisteredGeneratedDeclarationAuthorities, RootDeclarationDiscoveryError,
+    RootDeclarationSlot, TypedDeclarationEvaluatorSet, load_fixed_root_declaration,
 };
-use declarative_config::{
-    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    Source,
-};
+use declarative_config::{DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator, Source};
 use gluon_config::EvaluationIdentity;
 use thiserror::Error;
 
@@ -38,8 +33,7 @@ pub const SYSTEM_INTENT_PATH: &str = "etc/cast/system.glu";
 pub const SYSTEM_SNAPSHOT_PATH: &str = "usr/lib/system-model.glu";
 
 /// Engine-neutral failure to evaluate or convert a system declaration.
-pub type SystemDeclarationError =
-    DeclarationEvaluationError<spec::ConversionError>;
+pub type SystemDeclarationError = DeclarationEvaluationError<spec::ConversionError>;
 
 pub fn intent_path(root: &Path) -> PathBuf {
     root.join(SYSTEM_INTENT_PATH)
@@ -96,15 +90,9 @@ impl SystemModel {
         }
     }
 
-    pub(super) fn regenerate(
-        parts: SystemParts,
-    ) -> Result<Self, SystemDeclarationError> {
-        let normalized = spec::from_domain(
-            parts.disable_warning,
-            &parts.repositories,
-            &parts.packages,
-        )
-        .map_err(DeclarationEvaluationError::conversion)?;
+    pub(super) fn regenerate(parts: SystemParts) -> Result<Self, SystemDeclarationError> {
+        let normalized = spec::from_domain(parts.disable_warning, &parts.repositories, &parts.packages)
+            .map_err(DeclarationEvaluationError::conversion)?;
         let generated = gluon::SystemSnapshotCodec::encode_normalized(&normalized);
         evaluate_snapshot(&Source::new("system-model.glu", generated))
     }
@@ -196,20 +184,15 @@ pub fn load(path: &Path) -> Result<Option<LoadedSystemModel>, LoadError> {
         .and_then(OsStr::to_str)
         .ok_or_else(|| LoadError::InvalidPath(path.to_owned()))?;
     let evaluator = gluon::SystemIntentEvaluator::default();
-    if path.extension().and_then(OsStr::to_str)
-        != Some(evaluator.language_spec().extension())
-    {
+    if path.extension().and_then(OsStr::to_str) != Some(evaluator.language_spec().extension()) {
         return Err(LoadError::InvalidPath(path.to_owned()));
     }
-    let slot = RootDeclarationSlot::new(basename, file_name)
-        .map_err(|_| LoadError::InvalidPath(path.to_owned()))?;
+    let slot = RootDeclarationSlot::new(basename, file_name).map_err(|_| LoadError::InvalidPath(path.to_owned()))?;
     let evaluators = TypedDeclarationEvaluatorSet::new([evaluator])
         .expect("one validated system-intent adapter has no extension collision");
     let loaded = load_fixed_root_declaration(parent, &slot, &evaluators)?;
 
-    Ok(loaded.map(|loaded| {
-        loaded_from_declaration(path, loaded.value, loaded.identity)
-    }))
+    Ok(loaded.map(|loaded| loaded_from_declaration(path, loaded.value, loaded.identity)))
 }
 
 fn load_source(
@@ -218,11 +201,7 @@ fn load_source(
     evaluator: &gluon::SystemIntentEvaluator,
 ) -> Result<LoadedSystemModel, LoadError> {
     let evaluated = evaluator.evaluate(&source)?;
-    Ok(loaded_from_declaration(
-        path,
-        evaluated.value,
-        evaluated.identity,
-    ))
+    Ok(loaded_from_declaration(path, evaluated.value, evaluated.identity))
 }
 
 fn loaded_from_declaration(
@@ -260,13 +239,8 @@ fn loaded_from_declaration(
     }
 }
 
-pub(crate) fn encode_snapshot(
-    model: &SystemModel,
-) -> Result<String, spec::ConversionError> {
-    <gluon::SystemSnapshotCodec as DeclarationCodec<SystemModel>>::encode(
-        &gluon::SystemSnapshotCodec::default(),
-        model,
-    )
+pub(crate) fn encode_snapshot(model: &SystemModel) -> Result<String, spec::ConversionError> {
+    <gluon::SystemSnapshotCodec as DeclarationCodec<SystemModel>>::encode(&gluon::SystemSnapshotCodec::default(), model)
 }
 
 /// Complete ownership and language policy for the generated snapshot slot.
@@ -275,20 +249,14 @@ pub(crate) fn encode_snapshot(
 /// its stronger paired `os-release` plus system-snapshot transaction. Even a
 /// singleton active language therefore carries the complete registration
 /// boundary into publication and proof.
-pub(crate) fn snapshot_authorities(
-) -> RegisteredGeneratedDeclarationAuthorities {
+pub(crate) fn snapshot_authorities() -> RegisteredGeneratedDeclarationAuthorities {
     let active = gluon::SystemSnapshotCodec::default().generated_authority();
-    RegisteredGeneratedDeclarationAuthorities::new(
-        [active.clone()],
-        active,
-    )
-    .expect("the generated system snapshot authority set is valid")
+    RegisteredGeneratedDeclarationAuthorities::new([active.clone()], active)
+        .expect("the generated system snapshot authority set is valid")
 }
 
 /// Evaluate one generated snapshot through the registered typed codec.
-pub(crate) fn evaluate_snapshot(
-    source: &Source,
-) -> Result<SystemModel, SystemDeclarationError> {
+pub(crate) fn evaluate_snapshot(source: &Source) -> Result<SystemModel, SystemDeclarationError> {
     <gluon::SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
         &gluon::SystemSnapshotCodec::default(),
         source,
@@ -315,14 +283,8 @@ pub(super) fn create_with_options(
 }
 
 impl SystemModel {
-    fn with_source_fingerprint(
-        self,
-        source_fingerprint: String,
-    ) -> Result<Self, SystemDeclarationError> {
-        let snapshot = gluon::with_source_fingerprint(
-            &self.generated_snapshot,
-            &source_fingerprint,
-        );
+    fn with_source_fingerprint(self, source_fingerprint: String) -> Result<Self, SystemDeclarationError> {
+        let snapshot = gluon::with_source_fingerprint(&self.generated_snapshot, &source_fingerprint);
         evaluate_snapshot(&Source::new("system-model.glu", snapshot))
     }
 
@@ -397,10 +359,7 @@ pub enum LoadError {
     #[error("evaluate system declaration")]
     Declaration(#[from] SystemDeclarationError),
     #[error("load fixed system declaration")]
-    FixedDeclaration(
-        #[from]
-        LoadFixedRootDeclarationError<spec::ConversionError>,
-    ),
+    FixedDeclaration(#[from] LoadFixedRootDeclarationError<spec::ConversionError>),
     #[error("discover descriptor-rooted system declaration")]
     RootedDiscovery(#[source] RootDeclarationDiscoveryError),
     #[error("descriptor-rooted system declaration slot changed beneath {0}")]
@@ -497,11 +456,7 @@ let cast = import! cast.system.v1
         fs::create_dir_all(&directory).unwrap();
         let source_path = directory.join("system.glu");
         fs::write(&source_path, authored_source()).unwrap();
-        fs::set_permissions(
-            &source_path,
-            std::fs::Permissions::from_mode(0o644),
-        )
-        .unwrap();
+        fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let retained_directory = std::fs::File::open(&directory).unwrap();
 
         let detached_etc = temporary.path().join("detached-etc");
@@ -519,9 +474,7 @@ let cast = import! cast.system.v1
             fs::rename(&hook_detached_etc, &hook_public_etc).unwrap();
         });
 
-        let loaded = load_rooted(&directory, &retained_directory)
-            .unwrap()
-            .unwrap();
+        let loaded = load_rooted(&directory, &retained_directory).unwrap().unwrap();
 
         assert_eq!(loaded.path(), source_path);
         assert!(loaded.packages.contains(&Provider::package_name("alpha")));
@@ -735,8 +688,7 @@ let cast = import! cast.system.v1
             Some("https://new.example.test/index.stone")
         );
         assert!(!updated.repositories.contains_id(&repository::Id::new("not-added")));
-        let evaluated =
-            evaluate_snapshot(&Source::new("system-model.glu", updated.encoded())).unwrap();
+        let evaluated = evaluate_snapshot(&Source::new("system-model.glu", updated.encoded())).unwrap();
         assert_eq!(evaluated.encoded(), updated.encoded());
         assert_eq!(evaluated.fingerprint(), updated.fingerprint());
     }

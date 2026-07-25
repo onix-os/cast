@@ -8,8 +8,8 @@
 use std::time::Instant;
 
 use super::{
-    ParentRetentionMode, RetainedBootPublicationParent,
-    RetainedBootPublicationParentError, retain_boot_publication_parent_with,
+    ParentRetentionMode, RetainedBootPublicationParent, RetainedBootPublicationParentError,
+    retain_boot_publication_parent_with,
 };
 use crate::linux_fs::mount_namespace::RevalidatedTaskRootedAttachment;
 
@@ -24,8 +24,7 @@ impl<'prepared> RevalidatedTaskRootedAttachment<'prepared> {
         &'view self,
         admitted_parent_components: &[&str],
         deadline: Instant,
-    ) -> Result<RetainedBootPublicationParent<'view, 'prepared>, RetainedBootPublicationParentError>
-    {
+    ) -> Result<RetainedBootPublicationParent<'view, 'prepared>, RetainedBootPublicationParentError> {
         retain_boot_publication_parent_with(
             self,
             admitted_parent_components,

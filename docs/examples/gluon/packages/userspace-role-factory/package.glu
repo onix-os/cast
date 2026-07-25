@@ -1,24 +1,34 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 let roles = import! "./roles.glu"
 
 \role ->
     let selected = roles.select role
-    let base = b.mk_package (b.meta {
-        pname = selected.pname,
-        version = "1",
-        release = 1,
-        homepage = "https://example.invalid/userspace-roles",
-        license = ["CC0-1.0"],
-    })
     {
-        outputs = [
-            b.output_with {
-                summary = b.optional.set selected.summary,
-                description = b.optional.set "One explicit, typed userspace role with no imperative activation phase.",
+        meta = {
+            pname = selected.pname,
+            version = "1",
+            release = 1,
+            homepage = "https://example.invalid/userspace-roles",
+            license = ["CC0-1.0"],
+        },
+        builder = a.builder.custom a.empty.builder,
+        sources = [],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [
+            {
+                summary = a.optional.set selected.summary,
+                description = a.optional.set "One explicit, typed userspace role with no imperative activation phase.",
                 runtime_inputs = selected.packages,
-                .. b.output "out"
+                .. a.output "out"
             },
         ],
+        options = a.unset,
+        profiles = [],
         architectures = ["native"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }

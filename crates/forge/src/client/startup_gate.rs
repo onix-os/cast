@@ -1,9 +1,8 @@
 use thiserror::Error;
 
 use crate::{
-    Installation,
-    boot_publication::BootPublicationReceiptFingerprint,
-    db, installation, transition_identity, transition_journal,
+    Installation, boot_publication::BootPublicationReceiptFingerprint, db, installation, transition_identity,
+    transition_journal,
 };
 
 use super::{
@@ -26,8 +25,7 @@ mod usr_rollback_active_reblit;
 mod usr_rollback_new_state;
 
 pub(crate) use live_active_reblit_no_boot::{
-    ActiveReblitNoBootTailError, FinalizedActiveReblitNoBoot,
-    finish_active_reblit_no_boot,
+    ActiveReblitNoBootTailError, FinalizedActiveReblitNoBoot, finish_active_reblit_no_boot,
 };
 
 pub(in crate::client) use usr_rollback_activate_archived::{
@@ -36,8 +34,7 @@ pub(in crate::client) use usr_rollback_activate_archived::{
 pub(in crate::client) use usr_rollback_active_reblit::{
     UsrRollbackActiveReblitBootRepairCompleteSeal, UsrRollbackActiveReblitBootRepairRequiredSeal,
     UsrRollbackActiveReblitBootRepairStartSeal, UsrRollbackActiveReblitBootRepairUnverifiedSeal,
-    UsrRollbackActiveReblitCompleteRouteSeal,
-    UsrRollbackActiveReblitFinalizationSeal,
+    UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
 };
 pub(in crate::client) use usr_rollback_new_state::{
     UsrRollbackCompleteRouteSeal, UsrRollbackFinalizationSeal, UsrRollbackFreshDbInvalidationRouteSeal,
@@ -117,15 +114,11 @@ impl ActiveReblitBootSyncStartedCleanupSeal {
     }
 
     #[cfg(test)]
-    pub(in crate::client) fn new_for_test(
-        promoted_receipt: BootPublicationReceiptFingerprint,
-    ) -> Self {
+    pub(in crate::client) fn new_for_test(promoted_receipt: BootPublicationReceiptFingerprint) -> Self {
         Self::new(promoted_receipt)
     }
 
-    pub(in crate::client) const fn promoted_receipt(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn promoted_receipt(&self) -> BootPublicationReceiptFingerprint {
         self.promoted_receipt
     }
 }
@@ -263,9 +256,7 @@ impl CleanSystemStartup {
                 journal,
                 record,
             )? {
-                active_reblit_boot_sync_started::Dispatch::Unhandled { journal, record } => {
-                    (journal, record)
-                }
+                active_reblit_boot_sync_started::Dispatch::Unhandled { journal, record } => (journal, record),
                 active_reblit_boot_sync_started::Dispatch::Handled { journal, record } => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
@@ -292,9 +283,7 @@ impl CleanSystemStartup {
                 journal,
                 record,
             )? {
-                active_reblit_boot_sync_complete::Dispatch::Unhandled { journal, record } => {
-                    (journal, record)
-                }
+                active_reblit_boot_sync_complete::Dispatch::Unhandled { journal, record } => (journal, record),
                 active_reblit_boot_sync_complete::Dispatch::Handled { journal, record } => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
@@ -320,9 +309,7 @@ impl CleanSystemStartup {
                 journal,
                 record,
             )? {
-                active_reblit_commit_cleanup::Dispatch::Unhandled { journal, record } => {
-                    (journal, record)
-                }
+                active_reblit_commit_cleanup::Dispatch::Unhandled { journal, record } => (journal, record),
                 active_reblit_commit_cleanup::Dispatch::Handled { journal, record } => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
@@ -348,10 +335,7 @@ impl CleanSystemStartup {
                 journal,
                 record,
             )? {
-                active_reblit_commit_cleanup_complete::Dispatch::Unhandled {
-                    journal,
-                    record,
-                } => (journal, record),
+                active_reblit_commit_cleanup_complete::Dispatch::Unhandled { journal, record } => (journal, record),
                 active_reblit_commit_cleanup_complete::Dispatch::Handled { journal, record } => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
@@ -377,10 +361,7 @@ impl CleanSystemStartup {
                 journal,
                 record,
             )? {
-                active_reblit_complete_finalization::Dispatch::Unhandled {
-                    journal,
-                    record,
-                } => (journal, record),
+                active_reblit_complete_finalization::Dispatch::Unhandled { journal, record } => (journal, record),
                 active_reblit_complete_finalization::Dispatch::Handled { journal, record } => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
@@ -394,11 +375,7 @@ impl CleanSystemStartup {
                     return Err(Error::RecoveryPending(pending));
                 }
                 active_reblit_complete_finalization::Dispatch::Finalized { journal } => {
-                    return Self::admit_clean_after_terminal_finalization(
-                        installation,
-                        state_db,
-                        journal,
-                    );
+                    return Self::admit_clean_after_terminal_finalization(installation, state_db, journal);
                 }
             };
 
@@ -434,9 +411,7 @@ impl CleanSystemStartup {
                 in_flight.clone(),
             )?;
             let decision_in_flight = match root_abi {
-                startup_reconciliation::UsrExchangedRootAbiNormalizationAdmission::NotApplicable => {
-                    in_flight.clone()
-                }
+                startup_reconciliation::UsrExchangedRootAbiNormalizationAdmission::NotApplicable => in_flight.clone(),
                 startup_reconciliation::UsrExchangedRootAbiNormalizationAdmission::Deferred => {
                     let in_flight = state_db.audit_in_flight_transition()?;
                     let pending = startup_reconciliation::PendingSystemTransition::inspect(
@@ -804,13 +779,9 @@ pub(super) enum Error {
     #[error("dispatch the exact forward startup ActiveReblit CommitDecided cleanup checkpoint")]
     ActiveReblitCommitCleanupDispatch(#[from] active_reblit_commit_cleanup::Error),
     #[error("dispatch the exact forward startup ActiveReblit CommitCleanupComplete checkpoint")]
-    ActiveReblitCommitCleanupCompleteDispatch(
-        #[from] active_reblit_commit_cleanup_complete::Error,
-    ),
+    ActiveReblitCommitCleanupCompleteDispatch(#[from] active_reblit_commit_cleanup_complete::Error),
     #[error("dispatch the exact forward startup ActiveReblit Complete finalizer")]
-    ActiveReblitCompleteFinalizationDispatch(
-        #[from] active_reblit_complete_finalization::Error,
-    ),
+    ActiveReblitCompleteFinalizationDispatch(#[from] active_reblit_complete_finalization::Error),
     #[error("capture exact startup /usr rollback-decision authority")]
     UsrRollbackDecisionAuthority(#[from] startup_reconciliation::UsrRollbackDecisionAuthorityError),
     #[error("capture exact startup UsrExchanged root ABI normalization authority")]

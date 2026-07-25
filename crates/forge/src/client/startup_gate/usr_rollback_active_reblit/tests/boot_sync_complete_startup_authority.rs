@@ -93,10 +93,7 @@ fn stable_wrong_selection_defers_but_malformed_target_fails_stop() {
     malformed_record.candidate.id = None;
     let journal = open_boot_sync_complete_journal(&malformed);
     let reservation = ActiveStateReservation::acquire().unwrap();
-    assert!(
-        capture_boot_sync_complete_record(&malformed, &journal, &reservation, &malformed_record)
-            .is_err()
-    );
+    assert!(capture_boot_sync_complete_record(&malformed, &journal, &reservation, &malformed_record).is_err());
     assert_eq!(malformed.fixture.canonical_record(), malformed.fixture.source);
 }
 
@@ -134,9 +131,7 @@ fn database_and_source_binding_races_fail_stop_instead_of_deferring() {
     stale_record.generation += 1;
     let journal = open_boot_sync_complete_journal(&stale);
     let reservation = ActiveStateReservation::acquire().unwrap();
-    assert!(
-        capture_boot_sync_complete_record(&stale, &journal, &reservation, &stale_record).is_err()
-    );
+    assert!(capture_boot_sync_complete_record(&stale, &journal, &reservation, &stale_record).is_err());
     assert_eq!(stale.fixture.canonical_record(), stale.fixture.source);
 }
 
@@ -195,9 +190,7 @@ fn post_advance_evidence_validates_same_store_and_canonical_reopen() {
         let authority = capture_boot_sync_complete_ready(&fixture, &journal, &reservation);
         let successor = fixture.fixture.source.forward_successor(None).unwrap();
         assert_eq!(successor.phase, Phase::CommitDecided);
-        let (successor_binding, post_advance) = authority
-            .advance_record_binding(&journal, &successor)
-            .unwrap();
+        let (successor_binding, post_advance) = authority.advance_record_binding(&journal, &successor).unwrap();
 
         post_advance
             .revalidate_successor_same_store(&journal, &successor_binding, &successor)

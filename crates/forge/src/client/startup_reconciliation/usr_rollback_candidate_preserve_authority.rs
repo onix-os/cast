@@ -41,8 +41,7 @@ pub(in crate::client) use active_reblit_effect::{
     UsrRollbackActiveReblitCandidatePreserveAppliedEffectAuthority,
     UsrRollbackActiveReblitCandidatePreserveApplyReconciliation,
     UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority,
-    UsrRollbackActiveReblitCandidatePreserveEffectLease,
-    UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError,
+    UsrRollbackActiveReblitCandidatePreserveEffectLease, UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError,
 };
 #[cfg(test)]
 pub(in crate::client) use active_reblit_effect::{
@@ -62,8 +61,7 @@ pub(in crate::client) use archived_effect::{
 #[cfg(test)]
 pub(in crate::client) use effect_reconciliation::arm_before_usr_rollback_candidate_preserve_durable_trailing_evidence;
 pub(in crate::client) use effect_reconciliation::{
-    UsrRollbackCandidatePreserveFinishDurabilitySelection,
-    UsrRollbackCandidatePreserveRecordAdvanceError,
+    UsrRollbackCandidatePreserveFinishDurabilitySelection, UsrRollbackCandidatePreserveRecordAdvanceError,
     UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
@@ -209,19 +207,17 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
-        let namespace_inspection =
-            match UsrRollbackCandidatePreserveNamespaceInspection::begin(
-                installation,
-                journal,
-                &journal_record_binding,
-                record,
-            ) {
-                Ok(inspection) => inspection,
-                Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
-            };
+        let namespace_inspection = match UsrRollbackCandidatePreserveNamespaceInspection::begin(
+            installation,
+            journal,
+            &journal_record_binding,
+            record,
+        ) {
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
+        };
         let database = inspect_database(record, state_db, initial_in_flight)?;
         if !database_is_compatible(record, &database) || !candidate_preserve_plan_is_exact(record) {
             return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
@@ -233,12 +229,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         if !database_is_compatible(record, &database_after) || database != database_after {
             return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
         }
-        let namespace = match namespace_inspection.finish(
-            installation,
-            journal,
-            &journal_record_binding,
-            record,
-        ) {
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackCandidatePreserveAdmission::Deferred),
         };
@@ -273,12 +264,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackCandidatePreserveAuthorityError> {
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)
     }
 
     /// Revalidate every retained authority after the caller has proved the
@@ -293,12 +279,8 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         self.installation.revalidate_mutable_namespace()?;
         let database_before = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_before)?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after = inspect_current_database(&self.record, &self.state_db)?;
         require_exact_database(&self.database, database_after)?;
         if !candidate_preserve_plan_is_exact(&self.record) || self.namespace.topology() != expected_topology {
@@ -519,27 +501,14 @@ impl UsrRollbackCandidatePreserveRestartAuthority<'_> {
         self,
         journal: &TransitionJournalStore,
     ) -> Result<TransitionRecord, UsrRollbackCandidatePreserveAuthorityError> {
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
-        require_exact_database(
-            &self.database,
-            inspect_current_database(&self.record, &self.state_db)?,
-        )?;
+        require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if !candidate_preserve_plan_is_exact(&self.record) {
             return Err(UsrRollbackCandidatePreserveAuthorityErrorKind::EvidenceMismatch.into());
         }
         self.installation.revalidate_mutable_namespace()?;
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(self.record)
     }
@@ -595,25 +564,22 @@ fn system_trigger_candidate_preserve_source_is_exact(record: &TransitionRecord) 
             Phase::CandidatePreserveIntent,
             ForwardPhase::SystemTriggersStarted,
             15,
+        ) | (
+            Operation::NewState,
+            Phase::CandidatePreserveIntent,
+            ForwardPhase::SystemTriggersComplete,
+            16,
+        ) | (
+            Operation::ActiveReblit,
+            Phase::CandidatePreserveIntent,
+            ForwardPhase::SystemTriggersStarted,
+            13,
+        ) | (
+            Operation::ActiveReblit,
+            Phase::CandidatePreserveIntent,
+            ForwardPhase::SystemTriggersComplete,
+            14,
         )
-            | (
-                Operation::NewState,
-                Phase::CandidatePreserveIntent,
-                ForwardPhase::SystemTriggersComplete,
-                16,
-            )
-            | (
-                Operation::ActiveReblit,
-                Phase::CandidatePreserveIntent,
-                ForwardPhase::SystemTriggersStarted,
-                13,
-            )
-            | (
-                Operation::ActiveReblit,
-                Phase::CandidatePreserveIntent,
-                ForwardPhase::SystemTriggersComplete,
-                14,
-            )
     )
 }
 

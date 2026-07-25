@@ -415,21 +415,32 @@ mod tests {
         fs::write(
             root.path().join("stone.glu"),
             format!(
-                r#"let b = import! cast.package.v3
-let base = b.mk_package (b.meta {{
-    pname = "example",
-    version = "1.0.0",
-    release = 1,
-    homepage = "https://example.invalid",
-    license = ["MPL-2.0"],
-}})
+                r#"let a = import! cast.authored.v1
 {{
-    sources = [b.source.git_with {{
+    meta = {{
+        pname = "example",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid",
+        license = ["MPL-2.0"],
+    }},
+    builder = a.builder.custom a.empty.builder,
+    sources = [a.source.git_with {{
         url = "{URL}",
         git_ref = "main",
-        clone_dir = b.optional.set "chosen-source",
+        clone_dir = a.optional.set "chosen-source",
     }}],
-    .. base
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }}"#
             ),
         )

@@ -117,12 +117,10 @@ fn missing_wrong_and_duplicate_singletons_are_rejected_by_bounded_inspection() {
         diesel::sql_query("PRAGMA ignore_check_constraints = ON")
             .execute(conn)
             .unwrap();
-        diesel::sql_query(
-            "INSERT INTO boot_publication_receipt_head (singleton) VALUES (?)",
-        )
-        .bind::<Integer, _>(2)
-        .execute(conn)
-        .unwrap();
+        diesel::sql_query("INSERT INTO boot_publication_receipt_head (singleton) VALUES (?)")
+            .bind::<Integer, _>(2)
+            .execute(conn)
+            .unwrap();
         diesel::sql_query("PRAGMA ignore_check_constraints = OFF")
             .execute(conn)
             .unwrap();

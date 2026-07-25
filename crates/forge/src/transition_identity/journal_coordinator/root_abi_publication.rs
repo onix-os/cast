@@ -23,8 +23,7 @@ use crate::{
 
 use super::super::{CandidateMetadataProof, Error as IdentityError};
 use super::{
-    StatefulTransitionCoordinator, StatefulTransitionCoordinatorError, UsrExchangeEffectSeal,
-    UsrExchangedCoordinator,
+    StatefulTransitionCoordinator, StatefulTransitionCoordinatorError, UsrExchangeEffectSeal, UsrExchangedCoordinator,
     usr_exchange_effect::{require_active_reblit_snapshot, require_applied_exchange_sandwich},
     usr_exchange_intent::UsrExchangeReadiness,
 };
@@ -105,8 +104,7 @@ impl UsrExchangedCoordinator {
     /// and advance only the exact predecessor record inode captured before the
     /// physical effect.  This remains private to the unwired contract module.
     pub(super) fn publish_root_abi(self) -> Result<RootLinksCompleteCoordinator, RootAbiPublicationFailure> {
-        let (mut coordinator, metadata, provenance, authority, readiness) =
-            self.into_root_abi_publication_parts();
+        let (mut coordinator, metadata, provenance, authority, readiness) = self.into_root_abi_publication_parts();
         let transition_id = coordinator.record.transition_id.clone();
         let preflight = |source| RootAbiPublicationFailure::Preflight {
             transition_id: transition_id.clone(),
@@ -123,15 +121,8 @@ impl UsrExchangedCoordinator {
         // boundary. The retained proofs may have been held for arbitrary time.
         // The exact record binding is captured after the sandwich and is the
         // final admission operation before the monotonic physical effect.
-        require_applied_exchange_sandwich(
-            &coordinator,
-            &metadata,
-            &provenance,
-            &readiness,
-            &authority,
-            &seal,
-        )
-        .map_err(preflight)?;
+        require_applied_exchange_sandwich(&coordinator, &metadata, &provenance, &readiness, &authority, &seal)
+            .map_err(preflight)?;
         let cast = authority
             .installation()
             .retained_mutable_cast_directory()
@@ -145,25 +136,18 @@ impl UsrExchangedCoordinator {
             .map_err(StatefulTransitionCoordinatorError::from)
             .map_err(preflight)?;
 
-        let authority = authority.publish_root_abi().map_err(|source| {
-            RootAbiPublicationFailure::Publication {
+        let authority = authority
+            .publish_root_abi()
+            .map_err(|source| RootAbiPublicationFailure::Publication {
                 transition_id: transition_id.clone(),
                 source,
-            }
-        })?;
+            })?;
 
-        require_published_root_abi_sandwich(
-            &coordinator,
-            &metadata,
-            &provenance,
-            &readiness,
-            &authority,
-            &seal,
-        )
-        .map_err(|source| RootAbiPublicationFailure::PostEffectEvidence {
-            transition_id: transition_id.clone(),
-            source,
-        })?;
+        require_published_root_abi_sandwich(&coordinator, &metadata, &provenance, &readiness, &authority, &seal)
+            .map_err(|source| RootAbiPublicationFailure::PostEffectEvidence {
+                transition_id: transition_id.clone(),
+                source,
+            })?;
 
         // The consuming store primitive authenticates the retained predecessor
         // inode under the complete operation lock, publishes its sole legal
@@ -183,10 +167,7 @@ impl UsrExchangedCoordinator {
             .journal
             .advance_record_binding(cast, record_binding, &complete)
             .map_err(StatefulTransitionCoordinatorError::from)
-            .map_err(|source| RootAbiPublicationFailure::CompletionPersistence {
-                transition_id,
-                source,
-            })?;
+            .map_err(|source| RootAbiPublicationFailure::CompletionPersistence { transition_id, source })?;
         coordinator.record = complete;
 
         // A successful bound update is not by itself sufficient to return a
@@ -218,9 +199,7 @@ impl UsrExchangedCoordinator {
     }
 }
 
-fn exact_root_links_successor(
-    record: &TransitionRecord,
-) -> Result<TransitionRecord, RootAbiPublicationFailure> {
+fn exact_root_links_successor(record: &TransitionRecord) -> Result<TransitionRecord, RootAbiPublicationFailure> {
     let transition_id = record.transition_id.clone();
     let operation = record.operation;
     let expected_generation = match operation {
@@ -332,13 +311,7 @@ fn require_published_root_abi_evidence(
     )?;
     let (os_release, system_model) = metadata.policy_output_bytes();
     provenance.require_outputs(candidate, os_release, system_model)?;
-    require_active_reblit_snapshot(
-        coordinator,
-        authority.active_reblit(),
-        installation,
-        seal,
-        true,
-    )?;
+    require_active_reblit_snapshot(coordinator, authority.active_reblit(), installation, seal, true)?;
     readiness.require_live(&coordinator.identity)?;
     coordinator.require_record_runtime_evidence()?;
     coordinator.require_canonical_record()?;

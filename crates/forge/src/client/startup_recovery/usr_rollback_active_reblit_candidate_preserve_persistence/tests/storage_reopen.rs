@@ -96,7 +96,10 @@ fn startup_active_reblit_candidate_preserve_persistence_faults_reopen_exact_sour
                         }
                         assert_eq!(fixture.fixture.database_snapshot(), database_before);
                         assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
-                        assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), effect_count_before);
+                        assert_eq!(
+                            active_reblit_candidate_preserve_exchange_attempt_count(),
+                            effect_count_before
+                        );
                         let names = fs::read_dir(fixture.fixture.installation.root.join(".cast/journal"))
                             .unwrap()
                             .map(|entry| entry.unwrap().file_name())
@@ -138,7 +141,10 @@ fn startup_active_reblit_candidate_preserve_persistence_consumes_old_store_and_r
             assert_eq!(independent.load().unwrap(), Some(expected));
             assert_eq!(fixture.fixture.database_snapshot(), database_before);
             assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
-            assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), effect_count_before);
+            assert_eq!(
+                active_reblit_candidate_preserve_exchange_attempt_count(),
+                effect_count_before
+            );
         }
     }
 }

@@ -6,12 +6,7 @@
 //! deletion authority. Per-output provenance claims are caller-supplied inert
 //! assertions; a later coordinator must derive and authenticate them.
 
-use std::{
-    collections::TryReserveError,
-    os::unix::ffi::OsStrExt as _,
-    path::Path,
-    time::Instant,
-};
+use std::{collections::TryReserveError, os::unix::ffi::OsStrExt as _, path::Path, time::Instant};
 
 use sha2::{Digest as _, Sha256};
 
@@ -20,9 +15,7 @@ use super::{
     active_reblit_desired_publication::{
         DesiredActiveReblitBootPublication, PreparedActiveReblitDesiredPublicationInventory,
     },
-    active_reblit_mounted_boot_topology::{
-        BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology,
-    },
+    active_reblit_mounted_boot_topology::{BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology},
     active_reblit_publication_plan::{
         ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase,
         ActiveReblitBootPublicationRole,
@@ -87,14 +80,7 @@ impl<'inventory> BorrowedActiveReblitBootPublicationProvenanceClaim<'inventory> 
 }
 
 impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
-    BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+    BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 {
     /// Map this exact plan and its owned desired inventory into inert canonical
     /// receipt data at the retained attempt deadline.
@@ -126,23 +112,8 @@ impl<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare_bound_receipt_with_clock<
-    'input,
-    'topology_view,
-    'topology_authority,
-    'attempt,
-    'stone,
-    'roots,
-    Clock,
->(
-    plan: &BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >,
+fn prepare_bound_receipt_with_clock<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots, Clock>(
+    plan: &BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     inventory: &PreparedActiveReblitDesiredPublicationInventory,
     predecessor: &TransitionRecord,
     committed_predecessor: Option<BootPublicationReceiptFingerprint>,
@@ -159,30 +130,20 @@ where
     require_deadline(deadline, "predecessor validation", now)?;
     require_matching_inventory(plan, inventory, deadline, now)?;
     if provenance_claims.len() != inventory.outputs().len() {
-        return Err(
-            ActiveReblitBootPublicationReceiptError::ProvenanceClaimCountMismatch {
-                expected: inventory.outputs().len(),
-                actual: provenance_claims.len(),
-            },
-        );
+        return Err(ActiveReblitBootPublicationReceiptError::ProvenanceClaimCountMismatch {
+            expected: inventory.outputs().len(),
+            actual: provenance_claims.len(),
+        });
     }
 
-    let canonical_predecessor = encode_transition_record(predecessor)
-        .map_err(ActiveReblitBootPublicationReceiptError::PredecessorEncoding)?;
-    let predecessor_journal_sha256 = BootPublicationSha256::from_bytes(
-        Sha256::digest(&canonical_predecessor).into(),
-    );
+    let canonical_predecessor =
+        encode_transition_record(predecessor).map_err(ActiveReblitBootPublicationReceiptError::PredecessorEncoding)?;
+    let predecessor_journal_sha256 = BootPublicationSha256::from_bytes(Sha256::digest(&canonical_predecessor).into());
     require_deadline(deadline, "predecessor canonical hash", now)?;
 
-    let destinations = map_destinations(
-        plan.destination_layout(),
-        plan.mounted_topology(),
-        deadline,
-        now,
-    )?;
+    let destinations = map_destinations(plan.destination_layout(), plan.mounted_topology(), deadline, now)?;
     let outputs = map_outputs(inventory, provenance_claims, deadline, now)?;
-    let desired_inventory_sha256 =
-        BootPublicationSha256::from_bytes(*inventory.fingerprint().as_bytes());
+    let desired_inventory_sha256 = BootPublicationSha256::from_bytes(*inventory.fingerprint().as_bytes());
     let body = BootPublicationReceiptBody::new(
         predecessor.transition_id.clone(),
         committed_predecessor,
@@ -210,23 +171,8 @@ fn require_exact_predecessor(
         .map_err(ActiveReblitBootPublicationReceiptError::InvalidPredecessor)
 }
 
-fn require_matching_inventory<
-    'input,
-    'topology_view,
-    'topology_authority,
-    'attempt,
-    'stone,
-    'roots,
-    Clock,
->(
-    plan: &BoundActiveReblitBlsPublicationPlan<
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >,
+fn require_matching_inventory<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots, Clock>(
+    plan: &BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     inventory: &PreparedActiveReblitDesiredPublicationInventory,
     deadline: Instant,
     now: &mut Clock,
@@ -244,19 +190,13 @@ where
         });
     }
     if inventory.outputs().len() != plan.publication_count() {
-        return Err(ActiveReblitBootPublicationReceiptError::DesiredInventoryMismatch {
-            field: "output count",
-        });
+        return Err(ActiveReblitBootPublicationReceiptError::DesiredInventoryMismatch { field: "output count" });
     }
     if inventory.path_bytes() != plan.publication_path_bytes() {
-        return Err(ActiveReblitBootPublicationReceiptError::DesiredInventoryMismatch {
-            field: "path bytes",
-        });
+        return Err(ActiveReblitBootPublicationReceiptError::DesiredInventoryMismatch { field: "path bytes" });
     }
     if inventory.logical_bytes() != plan.logical_bytes() {
-        return Err(ActiveReblitBootPublicationReceiptError::DesiredInventoryMismatch {
-            field: "logical bytes",
-        });
+        return Err(ActiveReblitBootPublicationReceiptError::DesiredInventoryMismatch { field: "logical bytes" });
     }
     for (bound, desired) in plan.outputs().zip(inventory.outputs()) {
         require_deadline(deadline, "desired inventory output comparison", now)?;
@@ -298,9 +238,7 @@ where
         (
             ActiveReblitBootDestinationLayout::BootAliasesEsp,
             BoundActiveReblitMountedBootTopology::BootAliasesEsp { esp },
-        ) => BootPublicationDestinations::boot_aliases_esp(map_destination(
-            "esp", esp, deadline, now,
-        )?),
+        ) => BootPublicationDestinations::boot_aliases_esp(map_destination("esp", esp, deadline, now)?),
         (
             ActiveReblitBootDestinationLayout::DistinctXbootldr,
             BoundActiveReblitMountedBootTopology::DistinctXbootldr { esp, xbootldr },
@@ -324,18 +262,12 @@ where
     Clock: FnMut() -> Instant,
 {
     if target.partuuid != target.partition_uuid.as_str() {
-        return Err(
-            ActiveReblitBootPublicationReceiptError::TopologyPartuuidMismatch { destination: role },
-        );
+        return Err(ActiveReblitBootPublicationReceiptError::TopologyPartuuidMismatch { destination: role });
     }
     if target.destination.raw_device() != target.boot_filesystem.destination_device()
         || target.destination.inode() != target.boot_filesystem.destination_inode()
     {
-        return Err(
-            ActiveReblitBootPublicationReceiptError::TopologyFilesystemWitnessMismatch {
-                destination: role,
-            },
-        );
+        return Err(ActiveReblitBootPublicationReceiptError::TopologyFilesystemWitnessMismatch { destination: role });
     }
     let partuuid = clone_text(target.partuuid, "destination PARTUUID", deadline, now)?;
     let witness = BootPublicationHistoricalRuntimeWitness::new(
@@ -364,12 +296,12 @@ where
 {
     require_deadline(deadline, "output mapping pre-allocation", now)?;
     let mut outputs = Vec::new();
-    outputs
-        .try_reserve_exact(inventory.outputs().len())
-        .map_err(|source| ActiveReblitBootPublicationReceiptError::Allocation {
+    outputs.try_reserve_exact(inventory.outputs().len()).map_err(|source| {
+        ActiveReblitBootPublicationReceiptError::Allocation {
             resource: "receipt output inventory",
             source,
-        })?;
+        }
+    })?;
     require_deadline(deadline, "output mapping post-allocation", now)?;
     for (index, (desired, provenance_claim)) in inventory
         .outputs()
@@ -379,9 +311,7 @@ where
     {
         require_deadline(deadline, "receipt output mapping", now)?;
         if !provenance_claim.matches(desired) {
-            return Err(
-                ActiveReblitBootPublicationReceiptError::ProvenanceClaimBindingMismatch { index },
-            );
+            return Err(ActiveReblitBootPublicationReceiptError::ProvenanceClaimBindingMismatch { index });
         }
         let path = desired.relative_path().as_os_str().as_bytes();
         let path = std::str::from_utf8(path)
@@ -415,10 +345,7 @@ where
     let mut owned = String::new();
     owned
         .try_reserve_exact(text.len())
-        .map_err(|source: TryReserveError| ActiveReblitBootPublicationReceiptError::Allocation {
-            resource,
-            source,
-        })?;
+        .map_err(|source: TryReserveError| ActiveReblitBootPublicationReceiptError::Allocation { resource, source })?;
     owned.push_str(text);
     require_deadline(deadline, "text copy post-allocation", now)?;
     Ok(owned.into_boxed_str())

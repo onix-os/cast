@@ -71,8 +71,7 @@ fn startup_usr_rollback_complete_route_storage_faults_reopen_exact_fresh_db_inva
                             let namespace_before = fixture.namespace_snapshot();
                             arm();
 
-                            let error =
-                                persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
+                            let error = persist_usr_rollback_complete_route_and_reopen(journal, authority).unwrap_err();
 
                             assert_consumed();
                             assert!(
@@ -94,12 +93,11 @@ fn startup_usr_rollback_complete_route_storage_faults_reopen_exact_fresh_db_inva
                             assert_eq!(fixture.database_snapshot(), database_before, "{case:?}");
                             assert_eq!(fixture.namespace_snapshot(), namespace_before, "{case:?}");
                             fixture.assert_no_second_removal();
-                            let names = fs::read_dir(
-                                fixture.fixture.fixture.fixture.installation.root.join(".cast/journal"),
-                            )
-                            .unwrap()
-                            .map(|entry| entry.unwrap().file_name())
-                            .collect::<Vec<_>>();
+                            let names =
+                                fs::read_dir(fixture.fixture.fixture.fixture.installation.root.join(".cast/journal"))
+                                    .unwrap()
+                                    .map(|entry| entry.unwrap().file_name())
+                                    .collect::<Vec<_>>();
                             assert_eq!(names.len(), 2, "{case:?}: stale journal residue: {names:?}");
                         }
                     }

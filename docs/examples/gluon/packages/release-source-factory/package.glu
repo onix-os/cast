@@ -1,6 +1,5 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 let strings = import! std.string.prim
-let cmake = import! cast.builders.cmake.v2
 
 // Release data is an explicit factory argument. The archive URL, local name,
 // unpack destination, and package version therefore cannot silently drift
@@ -10,27 +9,42 @@ let cmake = import! cast.builders.cmake.v2
     let archive_name = strings.append (strings.append pname (strings.append "-" release.version)) ".tar.xz"
     let source_url = strings.append "https://example.invalid/releases/" archive_name
     let source_dir = strings.append pname (strings.append "-" release.version)
-    let base = b.mk_package (b.meta {
-        pname,
-        version = release.version,
-        release = release.package_release,
-        homepage = "https://example.invalid/release-probe",
-        license = ["BSD-2-Clause"],
-    })
+    let base = {
+        meta = {
+            pname,
+            version = release.version,
+            release = release.package_release,
+            homepage = "https://example.invalid/release-probe",
+            license = ["BSD-2-Clause"],
+        },
+        builder = a.builder.custom a.empty.builder,
+        sources = [],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.default,
+        options = a.unset,
+        profiles = [],
+        architectures = [],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
+    }
 
     {
-        builder = cmake.builder {
+        builder = a.builder.cmake {
             flags = ["-DBUILD_TESTING=ON"],
-            run_tests = b.boolean.true,
+            run_tests = a.true,
         },
         sources = [
-            b.source.archive_with {
+            a.source.archive_with {
                 url = source_url,
                 hash = release.sha256,
-                rename = b.optional.set archive_name,
-                strip_dirs = b.optional.set 1,
-                unpack = b.boolean.true,
-                unpack_dir = b.optional.set source_dir,
+                rename = a.optional.set archive_name,
+                strip_dirs = a.optional.set 1,
+                unpack = a.true,
+                unpack_dir = a.optional.set source_dir,
             },
         ],
         architectures = ["x86_64", "aarch64"],

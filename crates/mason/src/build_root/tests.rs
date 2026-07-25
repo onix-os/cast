@@ -60,34 +60,55 @@ fn locked() -> LockedPackage {
 fn selected_inputs_package() -> PackageSpec {
     let source = Source::new(
         "stone.glu",
-        r#"let cast = import! cast.package.v3
-let base = cast.mk_package (cast.meta {
-    pname = "example", version = "1.0.0", release = 1,
-    homepage = "https://example.invalid", license = ["MPL-2.0"],
-})
-let scripts = cast.defaults.scripts
-let selected = cast.profile_with {
+        r#"let a = import! cast.authored.v1
+let scripts = a.empty.scripts
+let selected = {
     name = "x86_64",
-    builder = cast.builder.shell scripts [cast.dep.binary "profile-builder"],
-    hooks = cast.defaults.hooks,
-    native_build_inputs = [cast.dep.package "profile-native"],
-    build_inputs = [cast.dep.package "profile-build"],
-    check_inputs = [cast.dep.package "profile-check"],
+    builder = {
+        required_tools = [a.dep.binary "profile-builder"],
+        environment = [],
+        phases = scripts,
+        supported_hooks = a.hook_support.all,
+    },
+    hooks = a.empty.hooks,
+    native_build_inputs = [a.dep.package "profile-native"],
+    build_inputs = [a.dep.package "profile-build"],
+    check_inputs = [a.dep.package "profile-check"],
 }
-let unrelated = cast.profile_with {
+let unrelated = {
     name = "aarch64",
-    builder = cast.builder.shell scripts [cast.dep.binary "unrelated-builder"],
-    hooks = cast.defaults.hooks,
-    native_build_inputs = [cast.dep.package "unrelated-native"],
-    build_inputs = [], check_inputs = [],
+    builder = {
+        required_tools = [a.dep.binary "unrelated-builder"],
+        environment = [],
+        phases = scripts,
+        supported_hooks = a.hook_support.all,
+    },
+    hooks = a.empty.hooks,
+    native_build_inputs = [a.dep.package "unrelated-native"],
+    build_inputs = [],
+    check_inputs = [],
 }
 {
-    builder = cast.builder.shell scripts [cast.dep.binary "base-builder"],
-    native_build_inputs = [cast.dep.package "base-native"],
-    build_inputs = [cast.dep.package "base-build"],
-    check_inputs = [cast.dep.package "base-check"],
+    meta = {
+        pname = "example",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.shell scripts [a.dep.binary "base-builder"],
+    sources = [],
+    native_build_inputs = [a.dep.package "base-native"],
+    build_inputs = [a.dep.package "base-build"],
+    check_inputs = [a.dep.package "base-check"],
+    outputs = a.outputs.default,
+    options = a.unset,
     profiles = [selected, unrelated],
-    .. base
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }
 "#,
     );
@@ -99,13 +120,29 @@ let unrelated = cast.profile_with {
 fn cmake_package_builder() -> stone_recipe::package::BuilderSpec {
     let source = Source::new(
         "stone.glu",
-        r#"let cast = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
-let base = cast.mk_package (cast.meta {
-    pname = "example", version = "1.0.0", release = 1,
-    homepage = "https://example.invalid", license = ["MPL-2.0"],
-})
-{ builder = cmake.default, .. base }
+        r#"let a = import! cast.authored.v1
+{
+    meta = {
+        pname = "example",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://example.invalid",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.cmake { flags = [], run_tests = a.true },
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
+}
 "#,
     );
     DeclarationEvaluator::<PackageSpec>::evaluate(&GluonPackageEvaluator::default(), &source)

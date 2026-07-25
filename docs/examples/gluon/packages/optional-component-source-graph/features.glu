@@ -1,5 +1,6 @@
-let b = import! cast.package.v3
+
+let a = import! cast.authored.v1
 
 {
-    component = b.boolean.true,
+    component = a.true,
 }

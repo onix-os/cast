@@ -1,45 +1,51 @@
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
 
 \repositories ->
-    let base = b.mk_package (b.meta {
-        pname = "orbit-console",
-        version = "2.4.0",
-        release = 1,
-        homepage = "https://example.invalid/orbit-console",
-        license = ["BSD-2-Clause"],
-    })
-
-    let hooks = b.hooks {
+    let hooks = a.hooks {
         pre_setup = [
-            b.step.run
-                (b.program.binary "mkdir")
+            a.step.run
+                (a.program.binary "mkdir")
                 ["-p", "application/subprojects"],
-            b.step.run
-                (b.program.binary "ln")
+            a.step.run
+                (a.program.binary "ln")
                 ["-s", "../../syntax-engine", "application/subprojects/syntax-engine"],
-            b.step.run
-                (b.program.binary "ln")
+            a.step.run
+                (a.program.binary "ln")
                 ["-s", "../../wire-format", "application/subprojects/wire-format"],
         ],
-        .. b.defaults.hooks
+        .. a.empty.hooks
     }
 
     {
-        builder = cmake.builder {
+        meta = {
+            pname = "orbit-console",
+            version = "2.4.0",
+            release = 1,
+            homepage = "https://example.invalid/orbit-console",
+            license = ["BSD-2-Clause"],
+        },
+        builder = a.builder.cmake {
             flags = [
                 "-Sapplication",
                 "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
                 "-DUSE_BUNDLED_SUBPROJECTS=ON",
             ],
-            run_tests = b.boolean.true,
+            run_tests = a.true,
         },
-        hooks,
         sources = [
             repositories.application,
             repositories.syntax,
             repositories.protocol,
         ],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.default,
+        options = a.unset,
+        profiles = [],
         architectures = ["native"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.some.hooks hooks,
     }

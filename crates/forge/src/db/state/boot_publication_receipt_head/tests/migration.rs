@@ -1,4 +1,7 @@
-use diesel::{RunQueryDsl as _, sql_types::{Binary, Integer, Nullable, Text}};
+use diesel::{
+    RunQueryDsl as _,
+    sql_types::{Binary, Integer, Nullable, Text},
+};
 use diesel_migrations::MigrationHarness as _;
 
 use super::*;
@@ -66,7 +69,12 @@ fn migration_rejects_non_singleton_rows_and_invalid_fingerprint_storage() {
         "UPDATE boot_publication_receipt_head SET pending_transition_id = 'GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG', pending_receipt_sha256 = zeroblob(32)",
         "UPDATE boot_publication_receipt_head SET pending_transition_id = '1111111111111111111111111111111A', pending_receipt_sha256 = zeroblob(32)",
     ] {
-        assert!(database.conn.exec(|conn| diesel::sql_query(statement).execute(conn)).is_err());
+        assert!(
+            database
+                .conn
+                .exec(|conn| diesel::sql_query(statement).execute(conn))
+                .is_err()
+        );
         assert_eq!(
             database.boot_publication_receipt_head().unwrap(),
             BootPublicationReceiptHead {

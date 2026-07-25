@@ -16,8 +16,8 @@ use crate::{
 };
 
 use super::super::startup_reconciliation::{
-    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority,
-    UsrRollbackArchivedCandidatePreserveRecordAdvanceError, UsrRollbackCandidatePreserveAuthorityError,
+    UsrRollbackArchivedCandidatePreserveDurableEffectAuthority, UsrRollbackArchivedCandidatePreserveRecordAdvanceError,
+    UsrRollbackCandidatePreserveAuthorityError,
 };
 use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
@@ -90,10 +90,7 @@ pub(in crate::client) fn persist_usr_rollback_archived_candidate_preserve_and_re
                 }
                 Err(source) => {
                     drop(successor_binding);
-                    UsrRollbackArchivedCandidatePreserveAdvanceOutcome::SuccessorBindingFailed {
-                        successor,
-                        source,
-                    }
+                    UsrRollbackArchivedCandidatePreserveAdvanceOutcome::SuccessorBindingFailed { successor, source }
                 }
             }
         }
@@ -103,7 +100,9 @@ pub(in crate::client) fn persist_usr_rollback_archived_candidate_preserve_and_re
         }
         Err(UsrRollbackArchivedCandidatePreserveRecordAdvanceError::Installation(source)) => {
             drop(journal);
-            return Err(UsrRollbackArchivedCandidatePreservePersistenceError::Installation(source));
+            return Err(UsrRollbackArchivedCandidatePreservePersistenceError::Installation(
+                source,
+            ));
         }
         Err(UsrRollbackArchivedCandidatePreserveRecordAdvanceError::Successor(source)) => {
             drop(journal);

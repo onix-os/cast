@@ -2,11 +2,12 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 validator="$root/misc/scripts/validate-fixtures-ci-proof.sh"
 generator="$root/misc/scripts/test-support/write-fixtures-ci-proof-v2.sh"
 ledger_calculator="$root/misc/scripts/calculate-fixtures-ci-ledger.sh"
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-proof-v2-validator-test.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-proof-v2-validator-test.XXXXXXXXXXXX")
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM

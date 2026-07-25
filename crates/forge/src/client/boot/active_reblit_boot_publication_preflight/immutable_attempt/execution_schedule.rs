@@ -8,31 +8,26 @@ use crate::{
             BoundActiveReblitBootNamespaceDomain, BoundActiveReblitBootNamespaceInputs,
         },
         active_reblit_installed_boot_publication_delta::{
-            ActiveReblitBootPublicationDeltaAction,
-            ActiveReblitBootPublicationEffectSchedule,
+            ActiveReblitBootPublicationDeltaAction, ActiveReblitBootPublicationEffectSchedule,
         },
         active_reblit_mounted_boot_topology::{
-            BootTargetRole, RevalidatedActiveReblitBootPublicationTarget,
-            RevalidatedActiveReblitBootPublicationTargets,
+            BootTargetRole, RevalidatedActiveReblitBootPublicationTarget, RevalidatedActiveReblitBootPublicationTargets,
         },
         active_reblit_publication_plan::{
-            ACTIVE_REBLIT_BOOT_OUTPUT_MODE, ActiveReblitBootDestinationLayout,
-            ActiveReblitBootDestinationRoot, ActiveReblitBootPublicationPhase,
-            ActiveReblitBootPublicationRole,
+            ACTIVE_REBLIT_BOOT_OUTPUT_MODE, ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot,
+            ActiveReblitBootPublicationPhase, ActiveReblitBootPublicationRole,
         },
     },
     linux_fs::descriptor_boot_namespace::{
-        BootNamespaceDestinationState, BootNamespaceRequest,
-        RetainedBootNamespaceExpectedSource,
+        BootNamespaceDestinationState, BootNamespaceRequest, RetainedBootNamespaceExpectedSource,
     },
 };
 
+use super::super::{assess_bound_namespaces_with, assess_one_bound_namespace};
 use super::{
-    ActiveReblitBootImmutablePublicationAttemptError,
-    RevalidatedActiveReblitBootPublicationPreflight,
+    ActiveReblitBootImmutablePublicationAttemptError, RevalidatedActiveReblitBootPublicationPreflight,
     ValidatedActiveReblitBootPublicationEffect,
 };
-use super::super::{assess_bound_namespaces_with, assess_one_bound_namespace};
 
 pub(super) fn prepare_execution_schedule(
     preflight: &RevalidatedActiveReblitBootPublicationPreflight<'_, '_, '_, '_, '_, '_, '_>,
@@ -51,18 +46,9 @@ pub(super) fn prepare_execution_schedule(
         );
     }
     let mut previous_phase = None;
-    for (plan_index, (scheduled, output)) in schedule
-        .entries()
-        .iter()
-        .zip(preflight.plan.outputs())
-        .enumerate()
-    {
+    for (plan_index, (scheduled, output)) in schedule.entries().iter().zip(preflight.plan.outputs()).enumerate() {
         if scheduled.plan_index() != plan_index || scheduled.root() != output.root() {
-            return Err(
-                ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState { plan_index });
         }
         let expected_phase = phase_for_role(output.role());
         if output.phase() != expected_phase {
@@ -98,14 +84,8 @@ pub(super) fn prepare_execution_schedule(
             output.root(),
             plan_index,
         )?;
-        if initial_state_for_action(scheduled.action())
-            != Some(preflight.initial_states[plan_index])
-        {
-            return Err(
-                ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState {
-                    plan_index,
-                },
-            );
+        if initial_state_for_action(scheduled.action()) != Some(preflight.initial_states[plan_index]) {
+            return Err(ActiveReblitBootImmutablePublicationAttemptError::InvalidPreflightState { plan_index });
         }
     }
     Ok(evidence)
@@ -115,16 +95,10 @@ pub(super) const fn initial_state_for_action(
     action: ActiveReblitBootPublicationDeltaAction,
 ) -> Option<BootNamespaceDestinationState> {
     match action {
-        ActiveReblitBootPublicationDeltaAction::PublishDesired => {
-            Some(BootNamespaceDestinationState::Absent)
-        }
+        ActiveReblitBootPublicationDeltaAction::PublishDesired => Some(BootNamespaceDestinationState::Absent),
         ActiveReblitBootPublicationDeltaAction::RetainOwnedDesired
-        | ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired => {
-            Some(BootNamespaceDestinationState::Exact)
-        }
-        ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired => {
-            Some(BootNamespaceDestinationState::Different)
-        }
+        | ActiveReblitBootPublicationDeltaAction::PreserveBorrowedDesired => Some(BootNamespaceDestinationState::Exact),
+        ActiveReblitBootPublicationDeltaAction::ReplaceOwnedDesired => Some(BootNamespaceDestinationState::Different),
         ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion
         | ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale => None,
     }
@@ -167,30 +141,19 @@ pub(super) fn route_publication<'view, 'source>(
         ) => domain_publication(BootTargetRole::Esp, esp, shared, plan_index),
         (
             RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr { esp, .. },
-            BoundActiveReblitBootNamespaceInputs::DistinctXbootldr {
-                esp: esp_inputs,
-                ..
-            },
+            BoundActiveReblitBootNamespaceInputs::DistinctXbootldr { esp: esp_inputs, .. },
             ActiveReblitBootDestinationLayout::DistinctXbootldr,
             BootTargetRole::Esp,
         ) => domain_publication(BootTargetRole::Esp, esp, esp_inputs, plan_index),
         (
-            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr {
-                xbootldr,
-                ..
-            },
+            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr { xbootldr, .. },
             BoundActiveReblitBootNamespaceInputs::DistinctXbootldr {
                 xbootldr: xbootldr_inputs,
                 ..
             },
             ActiveReblitBootDestinationLayout::DistinctXbootldr,
             BootTargetRole::Xbootldr,
-        ) => domain_publication(
-            BootTargetRole::Xbootldr,
-            xbootldr,
-            xbootldr_inputs,
-            plan_index,
-        ),
+        ) => domain_publication(BootTargetRole::Xbootldr, xbootldr, xbootldr_inputs, plan_index),
         _ => Err(ActiveReblitBootImmutablePublicationAttemptError::DestinationLayoutMismatch),
     }
 }
@@ -202,25 +165,24 @@ fn domain_publication<'view, 'source>(
     plan_index: usize,
 ) -> Result<RoutedPublication<'view, 'source>, ActiveReblitBootImmutablePublicationAttemptError> {
     if target.role() != role {
-        return Err(ActiveReblitBootImmutablePublicationAttemptError::DestinationRoleMismatch {
-            plan_index,
-            expected: role,
-            found: target.role(),
-        });
+        return Err(
+            ActiveReblitBootImmutablePublicationAttemptError::DestinationRoleMismatch {
+                plan_index,
+                expected: role,
+                found: target.role(),
+            },
+        );
     }
     let position = domain_plan_position(role, domain.plan_indices(), plan_index)?;
-    let namespace_request = domain.requests().get(position).copied().ok_or(
-        ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing {
-            role,
-            plan_index,
-        },
-    )?;
-    let expected_source = domain.expected_sources().get(position).ok_or(
-        ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing {
-            role,
-            plan_index,
-        },
-    )?;
+    let namespace_request = domain
+        .requests()
+        .get(position)
+        .copied()
+        .ok_or(ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing { role, plan_index })?;
+    let expected_source = domain
+        .expected_sources()
+        .get(position)
+        .ok_or(ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing { role, plan_index })?;
     Ok(RoutedPublication {
         role,
         target,
@@ -235,14 +197,12 @@ pub(super) const fn destination_role(
 ) -> BootTargetRole {
     match (layout, root) {
         (ActiveReblitBootDestinationLayout::BootAliasesEsp, _)
-        | (
-            ActiveReblitBootDestinationLayout::DistinctXbootldr,
-            ActiveReblitBootDestinationRoot::Esp,
-        ) => BootTargetRole::Esp,
-        (
-            ActiveReblitBootDestinationLayout::DistinctXbootldr,
-            ActiveReblitBootDestinationRoot::Boot,
-        ) => BootTargetRole::Xbootldr,
+        | (ActiveReblitBootDestinationLayout::DistinctXbootldr, ActiveReblitBootDestinationRoot::Esp) => {
+            BootTargetRole::Esp
+        }
+        (ActiveReblitBootDestinationLayout::DistinctXbootldr, ActiveReblitBootDestinationRoot::Boot) => {
+            BootTargetRole::Xbootldr
+        }
     }
 }
 
@@ -251,12 +211,9 @@ pub(super) fn domain_plan_position(
     plan_indices: &[usize],
     plan_index: usize,
 ) -> Result<usize, ActiveReblitBootImmutablePublicationAttemptError> {
-    plan_indices.binary_search(&plan_index).map_err(|_| {
-        ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing {
-            role,
-            plan_index,
-        }
-    })
+    plan_indices
+        .binary_search(&plan_index)
+        .map_err(|_| ActiveReblitBootImmutablePublicationAttemptError::DomainPlanIndexMissing { role, plan_index })
 }
 
 fn split_publication_path(
@@ -267,29 +224,21 @@ fn split_publication_path(
         .to_str()
         .ok_or(ActiveReblitBootImmutablePublicationAttemptError::NonUtf8Path { plan_index })?;
     let mut components = path.split('/');
-    let mut prior = components.next().ok_or(
-        ActiveReblitBootImmutablePublicationAttemptError::InvalidPathComponent { plan_index },
-    )?;
+    let mut prior = components
+        .next()
+        .ok_or(ActiveReblitBootImmutablePublicationAttemptError::InvalidPathComponent { plan_index })?;
     require_component(prior, plan_index)?;
     let mut parent_count = 0usize;
     for component in components {
         require_component(component, plan_index)?;
         if parent_count == 15 {
-            return Err(
-                ActiveReblitBootImmutablePublicationAttemptError::PublicationParentDepth {
-                    plan_index,
-                },
-            );
+            return Err(ActiveReblitBootImmutablePublicationAttemptError::PublicationParentDepth { plan_index });
         }
         parent_count += 1;
         prior = component;
     }
     if parent_count == 0 || prior.is_empty() {
-        return Err(
-            ActiveReblitBootImmutablePublicationAttemptError::MissingPublicationParent {
-                plan_index,
-            },
-        );
+        return Err(ActiveReblitBootImmutablePublicationAttemptError::MissingPublicationParent { plan_index });
     }
     Ok(())
 }
@@ -303,9 +252,7 @@ fn require_component(
         || component.len() > 255
         || component.as_bytes().contains(&0)
     {
-        Err(ActiveReblitBootImmutablePublicationAttemptError::InvalidPathComponent {
-            plan_index,
-        })
+        Err(ActiveReblitBootImmutablePublicationAttemptError::InvalidPathComponent { plan_index })
     } else {
         Ok(())
     }
@@ -315,11 +262,8 @@ const fn phase_for_role(role: ActiveReblitBootPublicationRole) -> ActiveReblitBo
     match role {
         ActiveReblitBootPublicationRole::Payload => ActiveReblitBootPublicationPhase::Payload,
         ActiveReblitBootPublicationRole::Entry => ActiveReblitBootPublicationPhase::Entry,
-        ActiveReblitBootPublicationRole::LoaderControl => {
-            ActiveReblitBootPublicationPhase::LoaderControl
-        }
-        ActiveReblitBootPublicationRole::FallbackBootloader
-        | ActiveReblitBootPublicationRole::SystemdBootloader => {
+        ActiveReblitBootPublicationRole::LoaderControl => ActiveReblitBootPublicationPhase::LoaderControl,
+        ActiveReblitBootPublicationRole::FallbackBootloader | ActiveReblitBootPublicationRole::SystemdBootloader => {
             ActiveReblitBootPublicationPhase::Bootloader
         }
     }

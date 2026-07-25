@@ -1,13 +1,13 @@
 
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
-let phases = b.scripts {
-    setup = b.phase [
-        b.step.run (b.program.binary "mkdir") ["-p", "build"],
+let phases = a.scripts {
+    setup = a.phase [
+        a.step.run (a.program.binary "mkdir") ["-p", "build"],
     ],
-    build = b.phase [
-        b.step.run
-            (b.program.binary "cc")
+    build = a.phase [
+        a.step.run
+            (a.program.binary "cc")
             [
                 "-O2",
                 "-g",
@@ -25,45 +25,54 @@ let phases = b.scripts {
                 "build/cast-custom-fixture",
             ],
     ],
-    check = b.phase [
-        b.step.run_built
-            (b.program.built "build/cast-custom-fixture")
+    check = a.phase [
+        a.step.run_built
+            (a.program.built "build/cast-custom-fixture")
             ["--self-test"],
     ],
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "dash",
-            declared_programs = [b.program.binary "install"],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "dash",
+            declared_programs = [a.program.binary "install"],
             script = r#"install -Dm755 build/cast-custom-fixture "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-custom-fixture""#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
-let base = b.mk_package (b.meta {
-    pname = "cast-custom-fixture",
-    version = "1.0.0",
-    release = 1,
-    homepage = "https://fixtures.invalid/cast-custom-fixture",
-    license = ["MPL-2.0"],
-})
-
 {
-    builder = b.builder.custom phases [
-        b.dep.binary "mkdir",
-        b.dep.binary "cc",
-        b.dep.binary "install",
-        b.dep.binary "dash",
+    meta = {
+        pname = "cast-custom-fixture",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://fixtures.invalid/cast-custom-fixture",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.binary "mkdir",
+        a.dep.binary "cc",
+        a.dep.binary "install",
+        a.dep.binary "dash",
     ],
     sources = [
-        b.source.archive_with {
+        a.source.archive_with {
             url = "https://fixtures.invalid/sources/cast-custom-fixture-1.0.0.tar",
             hash = "76cf98a8eef6104059a60cd78e839f94c279ee2a415c36bc98bc3793b416838c",
-            rename = b.optional.set "cast-custom-fixture.tar",
-            strip_dirs = b.optional.set 1,
-            unpack = b.boolean.true,
-            unpack_dir = b.optional.set "cast-custom-fixture",
+            rename = a.optional.set "cast-custom-fixture.tar",
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set "cast-custom-fixture",
         },
     ],
-    .. base
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

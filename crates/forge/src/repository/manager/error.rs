@@ -1,8 +1,6 @@
 use std::{collections::TryReserveError, io, path::PathBuf, sync::Arc};
 
-use config::declaration::{
-    LoadManagedDeclarationError, SaveManagedDeclarationError,
-};
+use config::declaration::{LoadManagedDeclarationError, SaveManagedDeclarationError};
 use stone::{StoneHeaderV1FileType, StonePayloadKind, StonePayloadMetaTag, StoneReadError};
 use thiserror::Error;
 use url::Url;
@@ -253,15 +251,9 @@ pub enum Error {
     #[error("meta db")]
     Database(#[from] meta::Error),
     #[error("save repository declaration")]
-    SaveConfig(
-        #[source]
-        Box<SaveManagedDeclarationError<repository::RepositoryConversionError>>,
-    ),
+    SaveConfig(#[source] Box<SaveManagedDeclarationError<repository::RepositoryConversionError>>),
     #[error("load repository declarations")]
-    LoadConfig(
-        #[source]
-        Box<LoadManagedDeclarationError<repository::RepositoryConversionError>>,
-    ),
+    LoadConfig(#[source] Box<LoadManagedDeclarationError<repository::RepositoryConversionError>>),
     #[error("unknown repo")]
     UnknownRepo(repository::Id),
     #[error("resolve history index uri from root index")]
@@ -276,22 +268,14 @@ pub enum Error {
     OutdatedRepos(Arc<Source>, Vec<OutdatedRepoIndexUri>),
 }
 
-impl From<SaveManagedDeclarationError<repository::RepositoryConversionError>>
-    for Error
-{
-    fn from(
-        error: SaveManagedDeclarationError<repository::RepositoryConversionError>,
-    ) -> Self {
+impl From<SaveManagedDeclarationError<repository::RepositoryConversionError>> for Error {
+    fn from(error: SaveManagedDeclarationError<repository::RepositoryConversionError>) -> Self {
         Self::SaveConfig(Box::new(error))
     }
 }
 
-impl From<LoadManagedDeclarationError<repository::RepositoryConversionError>>
-    for Error
-{
-    fn from(
-        error: LoadManagedDeclarationError<repository::RepositoryConversionError>,
-    ) -> Self {
+impl From<LoadManagedDeclarationError<repository::RepositoryConversionError>> for Error {
+    fn from(error: LoadManagedDeclarationError<repository::RepositoryConversionError>) -> Self {
         Self::LoadConfig(Box::new(error))
     }
 }

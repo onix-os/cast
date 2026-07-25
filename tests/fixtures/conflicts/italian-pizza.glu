@@ -1,29 +1,39 @@
-
-let b = import! cast.package.v3
-let scripts = b.scripts {
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "mkdir", b.program.binary "touch"],
+let a = import! cast.authored.v1
+let scripts = a.scripts {
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "mkdir", a.program.binary "touch"],
             script = r#"mkdir -p "${CAST_INSTALL_ROOT}${CAST_VENDORDIR}" && touch "${CAST_INSTALL_ROOT}${CAST_VENDORDIR}/italian-pizza""#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 let root = {
-    summary = b.optional.set "A certain Italian pizza that hates pineapples",
-    description = b.optional.set "Me no like pineapples.",
-    conflicts = [b.dep.package "pineapple"],
-    .. b.output "out"
+    summary = a.optional.set "A certain Italian pizza that hates pineapples",
+    description = a.optional.set "Me no like pineapples.",
+    conflicts = [a.dep.package "pineapple"],
+    .. a.output "out"
 }
 {
-    builder = b.builder.shell scripts [],
-    outputs = b.outputs.with_root "italian-pizza" root,
-    .. b.mk_package (b.meta {
+    meta = {
         pname = "italian-pizza",
         version = "1",
         release = 1,
         homepage = "https://github.com/serpent-os",
         license = ["Zlib"],
-    })
+    },
+    builder = a.builder.shell scripts [],
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.with_root root,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

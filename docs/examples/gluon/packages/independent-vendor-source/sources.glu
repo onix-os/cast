@@ -1,4 +1,4 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 // Application and dependency closure are separate authored identities. Each
 // record retains the URL, digest, extraction destination, and resulting source
@@ -9,13 +9,13 @@ let archive_lock = \identity ->
         url = identity.url,
         digest = identity.digest,
         unpack_dir = identity.unpack_dir,
-        lock = b.source.archive_with {
+        lock = a.source.archive_with {
             url = identity.url,
             hash = identity.digest,
-            rename = b.optional.set identity.archive_name,
-            strip_dirs = b.optional.set 1,
-            unpack = b.boolean.true,
-            unpack_dir = b.optional.set identity.unpack_dir,
+            rename = a.optional.set identity.archive_name,
+            strip_dirs = a.optional.set 1,
+            unpack = a.true,
+            unpack_dir = a.optional.set identity.unpack_dir,
         },
     }
 

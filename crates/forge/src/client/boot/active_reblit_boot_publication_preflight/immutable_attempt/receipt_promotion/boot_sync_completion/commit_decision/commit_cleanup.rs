@@ -15,19 +15,14 @@ use crate::{
         },
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
     },
-    db::state::{
-        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
-    },
+    db::state::{BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome},
     transition_journal::TransitionRecord,
 };
 
 use super::{
-    ActiveReblitBootTerminalEvidenceValidationError,
-    ActiveReblitBootCommitDecisionHandoff,
-    ActiveReblitBootCommitDecisionPostAdvanceError,
-    ValidatedActiveReblitBootPublicationEffect,
-    validate_committed_terminal_sandwich,
-    validate_exact_terminal_evidence_snapshot,
+    ActiveReblitBootCommitDecisionHandoff, ActiveReblitBootCommitDecisionPostAdvanceError,
+    ActiveReblitBootTerminalEvidenceValidationError, ValidatedActiveReblitBootPublicationEffect,
+    validate_committed_terminal_sandwich, validate_exact_terminal_evidence_snapshot,
 };
 
 /// Exact durable `CommitCleanupComplete` handoff retaining the writer
@@ -48,14 +43,7 @@ pub(in crate::client) struct ActiveReblitBootCommitCleanupCompleteHandoff<
     cleaned: CommitCleanupCompleteStagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     database_outcome: BootPublicationReceiptPromotionOutcome,
     publication_count: usize,
@@ -65,9 +53,7 @@ pub(in crate::client) struct ActiveReblitBootCommitCleanupCompleteHandoff<
     evidence: Vec<ValidatedActiveReblitBootPublicationEffect>,
 }
 
-impl std::fmt::Debug
-    for ActiveReblitBootCommitCleanupCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for ActiveReblitBootCommitCleanupCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ActiveReblitBootCommitCleanupCompleteHandoff")
@@ -84,15 +70,11 @@ impl ActiveReblitBootCommitCleanupCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_
         self.cleaned.record()
     }
 
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.cleaned.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn database_outcome(
-        &self,
-    ) -> BootPublicationReceiptPromotionOutcome {
+    pub(in crate::client) const fn database_outcome(&self) -> BootPublicationReceiptPromotionOutcome {
         self.database_outcome
     }
 
@@ -112,35 +94,20 @@ impl ActiveReblitBootCommitCleanupCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_
         self.replaced_count
     }
 
-    pub(in crate::client) const fn inventory(
-        &self,
-    ) -> &PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(&self) -> &PreparedActiveReblitDesiredPublicationInventory {
         self.cleaned.inventory()
     }
 
-    pub(in crate::client) const fn staging_outcome(
-        &self,
-    ) -> BootPublicationReceiptStageOutcome {
+    pub(in crate::client) const fn staging_outcome(&self) -> BootPublicationReceiptStageOutcome {
         self.cleaned.staging_outcome()
     }
 
-    pub(in crate::client) fn evidence(
-        &self,
-    ) -> &[ValidatedActiveReblitBootPublicationEffect] {
+    pub(in crate::client) fn evidence(&self) -> &[ValidatedActiveReblitBootPublicationEffect] {
         &self.evidence
     }
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     ActiveReblitBootCommitDecisionHandoff<
         'plan,
         'inventory,
@@ -172,13 +139,11 @@ where
         >,
         ActiveReblitBootCommitCleanupError,
     > {
-        self.committed
-            .revalidate_against(client)
-            .map_err(|source| {
-                ActiveReblitBootCommitCleanupError::PreCleanup(
-                    ActiveReblitBootCommitDecisionPostAdvanceError::CommittedEvidence(source),
-                )
-            })?;
+        self.committed.revalidate_against(client).map_err(|source| {
+            ActiveReblitBootCommitCleanupError::PreCleanup(
+                ActiveReblitBootCommitDecisionPostAdvanceError::CommittedEvidence(source),
+            )
+        })?;
         let retained_plan = self.committed.plan();
         validate_committed_terminal_sandwich(&self, client, retained_plan)
             .map_err(ActiveReblitBootCommitCleanupError::PreCleanup)?;
@@ -281,10 +246,7 @@ pub(in crate::client) enum ActiveReblitBootCommitCleanupError {
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootCommitCleanupPostAdvanceError {
     #[error("revalidate retained cleanup-complete staging evidence")]
-    CleanupCompleteEvidence(
-        #[source]
-        CommitCleanupCompleteStagedActiveReblitBootSyncValidationError,
-    ),
+    CleanupCompleteEvidence(#[source] CommitCleanupCompleteStagedActiveReblitBootSyncValidationError),
     #[error("the cleanup-complete authority returned a different retained plan")]
     PlanMismatch,
     #[error("revalidate exact terminal output and topology evidence")]
@@ -294,9 +256,6 @@ pub(in crate::client) enum ActiveReblitBootCommitCleanupPostAdvanceError {
 #[path = "commit_cleanup/complete.rs"]
 mod complete;
 pub(in crate::client) use complete::{
-    ActiveReblitBootCompleteError,
-    ActiveReblitBootCompleteHandoff,
-    ActiveReblitBootCompletePostAdvanceError,
-    ActiveReblitBootFinalizationError,
-    ActiveReblitBootFinalizedHandoff,
+    ActiveReblitBootCompleteError, ActiveReblitBootCompleteHandoff, ActiveReblitBootCompletePostAdvanceError,
+    ActiveReblitBootFinalizationError, ActiveReblitBootFinalizedHandoff,
 };

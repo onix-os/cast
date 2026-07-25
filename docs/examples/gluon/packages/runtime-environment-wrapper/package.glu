@@ -1,4 +1,4 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 let strings = import! std.string.prim
 
 let line = \value rest -> strings.append value (strings.append "\n" rest)
@@ -33,20 +33,20 @@ let line = \value rest -> strings.append value (strings.append "\n" rest)
                 r#"' > graphite-renderer
 /usr/bin/install -Dm755 graphite-renderer "${CAST_INSTALL_ROOT}${CAST_BINDIR}/graphite-renderer""#)
 
-    let phases = b.scripts {
-        install = b.phase [
-            b.step.shell_with {
+    let phases = a.scripts {
+        install = a.phase [
+            a.step.shell_with {
                 interpreter = runtime.interpreter.program,
-                declared_programs = [b.program.binary "install"],
+                declared_programs = [a.program.binary "install"],
                 script = install_script,
             },
         ],
-        .. b.defaults.scripts
+        .. a.empty.scripts
     }
 
-    let root = b.output_with {
-        summary = b.optional.set "Graphite renderer with a closed runtime environment",
-        description = b.optional.set "A source-less wrapper that binds one absolute renderer and every runtime resource without ambient discovery.",
+    let root = {
+        summary = a.optional.set "Graphite renderer with a closed runtime environment",
+        description = a.optional.set "A source-less wrapper that binds one absolute renderer and every runtime resource without ambient discovery.",
         runtime_inputs = [
             runtime.target.runtime_input,
             runtime.plugins.runtime_input,
@@ -55,28 +55,46 @@ let line = \value rest -> strings.append value (strings.append "\n" rest)
             runtime.schemas.runtime_input,
             runtime.interpreter.runtime_input,
         ],
-        paths = [b.path.exe "/usr/bin/graphite-renderer"],
-        .. b.output "out"
+        paths = [a.path.exe "/usr/bin/graphite-renderer"],
+        .. a.output "out"
     }
 
-    let base = b.mk_package (b.meta {
-        pname = "graphite-renderer-wrapper",
-        version = "1.0.0",
-        release = 1,
-        homepage = "https://example.invalid/graphite-renderer",
-        license = ["MIT"],
-    })
-
     {
-        builder = b.builder.custom phases [
-            runtime.interpreter.runtime_input,
-            b.dep.binary "install",
-        ],
-        outputs = [root],
-        options = b.options {
-            networking = b.boolean.false,
-            .. b.defaults.options
+        meta = {
+            pname = "graphite-renderer-wrapper",
+            version = "1.0.0",
+            release = 1,
+            homepage = "https://example.invalid/graphite-renderer",
+            license = ["MIT"],
         },
+        builder = a.builder.custom {
+            required_tools = [
+                runtime.interpreter.runtime_input,
+                a.dep.binary "install",
+            ],
+            environment = [],
+            phases,
+            supported_hooks = a.hook_support.all,
+        },
+        sources = [],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [root],
+        options = a.some.options (a.options {
+            toolchain = a.toolchain.llvm,
+            cspgo = a.false,
+            samplepgo = a.false,
+            debug = a.true,
+            strip = a.true,
+            networking = a.false,
+            compressman = a.false,
+            lastrip = a.true,
+        }),
+        profiles = [],
         architectures = ["native"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }

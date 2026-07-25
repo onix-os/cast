@@ -65,7 +65,7 @@ impl Drafter {
 
         let build_system = require_detected_build_system(build.detected_system)?;
 
-        let stone = encode_package_v3(&metadata, build_system, build.dependencies, licenses)?;
+        let stone = encode_authored_recipe(&metadata, build_system, build.dependencies, licenses)?;
         DeclarationEvaluator::<PackageSpec>::evaluate(
             &GluonPackageEvaluator::default(),
             &Source::new("stone.glu", stone.clone()),
@@ -91,7 +91,7 @@ fn require_draft_file_limit(actual: usize) -> Result<(), Error> {
     }
 }
 
-fn encode_package_v3(
+fn encode_authored_recipe(
     metadata: &Metadata,
     build_system: build::System,
     dependencies: impl IntoIterator<Item = Dependency>,
@@ -99,53 +99,68 @@ fn encode_package_v3(
 ) -> Result<String, Error> {
     use std::fmt::Write as _;
 
-    let mut output = String::from("let b = import! cast.package.v3\n");
-    let builder_module = match build_system {
-        build::System::Cmake => "cast.builders.cmake.v2",
-        build::System::Meson => "cast.builders.meson.v2",
-        build::System::Cargo => "cast.builders.cargo.v2",
-        build::System::Autotools => "cast.builders.autotools.v2",
+    // Cargo runs its checks by default; the other build systems draft with
+    // checks off so a generated recipe never fails on an untriaged test suite.
+    let run_tests = if matches!(build_system, build::System::Cargo) {
+        "a.true"
+    } else {
+        "a.false"
+    };
+    let builder = match build_system {
+        build::System::Cmake => format!("a.builder.cmake {{ flags = [], run_tests = {run_tests} }}"),
+        build::System::Meson => format!("a.builder.meson {{ flags = [], run_tests = {run_tests} }}"),
+        build::System::Cargo => {
+            format!("a.builder.cargo {{ features = [], binaries = [], run_tests = {run_tests} }}")
+        }
+        build::System::Autotools => {
+            format!("a.builder.autotools {{ flags = [], run_tests = {run_tests} }}")
+        }
         unsupported => {
             return Err(Error::UnsupportedDraftSystem {
                 system: unsupported.to_string(),
             });
         }
     };
-    writeln!(output, "let builder = import! {builder_module}").unwrap();
-
-    output.push_str("let base = b.mk_package (b.meta {\n");
-    for (field, value) in [
-        ("pname", placeholder(&metadata.source.name, "UPDATE-NAME")),
-        ("version", placeholder(&metadata.source.version, "0.0.0")),
-        (
-            "homepage",
-            placeholder(&metadata.source.homepage, "https://example.invalid/UPDATE-HOMEPAGE"),
-        ),
-    ] {
-        writeln!(output, "    {field} = {},", quoted(&value)).unwrap();
-        if field == "version" {
-            output.push_str("    release = 1,\n");
-        }
-    }
-    writeln!(output, "    license = {},", string_array(&licenses)).unwrap();
-    output.push_str("})\n");
-    output.push_str("let root = {\n");
-    output.push_str("    summary = b.optional.set \"UPDATE SUMMARY\",\n");
-    output.push_str("    description = b.optional.set \"UPDATE DESCRIPTION\",\n");
-    output.push_str("    .. b.output \"out\"\n}\n");
-    output.push_str("{\n");
-
-    let run_tests = matches!(build_system, build::System::Cargo);
-    output.push_str("    builder = builder.builder {\n");
-    writeln!(
-        output,
-        "        run_tests = b.boolean.{},",
-        if run_tests { "true" } else { "false" }
-    )
-    .unwrap();
-    output.push_str("        .. builder.defaults\n    },\n");
 
     let dependencies = dependencies.into_iter().sorted().collect::<Vec<_>>();
+
+    let mut output = String::from("let a = import! cast.authored.v1\n{\n");
+    output.push_str("    meta = {\n");
+    writeln!(
+        output,
+        "        pname = {},",
+        quoted(&placeholder(&metadata.source.name, "UPDATE-NAME"))
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "        version = {},",
+        quoted(&placeholder(&metadata.source.version, "0.0.0"))
+    )
+    .unwrap();
+    output.push_str("        release = 1,\n");
+    writeln!(
+        output,
+        "        homepage = {},",
+        quoted(&placeholder(&metadata.source.homepage, "https://example.invalid/UPDATE-HOMEPAGE"))
+    )
+    .unwrap();
+    writeln!(output, "        license = {},", string_array(&licenses)).unwrap();
+    output.push_str("    },\n");
+    writeln!(output, "    builder = {builder},").unwrap();
+    output.push_str("    sources = [\n");
+    for source in metadata.upstream_specs() {
+        match source {
+            UpstreamSpec::Archive { url, hash, .. } => {
+                writeln!(output, "        a.source.archive {} {},", quoted(&url), quoted(&hash)).unwrap();
+            }
+            UpstreamSpec::Git { url, git_ref, .. } => {
+                writeln!(output, "        a.source.git {} {},", quoted(&url), quoted(&git_ref)).unwrap();
+            }
+        }
+    }
+    output.push_str("    ],\n");
+    output.push_str("    native_build_inputs = [],\n");
     writeln!(
         output,
         "    build_inputs = [{}],",
@@ -156,19 +171,19 @@ fn encode_package_v3(
             .join(", ")
     )
     .unwrap();
-    output.push_str("    sources = [\n");
-    for source in metadata.upstream_specs() {
-        match source {
-            UpstreamSpec::Archive { url, hash, .. } => {
-                writeln!(output, "        b.source.archive {} {},", quoted(&url), quoted(&hash)).unwrap();
-            }
-            UpstreamSpec::Git { url, git_ref, .. } => {
-                writeln!(output, "        b.source.git {} {},", quoted(&url), quoted(&git_ref)).unwrap();
-            }
-        }
-    }
-    output.push_str("    ],\n    outputs = [root],\n");
-    output.push_str("    .. base\n}\n");
+    output.push_str("    check_inputs = [],\n");
+    output.push_str("    outputs = a.outputs.with_root {\n");
+    output.push_str("        summary = a.optional.set \"UPDATE SUMMARY\",\n");
+    output.push_str("        description = a.optional.set \"UPDATE DESCRIPTION\",\n");
+    output.push_str("        .. a.output \"out\"\n    },\n");
+    output.push_str("    options = a.unset,\n");
+    output.push_str("    profiles = [],\n");
+    output.push_str("    architectures = [],\n");
+    output.push_str("    tuning = [],\n");
+    output.push_str("    emul32 = a.false,\n");
+    output.push_str("    mold = a.false,\n");
+    output.push_str("    hooks = a.unset,\n");
+    output.push_str("}\n");
     Ok(output)
 }
 
@@ -192,7 +207,7 @@ fn encode_dependency(dependency: &Dependency) -> String {
         Kind::SystemBinary => "system_binary",
         Kind::PkgConfig32 => "pkgconfig32",
     };
-    format!("b.dep.{constructor} {}", quoted(&dependency.name))
+    format!("a.dep.{constructor} {}", quoted(&dependency.name))
 }
 
 fn quoted(value: &str) -> String {
@@ -296,7 +311,7 @@ mod test {
             uri: Url::parse("https://example.com/example-1.2.3.tar.xz").unwrap(),
             hash: "0123456789abcdef".repeat(4),
         }]);
-        let source = encode_package_v3(
+        let source = encode_authored_recipe(
             &metadata,
             build::System::Cargo,
             BTreeSet::<Dependency>::new(),
@@ -336,7 +351,7 @@ mod test {
             build::System::PerlModuleBuild,
         ] {
             assert!(matches!(
-                encode_package_v3(&metadata, system, BTreeSet::<Dependency>::new(), vec![]),
+                encode_authored_recipe(&metadata, system, BTreeSet::<Dependency>::new(), vec![]),
                 Err(Error::UnsupportedDraftSystem { .. })
             ));
         }

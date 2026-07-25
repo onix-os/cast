@@ -14,22 +14,22 @@ use super::{
     validation::validate_advance,
 };
 
-mod record_binding;
 mod delete_residue_recovery;
+mod record_binding;
 mod stale_temporary_cleanup;
-#[cfg(test)]
-pub(crate) use record_binding::{
-    ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
-    arm_bound_advance_before_final_deadline_callback, arm_bound_delete_private_name_callback,
-    assert_bound_advance_before_expired_cleanup_callback_consumed,
-    assert_bound_advance_before_final_deadline_callback_consumed, assert_bound_delete_private_name_callback_consumed,
-};
 #[cfg(test)]
 pub(crate) use delete_residue_recovery::{
     DeleteResidueRecoveryDurabilityBoundary, DeleteResidueRecoveryRevalidationBoundary,
     arm_delete_residue_recovery_durability_callback, arm_delete_residue_recovery_revalidation_callback,
     assert_delete_residue_recovery_durability_callback_consumed,
     assert_delete_residue_recovery_revalidation_callback_consumed,
+};
+#[cfg(test)]
+pub(crate) use record_binding::{
+    ScriptedBoundAdvanceDeadlineClock, arm_bound_advance_before_expired_cleanup_callback,
+    arm_bound_advance_before_final_deadline_callback, arm_bound_delete_private_name_callback,
+    assert_bound_advance_before_expired_cleanup_callback_consumed,
+    assert_bound_advance_before_final_deadline_callback_consumed, assert_bound_delete_private_name_callback_consumed,
 };
 pub(crate) use record_binding::{
     TransitionJournalRecordBinding, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
@@ -926,5 +926,4 @@ impl TransitionJournalStore {
         durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
         Ok(())
     }
-
 }

@@ -54,8 +54,16 @@ fn startup_root_links_complete_route_same_byte_predecessor_replacement_breaks_ex
                     ),
                     "{kind:?} {phase:?} historical={historical}: {error:?}"
                 );
-                assert_eq!(fixture.fixture.canonical_bytes(), before, "{kind:?} historical={historical}");
-                assert_eq!(fs::read(&displaced).unwrap(), before, "{kind:?} historical={historical}");
+                assert_eq!(
+                    fixture.fixture.canonical_bytes(),
+                    before,
+                    "{kind:?} historical={historical}"
+                );
+                assert_eq!(
+                    fs::read(&displaced).unwrap(),
+                    before,
+                    "{kind:?} historical={historical}"
+                );
                 let retained = fs::symlink_metadata(&displaced).unwrap();
                 let replacement = fs::symlink_metadata(&canonical).unwrap();
                 assert_ne!(

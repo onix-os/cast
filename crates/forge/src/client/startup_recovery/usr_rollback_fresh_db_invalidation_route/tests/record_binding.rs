@@ -8,12 +8,10 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
-            new_state_candidate_preserve_move_attempt_count,
-            reset_new_state_candidate_preserve_move_attempt_count,
+            new_state_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
         },
         startup_recovery::{
-            DurableUsrRollbackFreshDbInvalidationRouteRecord,
-            UsrRollbackFreshDbInvalidationRoutePersistenceError,
+            DurableUsrRollbackFreshDbInvalidationRouteRecord, UsrRollbackFreshDbInvalidationRoutePersistenceError,
             UsrRollbackFreshDbInvalidationRouteSuccessorBindingError,
             arm_after_usr_rollback_fresh_db_invalidation_route_successor_binding_check_before_reopen,
             arm_before_usr_rollback_fresh_db_invalidation_route_successor_binding_revalidation,
@@ -85,8 +83,7 @@ fn startup_usr_rollback_fresh_db_invalidation_route_bound_advance_same_byte_repl
             for source in CandidateSource::THROUGH_CANDIDATE_PRESERVED {
                 for usr_outcome in [RollbackActionOutcome::Applied, RollbackActionOutcome::AlreadySatisfied] {
                     for candidate_outcome in CandidateOutcome::ALL {
-                        let fixture =
-                            RouteFixture::at_epoch(historical, source, usr_outcome, candidate_outcome);
+                        let fixture = RouteFixture::at_epoch(historical, source, usr_outcome, candidate_outcome);
                         let journal = fixture.open_journal();
                         let reservation = ActiveStateReservation::acquire().unwrap();
                         reset_new_state_candidate_preserve_move_attempt_count();

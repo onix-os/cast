@@ -15,23 +15,17 @@ use crate::client::{
     active_reblit_boot_sync_staging::ActiveReblitBootSyncPromotedValidationError,
     active_reblit_installed_boot_publication_delta::ActiveReblitBootPublicationDeltaAction,
     active_reblit_mounted_boot_topology::{
-        ActiveReblitBootOwnedCleanupError,
-        ActiveReblitBootPublicationTargetsError, BootTargetRole,
-        RevalidatedActiveReblitBootPublicationTarget,
-        RevalidatedActiveReblitBootPublicationTargets,
+        ActiveReblitBootOwnedCleanupError, ActiveReblitBootPublicationTargetsError, BootTargetRole,
+        RevalidatedActiveReblitBootPublicationTarget, RevalidatedActiveReblitBootPublicationTargets,
     },
-    active_reblit_publication_plan::{
-        ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot,
-    },
+    active_reblit_publication_plan::{ActiveReblitBootDestinationLayout, ActiveReblitBootDestinationRoot},
 };
 
-use super::{
-    ActiveReblitBootTerminalEvidenceValidationError,
-    CleanedPromotedExactActiveReblitBootPublication,
-    PromotedExactActiveReblitBootPublication,
-    terminal_evidence::validate_exact_terminal_evidence_snapshot,
-};
 use super::super::ActiveReblitBootPromotedCleanupSeal;
+use super::{
+    ActiveReblitBootTerminalEvidenceValidationError, CleanedPromotedExactActiveReblitBootPublication,
+    PromotedExactActiveReblitBootPublication, terminal_evidence::validate_exact_terminal_evidence_snapshot,
+};
 
 /// Failure while discharging all receipt-owned post-promotion residue.
 ///
@@ -42,9 +36,7 @@ pub(in crate::client) enum ActiveReblitBootPromotedCleanupError {
     #[error("admit the exact promoted BootSyncStarted receipt before cleanup")]
     InitialPromotedEvidence(#[source] ActiveReblitBootSyncPromotedValidationError),
     #[error("validate exact desired outputs and historical effect evidence before cleanup")]
-    InitialTerminalEvidence(
-        #[source] ActiveReblitBootTerminalEvidenceValidationError,
-    ),
+    InitialTerminalEvidence(#[source] ActiveReblitBootTerminalEvidenceValidationError),
     #[error("capture exact boot targets for promoted cleanup")]
     Targets(#[source] ActiveReblitBootPublicationTargetsError),
     #[error("the promoted replacement target shape does not match output {plan_index}")]
@@ -80,21 +72,10 @@ pub(in crate::client) enum ActiveReblitBootPromotedCleanupError {
     #[error("the retained publication plan changed at promoted-cleanup checkpoint {checkpoint}")]
     PlanMismatch { checkpoint: &'static str },
     #[error("validate exact desired outputs after promoted cleanup")]
-    FinalTerminalEvidence(
-        #[source] ActiveReblitBootTerminalEvidenceValidationError,
-    ),
+    FinalTerminalEvidence(#[source] ActiveReblitBootTerminalEvidenceValidationError),
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     PromotedExactActiveReblitBootPublication<
         'plan,
         'inventory,
@@ -131,9 +112,7 @@ where
             .terminal
             .staged
             .revalidate_promoted_against(client)
-            .map_err(
-                ActiveReblitBootPromotedCleanupError::InitialPromotedEvidence,
-            )?;
+            .map_err(ActiveReblitBootPromotedCleanupError::InitialPromotedEvidence)?;
         let plan = admitted.plan();
         validate_exact_terminal_evidence_snapshot(
             plan,
@@ -145,67 +124,33 @@ where
             &self.terminal.evidence,
             "promoted cleanup admission",
         )
-        .map_err(
-            ActiveReblitBootPromotedCleanupError::InitialTerminalEvidence,
-        )?;
+        .map_err(ActiveReblitBootPromotedCleanupError::InitialTerminalEvidence)?;
 
         if !self.promoted_cleanup_required() {
             drop(admitted);
-            return Ok(CleanedPromotedExactActiveReblitBootPublication {
-                promoted: self,
-            });
+            return Ok(CleanedPromotedExactActiveReblitBootPublication { promoted: self });
         }
 
         let targets = plan
             .revalidate_publication_targets()
             .map_err(ActiveReblitBootPromotedCleanupError::Targets)?;
-        self.require_promoted_cleanup_checkpoint(
-            client,
-            plan,
-            "after promoted-cleanup target capture",
-        )?;
-        let seal = ActiveReblitBootPromotedCleanupSeal::new(
-            self.receipt_fingerprint(),
-        );
+        self.require_promoted_cleanup_checkpoint(client, plan, "after promoted-cleanup target capture")?;
+        let seal = ActiveReblitBootPromotedCleanupSeal::new(self.receipt_fingerprint());
 
         let mut replacement_count = 0usize;
-        for (plan_index, (retained, output)) in self
-            .evidence()
-            .iter()
-            .zip(plan.outputs())
-            .enumerate()
-        {
+        for (plan_index, (retained, output)) in self.evidence().iter().zip(plan.outputs()).enumerate() {
             let Some(historical) = retained.replacement_authority() else {
                 continue;
             };
-            let (role, target) = cleanup_target(
-                &targets,
-                plan.destination_layout(),
-                output.root(),
-            )
-            .ok_or(
-                ActiveReblitBootPromotedCleanupError::ReplacementTargetShape {
-                    plan_index,
-                },
-            )?;
-            self.require_promoted_cleanup_checkpoint(
-                client,
-                plan,
-                "immediately before replacement-sidecar cleanup",
-            )?;
+            let (role, target) = cleanup_target(&targets, plan.destination_layout(), output.root())
+                .ok_or(ActiveReblitBootPromotedCleanupError::ReplacementTargetShape { plan_index })?;
+            self.require_promoted_cleanup_checkpoint(client, plan, "immediately before replacement-sidecar cleanup")?;
             target
-                .reconcile_and_cleanup_promoted_owned_replacement(
-                    &seal,
+                .reconcile_and_cleanup_promoted_owned_replacement(&seal, plan_index, &output, historical)
+                .map_err(|source| ActiveReblitBootPromotedCleanupError::ReplacementCleanup {
+                    role,
                     plan_index,
-                    &output,
-                    historical,
-                )
-                .map_err(|source| {
-                    ActiveReblitBootPromotedCleanupError::ReplacementCleanup {
-                        role,
-                        plan_index,
-                        source,
-                    }
+                    source,
                 })?;
             replacement_count = replacement_count.checked_add(1).ok_or(
                 ActiveReblitBootPromotedCleanupError::ReplacementCountMismatch {
@@ -213,86 +158,43 @@ where
                     actual: usize::MAX,
                 },
             )?;
-            self.require_promoted_cleanup_checkpoint(
-                client,
-                plan,
-                "after replacement-sidecar cleanup",
-            )?;
+            self.require_promoted_cleanup_checkpoint(client, plan, "after replacement-sidecar cleanup")?;
         }
         if replacement_count != self.replaced_count() {
-            return Err(
-                ActiveReblitBootPromotedCleanupError::ReplacementCountMismatch {
-                    expected: self.replaced_count(),
-                    actual: replacement_count,
-                },
-            );
+            return Err(ActiveReblitBootPromotedCleanupError::ReplacementCountMismatch {
+                expected: self.replaced_count(),
+                actual: replacement_count,
+            });
         }
 
         let mut stale_count = 0usize;
-        for (delta_index, entry) in
-            admitted.classified_delta().entries().iter().enumerate()
-        {
+        for (delta_index, entry) in admitted.classified_delta().entries().iter().enumerate() {
             match entry.action() {
                 ActiveReblitBootPublicationDeltaAction::DeleteOwnedStaleAfterPromotion => {
-                    let expected = entry.installed_expected().ok_or(
-                        ActiveReblitBootPromotedCleanupError::StaleEntryShape {
-                            delta_index,
-                        },
-                    )?;
+                    let expected = entry
+                        .installed_expected()
+                        .ok_or(ActiveReblitBootPromotedCleanupError::StaleEntryShape { delta_index })?;
                     if entry.desired_expected().is_some() {
-                        return Err(
-                            ActiveReblitBootPromotedCleanupError::StaleEntryShape {
-                                delta_index,
-                            },
-                        );
+                        return Err(ActiveReblitBootPromotedCleanupError::StaleEntryShape { delta_index });
                     }
-                    let (role, target) = cleanup_target(
-                        &targets,
-                        plan.destination_layout(),
-                        entry.root(),
-                    )
-                    .ok_or(
-                        ActiveReblitBootPromotedCleanupError::StaleTargetShape {
-                            delta_index,
-                        },
-                    )?;
-                    self.require_promoted_cleanup_checkpoint(
-                        client,
-                        plan,
-                        "immediately before owned-stale cleanup",
-                    )?;
+                    let (role, target) = cleanup_target(&targets, plan.destination_layout(), entry.root())
+                        .ok_or(ActiveReblitBootPromotedCleanupError::StaleTargetShape { delta_index })?;
+                    self.require_promoted_cleanup_checkpoint(client, plan, "immediately before owned-stale cleanup")?;
                     target
-                        .reconcile_and_cleanup_promoted_owned_stale(
-                            &seal,
+                        .reconcile_and_cleanup_promoted_owned_stale(&seal, delta_index, entry.relative_path(), expected)
+                        .map_err(|source| ActiveReblitBootPromotedCleanupError::StaleCleanup {
+                            role,
                             delta_index,
-                            entry.relative_path(),
-                            expected,
-                        )
-                        .map_err(|source| {
-                            ActiveReblitBootPromotedCleanupError::StaleCleanup {
-                                role,
-                                delta_index,
-                                source,
-                            }
+                            source,
                         })?;
-                    stale_count = stale_count.checked_add(1).ok_or(
-                        ActiveReblitBootPromotedCleanupError::MissingCleanupAction,
-                    )?;
-                    self.require_promoted_cleanup_checkpoint(
-                        client,
-                        plan,
-                        "after owned-stale cleanup",
-                    )?;
+                    stale_count = stale_count
+                        .checked_add(1)
+                        .ok_or(ActiveReblitBootPromotedCleanupError::MissingCleanupAction)?;
+                    self.require_promoted_cleanup_checkpoint(client, plan, "after owned-stale cleanup")?;
                 }
                 ActiveReblitBootPublicationDeltaAction::PreserveUnownedStale => {
-                    if entry.desired_expected().is_some()
-                        || entry.installed_expected().is_none()
-                    {
-                        return Err(
-                            ActiveReblitBootPromotedCleanupError::StaleEntryShape {
-                                delta_index,
-                            },
-                        );
+                    if entry.desired_expected().is_some() || entry.installed_expected().is_none() {
+                        return Err(ActiveReblitBootPromotedCleanupError::StaleEntryShape { delta_index });
                     }
                 }
                 ActiveReblitBootPublicationDeltaAction::PublishDesired
@@ -317,19 +219,11 @@ where
             &self.terminal.evidence,
             "final promoted cleanup",
         )
-        .map_err(
-            ActiveReblitBootPromotedCleanupError::FinalTerminalEvidence,
-        )?;
-        self.require_promoted_cleanup_checkpoint(
-            client,
-            plan,
-            "final promoted cleanup",
-        )?;
+        .map_err(ActiveReblitBootPromotedCleanupError::FinalTerminalEvidence)?;
+        self.require_promoted_cleanup_checkpoint(client, plan, "final promoted cleanup")?;
 
         self.terminal.promoted_cleanup_required = false;
-        Ok(CleanedPromotedExactActiveReblitBootPublication {
-            promoted: self,
-        })
+        Ok(CleanedPromotedExactActiveReblitBootPublication { promoted: self })
     }
 
     fn require_promoted_cleanup_checkpoint(
@@ -349,16 +243,9 @@ where
             .terminal
             .staged
             .revalidate_promoted_against(client)
-            .map_err(|source| {
-                ActiveReblitBootPromotedCleanupError::PromotedEvidence {
-                    checkpoint,
-                    source,
-                }
-            })?;
+            .map_err(|source| ActiveReblitBootPromotedCleanupError::PromotedEvidence { checkpoint, source })?;
         if !std::ptr::eq(fresh.plan(), plan) {
-            return Err(ActiveReblitBootPromotedCleanupError::PlanMismatch {
-                checkpoint,
-            });
+            return Err(ActiveReblitBootPromotedCleanupError::PlanMismatch { checkpoint });
         }
         Ok(())
     }
@@ -379,18 +266,12 @@ fn cleanup_target<'view, 'target>(
             _,
         ) => Some((BootTargetRole::Esp, esp)),
         (
-            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr {
-                esp,
-                ..
-            },
+            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr { esp, .. },
             ActiveReblitBootDestinationLayout::DistinctXbootldr,
             ActiveReblitBootDestinationRoot::Esp,
         ) => Some((BootTargetRole::Esp, esp)),
         (
-            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr {
-                xbootldr,
-                ..
-            },
+            RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr { xbootldr, .. },
             ActiveReblitBootDestinationLayout::DistinctXbootldr,
             ActiveReblitBootDestinationRoot::Boot,
         ) => Some((BootTargetRole::Xbootldr, xbootldr)),

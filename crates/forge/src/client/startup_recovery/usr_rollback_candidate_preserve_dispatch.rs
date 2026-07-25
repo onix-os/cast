@@ -20,8 +20,7 @@ use super::super::startup_reconciliation::{
     UsrRollbackArchivedCandidatePreserveApplyReconciliation, UsrRollbackCandidatePreserveApplyAuthority,
     UsrRollbackCandidatePreserveApplyEffectSelection, UsrRollbackCandidatePreserveAuthorityError,
     UsrRollbackCandidatePreserveFinishAuthority, UsrRollbackCandidatePreserveFinishDurabilitySelection,
-    UsrRollbackCandidatePreserveRestartAuthority,
-    UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
+    UsrRollbackCandidatePreserveRestartAuthority, UsrRollbackNewStateCandidatePreserveAlreadySatisfiedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveAppliedEffectAuthority,
     UsrRollbackNewStateCandidatePreserveApplyReconciliation,
     UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation,
@@ -165,9 +164,7 @@ pub(in crate::client) fn dispatch_usr_rollback_candidate_preserve_and_reopen<'re
             match authority.into_effect_selection(&effect_seal, &journal)? {
                 UsrRollbackCandidatePreserveApplyEffectSelection::CreateNewStateTarget(lease) => {
                     match lease.reconcile(&effect_seal, &journal)? {
-                        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(
-                            authority,
-                        ) => {
+                        UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::RestartRequired(authority) => {
                             return return_exact_unchanged_source(journal, source_record, authority);
                         }
                         UsrRollbackNewStateCandidatePreserveCreateTargetReconciliation::NotApplied => {

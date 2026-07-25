@@ -21,9 +21,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use config::declaration::RegisteredGeneratedDeclarationAuthorities;
 #[cfg(test)]
 use config::declaration::GeneratedDeclarationAuthority;
+use config::declaration::RegisteredGeneratedDeclarationAuthorities;
 use thiserror::Error as ThisError;
 
 use crate::linux_fs::{
@@ -42,10 +42,10 @@ pub(crate) use existing_verification::CandidateMetadataVerification;
 #[cfg(test)]
 pub(crate) use existing_verification::arm_after_existing_release_retained;
 
+use generated_declaration::GeneratedDeclarationOutput;
 use retained_inode::{
     directory_witness, effective_user_id, file_type_name, metadata_io, published_witness, read_exact_at,
 };
-use generated_declaration::GeneratedDeclarationOutput;
 
 #[cfg(test)]
 pub(crate) fn arm_applied_private_directory_publication_error(after_parent_sync: impl FnOnce() + 'static) {
@@ -119,11 +119,7 @@ pub(crate) enum CandidateMetadataError {
     #[error("candidate metadata input `{}` exceeds the {limit}-byte limit (got {actual})", path.display())]
     InputTooLarge { path: PathBuf, limit: usize, actual: u64 },
     #[error("generated candidate metadata `{name}` exceeds the {limit}-byte limit (got {actual})")]
-    OutputTooLarge {
-        name: String,
-        limit: usize,
-        actual: usize,
-    },
+    OutputTooLarge { name: String, limit: usize, actual: usize },
     #[error("generated declaration name `{name}` is not a valid filesystem component")]
     InvalidGeneratedDeclarationName { name: String },
     #[error("generated declaration `{name}` does not begin with its registered ownership marker")]
@@ -241,10 +237,7 @@ impl CandidateMetadataOutputs {
     ) -> Result<Self, CandidateMetadataError> {
         let os_release = os_release.into();
         bounded_output("os-release".to_owned(), &os_release)?;
-        let system_model = GeneratedDeclarationOutput::system_model(
-            system_model_authorities,
-            system_model,
-        )?;
+        let system_model = GeneratedDeclarationOutput::system_model(system_model_authorities, system_model)?;
         Ok(Self {
             os_release,
             system_model,
@@ -265,9 +258,7 @@ impl CandidateMetadataOutputs {
     }
 
     #[cfg(test)]
-    pub(crate) fn system_model_authorities(
-        &self,
-    ) -> &RegisteredGeneratedDeclarationAuthorities {
+    pub(crate) fn system_model_authorities(&self) -> &RegisteredGeneratedDeclarationAuthorities {
         self.system_model.authorities()
     }
 
@@ -370,13 +361,7 @@ impl CandidateMetadataPublication {
         lib.require_named(&usr, LIB_NAME)?;
         after_first_publication();
         require_alternate_declarations_absent(&lib, &snapshot_output)?;
-        publish(
-            &usr,
-            &lib,
-            snapshot_name,
-            &prepared_snapshot,
-            snapshot_bytes,
-        )?;
+        publish(&usr, &lib, snapshot_name, &prepared_snapshot, snapshot_bytes)?;
         require_alternate_declarations_absent(&lib, &snapshot_output)?;
         lib.require_named(&usr, LIB_NAME)?;
         lib.sync()?;

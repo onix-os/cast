@@ -20,21 +20,18 @@ use super::{
     super::candidate_test_support::CandidateSource,
     fresh_db_invalidation_process_boundaries::FreshDbInvalidationProcessBoundary,
     fresh_db_invalidation_process_evidence::{
-        FreshDatabaseEvidence, PublicJournalIdentity, RawJournalInventory, RootAbiSnapshot,
-        StableNamespaceSnapshot, assert_joint_absence, assert_journal_reopenable,
-        assert_selected_present, canonical_path,
+        FreshDatabaseEvidence, PublicJournalIdentity, RawJournalInventory, RootAbiSnapshot, StableNamespaceSnapshot,
+        assert_joint_absence, assert_journal_reopenable, assert_selected_present, canonical_path,
     },
     fresh_db_invalidation_process_harness::{
-        CHILD_DEADLINE, ChildCase, DeadlineChild, MatrixDimensions, ProcessEpoch, ProcessRole,
-        ROLE_ENV, assert_exact_root_links_source, assert_parent_environment_clean,
-        assert_separate_control_path, expected_fresh_db_invalidated,
-        kill_after_real_invalidation_attempt, mark_recovery_as_next_database_opener,
+        CHILD_DEADLINE, ChildCase, DeadlineChild, MatrixDimensions, ProcessEpoch, ProcessRole, ROLE_ENV,
+        assert_exact_root_links_source, assert_parent_environment_clean, assert_separate_control_path,
+        expected_fresh_db_invalidated, kill_after_real_invalidation_attempt, mark_recovery_as_next_database_opener,
         spawn_child, write_control_case,
     },
     support::{
-        Epoch, FreshOutcome, build_fresh_invalidation, effect_counts,
-        install_persistent_selected_fresh_database, release_invalidation_fixture_handles,
-        reopen_persistent_state_database, reset_namespace_effect_counts,
+        Epoch, FreshOutcome, build_fresh_invalidation, effect_counts, install_persistent_selected_fresh_database,
+        release_invalidation_fixture_handles, reopen_persistent_state_database, reset_namespace_effect_counts,
     },
 };
 
@@ -77,8 +74,7 @@ fn run_parent_case(epoch: Epoch, boundary: FreshDbInvalidationProcessBoundary) {
     let source = fixture.record.clone();
     assert_exact_root_links_source(&source, process_epoch, dimensions);
     let applied = expected_fresh_db_invalidated(&source, RollbackActionOutcome::Applied);
-    let already_satisfied =
-        expected_fresh_db_invalidated(&source, RollbackActionOutcome::AlreadySatisfied);
+    let already_satisfied = expected_fresh_db_invalidated(&source, RollbackActionOutcome::AlreadySatisfied);
 
     let root = fs::canonicalize(&fixture.fixture.fixture.installation.root).unwrap();
     let source_bytes = fs::read(canonical_path(&root)).unwrap();
@@ -103,8 +99,7 @@ fn run_parent_case(epoch: Epoch, boundary: FreshDbInvalidationProcessBoundary) {
     let retained_root = release_invalidation_fixture_handles(fixture);
 
     let crash = spawn_child(ProcessRole::Crash, process_epoch, boundary, &root, &control_path);
-    let crash_status =
-        DeadlineChild::new(crash, "RootLinks invalidation crash child").wait(CHILD_DEADLINE);
+    let crash_status = DeadlineChild::new(crash, "RootLinks invalidation crash child").wait(CHILD_DEADLINE);
     assert_eq!(
         crash_status.signal(),
         Some(nix::libc::SIGKILL),
@@ -121,15 +116,8 @@ fn run_parent_case(epoch: Epoch, boundary: FreshDbInvalidationProcessBoundary) {
     // The parent does not reopen SQLite here. The recovery child below is the
     // first database opener after the SIGKILL and owns rollback recovery.
     mark_recovery_as_next_database_opener(&control_path);
-    let recovery = spawn_child(
-        ProcessRole::Recover,
-        process_epoch,
-        boundary,
-        &root,
-        &control_path,
-    );
-    let recovery_status =
-        DeadlineChild::new(recovery, "RootLinks invalidation recovery child").wait(CHILD_DEADLINE);
+    let recovery = spawn_child(ProcessRole::Recover, process_epoch, boundary, &root, &control_path);
+    let recovery_status = DeadlineChild::new(recovery, "RootLinks invalidation recovery child").wait(CHILD_DEADLINE);
     assert!(
         recovery_status.success(),
         "recovery child failed for {process_epoch:?} {boundary:?}: {recovery_status:?}"
@@ -238,8 +226,7 @@ fn run_recovery_child(
     source: &crate::transition_journal::TransitionRecord,
 ) {
     let applied = expected_fresh_db_invalidated(source, RollbackActionOutcome::Applied);
-    let already_satisfied =
-        expected_fresh_db_invalidated(source, RollbackActionOutcome::AlreadySatisfied);
+    let already_satisfied = expected_fresh_db_invalidated(source, RollbackActionOutcome::AlreadySatisfied);
     let invalidated = expected_after_recovery(case.boundary, &applied, &already_satisfied);
     let expected_entry = expected_after_recovery_entry(case.boundary, invalidated);
     let expected_start = if case.boundary.canonical_is_source() {
@@ -247,7 +234,10 @@ fn run_recovery_child(
     } else {
         &applied
     };
-    assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), *expected_start);
+    assert_eq!(
+        decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(),
+        *expected_start
+    );
 
     if case.boundary.is_database() && !case.boundary.database_commit_survives() {
         assert_selected_present(system.state_db(), source);
@@ -273,25 +263,27 @@ fn run_recovery_child(
     assert_eq!(pending.transition_id(), &expected_entry.transition_id);
     assert_eq!(pending.phase(), expected_entry.phase);
     assert_eq!(pending.disposition(), expected_entry.recovery_disposition());
-    assert!(pending.blockers().is_empty(), "unexpected blockers: {:?}", pending.blockers());
+    assert!(
+        pending.blockers().is_empty(),
+        "unexpected blockers: {:?}",
+        pending.blockers()
+    );
     assert!(pending.retains_database(system.state_db()));
 
-    let expected_removals = usize::from(
-        case.boundary.is_database() && !case.boundary.database_commit_survives(),
-    );
+    let expected_removals = usize::from(case.boundary.is_database() && !case.boundary.database_commit_survives());
     let effects = effect_counts();
     assert_eq!(effects.fresh_removal, expected_removals);
-    assert_eq!(
-        exact_fresh_transition_removal_transaction_attempts(),
-        expected_removals
-    );
+    assert_eq!(exact_fresh_transition_removal_transaction_attempts(), expected_removals);
     assert_eq!(effects.create, 0);
     assert_eq!(effects.normalize, 0);
     assert_eq!(effects.candidate_move, 0);
     assert_eq!(retained_exchange_syscall_count(), 0);
     assert_eq!(boot_synchronize_attempt_count(), 0);
     assert_joint_absence(system.state_db(), invalidated);
-    assert_eq!(decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(), expected_entry);
+    assert_eq!(
+        decode(&fs::read(canonical_path(&case.root)).unwrap()).unwrap(),
+        expected_entry
+    );
     RawJournalInventory::capture(&case.root).assert_clean_successor(&encode(&expected_entry).unwrap());
     assert_eq!(RootAbiSnapshot::capture(&case.root), root_abi_before);
     assert_eq!(StableNamespaceSnapshot::capture(&case.root), namespace_before);

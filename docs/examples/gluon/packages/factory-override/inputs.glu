@@ -1,7 +1,6 @@
-
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
 {
-    compression = b.dep.pkgconfig "zlib",
-    tls = b.dep.pkgconfig "openssl",
+    compression = a.dep.pkgconfig "zlib",
+    tls = a.dep.pkgconfig "openssl",
 }

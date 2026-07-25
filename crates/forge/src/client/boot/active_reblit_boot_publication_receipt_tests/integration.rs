@@ -3,10 +3,7 @@ use std::os::unix::ffi::OsStrExt as _;
 use sha2::{Digest as _, Sha256};
 
 use super::*;
-use crate::{
-    boot_publication::BootPublicationSha256,
-    transition_journal::encode as encode_transition_record,
-};
+use crate::{boot_publication::BootPublicationSha256, transition_journal::encode as encode_transition_record};
 
 #[test]
 fn real_bound_alias_plan_maps_to_one_complete_authority_free_receipt() {
@@ -16,9 +13,8 @@ fn real_bound_alias_plan_maps_to_one_complete_authority_free_receipt() {
         let committed = Some(receipt_fingerprint(0x44));
         let inventory = plan.prepare_desired_publication_inventory().unwrap();
         let claims = inert_claim_bindings(&inventory);
-        let expected_predecessor_sha256 = BootPublicationSha256::from_bytes(
-            Sha256::digest(encode_transition_record(&predecessor).unwrap()).into(),
-        );
+        let expected_predecessor_sha256 =
+            BootPublicationSha256::from_bytes(Sha256::digest(encode_transition_record(&predecessor).unwrap()).into());
 
         let receipt = plan
             .prepare_complete_boot_publication_receipt(&inventory, &predecessor, committed, &claims)
@@ -43,11 +39,17 @@ fn real_bound_alias_plan_maps_to_one_complete_authority_free_receipt() {
             claims.iter().map(|claim| claim.claim()).collect::<Vec<_>>()
         );
         for (output, desired) in body.outputs().iter().zip(inventory.outputs()) {
-            assert_eq!(output.relative_path().as_bytes(), desired.relative_path().as_os_str().as_bytes());
+            assert_eq!(
+                output.relative_path().as_bytes(),
+                desired.relative_path().as_os_str().as_bytes()
+            );
             assert_eq!(output.mode(), desired.mode());
             assert_eq!(output.xxh3().as_u128(), desired.checksum());
             assert_eq!(output.length(), desired.length());
-            assert_eq!(output.content_sha256().as_bytes(), desired.content_identity().as_bytes());
+            assert_eq!(
+                output.content_sha256().as_bytes(),
+                desired.content_identity().as_bytes()
+            );
         }
 
         let decoded = decode_boot_publication_receipt(receipt.canonical_body()).unwrap();
@@ -62,9 +64,7 @@ fn committed_predecessor_and_claim_data_are_fingerprint_significant() {
     with_bound_alias_plan!(|_fixture, plan| {
         let predecessor = exact_boot_sync_predecessor();
         let inventory = plan.prepare_desired_publication_inventory().unwrap();
-        let absent = claim_bindings(&inventory, |_| {
-            BootPublicationOutputProvenanceClaim::UnclaimedAbsent
-        });
+        let absent = claim_bindings(&inventory, |_| BootPublicationOutputProvenanceClaim::UnclaimedAbsent);
         let claimed = claim_bindings(&inventory, |_| {
             BootPublicationOutputProvenanceClaim::ClaimedPublishedByCast
         });

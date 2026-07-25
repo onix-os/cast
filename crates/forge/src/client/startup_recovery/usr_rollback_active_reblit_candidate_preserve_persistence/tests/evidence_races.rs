@@ -58,18 +58,10 @@ fn startup_active_reblit_candidate_preserve_persistence_rejects_mixed_and_cross_
                 active_reblit_candidate_preserve_exchange_attempt_count(),
                 expected_exchange_count
             );
-            let first_fixture = fixture_for_origin(
-                epoch,
-                origin,
-                Source::Intent,
-                RollbackActionOutcome::AlreadySatisfied,
-            );
-            let second_fixture = fixture_for_origin(
-                epoch,
-                origin,
-                Source::Intent,
-                RollbackActionOutcome::AlreadySatisfied,
-            );
+            let first_fixture =
+                fixture_for_origin(epoch, origin, Source::Intent, RollbackActionOutcome::AlreadySatisfied);
+            let second_fixture =
+                fixture_for_origin(epoch, origin, Source::Intent, RollbackActionOutcome::AlreadySatisfied);
             let first = first_fixture.open_journal();
             let reservation = ActiveStateReservation::acquire().unwrap();
             reset_active_reblit_candidate_preserve_exchange_attempt_count();

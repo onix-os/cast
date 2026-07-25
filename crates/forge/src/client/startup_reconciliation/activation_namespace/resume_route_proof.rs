@@ -108,7 +108,7 @@ fn exchange_layout(
         return Err(UsrRollbackResumeRouteNamespaceError::PrematureTransitionQuarantine);
     }
     assess_snapshot_layout(record, snapshot)?
-        .usr_exchange_layout()
+        .rollback_usr_exchange_layout()
         .ok_or(UsrRollbackResumeRouteNamespaceError::NotExchangeLayout)
 }
 

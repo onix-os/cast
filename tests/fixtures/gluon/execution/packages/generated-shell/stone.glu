@@ -1,9 +1,9 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
-let phases = b.scripts {
-    build = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
+let phases = a.scripts {
+    build = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
             declared_programs = [],
             script = r#"
 printf '%s\n' \
@@ -22,9 +22,9 @@ printf '%s\n' \
 "#,
         },
     ],
-    check = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
+    check = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
             declared_programs = [],
             script = r#"
 actual="$(source ./cast-generated-shell --self-test)"
@@ -44,37 +44,45 @@ fi
 "#,
         },
     ],
-    install = b.phase [
-        b.step.shell_with {
-            interpreter = b.program.binary "bash",
-            declared_programs = [b.program.binary "install"],
+    install = a.phase [
+        a.step.shell_with {
+            interpreter = a.program.binary "bash",
+            declared_programs = [a.program.binary "install"],
             script = r#"install -Dm755 cast-generated-shell "${CAST_INSTALL_ROOT}${CAST_BINDIR}/cast-generated-shell""#,
         },
     ],
-    .. b.defaults.scripts
+    .. a.empty.scripts
 }
 
-let root = b.output_with {
-    summary = b.optional.set "Gluon-authored shell application fixture",
-    runtime_inputs = [b.dep.binary "bash"],
-    paths = [b.path.exe "/usr/bin/cast-generated-shell"],
-    .. b.output "out"
+let root = {
+    summary = a.optional.set "Gluon-authored shell application fixture",
+    runtime_inputs = [a.dep.binary "bash"],
+    paths = [a.path.exe "/usr/bin/cast-generated-shell"],
+    .. a.output "out"
 }
-
-let base = b.mk_package (b.meta {
-    pname = "cast-generated-shell-fixture",
-    version = "1.0.0",
-    release = 1,
-    homepage = "https://fixtures.invalid/cast-generated-shell-fixture",
-    license = ["MPL-2.0"],
-})
 
 {
-    builder = b.builder.custom phases [
-        b.dep.binary "bash",
-        b.dep.binary "install",
+    meta = {
+        pname = "cast-generated-shell-fixture",
+        version = "1.0.0",
+        release = 1,
+        homepage = "https://fixtures.invalid/cast-generated-shell-fixture",
+        license = ["MPL-2.0"],
+    },
+    builder = a.builder.shell phases [
+        a.dep.binary "bash",
+        a.dep.binary "install",
     ],
-    outputs = [root],
+    sources = [],
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.explicit [root],
+    options = a.unset,
+    profiles = [],
     architectures = ["x86_64"],
-    .. base
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

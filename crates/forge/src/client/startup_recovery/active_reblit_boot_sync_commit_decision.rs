@@ -14,20 +14,19 @@ use thiserror::Error;
 
 use crate::{
     client::active_reblit_boot_publication_preflight::{
-        ActiveReblitBootCommitDecisionFinalValidation,
-        ActiveReblitBootPostCompletionValidationError,
+        ActiveReblitBootCommitDecisionFinalValidation, ActiveReblitBootPostCompletionValidationError,
     },
     installation,
-    transition_journal::{CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
+    transition_journal::{
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+    },
 };
 
 use super::super::startup_reconciliation::{
     ActiveReblitBootSyncCompleteAuthority, ActiveReblitBootSyncCompleteAuthorityError,
     ActiveReblitBootSyncCompletePostAdvanceAuthority, ActiveReblitBootSyncCompleteRecordAdvanceError,
 };
-use super::canonical_journal_reopen::{
-    CanonicalJournalReopenError, try_reopen_canonical_journal,
-};
+use super::canonical_journal_reopen::{CanonicalJournalReopenError, try_reopen_canonical_journal};
 
 /// Which exact canonical record survived an uncertain or rejected advance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,8 +59,7 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_and_reo
     journal: TransitionJournalStore,
     authority: ActiveReblitBootSyncCompleteAuthority<'_>,
 ) -> Result<(TransitionJournalStore, TransitionRecord), ActiveReblitBootSyncCommitDecisionPersistenceError> {
-    let (journal, record, binding) =
-        persist_active_reblit_boot_sync_commit_decision_inner(journal, authority, None)?;
+    let (journal, record, binding) = persist_active_reblit_boot_sync_commit_decision_inner(journal, authority, None)?;
     drop(binding);
     Ok((journal, record))
 }
@@ -73,18 +71,10 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_commit_decision_retaini
     authority: ActiveReblitBootSyncCompleteAuthority<'_>,
     final_validation: ActiveReblitBootCommitDecisionFinalValidation<'_>,
 ) -> Result<
-    (
-        TransitionJournalStore,
-        TransitionRecord,
-        TransitionJournalRecordBinding,
-    ),
+    (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding),
     ActiveReblitBootSyncCommitDecisionPersistenceError,
 > {
-    persist_active_reblit_boot_sync_commit_decision_inner(
-        journal,
-        authority,
-        Some(final_validation),
-    )
+    persist_active_reblit_boot_sync_commit_decision_inner(journal, authority, Some(final_validation))
 }
 
 fn persist_active_reblit_boot_sync_commit_decision_inner(
@@ -92,11 +82,7 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
     authority: ActiveReblitBootSyncCompleteAuthority<'_>,
     final_validation: Option<ActiveReblitBootCommitDecisionFinalValidation<'_>>,
 ) -> Result<
-    (
-        TransitionJournalStore,
-        TransitionRecord,
-        TransitionJournalRecordBinding,
-    ),
+    (TransitionJournalStore, TransitionRecord, TransitionJournalRecordBinding),
     ActiveReblitBootSyncCommitDecisionPersistenceError,
 > {
     authority
@@ -108,9 +94,9 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
         Ok(successor) => {
             drop(authority);
             drop(journal);
-            return Err(ActiveReblitBootSyncCommitDecisionPersistenceError::UnexpectedSuccessor {
-                phase: successor.phase,
-            });
+            return Err(
+                ActiveReblitBootSyncCommitDecisionPersistenceError::UnexpectedSuccessor { phase: successor.phase },
+            );
         }
         Err(source) => {
             drop(authority);
@@ -122,21 +108,16 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
     before_active_reblit_boot_sync_commit_decision_final_revalidation();
     let installation = authority.installation().clone();
     let advance_result = match final_validation {
-        Some(final_validation) => authority.advance_record_binding_after_final_validation(
-            &journal,
-            &successor,
-            final_validation,
-        ),
+        Some(final_validation) => {
+            authority.advance_record_binding_after_final_validation(&journal, &successor, final_validation)
+        }
         None => authority.advance_record_binding(&journal, &successor),
     };
     let advance = match advance_result {
         Ok((successor_binding, post_advance_authority)) => {
             before_active_reblit_boot_sync_commit_decision_same_store_validation();
-            let same_store_validation = post_advance_authority.revalidate_successor_same_store(
-                &journal,
-                &successor_binding,
-                &successor,
-            );
+            let same_store_validation =
+                post_advance_authority.revalidate_successor_same_store(&journal, &successor_binding, &successor);
             ActiveReblitBootSyncCommitDecisionAdvanceOutcome::Published {
                 successor_binding,
                 post_advance_authority,
@@ -157,11 +138,7 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
         }
         Err(ActiveReblitBootSyncCompleteRecordAdvanceError::FinalTerminalValidation(source)) => {
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncCommitDecisionPersistenceError::FinalTerminalValidation(
-                    source,
-                ),
-            );
+            return Err(ActiveReblitBootSyncCommitDecisionPersistenceError::FinalTerminalValidation(source));
         }
         Err(ActiveReblitBootSyncCompleteRecordAdvanceError::Installation(source)) => {
             drop(journal);
@@ -181,8 +158,8 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
     if let ActiveReblitBootSyncCommitDecisionAdvanceOutcome::Published { .. } = &advance {
         after_active_reblit_boot_sync_commit_decision_same_store_check_before_reopen();
     }
-    let reopened = try_reopen_canonical_journal(&installation)
-        .map_err(ActiveReblitBootSyncCommitDecisionReopenError::from);
+    let reopened =
+        try_reopen_canonical_journal(&installation).map_err(ActiveReblitBootSyncCommitDecisionReopenError::from);
 
     match advance {
         ActiveReblitBootSyncCommitDecisionAdvanceOutcome::Published {
@@ -192,31 +169,25 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
         } => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
                 before_active_reblit_boot_sync_commit_decision_reopened_validation();
-                let reopened_validation = post_advance_authority.revalidate_successor_reopened(
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                );
+                let reopened_validation =
+                    post_advance_authority.revalidate_successor_reopened(&reopened, &successor_binding, &successor);
                 match reopened_validation {
                     Ok(()) => {
                         after_active_reblit_boot_sync_commit_decision_old_binding_validation();
-                        let fresh_binding = match recapture_reopened_successor_binding(
-                            &installation,
-                            &reopened,
-                            &successor,
-                        ) {
-                            Ok(fresh_binding) => fresh_binding,
-                            Err(source) => {
-                                drop(successor_binding);
-                                drop(post_advance_authority);
-                                drop(reopened);
-                                return Err(
-                                    ActiveReblitBootSyncCommitDecisionPersistenceError::FreshSuccessorBinding {
-                                        source,
-                                    },
-                                );
-                            }
-                        };
+                        let fresh_binding =
+                            match recapture_reopened_successor_binding(&installation, &reopened, &successor) {
+                                Ok(fresh_binding) => fresh_binding,
+                                Err(source) => {
+                                    drop(successor_binding);
+                                    drop(post_advance_authority);
+                                    drop(reopened);
+                                    return Err(
+                                        ActiveReblitBootSyncCommitDecisionPersistenceError::FreshSuccessorBinding {
+                                            source,
+                                        },
+                                    );
+                                }
+                            };
                         let old_binding_revalidation = post_advance_authority.revalidate_successor_reopened(
                             &reopened,
                             &successor_binding,
@@ -263,19 +234,23 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
                         drop(successor_binding);
                         drop(post_advance_authority);
                         drop(reopened);
-                        Err(ActiveReblitBootSyncCommitDecisionPersistenceError::PostAdvanceValidation {
-                            durable: DurableActiveReblitBootSyncCommitDecisionRecord::CommitDecided,
-                            stage: ActiveReblitBootSyncCommitDecisionValidationStage::ReopenedOldBinding,
-                            source,
-                        })
+                        Err(
+                            ActiveReblitBootSyncCommitDecisionPersistenceError::PostAdvanceValidation {
+                                durable: DurableActiveReblitBootSyncCommitDecisionRecord::CommitDecided,
+                                stage: ActiveReblitBootSyncCommitDecisionValidationStage::ReopenedOldBinding,
+                                source,
+                            },
+                        )
                     }
                 }
             }
             Ok((reopened, actual)) => {
                 drop(reopened);
-                Err(ActiveReblitBootSyncCommitDecisionPersistenceError::ReopenAfterSuccessfulAdvance {
-                    source: unexpected_record(&source_record, &successor, actual),
-                })
+                Err(
+                    ActiveReblitBootSyncCommitDecisionPersistenceError::ReopenAfterSuccessfulAdvance {
+                        source: unexpected_record(&source_record, &successor, actual),
+                    },
+                )
             }
             Err(source) => {
                 Err(ActiveReblitBootSyncCommitDecisionPersistenceError::ReopenAfterSuccessfulAdvance { source })
@@ -291,19 +266,23 @@ fn persist_active_reblit_boot_sync_commit_decision_inner(
             match reopened {
                 Ok((reopened, Some(actual))) if actual == source_record => {
                     drop(reopened);
-                    Err(ActiveReblitBootSyncCommitDecisionPersistenceError::PostAdvanceValidation {
-                        durable: DurableActiveReblitBootSyncCommitDecisionRecord::BootSyncComplete,
-                        stage: ActiveReblitBootSyncCommitDecisionValidationStage::SameStore,
-                        source: validation,
-                    })
+                    Err(
+                        ActiveReblitBootSyncCommitDecisionPersistenceError::PostAdvanceValidation {
+                            durable: DurableActiveReblitBootSyncCommitDecisionRecord::BootSyncComplete,
+                            stage: ActiveReblitBootSyncCommitDecisionValidationStage::SameStore,
+                            source: validation,
+                        },
+                    )
                 }
                 Ok((reopened, Some(actual))) if actual == successor => {
                     drop(reopened);
-                    Err(ActiveReblitBootSyncCommitDecisionPersistenceError::PostAdvanceValidation {
-                        durable: DurableActiveReblitBootSyncCommitDecisionRecord::CommitDecided,
-                        stage: ActiveReblitBootSyncCommitDecisionValidationStage::SameStore,
-                        source: validation,
-                    })
+                    Err(
+                        ActiveReblitBootSyncCommitDecisionPersistenceError::PostAdvanceValidation {
+                            durable: DurableActiveReblitBootSyncCommitDecisionRecord::CommitDecided,
+                            stage: ActiveReblitBootSyncCommitDecisionValidationStage::SameStore,
+                            source: validation,
+                        },
+                    )
                 }
                 Ok((reopened, actual)) => {
                     drop(reopened);
@@ -555,10 +534,7 @@ pub(in crate::client) enum ActiveReblitBootSyncCommitDecisionPersistenceError {
     #[error("the bound advance rejected the derived exact ActiveReblit CommitDecided successor")]
     BoundAdvanceUnexpectedSuccessor,
     #[error("repeat exact terminal output validation at the bound journal advance")]
-    FinalTerminalValidation(
-        #[source]
-        ActiveReblitBootPostCompletionValidationError,
-    ),
+    FinalTerminalValidation(#[source] ActiveReblitBootPostCompletionValidationError),
     #[error("revalidate retained installation before the exact ActiveReblit CommitDecided advance")]
     Installation(#[source] installation::Error),
     #[error("ActiveReblit commit-decision journal advance failed after reopening exact durable {durable:?} record")]
@@ -567,7 +543,9 @@ pub(in crate::client) enum ActiveReblitBootSyncCommitDecisionPersistenceError {
         #[source]
         source: StorageError,
     },
-    #[error("ActiveReblit commit-decision journal advance failed ({advance}) and its canonical record could not be reconciled")]
+    #[error(
+        "ActiveReblit commit-decision journal advance failed ({advance}) and its canonical record could not be reconciled"
+    )]
     AdvanceAndReopen {
         advance: StorageError,
         #[source]

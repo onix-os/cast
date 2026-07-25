@@ -9,25 +9,19 @@ use crate::{
         active_reblit_bls_renderer::BoundActiveReblitBlsPublicationPlan,
         active_reblit_boot_publication_preflight::ActiveReblitCommitCleanupCompleteSeal,
         active_reblit_boot_sync_staging::{
-            CommitCleanupCompleteStagedActiveReblitCompleteError,
-            CompleteStagedActiveReblitBootSync,
+            CommitCleanupCompleteStagedActiveReblitCompleteError, CompleteStagedActiveReblitBootSync,
             CompleteStagedActiveReblitBootSyncValidationError,
         },
         active_reblit_desired_publication::PreparedActiveReblitDesiredPublicationInventory,
     },
-    db::state::{
-        BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome,
-    },
+    db::state::{BootPublicationReceiptPromotionOutcome, BootPublicationReceiptStageOutcome},
     transition_journal::TransitionRecord,
 };
 
 use super::{
-    ActiveReblitBootCommitCleanupCompleteHandoff,
-    ActiveReblitBootCommitCleanupPostAdvanceError,
-    ActiveReblitBootTerminalEvidenceValidationError,
-    ValidatedActiveReblitBootPublicationEffect,
-    validate_cleanup_complete_terminal_sandwich,
-    validate_exact_terminal_evidence_snapshot,
+    ActiveReblitBootCommitCleanupCompleteHandoff, ActiveReblitBootCommitCleanupPostAdvanceError,
+    ActiveReblitBootTerminalEvidenceValidationError, ValidatedActiveReblitBootPublicationEffect,
+    validate_cleanup_complete_terminal_sandwich, validate_exact_terminal_evidence_snapshot,
 };
 
 /// Exact durable generation-15 `Complete` handoff retaining the writer
@@ -47,14 +41,7 @@ pub(in crate::client) struct ActiveReblitBootCompleteHandoff<
     completed: CompleteStagedActiveReblitBootSync<
         'plan,
         'inventory,
-        BoundActiveReblitBlsPublicationPlan<
-            'input,
-            'topology_view,
-            'topology_authority,
-            'attempt,
-            'stone,
-            'roots,
-        >,
+        BoundActiveReblitBlsPublicationPlan<'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>,
     >,
     database_outcome: BootPublicationReceiptPromotionOutcome,
     publication_count: usize,
@@ -64,9 +51,7 @@ pub(in crate::client) struct ActiveReblitBootCompleteHandoff<
     evidence: Vec<ValidatedActiveReblitBootPublicationEffect>,
 }
 
-impl std::fmt::Debug
-    for ActiveReblitBootCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_>
-{
+impl std::fmt::Debug for ActiveReblitBootCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ActiveReblitBootCompleteHandoff")
@@ -83,15 +68,11 @@ impl ActiveReblitBootCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.completed.record()
     }
 
-    pub(in crate::client) const fn receipt_fingerprint(
-        &self,
-    ) -> BootPublicationReceiptFingerprint {
+    pub(in crate::client) const fn receipt_fingerprint(&self) -> BootPublicationReceiptFingerprint {
         self.completed.receipt_fingerprint()
     }
 
-    pub(in crate::client) const fn database_outcome(
-        &self,
-    ) -> BootPublicationReceiptPromotionOutcome {
+    pub(in crate::client) const fn database_outcome(&self) -> BootPublicationReceiptPromotionOutcome {
         self.database_outcome
     }
 
@@ -111,35 +92,20 @@ impl ActiveReblitBootCompleteHandoff<'_, '_, '_, '_, '_, '_, '_, '_> {
         self.replaced_count
     }
 
-    pub(in crate::client) const fn inventory(
-        &self,
-    ) -> &PreparedActiveReblitDesiredPublicationInventory {
+    pub(in crate::client) const fn inventory(&self) -> &PreparedActiveReblitDesiredPublicationInventory {
         self.completed.inventory()
     }
 
-    pub(in crate::client) const fn staging_outcome(
-        &self,
-    ) -> BootPublicationReceiptStageOutcome {
+    pub(in crate::client) const fn staging_outcome(&self) -> BootPublicationReceiptStageOutcome {
         self.completed.staging_outcome()
     }
 
-    pub(in crate::client) fn evidence(
-        &self,
-    ) -> &[ValidatedActiveReblitBootPublicationEffect] {
+    pub(in crate::client) fn evidence(&self) -> &[ValidatedActiveReblitBootPublicationEffect] {
         &self.evidence
     }
 }
 
-impl<
-        'plan,
-        'inventory,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'inventory, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     ActiveReblitBootCommitCleanupCompleteHandoff<
         'plan,
         'inventory,
@@ -171,13 +137,11 @@ where
         >,
         ActiveReblitBootCompleteError,
     > {
-        self.cleaned
-            .revalidate_against(client)
-            .map_err(|source| {
-                ActiveReblitBootCompleteError::PreAdvance(
-                    ActiveReblitBootCommitCleanupPostAdvanceError::CleanupCompleteEvidence(source),
-                )
-            })?;
+        self.cleaned.revalidate_against(client).map_err(|source| {
+            ActiveReblitBootCompleteError::PreAdvance(
+                ActiveReblitBootCommitCleanupPostAdvanceError::CleanupCompleteEvidence(source),
+            )
+        })?;
         let retained_plan = self.cleaned.plan();
         validate_cleanup_complete_terminal_sandwich(&self, client, retained_plan)
             .map_err(ActiveReblitBootCompleteError::PreAdvance)?;
@@ -269,10 +233,7 @@ where
 
 #[path = "complete/finalization.rs"]
 mod finalization;
-pub(in crate::client) use finalization::{
-    ActiveReblitBootFinalizationError,
-    ActiveReblitBootFinalizedHandoff,
-};
+pub(in crate::client) use finalization::{ActiveReblitBootFinalizationError, ActiveReblitBootFinalizedHandoff};
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootCompleteError {

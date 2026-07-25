@@ -27,10 +27,8 @@ fn dangling_and_tampered_pending_bodies_fail_before_head_mutation() {
     let head = tampered.boot_publication_receipt_head().unwrap();
     tampered.conn.exec(|connection| {
         let changed = diesel::update(
-            boot_publication_receipts::table.filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(pending.fingerprint().as_bytes().as_slice()),
-            ),
+            boot_publication_receipts::table
+                .filter(boot_publication_receipts::receipt_sha256.eq(pending.fingerprint().as_bytes().as_slice())),
         )
         .set(boot_publication_receipts::canonical_body.eq(foreign.canonical_body()))
         .execute(connection)
@@ -74,10 +72,8 @@ fn dangling_and_tampered_committed_predecessors_block_promotion() {
     let head = tampered.boot_publication_receipt_head().unwrap();
     tampered.conn.exec(|connection| {
         let changed = diesel::update(
-            boot_publication_receipts::table.filter(
-                boot_publication_receipts::receipt_sha256
-                    .eq(predecessor.fingerprint().as_bytes().as_slice()),
-            ),
+            boot_publication_receipts::table
+                .filter(boot_publication_receipts::receipt_sha256.eq(predecessor.fingerprint().as_bytes().as_slice())),
         )
         .set(boot_publication_receipts::canonical_body.eq(pending.canonical_body()))
         .execute(connection)

@@ -24,8 +24,8 @@ use super::{
     UsrRollbackActiveReblitBootRepairCompleteNamespaceInspection,
     UsrRollbackActiveReblitBootRepairCompleteNamespaceProof, active_reblit_completed_boot_repair_plan_is_exact,
     capture_active_reblit_boot_repair_active_state, complete_namespace_error_is_structural,
-    inspect_active_reblit_boot_repair_database,
-    require_exact_active_reblit_boot_repair_active_state, require_exact_active_reblit_boot_repair_database,
+    inspect_active_reblit_boot_repair_database, require_exact_active_reblit_boot_repair_active_state,
+    require_exact_active_reblit_boot_repair_database,
 };
 
 pub(in crate::client) enum UsrRollbackActiveReblitBootRepairCompleteAdmission<'system, 'reservation> {

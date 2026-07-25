@@ -147,7 +147,10 @@ fn sealed_memfd(bytes: &[u8]) -> File {
     // SAFETY: fchmod consumes only the live descriptor and integer mode.
     assert_eq!(unsafe { nix::libc::fchmod(file.as_raw_fd(), 0o400) }, 0);
     // SAFETY: F_ADD_SEALS consumes only the live descriptor and fixed mask.
-    assert_eq!(unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_ADD_SEALS, FULL_SEALS) }, 0);
+    assert_eq!(
+        unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_ADD_SEALS, FULL_SEALS) },
+        0
+    );
     file
 }
 
@@ -175,20 +178,20 @@ fn marker_value<'line>(lines: &[&'line str], key: &str) -> &'line str {
 
 fn assert_disposable_vm_identity_and_marker(publication_parent: &str) -> String {
     let expected_hostname = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_HOSTNAME");
-    let expected_machine_id =
-        required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID");
+    let expected_machine_id = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_MACHINE_ID");
     let expected_boot_id = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_BOOT_ID");
     let expected_virtualization =
         required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_VIRTUALIZATION");
-    let expected_target_devnum =
-        required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM");
-    let expected_ssh_sha256 =
-        required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_SSH_SHA256");
+    let expected_target_devnum = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_TARGET_DEVNUM");
+    let expected_ssh_sha256 = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_EXPECTED_SSH_SHA256");
     assert_eq!(
         read_disposable_vm_line(Path::new("/proc/sys/kernel/hostname")),
         expected_hostname
     );
-    assert_eq!(read_disposable_vm_line(Path::new("/etc/machine-id")), expected_machine_id);
+    assert_eq!(
+        read_disposable_vm_line(Path::new("/etc/machine-id")),
+        expected_machine_id
+    );
     assert_eq!(
         read_disposable_vm_line(Path::new("/proc/sys/kernel/random/boot_id")),
         expected_boot_id
@@ -206,11 +209,17 @@ fn assert_disposable_vm_identity_and_marker(publication_parent: &str) -> String 
         .output()
         .unwrap();
     assert!(detected.status.success());
-    assert_eq!(std::str::from_utf8(&detected.stdout).unwrap(), format!("{expected_virtualization}\n"));
+    assert_eq!(
+        std::str::from_utf8(&detected.stdout).unwrap(),
+        format!("{expected_virtualization}\n")
+    );
     assert!(detected.stderr.is_empty());
 
     let ssh_connection = required_disposable_vm_environment("SSH_CONNECTION");
-    assert_eq!(hex::encode(Sha256::digest(ssh_connection.as_bytes())), expected_ssh_sha256);
+    assert_eq!(
+        hex::encode(Sha256::digest(ssh_connection.as_bytes())),
+        expected_ssh_sha256
+    );
     let marker = required_disposable_vm_environment("CAST_VM_BOOT_PUBLICATION_CONSUMED_MARKER");
     assert_eq!(marker, DISPOSABLE_VM_CONSUMED_MARKER);
     let marker_path = Path::new(&marker);
@@ -250,7 +259,10 @@ fn assert_disposable_vm_identity_and_marker(publication_parent: &str) -> String 
     ];
     assert_eq!(lines.len(), expected_keys.len());
     for (line, key) in lines.iter().zip(expected_keys) {
-        assert!(line.starts_with(&format!("{key}=")), "consumed marker key order changed");
+        assert!(
+            line.starts_with(&format!("{key}=")),
+            "consumed marker key order changed"
+        );
     }
     assert_eq!(marker_value(&lines, "protocol"), "1");
     assert_eq!(marker_value(&lines, "hostname"), expected_hostname);
@@ -290,12 +302,16 @@ fn assert_disposable_vm_mount_policy(expected_devnum: &str) {
     for required in ["rw", "fmask=0133", "dmask=0022"] {
         assert!(has_mount_option(super_options, required));
     }
-    assert!(super_options
-        .split(',')
-        .all(|option| !option.starts_with("uid=") || option == "uid=0"));
-    assert!(super_options
-        .split(',')
-        .all(|option| !option.starts_with("gid=") || option == "gid=0"));
+    assert!(
+        super_options
+            .split(',')
+            .all(|option| !option.starts_with("uid=") || option == "uid=0")
+    );
+    assert!(
+        super_options
+            .split(',')
+            .all(|option| !option.starts_with("gid=") || option == "gid=0")
+    );
     let mount_metadata = fs::metadata(DISPOSABLE_VM_MOUNT_ROOT).unwrap();
     assert_eq!(mount_metadata.uid(), 0);
     assert_eq!(mount_metadata.gid(), 0);
@@ -306,15 +322,25 @@ fn disposable_vm_parent() -> PathBuf {
         env::var("CAST_VM_BOOT_PUBLICATION_CONFIRMATION").unwrap(),
         DISPOSABLE_VM_CONFIRMATION
     );
-    assert!(nix::unistd::geteuid().is_root(), "disposable VM publication requires guest root");
-    assert!(Path::new("/sys/firmware/efi").is_dir(), "disposable VM publication requires UEFI");
+    assert!(
+        nix::unistd::geteuid().is_root(),
+        "disposable VM publication requires guest root"
+    );
+    assert!(
+        Path::new("/sys/firmware/efi").is_dir(),
+        "disposable VM publication requires UEFI"
+    );
 
     let authored = env::var("CAST_VM_BOOT_PUBLICATION_PARENT").unwrap();
     let relative = authored
         .strip_prefix(DISPOSABLE_VM_PARENT_PREFIX)
         .expect("publication parent escaped the fixed disposable VM mount root");
     assert!(!relative.is_empty() && !relative.ends_with('/'));
-    assert!(relative.split('/').all(|component| !component.is_empty() && component != "." && component != ".."));
+    assert!(
+        relative
+            .split('/')
+            .all(|component| !component.is_empty() && component != "." && component != "..")
+    );
     let parent = PathBuf::from(authored);
     assert!(parent.is_dir());
     assert!(!fs::symlink_metadata(&parent).unwrap().file_type().is_symlink());
@@ -413,7 +439,10 @@ fn assert_nonexact_mode_0644_residue(
 
     let first = fixture.publish_generated(bytes);
 
-    assert!(matches!(first, Err(RetainedBootFilePublicationError::InjectedFault { .. })));
+    assert!(matches!(
+        first,
+        Err(RetainedBootFilePublicationError::InjectedFault { .. })
+    ));
     assert!(!fixture.canonical().exists());
     let private = fixture.private_path();
     let opening = fs::metadata(&private).unwrap();
@@ -423,7 +452,10 @@ fn assert_nonexact_mode_0644_residue(
 
     let retry = fixture.publish_generated(bytes);
 
-    assert!(retry.is_err(), "an unowned incomplete attempt must not be adopted or rewritten");
+    assert!(
+        retry.is_err(),
+        "an unowned incomplete attempt must not be adopted or rewritten"
+    );
     assert!(!fixture.canonical().exists());
     let closing = fs::metadata(&private).unwrap();
     assert_eq!(closing.ino(), opening.ino());
@@ -491,7 +523,10 @@ fn stop_after_final_write_preserves_exact_mode_0644_residue_then_same_inode_resu
 
     let first = fixture.publish_generated(bytes);
 
-    assert!(matches!(first, Err(RetainedBootFilePublicationError::InjectedFault { .. })));
+    assert!(matches!(
+        first,
+        Err(RetainedBootFilePublicationError::InjectedFault { .. })
+    ));
     assert!(!fixture.canonical().exists());
     let private = fixture.private_path();
     let residue = fs::metadata(&private).unwrap();
@@ -505,7 +540,10 @@ fn stop_after_final_write_preserves_exact_mode_0644_residue_then_same_inode_resu
     assert_eq!(resumed.file_inode(), residue.ino());
     assert!(!private.exists());
     assert_eq!(fs::read(fixture.canonical()).unwrap(), bytes);
-    assert_eq!(fs::metadata(fixture.canonical()).unwrap().permissions().mode() & 0o7777, 0o644);
+    assert_eq!(
+        fs::metadata(fixture.canonical()).unwrap().permissions().mode() & 0o7777,
+        0o644
+    );
 }
 
 #[test]
@@ -520,7 +558,10 @@ fn generated_source_publishes_once_and_exact_destination_is_idempotent() {
     let expected_sha256: [u8; 32] = Sha256::digest(bytes).into();
     assert_eq!(published.sha256(), expected_sha256);
     assert_eq!(fs::read(fixture.canonical()).unwrap(), bytes);
-    assert_eq!(fs::metadata(fixture.canonical()).unwrap().permissions().mode() & 0o7777, 0o644);
+    assert_eq!(
+        fs::metadata(fixture.canonical()).unwrap().permissions().mode() & 0o7777,
+        0o644
+    );
     let inode = published.file_inode();
 
     let idempotent = fixture.publish_generated(bytes).unwrap();
@@ -563,7 +604,10 @@ fn different_canonical_destination_is_preserved_and_refused() {
 
     let error = fixture.publish_generated(b"expected bytes").unwrap_err();
 
-    assert!(matches!(error, RetainedBootFilePublicationError::DifferentCanonicalDestination));
+    assert!(matches!(
+        error,
+        RetainedBootFilePublicationError::DifferentCanonicalDestination
+    ));
     assert_eq!(fs::read(fixture.canonical()).unwrap(), before);
     assert_eq!(fs::read_dir(&fixture.destination).unwrap().count(), 1);
 }
@@ -598,7 +642,10 @@ fn different_and_foreign_private_residue_are_preserved_and_refused() {
     let private = fixture.private_path();
     fs::write(&private, b"different private bytes").unwrap();
     let different = fixture.publish_generated(bytes).unwrap_err();
-    assert!(matches!(different, RetainedBootFilePublicationError::DifferentPrivateResidue));
+    assert!(matches!(
+        different,
+        RetainedBootFilePublicationError::DifferentPrivateResidue
+    ));
     assert_eq!(fs::read(&private).unwrap(), b"different private bytes");
     assert!(!fixture.canonical().exists());
 
@@ -624,7 +671,10 @@ fn exact_bytes_with_wrong_effective_mode_are_not_adopted() {
             field: "destination metadata or effective mode"
         }
     ));
-    assert_eq!(fs::metadata(fixture.canonical()).unwrap().permissions().mode() & 0o7777, 0o600);
+    assert_eq!(
+        fs::metadata(fixture.canonical()).unwrap().permissions().mode() & 0o7777,
+        0o600
+    );
 }
 
 #[test]
@@ -636,7 +686,9 @@ fn source_sha256_mismatch_fails_before_private_publication() {
 
     assert!(matches!(
         error,
-        RetainedBootFilePublicationError::ContentIdentityMismatch { field: "source SHA-256" }
+        RetainedBootFilePublicationError::ContentIdentityMismatch {
+            field: "source SHA-256"
+        }
     ));
     assert!(!fixture.canonical().exists());
     assert!(fixture.private_path().is_file());
@@ -646,9 +698,7 @@ fn source_sha256_mismatch_fails_before_private_publication() {
 fn error_reported_after_single_move_is_reconciled_as_published() {
     let fixture = PublicationFixture::new("forge-boot-leaf-rename-reconcile-");
     let bytes = b"rename reconciliation payload\n";
-    arm_retained_boot_file_publication_fault(
-        FixtureRetainedBootFilePublicationFault::RenameReportsErrorAfterApplied,
-    );
+    arm_retained_boot_file_publication_fault(FixtureRetainedBootFilePublicationFault::RenameReportsErrorAfterApplied);
 
     let published = fixture.publish_generated(bytes).unwrap();
 

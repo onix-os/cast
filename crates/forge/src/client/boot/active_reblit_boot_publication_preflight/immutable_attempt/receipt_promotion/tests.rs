@@ -4,44 +4,31 @@ use std::{
     path::Path,
 };
 
-use super::*;
 use super::super::receipt_promotion::*;
+use super::*;
 use crate::{
     client::{
         active_reblit_bls_renderer::arm_bound_plan_collision_drift,
         active_reblit_boot_namespace_inputs::ActiveReblitBootNamespaceInputError,
         active_reblit_boot_publication_preflight::fixture_assessment::{
-            FixtureBootNamespaceAssessment,
-            FixtureBootNamespaceAssessmentGuard,
-            arm as arm_fixture_boot_namespace_assessments,
-            remaining as fixture_boot_namespace_assessments_remaining,
-        },
-        active_reblit_mounted_boot_topology::{
-            ActiveReblitBootPublicationTargetsError,
-            ActiveReblitMountedBootTopologyCaptureError,
-            BootTargetRole,
-            arm_fixture_immutable_leaf_assessments,
-            fixture_immutable_leaf_assessments_remaining,
+            FixtureBootNamespaceAssessment, FixtureBootNamespaceAssessmentGuard,
+            arm as arm_fixture_boot_namespace_assessments, remaining as fixture_boot_namespace_assessments_remaining,
         },
         active_reblit_installed_boot_publication_delta::ActiveReblitBootPublicationDeltaAction,
+        active_reblit_mounted_boot_topology::{
+            ActiveReblitBootPublicationTargetsError, ActiveReblitMountedBootTopologyCaptureError, BootTargetRole,
+            arm_fixture_immutable_leaf_assessments, fixture_immutable_leaf_assessments_remaining,
+        },
     },
-    db::state::{
-        BootPublicationReceiptPromotionOutcome,
-        BootPublicationReceiptState,
-    },
+    db::state::{BootPublicationReceiptPromotionOutcome, BootPublicationReceiptState},
     transition_journal::{Phase, TransitionJournalStore},
 };
 
 use super::support::with_staged_alias_attempt;
 
-fn arm_exact_alias_assessments(
-    root: &Path,
-    count: usize,
-) -> FixtureBootNamespaceAssessmentGuard {
+fn arm_exact_alias_assessments(root: &Path, count: usize) -> FixtureBootNamespaceAssessmentGuard {
     arm_fixture_boot_namespace_assessments(
-        (0..count).map(|_| {
-            FixtureBootNamespaceAssessment::new(BootTargetRole::Esp, root.to_owned())
-        }),
+        (0..count).map(|_| FixtureBootNamespaceAssessment::new(BootTargetRole::Esp, root.to_owned())),
     )
 }
 
@@ -54,10 +41,7 @@ fn set_safe_publication_parents(root: &Path, relative_path: &Path) {
     }
 }
 
-fn assert_promoted_state(
-    state: &BootPublicationReceiptState,
-    fingerprint: BootPublicationReceiptFingerprint,
-) {
+fn assert_promoted_state(state: &BootPublicationReceiptState, fingerprint: BootPublicationReceiptFingerprint) {
     assert_eq!(state.head().committed(), Some(fingerprint));
     assert!(state.head().pending().is_none());
     assert!(state.pending().is_none());
@@ -92,10 +76,7 @@ fn evidence_snapshot(
 macro_rules! publish_terminal_alias {
     ($staged:expr, $client:expr, $plan:expr, $root:expr) => {{
         let aggregate = arm_exact_alias_assessments($root, 3);
-        let leaf = arm_fixture_immutable_leaf_assessments(
-            ($root).to_owned(),
-            ($plan).publication_count(),
-        );
+        let leaf = arm_fixture_immutable_leaf_assessments(($root).to_owned(), ($plan).publication_count());
         let terminal = ($staged)
             .attempt_immutable_boot_publication($client)
             .expect("terminal immutable publication");
@@ -109,6 +90,8 @@ macro_rules! publish_terminal_alias {
 
 #[path = "tests/admission.rs"]
 mod admission;
+#[path = "tests/completion.rs"]
+mod completion;
 #[path = "tests/database_reporting.rs"]
 mod database_reporting;
 #[path = "tests/fail_stop.rs"]
@@ -119,5 +102,3 @@ mod last_boundary;
 mod pre_promotion_integrity;
 #[path = "tests/success.rs"]
 mod success;
-#[path = "tests/completion.rs"]
-mod completion;

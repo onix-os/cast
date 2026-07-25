@@ -37,6 +37,16 @@ mod partial_replacement;
 mod slot_links;
 mod usr_xattrs;
 
+/// A minimal receipt pair for driving a record through the explicit
+/// `boot_sync_started_successor` in tests (validation requires a present pair
+/// from `BootSyncStarted` onward).
+fn test_boot_publication_receipt_pair() -> crate::boot_publication::BootPublicationReceiptPair {
+    crate::boot_publication::BootPublicationReceiptPair {
+        committed: None,
+        pending: crate::boot_publication::BootPublicationReceiptFingerprint::from_bytes([0x11; 32]),
+    }
+}
+
 const ROOT_ABI: [(&str, &str); 5] = [
     ("bin", "usr/bin"),
     ("sbin", "usr/sbin"),
@@ -206,7 +216,12 @@ fn active_reblit_boot_repair_complete_fixture(outcome: BootRepairOutcome) -> (Fi
         if current.phase == Phase::BootSyncStarted {
             break;
         }
-        let successor = current.forward_successor(None).unwrap();
+        // Entering `BootSyncStarted` requires the explicit receipt-bearing
+        // successor; every earlier phase uses the generic forward edge.
+        let successor = current
+            .forward_successor(None)
+            .or_else(|_| current.boot_sync_started_successor(test_boot_publication_receipt_pair()))
+            .unwrap();
         journal.advance(&current, &successor).unwrap();
         current = successor;
     }

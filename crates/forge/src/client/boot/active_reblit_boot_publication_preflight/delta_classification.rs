@@ -2,20 +2,11 @@
 
 use super::RevalidatedActiveReblitBootPublicationPreflight;
 use crate::client::active_reblit_installed_boot_publication_delta::{
-    ActiveReblitBootPublicationDeltaError,
-    ClassifiedActiveReblitBootPublicationDelta,
+    ActiveReblitBootPublicationDeltaError, ClassifiedActiveReblitBootPublicationDelta,
     PreparedActiveReblitBootPublicationDelta,
 };
 
-impl<
-        'plan,
-        'input,
-        'topology_view,
-        'topology_authority,
-        'attempt,
-        'stone,
-        'roots,
-    >
+impl<'plan, 'input, 'topology_view, 'topology_authority, 'attempt, 'stone, 'roots>
     RevalidatedActiveReblitBootPublicationPreflight<
         'plan,
         'input,
@@ -35,8 +26,7 @@ impl<
     pub(in crate::client) fn classify_installed_boot_publication_delta(
         &self,
         prepared: &PreparedActiveReblitBootPublicationDelta,
-    ) -> Result<ClassifiedActiveReblitBootPublicationDelta, ActiveReblitBootPublicationDeltaError>
-    {
+    ) -> Result<ClassifiedActiveReblitBootPublicationDelta, ActiveReblitBootPublicationDeltaError> {
         prepared.classify_with_preflight_assessment(&self.assessment_seal)
     }
 }

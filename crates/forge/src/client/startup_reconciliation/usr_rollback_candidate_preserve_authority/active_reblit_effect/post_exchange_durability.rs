@@ -2,9 +2,9 @@
 
 mod persistence;
 
+pub(in crate::client) use persistence::UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError;
 #[cfg(test)]
 pub(in crate::client) use persistence::arm_before_active_reblit_candidate_preserve_persistence_durable_trailing_evidence;
-pub(in crate::client) use persistence::UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError;
 
 #[cfg(test)]
 use crate::transition_journal::RollbackActionOutcome;
@@ -139,8 +139,8 @@ fn complete_after_binding<'reservation, Namespace>(
     )?;
     let namespace_result = complete_namespace(namespace, &installation, &record);
     run_before_durable_trailing_evidence();
-    let trailing_evidence = require_effect_binding(&installation, &journal_record_binding, &record, journal)
-        .and_then(|()| {
+    let trailing_evidence =
+        require_effect_binding(&installation, &journal_record_binding, &record, journal).and_then(|()| {
             require_active_reblit_post_effect_evidence(
                 &installation,
                 &state_db,

@@ -43,10 +43,7 @@ fn only_registered_extensions_occupy_the_fixed_slot() {
     fixture.write_root(ROOT_LOCATOR);
     let prepared = fixture.prepare().unwrap();
     assert_eq!(
-        prepared
-            .revalidate(&fixture.installation)
-            .unwrap()
-            .kernel_argument(),
+        prepared.revalidate(&fixture.installation).unwrap().kernel_argument(),
         format!("root={ROOT_LOCATOR}")
     );
 }

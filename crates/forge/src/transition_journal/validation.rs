@@ -204,14 +204,11 @@ impl TransitionRecord {
             return if self.boot_publication_receipts.is_none() {
                 Ok(())
             } else {
-                Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(
-                    self.version,
-                ))
+                Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(self.version))
             };
         }
 
-        let required = self.options.run_boot_sync
-            && layout_phase.ordinal() >= ForwardPhase::BootSyncStarted.ordinal();
+        let required = self.options.run_boot_sync && layout_phase.ordinal() >= ForwardPhase::BootSyncStarted.ordinal();
         if self.boot_publication_receipts.is_some() == required {
             Ok(())
         } else {

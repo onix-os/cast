@@ -142,13 +142,7 @@ impl ActiveReblitBootSyncCompleteNamespaceProof {
         binding_mode: SuccessorBindingMode,
     ) -> Result<(), ActiveReblitBootSyncCompleteNamespaceError> {
         require_exact_commit_decided_successor(completed, successor)?;
-        require_exact_successor_journal(
-            installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_journal(installation, journal, successor_binding, successor, binding_mode)?;
         installation.revalidate_mutable_namespace()?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
@@ -165,13 +159,7 @@ impl ActiveReblitBootSyncCompleteNamespaceProof {
         require_exact_layout(completed, &fresh, self.layout)?;
         require_exact_successor_layout(successor, &fresh, self.layout)?;
 
-        require_exact_successor_journal(
-            installation,
-            journal,
-            successor_binding,
-            successor,
-            binding_mode,
-        )?;
+        require_exact_successor_journal(installation, journal, successor_binding, successor, binding_mode)?;
         self.before.revalidate_retained()?;
         self.after.revalidate_retained()?;
         installation.revalidate_mutable_namespace()?;
@@ -189,7 +177,9 @@ fn exact_layout(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
 ) -> Result<LayoutAlternative, ActiveReblitBootSyncCompleteNamespaceError> {
-    if record.operation != Operation::ActiveReblit || record.phase != Phase::BootSyncComplete || record.rollback.is_some()
+    if record.operation != Operation::ActiveReblit
+        || record.phase != Phase::BootSyncComplete
+        || record.rollback.is_some()
     {
         return Err(ActiveReblitBootSyncCompleteNamespaceError::WrongSource);
     }
@@ -284,9 +274,7 @@ fn require_exact_successor_journal(
     successor: &TransitionRecord,
     binding_mode: SuccessorBindingMode,
 ) -> Result<(), ActiveReblitBootSyncCompleteNamespaceError> {
-    if matches!(binding_mode, SuccessorBindingMode::SameStore)
-        && !journal.has_record_store_binding(successor_binding)
-    {
+    if matches!(binding_mode, SuccessorBindingMode::SameStore) && !journal.has_record_store_binding(successor_binding) {
         return Err(ActiveReblitBootSyncCompleteNamespaceError::JournalChanged);
     }
     let cast = installation.retained_mutable_cast_directory()?;
@@ -346,9 +334,7 @@ mod classification_tests {
     #[test]
     fn stable_shape_mismatch_may_defer_but_changed_or_post_advance_evidence_does_not() {
         assert!(active_reblit_boot_sync_complete_namespace_error_is_mismatch(
-            &ActiveReblitBootSyncCompleteNamespaceError::Policy(NamespacePolicyConflict::CandidateCount {
-                actual: 0,
-            }),
+            &ActiveReblitBootSyncCompleteNamespaceError::Policy(NamespacePolicyConflict::CandidateCount { actual: 0 }),
         ));
         assert!(active_reblit_boot_sync_complete_namespace_error_is_mismatch(
             &ActiveReblitBootSyncCompleteNamespaceError::WrongSource,

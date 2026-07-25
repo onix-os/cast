@@ -22,7 +22,10 @@ fn startup_usr_exchanged_root_abi_temporary_and_foreign_final_names_never_mutate
     assert_eq!(temporary.canonical_bytes(), source);
     assert_eq!(usr_exchanged_root_abi_publication_attempts(), 0);
     assert_eq!(usr_exchanged_root_abi_complete_sync_attempts(), 0);
-    assert_eq!(fs::read_link(temporary.installation.root.join("bin.next")).unwrap(), std::path::Path::new("usr/bin"));
+    assert_eq!(
+        fs::read_link(temporary.installation.root.join("bin.next")).unwrap(),
+        std::path::Path::new("usr/bin")
+    );
 
     let foreign = Fixture::new(OperationKind::Archived, SourceCase::ExchangedPost);
     foreign.set_root_abi_subset(0);
@@ -33,7 +36,10 @@ fn startup_usr_exchanged_root_abi_temporary_and_foreign_final_names_never_mutate
     assert_eq!(pending(&error).phase(), Phase::UsrExchanged);
     assert_eq!(foreign.canonical_bytes(), source);
     assert_eq!(usr_exchanged_root_abi_publication_attempts(), 0);
-    assert_eq!(fs::read_link(foreign.installation.root.join("bin")).unwrap(), std::path::Path::new("usr/not-bin"));
+    assert_eq!(
+        fs::read_link(foreign.installation.root.join("bin")).unwrap(),
+        std::path::Path::new("usr/not-bin")
+    );
 }
 
 #[test]

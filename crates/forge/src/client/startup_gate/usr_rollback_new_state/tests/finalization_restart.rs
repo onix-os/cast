@@ -7,20 +7,18 @@
 use crate::{
     client::snapshot_startup_recovery_namespace,
     transition_journal::{
-        RollbackActionOutcome, arm_next_delete_canonical_unlink_fault,
-        arm_next_delete_directory_sync_fault, assert_delete_canonical_unlink_fault_consumed,
-        assert_delete_directory_sync_fault_consumed,
+        RollbackActionOutcome, arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
+        assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
     },
 };
 
 use super::{
     super::candidate_test_support::CandidateSource,
     support::{
-        CandidateOutcome, Epoch, FreshOutcome, assert_canonical_absent,
-        assert_suffix_dispatch_error, build_fresh_invalidation, effect_counts,
-        enter_fresh_clean_handles, enter_invalidation, install_persistent_joint_absence_database,
-        open_layout_database, persist_fresh_invalidated, persist_rollback_complete,
-        release_invalidation_fixture_handles, reset_namespace_effect_counts,
+        CandidateOutcome, Epoch, FreshOutcome, assert_canonical_absent, assert_suffix_dispatch_error,
+        build_fresh_invalidation, effect_counts, enter_fresh_clean_handles, enter_invalidation,
+        install_persistent_joint_absence_database, open_layout_database, persist_fresh_invalidated,
+        persist_rollback_complete, release_invalidation_fixture_handles, reset_namespace_effect_counts,
     },
 };
 

@@ -8,13 +8,12 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
-            new_state_candidate_preserve_move_attempt_count,
-            reset_new_state_candidate_preserve_move_attempt_count,
+            new_state_candidate_preserve_move_attempt_count, reset_new_state_candidate_preserve_move_attempt_count,
         },
     },
     transition_journal::{
-        PublicBindingRevalidationBoundary, RollbackActionOutcome,
-        arm_public_binding_revalidation_callback, assert_public_binding_revalidation_callback_consumed,
+        PublicBindingRevalidationBoundary, RollbackActionOutcome, arm_public_binding_revalidation_callback,
+        assert_public_binding_revalidation_callback_consumed,
     },
 };
 
@@ -26,16 +25,12 @@ use super::super::{
     persist_usr_rollback_candidate_preserve_and_reopen,
 };
 use super::support::{
-    CandidateOrigin, Fixture, Source, durable_authority, expected_candidate_preserved,
-    fixture_for_origin_at_epoch, non_journal_namespace_snapshot,
+    CandidateOrigin, Fixture, Source, durable_authority, expected_candidate_preserved, fixture_for_origin_at_epoch,
+    non_journal_namespace_snapshot,
 };
 
 fn canonical_journal(fixture: &Fixture) -> std::path::PathBuf {
-    fixture
-        .fixture
-        .installation
-        .root
-        .join(".cast/journal/state-transition")
+    fixture.fixture.installation.root.join(".cast/journal/state-transition")
 }
 
 fn inode_identity(path: &Path) -> (u64, u64) {
@@ -111,8 +106,7 @@ fn startup_usr_rollback_candidate_preserve_bound_advance_same_byte_replacements_
                         );
                         arm_public_binding_revalidation_callback(boundary, hook);
 
-                        let error =
-                            persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap_err();
+                        let error = persist_usr_rollback_candidate_preserve_and_reopen(journal, authority).unwrap_err();
 
                         assert_public_binding_revalidation_callback_consumed();
                         assert!(matches!(
@@ -186,7 +180,8 @@ fn startup_usr_rollback_candidate_preserve_same_byte_successor_replacement_after
 }
 
 #[test]
-fn startup_usr_rollback_candidate_preserve_same_byte_successor_replacement_after_same_store_binding_fails_reopened_binding() {
+fn startup_usr_rollback_candidate_preserve_same_byte_successor_replacement_after_same_store_binding_fails_reopened_binding()
+ {
     for historical in [false, true] {
         for source in Source::THROUGH_CANDIDATE_PRESERVED {
             for origin in CandidateOrigin::ALL {

@@ -1,26 +1,29 @@
-let b = import! cast.package.v3
-let builder = import! cast.builders.cargo.v2
-let base = b.mk_package (b.meta {
-    pname = "example",
-    version = "1.2.3",
-    release = 1,
-    homepage = "https://example.com",
-    license = ["MPL-2.0"],
-})
-let root = {
-    summary = b.optional.set "UPDATE SUMMARY",
-    description = b.optional.set "UPDATE DESCRIPTION",
-    .. b.output "out"
-}
+let a = import! cast.authored.v1
 {
-    builder = builder.builder {
-        run_tests = b.boolean.true,
-        .. builder.defaults
+    meta = {
+        pname = "example",
+        version = "1.2.3",
+        release = 1,
+        homepage = "https://example.com",
+        license = ["MPL-2.0"],
     },
-    build_inputs = [],
+    builder = a.builder.cargo { features = [], binaries = [], run_tests = a.true },
     sources = [
-        b.source.archive "https://example.com/example-1.2.3.tar.xz" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        a.source.archive "https://example.com/example-1.2.3.tar.xz" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ],
-    outputs = [root],
-    .. base
+    native_build_inputs = [],
+    build_inputs = [],
+    check_inputs = [],
+    outputs = a.outputs.with_root {
+        summary = a.optional.set "UPDATE SUMMARY",
+        description = a.optional.set "UPDATE DESCRIPTION",
+        .. a.output "out"
+    },
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

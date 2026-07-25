@@ -15,12 +15,10 @@ use crate::{
             UsrRollbackActiveReblitCompleteRouteSeal, UsrRollbackActiveReblitFinalizationSeal,
         },
         startup_reconciliation::{
-            UsrRollbackActiveReblitBootRepairCompleteAdmission,
-            UsrRollbackActiveReblitBootRepairCompleteAuthority,
+            UsrRollbackActiveReblitBootRepairCompleteAdmission, UsrRollbackActiveReblitBootRepairCompleteAuthority,
             UsrRollbackActiveReblitCompleteRouteAdmission, UsrRollbackActiveReblitCompleteRouteAuthority,
-            UsrRollbackActiveReblitCompleteRouteAuthorityError,
-            UsrRollbackActiveReblitFinalizationAdmission, UsrRollbackActiveReblitFinalizationAuthority,
-            active_reblit_candidate_preserve_exchange_attempt_count,
+            UsrRollbackActiveReblitCompleteRouteAuthorityError, UsrRollbackActiveReblitFinalizationAdmission,
+            UsrRollbackActiveReblitFinalizationAuthority, active_reblit_candidate_preserve_exchange_attempt_count,
             reset_active_reblit_candidate_preserve_exchange_attempt_count,
             reset_active_reblit_candidate_preserve_post_exchange_durability_events,
             take_active_reblit_candidate_preserve_post_exchange_durability_events,
@@ -28,8 +26,8 @@ use crate::{
         startup_recovery::{
             DurableUsrRollbackActiveReblitBootRepairCompleteRecord,
             DurableUsrRollbackActiveReblitBootRepairRequiredRecord,
-            DurableUsrRollbackActiveReblitBootRepairStartRecord,
-            DurableUsrRollbackActiveReblitCandidatePreserveRecord, DurableUsrRollbackActiveReblitCompleteRouteRecord,
+            DurableUsrRollbackActiveReblitBootRepairStartRecord, DurableUsrRollbackActiveReblitCandidatePreserveRecord,
+            DurableUsrRollbackActiveReblitCompleteRouteRecord,
             UsrRollbackActiveReblitBootRepairCompletePersistenceError,
             UsrRollbackActiveReblitBootRepairRequiredPersistenceError,
             UsrRollbackActiveReblitBootRepairStartPersistenceError,
@@ -230,7 +228,10 @@ pub(super) fn expected_rollback_complete(candidate_preserved: &TransitionRecord)
 }
 
 pub(super) fn assert_exact_no_boot_completion_plan(record: &TransitionRecord, source: CandidateSource) {
-    assert!(matches!(record.phase, Phase::CandidatePreserved | Phase::RollbackComplete));
+    assert!(matches!(
+        record.phase,
+        Phase::CandidatePreserved | Phase::RollbackComplete
+    ));
     assert_eq!(record.candidate.id, record.previous.id);
     let rollback = record.rollback.as_ref().unwrap();
     assert_eq!(
@@ -493,14 +494,7 @@ fn capture_complete_route_parts<'reservation>(
     UsrRollbackActiveReblitCompleteRouteAuthorityError,
 > {
     let seal = UsrRollbackActiveReblitCompleteRouteSeal::new_for_test();
-    UsrRollbackActiveReblitCompleteRouteAuthority::capture(
-        &seal,
-        installation,
-        journal,
-        database,
-        reservation,
-        record,
-    )
+    UsrRollbackActiveReblitCompleteRouteAuthority::capture(&seal, installation, journal, database, reservation, record)
 }
 
 pub(super) fn capture_boot_repair_complete_ready<'system, 'reservation>(

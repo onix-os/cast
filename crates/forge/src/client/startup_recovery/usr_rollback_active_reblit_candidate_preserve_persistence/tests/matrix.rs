@@ -49,7 +49,10 @@ fn exercise_success_matrix(origin: CandidateOrigin) {
                 assert_eq!(fixture.fixture.canonical_record(), expected);
                 assert_eq!(fixture.fixture.database_snapshot(), database_before);
                 assert_eq!(non_journal_namespace_snapshot(&fixture), namespace_before);
-                assert_eq!(active_reblit_candidate_preserve_exchange_attempt_count(), effect_count_before);
+                assert_eq!(
+                    active_reblit_candidate_preserve_exchange_attempt_count(),
+                    effect_count_before
+                );
                 cases += 1;
             }
         }

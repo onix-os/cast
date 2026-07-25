@@ -12,16 +12,10 @@ use std::{
     path::Path,
 };
 
-use config::declaration::{
-    RootDeclarationSlot, TypedDeclarationEvaluatorSet,
-};
+use config::declaration::{RootDeclarationSlot, TypedDeclarationEvaluatorSet};
 use declarative_config::{DeclarationEvaluator, Source, SourceRoot};
 
-use super::{
-    LoadError, LoadedSystemModel,
-    gluon::SystemIntentEvaluator,
-    load_source,
-};
+use super::{LoadError, LoadedSystemModel, gluon::SystemIntentEvaluator, load_source};
 
 const SOURCE_MODE_MASK: u32 = 0o7777;
 
@@ -69,12 +63,9 @@ pub(crate) fn load_rooted(
     directory_path: &Path,
     directory: &std::fs::File,
 ) -> Result<Option<LoadedSystemModel>, LoadError> {
-    let evaluators = TypedDeclarationEvaluatorSet::new([
-        SystemIntentEvaluator::default(),
-    ])
-    .expect("one validated system-intent adapter has no extension collision");
-    let slot = RootDeclarationSlot::new("system", "system.glu")
-        .expect("the canonical system-intent slot is valid");
+    let evaluators = TypedDeclarationEvaluatorSet::new([SystemIntentEvaluator::default()])
+        .expect("one validated system-intent adapter has no extension collision");
+    let slot = RootDeclarationSlot::new("system", "system.glu").expect("the canonical system-intent slot is valid");
     let discovered = slot
         .discover_at(directory_path, directory, evaluators.languages())
         .map_err(LoadError::RootedDiscovery)?;
@@ -96,20 +87,8 @@ pub(crate) fn load_rooted(
     let expected = source_witness(&source_file, &source_path)?;
 
     after_rooted_system_source_retained();
-    require_slot(
-        directory_path,
-        directory,
-        &slot,
-        &evaluators,
-        &discovered,
-    )?;
-    require_named_source(
-        directory,
-        &source_file,
-        &relative_path,
-        &source_path,
-        expected,
-    )?;
+    require_slot(directory_path, directory, &slot, &evaluators, &discovered)?;
+    require_named_source(directory, &source_file, &relative_path, &source_path, expected)?;
 
     let source_root = SourceRoot::from_directory(directory_path, directory).map_err(evaluation)?;
     let evaluator = evaluators
@@ -119,28 +98,13 @@ pub(crate) fn load_rooted(
     let source = source_root
         .load(&relative_path, evaluator.limits().max_source_bytes)
         .map_err(evaluation)?;
-    let source = Source::new(
-        discovered.logical_name(),
-        source.text().to_owned(),
-    );
+    let source = Source::new(discovered.logical_name(), source.text().to_owned());
     source_root.verify_retained_directories().map_err(evaluation)?;
     let loaded = load_source(&source_path, source, &evaluator)?;
     source_root.verify_retained_directories().map_err(evaluation)?;
 
-    require_slot(
-        directory_path,
-        directory,
-        &slot,
-        &evaluators,
-        &discovered,
-    )?;
-    require_named_source(
-        directory,
-        &source_file,
-        &relative_path,
-        &source_path,
-        expected,
-    )?;
+    require_slot(directory_path, directory, &slot, &evaluators, &discovered)?;
+    require_named_source(directory, &source_file, &relative_path, &source_path, expected)?;
 
     Ok(Some(loaded))
 }
@@ -149,10 +113,7 @@ fn require_slot(
     directory_path: &Path,
     directory: &std::fs::File,
     slot: &RootDeclarationSlot,
-    evaluators: &TypedDeclarationEvaluatorSet<
-        super::gluon::SystemIntentDeclaration,
-        SystemIntentEvaluator,
-    >,
+    evaluators: &TypedDeclarationEvaluatorSet<super::gluon::SystemIntentDeclaration, SystemIntentEvaluator>,
     expected: &config::declaration::DiscoveredRootDeclaration,
 ) -> Result<(), LoadError> {
     let actual = slot
@@ -172,8 +133,8 @@ fn require_named_source(
     path: &Path,
     expected: SourceWitness,
 ) -> Result<(), LoadError> {
-    let named = open_source(directory, relative_path, path)?
-        .ok_or_else(|| LoadError::RootedSourceChanged(path.to_owned()))?;
+    let named =
+        open_source(directory, relative_path, path)?.ok_or_else(|| LoadError::RootedSourceChanged(path.to_owned()))?;
     if source_witness(retained, path)? == expected && source_witness(&named, path)? == expected {
         Ok(())
     } else {
@@ -191,11 +152,15 @@ fn open_source(
         | nix::libc::O_NOFOLLOW
         | nix::libc::O_NONBLOCK
         | nix::libc::O_NOCTTY;
-    let relative_path = CString::new(relative_path.as_os_str().as_bytes())
-        .map_err(|_| retain(path, io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "system declaration path contains a NUL byte",
-        )))?;
+    let relative_path = CString::new(relative_path.as_os_str().as_bytes()).map_err(|_| {
+        retain(
+            path,
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "system declaration path contains a NUL byte",
+            ),
+        )
+    })?;
     match crate::linux_fs::openat2_file(
         directory.as_raw_fd(),
         &relative_path,
@@ -245,9 +210,7 @@ fn retain(path: &Path, source: io::Error) -> LoadError {
 }
 
 fn evaluation(source: gluon_config::Diagnostic) -> LoadError {
-    LoadError::Declaration(
-        declarative_config::DeclarationEvaluationError::Evaluation(source),
-    )
+    LoadError::Declaration(declarative_config::DeclarationEvaluationError::Evaluation(source))
 }
 
 #[cfg(test)]

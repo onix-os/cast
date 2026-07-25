@@ -237,10 +237,7 @@ fn sealed_source_length_and_digest_mismatch_precede_root_observation() {
                 RetainedBootNamespaceAssessmentError::ExpectedDigestMismatch { request_index: 0 }
             ));
         } else {
-            assert!(matches!(
-                error,
-                RetainedBootNamespaceAssessmentError::Filesystem { .. }
-            ));
+            assert!(matches!(error, RetainedBootNamespaceAssessmentError::Filesystem { .. }));
         }
         assert_eq!(events.get(), 0);
     }

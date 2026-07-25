@@ -6,8 +6,7 @@ use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
         startup_reconciliation::{
-            UsrRollbackFinalizationAdmission,
-            arm_between_usr_rollback_finalization_database_captures,
+            UsrRollbackFinalizationAdmission, arm_between_usr_rollback_finalization_database_captures,
         },
         startup_recovery::{
             UsrRollbackFinalizationError, arm_after_usr_rollback_finalization_delete,

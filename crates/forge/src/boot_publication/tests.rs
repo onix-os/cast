@@ -12,7 +12,10 @@ fn receipt_fingerprint_uses_one_canonical_lowercase_hex_encoding() {
         encoded,
         "\"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\""
     );
-    assert_eq!(serde_json::from_str::<BootPublicationReceiptFingerprint>(&encoded).unwrap(), fingerprint);
+    assert_eq!(
+        serde_json::from_str::<BootPublicationReceiptFingerprint>(&encoded).unwrap(),
+        fingerprint
+    );
 }
 
 #[test]
@@ -51,7 +54,10 @@ fn receipt_pair_is_strict_and_round_trips_both_committed_states() {
         },
     ] {
         let encoded = serde_json::to_vec(&pair).unwrap();
-        assert_eq!(serde_json::from_slice::<BootPublicationReceiptPair>(&encoded).unwrap(), pair);
+        assert_eq!(
+            serde_json::from_slice::<BootPublicationReceiptPair>(&encoded).unwrap(),
+            pair
+        );
     }
 
     let extra = format!(

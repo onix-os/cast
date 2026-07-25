@@ -15,20 +15,15 @@ use thiserror::Error;
 use crate::{
     installation,
     transition_journal::{
-        CodecError, Phase, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
 use super::super::startup_reconciliation::{
-    ActiveReblitBootSyncStartedPostAdvanceAuthority,
-    ActiveReblitBootSyncStartedRecordAdvanceError,
-    ActiveReblitBootSyncStartedRecoveryAuthority,
-    ActiveReblitBootSyncStartedRecoveryAuthorityError,
+    ActiveReblitBootSyncStartedPostAdvanceAuthority, ActiveReblitBootSyncStartedRecordAdvanceError,
+    ActiveReblitBootSyncStartedRecoveryAuthority, ActiveReblitBootSyncStartedRecoveryAuthorityError,
 };
-use super::canonical_journal_reopen::{
-    CanonicalJournalReopenError, reopen_canonical_journal,
-};
+use super::canonical_journal_reopen::{CanonicalJournalReopenError, reopen_canonical_journal};
 
 /// Which exact canonical record survived an uncertain or rejected advance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,10 +44,8 @@ pub(in crate::client) enum ActiveReblitBootSyncStartedCompletionValidationStage 
 enum ActiveReblitBootSyncStartedCompletionAdvanceOutcome<'reservation> {
     Published {
         successor_binding: TransitionJournalRecordBinding,
-        post_advance_authority:
-            ActiveReblitBootSyncStartedPostAdvanceAuthority<'reservation>,
-        same_store_validation:
-            Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError>,
+        post_advance_authority: ActiveReblitBootSyncStartedPostAdvanceAuthority<'reservation>,
+        same_store_validation: Result<(), ActiveReblitBootSyncStartedRecoveryAuthorityError>,
     },
     StorageFailed(StorageError),
 }
@@ -63,10 +56,7 @@ enum ActiveReblitBootSyncStartedCompletionAdvanceOutcome<'reservation> {
 pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_reopen(
     journal: TransitionJournalStore,
     authority: ActiveReblitBootSyncStartedRecoveryAuthority<'_>,
-) -> Result<
-    (TransitionJournalStore, TransitionRecord),
-    ActiveReblitBootSyncStartedCompletionPersistenceError,
-> {
+) -> Result<(TransitionJournalStore, TransitionRecord), ActiveReblitBootSyncStartedCompletionPersistenceError> {
     authority
         .revalidate(&journal)
         .map_err(ActiveReblitBootSyncStartedCompletionPersistenceError::Authority)?;
@@ -76,18 +66,12 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
         Ok(None) => {
             drop(authority);
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::MissingReceiptCorrelation,
-            );
+            return Err(ActiveReblitBootSyncStartedCompletionPersistenceError::MissingReceiptCorrelation);
         }
         Err(source) => {
             drop(authority);
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::SourceRecord {
-                    source,
-                },
-            );
+            return Err(ActiveReblitBootSyncStartedCompletionPersistenceError::SourceRecord { source });
         }
     };
     let successor = match source_record.boot_sync_complete_successor(pair) {
@@ -96,19 +80,13 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
             drop(authority);
             drop(journal);
             return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::UnexpectedSuccessor {
-                    phase: successor.phase,
-                },
+                ActiveReblitBootSyncStartedCompletionPersistenceError::UnexpectedSuccessor { phase: successor.phase },
             );
         }
         Err(source) => {
             drop(authority);
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::RouteConstruction {
-                    source,
-                },
-            );
+            return Err(ActiveReblitBootSyncStartedCompletionPersistenceError::RouteConstruction { source });
         }
     };
 
@@ -118,11 +96,7 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
         Ok((successor_binding, post_advance_authority)) => {
             before_active_reblit_boot_sync_started_completion_same_store_validation();
             let same_store_validation =
-                post_advance_authority.revalidate_successor_same_store(
-                    &journal,
-                    &successor_binding,
-                    &successor,
-                );
+                post_advance_authority.revalidate_successor_same_store(&journal, &successor_binding, &successor);
             ActiveReblitBootSyncStartedCompletionAdvanceOutcome::Published {
                 successor_binding,
                 post_advance_authority,
@@ -131,29 +105,21 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
         }
         Err(ActiveReblitBootSyncStartedRecordAdvanceError::Authority(source)) => {
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::Authority(source),
-            );
+            return Err(ActiveReblitBootSyncStartedCompletionPersistenceError::Authority(source));
         }
         Err(ActiveReblitBootSyncStartedRecordAdvanceError::Record(source)) => {
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::BoundAdvanceRecord {
-                    source,
-                },
-            );
+            return Err(ActiveReblitBootSyncStartedCompletionPersistenceError::BoundAdvanceRecord { source });
         }
         Err(ActiveReblitBootSyncStartedRecordAdvanceError::UnexpectedSuccessor) => {
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::BoundAdvanceUnexpectedSuccessor,
-            );
+            return Err(ActiveReblitBootSyncStartedCompletionPersistenceError::BoundAdvanceUnexpectedSuccessor);
         }
         Err(ActiveReblitBootSyncStartedRecordAdvanceError::Installation(source)) => {
             drop(journal);
-            return Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::Installation(source),
-            );
+            return Err(ActiveReblitBootSyncStartedCompletionPersistenceError::Installation(
+                source,
+            ));
         }
         Err(ActiveReblitBootSyncStartedRecordAdvanceError::Storage(source)) => {
             ActiveReblitBootSyncStartedCompletionAdvanceOutcome::StorageFailed(source)
@@ -166,13 +132,11 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
     // accidentally authorize a second action.
     drop(journal);
 
-    if let ActiveReblitBootSyncStartedCompletionAdvanceOutcome::Published { .. } =
-        &advance
-    {
+    if let ActiveReblitBootSyncStartedCompletionAdvanceOutcome::Published { .. } = &advance {
         after_active_reblit_boot_sync_started_completion_same_store_check_before_reopen();
     }
-    let reopened = reopen_canonical_journal(&installation)
-        .map_err(ActiveReblitBootSyncStartedCompletionReopenError::from);
+    let reopened =
+        reopen_canonical_journal(&installation).map_err(ActiveReblitBootSyncStartedCompletionReopenError::from);
 
     match advance {
         ActiveReblitBootSyncStartedCompletionAdvanceOutcome::Published {
@@ -183,37 +147,29 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
             Ok((reopened, Some(actual))) if actual == successor => {
                 before_active_reblit_boot_sync_started_completion_reopened_validation();
                 let reopened_validation =
-                    post_advance_authority.revalidate_successor_reopened(
-                        &reopened,
-                        &successor_binding,
-                        &successor,
-                    );
+                    post_advance_authority.revalidate_successor_reopened(&reopened, &successor_binding, &successor);
                 match reopened_validation {
                     Ok(()) => {
                         after_active_reblit_boot_sync_started_completion_old_binding_validation();
-                        let fresh_binding = match recapture_reopened_successor_binding(
-                            &installation,
+                        let fresh_binding =
+                            match recapture_reopened_successor_binding(&installation, &reopened, &successor) {
+                                Ok(fresh_binding) => fresh_binding,
+                                Err(source) => {
+                                    drop(successor_binding);
+                                    drop(post_advance_authority);
+                                    drop(reopened);
+                                    return Err(
+                                        ActiveReblitBootSyncStartedCompletionPersistenceError::FreshSuccessorBinding {
+                                            source,
+                                        },
+                                    );
+                                }
+                            };
+                        let old_binding_revalidation = post_advance_authority.revalidate_successor_reopened(
                             &reopened,
+                            &successor_binding,
                             &successor,
-                        ) {
-                            Ok(fresh_binding) => fresh_binding,
-                            Err(source) => {
-                                drop(successor_binding);
-                                drop(post_advance_authority);
-                                drop(reopened);
-                                return Err(
-                                    ActiveReblitBootSyncStartedCompletionPersistenceError::FreshSuccessorBinding {
-                                        source,
-                                    },
-                                );
-                            }
-                        };
-                        let old_binding_revalidation =
-                            post_advance_authority.revalidate_successor_reopened(
-                                &reopened,
-                                &successor_binding,
-                                &successor,
-                            );
+                        );
                         if let Err(source) = old_binding_revalidation {
                             drop(fresh_binding);
                             drop(successor_binding);
@@ -231,12 +187,11 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
                         }
                         drop(successor_binding);
                         before_active_reblit_boot_sync_started_completion_fresh_binding_validation();
-                        let final_validation =
-                            post_advance_authority.revalidate_successor_same_store(
-                                &reopened,
-                                &fresh_binding,
-                                &successor,
-                            );
+                        let final_validation = post_advance_authority.revalidate_successor_same_store(
+                            &reopened,
+                            &fresh_binding,
+                            &successor,
+                        );
                         drop(fresh_binding);
                         drop(post_advance_authority);
                         match final_validation {
@@ -245,8 +200,7 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
                                 drop(reopened);
                                 Err(
                                     ActiveReblitBootSyncStartedCompletionPersistenceError::PostAdvanceValidation {
-                                        durable:
-                                            DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
+                                        durable: DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
                                         stage:
                                             ActiveReblitBootSyncStartedCompletionValidationStage::ReopenedFreshBinding,
                                         source,
@@ -261,10 +215,8 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
                         drop(reopened);
                         Err(
                             ActiveReblitBootSyncStartedCompletionPersistenceError::PostAdvanceValidation {
-                                durable:
-                                    DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
-                                stage:
-                                    ActiveReblitBootSyncStartedCompletionValidationStage::ReopenedOldBinding,
+                                durable: DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
+                                stage: ActiveReblitBootSyncStartedCompletionValidationStage::ReopenedOldBinding,
                                 source,
                             },
                         )
@@ -279,11 +231,9 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
                     },
                 )
             }
-            Err(source) => Err(
-                ActiveReblitBootSyncStartedCompletionPersistenceError::ReopenAfterSuccessfulAdvance {
-                    source,
-                },
-            ),
+            Err(source) => {
+                Err(ActiveReblitBootSyncStartedCompletionPersistenceError::ReopenAfterSuccessfulAdvance { source })
+            }
         },
         ActiveReblitBootSyncStartedCompletionAdvanceOutcome::Published {
             successor_binding,
@@ -297,10 +247,8 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
                     drop(reopened);
                     Err(
                         ActiveReblitBootSyncStartedCompletionPersistenceError::PostAdvanceValidation {
-                            durable:
-                                DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncStarted,
-                            stage:
-                                ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
+                            durable: DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncStarted,
+                            stage: ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
                             source: validation,
                         },
                     )
@@ -309,10 +257,8 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
                     drop(reopened);
                     Err(
                         ActiveReblitBootSyncStartedCompletionPersistenceError::PostAdvanceValidation {
-                            durable:
-                                DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
-                            stage:
-                                ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
+                            durable: DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
+                            stage: ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
                             source: validation,
                         },
                     )
@@ -321,60 +267,42 @@ pub(in crate::client) fn persist_active_reblit_boot_sync_started_completion_and_
                     drop(reopened);
                     Err(
                         ActiveReblitBootSyncStartedCompletionPersistenceError::PostAdvanceValidationAndReopen {
-                            stage:
-                                ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
+                            stage: ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
                             validation,
-                            reopen: unexpected_record(
-                                &source_record,
-                                &successor,
-                                actual,
-                            ),
+                            reopen: unexpected_record(&source_record, &successor, actual),
                         },
                     )
                 }
                 Err(reopen) => Err(
                     ActiveReblitBootSyncStartedCompletionPersistenceError::PostAdvanceValidationAndReopen {
-                        stage:
-                            ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
+                        stage: ActiveReblitBootSyncStartedCompletionValidationStage::SameStore,
                         validation,
                         reopen,
                     },
                 ),
             }
         }
-        ActiveReblitBootSyncStartedCompletionAdvanceOutcome::StorageFailed(
-            advance_error,
-        ) => match reopened {
+        ActiveReblitBootSyncStartedCompletionAdvanceOutcome::StorageFailed(advance_error) => match reopened {
             Ok((reopened, Some(actual))) if actual == source_record => {
                 drop(reopened);
-                Err(
-                    ActiveReblitBootSyncStartedCompletionPersistenceError::Advance {
-                        durable:
-                            DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncStarted,
-                        source: advance_error,
-                    },
-                )
+                Err(ActiveReblitBootSyncStartedCompletionPersistenceError::Advance {
+                    durable: DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncStarted,
+                    source: advance_error,
+                })
             }
             Ok((reopened, Some(actual))) if actual == successor => {
                 drop(reopened);
-                Err(
-                    ActiveReblitBootSyncStartedCompletionPersistenceError::Advance {
-                        durable:
-                            DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
-                        source: advance_error,
-                    },
-                )
+                Err(ActiveReblitBootSyncStartedCompletionPersistenceError::Advance {
+                    durable: DurableActiveReblitBootSyncStartedCompletionRecord::BootSyncComplete,
+                    source: advance_error,
+                })
             }
             Ok((reopened, actual)) => {
                 drop(reopened);
                 Err(
                     ActiveReblitBootSyncStartedCompletionPersistenceError::AdvanceAndReopen {
                         advance: advance_error,
-                        reopen: unexpected_record(
-                            &source_record,
-                            &successor,
-                            actual,
-                        ),
+                        reopen: unexpected_record(&source_record, &successor, actual),
                     },
                 )
             }
@@ -392,22 +320,19 @@ fn recapture_reopened_successor_binding(
     installation: &crate::Installation,
     reopened: &TransitionJournalStore,
     successor: &TransitionRecord,
-) -> Result<
-    TransitionJournalRecordBinding,
-    ActiveReblitBootSyncStartedCompletionFreshBindingError,
-> {
-    installation.revalidate_mutable_namespace().map_err(
-        ActiveReblitBootSyncStartedCompletionFreshBindingError::Installation,
-    )?;
-    let cast = installation.retained_mutable_cast_directory().map_err(
-        ActiveReblitBootSyncStartedCompletionFreshBindingError::Installation,
-    )?;
-    let fresh_binding = reopened.record_binding(cast, successor).map_err(
-        ActiveReblitBootSyncStartedCompletionFreshBindingError::Storage,
-    )?;
-    installation.revalidate_mutable_namespace().map_err(
-        ActiveReblitBootSyncStartedCompletionFreshBindingError::Installation,
-    )?;
+) -> Result<TransitionJournalRecordBinding, ActiveReblitBootSyncStartedCompletionFreshBindingError> {
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(ActiveReblitBootSyncStartedCompletionFreshBindingError::Installation)?;
+    let cast = installation
+        .retained_mutable_cast_directory()
+        .map_err(ActiveReblitBootSyncStartedCompletionFreshBindingError::Installation)?;
+    let fresh_binding = reopened
+        .record_binding(cast, successor)
+        .map_err(ActiveReblitBootSyncStartedCompletionFreshBindingError::Storage)?;
+    installation
+        .revalidate_mutable_namespace()
+        .map_err(ActiveReblitBootSyncStartedCompletionFreshBindingError::Installation)?;
     Ok(fresh_binding)
 }
 
@@ -567,9 +492,7 @@ fn before_active_reblit_boot_sync_started_completion_fresh_binding_validation() 
 
 #[derive(Debug, Error)]
 pub(in crate::client) enum ActiveReblitBootSyncStartedCompletionFreshBindingError {
-    #[error(
-        "revalidate retained installation around fresh reopened BootSyncComplete binding capture"
-    )]
+    #[error("revalidate retained installation around fresh reopened BootSyncComplete binding capture")]
     Installation(#[source] installation::Error),
     #[error("capture a fresh same-store binding for the reopened BootSyncComplete record")]
     Storage(#[source] StorageError),
@@ -591,18 +514,14 @@ pub(in crate::client) enum ActiveReblitBootSyncStartedCompletionPersistenceError
         #[source]
         source: CodecError,
     },
-    #[error(
-        "ActiveReblit boot-sync completion routing selected unexpected successor phase {phase:?}"
-    )]
+    #[error("ActiveReblit boot-sync completion routing selected unexpected successor phase {phase:?}")]
     UnexpectedSuccessor { phase: Phase },
     #[error("validate the exact ActiveReblit BootSyncComplete successor at the bound advance")]
     BoundAdvanceRecord {
         #[source]
         source: CodecError,
     },
-    #[error(
-        "the bound advance rejected the derived exact ActiveReblit BootSyncComplete successor"
-    )]
+    #[error("the bound advance rejected the derived exact ActiveReblit BootSyncComplete successor")]
     BoundAdvanceUnexpectedSuccessor,
     #[error("revalidate retained installation before the exact ActiveReblit BootSyncComplete advance")]
     Installation(#[source] installation::Error),
@@ -622,18 +541,14 @@ pub(in crate::client) enum ActiveReblitBootSyncStartedCompletionPersistenceError
         #[source]
         reopen: ActiveReblitBootSyncStartedCompletionReopenError,
     },
-    #[error(
-        "post-advance {stage:?} validation failed after reopening exact durable {durable:?} record"
-    )]
+    #[error("post-advance {stage:?} validation failed after reopening exact durable {durable:?} record")]
     PostAdvanceValidation {
         durable: DurableActiveReblitBootSyncStartedCompletionRecord,
         stage: ActiveReblitBootSyncStartedCompletionValidationStage,
         #[source]
         source: ActiveReblitBootSyncStartedRecoveryAuthorityError,
     },
-    #[error(
-        "post-advance {stage:?} validation failed ({validation}) and its canonical record could not be reconciled"
-    )]
+    #[error("post-advance {stage:?} validation failed ({validation}) and its canonical record could not be reconciled")]
     PostAdvanceValidationAndReopen {
         stage: ActiveReblitBootSyncStartedCompletionValidationStage,
         validation: ActiveReblitBootSyncStartedRecoveryAuthorityError,
@@ -668,14 +583,10 @@ pub(in crate::client) enum ActiveReblitBootSyncStartedCompletionReopenError {
     },
 }
 
-impl From<CanonicalJournalReopenError>
-    for ActiveReblitBootSyncStartedCompletionReopenError
-{
+impl From<CanonicalJournalReopenError> for ActiveReblitBootSyncStartedCompletionReopenError {
     fn from(source: CanonicalJournalReopenError) -> Self {
         match source {
-            CanonicalJournalReopenError::Installation(source) => {
-                Self::Installation(source)
-            }
+            CanonicalJournalReopenError::Installation(source) => Self::Installation(source),
             CanonicalJournalReopenError::Journal(source) => Self::Journal(source),
         }
     }

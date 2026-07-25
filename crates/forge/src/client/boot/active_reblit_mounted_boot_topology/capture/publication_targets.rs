@@ -19,28 +19,23 @@ use crate::{
     boot_publication::BootPublicationReceiptFingerprint,
     linux_fs::{
         descriptor_boot_namespace::{
-            BootNamespaceAssessmentLimits, BootNamespaceRequest,
-            RetainedBootNamespaceAssessmentLimits,
+            BootNamespaceAssessmentLimits, BootNamespaceRequest, RetainedBootNamespaceAssessmentLimits,
             RetainedBootNamespaceExpectedSource,
         },
         mount_namespace::{
-            RevalidatedTaskRootedAttachment,
-            TaskRootBootNamespaceAssessmentError,
+            RevalidatedTaskRootedAttachment, TaskRootBootNamespaceAssessmentError,
             ValidatedTaskRootBootNamespaceAssessment,
         },
     },
 };
 
-use super::{
-    model::{
-        PreparedMountedBootTarget, PreparedMountedBootTargets,
-        RevalidatedActiveReblitMountedBootTopology,
-    },
-    ActiveReblitMountedBootTopologyCaptureError,
-};
 use super::super::{
-    BootTargetRole, BoundActiveReblitMountedBootTarget,
-    BoundActiveReblitMountedBootTopology, MountedBootDestinationIdentity,
+    BootTargetRole, BoundActiveReblitMountedBootTarget, BoundActiveReblitMountedBootTopology,
+    MountedBootDestinationIdentity,
+};
+use super::{
+    ActiveReblitMountedBootTopologyCaptureError,
+    model::{PreparedMountedBootTarget, PreparedMountedBootTargets, RevalidatedActiveReblitMountedBootTopology},
 };
 
 #[path = "publication_targets/immutable_leaf.rs"]
@@ -53,30 +48,24 @@ mod owned_replacement;
 mod receipt_validation;
 
 pub(in crate::client) use immutable_leaf::ActiveReblitBootImmutableLeafPublicationError;
-pub(in crate::client) use owned_cleanup::{
-    ActiveReblitBootOwnedCleanupError, ActiveReblitBootOwnedCleanupOutcome,
+#[cfg(test)]
+pub(in crate::client) use immutable_leaf::{
+    FixtureImmutableLeafAssessmentGuard, arm_fixture_immutable_leaf_assessments,
+    fixture_immutable_leaf_assessments_remaining,
 };
-pub(in crate::client) use receipt_validation::ActiveReblitBootReceiptTargetValidationError;
+pub(in crate::client) use owned_cleanup::{ActiveReblitBootOwnedCleanupError, ActiveReblitBootOwnedCleanupOutcome};
+#[cfg(test)]
+pub(in crate::client) use owned_cleanup::{
+    FixtureOwnedCleanupTargetGuard, arm_fixture_owned_cleanup_targets, fixture_owned_cleanup_targets_remaining,
+};
 #[allow(unused_imports)] // consumed by the aggregate owned-replacement executor
 pub(in crate::client) use owned_replacement::ActiveReblitBootOwnedLeafReplacementError;
 #[cfg(test)]
-pub(in crate::client) use immutable_leaf::{
-    FixtureImmutableLeafAssessmentGuard,
-    arm_fixture_immutable_leaf_assessments,
-    fixture_immutable_leaf_assessments_remaining,
-};
-#[cfg(test)]
-pub(in crate::client) use owned_cleanup::{
-    FixtureOwnedCleanupTargetGuard, arm_fixture_owned_cleanup_targets,
-    fixture_owned_cleanup_targets_remaining,
-};
-#[cfg(test)]
 pub(in crate::client) use owned_replacement::{
-    FixtureOwnedReplacementAssessmentGuard,
-    arm_fixture_owned_replacement_assessments,
-    fixture_owned_replacement_assessments_remaining,
-    fixture_owned_replacement_validations_remaining,
+    FixtureOwnedReplacementAssessmentGuard, arm_fixture_owned_replacement_assessments,
+    fixture_owned_replacement_assessments_remaining, fixture_owned_replacement_validations_remaining,
 };
+pub(in crate::client) use receipt_validation::ActiveReblitBootReceiptTargetValidationError;
 
 /// Failure while bracketing opaque publication targets with full topology
 /// revalidation.
@@ -175,10 +164,7 @@ impl RevalidatedActiveReblitBootPublicationTarget<'_> {
         &self,
         requests: &[BootNamespaceRequest<'_>],
         expected: &[RetainedBootNamespaceExpectedSource<'_>],
-    ) -> Result<
-        ValidatedTaskRootBootNamespaceAssessment,
-        TaskRootBootNamespaceAssessmentError,
-    > {
+    ) -> Result<ValidatedTaskRootBootNamespaceAssessment, TaskRootBootNamespaceAssessmentError> {
         self.attachment.assess_retained_boot_namespace_until(
             requests,
             expected,
@@ -264,11 +250,7 @@ impl RevalidatedActiveReblitBootPublicationTargets<'_> {
                 },
             ) => {
                 require_bound_identity(esp.role, esp_facts, observed_identity(&esp.attachment))?;
-                require_bound_identity(
-                    xbootldr.role,
-                    xbootldr_facts,
-                    observed_identity(&xbootldr.attachment),
-                )
+                require_bound_identity(xbootldr.role, xbootldr_facts, observed_identity(&xbootldr.attachment))
             }
             _ => Err(ActiveReblitBootPublicationTargetsError::TopologyShapeChanged),
         }
@@ -350,13 +332,7 @@ fn capture_exact_targets<'prepared>(
             },
         ) => Ok(RevalidatedActiveReblitBootPublicationTargets::DistinctXbootldr {
             esp: capture_exact_target(esp, anchor, BootTargetRole::Esp, esp_facts, deadline)?,
-            xbootldr: capture_exact_target(
-                xbootldr,
-                anchor,
-                BootTargetRole::Xbootldr,
-                xbootldr_facts,
-                deadline,
-            )?,
+            xbootldr: capture_exact_target(xbootldr, anchor, BootTargetRole::Xbootldr, xbootldr_facts, deadline)?,
         }),
         _ => Err(ActiveReblitBootPublicationTargetsError::TopologyShapeChanged),
     }
@@ -461,10 +437,7 @@ fn require_deadline(
     now: &mut impl FnMut() -> Instant,
 ) -> Result<(), ActiveReblitBootPublicationTargetsError> {
     if now() > deadline {
-        Err(ActiveReblitBootPublicationTargetsError::DeadlineExceeded {
-            checkpoint,
-            deadline,
-        })
+        Err(ActiveReblitBootPublicationTargetsError::DeadlineExceeded { checkpoint, deadline })
     } else {
         Ok(())
     }

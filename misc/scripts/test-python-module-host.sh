@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 umask 077
 
 script_dir=${BASH_SOURCE[0]%/*}
@@ -28,7 +29,7 @@ assert path.stat().st_nlink == 1
 assert hashlib.sha256(path.read_bytes()).hexdigest() == sys.argv[2]
 ' "$archive" "$expected_hash"
 
-temporary=$(timeout --kill-after=2s 10s mktemp -d "${TMPDIR:-/tmp}/cast-python-module-host.XXXXXX")
+temporary=$(timeout --kill-after=2s 10s mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-python-module-host.XXXXXX")
 readonly temporary
 
 print_build_logs() {

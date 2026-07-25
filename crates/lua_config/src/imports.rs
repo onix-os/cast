@@ -3,7 +3,7 @@
 //! Lua only *parses* imports; the shared `declarative_config` core resolves
 //! them. An import is the call `cast.import("<name>")` whose single argument is
 //! a string literal. Embedded ABI imports use a semantic name such as
-//! `cast.package.v3`; relative imports carry an exact `.lua` extension. Every
+//! `cast.authored.v1`; relative imports carry an exact `.lua` extension. Every
 //! non-literal, computed, or malformed import becomes a rejecting
 //! [`ImportRequest`] so the shared graph fails closed before VM execution.
 
@@ -128,7 +128,7 @@ mod tests {
     fn classifies_embedded_and_relative_literals_in_order() {
         let requests = discover_imports(
             r#"
-                local pkg = cast.import("cast.package.v3")
+                local pkg = cast.import("cast.authored.v1")
                 local helper = cast.import("./helper.lua")
                 return { pkg = pkg, helper = helper }
             "#,
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(
             requests,
             vec![
-                ImportRequest::embedded("cast.package.v3"),
+                ImportRequest::embedded("cast.authored.v1"),
                 ImportRequest::relative("./helper.lua"),
             ]
         );

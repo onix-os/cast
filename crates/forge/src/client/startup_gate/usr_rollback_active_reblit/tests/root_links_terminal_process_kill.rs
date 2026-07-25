@@ -8,7 +8,6 @@ use crate::{
         MutableSystemCapabilities, MutableSystemCapabilitiesTestSeal,
         active_state_snapshot::ActiveStateReservation,
         snapshot_startup_recovery_namespace,
-        startup_reconciliation::fresh_db_invalidation_removal_call_count,
         startup_gate::{
             CleanSystemStartup,
             root_links_terminal_process_harness::{
@@ -17,6 +16,7 @@ use crate::{
                 assert_clean_holds_journal_lock, assert_clean_store_reopens, forbid_journal_update, kill_self,
             },
         },
+        startup_reconciliation::fresh_db_invalidation_removal_call_count,
         startup_recovery::arm_before_usr_rollback_active_reblit_finalization_final_revalidation,
     },
     db,
@@ -114,7 +114,10 @@ fn run_parent_case(epoch: ProcessEpoch, scenario: RootLinksDeleteScenario) {
     drop(open_layout_database(&fixture.fixture.installation));
 
     let root = fs::canonicalize(&fixture.fixture.installation.root).unwrap();
-    assert_eq!(active_wrapper_path_at(&fixture, wrapper_index), wrapper_path(&root, &terminal, wrapper_index));
+    assert_eq!(
+        active_wrapper_path_at(&fixture, wrapper_index),
+        wrapper_path(&root, &terminal, wrapper_index)
+    );
     let journal = JournalExpectation::capture(&root, &terminal);
     let root_links = RootLinksSnapshot::capture(&root);
     let namespace = snapshot_startup_recovery_namespace(&root);
@@ -234,15 +237,17 @@ fn run_final_recovery(
 
     {
         let reservation = ActiveStateReservation::acquire().unwrap();
-        let clean_again = CleanSystemStartup::enter(system, &reservation).unwrap_or_else(|error| {
-            panic!("ActiveReblit RootLinks clean endpoint did not remain clean: {error:?}")
-        });
+        let clean_again = CleanSystemStartup::enter(system, &reservation)
+            .unwrap_or_else(|error| panic!("ActiveReblit RootLinks clean endpoint did not remain clean: {error:?}"));
         assert_clean_holds_journal_lock(system.installation(), &case.root);
         drop(clean_again);
     }
 
     assert_zero_effects();
-    assert_eq!(ActiveReblitDatabaseEvidence::capture(system.state_db(), terminal), database_before);
+    assert_eq!(
+        ActiveReblitDatabaseEvidence::capture(system.state_db(), terminal),
+        database_before
+    );
     assert_eq!(snapshot_startup_recovery_namespace(&case.root), namespace_before);
     root_links.assert_unchanged(&case.root);
     assert_wrapper(&case.root, terminal, wrapper_index(case.epoch));
@@ -262,7 +267,10 @@ fn assert_exact_terminal(record: &TransitionRecord, epoch: ProcessEpoch) {
     let rollback = record.rollback.as_ref().unwrap();
     assert_eq!(rollback.source, ForwardPhase::RootLinksComplete);
     assert_eq!(rollback.usr_exchange, recorded_action(epoch_outcome(epoch)));
-    assert_eq!(rollback.candidate.action, recorded_action(candidate_origin(epoch).outcome()));
+    assert_eq!(
+        rollback.candidate.action,
+        recorded_action(candidate_origin(epoch).outcome())
+    );
     assert_eq!(rollback.previous_archive, RollbackAction::NotRequired);
     assert_eq!(rollback.candidate.disposition, AbortDisposition::Quarantine);
     assert_eq!(rollback.fresh_db, RollbackAction::NotRequired);

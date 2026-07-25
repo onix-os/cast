@@ -66,12 +66,7 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_complete_route_and_r
     let advance = match authority.advance_record_binding(&journal, &successor) {
         Ok(successor_binding) => {
             before_usr_rollback_active_reblit_complete_route_successor_binding_revalidation();
-            let exact = revalidate_published_route_binding(
-                &installation,
-                &journal,
-                &successor_binding,
-                &successor,
-            );
+            let exact = revalidate_published_route_binding(&installation, &journal, &successor_binding, &successor);
             match exact {
                 Ok(true) => UsrRollbackActiveReblitCompleteRouteAdvanceOutcome::Published(successor_binding),
                 Ok(false) => {
@@ -92,7 +87,9 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_complete_route_and_r
         }
         Err(UsrRollbackActiveReblitCompleteRouteRecordAdvanceError::Installation(source)) => {
             drop(journal);
-            return Err(UsrRollbackActiveReblitCompleteRoutePersistenceError::Installation(source));
+            return Err(UsrRollbackActiveReblitCompleteRoutePersistenceError::Installation(
+                source,
+            ));
         }
         Err(UsrRollbackActiveReblitCompleteRouteRecordAdvanceError::Storage(source)) => {
             UsrRollbackActiveReblitCompleteRouteAdvanceOutcome::StorageFailed(source)
@@ -111,12 +108,7 @@ pub(in crate::client) fn persist_usr_rollback_active_reblit_complete_route_and_r
     match advance {
         UsrRollbackActiveReblitCompleteRouteAdvanceOutcome::Published(successor_binding) => match reopened {
             Ok((reopened, Some(actual))) if actual == successor => {
-                let exact = revalidate_reopened_route_binding(
-                    &installation,
-                    &reopened,
-                    &successor_binding,
-                    &successor,
-                );
+                let exact = revalidate_reopened_route_binding(&installation, &reopened, &successor_binding, &successor);
                 drop(successor_binding);
                 match exact {
                     Ok(true) => Ok((reopened, successor)),

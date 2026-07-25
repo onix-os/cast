@@ -1,6 +1,6 @@
-let b = import! cast.package.v3
+let a = import! cast.authored.v1
 
-let cargo = b.program.binary "cargo"
+let cargo = a.program.binary "cargo"
 
 let setup_script = r#"test -f "${CAST_SOURCE_DIR}/application/Cargo.toml"
 test -f "${CAST_SOURCE_DIR}/application/Cargo.lock"
@@ -38,60 +38,72 @@ install -Dm644 "${CAST_SOURCE_DIR}/application/README.md" "${CAST_INSTALL_ROOT}$
 // empty private home, a disabled network policy, and one source replacement
 // pointing at the separately extracted vendor tree.
 \sources ->
-    let phases = b.scripts {
-        setup = b.phase [b.step.shell setup_script],
-        build = b.phase [
-            b.step.shell_with {
-                interpreter = b.program.binary "bash",
+    let phases = a.scripts {
+        setup = a.phase [a.step.shell setup_script],
+        build = a.phase [
+            a.step.shell_with {
+                interpreter = a.program.binary "bash",
                 declared_programs = [cargo],
                 script = build_script,
             },
         ],
-        check = b.phase [
-            b.step.shell_with {
-                interpreter = b.program.binary "bash",
+        check = a.phase [
+            a.step.shell_with {
+                interpreter = a.program.binary "bash",
                 declared_programs = [cargo],
                 script = check_script,
             },
         ],
-        install = b.phase [
-            b.step.shell_with {
-                interpreter = b.program.binary "bash",
-                declared_programs = [b.program.binary "install"],
+        install = a.phase [
+            a.step.shell_with {
+                interpreter = a.program.binary "bash",
+                declared_programs = [a.program.binary "install"],
                 script = install_script,
             },
         ],
-        .. b.defaults.scripts
+        .. a.empty.scripts
     }
 
-    let root = b.output_with {
-        summary = b.optional.set "Offline-built application with an independent vendor closure",
+    let root = {
+        summary = a.optional.set "Offline-built application with an independent vendor closure",
         paths = [
-            b.path.exe "/usr/bin/vendor-note",
-            b.path.any "/usr/share/doc/vendor-note/README.md",
+            a.path.exe "/usr/bin/vendor-note",
+            a.path.any "/usr/share/doc/vendor-note/README.md",
         ],
-        .. b.output "out"
+        .. a.output "out"
     }
-
-    let base = b.mk_package (b.meta {
-        pname = "vendor-note",
-        version = "3.2.1",
-        release = 1,
-        homepage = "https://example.invalid/vendor-note",
-        license = ["MIT"],
-    })
 
     {
-        builder = b.builder.custom phases [
-            b.dep.binary "cargo",
-            b.dep.binary "install",
-        ],
-        outputs = [root],
-        options = b.options {
-            networking = b.boolean.false,
-            .. b.defaults.options
+        meta = {
+            pname = "vendor-note",
+            version = "3.2.1",
+            release = 1,
+            homepage = "https://example.invalid/vendor-note",
+            license = ["MIT"],
         },
+        builder = a.builder.shell phases [
+            a.dep.binary "cargo",
+            a.dep.binary "install",
+        ],
         sources = [sources.application.lock, sources.vendor.lock],
+        native_build_inputs = [],
+        build_inputs = [],
+        check_inputs = [],
+        outputs = a.outputs.explicit [root],
+        options = a.some.options (a.options {
+            toolchain = a.toolchain.llvm,
+            cspgo = a.false,
+            samplepgo = a.false,
+            debug = a.true,
+            strip = a.true,
+            networking = a.false,
+            compressman = a.false,
+            lastrip = a.true,
+        }),
+        profiles = [],
         architectures = ["native"],
-        .. base
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }

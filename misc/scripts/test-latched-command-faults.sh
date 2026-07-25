@@ -2,9 +2,10 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 runner="$root/misc/scripts/run-latched-command.sh"
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-latched-command-test.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-latched-command-test.XXXXXXXXXXXX")
 active_group=
 active_child=
 sentinel_pid=

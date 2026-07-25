@@ -151,10 +151,10 @@ fn assert_disabled_factory_variant() {
     );
     let source = Source::new(
         "disabled.glu",
-        r#"let b = import! cast.package.v3
+        r#"let a = import! cast.authored.v1
 let make_package = import! "./package.glu"
 
-make_package { component = b.boolean.false }
+make_package { component = a.false }
 "#,
     );
     let disabled = DeclarationEvaluator::<PackageSpec>::evaluate(&evaluator, &source)

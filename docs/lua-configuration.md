@@ -123,7 +123,7 @@ slot keeps one canonical logical name regardless of engine.
 ## ABI encoding reference
 
 Gluon declarations import a versioned `cast.*` ABI module that supplies typed
-constructors (`cast.repository.direct`, `cast.trigger`, `b.dep.package`, …). Lua
+constructors (`cast.repository.direct`, `cast.trigger`, `a.dep.package`, …). Lua
 has no imported ABI: the same shapes are written directly in the uniform tagged
 encoding above, so each Gluon ABI is "paired" by the Lua encoding of the value
 it constructs rather than by a second ABI file. The mapping per registered ABI:
@@ -136,10 +136,34 @@ it constructs rather than by a second ABI file. The mapping per registered ABI:
 | `cast.system.v1` | one `{ disable_warning, repositories, packages }` record |
 | `cast.build_policy.layers.v1` | `{ name, layers = { { name, entries = { { operation = { kind = … }, origin } } } } }` |
 | `cast.build_policy.v5` | the full policy record; `TextSpec` is `{ kind = "literal"/"context"/"concat", … }`, patches are `{ kind = "keep"/"set"/… }` |
-| `cast.package.v3` | one recipe record; `DependencySpec`/`StepSpec` are `{ kind = … }` variants |
-| `cast.builders.{cmake,meson,cargo,autotools}.v2` | selected via `BuilderEnvironmentSpec` names and the builder-specific `StepSpec` variants (`{ kind = "cmake_build" }`, …) |
+| `cast.authored.v1` | one recipe record — `meta`, `builder`, `sources`, `native_build_inputs`, `build_inputs`, `check_inputs`, `outputs`, `options`, `profiles`, `architectures`, `tuning`, `emul32`, `mold`, `hooks`; `builder` is a request tagged `{ kind = "cmake"/"meson"/"cargo"/"autotools", … }` or the escape hatch `{ kind = "custom", spec = { … } }`; `DependencySpec`/`StepSpec` are `{ kind = … }` variants; every optional/list field a Lua table omits takes the shared-Rust default |
 | `cast.boot_topology.v2` | `{ esp, boot = { kind = "alias_esp"/"distinct_xbootldr", … } }` |
 | `cast.root_filesystem.v1` | `{ root = "<locator>" }` |
+
+There is no separate builder ABI: in the legacy authoring surface each build
+system (`cast.builders.cmake.v2`, `.meson.v2`, …) was its own import producing
+raw `StepSpec` sequences. The authored ABI collapses that into the `builder`
+field of `cast.authored.v1` itself — a declarative *request*
+(`a.builder.cmake { flags = [...], run_tests = a.true }` in Gluon, `{ kind =
+"cmake", flags = {...}, run_tests = true }` in Lua) that shared Rust lowers
+into the concrete phase/step sequence. Neither engine authors steps directly
+for a standard build system; `a.builder.custom`/`a.builder.shell` (Gluon) and
+`{ kind = "custom", spec = {...} }` (Lua) remain for a fully custom builder.
+All authoring defaults and this request-to-steps lowering live in one shared
+Rust module (`stone_recipe::package::lower`), which is why Gluon and Lua stay
+interchangeable, thin syntaxes over an identical `PackageSpec`:
+`crates/stone_recipe/tests/authoring_independence.rs` authors the same package
+in both languages and asserts the decoded `PackageSpec` values are equal.
+
+Composition (overriding one field of a base recipe — a release bump, an
+alternate output set, a swapped dependency) is not a Lua/Gluon ABI concern: the
+authored record has no patch type of its own. In Gluon it is ordinary record
+update over an authored base, `{ field = new_value, .. base }` (see
+[`examples/gluon/packages/release-override`](./examples/gluon/packages/release-override)
+and
+[`examples/gluon/packages/factory-override`](./examples/gluon/packages/factory-override));
+Lua has no update syntax on tables, so a composed Lua recipe constructs a full
+new table rather than patching one.
 
 Runnable paired sources for the config and machine-local domains live under
 [`examples/lua`](./examples/lua) alongside their Gluon originals in

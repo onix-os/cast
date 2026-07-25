@@ -5,8 +5,7 @@ use crate::{
         active_state_snapshot::ActiveStateReservation,
         startup_gate::UsrRollbackActiveReblitBootRepairCompleteSeal,
         startup_reconciliation::{
-            UsrRollbackActiveReblitBootRepairCompleteAdmission,
-            UsrRollbackActiveReblitBootRepairCompleteAuthority,
+            UsrRollbackActiveReblitBootRepairCompleteAdmission, UsrRollbackActiveReblitBootRepairCompleteAuthority,
         },
     },
     transition_journal::{
@@ -19,21 +18,17 @@ use super::{
     super::test_fixture::BootSyncStartedLayout,
     support::{
         CandidateOrigin, Epoch, UsrRestoreOrigin, WRAPPER_INDEX, assert_no_boot_synchronize_attempts,
-        assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started,
-        capture_boot_repair_complete_ready, drive_boot_sync_started_to_candidate_preserved, enter_boot,
-        expected_boot_repair_required, reset_boot_synchronize_observer, reset_candidate_effect_observers,
-        seed_boot_repair_complete_for_test,
+        assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started, capture_boot_repair_complete_ready,
+        drive_boot_sync_started_to_candidate_preserved, enter_boot, expected_boot_repair_required,
+        reset_boot_synchronize_observer, reset_candidate_effect_observers, seed_boot_repair_complete_for_test,
     },
 };
 
 #[test]
 fn startup_active_reblit_boot_repair_complete_rejects_every_inexact_route_shape() {
     let fixture = build_boot_sync_started(Epoch::Current, BootSyncStartedLayout::Post);
-    let preserved = drive_boot_sync_started_to_candidate_preserved(
-        &fixture,
-        UsrRestoreOrigin::Applied,
-        CandidateOrigin::Applied,
-    );
+    let preserved =
+        drive_boot_sync_started_to_candidate_preserved(&fixture, UsrRestoreOrigin::Applied, CandidateOrigin::Applied);
     let required = expected_boot_repair_required(&preserved);
     let required_entry = enter_boot(&fixture);
     assert_pending_phase(&required_entry, Phase::BootRepairRequired);

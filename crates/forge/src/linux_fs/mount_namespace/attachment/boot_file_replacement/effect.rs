@@ -2,11 +2,7 @@ use std::{ffi::CStr, fs::File, io, os::fd::AsRawFd as _};
 
 use crate::linux_fs::{renameat2_exchange_once, renameat2_noreplace_once};
 
-pub(super) fn exchange_once(
-    parent: &File,
-    canonical_name: &CStr,
-    sidecar_name: &CStr,
-) -> io::Result<()> {
+pub(super) fn exchange_once(parent: &File, canonical_name: &CStr, sidecar_name: &CStr) -> io::Result<()> {
     let result = renameat2_exchange_once(parent, canonical_name, parent, sidecar_name);
     #[cfg(test)]
     if result.is_ok() && take_exchange_error_after_applied() {
@@ -83,9 +79,7 @@ pub(crate) fn arm_boot_file_sidecar_stop_after_unlink() {
 #[cfg(test)]
 /// Arms a one-shot callback after the detached stale inode plus its parent and
 /// filesystem have been synchronized, but before the private leaf is unlinked.
-pub(crate) fn arm_after_stale_boot_file_detach_callback(
-    callback: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_after_stale_boot_file_detach_callback(callback: impl FnOnce() + 'static) {
     AFTER_STALE_DETACH_CALLBACK.with(|slot| {
         assert!(
             slot.borrow_mut().replace(Box::new(callback)).is_none(),
@@ -97,9 +91,7 @@ pub(crate) fn arm_after_stale_boot_file_detach_callback(
 #[cfg(test)]
 /// Arms a one-shot callback after sidecar/private unlink reconciliation, but
 /// before its parent and filesystem durability boundary.
-pub(crate) fn arm_after_boot_file_sidecar_unlink_callback(
-    callback: impl FnOnce() + 'static,
-) {
+pub(crate) fn arm_after_boot_file_sidecar_unlink_callback(callback: impl FnOnce() + 'static) {
     AFTER_SIDECAR_UNLINK_CALLBACK.with(|slot| {
         assert!(
             slot.borrow_mut().replace(Box::new(callback)).is_none(),

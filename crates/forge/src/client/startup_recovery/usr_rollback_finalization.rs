@@ -9,8 +9,7 @@
 use thiserror::Error;
 
 use crate::transition_journal::{
-    Operation, Phase, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
-    TransitionJournalStore,
+    Operation, Phase, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState, TransitionJournalStore,
 };
 
 use super::super::startup_reconciliation::{
@@ -72,15 +71,16 @@ fn reconcile_bound_delete(
                 .map_err(UsrRollbackFinalizationError::PostDeleteAuthority)?;
             Ok(journal)
         }
-        Err(delete @ TransitionJournalRecordDeleteError::Storage {
-            state: TransitionJournalRecordDeleteState::Absent,
-            ..
-        }) => match after_delete.revalidate_after_journal_delete(&journal) {
+        Err(
+            delete @ TransitionJournalRecordDeleteError::Storage {
+                state: TransitionJournalRecordDeleteState::Absent,
+                ..
+            },
+        ) => match after_delete.revalidate_after_journal_delete(&journal) {
             Ok(()) => Err(UsrRollbackFinalizationError::Delete(delete)),
-            Err(verification) => Err(UsrRollbackFinalizationError::DeleteAndPostDeleteAuthority {
-                delete,
-                verification,
-            }),
+            Err(verification) => {
+                Err(UsrRollbackFinalizationError::DeleteAndPostDeleteAuthority { delete, verification })
+            }
         },
         Err(source) => Err(UsrRollbackFinalizationError::Delete(source)),
     }

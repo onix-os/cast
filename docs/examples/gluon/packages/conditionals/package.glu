@@ -1,28 +1,40 @@
 
-let b = import! cast.package.v3
-let cmake = import! cast.builders.cmake.v2
+let a = import! cast.authored.v1
+let { Bool } = import! cast.authored.v1
 
-// Feature switches are typed values consumed by an ordinary pure function.
-// They can select complete list fields without stringly conditional syntax.
+// `Bool` is destructured from the authored prelude so its `True`/`False`
+// constructors are in scope for plain `if`/`then`/`else`, matching the type
+// used by `features.documentation` / `features.tests` / `features.tls`.
+let when = \condition values ->
+    if condition then values else []
+
 \features ->
-    let base = b.mk_package (b.meta {
-        pname = "conditional-viewer",
-        version = "1.5.0",
-        release = 1,
-        homepage = "https://example.invalid/conditional-viewer",
-        license = ["MIT"],
-    })
     {
-        builder = cmake.builder {
-            flags = b.boolean.when features.documentation ["-DBUILD_DOCUMENTATION=ON"],
+        meta = {
+            pname = "conditional-viewer",
+            version = "1.5.0",
+            release = 1,
+            homepage = "https://example.invalid/conditional-viewer",
+            license = ["MIT"],
+        },
+        builder = a.builder.cmake {
+            flags = when features.documentation ["-DBUILD_DOCUMENTATION=ON"],
             run_tests = features.tests,
         },
-        build_inputs = b.boolean.when features.tls [b.dep.pkgconfig "openssl"],
-        check_inputs = b.boolean.when features.tests [b.dep.binary "xvfb-run"],
         sources = [
-            b.source.archive
+            a.source.archive
                 "https://example.invalid/conditional-viewer-1.5.0.tar.xz"
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         ],
-        .. base
+        native_build_inputs = [],
+        build_inputs = when features.tls [a.dep.pkgconfig "openssl"],
+        check_inputs = when features.tests [a.dep.binary "xvfb-run"],
+        outputs = a.outputs.default,
+        options = a.unset,
+        profiles = [],
+        architectures = [],
+        tuning = [],
+        emul32 = a.false,
+        mold = a.false,
+        hooks = a.unset,
     }

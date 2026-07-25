@@ -1,31 +1,37 @@
-
-let b = import! cast.package.v3
-let meson = import! cast.builders.meson.v2
-
-let base = b.mk_package (b.meta {
-    pname = "meson-hello",
-    version = "1.8.0",
-    release = 1,
-    homepage = "https://example.invalid/meson-hello",
-    license = ["MIT"],
-})
+let a = import! cast.authored.v1
 
 {
-    builder = meson.builder {
+    meta = {
+        pname = "meson-hello",
+        version = "1.8.0",
+        release = 1,
+        homepage = "https://example.invalid/meson-hello",
+        license = ["MIT"],
+    },
+    builder = a.builder.meson {
         flags = [
             "-Ddefault_library=shared",
             "-Ddocumentation=disabled",
         ],
-        run_tests = b.boolean.true,
+        run_tests = a.true,
     },
-    build_inputs = [
-        b.dep.pkgconfig "glib-2.0",
-        b.dep.pkgconfig "libffi",
-    ],
     sources = [
-        b.source.archive
+        a.source.archive
             "https://example.invalid/meson-hello-1.8.0.tar.xz"
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ],
-    .. base
+    native_build_inputs = [],
+    build_inputs = [
+        a.dep.pkgconfig "glib-2.0",
+        a.dep.pkgconfig "libffi",
+    ],
+    check_inputs = [],
+    outputs = a.outputs.default,
+    options = a.unset,
+    profiles = [],
+    architectures = [],
+    tuning = [],
+    emul32 = a.false,
+    mold = a.false,
+    hooks = a.unset,
 }

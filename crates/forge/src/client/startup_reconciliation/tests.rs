@@ -255,8 +255,21 @@ fn rollback_record(phase: Phase, fresh_db: RollbackAction) -> TransitionRecord {
     record
 }
 
+/// A minimal receipt pair for test records that reach `BootSyncStarted` or
+/// later, where validation now requires `boot_publication_receipts` to be
+/// present (the live path stages these via `boot_sync_started_successor`).
+fn test_boot_publication_receipt_pair() -> crate::boot_publication::BootPublicationReceiptPair {
+    crate::boot_publication::BootPublicationReceiptPair {
+        committed: None,
+        pending: crate::boot_publication::BootPublicationReceiptFingerprint::from_bytes([0x11; 32]),
+    }
+}
+
 fn boot_repair_complete_database_record() -> TransitionRecord {
-    let source = record_at(Phase::BootSyncStarted);
+    let mut source = record_at(Phase::BootSyncStarted);
+    // The record carries `run_boot_sync` and sits at `BootSyncStarted`, so the
+    // receipt-presence invariant requires a committed/pending pair.
+    source.boot_publication_receipts = Some(test_boot_publication_receipt_pair());
     let decided = source
         .rollback_decision(RollbackObservations {
             allocated_candidate_id: None,

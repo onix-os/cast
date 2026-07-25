@@ -72,8 +72,7 @@ impl<'reservation> UsrRollbackActivateArchivedCompleteRouteAuthority<'reservatio
         }
 
         installation.revalidate_mutable_namespace()?;
-        let journal_record_binding =
-            journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
+        let journal_record_binding = journal.record_binding(installation.retained_mutable_cast_directory()?, record)?;
         installation.revalidate_mutable_namespace()?;
 
         let database_before = match inspect_current_database(record, state_db)? {
@@ -82,23 +81,17 @@ impl<'reservation> UsrRollbackActivateArchivedCompleteRouteAuthority<'reservatio
                 return Ok(UsrRollbackActivateArchivedCompleteRouteAdmission::Deferred);
             }
         };
-        let namespace_inspection =
-            match UsrRollbackActivateArchivedCompleteRouteNamespaceInspection::begin(
-                installation,
-                journal,
-                &journal_record_binding,
-                record,
-            ) {
-                Ok(inspection) => inspection,
-                Err(_) => return Ok(UsrRollbackActivateArchivedCompleteRouteAdmission::Deferred),
-            };
-        run_between_database_captures();
-        let namespace = match namespace_inspection.finish(
+        let namespace_inspection = match UsrRollbackActivateArchivedCompleteRouteNamespaceInspection::begin(
             installation,
             journal,
             &journal_record_binding,
             record,
         ) {
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(UsrRollbackActivateArchivedCompleteRouteAdmission::Deferred),
+        };
+        run_between_database_captures();
+        let namespace = match namespace_inspection.finish(installation, journal, &journal_record_binding, record) {
             Ok(namespace) => namespace,
             Err(_) => return Ok(UsrRollbackActivateArchivedCompleteRouteAdmission::Deferred),
         };
@@ -132,32 +125,18 @@ impl<'reservation> UsrRollbackActivateArchivedCompleteRouteAuthority<'reservatio
         &self,
         journal: &TransitionJournalStore,
     ) -> Result<(), UsrRollbackActivateArchivedCompleteRouteAuthorityError> {
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         let database_before =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
-        self.namespace.revalidate(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        self.namespace
+            .revalidate(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         let database_after =
             require_exact_database(&self.database, inspect_current_database(&self.record, &self.state_db)?)?;
         if database_before != database_after || !activate_archived_complete_route_plan_is_exact(&self.record) {
             return Err(UsrRollbackActivateArchivedCompleteRouteAuthorityErrorKind::RouteEvidenceMismatch.into());
         }
-        require_journal_record_binding(
-            &self.installation,
-            journal,
-            &self.journal_record_binding,
-            &self.record,
-        )?;
+        require_journal_record_binding(&self.installation, journal, &self.journal_record_binding, &self.record)?;
         self.installation.revalidate_mutable_namespace()?;
         Ok(())
     }
@@ -192,9 +171,7 @@ fn require_journal_record_binding(
     record: &TransitionRecord,
 ) -> Result<(), UsrRollbackActivateArchivedCompleteRouteAuthorityError> {
     if !journal.has_record_store_binding(binding) {
-        return Err(
-            UsrRollbackActivateArchivedCompleteRouteAuthorityErrorKind::JournalRecordBindingMismatch.into(),
-        );
+        return Err(UsrRollbackActivateArchivedCompleteRouteAuthorityErrorKind::JournalRecordBindingMismatch.into());
     }
     let cast = installation.retained_mutable_cast_directory()?;
     if journal.has_record_binding(cast, binding, record)? {

@@ -51,7 +51,11 @@ fn startup_root_links_complete_next_entry_routes_exact_decision_without_reverse_
         assert!(pending(&second).blockers().is_empty(), "{kind:?}");
         assert_eq!(fixture.canonical_record(), reverse_intent, "{kind:?}");
         assert_eq!(fixture.database_snapshot(), database_before, "{kind:?}");
-        assert_eq!(directory_identity(&fixture.installation.root.join("usr")), usr_before, "{kind:?}");
+        assert_eq!(
+            directory_identity(&fixture.installation.root.join("usr")),
+            usr_before,
+            "{kind:?}"
+        );
         assert_eq!(retained_exchange_syscall_count(), 0, "{kind:?}");
         assert_eq!(usr_exchanged_root_abi_publication_attempts(), 0, "{kind:?}");
         assert_eq!(usr_exchanged_root_abi_complete_sync_attempts(), 0, "{kind:?}");

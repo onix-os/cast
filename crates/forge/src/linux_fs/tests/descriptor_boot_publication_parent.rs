@@ -91,7 +91,11 @@ fn existing_parent_chain_is_reused_without_inode_replacement() {
     assert_eq!(parent.destination_inode(), second);
     assert_eq!(fs::metadata(fixture.root.join("EFI")).unwrap().ino(), first);
     assert_eq!(fs::metadata(fixture.root.join("EFI/Linux")).unwrap().ino(), second);
-    assert!(fs::read_dir(&fixture.root).unwrap().all(|entry| entry.unwrap().file_name() == "EFI"));
+    assert!(
+        fs::read_dir(&fixture.root)
+            .unwrap()
+            .all(|entry| entry.unwrap().file_name() == "EFI")
+    );
 }
 
 #[test]
@@ -131,8 +135,7 @@ fn existing_only_parent_retention_never_creates_a_missing_component() {
 #[test]
 fn existing_only_parent_retention_never_recreates_a_post_assessment_race() {
     use crate::linux_fs::mount_namespace::{
-        RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest,
-        RetainedBootLeafAssessmentState,
+        RetainedBootLeafAssessmentLimits, RetainedBootLeafAssessmentRequest, RetainedBootLeafAssessmentState,
     };
 
     let fixture = ParentFixture::new("forge-boot-parent-existing-race-");
@@ -192,13 +195,9 @@ fn multi_component_chain_is_created_retained_and_same_root_bound() {
 fn mkdir_error_report_after_applied_is_reconciled_without_second_attempt() {
     let fixture = ParentFixture::new("forge-boot-parent-mkdir-report-");
     let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
-    arm_retained_boot_publication_parent_fault(ParentFault::MkdirReportsErrorAfterApplied {
-        component_index: 0,
-    });
+    arm_retained_boot_publication_parent_fault(ParentFault::MkdirReportsErrorAfterApplied { component_index: 0 });
 
-    let parent = view
-        .retain_boot_publication_parent_until(&["EFI"], deadline())
-        .unwrap();
+    let parent = view.retain_boot_publication_parent_until(&["EFI"], deadline()).unwrap();
 
     assert_eq!(parent.component_count(), 1);
     assert!(fixture.root.join("EFI").is_dir());
@@ -209,9 +208,7 @@ fn mkdir_error_report_after_applied_is_reconciled_without_second_attempt() {
 fn interrupted_creation_residue_is_re_admitted_with_the_same_inode() {
     let fixture = ParentFixture::new("forge-boot-parent-residue-");
     let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
-    arm_retained_boot_publication_parent_fault(ParentFault::AfterCreationBeforeDurability {
-        component_index: 0,
-    });
+    arm_retained_boot_publication_parent_fault(ParentFault::AfterCreationBeforeDurability { component_index: 0 });
 
     assert!(matches!(
         view.retain_boot_publication_parent_until(&["EFI"], deadline()),
@@ -219,9 +216,7 @@ fn interrupted_creation_residue_is_re_admitted_with_the_same_inode() {
     ));
     let residue_inode = fs::metadata(fixture.root.join("EFI")).unwrap().ino();
 
-    let admitted = view
-        .retain_boot_publication_parent_until(&["EFI"], deadline())
-        .unwrap();
+    let admitted = view.retain_boot_publication_parent_until(&["EFI"], deadline()).unwrap();
     assert_eq!(admitted.destination_inode(), residue_inode);
 }
 
@@ -256,9 +251,11 @@ fn directory_durability_runs_deepest_child_to_root_before_filesystem_and_termina
         .position(|point| *point == ParentCheckpoint::BeforeTerminalRevalidation)
         .unwrap();
     assert!(filesystem < terminal);
-    assert!(observed[..filesystem]
-        .iter()
-        .any(|point| *point == ParentCheckpoint::AfterDirectorySync { depth: 0 }));
+    assert!(
+        observed[..filesystem]
+            .iter()
+            .any(|point| *point == ParentCheckpoint::AfterDirectorySync { depth: 0 })
+    );
 }
 
 #[test]
@@ -276,12 +273,13 @@ fn terminal_name_substitution_is_preserved_but_refused() {
         }
     });
 
-    assert!(view
-        .retain_boot_publication_parent_until(&["EFI"], deadline())
-        .is_err());
+    assert!(view.retain_boot_publication_parent_until(&["EFI"], deadline()).is_err());
     assert!(canonical.is_dir());
     assert!(displaced.is_dir());
-    assert_ne!(fs::metadata(canonical).unwrap().ino(), fs::metadata(displaced).unwrap().ino());
+    assert_ne!(
+        fs::metadata(canonical).unwrap().ino(),
+        fs::metadata(displaced).unwrap().ino()
+    );
 }
 
 #[test]
@@ -299,9 +297,10 @@ fn intermediate_parent_substitution_is_refused_before_deeper_creation() {
         }
     });
 
-    assert!(view
-        .retain_boot_publication_parent_until(&["EFI", "Linux"], deadline())
-        .is_err());
+    assert!(
+        view.retain_boot_publication_parent_until(&["EFI", "Linux"], deadline())
+            .is_err()
+    );
     assert!(canonical.is_dir());
     assert!(displaced.is_dir());
     assert!(!canonical.join("Linux").exists());
@@ -314,16 +313,12 @@ fn regular_symlink_and_writable_directory_components_are_refused_without_replace
     let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
     let component = fixture.root.join("EFI");
     fs::write(&component, b"foreign regular file").unwrap();
-    assert!(view
-        .retain_boot_publication_parent_until(&["EFI"], deadline())
-        .is_err());
+    assert!(view.retain_boot_publication_parent_until(&["EFI"], deadline()).is_err());
     assert_eq!(fs::read(&component).unwrap(), b"foreign regular file");
 
     fs::remove_file(&component).unwrap();
     symlink(fixture.temporary.path(), &component).unwrap();
-    assert!(view
-        .retain_boot_publication_parent_until(&["EFI"], deadline())
-        .is_err());
+    assert!(view.retain_boot_publication_parent_until(&["EFI"], deadline()).is_err());
     assert!(fs::symlink_metadata(&component).unwrap().file_type().is_symlink());
 
     fs::remove_file(&component).unwrap();
@@ -346,8 +341,7 @@ fn foreign_device_and_mount_id_are_rejected_by_the_closed_identity_policy() {
 
 #[test]
 fn root_credentials_and_child_owner_group_mode_drift_are_rejected() {
-    validate_fixture_boot_publication_parent_policy(1000, 100, 1000, 100, 0o755, 1000, 100, 0o750)
-        .unwrap();
+    validate_fixture_boot_publication_parent_policy(1000, 100, 1000, 100, 0o755, 1000, 100, 0o750).unwrap();
     for policy in [
         (1001, 100, 1000, 100, 0o755, 1000, 100, 0o755),
         (1000, 101, 1000, 100, 0o755, 1000, 100, 0o755),
@@ -359,10 +353,12 @@ fn root_credentials_and_child_owner_group_mode_drift_are_rejected() {
         (1000, 100, 1000, 100, 0o755, 1000, 100, 0o2755),
         (1000, 100, 1000, 100, 0o755, 1000, 100, 0o655),
     ] {
-        assert!(validate_fixture_boot_publication_parent_policy(
-            policy.0, policy.1, policy.2, policy.3, policy.4, policy.5, policy.6, policy.7,
-        )
-        .is_err());
+        assert!(
+            validate_fixture_boot_publication_parent_policy(
+                policy.0, policy.1, policy.2, policy.3, policy.4, policy.5, policy.6, policy.7,
+            )
+            .is_err()
+        );
     }
 }
 
@@ -371,9 +367,10 @@ fn only_nonempty_bounded_raw_parent_components_reach_the_syscall_boundary() {
     let fixture = ParentFixture::new("forge-boot-parent-components-");
     let view = fixture.attachment.revalidate_against(&fixture.anchor).unwrap();
     for components in [Vec::<&str>::new(), vec![""], vec!["."], vec![".."], vec!["EFI/Linux"]] {
-        assert!(view
-            .retain_boot_publication_parent_until(&components, deadline())
-            .is_err());
+        assert!(
+            view.retain_boot_publication_parent_until(&components, deadline())
+                .is_err()
+        );
     }
     let too_many = vec!["safe"; 16];
     assert!(matches!(

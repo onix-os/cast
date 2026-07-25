@@ -23,11 +23,7 @@ use super::support::{
 };
 
 fn canonical_journal(fixture: &Fixture) -> PathBuf {
-    fixture
-        .fixture
-        .installation
-        .root
-        .join(".cast/journal/state-transition")
+    fixture.fixture.installation.root.join(".cast/journal/state-transition")
 }
 
 fn inode_identity(path: &Path) -> (u64, u64) {
@@ -92,12 +88,7 @@ fn startup_root_links_reverse_same_byte_predecessor_replacement_at_pre_effect_bo
     for historical in [false, true] {
         for kind in OperationKind::ALL {
             for layout in [ReverseLayout::Post, ReverseLayout::Pre] {
-                let fixture = Fixture::for_effect_source(
-                    kind,
-                    SourceCase::RootLinksCompletePost,
-                    layout,
-                    historical,
-                );
+                let fixture = Fixture::for_effect_source(kind, SourceCase::RootLinksCompletePost, layout, historical);
                 let case = format!("{kind:?} {layout:?} historical={historical}");
                 let source_bytes = fixture.fixture.canonical_bytes();
                 let database_before = fixture.fixture.database_snapshot();
@@ -126,7 +117,11 @@ fn startup_root_links_reverse_same_byte_predecessor_replacement_at_pre_effect_bo
                     ReverseLayout::Pre => RollbackActionOutcome::AlreadySatisfied,
                 };
                 assert_usr_restored_pending(&restarted);
-                assert_eq!(fixture.fixture.canonical_record(), expected_usr_restored(&fixture, outcome), "{case}");
+                assert_eq!(
+                    fixture.fixture.canonical_record(),
+                    expected_usr_restored(&fixture, outcome),
+                    "{case}"
+                );
                 assert_eq!(
                     retained_exchange_syscall_count(),
                     usize::from(layout == ReverseLayout::Post),
@@ -142,12 +137,8 @@ fn startup_root_links_reverse_same_byte_predecessor_replacement_at_pre_effect_bo
 fn startup_root_links_reverse_same_byte_predecessor_replacement_after_exchange_before_persistence_never_advances() {
     for historical in [false, true] {
         for kind in OperationKind::ALL {
-            let fixture = Fixture::for_effect_source(
-                kind,
-                SourceCase::RootLinksCompletePost,
-                ReverseLayout::Post,
-                historical,
-            );
+            let fixture =
+                Fixture::for_effect_source(kind, SourceCase::RootLinksCompletePost, ReverseLayout::Post, historical);
             let case = format!("{kind:?} historical={historical}");
             let source_bytes = fixture.fixture.canonical_bytes();
             let database_before = fixture.fixture.database_snapshot();

@@ -2,8 +2,8 @@
 
 use config::declaration::GeneratedDeclarationAuthority;
 use declarative_config::{
-    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator,
-    EvaluationDeadline, Evaluation as DeclarationEvaluation, LanguageSpec, Limits, SourceRoot,
+    DeclarationCodec, DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
+    EvaluationDeadline, LanguageSpec, Limits, SourceRoot,
 };
 use gluon_config::{Diagnostic, EvaluationIdentity, GluonEngine, ImportPolicy, Source};
 
@@ -38,11 +38,9 @@ impl Default for SystemIntentEvaluator {
 impl SystemIntentEvaluator {
     pub(crate) fn new(limits: Limits) -> Self {
         Self {
-            engine: configured_engine(GluonEngine::new(limits))
-                .expect("the embedded system ABI is valid and unique"),
+            engine: configured_engine(GluonEngine::new(limits)).expect("the embedded system ABI is valid and unique"),
         }
     }
-
 }
 
 /// Stateful Gluon codec for canonical generated system snapshots.
@@ -60,8 +58,7 @@ impl Default for SystemSnapshotCodec {
 impl SystemSnapshotCodec {
     pub(crate) fn new(limits: Limits) -> Self {
         Self {
-            engine: configured_engine(GluonEngine::new(limits))
-                .expect("the embedded system ABI is valid and unique"),
+            engine: configured_engine(GluonEngine::new(limits)).expect("the embedded system ABI is valid and unique"),
         }
     }
 
@@ -75,11 +72,8 @@ impl SystemSnapshotCodec {
     /// domain-specific marker proves that the bytes belong to Cast's system
     /// snapshot slot rather than to an authored declaration.
     pub(crate) fn generated_authority(&self) -> GeneratedDeclarationAuthority {
-        GeneratedDeclarationAuthority::new(
-            self.language_spec().clone(),
-            GENERATED_GLUON_MARKER,
-        )
-        .expect("the generated system snapshot authority is valid")
+        GeneratedDeclarationAuthority::new(self.language_spec().clone(), GENERATED_GLUON_MARKER)
+            .expect("the generated system snapshot authority is valid")
     }
 }
 
@@ -91,10 +85,7 @@ pub(super) fn generated_source_fingerprint(source: &str) -> Option<String> {
     encoding::source_fingerprint(source)
 }
 
-pub(super) fn with_source_fingerprint(
-    generated: &str,
-    source_fingerprint: &str,
-) -> String {
+pub(super) fn with_source_fingerprint(generated: &str, source_fingerprint: &str) -> String {
     encoding::with_source_fingerprint(generated, source_fingerprint)
 }
 
@@ -220,21 +211,15 @@ impl DeclarationEvaluator<SystemIntentDeclaration> for SystemIntentEvaluator {
         &self,
         source: &Source,
         deadline: EvaluationDeadline,
-    ) -> Result<
-        DeclarationEvaluation<SystemIntentDeclaration, Self::Identity>,
-        DeclarationEvaluationError<Self::Error>,
-    > {
+    ) -> Result<DeclarationEvaluation<SystemIntentDeclaration, Self::Identity>, DeclarationEvaluationError<Self::Error>>
+    {
         let authored_source = source.text().to_owned();
         let evaluated = evaluate_spec(&self.engine, source, deadline)?;
-        let parts = spec::into_domain(evaluated.value)
-            .map_err(DeclarationEvaluationError::Conversion)?;
+        let parts = spec::into_domain(evaluated.value).map_err(DeclarationEvaluationError::Conversion)?;
         let model = SystemModel::regenerate(parts)?;
 
         Ok(DeclarationEvaluation {
-            value: SystemIntentDeclaration {
-                authored_source,
-                model,
-            },
+            value: SystemIntentDeclaration { authored_source, model },
             identity: evaluated.identity,
         })
     }
@@ -262,25 +247,14 @@ impl DeclarationEvaluator<SystemModel> for SystemSnapshotCodec {
         &self,
         source: &Source,
         deadline: EvaluationDeadline,
-    ) -> Result<
-        DeclarationEvaluation<SystemModel, Self::Identity>,
-        DeclarationEvaluationError<Self::Error>,
-    > {
+    ) -> Result<DeclarationEvaluation<SystemModel, Self::Identity>, DeclarationEvaluationError<Self::Error>> {
         let source_text = source.text().to_owned();
         let evaluated = evaluate_spec(&self.engine, source, deadline)?;
-        let parts = spec::into_domain(evaluated.value)
-            .map_err(DeclarationEvaluationError::Conversion)?;
+        let parts = spec::into_domain(evaluated.value).map_err(DeclarationEvaluationError::Conversion)?;
         let identity = evaluated.identity;
-        let model = SystemModel::from_generated(
-            parts,
-            source_text,
-            identity.clone(),
-        );
+        let model = SystemModel::from_generated(parts, source_text, identity.clone());
 
-        Ok(DeclarationEvaluation {
-            value: model,
-            identity,
-        })
+        Ok(DeclarationEvaluation { value: model, identity })
     }
 }
 
@@ -335,15 +309,11 @@ mod tests {
         fingerprint: EvaluationIdentity,
     }
 
-    fn evaluate(
-        source: &Source,
-    ) -> Result<
-        EvaluatedSystem,
-        DeclarationEvaluationError<spec::ConversionError>,
-    > {
-        let evaluated = <SystemIntentEvaluator as DeclarationEvaluator<
-            SystemIntentDeclaration,
-        >>::evaluate(&SystemIntentEvaluator::default(), source)?;
+    fn evaluate(source: &Source) -> Result<EvaluatedSystem, DeclarationEvaluationError<spec::ConversionError>> {
+        let evaluated = <SystemIntentEvaluator as DeclarationEvaluator<SystemIntentDeclaration>>::evaluate(
+            &SystemIntentEvaluator::default(),
+            source,
+        )?;
         Ok(EvaluatedSystem {
             model: evaluated.value.model,
             fingerprint: evaluated.identity,
@@ -352,15 +322,9 @@ mod tests {
 
     fn evaluate_generated_snapshot(
         source: &Source,
-    ) -> Result<
-        SystemModel,
-        DeclarationEvaluationError<spec::ConversionError>,
-    > {
-        <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
-            &SystemSnapshotCodec::default(),
-            source,
-        )
-        .map(|evaluation| evaluation.value)
+    ) -> Result<SystemModel, DeclarationEvaluationError<spec::ConversionError>> {
+        <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(&SystemSnapshotCodec::default(), source)
+            .map(|evaluation| evaluation.value)
     }
 
     fn authored(body: &str) -> Source {
@@ -393,7 +357,9 @@ mod tests {
                     enabled: Some(true),
                 },
             ],
-            packages: ["alpha", "binary(tool)", "soname(libc.so.6)"].map(str::to_owned).to_vec(),
+            packages: ["alpha", "binary(tool)", "soname(libc.so.6)"]
+                .map(str::to_owned)
+                .to_vec(),
         }
     }
 
@@ -451,9 +417,7 @@ mod tests {
     fn complete_snapshot_matches_the_frozen_golden() {
         assert_eq!(
             encoding::encode_generated(&complete_normalized_system_value()).as_bytes(),
-            include_bytes!(
-                "../../../../tests/fixtures/gluon/goldens/system-snapshot.glu"
-            )
+            include_bytes!("../../../../tests/fixtures/gluon/goldens/system-snapshot.glu")
         );
     }
 
@@ -464,48 +428,29 @@ mod tests {
         value.packages.reverse();
         let encoded = encoding::encode_generated(&value);
 
-        assert_eq!(
-            encoded,
-            encoding::encode_generated(&complete_normalized_system_value())
-        );
+        assert_eq!(encoded, encoding::encode_generated(&complete_normalized_system_value()));
         assert!(encoding::is_generated(&encoded));
         assert!(!encoded.contains("import!"));
         assert!(encoded.contains("type RepositorySourceSpec ="));
         assert!(encoded.contains("type SystemSpec ="));
         assert!(encoded.contains("description = Some \"line \\\"quoted\\\"\\npath\\\\leaf\\t雪\","));
-        assert!(
-            encoded.find("id = \"a-direct\"").unwrap()
-                < encoded.find("id = \"z-root\"").unwrap()
-        );
-        assert!(
-            encoded.find("\"alpha\"").unwrap()
-                < encoded.find("\"soname(libc.so.6)\"").unwrap()
-        );
+        assert!(encoded.find("id = \"a-direct\"").unwrap() < encoded.find("id = \"z-root\"").unwrap());
+        assert!(encoded.find("\"alpha\"").unwrap() < encoded.find("\"soname(libc.so.6)\"").unwrap());
     }
 
     #[test]
     fn generated_snapshot_authority_binds_exact_language_marker_and_public_name() {
         let codec = SystemSnapshotCodec::default();
         let authority = codec.generated_authority();
-        let language = <SystemSnapshotCodec as DeclarationEvaluator<
-            SystemModel,
-        >>::language_spec(&codec);
-        let encoded = encoding::encode_generated(
-            &spec::SystemSpec::default(),
-        );
+        let language = <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::language_spec(&codec);
+        let encoded = encoding::encode_generated(&spec::SystemSpec::default());
 
         assert_eq!(authority.language_spec(), language);
         assert_eq!(authority.language_spec().language().as_str(), "gluon");
         assert_eq!(authority.language_spec().extension(), "glu");
+        assert_eq!(authority.ownership_marker(), GENERATED_GLUON_MARKER.as_bytes(),);
         assert_eq!(
-            authority.ownership_marker(),
-            GENERATED_GLUON_MARKER.as_bytes(),
-        );
-        assert_eq!(
-            format!(
-                "system-model.{}",
-                authority.language_spec().extension(),
-            ),
+            format!("system-model.{}", authority.language_spec().extension(),),
             "system-model.glu",
         );
         assert!(encoded.as_bytes().starts_with(authority.ownership_marker()));
@@ -513,23 +458,17 @@ mod tests {
 
     #[test]
     fn authored_source_fingerprint_annotation_round_trips_exactly() {
-        let fingerprint =
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let fingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let generated = encoding::encode_generated(&spec::SystemSpec::default());
         let annotated = encoding::with_source_fingerprint(&generated, fingerprint);
 
-        assert_eq!(
-            encoding::source_fingerprint(&annotated).as_deref(),
-            Some(fingerprint)
-        );
+        assert_eq!(encoding::source_fingerprint(&annotated).as_deref(), Some(fingerprint));
         assert_eq!(
             annotated,
             format!(
                 "{}// Authored source fingerprint: {fingerprint}\n{}",
                 GENERATED_GLUON_MARKER,
-                generated
-                    .strip_prefix(GENERATED_GLUON_MARKER)
-                    .unwrap()
+                generated.strip_prefix(GENERATED_GLUON_MARKER).unwrap()
             )
         );
     }
@@ -694,9 +633,10 @@ mod tests {
     #[test]
     fn typed_adapters_preserve_v1_identity_and_canonical_snapshot_bytes() {
         let source = authored("cast.system");
-        let intent = <SystemIntentEvaluator as DeclarationEvaluator<
-            SystemIntentDeclaration,
-        >>::evaluate(&SystemIntentEvaluator::default(), &source)
+        let intent = <SystemIntentEvaluator as DeclarationEvaluator<SystemIntentDeclaration>>::evaluate(
+            &SystemIntentEvaluator::default(),
+            &source,
+        )
         .unwrap();
 
         assert_eq!(intent.value.authored_source, source.text());
@@ -708,9 +648,7 @@ mod tests {
         let model = SystemModel::try_from(complete_normalized_system_value()).unwrap();
         let codec = SystemSnapshotCodec::default();
         let encoded = codec.encode(&model).unwrap();
-        let golden = include_str!(
-            "../../../../tests/fixtures/gluon/goldens/system-snapshot.glu"
-        );
+        let golden = include_str!("../../../../tests/fixtures/gluon/goldens/system-snapshot.glu");
 
         assert_eq!(encoded, golden);
         let decoded = <SystemSnapshotCodec as DeclarationEvaluator<SystemModel>>::evaluate(
@@ -726,9 +664,7 @@ mod tests {
     #[test]
     fn typed_intent_adapter_keeps_engine_and_conversion_failures_distinct() {
         let evaluator = SystemIntentEvaluator::default();
-        let wrong_type = <SystemIntentEvaluator as DeclarationEvaluator<
-            SystemIntentDeclaration,
-        >>::evaluate(
+        let wrong_type = <SystemIntentEvaluator as DeclarationEvaluator<SystemIntentDeclaration>>::evaluate(
             &evaluator,
             &authored("{ packages = [1], .. cast.system }"),
         )
@@ -739,9 +675,7 @@ mod tests {
                 if error.category == DiagnosticCategory::Type
         ));
 
-        let invalid_priority = <SystemIntentEvaluator as DeclarationEvaluator<
-            SystemIntentDeclaration,
-        >>::evaluate(
+        let invalid_priority = <SystemIntentEvaluator as DeclarationEvaluator<SystemIntentDeclaration>>::evaluate(
             &evaluator,
             &authored(
                 r#"
@@ -769,9 +703,10 @@ mod tests {
             max_source_bytes: 2,
             ..Limits::default()
         });
-        let oversized = <SystemIntentEvaluator as DeclarationEvaluator<
-            SystemIntentDeclaration,
-        >>::evaluate(&bounded, &authored("cast.system"))
+        let oversized = <SystemIntentEvaluator as DeclarationEvaluator<SystemIntentDeclaration>>::evaluate(
+            &bounded,
+            &authored("cast.system"),
+        )
         .unwrap_err();
         assert!(matches!(
             oversized,

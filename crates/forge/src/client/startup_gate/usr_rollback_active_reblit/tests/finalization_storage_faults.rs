@@ -3,14 +3,12 @@
 use crate::{
     client::{
         active_state_snapshot::ActiveStateReservation,
-        startup_recovery::{
-            UsrRollbackActiveReblitFinalizationError, finalize_usr_rollback_active_reblit,
-        },
+        startup_recovery::{UsrRollbackActiveReblitFinalizationError, finalize_usr_rollback_active_reblit},
     },
     transition_journal::{
-        RollbackActionOutcome, arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
+        RollbackActionOutcome, TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
+        arm_next_delete_canonical_unlink_fault, arm_next_delete_directory_sync_fault,
         assert_delete_canonical_unlink_fault_consumed, assert_delete_directory_sync_fault_consumed,
-        TransitionJournalRecordDeleteError, TransitionJournalRecordDeleteState,
     },
 };
 

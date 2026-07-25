@@ -14,10 +14,7 @@ use crate::{
     },
 };
 
-use super::{
-    fixture::OperationKind,
-    support::RouteFixture,
-};
+use super::{fixture::OperationKind, support::RouteFixture};
 
 #[test]
 fn startup_root_links_complete_route_all_storage_faults_reopen_exact_record_across_operations_and_epochs() {

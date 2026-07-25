@@ -2,11 +2,12 @@
 
 set -eu
 
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd -P)
 budgets="$root/misc/scripts/fixture-runtime-budgets.sh"
 delegated_runner="$root/misc/scripts/run-delegated-execution-fixture.sh"
 outer_runner="$root/misc/scripts/run-fixtures-ci-with-evidence.sh"
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-fixture-runtime-budget-test.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-fixture-runtime-budget-test.XXXXXXXXXXXX")
 cleanup() {
     status=$?
     trap - EXIT HUP INT TERM

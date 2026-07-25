@@ -16,8 +16,7 @@ use std::{
 
 use config::declaration::RegisteredLanguages;
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator,
-    Evaluation as DeclarationEvaluation, LanguageSpec, Source,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, LanguageSpec, Source,
 };
 use gluon_config::{EvaluationIdentity, EvaluationIdentityValidationError};
 use thiserror::Error;
@@ -33,10 +32,10 @@ use self::{
 mod filesystem;
 #[path = "active_reblit_root_filesystem_intent/gluon.rs"]
 mod gluon;
-#[path = "active_reblit_root_filesystem_intent/normalization.rs"]
-mod normalization;
 #[path = "active_reblit_root_filesystem_intent/lua.rs"]
 mod lua;
+#[path = "active_reblit_root_filesystem_intent/normalization.rs"]
+mod normalization;
 
 const KIB: usize = 1024;
 const MAX_ROOT_FILESYSTEM_SOURCE_BYTES: usize = 64 * KIB;
@@ -167,33 +166,18 @@ impl PreparedActiveReblitRootFilesystemIntent {
         F: FnOnce(),
     {
         let languages = registered_declaration_languages();
-        let bytes = revalidate_source(
-            installation,
-            &self.source,
-            &languages,
-            budget,
-        )?;
+        let bytes = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&bytes)?;
         let source_text =
             std::str::from_utf8(&bytes).map_err(|source| ActiveReblitRootFilesystemIntentError::InvalidUtf8 {
                 path: budget.source_path.clone(),
                 source,
             })?;
-        let evaluated = evaluate_declaration(
-            source_text,
-            self.source.language(),
-            self.source.logical_name(),
-            budget,
-        )?;
+        let evaluated = evaluate_declaration(source_text, self.source.language(), self.source.logical_name(), budget)?;
         self.require_exact_evaluation(&evaluated)?;
 
         before_terminal_rebind();
-        let terminal = revalidate_source(
-            installation,
-            &self.source,
-            &languages,
-            budget,
-        )?;
+        let terminal = revalidate_source(installation, &self.source, &languages, budget)?;
         self.require_exact_source(&terminal)
     }
 
@@ -210,10 +194,7 @@ impl PreparedActiveReblitRootFilesystemIntent {
 
     fn require_exact_evaluation(
         &self,
-        evaluated: &DeclarationEvaluation<
-            RootFilesystemIntentValue,
-            EvaluationIdentity,
-        >,
+        evaluated: &DeclarationEvaluation<RootFilesystemIntentValue, EvaluationIdentity>,
     ) -> Result<(), ActiveReblitRootFilesystemIntentError> {
         if evaluated.value == self.value && evaluated.identity == self.fingerprint {
             Ok(())
@@ -431,11 +412,7 @@ where
 {
     revalidate_installation_root(installation, budget)?;
     let languages = registered_declaration_languages();
-    let (source, bytes) = capture_source(
-        installation,
-        &languages,
-        budget,
-    )?;
+    let (source, bytes) = capture_source(installation, &languages, budget)?;
     let source_text = std::str::from_utf8(&bytes)
         .map_err(|source| ActiveReblitRootFilesystemIntentError::InvalidUtf8 {
             path: root_filesystem_intent_path(installation),
@@ -443,12 +420,7 @@ where
         })?
         .to_owned()
         .into_boxed_str();
-    let evaluated = evaluate_declaration(
-        &source_text,
-        source.language(),
-        source.logical_name(),
-        budget,
-    )?;
+    let evaluated = evaluate_declaration(&source_text, source.language(), source.logical_name(), budget)?;
     let prepared = PreparedActiveReblitRootFilesystemIntent {
         source,
         source_text,
@@ -473,10 +445,8 @@ fn evaluate_declaration(
     language: &LanguageSpec,
     logical_name: &str,
     budget: &mut RootFilesystemIntentBudget,
-) -> Result<
-    DeclarationEvaluation<RootFilesystemIntentValue, EvaluationIdentity>,
-    ActiveReblitRootFilesystemIntentError,
-> {
+) -> Result<DeclarationEvaluation<RootFilesystemIntentValue, EvaluationIdentity>, ActiveReblitRootFilesystemIntentError>
+{
     // The root-filesystem normalization takes `&mut budget`, so the matching
     // evaluator is constructed by language rather than held together in a set:
     // two engines cannot borrow the budget mutably at once.
@@ -500,9 +470,7 @@ fn lift_evaluation_error(
     error: DeclarationEvaluationError<ActiveReblitRootFilesystemIntentError>,
 ) -> ActiveReblitRootFilesystemIntentError {
     match error {
-        DeclarationEvaluationError::Evaluation(source) => {
-            ActiveReblitRootFilesystemIntentError::Evaluation(source)
-        }
+        DeclarationEvaluationError::Evaluation(source) => ActiveReblitRootFilesystemIntentError::Evaluation(source),
         DeclarationEvaluationError::Conversion(source) => source,
     }
 }

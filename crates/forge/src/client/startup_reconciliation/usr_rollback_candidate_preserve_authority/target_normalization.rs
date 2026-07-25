@@ -10,7 +10,8 @@ use crate::transition_journal::TransitionJournalStore;
 
 use super::{
     UsrRollbackCandidatePreserveAuthorityError, UsrRollbackCandidatePreserveRestartAuthority,
-    UsrRollbackNewStateCandidatePreserveNormalizeTargetEffect, UsrRollbackNewStateCandidatePreserveNormalizeTargetLease,
+    UsrRollbackNewStateCandidatePreserveNormalizeTargetEffect,
+    UsrRollbackNewStateCandidatePreserveNormalizeTargetLease,
     effect_evidence::{require_effect_binding, require_post_effect_evidence, require_pre_effect_evidence},
 };
 use crate::client::{

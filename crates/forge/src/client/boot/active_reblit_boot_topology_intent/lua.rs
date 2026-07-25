@@ -17,16 +17,16 @@ use std::fmt::Write as _;
 use std::time::Duration;
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation,
-    EvaluationDeadline, EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation as DeclarationEvaluation, EvaluationDeadline,
+    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
 };
 use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
 
-use super::gluon::{assemble_boot_topology, BootTargetInput, SOURCE_LOGICAL_NAME};
+use super::gluon::{BootTargetInput, SOURCE_LOGICAL_NAME, assemble_boot_topology};
 use super::{
-    ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError,
-    ActiveReblitBootTopologyIntentValue, ActiveReblitBootTopologyTarget, BootTopologyIntentBudget,
+    ActiveReblitBootPartitionSelector, ActiveReblitBootTopologyIntentError, ActiveReblitBootTopologyIntentValue,
+    ActiveReblitBootTopologyTarget, BootTopologyIntentBudget,
 };
 
 const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -80,9 +80,7 @@ pub(super) struct LuaBootTopologyIntentEvaluator<'budget> {
 }
 
 impl<'budget> LuaBootTopologyIntentEvaluator<'budget> {
-    pub(super) fn new(
-        budget: &'budget BootTopologyIntentBudget,
-    ) -> Result<Self, ActiveReblitBootTopologyIntentError> {
+    pub(super) fn new(budget: &'budget BootTopologyIntentBudget) -> Result<Self, ActiveReblitBootTopologyIntentError> {
         budget.require_deadline()?;
         let remaining = budget.remaining_duration()?;
         let mut limits = Limits::default();
@@ -101,9 +99,7 @@ impl<'budget> LuaBootTopologyIntentEvaluator<'budget> {
     }
 }
 
-impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
-    for LuaBootTopologyIntentEvaluator<'_>
-{
+impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue> for LuaBootTopologyIntentEvaluator<'_> {
     type Identity = EvaluationIdentity;
     type Error = ActiveReblitBootTopologyIntentError;
 
@@ -137,8 +133,7 @@ impl DeclarationEvaluator<ActiveReblitBootTopologyIntentValue>
         self.budget
             .require_deadline()
             .map_err(DeclarationEvaluationError::Conversion)?;
-        require_lua_fingerprint_contract(&evaluation.identity)
-            .map_err(DeclarationEvaluationError::Conversion)?;
+        require_lua_fingerprint_contract(&evaluation.identity).map_err(DeclarationEvaluationError::Conversion)?;
 
         let intent = evaluation.value;
         let value = assemble_boot_topology(intent.esp.partuuid, intent.esp.mount_point, intent.boot.into())
@@ -296,8 +291,7 @@ return {{
     #[test]
     fn a_lua_alias_intent_matches_the_gluon_conversion() {
         let fixture = Fixture::new();
-        let gluon = gluon_value_for_test(ESP_PARTUUID, ESP_MOUNT_POINT, None)
-            .expect("gluon alias intent converts");
+        let gluon = gluon_value_for_test(ESP_PARTUUID, ESP_MOUNT_POINT, None).expect("gluon alias intent converts");
         assert_eq!(lua_value(&fixture, &alias_source()), gluon);
     }
 
@@ -333,10 +327,8 @@ return {{
         let fixture = Fixture::new();
         let esp = "11111111-2222-3333-4444-555555555555";
 
-        let alias = std::fs::read_to_string(format!(
-            "{root_dir}/docs/examples/lua/boot-topology-aliases-esp.lua"
-        ))
-        .expect("lua alias example");
+        let alias = std::fs::read_to_string(format!("{root_dir}/docs/examples/lua/boot-topology-aliases-esp.lua"))
+            .expect("lua alias example");
         assert_eq!(
             lua_value(&fixture, &alias),
             gluon_value_for_test(esp, "/efi", None).expect("gluon alias"),
@@ -348,12 +340,8 @@ return {{
         .expect("lua distinct example");
         assert_eq!(
             lua_value(&fixture, &distinct),
-            gluon_value_for_test(
-                esp,
-                "/efi",
-                Some(("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "/boot")),
-            )
-            .expect("gluon distinct"),
+            gluon_value_for_test(esp, "/efi", Some(("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", "/boot")),)
+                .expect("gluon distinct"),
         );
     }
 

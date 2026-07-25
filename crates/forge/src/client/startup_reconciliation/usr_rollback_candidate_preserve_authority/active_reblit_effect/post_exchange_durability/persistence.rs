@@ -7,8 +7,8 @@
 use crate::{
     Installation,
     transition_journal::{
-        CodecError, Phase, RollbackActionOutcome, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Phase, RollbackActionOutcome, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
@@ -124,10 +124,9 @@ impl UsrRollbackActiveReblitCandidatePreserveDurableEffectAuthority<'_> {
                 record: successor,
                 binding,
             }),
-            Err(source) => Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Storage {
-                source,
-                successor,
-            }),
+            Err(source) => {
+                Err(UsrRollbackActiveReblitCandidatePreserveRecordAdvanceError::Storage { source, successor })
+            }
         }
     }
 }

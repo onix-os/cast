@@ -51,6 +51,10 @@ mod legacy_boot_repair;
 mod namespace_helpers;
 mod prejournal_inventory;
 mod previous_tree_move;
+// Forward scaffolding: minted by the not-yet-built PreviousRestore rollback
+// dispatcher (Phase 1) and used today by its physical-primitive test.
+#[allow(unused_imports)]
+pub(crate) use previous_tree_move::PreviousRestoreRecoverySeal;
 mod prune_residue;
 mod retained_usr_exchange_syscall;
 mod reusable_previous_slot;
@@ -98,12 +102,13 @@ use fault_injection::{
 };
 #[allow(unused_imports)] // contract-only surface for the later live coordinator integration
 pub(crate) use journal_coordinator::{
-    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal,
-    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal,
-    ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
-    NewStatePrevious, execute_active_reblit_forward,
-    StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
-    StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
+    ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, ActiveReblitForwardError,
+    ActiveReblitNoBootCompletionFailure, ActiveReblitNoBootTailSeal, ActiveReblitSystemTriggerView,
+    ActiveReblitTransactionTriggerView, NewStateForwardError, NewStatePrevious, NewStateSystemTriggerView,
+    NewStateTransactionTriggerView, PreviousArchiveBootHandoffFailure, PreviousArchivedBootSyncHandoffSeal,
+    PreviousArchivedCoordinator, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
+    StatefulTransitionRequest, SystemTriggersCompleteCoordinator, execute_active_reblit_forward,
+    execute_new_state_forward,
 };
 pub(crate) use legacy_boot_repair::{LegacyBootRepairAuthority, LegacyBootRepairAuthorityError};
 use namespace_helpers::*;

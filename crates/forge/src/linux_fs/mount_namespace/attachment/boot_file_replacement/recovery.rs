@@ -1,11 +1,10 @@
 //! Restart-safe classification of deterministic replacement cleanup prefixes.
 
-use super::*;
 use super::model::{
-    RetainedBootFileAppliedSidecarCleanupState,
-    RetainedBootFileRestoredSidecarCleanupState, RetainedBootFileStaleCleanupState,
-    StaleFileLocation,
+    RetainedBootFileAppliedSidecarCleanupState, RetainedBootFileRestoredSidecarCleanupState,
+    RetainedBootFileStaleCleanupState, StaleFileLocation,
 };
+use super::*;
 
 impl RetainedBootPublicationParent<'_, '_> {
     /// Authenticate an exact unexchanged stage or restored rollback pair.
@@ -32,9 +31,7 @@ impl RetainedBootPublicationParent<'_, '_> {
         deadline: Instant,
     ) -> Result<RetainedBootFileAppliedSidecarCleanupState, RetainedBootFileReplacementError> {
         reconcile_sidecar(self, request, limits, PairState::Applied, deadline).map(|state| match state {
-            ReconciledSidecar::Pending(authority) => {
-                RetainedBootFileAppliedSidecarCleanupState::Pending(authority)
-            }
+            ReconciledSidecar::Pending(authority) => RetainedBootFileAppliedSidecarCleanupState::Pending(authority),
             ReconciledSidecar::AlreadyClean => RetainedBootFileAppliedSidecarCleanupState::AlreadyClean,
         })
     }
@@ -48,9 +45,9 @@ impl RetainedBootPublicationParent<'_, '_> {
     ) -> Result<RetainedBootFileRestoredSidecarCleanupState, RetainedBootFileReplacementError> {
         reconcile_sidecar(self, request, limits, PairState::Restored, deadline).map(|state| match state {
             ReconciledSidecar::Pending(authority) => {
-                RetainedBootFileRestoredSidecarCleanupState::Pending(
-                    ValidatedRetainedBootFileRestoration { replacement: authority },
-                )
+                RetainedBootFileRestoredSidecarCleanupState::Pending(ValidatedRetainedBootFileRestoration {
+                    replacement: authority,
+                })
             }
             ReconciledSidecar::AlreadyClean => RetainedBootFileRestoredSidecarCleanupState::AlreadyClean,
         })
@@ -115,16 +112,18 @@ impl RetainedBootPublicationParent<'_, '_> {
                     "authenticating detached stale cleanup recovery",
                     deadline,
                 )?;
-                synchronize_files(&[
-                    &open_exact(
+                synchronize_files(
+                    &[&open_exact(
                         &parent,
                         &private,
                         request.stale(),
                         destination,
                         "synchronizing detached stale cleanup recovery",
                         deadline,
-                    )?,
-                ], &parent, deadline)?;
+                    )?],
+                    &parent,
+                    deadline,
+                )?;
                 self.require_publication_parent_until("closing detached stale cleanup recovery", deadline)
                     .map_err(|source| publication("closing detached stale cleanup recovery", source))?;
                 require_absent(&parent, &canonical, deadline)?;
@@ -194,7 +193,8 @@ fn reconcile_sidecar(
     {
         None => {
             synchronize_files(&[&canonical], &parent, deadline)?;
-            target.require_publication_parent_until("closing already-clean replacement sidecar recovery", deadline)
+            target
+                .require_publication_parent_until("closing already-clean replacement sidecar recovery", deadline)
                 .map_err(|source| publication("closing already-clean replacement sidecar recovery", source))?;
             let closing = exact_identity(
                 &parent,
@@ -224,7 +224,8 @@ fn reconcile_sidecar(
                 PairState::Restored => (canonical_identity, sidecar_identity),
                 PairState::Ambiguous => unreachable!(),
             };
-            target.require_publication_parent_until("closing pending replacement sidecar recovery", deadline)
+            target
+                .require_publication_parent_until("closing pending replacement sidecar recovery", deadline)
                 .map_err(|source| publication("closing pending replacement sidecar recovery", source))?;
             require_pair(
                 &parent,

@@ -249,8 +249,14 @@ mod tests {
         });
 
         if activation_completed(result, "stateful system policy") {
-            assert_eq!(fs::read(fixture.installation.root.join("usr/system-write")).unwrap(), b"system usr");
-            assert_eq!(fs::read(fixture.installation.root.join("etc/system-write")).unwrap(), b"system etc");
+            assert_eq!(
+                fs::read(fixture.installation.root.join("usr/system-write")).unwrap(),
+                b"system usr"
+            );
+            assert_eq!(
+                fs::read(fixture.installation.root.join("etc/system-write")).unwrap(),
+                b"system etc"
+            );
             assert!(!fixture.isolation_root.path().join("undeclared-root-write").exists());
             assert!(!fixture.isolation_root.path().join("tmp/system-write").exists());
         }
@@ -268,7 +274,10 @@ mod tests {
                 Err(error) => error,
             };
             assert_pin_failure(error, substitution, &target);
-            assert_eq!(fs::read(target.join("replacement-witness")).unwrap(), b"foreign replacement");
+            assert_eq!(
+                fs::read(target.join("replacement-witness")).unwrap(),
+                b"foreign replacement"
+            );
             assert!(detached.is_dir());
         }
     }
@@ -289,7 +298,11 @@ mod tests {
 
     fn assert_activation_substitution_fails_closed(substitution: Substitution) {
         let fixture = SystemContainerFixture::new();
-        fs::write(fixture.installation.root.join("usr/payload-witness"), b"payload must not run").unwrap();
+        fs::write(
+            fixture.installation.root.join("usr/payload-witness"),
+            b"payload must not run",
+        )
+        .unwrap();
         fs::write(
             fixture.installation.isolation_dir().join("retained-witness"),
             b"retained isolation",
@@ -322,7 +335,11 @@ mod tests {
 
     fn assert_post_payload_substitution_is_detected(substitution: Substitution) {
         let fixture = SystemContainerFixture::new();
-        fs::write(fixture.installation.root.join("usr/payload-witness"), b"payload may run once").unwrap();
+        fs::write(
+            fixture.installation.root.join("usr/payload-witness"),
+            b"payload may run once",
+        )
+        .unwrap();
         let (target, detached) = substitution_paths(&fixture, substitution);
         let hook_target = target.clone();
         let hook_detached = detached.clone();
@@ -330,11 +347,17 @@ mod tests {
 
         let result = fixture.runner().execute();
 
-        assert!(detached.is_dir(), "{substitution:?} post-payload substitution hook did not run");
+        assert!(
+            detached.is_dir(),
+            "{substitution:?} post-payload substitution hook did not run"
+        );
         let payload_completed = assert_post_payload_revalidation_failure(result, substitution, &target);
         let retained_payload = retained_payload_path(&fixture, substitution, &detached);
         assert_eq!(retained_payload.exists(), !payload_completed);
-        assert_eq!(fs::read(target.join("replacement-witness")).unwrap(), b"foreign replacement");
+        assert_eq!(
+            fs::read(target.join("replacement-witness")).unwrap(),
+            b"foreign replacement"
+        );
         if matches!(substitution, Substitution::Usr) {
             assert_eq!(fs::read(target.join("payload-witness")).unwrap(), b"foreign payload");
         }
@@ -442,10 +465,7 @@ mod tests {
         target: &Path,
     ) {
         match result {
-            Err(Error::SystemTriggerOperationAndRevalidation {
-                primary,
-                revalidation,
-            }) => {
+            Err(Error::SystemTriggerOperationAndRevalidation { primary, revalidation }) => {
                 assert!(matches!(*primary, Error::Container(_)));
                 assert_pin_failure(*revalidation, substitution, target);
             }
@@ -463,10 +483,7 @@ mod tests {
                 assert_pin_failure(error, substitution, target);
                 true
             }
-            Err(Error::SystemTriggerOperationAndRevalidation {
-                primary,
-                revalidation,
-            }) => {
+            Err(Error::SystemTriggerOperationAndRevalidation { primary, revalidation }) => {
                 assert_pin_failure(*revalidation, substitution, target);
                 match *primary {
                     Error::Container(source) if source.execution_capability_unavailable() => false,
@@ -502,7 +519,9 @@ mod tests {
         ) {
             Ok(())
         } else {
-            Err(io::Error::other(format!("unexpected {path_role} write result: {source}")))
+            Err(io::Error::other(format!(
+                "unexpected {path_role} write result: {source}"
+            )))
         }
     }
 

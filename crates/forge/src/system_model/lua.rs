@@ -11,8 +11,8 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use declarative_config::{
-    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline,
-    EvaluationIdentity, LanguageSpec, Limits, Source, SourceRoot,
+    DeclarationEvaluationError, DeclarationEvaluator, Evaluation, EvaluationDeadline, EvaluationIdentity, LanguageSpec,
+    Limits, Source, SourceRoot,
 };
 use lua_config::{GENERATED_LUA_MARKER, LuaEngine, lua_string, pretty_lua};
 use serde::Deserialize;
@@ -82,10 +82,7 @@ impl DeclarationEvaluator<SystemModel> for LuaSystemEvaluator {
             .map_err(DeclarationEvaluationError::Conversion)?;
         let identity = evaluated.identity;
         let model = SystemModel::from_generated(parts, source_text, identity.clone());
-        Ok(Evaluation {
-            value: model,
-            identity,
-        })
+        Ok(Evaluation { value: model, identity })
     }
 }
 
@@ -167,8 +164,7 @@ pub(crate) fn convert_generated_system_declaration(
 
     // Fail closed: the migrated artifact must normalize to the original value.
     let original_spec = spec::SystemSpec::try_from(&original).map_err(SystemMigrationError::Encode)?;
-    let converted_spec =
-        spec::SystemSpec::try_from(&reevaluated.value).map_err(SystemMigrationError::Encode)?;
+    let converted_spec = spec::SystemSpec::try_from(&reevaluated.value).map_err(SystemMigrationError::Encode)?;
     if original_spec != converted_spec {
         return Err(SystemMigrationError::ConversionDiverged);
     }
@@ -237,13 +233,8 @@ pub(crate) fn migrate_state_system_declaration(
         source,
     })?;
 
-    let request = convert_generated_system_declaration(
-        state_id,
-        SYSTEM_SNAPSHOT_PATH,
-        text,
-        state_tree_marker,
-    )
-    .map_err(SystemDeclarationMigrationError::Convert)?;
+    let request = convert_generated_system_declaration(state_id, SYSTEM_SNAPSHOT_PATH, text, state_tree_marker)
+        .map_err(SystemDeclarationMigrationError::Convert)?;
 
     migrate_declaration(database, blobs, request).map_err(SystemDeclarationMigrationError::Bridge)
 }
@@ -379,20 +370,16 @@ return {
         let gluon = gluon_model(GLUON_SYSTEM);
 
         assert_eq!(lua.disable_warning, gluon.disable_warning);
-        assert_eq!(
-            format!("{:?}", lua.repositories),
-            format!("{:?}", gluon.repositories)
-        );
+        assert_eq!(format!("{:?}", lua.repositories), format!("{:?}", gluon.repositories));
         assert_eq!(lua.packages, gluon.packages);
     }
 
     #[test]
     fn the_paired_system_documentation_example_normalizes_equally() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-        let gluon = std::fs::read_to_string(format!("{root}/docs/examples/gluon/system.glu"))
-            .expect("gluon system example");
-        let lua = std::fs::read_to_string(format!("{root}/docs/examples/lua/system.lua"))
-            .expect("lua system example");
+        let gluon =
+            std::fs::read_to_string(format!("{root}/docs/examples/gluon/system.glu")).expect("gluon system example");
+        let lua = std::fs::read_to_string(format!("{root}/docs/examples/lua/system.lua")).expect("lua system example");
         let gluon = gluon_model(&gluon);
         let lua = lua_model(&lua);
         assert_eq!(lua.disable_warning, gluon.disable_warning);
@@ -431,13 +418,8 @@ return {
     #[test]
     fn converting_the_generated_system_declaration_builds_a_verified_request() {
         let marker = vec![9u8; 32];
-        let request = convert_generated_system_declaration(
-            7,
-            "usr/lib/system-model.glu",
-            GLUON_SYSTEM,
-            &marker,
-        )
-        .expect("conversion succeeds");
+        let request = convert_generated_system_declaration(7, "usr/lib/system-model.glu", GLUON_SYSTEM, &marker)
+            .expect("conversion succeeds");
 
         assert_eq!(request.state_id, 7);
         assert_eq!(request.logical_slot, "usr/lib/system-model.glu");
@@ -476,34 +458,21 @@ return {
         std::fs::write(&snapshot, GLUON_SYSTEM).unwrap();
 
         let marker = vec![3u8; 32];
-        let commit = migrate_state_system_declaration(
-            &database,
-            &blobs,
-            state_id,
-            state_root.path(),
-            &marker,
-        )
-        .expect("system snapshot migrates");
+        let commit = migrate_state_system_declaration(&database, &blobs, state_id, state_root.path(), &marker)
+            .expect("system snapshot migrates");
         assert_eq!(commit, DeclarationMigrationCommit::Committed);
 
         // The committed Lua blob resolves and re-decodes to the original value.
         let resolved = resolve_migrated_blob(&database, &blobs, state_id, SYSTEM_SNAPSHOT_PATH)
             .unwrap()
             .expect("a committed row selects the blob");
-        let redecoded =
-            spec::SystemSpec::try_from(&lua_model(std::str::from_utf8(&resolved).unwrap())).unwrap();
+        let redecoded = spec::SystemSpec::try_from(&lua_model(std::str::from_utf8(&resolved).unwrap())).unwrap();
         let original = spec::SystemSpec::try_from(&gluon_model(GLUON_SYSTEM)).unwrap();
         assert_eq!(redecoded, original);
 
         // Idempotent: re-running commits nothing new.
-        let again = migrate_state_system_declaration(
-            &database,
-            &blobs,
-            state_id,
-            state_root.path(),
-            &marker,
-        )
-        .expect("re-migration is idempotent");
+        let again = migrate_state_system_declaration(&database, &blobs, state_id, state_root.path(), &marker)
+            .expect("re-migration is idempotent");
         assert_eq!(again, DeclarationMigrationCommit::AlreadyPresent);
     }
 
@@ -524,16 +493,10 @@ return {
             .expect("snapshot migrates");
 
         // A committed row that revalidates resolves to the migrated model.
-        let resolved = resolve_migrated_system_snapshot(
-            &database,
-            &blobs,
-            state_id,
-            SYSTEM_SNAPSHOT_PATH,
-            GLUON_SYSTEM,
-            &marker,
-        )
-        .expect("resolution succeeds")
-        .expect("a committed row resolves");
+        let resolved =
+            resolve_migrated_system_snapshot(&database, &blobs, state_id, SYSTEM_SNAPSHOT_PATH, GLUON_SYSTEM, &marker)
+                .expect("resolution succeeds")
+                .expect("a committed row resolves");
         assert_eq!(
             spec::SystemSpec::try_from(&resolved).unwrap(),
             spec::SystemSpec::try_from(&gluon_model(GLUON_SYSTEM)).unwrap(),
@@ -541,38 +504,44 @@ return {
 
         // A drifted tree marker fails closed rather than selecting the blob.
         let wrong_marker = vec![6u8; 32];
-        assert!(resolve_migrated_system_snapshot(
-            &database,
-            &blobs,
-            state_id,
-            SYSTEM_SNAPSHOT_PATH,
-            GLUON_SYSTEM,
-            &wrong_marker,
-        )
-        .is_err());
+        assert!(
+            resolve_migrated_system_snapshot(
+                &database,
+                &blobs,
+                state_id,
+                SYSTEM_SNAPSHOT_PATH,
+                GLUON_SYSTEM,
+                &wrong_marker,
+            )
+            .is_err()
+        );
 
         // A swapped-out original source fails closed.
-        assert!(resolve_migrated_system_snapshot(
-            &database,
-            &blobs,
-            state_id,
-            SYSTEM_SNAPSHOT_PATH,
-            "return { disable_warning = true }\n",
-            &marker,
-        )
-        .is_err());
+        assert!(
+            resolve_migrated_system_snapshot(
+                &database,
+                &blobs,
+                state_id,
+                SYSTEM_SNAPSHOT_PATH,
+                "return { disable_warning = true }\n",
+                &marker,
+            )
+            .is_err()
+        );
 
         // A state with no committed row yields None — the caller reads legacy.
         let other_state = i32::from(database.add(&[], None, None).unwrap().id);
-        assert!(resolve_migrated_system_snapshot(
-            &database,
-            &blobs,
-            other_state,
-            SYSTEM_SNAPSHOT_PATH,
-            GLUON_SYSTEM,
-            &marker,
-        )
-        .expect("resolution succeeds")
-        .is_none());
+        assert!(
+            resolve_migrated_system_snapshot(
+                &database,
+                &blobs,
+                other_state,
+                SYSTEM_SNAPSHOT_PATH,
+                GLUON_SYSTEM,
+                &marker,
+            )
+            .expect("resolution succeeds")
+            .is_none()
+        );
     }
 }

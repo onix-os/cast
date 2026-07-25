@@ -16,23 +16,19 @@ pub(super) fn load_transaction(candidate_usr: &File, candidate_usr_path: &Path) 
         return Ok(Vec::new());
     };
     let evaluators = trigger_declaration::transaction_evaluators();
-    config::declaration::load_rooted_declarations(
-        &trigger_root_path,
-        &trigger_root,
-        &evaluators,
-    )
-    .map_err(|source| Error::RootedTriggerDeclarations {
-        source: Box::new(source),
-    })
-    .map(|loaded| {
-        loaded
-            .into_iter()
-            .map(|loaded| {
-                let TransactionTrigger(trigger) = loaded.value;
-                trigger
-            })
-            .collect_vec()
-    })
+    config::declaration::load_rooted_declarations(&trigger_root_path, &trigger_root, &evaluators)
+        .map_err(|source| Error::RootedTriggerDeclarations {
+            source: Box::new(source),
+        })
+        .map(|loaded| {
+            loaded
+                .into_iter()
+                .map(|loaded| {
+                    let TransactionTrigger(trigger) = loaded.value;
+                    trigger
+                })
+                .collect_vec()
+        })
 }
 
 pub(super) fn load_system(candidate_usr: &File, candidate_usr_path: &Path) -> Result<Vec<Trigger>, Error> {
@@ -41,23 +37,19 @@ pub(super) fn load_system(candidate_usr: &File, candidate_usr_path: &Path) -> Re
         return Ok(Vec::new());
     };
     let evaluators = trigger_declaration::system_evaluators();
-    config::declaration::load_rooted_declarations(
-        &trigger_root_path,
-        &trigger_root,
-        &evaluators,
-    )
-    .map_err(|source| Error::RootedTriggerDeclarations {
-        source: Box::new(source),
-    })
-    .map(|loaded| {
-        loaded
-            .into_iter()
-            .map(|loaded| {
-                let SystemTrigger(trigger) = loaded.value;
-                trigger
-            })
-            .collect_vec()
-    })
+    config::declaration::load_rooted_declarations(&trigger_root_path, &trigger_root, &evaluators)
+        .map_err(|source| Error::RootedTriggerDeclarations {
+            source: Box::new(source),
+        })
+        .map(|loaded| {
+            loaded
+                .into_iter()
+                .map(|loaded| {
+                    let SystemTrigger(trigger) = loaded.value;
+                    trigger
+                })
+                .collect_vec()
+        })
 }
 
 fn open_trigger_root(

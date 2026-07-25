@@ -8,8 +8,7 @@ use crate::{
 
 use super::support::{
     CandidateOrigin, Source, durable_authority, expected_candidate_preserved, fixture_for_origin,
-    fixture_for_origin_at_epoch,
-    non_journal_namespace_snapshot,
+    fixture_for_origin_at_epoch, non_journal_namespace_snapshot,
 };
 
 fn exercise_success_matrix(origin: CandidateOrigin) {

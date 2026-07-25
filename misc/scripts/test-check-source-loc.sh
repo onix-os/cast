@@ -4,7 +4,8 @@ set -euo pipefail
 
 readonly script_dir=$(CDPATH= cd -- "${BASH_SOURCE[0]%/*}" && pwd -P)
 readonly checker=${script_dir}/check-source-loc.sh
-temporary=$(mktemp -d "${TMPDIR:-/tmp}/cast-source-loc.XXXXXX")
+. "$(dirname -- "$0")/lib/host-scratch-root.sh"
+temporary=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-source-loc.XXXXXX")
 trap 'rm -rf -- "${temporary}"' EXIT HUP INT TERM
 readonly repository=${temporary}/repository
 readonly output=${temporary}/output

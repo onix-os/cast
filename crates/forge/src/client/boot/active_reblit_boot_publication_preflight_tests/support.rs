@@ -52,11 +52,7 @@ pub(super) fn alternating_states(count: usize) -> Box<[BootNamespaceDestinationS
         .collect()
 }
 
-pub(super) const fn identity(
-    device: u64,
-    inode: u64,
-    mount_id: u64,
-) -> BootPublicationAssessmentIdentity {
+pub(super) const fn identity(device: u64, inode: u64, mount_id: u64) -> BootPublicationAssessmentIdentity {
     BootPublicationAssessmentIdentity {
         device,
         inode,

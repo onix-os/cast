@@ -164,9 +164,7 @@ fn historical_destination_device_must_match_its_partition_identity() {
                 BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
             )],
         ),
-        Err(BootPublicationReceiptBodyError::HistoricalPartitionDeviceMismatch {
-            destination: "esp",
-        })
+        Err(BootPublicationReceiptBodyError::HistoricalPartitionDeviceMismatch { destination: "esp" })
     );
 }
 
@@ -193,10 +191,7 @@ fn distinct_destinations_require_distinct_partition_devices_and_equal_disk_seque
     );
     assert_eq!(
         body_with(
-            BootPublicationDestinations::distinct_xbootldr(
-                destination(ESP_PARTUUID, 1, 1),
-                same_partition_device,
-            ),
+            BootPublicationDestinations::distinct_xbootldr(destination(ESP_PARTUUID, 1, 1), same_partition_device,),
             vec![output.clone()],
         ),
         Err(BootPublicationReceiptBodyError::DistinctPartitionIdentityCollision)
@@ -216,10 +211,7 @@ fn distinct_destinations_require_distinct_partition_devices_and_equal_disk_seque
     );
     assert_eq!(
         body_with(
-            BootPublicationDestinations::distinct_xbootldr(
-                destination(ESP_PARTUUID, 1, 1),
-                different_disk_sequence,
-            ),
+            BootPublicationDestinations::distinct_xbootldr(destination(ESP_PARTUUID, 1, 1), different_disk_sequence,),
             vec![output],
         ),
         Err(BootPublicationReceiptBodyError::DistinctDiskSequenceMismatch)
@@ -336,16 +328,19 @@ fn output_order_duplicate_and_fat_alias_collisions_are_rejected() {
         BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
     );
     assert_eq!(
-        body_with(alias_destinations(), vec![
-            output(
-                BootPublicationRoot::Boot,
-                BootPublicationPublicationPhase::Payload,
-                BootPublicationOutputRole::Payload,
-                "EFI/A/vmlinuz",
-                BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
-            ),
-            folded_alias,
-        ]),
+        body_with(
+            alias_destinations(),
+            vec![
+                output(
+                    BootPublicationRoot::Boot,
+                    BootPublicationPublicationPhase::Payload,
+                    BootPublicationOutputRole::Payload,
+                    "EFI/A/vmlinuz",
+                    BootPublicationOutputProvenanceClaim::UnclaimedAbsent,
+                ),
+                folded_alias,
+            ]
+        ),
         Err(BootPublicationReceiptBodyError::OutputPathCollision { first: 0, second: 1 })
     );
 }

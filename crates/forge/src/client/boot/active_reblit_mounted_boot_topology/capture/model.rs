@@ -257,10 +257,7 @@ impl std::fmt::Debug for RevalidatedActiveReblitMountedBootTopology<'_> {
 }
 
 impl RevalidatedActiveReblitMountedBootTopology<'_> {
-    pub(in crate::client) fn is_bound_to_installation(
-        &self,
-        installation: &Installation,
-    ) -> bool {
+    pub(in crate::client) fn is_bound_to_installation(&self, installation: &Installation) -> bool {
         std::ptr::eq(self._installation, installation)
     }
 

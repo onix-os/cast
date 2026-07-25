@@ -390,9 +390,7 @@ mod tests {
             [Provider::package_name("alpha")].into_iter().collect(),
         );
         let content = snapshot_content(&model);
-        let evaluated =
-            system_model::evaluate_snapshot(&Source::new("system-model.glu", content.clone()))
-                .unwrap();
+        let evaluated = system_model::evaluate_snapshot(&Source::new("system-model.glu", content.clone())).unwrap();
 
         assert!(content.starts_with(system_model::gluon::GENERATED_GLUON_MARKER));
         assert!(!content.contains("import!"));

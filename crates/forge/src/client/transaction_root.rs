@@ -120,10 +120,7 @@ impl RetainedLocalEtc {
         if local_etc_mutable_identity(&named, &self.path, installation)? != expected
             || local_etc_mutable_identity(&self.directory, &self.path, installation)? != expected
         {
-            return Err(local_etc_changed(
-                installation,
-                "mutable local /etc final name changed",
-            ));
+            return Err(local_etc_changed(installation, "mutable local /etc final name changed"));
         }
         require_no_acl(&named, &self.path, installation, "revalidate named mutable local /etc")?;
         installation.revalidate_root_directory()?;

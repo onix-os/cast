@@ -2,10 +2,7 @@
 
 use std::collections::HashMap;
 
-use config::declaration::{
-    DeclarationEvaluatorSet, SaveDeclarationError,
-    SaveManagedDeclarationError,
-};
+use config::declaration::{DeclarationEvaluatorSet, SaveDeclarationError, SaveManagedDeclarationError};
 use declarative_config::DeclarationEvaluator as _;
 use fs_err as fs;
 use tui::Styled;
@@ -31,9 +28,7 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
 
     match source {
         manager::Source::ConfigManager(config_manager) => {
-            println!(
-                "{count} {repo_plural} {require_plural} an updated repository declaration"
-            );
+            println!("{count} {repo_plural} {require_plural} an updated repository declaration");
 
             let codec = repository::RepositoryCodec::default();
             let evaluators = DeclarationEvaluatorSet::new([codec.clone()])
@@ -122,9 +117,7 @@ pub fn handle_outdated_index_uris(source: &manager::Source, outdated_repos: Vec<
             }
         }
         manager::Source::SystemModel { system_model, .. } => {
-            println!(
-                "{count} system-intent {repo_plural} {require_plural} an authored source update"
-            );
+            println!("{count} system-intent {repo_plural} {require_plural} an authored source update");
 
             let path = system_model.path().to_owned();
 

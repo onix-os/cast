@@ -7,8 +7,8 @@
 use crate::{
     Installation,
     transition_journal::{
-        CodecError, Phase, RollbackActionOutcome, StorageError, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        CodecError, Phase, RollbackActionOutcome, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
@@ -109,9 +109,7 @@ impl UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'_> {
             .map_err(UsrRollbackArchivedCandidatePreserveRecordAdvanceError::Successor)?;
         if successor.phase != Phase::CandidatePreserved {
             return Err(
-                UsrRollbackArchivedCandidatePreserveRecordAdvanceError::UnexpectedSuccessor {
-                    phase: successor.phase,
-                },
+                UsrRollbackArchivedCandidatePreserveRecordAdvanceError::UnexpectedSuccessor { phase: successor.phase },
             );
         }
         let cast = self.effect.installation.retained_mutable_cast_directory()?;
@@ -120,10 +118,7 @@ impl UsrRollbackArchivedCandidatePreserveDurableEffectAuthority<'_> {
                 record: successor,
                 binding,
             }),
-            Err(source) => Err(UsrRollbackArchivedCandidatePreserveRecordAdvanceError::Storage {
-                source,
-                successor,
-            }),
+            Err(source) => Err(UsrRollbackArchivedCandidatePreserveRecordAdvanceError::Storage { source, successor }),
         }
     }
 }
