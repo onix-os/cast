@@ -116,6 +116,86 @@ impl<'reservation> NewStateCommitCleanupAuthority<'reservation> {
         self.installation.revalidate_mutable_namespace()?;
         require_binding(&self.installation, journal, &self.journal_record_binding, &self.record)
     }
+    /// Advance the record and its binding together to `CommitCleanupComplete`.
+    ///
+    /// There is no effect to reconcile first: this authority *is* the durable
+    /// one, because NewState performs no cleanup exchange. The caller must have
+    /// derived `successor` from `forward_successor(None)` on this record.
+    pub(in crate::client) fn advance_record_binding(
+        self,
+        journal: &TransitionJournalStore,
+        successor: &TransitionRecord,
+    ) -> Result<
+        (TransitionJournalRecordBinding, NewStateCommitCleanupPostAdvanceAuthority<'reservation>),
+        NewStateCommitCleanupAuthorityError,
+    > {
+        self.revalidate(journal)?;
+        if successor.phase != Phase::CommitCleanupComplete
+            || successor.transition_id != self.record.transition_id
+            || successor.generation != self.record.generation.saturating_add(1)
+        {
+            return Err(NewStateCommitCleanupAuthorityError::UnexpectedSuccessor);
+        }
+
+        let Self {
+            installation,
+            state_db,
+            record,
+            database,
+            journal_record_binding,
+            _active_state_reservation,
+        } = self;
+        let cast = installation.retained_mutable_cast_directory()?;
+        let successor_binding = journal.advance_record_binding(cast, journal_record_binding, successor)?;
+        Ok((
+            successor_binding,
+            NewStateCommitCleanupPostAdvanceAuthority {
+                installation,
+                state_db,
+                completed_record: record,
+                database,
+                _active_state_reservation,
+            },
+        ))
+    }
+}
+
+/// Retained evidence after the cleanup record has been advanced.
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+pub(in crate::client) struct NewStateCommitCleanupPostAdvanceAuthority<'reservation> {
+    installation: Installation,
+    state_db: db::state::Database,
+    completed_record: TransitionRecord,
+    database: DatabaseEvidence,
+    _active_state_reservation: &'reservation ActiveStateReservation,
+}
+
+#[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+impl NewStateCommitCleanupPostAdvanceAuthority<'_> {
+    /// Prove the published successor is the exact record this authority
+    /// advanced to, bound to the same journal store.
+    pub(in crate::client) fn revalidate_successor_same_store(
+        &self,
+        journal: &TransitionJournalStore,
+        successor_binding: &TransitionJournalRecordBinding,
+        successor: &TransitionRecord,
+    ) -> Result<(), NewStateCommitCleanupAuthorityError> {
+        require_binding(&self.installation, journal, successor_binding, successor)?;
+        self.installation.revalidate_mutable_namespace()?;
+        let in_flight = self
+            .state_db
+            .audit_in_flight_transition()
+            .map_err(InspectionError::from)?;
+        let database = inspect_database(successor, &self.state_db, in_flight)?;
+        if database != self.database {
+            return Err(NewStateCommitCleanupAuthorityError::DatabaseChanged);
+        }
+        Ok(())
+    }
+
+    pub(in crate::client) fn completed_record(&self) -> &TransitionRecord {
+        &self.completed_record
+    }
 }
 
 fn require_binding(
@@ -154,6 +234,8 @@ pub(in crate::client) enum NewStateCommitCleanupAuthorityError {
     JournalRecordBindingMismatch,
     #[error("the record is no longer an exact NewState commit-cleanup source")]
     SourceContract,
+    #[error("the successor is not the exact cleanup-complete record")]
+    UnexpectedSuccessor,
     #[error("the state database changed during admission")]
     DatabaseChanged,
     #[error("installation: {0}")]
