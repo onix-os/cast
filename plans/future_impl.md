@@ -126,6 +126,52 @@ semantics? Does the fresh-allocation DB edge need a new forward startup authorit
 **Risk note:** getting `archive_previous` + receipt binding wrong on the fresh
 path can leave a system unable to roll back to its predecessor.
 
+### 1.1a NewState pre-allocation boot applicability (D1.4)  · E:M R:high
+
+**Decision D1.4 (user, 2026-07-25): assess applicability pre-allocation from the
+selections.** Do not let the journal assert `run_boot_sync` and then finish
+without boot, and do not move row allocation back out of the journal.
+
+**Why this is needed to wire Slice 5.** `apply_new_state_candidate` currently
+hardcodes `run_boot_sync = true` and turns a non-bootable candidate into a hard
+error (`NewStateBootNotApplicable`, `new_state_boot_transition.rs`). Making it
+the default would regress every package install whose candidate publishes no
+kernel — the legacy route simply skips boot for those. ActiveReblit has no such
+problem: it assesses applicability pre-journal and passes the resulting
+`run_boot_sync` into the coordinator (`active_reblit_transition.rs:88-114`).
+NewState cannot copy that directly because its state row is allocated *inside*
+the journal (Slice 1's `add_with_transition`, which exists so a crash cannot
+orphan the row from its transition).
+
+**What the assessment actually needs (traced 2026-07-25).** Both
+`NotApplicable` outcomes are decided from the head state's *layouts*, not from
+the state chain:
+
+- `NoSystemdBootAsset` — `head_systemd_candidate_count(projection, ..)`
+  (`active_reblit_asset_plan.rs:455`, rejects at `:461`).
+- `NoKernel` — `kernel_count == 0` over the projected layouts (`:550-556`).
+
+For a NewState candidate those layouts are exactly the incoming `&[Selection]`
+package layouts, all resolvable from `layout_db` before any row exists.
+
+**Implementation shape.** The chain today is
+`PreparedActiveReblitStoneBootInputs::prepare_until(.., expected_head: &State, ..)`
+→ `PreparedActiveReblitBootProjection::prepare_until(state_db, layout_db, head: state::Id, ..)`
+→ `prepare_asset_plan_until`. Only the projection is id-bound. Prefer making the
+projection constructible from an explicit package-layout set so **one**
+implementation serves both callers; do **not** re-implement the two rules
+separately, or the pre-journal answer will drift from the real plan and the
+journal will claim a boot that never becomes possible.
+
+**Then** Slice 5 passes the derived `run_boot_sync` into
+`execute_new_state_forward` (replacing the hardcoded `true`) and treats
+`NotApplicable` as "finish without boot" rather than an error.
+
+**Still separate:** `apply_new_state_candidate` handles only the Active-previous
+(archive) case. First install with no active predecessor has no coordinated
+route at all and must be built before the legacy path can be deleted
+(`plans/cleanup_legacy.md` §2).
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has
@@ -511,7 +557,8 @@ parallel with Phase 2's long VM campaigns since they touch disjoint code.
 
 Blocking or shaping, by phase: **D0.2** (make-gate test rename/removed),
 **D0.4** (dead-code keep vs delete), **D1.1** (NewState receipt/rollback
-semantics), **D1.3** (archived-repair record weight), **D2.1** (VM power-loss
+semantics — RESOLVED: one operation-neutral boot route), **D1.4** (NewState
+pre-allocation boot applicability — RESOLVED: assess from selections), **D1.3** (archived-repair record weight), **D2.1** (VM power-loss
 model + nested-KVM + cross-reboot identity), **D2.2** (VM vs loopback-ESP for the
 Ready test), **D2.3** (pending-receipt protocol as hard prerequisite? — I confirm
 before any boot-mutation), **D3.1** (toolchain-free strictness + encoding),
