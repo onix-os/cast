@@ -323,12 +323,13 @@ impl ReadOnlyConnection {
     pub(crate) fn attempt_test_ordered_scan(&self) -> Result<(), ReadOnlyError> {
         // This deliberately expensive scan exercises SQLite's temporary-sort
         // policy rather than the production query deadline. A loaded parallel
-        // test run can legitimately take longer than the public two-second
-        // budget, so keep the test bounded independently.
+        // test run — or a heavily contended sandbox — can legitimately take far
+        // longer than the public two-second budget, so keep the test bounded
+        // independently and generously; this only guards against a hang.
         self.snapshot_with_limits(
             QueryLimits {
                 callback_budget: usize::MAX,
-                deadline: Duration::from_secs(30),
+                deadline: Duration::from_secs(120),
             },
             |row| {
                 let mut statement = row.prepare(c"SELECT a.name FROM sqlite_master AS a, sqlite_master AS b, sqlite_master AS c, sqlite_master AS d, sqlite_master AS e, sqlite_master AS f, sqlite_master AS g ORDER BY a.name, b.name, c.name, d.name, e.name, f.name, g.name")?;
