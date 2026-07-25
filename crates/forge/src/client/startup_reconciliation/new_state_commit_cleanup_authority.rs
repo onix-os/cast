@@ -294,6 +294,89 @@ pub(in crate::client) enum NewStateCommitCleanupAuthorityError {
     Inspection(#[from] InspectionError),
 }
 
-// The admission gate is exercised against real records by the Slice 5 wiring,
-// which owns the journal fixtures needed to build a NewState `CommitDecided`
-// record; `TransitionRecord` has no builder reachable from this module.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        state::TransitionId,
+        transition_journal::{
+            BootId, MountNamespaceIdentity, Previous, PreviousOrigin, QuarantineName, RuntimeEpoch,
+            RuntimeTreeIdentity, TreeToken,
+        },
+    };
+
+    /// A committed, archiving NewState record: the exact shape
+    /// `active_reblit_commit_cleanup_authority` refuses on three separate counts.
+    fn new_state_commit_decided() -> TransitionRecord {
+        let mut record = TransitionRecord::preparing(
+            TransitionId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+            RuntimeEpoch {
+                boot_id: BootId::parse("01234567-89ab-4cde-8f01-23456789abcd").unwrap(),
+                mount_namespace: MountNamespaceIdentity { st_dev: 30, inode: 31 },
+            },
+            Operation::NewState,
+            None,
+            TreeToken::parse("a".repeat(TreeToken::TEXT_LENGTH)).unwrap(),
+            RuntimeTreeIdentity {
+                st_dev: 10,
+                inode: 10,
+                mount_id: 12,
+            },
+            Previous {
+                id: Some(41),
+                tree_token: TreeToken::parse("b".repeat(TreeToken::TEXT_LENGTH)).unwrap(),
+                usr_runtime_identity: RuntimeTreeIdentity {
+                    st_dev: 10,
+                    inode: 20,
+                    mount_id: 12,
+                },
+                origin: PreviousOrigin::ActiveState,
+            },
+            true,
+            true,
+            QuarantineName::parse("new-state-cleanup-test").unwrap(),
+        )
+        .unwrap();
+        record.phase = Phase::CommitDecided;
+        record.candidate.id = Some(42);
+        record
+    }
+
+    #[test]
+    fn only_a_committed_archiving_new_state_is_an_exact_source() {
+        let exact = new_state_commit_decided();
+        assert!(exact.options.archive_previous, "ActiveState previous implies archiving");
+        assert!(exact_new_state_commit_cleanup_source(&exact));
+
+        // Every ActiveReblit-shaped record belongs to the other authority.
+        let mut wrong_operation = exact.clone();
+        wrong_operation.operation = Operation::ActiveReblit;
+        assert!(!exact_new_state_commit_cleanup_source(&wrong_operation));
+
+        // Cleanup admission is the CommitDecided boundary only.
+        for phase in [Phase::PreviousArchived, Phase::CommitCleanupComplete, Phase::Complete] {
+            let mut wrong_phase = exact.clone();
+            wrong_phase.phase = phase;
+            assert!(
+                !exact_new_state_commit_cleanup_source(&wrong_phase),
+                "{phase:?} must not admit cleanup",
+            );
+        }
+
+        // A non-archiving NewState is the deferred no-previous case, not this one.
+        let mut no_archive = exact.clone();
+        no_archive.options.archive_previous = false;
+        assert!(!exact_new_state_commit_cleanup_source(&no_archive));
+
+        // Candidate == previous is the in-place repair shape, never NewState.
+        let mut same_state = exact.clone();
+        same_state.previous.id = same_state.candidate.id;
+        assert!(!exact_new_state_commit_cleanup_source(&same_state));
+
+        // A rolling-back record is owned by the rollback suffixes.
+        let mut missing_candidate = exact.clone();
+        missing_candidate.candidate.id = None;
+        assert!(!exact_new_state_commit_cleanup_source(&missing_candidate));
+    }
+}
