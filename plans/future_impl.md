@@ -611,6 +611,29 @@ startup reconciler for a partial publish. Reuse `ArchivedStateRepairIdentity` as
 the effect layer. **D1.3:** full journal record vs a lighter durable marker,
 given it never crosses the `/usr`/boot boundary?
 
+**Narrowed 2026-07-26: "a degenerate `ActivateArchived`" is not viable.** The
+forward phase chain advances `TransactionTriggersComplete -> UsrExchangeIntent`
+**unconditionally** (`validation.rs:535`). Unlike `run_system_triggers` and
+`run_boot_sync`, which the options switch off, there is no options-driven path
+that skips the exchange — every forward transition in the model crosses the
+`/usr` boundary. An archived repair never touches live `/usr`, so it cannot be
+expressed as any configuration of the existing operations.
+
+That leaves D1.3 a genuine two-way choice, with the middle option removed:
+
+- **A new `Operation::ArchivedRepair`** with its own short phase path
+  (`Preparing -> CandidatePrepared -> TransactionTriggersComplete -> publish`).
+  Costs a journal model change — a new operation *and* a second forward chain,
+  which every phase-driven consumer (`forward_layouts`,
+  `expected_forward_generation`, successors, validation) must then handle.
+- **A lighter durable marker** outside the transition journal entirely, sized to
+  the actual need: survive a crash between "metadata published to candidate row"
+  and "publication committed". With no `/usr` or boot involvement, none of the
+  journal's exchange/boot/rollback machinery applies.
+
+The narrow durability need and the cost of a second forward chain both point at
+the marker; the journal buys little here beyond uniformity.
+
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
 ActiveReblit forward cleanup/finalization is already journal-durable+resumable
 (`recovery.rs:45` RollForward + startup dispatch). NewState/ActivateArchived
