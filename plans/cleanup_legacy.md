@@ -24,7 +24,40 @@ files**. Not all are debt. Breakdown by nature:
 
 ---
 
-## 1. Journal payload version compatibility · E:S R:low · **do first**
+## 1. Journal payload version compatibility · E:S R:low · **DONE**
+
+**Outcome:** collapsed to a single payload version; zero `PAYLOAD_VERSION_V1`/
+`_V2` references remain anywhere. Removed: both legacy constants, the
+`matches!(self.version, V1 | V2 | PAYLOAD_VERSION)` fallback, all three
+version-conditional validation branches, two dead version guards in
+`successors.rs` (already unreachable after `validate()`), and the three
+now-unused `PayloadVersion*Mismatch` error variants.
+
+Invariants were preserved rather than dropped, as the caution below required:
+
+- The V1 "cannot reach `BootRepairComplete` / cannot carry applied boot
+  rollback" rules were *capability* statements about the old format, not
+  invariants of the current one — current records legitimately do both. Deleted.
+- The receipt-entry rule kept its real content (`None -> Some` only at
+  `BootSyncStarted`); only the always-true version clause was dropped.
+- `validate_boot_publication_receipts` kept its unconditional presence rule.
+
+Tests: deleted the wholly-legacy ones (`payload_v1_remains_decodable...`,
+`canonical_v2_full_frame...`, `legacy_payloads_freeze...`,
+`typed_boot_sync_complete_successor_rejects_legacy_payload_versions`,
+`startup_legacy_boot_sync_started_remains_rollback_eligible`,
+`startup_legacy_v2_boot_sync_complete_without_receipt_pair_stays_forward_pending`)
+and trimmed the legacy portions out of four mixed tests. Deleted the dead
+helpers `build_legacy_boot_sync_started`, `legacy_boot_sync_complete_fixture`,
+`assert_legacy_ready`.
+
+The golden-frame fixtures were regenerated and renamed
+(`transition-journal-v1-rollback-decided.*` →
+`transition-journal-rollback-decided.*`). Note the old golden encoded a
+*V1-shaped* record — `BootSyncStarted` with no receipts — which the single
+version makes invalid; the golden now locks a currently-valid record.
+
+### Original entry
 
 **State:** `codec.rs:15-23` defines `PAYLOAD_VERSION_V1 = 1`,
 `PAYLOAD_VERSION_V2 = 2`, `PAYLOAD_VERSION = 3`. `validation.rs:137-155` accepts
@@ -122,13 +155,36 @@ the surrounding design.
 
 ---
 
-## 6. `TODO`/`FIXME` audit · E:S R:low · **independent**
+## 6. `TODO`/`FIXME` audit · E:S R:low · **triaged, partly done**
 
-**State:** 23 across `crates/` and `bin/`. Known example now resolved:
-`cli/repo.rs` canonical-output TODO (closed by `1218c00a`).
+**State:** was 23 across `crates/` and `bin/`; **20 remain**. An earlier example
+was already closed by `1218c00a` (`cli/repo.rs` canonical output).
 
-**Action:** trirage each into: fix now (small), file into `future_impl.md`
-(real work), or delete (stale). No TODO should survive without a plan reference.
+**Deleted as stale (done):**
+
+- `registry/plugin/active.rs:5` and `registry/plugin/cobble.rs:12` — bare
+  `// TODO:` markers with no content at all.
+- `dag/src/lib.rs:220` — `// TODO: How tf do i get node value from A to E?`, a
+  scratch note inside a test whose following assertions already answer it.
+
+**Substantive — needs a decision, do not silently "fix":**
+
+- `vfs/src/tree/mod.rs:147` — `// TODO: Reenable` above a commented-out
+  `return Err(e)`. Duplicate-path detection is currently **downgraded from an
+  error to an `eprintln!` warning**. Re-enabling it is a real behaviour change
+  (installs that currently succeed with duplicate reports would start failing),
+  so it needs an explicit decision rather than a cleanup sweep. **D-CL6:** should
+  duplicate paths fail closed?
+
+**Remaining 19 — genuine future-work notes**, spread across `dag` (cycle
+breaking), `vfs`, `forge` (`prune`, `sync`, `cache`, `postblit`, `util`,
+`registry`, `cli/search`, `cli/repo` API overhaul), `mason` (`draft/metadata`
+gitlab/github version parsing, `build/job/phase`), `stone`/`libstone`
+(encoding, error types), `container` (error granularity, mount syscalls). None
+block anything; each is a small independent improvement.
+
+**Action:** resolve D-CL6, then file the remaining notes as concrete entries in
+`future_impl.md` so no `TODO` survives without a plan reference.
 
 ---
 
