@@ -37,6 +37,8 @@ use super::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
 pub(in crate::client) enum NewStateTerminalStep {
+    /// `BootSyncComplete -> CommitDecided`, once boot publication has finished.
+    BootSyncComplete,
     /// `CommitDecided -> CommitCleanupComplete`. NewState has no cleanup effect.
     CommitCleanup,
     /// `CommitCleanupComplete -> Complete`.
@@ -49,6 +51,7 @@ pub(in crate::client) enum NewStateTerminalStep {
 impl NewStateTerminalStep {
     const fn source(self) -> Phase {
         match self {
+            Self::BootSyncComplete => Phase::BootSyncComplete,
             Self::CommitCleanup => Phase::CommitDecided,
             Self::CleanupComplete => Phase::CommitCleanupComplete,
             Self::Finalize => Phase::Complete,
@@ -66,6 +69,7 @@ impl NewStateTerminalStep {
 
     const fn successor(self) -> Phase {
         match self {
+            Self::BootSyncComplete => Phase::CommitDecided,
             Self::CommitCleanup => Phase::CommitCleanupComplete,
             // `Finalize` never advances; `advances()` gates every caller, and
             // reporting `Complete` keeps the accessor total.
@@ -543,6 +547,25 @@ mod tests {
 
         assert_eq!(NewStateTerminalStep::CommitCleanup.successor(), Phase::CommitCleanupComplete);
         assert_eq!(NewStateTerminalStep::CleanupComplete.successor(), Phase::Complete);
+
+        // The boot tail rejoins the shared chain at `BootSyncComplete`.
+        let mut boot_sync_complete = commit_decided.clone();
+        boot_sync_complete.phase = Phase::BootSyncComplete;
+        assert!(exact_new_state_terminal_source(
+            &boot_sync_complete,
+            NewStateTerminalStep::BootSyncComplete
+        ));
+        assert!(!exact_new_state_terminal_source(
+            &boot_sync_complete,
+            NewStateTerminalStep::CommitCleanup
+        ));
+        assert_eq!(NewStateTerminalStep::BootSyncComplete.successor(), Phase::CommitDecided);
+
+        // Only `Finalize` deletes instead of advancing.
+        assert!(NewStateTerminalStep::BootSyncComplete.advances());
+        assert!(NewStateTerminalStep::CommitCleanup.advances());
+        assert!(NewStateTerminalStep::CleanupComplete.advances());
+        assert!(!NewStateTerminalStep::Finalize.advances());
     }
 
     #[test]
