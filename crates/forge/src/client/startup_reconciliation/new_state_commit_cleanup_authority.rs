@@ -180,7 +180,47 @@ impl NewStateCommitCleanupPostAdvanceAuthority<'_> {
         successor_binding: &TransitionJournalRecordBinding,
         successor: &TransitionRecord,
     ) -> Result<(), NewStateCommitCleanupAuthorityError> {
-        require_binding(&self.installation, journal, successor_binding, successor)?;
+        self.revalidate_successor(journal, successor_binding, successor, SuccessorBindingMode::SameStore)
+    }
+
+    /// Same proof against a journal that has been closed and reopened, where the
+    /// original store identity no longer applies and only the reopened record
+    /// binding can authenticate the successor.
+    pub(in crate::client) fn revalidate_successor_reopened(
+        &self,
+        journal: &TransitionJournalStore,
+        successor_binding: &TransitionJournalRecordBinding,
+        successor: &TransitionRecord,
+    ) -> Result<(), NewStateCommitCleanupAuthorityError> {
+        self.revalidate_successor(journal, successor_binding, successor, SuccessorBindingMode::Reopened)
+    }
+
+    fn revalidate_successor(
+        &self,
+        journal: &TransitionJournalStore,
+        successor_binding: &TransitionJournalRecordBinding,
+        successor: &TransitionRecord,
+        mode: SuccessorBindingMode,
+    ) -> Result<(), NewStateCommitCleanupAuthorityError> {
+        let cast = self.installation.retained_mutable_cast_directory()?;
+        let exact = match mode {
+            SuccessorBindingMode::SameStore => {
+                journal.has_record_store_binding(successor_binding)
+                    && journal.has_record_binding(cast, successor_binding, successor)?
+            }
+            SuccessorBindingMode::Reopened => {
+                journal.has_reopened_record_binding(cast, successor_binding, successor)?
+            }
+        };
+        if !exact {
+            return Err(NewStateCommitCleanupAuthorityError::SuccessorRecordBindingChanged);
+        }
+        if successor.phase != Phase::CommitCleanupComplete
+            || successor.transition_id != self.completed_record.transition_id
+            || successor.generation != self.completed_record.generation.saturating_add(1)
+        {
+            return Err(NewStateCommitCleanupAuthorityError::UnexpectedSuccessor);
+        }
         self.installation.revalidate_mutable_namespace()?;
         let in_flight = self
             .state_db
@@ -196,6 +236,12 @@ impl NewStateCommitCleanupPostAdvanceAuthority<'_> {
     pub(in crate::client) fn completed_record(&self) -> &TransitionRecord {
         &self.completed_record
     }
+}
+
+#[derive(Clone, Copy)]
+enum SuccessorBindingMode {
+    SameStore,
+    Reopened,
 }
 
 fn require_binding(
@@ -234,6 +280,8 @@ pub(in crate::client) enum NewStateCommitCleanupAuthorityError {
     JournalRecordBindingMismatch,
     #[error("the record is no longer an exact NewState commit-cleanup source")]
     SourceContract,
+    #[error("the published successor record binding changed")]
+    SuccessorRecordBindingChanged,
     #[error("the successor is not the exact cleanup-complete record")]
     UnexpectedSuccessor,
     #[error("the state database changed during admission")]
