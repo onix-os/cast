@@ -388,6 +388,43 @@ NewState does none of it.** Expect analogs closer to the ~200-line shape of
 admission on the record, generic layout assessment, bound advance, successor
 revalidation. Revised estimate **E:L, not E:XL**.
 
+### 1.1d NewState boot tail — the staged chain is generation-bound  · E:M R:high · **last gate before Slice 5**
+
+**Status: the NewState terminal *authority* chain is complete** (§1.1b/§1.1c —
+`BootSyncStarted→BootSyncComplete→CommitDecided→CommitCleanupComplete→Complete→delete`,
+all built and tested). The **no-boot** path is wired and proven live by
+`apply_new_state_candidate_forwards_archives_and_commits_without_boot`.
+
+**What remains is the bootable path.** `complete_new_state_boot` drives the
+ActiveReblit *staged* boot chain (`client/boot/active_reblit_boot_sync_staging/`),
+whose validation is ActiveReblit-shaped in two ways:
+
+1. **Shape gates** — 4 `archive_previous` references across 3 files, plus
+   `record.operation != Operation::ActiveReblit`. NewState-with-archive trips
+   all of them (`commit_decision_handoff.rs:105-115`,
+   `commit_cleanup_handoff.rs:212`).
+2. **Hard-coded generations** — `ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION = 12`
+   and `ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION = 13`
+   (`commit_decision_handoff.rs:32`, `commit_cleanup_handoff.rs:30`,
+   `active_reblit_boot_sync_complete_authority.rs:38-39`).
+
+The generations are the real work. NewState-with-archive traverses
+`PreviousArchiveIntent` and `PreviousArchived` that ActiveReblit does not, so its
+generations run **four higher** at the same phases. There is **no
+generation-derivation helper anywhere in the crate** — every site compares
+against a literal.
+
+**So this needs a derived expectation** (operation + options + phase → generation)
+replacing the literals, then the shape gates widened. It is contained, but it is
+arithmetic inside crash-verified staged validation: an off-by-one silently
+accepts a record from the wrong point in the chain. Worth its own session with
+the crash matrix runnable.
+
+**Do not wire Slice 5 before this.** Wiring now would split production between
+two transition engines keyed on whether a candidate happens to ship a kernel —
+non-bootable installs through the durable route, bootable ones still legacy.
+That is worse than either engine alone.
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has
