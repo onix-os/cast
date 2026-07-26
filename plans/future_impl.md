@@ -831,6 +831,39 @@ interruption be driven from the host hypervisor (current rules forbid `virsh`
 inside scripts)? (c) how to authenticate campaign identity/results across a
 reboot that severs SSH — first-boot resume service + serial evidence?
 
+**D2.1 — measured in the VM, 2026-07-26.** Two of the three sub-questions now
+have factual answers; only (a) is still a judgement call.
+
+- **(b) nested KVM is available.** `/sys/module/kvm_*/parameters/nested` reads
+  `Y` and `/dev/kvm` is present; the VM has 12 cores and 7 GB RAM. So
+  interruption can be driven from *inside* the approved VM against a nested
+  guest, and does not need host-hypervisor access — which keeps the "no `virsh`
+  on the host from scripts" rule intact.
+  **Caveat:** the tooling is not installed. `virsh` and `qemu-system-x86_64` are
+  both absent and `libvirtd` is inactive. Provisioning qemu/libvirt inside the
+  VM is a prerequisite for the harness.
+- **(c) campaign identity across a reboot is already modelled.** The kernel
+  exposes `/proc/sys/kernel/random/boot_id` (observed
+  `7b1f4f54-2fd4-4596-8205-2241f0a62251`), which is exactly what
+  `RuntimeEpoch { boot_id, mount_namespace }` records and validates against. A
+  reboot changes it, and the journal already treats a changed epoch as the
+  signal that a record predates this boot. So the campaign does not need a new
+  identity mechanism — it needs to *read* the same value the journal does, and
+  correlate results by it.
+- **(a) still open, but narrowed.** With a nested guest, `virsh destroy` (or
+  qemu `quit`) is a genuine instantaneous power cut: everything not fsynced is
+  lost, which is the semantics the durability work actually claims. That is a
+  stronger and simpler model than `dm-flakey` fsync-fault injection, which
+  simulates a *failing* device rather than a *vanishing* one. Snapshot revert is
+  weaker still — it restores a consistent point rather than an interrupted one.
+  Recommendation: nested-guest hard destroy, with `dm-flakey` kept in reserve
+  for targeted single-fsync-failure cases the coordinator claims to survive.
+
+**Remaining blocker for the crash matrix is now the harness itself** (Phase 2.1,
+E:XL), not the model: provision qemu/libvirt in the VM, build a nested guest
+image, and add reboot-surviving result collection. The current harness never
+reboots.
+
 ### 2.2 Live `Ready`-branch boot regression  · E:L R:med
 No single regression drives `Client::verify → complete_active_reblit_boot →
 finalize` end-to-end (CI resolves boot inputs to `NotApplicable`; the VM test
