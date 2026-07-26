@@ -829,6 +829,30 @@ Note the parked ordinals are a deliberate temporary: they say "after Complete",
 which is wrong for the chain but harmless while unreachable. They must be
 corrected in the same commit that routes into the phases.
 
+**Blocker for that correction, found 2026-07-26 — `policy.rs` hard-codes phase
+ordinals as bare integers.** Moving the parked ordinals from 19-20 to their true
+1-2 position (shifting the rest) was tried in isolation, with declaration order
+unchanged and the phases still unreachable. It fails 54 `activate_archived`, 11
+`activation_namespace` and 2 `journal_coordinator` tests.
+
+The cause is not declaration order (an earlier note here blamed that; it was
+wrong). `activation_namespace/policy.rs` compares ordinals against literals:
+
+    match phase { 0..=2 => Absent, 3 => Optional(candidate), _ => Present(..) }
+    source >= 9 || (source >= 8 && record.phase == Phase::RollbackComplete)
+    forward_phase_ordinal(record.phase) >= 9
+
+Five such sites. They encode "before candidate preparation", "root ABI must be
+complete" and similar as magic numbers, so any renumbering silently changes
+their meaning. This is why the `.ordinal()` audit missed them — they contain no
+`.ordinal()` call at all, only the `forward_ordinal` helper and bare integers.
+
+**This is a pre-existing hazard independent of §1.2b** and worth fixing on its
+own: replace each literal with a named phase comparison
+(`>= ForwardPhase::RootLinksComplete.ordinal()` and so on). Once that is done the
+ordinal move is mechanical, and the class of silent breakage disappears rather
+than being navigated around a fourth time.
+
 Original correction, retained because the underlying hazard is still real:
 
 **CORRECTION 2026-07-26 — a third ordering dependency exists, and the audit
