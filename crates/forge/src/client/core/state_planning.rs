@@ -60,19 +60,6 @@ impl Client {
         // exchange boundary without reopening mutable path authority.
         let live_root_abi = preflight_root_links(&self.installation.root)?;
         let isolation_root = create_root_links(&self.installation.isolation_dir())?;
-        // Same substitution window the legacy path guards at
-        // `stateful_transition.rs`: between retaining the isolation root and
-        // using it, a same-UID writer can swap the pathname for a symlink.
-        // Armed here so the proof outlives that path's removal
-        // (`plans/cleanup_legacy.md` §2).
-        //
-        // NOT YET EXERCISED. The porting test still drives the legacy route;
-        // retargeting it is not a signature swap, because the coordinated route
-        // allocates the state row itself rather than taking one. Until that test
-        // is ported this call site is armed but unproven — do not treat its
-        // presence as evidence the substitution window is covered here.
-        #[cfg(test)]
-        after_stateful_isolation_root_retention();
 
         let archived_usr = self.installation.root_path(new.id.to_string()).join("usr");
         active_state.revalidate(&self.installation)?;
