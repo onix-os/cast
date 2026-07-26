@@ -662,6 +662,22 @@ impl CleanSystemStartup {
             });
         }
 
+        // Archived repair carries no journal record (`plans/future_impl.md`
+        // §1.3, D1.3), so its interruption marker is the only evidence that a
+        // repair died between writing the candidate row and publishing the
+        // tree. Checked here, alongside the orphan-row audit, because both
+        // answer the same question: did a previous run leave durable state that
+        // no longer matches the namespace?
+        if let Some(state) =
+            super::archived_repair_marker::pending(installation).map_err(|source| Error::ArchivedRepairMarker {
+                source: Box::new(source),
+            })?
+        {
+            return Err(Error::InterruptedArchivedRepair {
+                state: i32::from(state),
+            });
+        }
+
         let authority = startup_reconciliation::StartupRecoveryAuthority::new(installation, journal, state_db);
         let residue = transition_identity::audit_archived_state_prune_residue(installation, authority.journal());
         let namespace = installation.revalidate_mutable_namespace();
@@ -762,6 +778,13 @@ pub(super) enum Error {
     MetadataProvenance(#[from] db::state::MetadataProvenanceError),
     #[error("state {state} retains orphan transition {transition} while the canonical journal is absent")]
     OrphanTransitionRow { state: i32, transition: String },
+    #[error("an archived-state repair of state {state} was interrupted and must be reconciled")]
+    InterruptedArchivedRepair { state: i32 },
+    #[error("read the durable archived-repair interruption marker")]
+    ArchivedRepairMarker {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("canonical transition {transition} appeared as {operation:?} {phase:?} while proving clean startup")]
     CanonicalTransitionAppearedDuringCleanAdmission {
         transition: String,

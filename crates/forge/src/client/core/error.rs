@@ -803,6 +803,11 @@ pub enum Error {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+    #[error("record the durable archived-repair interruption marker")]
+    ArchivedRepairMarker {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("decorate a stateful candidate through retained metadata capabilities")]
     StatefulCandidateMetadata {
         #[source]
