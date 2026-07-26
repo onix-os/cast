@@ -578,10 +578,15 @@ pub(super) fn candidate_state_id_expectation(record: &TransitionRecord) -> State
         .map(|rollback| rollback.source)
         .map(forward_ordinal)
         .unwrap_or_else(|| forward_phase_ordinal(record.phase));
-    match phase {
-        0..=2 => StateIdExpectation::Absent,
-        3 => StateIdExpectation::Optional(candidate),
-        _ => StateIdExpectation::Present(candidate),
+    // Named rather than numeric. These were bare literals (`0..=2`, `3`), which
+    // silently changed meaning under any phase renumbering and were invisible to
+    // an `.ordinal()` grep — see `plans/future_impl.md` §1.2b.
+    if phase < forward_ordinal(ForwardPhase::CandidatePrepareStarted) {
+        StateIdExpectation::Absent
+    } else if phase == forward_ordinal(ForwardPhase::CandidatePrepareStarted) {
+        StateIdExpectation::Optional(candidate)
+    } else {
+        StateIdExpectation::Present(candidate)
     }
 }
 
@@ -621,9 +626,10 @@ fn previous_state_id_matches(expected: PreviousStateIdExpectation, actual: State
 pub(super) fn root_abi_must_be_complete(record: &TransitionRecord) -> bool {
     if let Some(rollback) = &record.rollback {
         let source = forward_ordinal(rollback.source);
-        return source >= 9 || (source >= 8 && record.phase == Phase::RollbackComplete);
+        return source >= forward_ordinal(ForwardPhase::RootLinksComplete)
+            || (source >= forward_ordinal(ForwardPhase::UsrExchanged) && record.phase == Phase::RollbackComplete);
     }
-    forward_phase_ordinal(record.phase) >= 9
+    forward_phase_ordinal(record.phase) >= forward_ordinal(ForwardPhase::RootLinksComplete)
 }
 
 pub(super) fn isolation_abi_must_be_complete(record: &TransitionRecord) -> bool {
@@ -632,8 +638,9 @@ pub(super) fn isolation_abi_must_be_complete(record: &TransitionRecord) -> bool 
         .as_ref()
         .map(|rollback| forward_ordinal(rollback.source))
         .unwrap_or_else(|| forward_phase_ordinal(record.phase));
-    (matches!(record.operation, Operation::NewState | Operation::ActiveReblit) && phase >= 5)
-        || (record.options.run_system_triggers && phase >= 10)
+    (matches!(record.operation, Operation::NewState | Operation::ActiveReblit)
+        && phase >= forward_ordinal(ForwardPhase::TransactionTriggersStarted))
+        || (record.options.run_system_triggers && phase >= forward_ordinal(ForwardPhase::SystemTriggersStarted))
 }
 
 fn active_reblit_reservation(record: &TransitionRecord) -> ActiveReblitReservation {
@@ -642,10 +649,12 @@ fn active_reblit_reservation(record: &TransitionRecord) -> ActiveReblitReservati
         .as_ref()
         .map(|rollback| forward_ordinal(rollback.source))
         .unwrap_or_else(|| forward_phase_ordinal(record.phase));
-    match phase {
-        0..=3 => ActiveReblitReservation::Absent,
-        4 => ActiveReblitReservation::Optional,
-        _ => ActiveReblitReservation::Required,
+    if phase < forward_ordinal(ForwardPhase::CandidatePrepared) {
+        ActiveReblitReservation::Absent
+    } else if phase == forward_ordinal(ForwardPhase::CandidatePrepared) {
+        ActiveReblitReservation::Optional
+    } else {
+        ActiveReblitReservation::Required
     }
 }
 
