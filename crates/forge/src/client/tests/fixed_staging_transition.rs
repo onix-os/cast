@@ -1,7 +1,7 @@
 use std::{
     cell::Cell,
     ffi::OsString,
-    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink},
     rc::Rc,
     sync::mpsc::{self, RecvTimeoutError},
     time::Duration,
@@ -224,18 +224,169 @@ fn stateful_candidate_rejects_corrupt_cache_bytes_without_publishing_usr() {
     assert_eq!(fs::read(&asset).unwrap(), corrupt);
 }
 
-// Two legacy proofs lived here — `retained_state_id_write_never_targets_a_substituted_usr`
-// and `stateful_trigger_preparation_never_follows_a_replaced_isolation_root` —
-// and were removed with `apply_stateful_candidate` (`plans/cleanup_legacy.md` §2).
-//
-// Both guarded the same TOCTOU shape on the legacy route: a same-UID writer
-// replacing `usr` or the isolation-root pathname must not redirect the state-ID
-// write or the trigger container. On the coordinated route these are no longer
-// runtime properties to probe. The trigger closure receives
-// `TriggerScope::RetainedTransaction` carrying a `&RetainedRootAbi` from
-// `retained_isolation_root()`, so the retained capability is threaded through as
-// a *type* rather than a re-resolvable pathname — enforced structurally rather
-// than checked. The test below exercises that path end to end.
+#[test]
+fn retained_state_id_write_never_targets_a_substituted_usr() {
+    let temporary = tempfile::tempdir().unwrap();
+    let client = stateful_test_client(temporary.path());
+    let candidate = client
+        .materialize_stateful_candidate(std::iter::empty::<&package::Id>())
+        .unwrap();
+    let state = client.state_db.add(&[], Some("retained metadata"), None).unwrap();
+    let staging = client.installation.staging_dir();
+    let usr = staging.join("usr");
+    let retained = staging.join("retained-original-usr");
+    let hook_usr = usr.clone();
+    let hook_retained = retained.clone();
+    arm_before_retained_state_metadata(move || {
+        fs::rename(&hook_usr, &hook_retained).unwrap();
+        fs::create_dir(&hook_usr).unwrap();
+        fs::set_permissions(&hook_usr, Permissions::from_mode(0o755)).unwrap();
+        fs::write(hook_usr.join("foreign"), b"replacement").unwrap();
+    });
+
+    let result =
+        client.apply_stateful_candidate(candidate, &state, None, generated_system_snapshot("retained-metadata"));
+
+    assert!(result.is_err());
+    assert_eq!(
+        fs::read_to_string(retained.join(".stateID")).unwrap(),
+        state.id.to_string()
+    );
+    assert_eq!(fs::read(usr.join("foreign")).unwrap(), b"replacement");
+    assert!(!usr.join(".stateID").exists());
+}
+
+#[test]
+fn stateful_trigger_preparation_never_follows_a_replaced_isolation_root() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut client = stateful_test_client(temporary.path());
+    let previous = client.state_db.add(&[], Some("previous"), None).unwrap();
+    client.installation.active_state = Some(previous.id);
+    record_state_id(&client.installation.root, previous.id).unwrap();
+    record_system_snapshot(&client.installation.root, generated_system_snapshot("previous-package")).unwrap();
+    let live_usr = client.installation.root.join("usr");
+    let live_identity = directory_identity(&live_usr);
+    let isolation = client.installation.isolation_dir();
+    let detached = client.installation.root_path("detached-isolation-root");
+    let victim = client.installation.root.join("foreign-isolation-victim");
+    fs::create_dir(&victim).unwrap();
+    fs::write(victim.join("sentinel"), b"foreign replacement").unwrap();
+
+    let package = package::Id::from("stateful-isolation-root-race");
+    client
+        .layout_db
+        .add(
+            &package,
+            &StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFDIR | 0o755,
+                tag: 0,
+                file: StonePayloadLayoutFile::Directory("share/stateful-isolation-trigger-input".into()),
+            },
+        )
+        .unwrap();
+    let candidate = client.materialize_stateful_candidate([&package]).unwrap();
+    let candidate_state = client
+        .state_db
+        .add(
+            &[Selection::explicit(package)],
+            Some("isolation root race candidate"),
+            None,
+        )
+        .unwrap();
+    let candidate_marker = client
+        .installation
+        .staging_path("usr/share/stateful-isolation-trigger-input");
+    let trigger = client
+        .installation
+        .staging_path("usr/share/cast/triggers/tx.d/isolation-root-race.glu");
+    fs::create_dir_all(trigger.parent().unwrap()).unwrap();
+    for directory in [
+        client.installation.staging_path("usr/share/cast"),
+        client.installation.staging_path("usr/share/cast/triggers"),
+        client.installation.staging_path("usr/share/cast/triggers/tx.d"),
+    ] {
+        fs::set_permissions(directory, Permissions::from_mode(0o755)).unwrap();
+    }
+    fs::write(
+        &trigger,
+        r#"let cast = import! cast.trigger.v1
+let base = cast.trigger "isolation-root-race" "Retained isolation root race proof"
+{
+    paths = [cast.path
+        "/usr/share/stateful-isolation-trigger-input"
+        ["delete-marker"]
+        (cast.optional.set cast.path_kind.directory)],
+    handlers = [cast.handler.named "delete-marker" (cast.handler.delete
+        ["/usr/share/stateful-isolation-trigger-input"])],
+    .. base
+}
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&trigger, Permissions::from_mode(0o644)).unwrap();
+
+    let hook_isolation = isolation.clone();
+    let hook_detached = detached.clone();
+    let hook_victim = victim.clone();
+    arm_after_stateful_isolation_root_retention(move || {
+        fs::rename(&hook_isolation, &hook_detached).unwrap();
+        symlink(&hook_victim, &hook_isolation).unwrap();
+    });
+
+    let error = client
+        .apply_stateful_candidate(
+            candidate,
+            &candidate_state,
+            Some(previous.id),
+            generated_system_snapshot("candidate-package"),
+        )
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            Error::StatefulCandidatePreserved { primary, .. }
+                if matches!(
+                    primary.as_ref(),
+                    Error::PostBlit(postblit::Error::PinRetainedTransactionSource {
+                        role: "container root",
+                        path,
+                        ..
+                    }) if path == &isolation
+                )
+        ),
+        "unexpected retained isolation failure: {error:#?}"
+    );
+    assert!(fs::symlink_metadata(&isolation).unwrap().file_type().is_symlink());
+    assert_eq!(fs::read_link(&isolation).unwrap(), victim);
+    assert_eq!(fs::read(victim.join("sentinel")).unwrap(), b"foreign replacement");
+    assert!(
+        !victim.join("etc").exists(),
+        "stateful trigger preparation followed the replacement symlink"
+    );
+    assert!(
+        !detached.join("etc").exists(),
+        "failed preparation must not mutate the detached retained root"
+    );
+    assert_eq!(directory_identity(&live_usr), live_identity);
+    assert_eq!(
+        fs::read_to_string(live_usr.join(".stateID")).unwrap(),
+        previous.id.to_string()
+    );
+    let quarantines = fs::read_dir(client.installation.state_quarantine_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(quarantines.len(), 1, "candidate was not preserved exactly once");
+    assert!(
+        quarantines[0]
+            .join("usr/share/stateful-isolation-trigger-input")
+            .is_dir()
+    );
+    assert!(!candidate_marker.exists());
+}
 
 #[test]
 fn apply_new_state_candidate_forwards_archives_and_commits_without_boot() {
