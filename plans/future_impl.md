@@ -807,6 +807,30 @@ Work items, each of which the compiler will point at once the variants exist:
    routes into it; then update the ActivateArchived tests. That order keeps the
    tree building at each step, which the model-first order did not.
 
+**RESOLVED 2026-07-26 — appending sidesteps it, and the model foundation is
+landed and green.** The two phases now exist in both enums, appended at the end
+rather than in chain order, with their ordinals *parked* at 19-20 above
+`Complete` so no existing ordinal moves and no existing comparison changes.
+Nothing routes into them (`next_forward_phase` returns `None`), so they are
+unreachable by construction.
+
+Verified: `activate_archived` 67/67, `activation_namespace` 60/60,
+`journal_coordinator` 117/117, `transition_journal` 136/136 — 380 tests, zero
+failures, production build at zero warnings.
+
+Remaining for §1.2b: add the coordinator's `begin_archived_staging()` /
+`complete_archived_staging()` pair with the tree move between the two advances,
+then move the parked ordinals from 19-20 to 1-2 and point
+`next_forward_phase`'s `Preparing` arm at them for `ActivateArchived`. The
+ordinal move and the routing must land together with the coordinator step, since
+that is what makes the phases reachable.
+
+Note the parked ordinals are a deliberate temporary: they say "after Complete",
+which is wrong for the chain but harmless while unreachable. They must be
+corrected in the same commit that routes into the phases.
+
+Original correction, retained because the underlying hazard is still real:
+
 **CORRECTION 2026-07-26 — a third ordering dependency exists, and the audit
 below did not find it.** Adding the two variants after `Preparing` and
 renumbering *both* ordinal tables still breaks 54 `activate_archived` and 11
