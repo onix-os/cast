@@ -639,7 +639,7 @@ archived state into live `/usr`. The coordinator already has
 **Approach:** an `execute_activate_archived_forward` analog + forward startup
 dispatch. Largely shares 1.1's neutral helper.
 
-### 1.3 Archived-state repair → reduced durable route  · E:M R:med
+### 1.3 Archived-state repair → reduced durable route  · **IMPLEMENTED 2026-07-26**
 `repair_archived_state` (`client/archived_repair.rs:82`) rebuilds an **inactive**
 tree — no live `/usr` mutation, no boot, transaction-triggers only — via the
 separate legacy `ArchivedStateRepairIdentity`. Narrower durability need: survive
@@ -678,8 +678,23 @@ namespace (`RepairLayout` is the natural vocabulary for that reconciliation, and
 is already implemented). It does *not* need to journal phases — the in-process
 resume already has that covered.
 
-Remaining work: marker format and placement, write/clear siting, a startup hook,
-the reconciler itself, and crash tests. Not yet implemented.
+**Implemented** as `client/archived_repair_marker.rs`: a plain
+`.cast/archived-repair-pending` file holding one state ID, armed before the
+first mutation in `repair_archived_state_with_checkpoint` and disarmed only
+after `publish` returns `Ok` (a failed publication deliberately leaves it
+armed). Both the file and the `.cast` directory are synced, so a power loss
+cannot keep the mutation while losing the marker. `startup_gate::admit_clean`
+reads it alongside the orphan-row audit — the two answer the same question —
+and reports `InterruptedArchivedRepair { state }`.
+
+Deliberately not a journal record: it carries no phase, because the namespace is
+the source of truth for *where* a repair got to and `RepairLayout` already reads
+it. Covered by round-trip and malformed-input tests in the module.
+
+**Still open:** the gate currently *reports* an interrupted repair rather than
+reconciling it, so recovery is operator-driven. Automatic reconciliation would
+drive `RepairLayout` to decide whether to re-publish or roll the candidate row
+back — worth doing once the Phase 2.1 crash harness exists to test it.
 
 **D1.3:** full journal record vs a lighter durable marker,
 given it never crosses the `/usr`/boot boundary?
