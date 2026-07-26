@@ -196,23 +196,15 @@ impl Client {
                             .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
                         Ok(Some(state))
                     }
-                    // First install, on the same coordinated route. This used
-                    // to defer at `CleanupComplete` — the namespace policy
-                    // demanded a synthesized-empty previous be `Absent`, which
-                    // the cleanup path cannot produce because it never unlinks,
-                    // so the record stayed live and startup reported
-                    // `RecoveryPending`. D1.5 admits that previous in staging,
-                    // which lets the terminal chain finish.
+                    // First install. The coordinated tails exist and the forward
+                    // prefix runs, but the terminal chain defers at
+                    // `CleanupComplete` for a no-predecessor record, leaving a
+                    // live journal record that startup reports as
+                    // `RecoveryPending`. Legacy until that is resolved — see
+                    // `plans/future_impl.md` §1.1e.
                     None => {
-                        let state = self
-                            .apply_new_state_candidate(
-                                candidate,
-                                None,
-                                selections,
-                                &summary.to_string(),
-                                system_snapshot,
-                            )
-                            .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
+                        let state = self.state_db.add(selections, Some(&summary.to_string()), None)?;
+                        self.apply_stateful_candidate(candidate, &state, None, system_snapshot)?;
                         Ok(Some(state))
                     }
                 }
