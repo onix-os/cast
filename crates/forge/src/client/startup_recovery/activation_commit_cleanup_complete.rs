@@ -236,6 +236,8 @@ pub(in crate::client) enum ActivationCommitCleanupPersistenceError {
     },
     #[error("audit the in-flight transition")]
     InFlight(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("clear the candidate row's in-flight transition marker")]
+    ClearInFlight(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("the {step} terminal step was deferred: {reason}")]
     AdmissionDeferred { step: String, reason: String },
     #[error("the {step} terminal step was not applicable")]
@@ -335,6 +337,37 @@ pub(in crate::client) fn finish_activation_after_commit(
         drop(binding);
         journal = next_journal;
         record = next_record;
+    }
+
+    // Clear the candidate row's in-flight marker before the terminal delete.
+    //
+    // The coordinator allocates the row with `add_with_transition`, which stamps
+    // `state.transition_id`. Archiving the predecessor is what normally clears
+    // it (`db/state/exact_archived_removal.rs`), so a transition with no
+    // predecessor to archive never reaches that path — the marker would outlive
+    // the transition and the next startup's `audit_in_flight_transition` would
+    // report `OrphanTransitionRow`, making a successful install look like an
+    // interrupted one.
+    //
+    // The ordering is the crash-safety property. Clearing here happens while the
+    // record is still live at `Complete`, so a crash between the clear and the
+    // delete leaves a record whose ownership reads `Cleared` with no in-flight
+    // row — a combination `inspect_database` already admits — and the next
+    // startup finishes the delete. Deleting first would invert that: a marked
+    // row with no record left to recover it from.
+    //
+    // Guarded because `clear_transition_if_matches` requires exactly one row to
+    // change. When a predecessor was archived the marker is already gone, and an
+    // unguarded clear would fail a transition that is in fact correct.
+    let pending = state_db
+        .audit_in_flight_transition()
+        .map_err(|source| ActivationCommitCleanupPersistenceError::InFlight(Box::new(source)))?;
+    if let Some(row) = pending.as_ref()
+        && row.transition_id == record.transition_id
+    {
+        state_db
+            .clear_transition_if_matches(row.state_id, &record.transition_id)
+            .map_err(|source| ActivationCommitCleanupPersistenceError::ClearInFlight(Box::new(source)))?;
     }
 
     let in_flight = state_db
