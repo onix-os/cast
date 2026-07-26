@@ -1246,3 +1246,18 @@ default mount points), **D4.3** (per-adapter vs global evaluator-policy version 
 load-bearing), **D4.4/4.5** (config-root + repo trusted-owner models),
 **D5.1/5.2/5.3** (security design confirmations), **D7.1/7.3** (timeout macro,
 capacity thresholds).
+
+### Session plan (decided 2026-07-26)
+
+Order: item 1 first (it gates verification of everything else), then 2, 4, 3.
+
+1. **Root-cause the `completion` concurrency bug properly** — no serialisation
+   workaround. Bisect the 27 tests to find the shared mutable state.
+2. **Port `stateful_trigger_preparation_never_follows_a_replaced_isolation_root`
+   to the coordinated route, prove it still catches the substitution, then
+   delete `stateful_transition.rs`.** Never delete the security proof first.
+3. **Build the full crash matrix** — every operation crossed with every journal
+   phase, not a single scenario.
+4. **Insert the archived-staging phases at ordinals 1-2 and shift the rest**,
+   with a dedicated audit pass over every `ordinal()` caller to catch the
+   silent-degradation risk.
