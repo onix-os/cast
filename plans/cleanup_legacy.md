@@ -92,11 +92,31 @@ routes through the coordinator like every other stateful transition.
 
 What remains is the 616-line `client/core/stateful_transition.rs` definition
 plus two test callers in `client/tests/fixed_staging_transition.rs` (:248,
-:339). Removal is now a deletion rather than a migration, but it is not
-mechanical: those two tests cover fixed-staging behaviour that needs either a
-coordinated equivalent or an explicit decision that the coverage moved
-elsewhere. Do it against a clean full-suite baseline; §§3 and 4 follow
-immediately once the path is gone. What remains is the 616-line `client/core/stateful_transition.rs`
+:339). Removal is a deletion rather than a migration, but it is **not** mechanical:
+the two test callers are security proofs, and deleting them silently drops
+coverage. Surveyed 2026-07-26 — both are portable, and the exact work is:
+
+1. `retained_state_id_write_never_targets_a_substituted_usr` (:228) proves the
+   state-ID write follows the retained descriptor rather than a substituted
+   `usr` pathname. Its hook `before_retained_state_metadata` already fires from
+   **shared** code (`core/state_metadata.rs:89`), so the coordinated route
+   triggers it unchanged. Port = retarget the call to
+   `apply_new_state_candidate`; no production change.
+
+2. `stateful_trigger_preparation_never_follows_a_replaced_isolation_root` (:260)
+   proves trigger preparation does not follow a swapped isolation-root symlink.
+   Its hook `after_stateful_isolation_root_retention` fires **only** from
+   `stateful_transition.rs:174` — the legacy path itself — so deleting that file
+   removes the sole call site and the proof with it. The coordinated route does
+   create an isolation root, at `core/state_planning.rs:62`. Port = move the
+   `#[cfg(test)] after_stateful_isolation_root_retention()` call to immediately
+   after that `create_root_links`, then retarget the test.
+
+Order: port both tests and verify they still fail-on-regression against the
+coordinated route *before* deleting `stateful_transition.rs`. Deleting first
+would make the ports unverifiable. §§3 and 4 follow once the path is gone.
+Do it against a clean full-suite baseline — see §2.1a, which currently makes
+full-suite results ambiguous. What remains is the 616-line `client/core/stateful_transition.rs`
 definition plus two test callers in `client/tests/fixed_staging_transition.rs`
 (:248, :339).
 
