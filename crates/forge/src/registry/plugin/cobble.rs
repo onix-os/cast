@@ -9,7 +9,6 @@ use thiserror::Error;
 use crate::Provider;
 use crate::package::{self, Meta, MissingMetaFieldError, Package, meta};
 
-// TODO:
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Cobble {
     // Storage of local packages

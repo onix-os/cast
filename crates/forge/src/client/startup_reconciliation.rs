@@ -23,6 +23,7 @@ use crate::{
     tree_marker::{RetainedTreeMarker, TreeMarkerError, TreeMarkerStore},
 };
 
+mod activation_commit_cleanup_authority;
 mod activation_namespace;
 mod active_reblit_boot_repair_evidence;
 #[allow(dead_code)] // read-only startup boundary; live dispatch is deliberately a later slice
@@ -35,6 +36,10 @@ mod database_evidence;
 #[cfg(test)]
 mod focused_test_exports;
 mod metadata_provenance;
+pub(in crate::client) use activation_commit_cleanup_authority::{
+    ActivationCommitCleanupAdmission, ActivationCommitCleanupAuthority, ActivationCommitCleanupAuthorityError,
+    ActivationTerminalStep,
+};
 mod replacement_mutation_authority;
 mod usr_exchanged_root_abi_authority;
 mod usr_rollback_activate_archived_complete_route_authority;

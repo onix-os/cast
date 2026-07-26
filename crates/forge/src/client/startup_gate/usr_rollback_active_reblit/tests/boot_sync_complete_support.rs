@@ -17,7 +17,7 @@ use crate::{
         },
     },
     db,
-    transition_journal::{Phase, TransitionJournalStore, TransitionRecord, encode},
+    transition_journal::{Phase, TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -80,23 +80,6 @@ pub(super) fn boot_sync_complete_fixture(epoch: Epoch, promote_receipt: bool) ->
     journal.advance(&fixture.fixture.source, &completed).unwrap();
     drop(journal);
     fixture.fixture.source = completed;
-    fixture
-}
-
-/// Recreate an already-existing legacy boot-completion checkpoint. Legacy
-/// payloads cannot newly cross this edge, but a valid on-disk v1/v2 record
-/// must stay forward-pending rather than being reinterpreted as rollback.
-pub(super) fn legacy_boot_sync_complete_fixture(epoch: Epoch, version: u16) -> BootRepairFixture {
-    let mut fixture = boot_sync_complete_fixture(epoch, true);
-    assert!(matches!(version, 1 | 2));
-    fixture.fixture.source.version = version;
-    fixture.fixture.source.boot_publication_receipts = None;
-    fs::write(
-        fixture.fixture.installation.root.join(".cast/journal/state-transition"),
-        encode(&fixture.fixture.source).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(fixture.fixture.canonical_record(), fixture.fixture.source);
     fixture
 }
 

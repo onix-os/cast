@@ -118,7 +118,7 @@ impl StateIdFingerprint {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(super) struct RetainedStateId {
     pub(super) file: Option<File>,
     pub(super) temporary: Option<File>,
@@ -133,7 +133,7 @@ pub(super) struct SlotFingerprint {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(super) struct RetainedSlotLink {
     pub(super) file: File,
     pub(super) name: Vec<u8>,
@@ -163,7 +163,7 @@ impl UsrFingerprint {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(super) struct RetainedUsr {
     pub(super) store: TreeMarkerStore,
     pub(super) marker: RetainedTreeMarker,
@@ -194,7 +194,7 @@ impl WrapperFingerprint {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(super) struct RetainedIsolationScaffold {
     pub(super) directory: File,
     pub(super) path: PathBuf,
@@ -202,7 +202,7 @@ pub(super) struct RetainedIsolationScaffold {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(super) struct RetainedWrapper {
     pub(super) directory: File,
     pub(super) fingerprint: WrapperFingerprint,
@@ -238,7 +238,7 @@ pub(super) struct RootAbiLinkFingerprint {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(super) struct RetainedRootAbiLink {
     pub(super) file: File,
     pub(super) fingerprint: RootAbiLinkFingerprint,
@@ -256,7 +256,7 @@ impl RootAbiFingerprint {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(super) struct RetainedRootAbi {
     pub(super) links: Vec<Option<RetainedRootAbiLink>>,
     pub(super) fingerprint: RootAbiFingerprint,
@@ -292,7 +292,7 @@ pub(crate) struct NamespaceFingerprint {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // retained capture: fields hold descriptors open for later revalidation, not for reading
 pub(crate) struct NamespaceSnapshot {
     pub(super) root: File,
     pub(super) root_path: PathBuf,

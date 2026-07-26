@@ -126,6 +126,512 @@ semantics? Does the fresh-allocation DB edge need a new forward startup authorit
 **Risk note:** getting `archive_previous` + receipt binding wrong on the fresh
 path can leave a system unable to roll back to its predecessor.
 
+### 1.1a NewState pre-allocation boot applicability (D1.4)  · E:M R:high
+
+**Decision D1.4 (user, 2026-07-25): assess applicability pre-allocation from the
+selections.** Do not let the journal assert `run_boot_sync` and then finish
+without boot, and do not move row allocation back out of the journal.
+
+**Why this is needed to wire Slice 5.** `apply_new_state_candidate` currently
+hardcodes `run_boot_sync = true` and turns a non-bootable candidate into a hard
+error (`NewStateBootNotApplicable`, `new_state_boot_transition.rs`). Making it
+the default would regress every package install whose candidate publishes no
+kernel — the legacy route simply skips boot for those. ActiveReblit has no such
+problem: it assesses applicability pre-journal and passes the resulting
+`run_boot_sync` into the coordinator (`active_reblit_transition.rs:88-114`).
+NewState cannot copy that directly because its state row is allocated *inside*
+the journal (Slice 1's `add_with_transition`, which exists so a crash cannot
+orphan the row from its transition).
+
+**What the assessment actually needs (traced 2026-07-25).** Both
+`NotApplicable` outcomes are decided from the head state's *layouts*, not from
+the state chain:
+
+- `NoSystemdBootAsset` — `head_systemd_candidate_count(projection, ..)`
+  (`active_reblit_asset_plan.rs:455`, rejects at `:461`).
+- `NoKernel` — `kernel_count == 0` over the projected layouts (`:550-556`).
+
+For a NewState candidate those layouts are exactly the incoming `&[Selection]`
+package layouts, all resolvable from `layout_db` before any row exists.
+
+**Implementation shape — CORRECTED after tracing the plan builder.** An earlier
+draft of this entry assumed the two rules could simply be lifted out over a
+`(package ids, layouts)` pair. They cannot, and that route would be wrong:
+
+- `NoSystemdBootAsset` *is* head-local (`head_systemd_candidate_count` filters
+  `projection.layouts()` by `selected_packages(projection.head())`), so it would
+  lift cleanly on its own.
+- `NoKernel` is **not**. `kernel_count` is accumulated across **every state in
+  the projection's chain** (`active_reblit_asset_plan.rs:473-485`), inside the
+  same loop that builds `state_plans`, `schema_requirements` and per-asset
+  roles. Bootability therefore means "the retained chain contributes at least
+  one kernel", not "this candidate ships one".
+
+So the pre-allocation probe cannot ignore the chain — it must run the existing
+accumulation with the *candidate's selections standing in as the prospective
+head*, the rest of the chain coming from `state_db` as it already does. The real
+obstacle is that `PreparedActiveReblitBootProjection.states` is a
+`db::state::FrozenBootInput` — a frozen capture of persisted `State` rows — with
+no way to express a head that has no row yet.
+
+**Therefore the work is:** let the projection carry a *prospective* head
+(package set + layouts, no `state::Id`) alongside the persisted tail, and have
+`prepare_asset_plan_until` treat it as `state_index == 0`. One implementation
+still serves both callers. This is a change to a crash-matrix-verified capture
+type, so it wants a fresh session and its own test pass — not a tail-end edit.
+
+Do **not** re-implement either rule separately: the pre-journal answer would
+drift from the real plan, and the journal would claim a boot that never becomes
+possible.
+
+**Then** Slice 5 passes the derived `run_boot_sync` into
+`execute_new_state_forward` (replacing the hardcoded `true`) and treats
+`NotApplicable` as "finish without boot" rather than an error.
+
+**Still separate:** `apply_new_state_candidate` handles only the Active-previous
+(archive) case. First install with no active predecessor has no coordinated
+route at all and must be built before the legacy path can be deleted
+(`plans/cleanup_legacy.md` §2).
+
+### 1.1b NewState commit-cleanup route  · E:M R:high · **blocks Slice 5**
+
+**Found 2026-07-25 by tracing the tail; not previously known.** Both coordinated
+NewState paths reach `Complete` through
+`ActiveReblitCommitCleanupAuthority`, which **rejects NewState records at
+runtime**:
+
+- `capture_with_record_binding` (`active_reblit_commit_cleanup_authority.rs:203`)
+  returns `NotApplicable` unless `record.operation == Operation::ActiveReblit`.
+- `capture` (`:165-173`) additionally rejects `options.archive_previous` and
+  `!same_nonempty_candidate_and_previous(record)`.
+
+A NewState record trips all three (operation `NewState`, `archive_previous`
+true, candidate ≠ previous). Both routes hit it:
+
+- boot path — `complete_new_state_boot` → `persist_commit_cleanup_complete` →
+  `capture_retained_binding`
+- no-boot path — the terminal tail `finish_active_reblit_no_boot` → `capture`
+
+**This corrects an earlier conclusion.** Slice 3c was recorded as "COMPILES for
+the NewState-derived staged boot — proving it operation-neutral". The types line
+up; the runtime admission does not. `apply_new_state_candidate` would fail at
+commit cleanup on a real system. The integration test
+`apply_new_state_candidate_forwards_and_archives_before_boot_applicability`
+never caught it because it stops earlier at `NewStateBootNotApplicable` — the
+very error §1.1a removes, so fixing §1.1a alone would have walked straight into
+this.
+
+**Shape — SMALLER than a mirror (traced further, 2026-07-25).** An earlier draft
+of this entry called for a full ~500-800 line NewState authority mirroring
+`active_reblit_commit_cleanup_authority.rs`. That is wrong, because the thing
+ActiveReblit's cleanup *does* has no NewState counterpart:
+
+- The cleanup effect is a staging-wrapper **exchange**
+  (`.../effect.rs:51` → `prepare_exchange` / `attempt_exchange_once`).
+- That wrapper rotation is set up by `prepare_active_reblit_staging_rotation`,
+  which the legacy path gates on
+  `candidate_origin == StatefulCandidateOrigin::ActiveReblit`
+  (`core/stateful_transition.rs:142`). ActiveReblit needs it because candidate
+  and previous are the *same* state, so it activates through a replacement
+  wrapper. **NewState never rotates a wrapper** — its candidate came from
+  staging into `/usr` and its predecessor went to its own state slot.
+
+So NewState has **nothing to reconcile** at `CommitDecided`. But the phase chain
+is mandatory — `CommitDecided → CommitCleanupComplete → Complete`
+(`validation.rs:511-512`) — so it still must *traverse* the phase.
+
+**Therefore build a no-effect cleanup route**, not a parallel authority: admit
+NewState at `CommitDecided` and advance the record to `CommitCleanupComplete`
+without an exchange attempt, in the spirit of the existing
+`ActiveReblitCommitCleanupRoutePlan::NoBoot` variant. Keep the record-binding
+and database revalidation sandwiches; drop only the namespace exchange. Revised
+estimate: **E:M-L**, not the original E:L "full mirror".
+
+**The one real obstacle (traced to the bottom).** The persistence step is
+already operation-neutral — `persist_active_reblit_commit_cleanup_complete_retaining_binding`
+(`startup_recovery/active_reblit_commit_cleanup_complete.rs:69`) just calls
+`forward_successor(None)`, which derives the successor from the record's own
+options. So nothing below the authority needs changing.
+
+The obstacle is the typestate above it:
+`ActiveReblitCommitCleanupDurableAuthority` holds a
+`DurableActiveReblitCommitCleanupNamespace` (`.../effect.rs:44-47`), and the
+only way to obtain one is `complete()` on a namespace that has *already
+exchanged* (`.../effect.rs:120-133`). A no-exchange route therefore cannot
+produce the existing durable type. **Resolved: NewState must not reuse this namespace machinery at all.** Both
+options first considered (enum the durable namespace; or clone the type) assume
+NewState needs *some* namespace evidence. It does not.
+`DurableActiveReblitCommitCleanupNamespace` holds `parents` (retained wrapper
+descriptors from the exchange), `final_finish` and `final_projection` — all
+wrapper-shaped concepts with no NewState counterpart, since NewState performs no
+exchange and rotates no wrapper.
+
+So build a small, self-contained `new_state_commit_cleanup` authority whose
+evidence is **record binding + database only**, with no namespace member:
+
+- admission: `Operation::NewState`, `Phase::CommitDecided`, `rollback.is_none()`,
+  `options.archive_previous`, candidate ≠ previous, receipt correlation
+  consistent with `run_boot_sync`
+- durable authority: holds that evidence; nothing to reconcile
+- persistence: sibling of
+  `persist_active_reblit_commit_cleanup_complete_retaining_binding`, calling
+  `forward_successor(None)` → `CommitCleanupComplete` (already neutral)
+
+This touches **no** ActiveReblit typestate, so the crash-verified path is
+untouched and its tests keep their meaning. That is why the estimate is E:M
+rather than E:L, and it is the shape to build.
+
+**Status: authority side SHIPPED** (`a9bdc13a`, `891e12dc`) —
+`new_state_commit_cleanup_authority.rs`: admission gate, bracketing database
+captures, record-binding checks, `advance_record_binding` to
+`CommitCleanupComplete`, and a post-advance authority proving the published
+successor. No namespace member anywhere; ~200 lines; zero production warnings.
+
+**Remaining: the persistence sibling — make it generic, do NOT duplicate it.**
+`persist_active_reblit_commit_cleanup_complete_inner`
+(`startup_recovery/active_reblit_commit_cleanup_complete.rs:79`) is ~300 lines of
+durability-critical logic: blocking vs non-blocking journal reopen, successor
+revalidation against the reopened journal, fresh binding recapture, multi-stage
+validation, storage-failure reconciliation, and fault-injection hooks. Copying it
+for NewState would fork the most safety-critical code in the crate.
+
+The *method* surface it calls is small and trait-shaped — `revalidate`,
+`record`, `installation`, `advance_record_binding`, plus
+`revalidate_successor_same_store` / `revalidate_successor_reopened` on the
+post-advance value. **The NewState authority now implements all of it**
+(`a9bdc13a`, `891e12dc`, `dcfbbb51`), so the authority side of §1.1b is done.
+
+**But genericizing the persistence function is more invasive than that surface
+suggests** (measured 2026-07-25): nine ActiveReblit-specific *types* are threaded
+through its body and signature —
+`ActiveReblitCommitCleanupDurableAuthority`, `…PostAdvanceAuthority`,
+`…Record`, `…ValidationStage`, and the `…EffectError`, `…FreshBindingError`,
+`…PersistenceError`, `…RecordAdvanceError`, `…ReopenError` error types. A generic
+version must abstract over all nine, which is a substantial refactor of
+crash-matrix-verified durability code, not a small trait extraction.
+
+**Decide with the crash matrix runnable** (the VM at `192.168.122.148` is
+reachable — confirmed 2026-07-25):
+
+- **(a) Genericize anyway**, using the ActiveReblit crash matrix as the net. One
+  implementation of reopen/recapture/storage-failure reconciliation forever.
+  Higher up-front risk, lower long-term risk.
+- **(b) NewState-specific persistence**, sharing only leaf helpers. Lower
+  up-front risk, but forks the crate's most safety-critical logic into two
+  copies that must stay identical.
+
+Prefer (a) if the crash matrix can be run against both operations; otherwise the
+fork in (b) is the kind of duplication that rots.
+
+The 8 ActiveReblit-specific predicates (`capture`, `capture_with_record_binding`,
+`exact_route_plan`, `record_plan_is_exact`) still all need a NewState branch, so
+this is not a one-line gate relaxation either.
+
+**Ordering:** build this **before** wiring §1.1a. Wiring the probe first yields
+a route that gets further and then fails at cleanup — strictly worse than
+today's honest `NewStateBootNotApplicable`.
+
+### 1.1c NewState terminal tail — the full authority chain  · E:L R:high
+
+**Found 2026-07-25 by walking the tail; this resizes Phase 1.1.** §1.1b treated
+commit cleanup as *the* ActiveReblit-gated step blocking NewState. It is one of
+**four**. Every authority the terminal tail traverses gates on
+`Operation::ActiveReblit`, and each carries its own namespace evidence shaped
+around ActiveReblit's wrapper rotation:
+
+| authority | lines | `Operation::ActiveReblit` gates | NewState analog |
+|---|---|---|---|
+| `ActiveReblitBootSyncCompleteAuthority` | 820 | 3 | needed |
+| `ActiveReblitCommitCleanupAuthority` | 801 | 4 | **built** (`a9bdc13a`…`d33a8856`) |
+| `ActiveReblitCommitCleanupCompleteAuthority` | 812 | 4 | needed |
+| `ActiveReblitCompleteFinalizationAuthority` | 762 | 3 | needed |
+
+Both tails route through them — the boot tail via `capture_retained_binding`
+(`boot_sync_complete_persistence/…`), the no-boot tail via `capture`
+(`startup_gate/live_active_reblit_no_boot.rs:72,119,143`).
+
+**So reaching `Complete` on the coordinated NewState route needs roughly three
+more authority stacks (~2400 lines), not one.** Each repeats the §1.1b design
+question — *what namespace evidence does NewState actually need here?* — and the
+§1.1b answer ("none: NewState rotates no wrapper") will not simply carry over.
+`ActiveReblitCommitCleanupCompleteAuthority` holds an
+`ActiveReblitCommitCleanupFinishNamespaceProof`, and the NewState equivalent must
+prove something real about `/usr` being the candidate with the predecessor
+archived — a different shape, not an absence.
+
+**Consequence for sequencing.** Slice 5 cannot wire the coordinated route live
+until this chain exists; wiring earlier produces a route that runs further and
+then fails deeper, which is worse than today's honest early error. The
+`cleanup_legacy.md` §2 blocker therefore stands well beyond §1.1a/§1.1b.
+
+**Question answered (2026-07-25) — the namespace modelling already exists, so
+the NewState analogs are far smaller than the ActiveReblit files.**
+
+The blocking worry was that each analog would need new namespace modelling. It
+does not. `policy.rs::commit_layouts` (:261-276) is **record-driven and
+operation-general**: for `PreviousOrigin::ActiveState` — exactly NewState's
+archive case — it already yields `{candidate: Live, previous: Archived}` for
+`CommitDecided`, `CommitCleanupComplete` and `Complete` (:255-256). And
+`assess_snapshot_layout` (:147) validates a snapshot against those alternatives
+using only the record's own tree tokens.
+
+So a NewState terminal authority validates its namespace with the **generic**
+snapshot+policy machinery. What it must *not* reuse is
+`ProjectedActiveReblitCommitCleanupNamespace`, which rejects non-ActiveReblit
+outright (`capture/active_reblit_commit_cleanup.rs:149`) and is built from
+`wrapper_index` / `target_name` / `CommitCleanupInvariant` — it tracks a wrapper
+identity through an exchange.
+
+**That exchange-tracking is why the ActiveReblit files are 762-820 lines, and
+NewState does none of it.** Expect analogs closer to the ~200-line shape of
+`new_state_commit_cleanup_authority.rs` than to their ActiveReblit namesakes:
+admission on the record, generic layout assessment, bound advance, successor
+revalidation. Revised estimate **E:L, not E:XL**.
+
+### 1.1d NewState boot tail — the staged chain is generation-bound  · E:M R:high · **last gate before Slice 5**
+
+**Status: the NewState terminal *authority* chain is complete** (§1.1b/§1.1c —
+`BootSyncStarted→BootSyncComplete→CommitDecided→CommitCleanupComplete→Complete→delete`,
+all built and tested). The **no-boot** path is wired and proven live by
+`apply_new_state_candidate_forwards_archives_and_commits_without_boot`.
+
+**What remains is the bootable path.** `complete_new_state_boot` drives the
+ActiveReblit *staged* boot chain (`client/boot/active_reblit_boot_sync_staging/`),
+whose validation is ActiveReblit-shaped in two ways:
+
+1. **Shape gates** — 4 `archive_previous` references across 3 files, plus
+   `record.operation != Operation::ActiveReblit`. NewState-with-archive trips
+   all of them (`commit_decision_handoff.rs:105-115`,
+   `commit_cleanup_handoff.rs:212`).
+2. **Hard-coded generations** — `ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION = 12`
+   and `ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION = 13`
+   (`commit_decision_handoff.rs:32`, `commit_cleanup_handoff.rs:30`,
+   `active_reblit_boot_sync_complete_authority.rs:38-39`).
+
+The generations are the real work. NewState-with-archive traverses
+`PreviousArchiveIntent` and `PreviousArchived` that ActiveReblit does not, so its
+generations run **four higher** at the same phases. There is **no
+generation-derivation helper anywhere in the crate** — every site compares
+against a literal.
+
+**So this needs a derived expectation** (operation + options + phase → generation)
+replacing the literals, then the shape gates widened. It is contained, but it is
+arithmetic inside crash-verified staged validation: an off-by-one silently
+accepts a record from the wrong point in the chain. Worth its own session with
+the crash matrix runnable.
+
+**Do not wire Slice 5 before this.** Wiring now would split production between
+two transition engines keyed on whether a candidate happens to ship a kernel —
+non-bootable installs through the durable route, bootable ones still legacy.
+That is worse than either engine alone.
+
+### 1.1e First-install terminal completion  · **RESOLVED 2026-07-26**
+
+**Two blockers, not one. D1.5 cleared the first; the second is open.**
+
+*Cleared (D1.5):* the terminal namespace proof required a `SynthesizedEmpty`
+previous to be `Absent` at `CommitCleanupComplete`, which the cleanup path
+cannot produce because it never unlinks. `commit_layouts` now admits it in
+staging, so the terminal chain finishes.
+
+*Cleared (second blocker) — the in-flight marker.*
+`new_state_forward.rs:187` allocates the state row via `add_with_transition`,
+which stamps `state.transition_id`. The **only** production code that clears
+that column is `exact_archived_removal.rs:223`, which runs while archiving the
+predecessor. A first install has no predecessor, so the column stays set after
+the transition completes, and the next startup's `audit_in_flight_transition`
+reports `OrphanTransitionRow` — a successful install looks like an interrupted
+one. Caught by `state_creation_records_and_exports_the_generated_snapshot`,
+`export_prefers_a_committed_lua_migration_of_the_system_snapshot` and
+`reused_client_rejects_a_second_state_before_database_allocation`; routing was
+reverted rather than shipped.
+
+**Fixed** in `finish_activation_after_commit`: a guarded
+`clear_transition_if_matches` immediately before the `Finalize` capture, so the
+clear lands while the record is still live at `Complete`. A crash between the
+clear and the delete leaves ownership `Cleared` with no in-flight row, which
+`inspect_database` already admits, so the next startup finishes the delete;
+deleting first would leave a marked row with no record to recover it from. The
+guard matters because the clear requires exactly one row to change, and a
+transition that archived a predecessor has already had its marker cleared.
+
+Original diagnosis retained below.
+
+**Resolved by D1.5.** The deferral was the terminal namespace proof: the policy
+required a `SynthesizedEmpty` previous to be `Absent` at `CommitCleanupComplete`,
+which the cleanup path cannot produce because it never unlinks. `commit_layouts`
+now admits that previous in staging at the terminal phases, the terminal chain
+finishes, and `state_planning.rs`'s `None` arm routes first install through
+`apply_new_state_candidate` like every other stateful transition.
+`apply_stateful_candidate` no longer has a caller from this arm — see
+`plans/cleanup_legacy.md` §§2-4, which this unblocks.
+
+Original diagnosis retained below.
+
+**Everything up to commit works; the transition does not end.** For a NewState
+record with no predecessor (`SynthesizedEmpty`), the coordinated route runs the
+forward prefix, the unarchived tails, and reaches `CommitDecided`. Driving the
+terminal chain from there then fails: `CommitCleanup` admits, but
+`CleanupComplete` returns `Deferred`.
+
+`Deferred` means the evidence was not exact — either the bracketing database
+captures disagreed, or the terminal namespace proof failed to admit. It is *not*
+a source-contract rejection: `exact_new_state_terminal_source` accepts both
+NewState shapes (verified by
+`each_terminal_step_admits_only_its_own_source_phase`).
+
+**Consequence if routed anyway:** the journal keeps a live record at
+`CommitDecided`, so the next startup reports `RecoveryPending` — a successful
+install looks like an interrupted one. Four `active_state_snapshot_tests` catch
+exactly this, which is how it was found.
+
+**So first install stays on the legacy route** (`state_planning.rs`, `None`
+arm) until this is resolved. Replacing an active state is unaffected and is
+already coordinated.
+
+**DIAGNOSED (2026-07-26). The reason is `NamespaceAtBegin` — the terminal
+namespace proof, not the database evidence.** `capture` now carries a
+`NewStateCommitCleanupDeferral` so this is readable instead of guessed at; all
+three `Deferred` sites previously discarded their reason.
+
+**Root cause: nothing disposes of the synthesized-empty previous tree.**
+`policy::commit_layouts` maps `PreviousOrigin::SynthesizedEmpty` to
+`PreviousPlace::Absent`, and `previous_place_matches` only accepts `Absent` when
+*no* tree carries the record's previous token. A first install synthesizes an
+empty `/usr` as its "previous"; after the exchange that tree sits in staging, and
+the coordinated route never removes it.
+
+**Why `CommitCleanup` admits but `CleanupComplete` defers** — `commit_layouts`
+takes an `intent` flag, true only for `CommitDecided` (`policy.rs:255-256`). With
+`intent` it offers `[POST_EXCHANGE, completed]`, so a previous still in staging is
+accepted; without it, only `completed` = `{candidate: Live, previous: Absent}`.
+So the route passes the first terminal step and fails the second — exactly the
+observed behaviour.
+
+**The contract is explicitly asserted, not incidental.**
+`activation_namespace/tests.rs:780-795` walks exactly this: synthesized previous
+in staging passes at `CommitDecided`, **fails with `PhaseLayout` at
+`CommitCleanupComplete`**, and passes both once `staging/usr` is removed. So the
+policy is deliberate — the route is what is missing a step, and the observed
+defer is the policy working as designed.
+
+**Note the legacy route never hits this**: it has no journal and therefore no
+phase-layout checks at all, which is why a first install has always left the
+synthesized tree behind without complaint.
+
+**Shape of the fix — and a trap. Do NOT delete the tree.**
+
+The obvious reading of "previous must be `Absent`" is to remove the synthesized
+tree. That would violate an explicit architectural principle stated at
+`previous_tree_move.rs:658-664`:
+
+> *This is intentionally non-destructive. A same-UID writer can replace a final
+> pathname after it is checked, so `unlinkat` cannot safely remove the retained
+> inode. A no-replace rename preserves every racing inode.*
+
+Nothing in this layer unlinks. Every disposal is a **no-replace rename to a
+private parking name**, so a racing inode is preserved rather than destroyed.
+The test at `activation_namespace/tests.rs:790` uses `remove_dir_all` because it
+is a *test* arranging a namespace, not a model of the production effect.
+
+**Resolved by lookup: (a) is ruled out, so this is a policy question.**
+`NamespaceSnapshot` scans parking locations — `TreeLocation` includes
+`PreviousParking`, `ArchivedCandidateParking`, `TransitionQuarantine` and
+`AmbientQuarantine` (`capture/model.rs:46-55`) — and `trees_for_token` filters
+that whole set. A parked tree is therefore still *found*, just in a different
+place, so renaming cannot produce `Absent` any more than leaving it in staging
+can.
+
+**Which means `Absent` may be unreachable for a synthesized previous.** Nothing
+moves it: a first install synthesizes an empty `/usr` to exchange against, and
+after the exchange it sits in staging permanently. If no effect removes it — and
+none may, given the layer never unlinks — then
+`commit_layouts`' `SynthesizedEmpty -> Absent` mapping describes a state the
+system never reaches.
+
+**D1.5 — needs a decision, because it changes a tested policy.**
+`activation_namespace/tests.rs:780-795` explicitly asserts today's behaviour
+(`PhaseLayout` error at `CommitCleanupComplete` with the tree in staging), so
+this is not a bug to quietly fix:
+
+- **(i)** The policy is right and a disposal effect is genuinely missing — in
+  which case that effect must be designed within the no-unlink discipline, which
+  is exactly what makes it hard.
+- **(ii)** The policy is wrong: `commit_layouts` should keep `POST_EXCHANGE` as
+  an alternative for `SynthesizedEmpty` at the terminal phases, since the
+  previous legitimately remains in staging. The `intent` flag (`policy.rs:271`)
+  currently drops it. Fix is one condition plus updating that test.
+
+(ii) is the smaller and, on the evidence, more likely correct answer — the
+legacy route has always left the tree there, and no coordinated route exercised
+this path until 2026-07-26. But it rewrites an asserted contract, so confirm the
+intent before changing it.
+
+### 1.2a ActivateArchived — what already exists  · survey 2026-07-26
+
+**Smaller than E:L suggests: the coordinator prefix already supports it.**
+
+- `NewStateRequest`/`request.rs:28,73-79` already builds an
+  `Operation::ActivateArchived` record.
+- `candidate_preparation.rs` handles the operation throughout (:131, :195, :220)
+  and yields a dedicated `PreparedArchivedTransitionCoordinator` typestate.
+- That typestate already persists `/usr` exchange intent
+  (`usr_exchange_intent.rs:94`), so the exchange, root-links and system-trigger
+  phases — which are shared — are reachable today.
+
+**What is missing:**
+
+1. `execute_activate_archived_forward`, mirroring `execute_new_state_forward`
+   (226 lines). It should be *shorter*: no fresh allocation, because the state
+   row already exists — that is the whole point of activating an archived state.
+2. Terminal-chain admission. `exact_new_state_terminal_source` gates on
+   `Operation::NewState`, so the chain built in §1.1b/§1.1c rejects
+   ActivateArchived records today.
+
+**The terminal chain should generalize rather than be rebuilt.** An
+ActivateArchived record has the same terminal shape as an archiving NewState —
+`archive_previous`, candidate ≠ previous, both non-null — so the existing
+`NewStateTerminalStep` machinery (admission, advance, same-store/reopened
+revalidation, finalize) should serve it by widening the operation predicate,
+exactly as `commit_layouts` already serves all three operations. Verify against
+`policy.rs:264-269`, which maps `PreviousOrigin` per operation and already
+covers the archived case.
+
+**Sequence:** widen the terminal predicate first (small, testable in isolation
+against a hand-built record), then write the forward driver, then wire
+`state_planning.rs:115` off `commit_stateful_staging`.
+
+**Progress:** terminal admission SHIPPED (`700d4c6b`) — one authority now serves
+both NewState and ActivateArchived, with the no-predecessor shape restricted to
+NewState since activation always has something to archive. Forward driver
+SHIPPED (`f4f50cba`), and it is shorter than NewState's for two reasons the code
+itself dictates: no fresh allocation (the row already exists), and **no
+transaction triggers** — `PreparedArchivedTransitionCoordinator` has no
+`prepare_for_transaction_triggers` at all, and `usr_exchange_intent.rs:94`
+states why: *"archived activation never runs transaction triggers"*.
+
+**Remaining: the client composition, and it has an ordering question.**
+Unlike NewState — which materializes a candidate into staging before the
+journal — activation must first *move* the archived tree into staging via
+`tree_identity.stage_archived_candidate` (`state_planning.rs:80`), a physical,
+reconciled move with its own `Applied` resume path
+(`finish_applied_archived_candidate_stage`).
+
+**Decide where that move belongs:**
+
+- **Outside the journal**, before `execute_activate_archived_forward`, mirroring
+  how NewState materializes first. Simplest, and matches the legacy ordering —
+  but a crash between the stage and the journal leaves the archived tree in
+  staging with no record explaining why, which is exactly the class of orphan
+  the coordinated route exists to eliminate.
+- **Inside the journal**, as a phase between `Preparing` and
+  `CandidatePrepared`. Durable and recoverable, but needs a new phase or a
+  reused one, and the journal model currently has no archived-staging phase.
+
+The second is more in the spirit of Phase 1; the first is what ships soonest.
+Note this is the same class of question as D1.5 — whether a physical effect the
+legacy route performs untracked should become a journaled phase.
+
 ### 1.2 ActivateArchived → durable coordinator route  · E:L R:high
 Same untethered legacy path (`commit_stateful_staging`) for activating an
 archived state into live `/usr`. The coordinator already has
@@ -133,7 +639,7 @@ archived state into live `/usr`. The coordinator already has
 **Approach:** an `execute_activate_archived_forward` analog + forward startup
 dispatch. Largely shares 1.1's neutral helper.
 
-### 1.3 Archived-state repair → reduced durable route  · E:M R:med
+### 1.3 Archived-state repair → reduced durable route  · **IMPLEMENTED 2026-07-26**
 `repair_archived_state` (`client/archived_repair.rs:82`) rebuilds an **inactive**
 tree — no live `/usr` mutation, no boot, transaction-triggers only — via the
 separate legacy `ArchivedStateRepairIdentity`. Narrower durability need: survive
@@ -143,8 +649,147 @@ a crash between "metadata published to candidate row" and "publication committed
 `run_boot_sync=false, run_system_triggers=false`, no exchange) covering
 `Preparing → CandidatePrepared → TransactionTriggersComplete → publish`, plus a
 startup reconciler for a partial publish. Reuse `ArchivedStateRepairIdentity` as
-the effect layer. **D1.3:** full journal record vs a lighter durable marker,
+the effect layer. **Survey 2026-07-26 — what the marker is actually for.** The plan framed the
+window as "a crash between metadata published to candidate row and publication
+committed", which reads as an in-process gap. It is not: that gap is already
+well covered.
+
+- `publish` derives `RepairLayout` (`Initial` / `CandidateCanonical` /
+  `Complete` / `Preserved`) from the on-disk namespace and resumes from it,
+  with a bounded retry loop and `require_candidate_boundary` reconciliation at
+  every exit. `finish_complete` is pure fsync + revalidation — it performs no
+  database write, so there is no torn in-process commit to protect.
+- The database metadata is written earlier, during preparation
+  (`prepare_retained_candidate` / `decorate_archived`).
+
+**The real gap is cross-restart: there is no startup reconciler for archived
+repair.** `grep` over `startup_gate.rs`, `startup_recovery.rs` and
+`startup_reconciliation.rs` finds no `ArchivedRepair` reference at all. So if
+the process dies after preparation wrote the candidate row but before the tree
+was published, nothing on the next boot notices — the row can describe a
+repaired state whose tree was never swapped, and no later operation is obliged
+to detect it.
+
+That makes the marker's job specific and narrow: **make the next startup
+notice.** Write it before the first mutation, clear it after
+`finish_complete_bounded` succeeds; a marker found at startup means an archived
+repair was interrupted and the candidate row must be reconciled against the
+namespace (`RepairLayout` is the natural vocabulary for that reconciliation, and
+is already implemented). It does *not* need to journal phases — the in-process
+resume already has that covered.
+
+**Implemented** as `client/archived_repair_marker.rs`: a plain
+`.cast/archived-repair-pending` file holding one state ID, armed before the
+first mutation in `repair_archived_state_with_checkpoint` and disarmed only
+after `publish` returns `Ok` (a failed publication deliberately leaves it
+armed). Both the file and the `.cast` directory are synced, so a power loss
+cannot keep the mutation while losing the marker. `startup_gate::admit_clean`
+reads it alongside the orphan-row audit — the two answer the same question —
+and reports `InterruptedArchivedRepair { state }`.
+
+Deliberately not a journal record: it carries no phase, because the namespace is
+the source of truth for *where* a repair got to and `RepairLayout` already reads
+it. Covered by round-trip and malformed-input tests in the module.
+
+**Still open:** the gate currently *reports* an interrupted repair rather than
+reconciling it, so recovery is operator-driven. Automatic reconciliation would
+drive `RepairLayout` to decide whether to re-publish or roll the candidate row
+back — worth doing once the Phase 2.1 crash harness exists to test it.
+
+**D1.3:** full journal record vs a lighter durable marker,
 given it never crosses the `/usr`/boot boundary?
+
+**Narrowed 2026-07-26: "a degenerate `ActivateArchived`" is not viable.** The
+forward phase chain advances `TransactionTriggersComplete -> UsrExchangeIntent`
+**unconditionally** (`validation.rs:535`). Unlike `run_system_triggers` and
+`run_boot_sync`, which the options switch off, there is no options-driven path
+that skips the exchange — every forward transition in the model crosses the
+`/usr` boundary. An archived repair never touches live `/usr`, so it cannot be
+expressed as any configuration of the existing operations.
+
+That leaves D1.3 a genuine two-way choice, with the middle option removed:
+
+- **A new `Operation::ArchivedRepair`** with its own short phase path
+  (`Preparing -> CandidatePrepared -> TransactionTriggersComplete -> publish`).
+  Costs a journal model change — a new operation *and* a second forward chain,
+  which every phase-driven consumer (`forward_layouts`,
+  `expected_forward_generation`, successors, validation) must then handle.
+- **A lighter durable marker** outside the transition journal entirely, sized to
+  the actual need: survive a crash between "metadata published to candidate row"
+  and "publication committed". With no `/usr` or boot involvement, none of the
+  journal's exchange/boot/rollback machinery applies.
+
+The narrow durability need and the cost of a second forward chain both point at
+the marker; the journal buys little here beyond uniformity.
+
+### Decisions resolved 2026-07-26
+
+**D1.5 — first install (no predecessor): relax the namespace policy.**
+A `SynthesizedEmpty` previous may remain *present* at `CommitCleanupComplete`
+and `Complete`. The competing option — having cleanup remove the synthesized
+tree — would carve an exception into the no-unlink discipline
+(`previous_tree_move.rs:658`), which is currently absolute; that discipline is
+worth more than the tidiness of an empty staging slot. Rewrites the contract
+asserted at `activation_namespace/tests.rs:780-795`. Consequence: a first
+install leaves an empty staging tree behind until the next transition reuses
+the slot. Unblocks routing the no-previous case off `apply_stateful_candidate`.
+
+**Staging order for `ActivateArchived`: inside the journal, as a durable phase.**
+Moving the archived tree into staging becomes a journaled phase rather than an
+untracked pre-step, so a crash is recoverable from the record. The rejected
+alternative (matching legacy, move outside the journal) ships sooner but leaves
+an orphaned staging tree with no record pointing at it after a crash between the
+move and the journal write — a permanent known-orphan window, which is exactly
+the class of defect this epic exists to remove. Cost: the phase model gains an
+archived-staging phase, and every phase-driven consumer (`forward_layouts`,
+`expected_forward_generation`, successors, validation) must handle it.
+
+**D1.3 — archived repair: a lighter durable marker, not a journal record.**
+Sized to the actual need — survive a crash between "metadata published to
+candidate row" and "publication committed". Since archived repair never crosses
+the `/usr`/boot boundary, none of the journal's exchange/boot/rollback machinery
+applies, and a second forward chain would impose cost on every phase-driven
+consumer for no gain beyond uniformity. See the narrowing note under §1.3.
+
+### 1.2b Archived-staging phase — concrete shape  · E:L R:med
+
+Follows from the staging-order decision. `ActivateArchived`'s candidate starts
+in the archived location, but `PRE_EXCHANGE` requires `{candidate: Staging,
+previous: Live}` by `CandidatePrepared`. The move between those two is what
+becomes durable.
+
+Chain (ActivateArchived only), inserted between `Preparing` and
+`CandidatePrepareStarted`:
+
+    Preparing -> ArchivedCandidateStagingIntent -> ArchivedCandidateStaged
+              -> CandidatePrepareStarted -> ...
+
+Work items, each of which the compiler will point at once the variants exist:
+
+1. `CandidatePlace::Archived` — a fourth variant in the namespace policy
+   (`activation_namespace/policy.rs:64`); today the candidate can only be
+   `Live`, `Staging` or `Destination`.
+2. Two `ForwardPhase` variants at ordinals 1 and 2, shifting every later ordinal
+   by two. Ordinals are not cosmetic: `rollback_allowed` compares them, so they
+   must keep reflecting true chain order — appending at the end would be wrong.
+3. Matching `Phase` variants plus codec encoding. No back-compat concern: the
+   payload version is already collapsed to a single current version.
+4. `next_forward_phase`: `Preparing if ActivateArchived => StagingIntent`,
+   `StagingIntent => Staged`, `Staged => CandidatePrepareStarted`. The existing
+   `Preparing => CandidatePrepareStarted` arm stays for the other operations.
+5. `forward_layouts`: `Preparing`/`StagingIntent` for `ActivateArchived` admit
+   `{Archived, Live}`; `StagingIntent` also admits `PRE_EXCHANGE` (the
+   intent-phase both-sides rule); `Staged` admits `PRE_EXCHANGE` alone.
+6. `MAX_FORWARD_PHASE_ADVANCES` 19 -> 21. `expected_forward_generation` needs no
+   other change — it walks the chain rather than hard-coding literals.
+7. `capture_snapshot` must be able to observe a candidate in the archived
+   location, which it has no reason to look for today.
+8. `execute_activate_archived_forward` drives the two new phases and performs
+   the move between them.
+
+Risk concentrates in (2): the ordinal shift touches every phase-ordering
+consumer, and a missed one degrades silently rather than failing to compile.
+Worth a dedicated pass over every `ordinal()` caller.
 
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
 ActiveReblit forward cleanup/finalization is already journal-durable+resumable
@@ -185,6 +830,57 @@ snapshot revert? (b) is nested KVM available in the approved VM, or must
 interruption be driven from the host hypervisor (current rules forbid `virsh`
 inside scripts)? (c) how to authenticate campaign identity/results across a
 reboot that severs SSH — first-boot resume service + serial evidence?
+
+**D2.1 — measured in the VM, 2026-07-26.** Two of the three sub-questions now
+have factual answers; only (a) is still a judgement call.
+
+- **(b) nested KVM is available.** `/sys/module/kvm_*/parameters/nested` reads
+  `Y` and `/dev/kvm` is present; the VM has 12 cores and 7 GB RAM. So
+  interruption can be driven from *inside* the approved VM against a nested
+  guest, and does not need host-hypervisor access — which keeps the "no `virsh`
+  on the host from scripts" rule intact.
+  **Caveat:** the tooling is not installed. `virsh` and `qemu-system-x86_64` are
+  both absent and `libvirtd` is inactive. Provisioning qemu/libvirt inside the
+  VM is a prerequisite for the harness.
+- **(c) campaign identity across a reboot is already modelled.** The kernel
+  exposes `/proc/sys/kernel/random/boot_id` (observed
+  `7b1f4f54-2fd4-4596-8205-2241f0a62251`), which is exactly what
+  `RuntimeEpoch { boot_id, mount_namespace }` records and validates against. A
+  reboot changes it, and the journal already treats a changed epoch as the
+  signal that a record predates this boot. So the campaign does not need a new
+  identity mechanism — it needs to *read* the same value the journal does, and
+  correlate results by it.
+- **(a) still open, but narrowed.** With a nested guest, `virsh destroy` (or
+  qemu `quit`) is a genuine instantaneous power cut: everything not fsynced is
+  lost, which is the semantics the durability work actually claims. That is a
+  stronger and simpler model than `dm-flakey` fsync-fault injection, which
+  simulates a *failing* device rather than a *vanishing* one. Snapshot revert is
+  weaker still — it restores a consistent point rather than an interrupted one.
+  Recommendation: nested-guest hard destroy, with `dm-flakey` kept in reserve
+  for targeted single-fsync-failure cases the coordinator claims to survive.
+
+**Harness slice landed 2026-07-26:** `misc/scripts/crash-matrix-nested.sh`.
+
+Done and verified running inside the VM:
+- qemu 10.2.1 + qemu-utils provisioned; the invoking user added to `kvm`.
+- `--self-test` proves both primitives the matrix rests on: nested KVM really
+  accelerates a guest, and a SIGKILL power cut lands mid-run. Exits 0 and
+  cleans up its scratch root.
+- The cut is SIGKILL, never a monitor `quit` — `quit` would let qemu flush,
+  defeating the point. This is why `kill -9` on the forge process is *not* a
+  substitute: the page cache outlives the process, so the filesystem still sees
+  every write. Only destroying the machine loses them.
+
+Still to build for a real campaign:
+- A guest image with forge installed, and a way to drive one operation to a
+  chosen journal phase before the cut.
+- Per-phase cut scheduling across the operation matrix (NewState,
+  ActivateArchived, ActiveReblit, archived repair).
+- Reboot-surviving result collection, keyed by the guest's
+  `/proc/sys/kernel/random/boot_id`, plus the startup-gate verdict per run.
+
+The archived-repair marker (§1.3) is a natural first target: it is the newest
+durability claim and has no crash coverage yet.
 
 ### 2.2 Live `Ready`-branch boot regression  · E:L R:med
 No single regression drives `Client::verify → complete_active_reblit_boot →
@@ -445,6 +1141,51 @@ which filesystem (`target/` build root vs `/var/tmp` VM build root).
 
 ---
 
+### 7.4 Source-comment backlog (`TODO`/`FIXME`)  · E:S-per-item R:low
+
+Filed from `plans/cleanup_legacy.md` §6 so no source comment survives without a
+plan reference. Each is small, independent, and blocks nothing. Grouped by
+nature; the file:line is the anchor, not a promise about scope.
+
+**Correctness / behaviour (decide before changing):**
+- `vfs/src/tree/mod.rs:147` — duplicate-path detection is downgraded from an
+  error to an `eprintln!` (`return Err(e)` commented out). Re-enabling makes
+  currently-succeeding installs fail. **D-CL6** in `cleanup_legacy.md`.
+- `dag/src/subgraph.rs:123` — cycle breaking is unimplemented.
+- `forge/src/registry/plugin/active.rs:39` and
+  `forge/src/registry/plugin/active.rs:81` — two unhandled error paths.
+- `forge/src/registry/plugin/cobble.rs:99` — unverified flag choice.
+- `libstone/src/lib.rs:156` — error handling unimplemented.
+- `container/src/lib.rs:548` — replace the catch-all error with finer variants.
+
+**Parsing gaps (known-wrong inputs):**
+- `mason/src/draft/metadata/github.rs:106` — string version prefixes unhandled.
+- `mason/src/draft/metadata/gitlab.rs:106` — project name embedded in the
+  version is unhandled.
+
+**API / ergonomics:**
+- `forge/src/cli/repo.rs:60` — the `repo` CLI API wants a full overhaul; the
+  current shape is explicitly temporary. (Its canonical-output TODO is already
+  closed by `1218c00a`.)
+- `forge/src/client/cache.rs:244` — return an `Unpacked` value owning `blit`.
+- `forge/src/registry/plugin/repository.rs:31` — replace mutation with a
+  type-safe construction.
+- `forge/src/cli/search.rs:398` — search binary names by default.
+- `forge/src/client/prune.rs:116` — report "no states to be removed".
+- `forge/src/client/sync.rs:163` — surface the "why" of system-intent packages.
+- `forge/src/client/postblit.rs:235` — cache under `/var/`.
+- `stone/src/write.rs:21` — allow plain encoding.
+- `container/src/mounts/syscalls.rs:40` — prefer a real API over the current
+  approach.
+
+**Blocked on upstream Rust:**
+- `forge/src/util.rs:266` — adopt `try {}` once stable.
+
+**Cosmetic:**
+- `mason/src/build/job/phase.rs:70` — output formatting.
+
+---
+
 ## Cross-cutting sequencing summary
 
 ```
@@ -466,7 +1207,8 @@ parallel with Phase 2's long VM campaigns since they touch disjoint code.
 
 Blocking or shaping, by phase: **D0.2** (make-gate test rename/removed),
 **D0.4** (dead-code keep vs delete), **D1.1** (NewState receipt/rollback
-semantics), **D1.3** (archived-repair record weight), **D2.1** (VM power-loss
+semantics — RESOLVED: one operation-neutral boot route), **D1.4** (NewState
+pre-allocation boot applicability — RESOLVED: assess from selections), **D1.3** (archived-repair record weight), **D2.1** (VM power-loss
 model + nested-KVM + cross-reboot identity), **D2.2** (VM vs loopback-ESP for the
 Ready test), **D2.3** (pending-receipt protocol as hard prerequisite? — I confirm
 before any boot-mutation), **D3.1** (toolchain-free strictness + encoding),

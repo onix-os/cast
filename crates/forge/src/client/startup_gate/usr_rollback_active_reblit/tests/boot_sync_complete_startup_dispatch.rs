@@ -11,7 +11,7 @@ use crate::{
 use super::{
     boot_sync_complete_support::{
         BootSyncCompleteReadOnlySnapshot, boot_sync_complete_fixture, exact_commit_decided,
-        exact_promoted_receipt_state, legacy_boot_sync_complete_fixture,
+        exact_promoted_receipt_state,
     },
     support::{
         Epoch, assert_complete_route_journal_only, assert_pending_phase, enter, enter_boot,
@@ -61,24 +61,6 @@ fn startup_unpromoted_boot_sync_complete_stays_exactly_pending_and_never_rolls_b
 
     assert_pending_phase(&error, Phase::BootSyncComplete);
     assert_eq!(fixture.fixture.canonical_record(), source);
-    assert_eq!(source.rollback, None);
-    read_only.assert_unchanged(&fixture);
-    assert_complete_route_journal_only();
-}
-
-#[test]
-fn startup_legacy_v2_boot_sync_complete_without_receipt_pair_stays_forward_pending() {
-    let fixture = legacy_boot_sync_complete_fixture(Epoch::Historical, 2);
-    let source = fixture.fixture.source.clone();
-    let read_only = BootSyncCompleteReadOnlySnapshot::capture(&fixture);
-    reset_complete_route_effect_observers();
-
-    let error = enter_boot(&fixture);
-
-    assert_pending_phase(&error, Phase::BootSyncComplete);
-    assert_eq!(fixture.fixture.canonical_record(), source);
-    assert_eq!(source.version, 2);
-    assert_eq!(source.boot_publication_receipt_correlation().unwrap(), None);
     assert_eq!(source.rollback, None);
     read_only.assert_unchanged(&fixture);
     assert_complete_route_journal_only();

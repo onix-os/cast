@@ -152,6 +152,15 @@ fn journal_coordinator_root_links_complete_failures_release_journal_and_writer_a
             _ => unreachable!(),
         }
 
+        // Both probes below are hang-guards, not latency assertions: what they
+        // prove is that a worker thread *completes* — i.e. the failure value did
+        // not retain the authority. A retained authority blocks the worker
+        // forever, so any finite bound catches it. The bound is generous because
+        // each probe opens the journal and fsyncs, and under a parallel test run
+        // on a slow-fsync disk that can take seconds; a tight bound turns disk
+        // contention into a spurious "authority was retained" failure.
+        const RELEASE_HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(60);
+
         let root = fixture.installation.root.clone();
         let (journal_sender, journal_receiver) = std::sync::mpsc::sync_channel(1);
         let journal_worker = std::thread::spawn(move || {
@@ -160,7 +169,7 @@ fn journal_coordinator_root_links_complete_failures_release_journal_and_writer_a
             journal_sender.send(phase).unwrap();
         });
         assert_eq!(
-            journal_receiver.recv_timeout(std::time::Duration::from_secs(2)),
+            journal_receiver.recv_timeout(RELEASE_HANG_GUARD),
             Ok(Some(Phase::UsrExchanged)),
             "{failure_kind} error retained the journal authority"
         );
@@ -183,7 +192,7 @@ fn journal_coordinator_root_links_complete_failures_release_journal_and_writer_a
                 .unwrap();
         });
         assert_eq!(
-            writer_receiver.recv_timeout(std::time::Duration::from_secs(2)),
+            writer_receiver.recv_timeout(RELEASE_HANG_GUARD),
             Ok(true),
             "{failure_kind} error retained the cooperating-writer authority"
         );

@@ -13,24 +13,6 @@ fn assert_receipts(record: &TransitionRecord, expected: BootPublicationReceiptPa
 }
 
 #[test]
-fn canonical_v2_full_frame_and_json_order_remain_legacy_stable() {
-    const GOLDEN_V1_WITH_NEWLINE: &[u8] =
-        include_bytes!("../../../../../tests/fixtures/transition-journal-v1-rollback-decided.json");
-    let golden_v1 = std::str::from_utf8(&GOLDEN_V1_WITH_NEWLINE[..GOLDEN_V1_WITH_NEWLINE.len() - 1]).unwrap();
-    let expected_v2 = golden_v1.replacen("\"version\":1", "\"version\":2", 1);
-
-    let mut source = new_state_record(Phase::BootSyncStarted);
-    source.version = PAYLOAD_VERSION_V2;
-    source.boot_publication_receipts = None;
-    let value = rollback_decided(&source);
-    let frame = encode(&value).unwrap();
-    assert_eq!(&frame[HEADER_SIZE..], expected_v2.as_bytes());
-    assert_eq!(frame, frame_payload(expected_v2.as_bytes()));
-    assert_eq!(decode(&frame).unwrap(), value);
-    assert_eq!(encode(&decode(&frame).unwrap()).unwrap(), frame);
-}
-
-#[test]
 fn payload_v3_boot_publication_receipts_are_canonical_and_version_gated() {
     let source = new_state_record(Phase::PreviousArchived);
     let receipts = boot_publication_receipts();
@@ -62,43 +44,18 @@ fn payload_v3_boot_publication_receipts_are_canonical_and_version_gated() {
     });
     assert!(matches!(decode(&explicit_null), Err(CodecError::NonCanonicalPayload)));
 
-    for version in [PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2] {
-        let mut legacy = started.clone();
-        legacy.version = version;
-        legacy.boot_publication_receipts = None;
-        let legacy_frame = encode(&legacy).unwrap();
-        assert_eq!(decode(&legacy_frame).unwrap(), legacy);
-        assert_eq!(encode(&decode(&legacy_frame).unwrap()).unwrap(), legacy_frame);
-        let explicit_legacy_field = replace_payload(&legacy_frame, |payload| {
-            payload.replacen(
-                "\"rollback\":null,",
-                "\"rollback\":null,\"boot_publication_receipts\":null,",
-                1,
-            )
-        });
-        assert!(matches!(
-            decode(&explicit_legacy_field),
-            Err(CodecError::NonCanonicalPayload)
-        ));
-
-        legacy.boot_publication_receipts = Some(receipts);
-        assert!(matches!(
-            encode(&legacy),
-            Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(actual)) if actual == version
-        ));
-    }
-
-    let v3_preparing = encode(&preparing).unwrap();
-    let v2_preparing = replace_payload(&v3_preparing, |payload| {
+    // Any version other than the single supported one is rejected outright.
+    let foreign = replace_payload(&encode(&preparing).unwrap(), |payload| {
         payload.replacen(
             &format!("\"version\":{PAYLOAD_VERSION}"),
-            &format!("\"version\":{PAYLOAD_VERSION_V2}"),
+            &format!("\"version\":{}", PAYLOAD_VERSION - 1),
             1,
         )
     });
-    let decoded_v2 = decode(&v2_preparing).unwrap();
-    assert_eq!(decoded_v2.version, PAYLOAD_VERSION_V2);
-    assert_eq!(encode(&decoded_v2).unwrap(), v2_preparing);
+    assert!(matches!(
+        decode(&foreign),
+        Err(CodecError::UnsupportedPayloadVersion(version)) if version == PAYLOAD_VERSION - 1
+    ));
 }
 
 #[test]
@@ -202,57 +159,12 @@ fn production_boot_sync_entry_requires_the_typed_receipt_successor() {
         })
     ));
 
-    for version in [PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2] {
-        let mut legacy = source.clone();
-        legacy.version = version;
-        assert!(matches!(
-            legacy.forward_successor(None),
-            Err(CodecError::ExplicitBootSyncStartedSuccessorRequired)
-        ));
-        assert!(matches!(
-            legacy.boot_sync_started_successor(receipts),
-            Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(actual)) if actual == version
-        ));
-    }
-}
-
-#[test]
-fn legacy_payloads_freeze_before_boot_entry_and_retain_conservative_recovery() {
-    for version in [PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2] {
-        let mut pre_boot = new_state_record(Phase::PreviousArchived);
-        pre_boot.version = version;
-        assert_eq!(pre_boot.boot_publication_receipt_correlation().unwrap(), None);
-        assert!(matches!(
-            pre_boot.forward_successor(None),
-            Err(CodecError::ExplicitBootSyncStartedSuccessorRequired)
-        ));
-
-        let safe_rollback = pre_boot
-            .rollback_decision(boot_observations(InitialRollbackAction::AlreadySatisfied))
-            .unwrap();
-        assert_eq!(safe_rollback.version, version);
-        assert_eq!(safe_rollback.boot_publication_receipt_correlation().unwrap(), None);
-        assert_eq!(safe_rollback.rollback.as_ref().unwrap().boot, BootRollback::NotRequired);
-
-        let mut existing_started = new_state_record(Phase::BootSyncStarted);
-        existing_started.version = version;
-        existing_started.boot_publication_receipts = None;
-        let framed = encode(&existing_started).unwrap();
-        let existing_started = decode(&framed).unwrap();
-        assert_eq!(existing_started.boot_publication_receipt_correlation().unwrap(), None);
-
-        let decided = existing_started
-            .rollback_decision(boot_observations(InitialRollbackAction::AlreadySatisfied))
-            .unwrap();
-        let required = decided.rollback_successor(None).unwrap();
-        assert_eq!(required.phase, Phase::BootRepairRequired);
-        assert_eq!(required.boot_publication_receipt_correlation().unwrap(), None);
-        let started = required.boot_repair_started_successor().unwrap();
-        let unverified = started.boot_repair_unverified_successor().unwrap();
-        assert_eq!(unverified.phase, Phase::BootRepairUnverified);
-        assert_eq!(unverified.version, version);
-        assert_eq!(unverified.boot_publication_receipt_correlation().unwrap(), None);
-    }
+    // Generic forward advancement can never enter the receipt-bearing phase; it
+    // must go through the typed successor regardless of anything else.
+    assert!(matches!(
+        source.forward_successor(None),
+        Err(CodecError::ExplicitBootSyncStartedSuccessorRequired)
+    ));
 }
 
 #[test]

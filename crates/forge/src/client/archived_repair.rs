@@ -118,6 +118,16 @@ impl Client {
         retained_staging
             .revalidate(&self.installation)
             .map_err(|source| archived_repair_staging_error(state, &staging, "before state metadata", source))?;
+
+        // Arm the interrupted-repair marker before the first mutation. Nothing
+        // below is journalled, so this is the only thing that lets a later
+        // startup know a repair was in flight (`plans/future_impl.md` §1.3).
+        super::archived_repair_marker::arm(&self.installation, state.id).map_err(|source| {
+            Error::ArchivedRepairMarker {
+                source: Box::new(source),
+            }
+        })?;
+
         super::record_state_id_retained(&retained_staging, &candidate_usr, state.id).map_err(|source| {
             Error::ArchivedStateRepair {
                 source: Box::new(RepairError::Preparation {
@@ -208,7 +218,18 @@ impl Client {
         };
 
         match identity.publish(&self.installation, &self.state_db) {
-            Ok(publication) => Ok(publication),
+            // Disarm only after publication is durable. Doing it earlier would
+            // reopen the very window the marker exists to close; a failed
+            // publication deliberately leaves the marker armed so the next
+            // startup still reconciles.
+            Ok(publication) => {
+                super::archived_repair_marker::disarm(&self.installation).map_err(|source| {
+                    Error::ArchivedRepairMarker {
+                        source: Box::new(source),
+                    }
+                })?;
+                Ok(publication)
+            }
             Err(failure) if failure.outcome() == ArchivedStateRepairOutcome::NotApplied => {
                 let primary = archived_repair_publication_error(state, failure);
                 Err(self.preserve_failed_archived_repair(state, &identity, primary))

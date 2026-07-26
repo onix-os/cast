@@ -1,5 +1,5 @@
 use super::{
-    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION, PAYLOAD_VERSION_V1, PAYLOAD_VERSION_V2},
+    codec::{CodecError, PAYLOAD_FORMAT, PAYLOAD_VERSION},
     model::{
         AbortDisposition, BootRollback, ForwardPhase, MountNamespaceIdentity, Operation, Phase, PreviousOrigin,
         RollbackAction, RollbackPlan, RuntimeEpoch, RuntimeTreeIdentity, TransitionRecord,
@@ -134,24 +134,8 @@ impl TransitionRecord {
         if self.format != PAYLOAD_FORMAT {
             return Err(CodecError::UnsupportedPayloadFormat(self.format.clone()));
         }
-        if !matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION_V2 | PAYLOAD_VERSION) {
+        if self.version != PAYLOAD_VERSION {
             return Err(CodecError::UnsupportedPayloadVersion(self.version));
-        }
-        if self.version == PAYLOAD_VERSION_V1 {
-            if self.phase == Phase::BootRepairComplete {
-                return Err(CodecError::PayloadVersionPhaseMismatch {
-                    version: self.version,
-                    phase: self.phase,
-                });
-            }
-            if let Some(status @ (BootRollback::Applied | BootRollback::AlreadySatisfied)) =
-                self.rollback.as_ref().map(|rollback| rollback.boot)
-            {
-                return Err(CodecError::PayloadVersionBootRollbackMismatch {
-                    version: self.version,
-                    status,
-                });
-            }
         }
         if self.generation == 0 {
             return Err(CodecError::ZeroGeneration);
@@ -200,14 +184,6 @@ impl TransitionRecord {
     }
 
     fn validate_boot_publication_receipts(&self, layout_phase: ForwardPhase) -> Result<(), CodecError> {
-        if matches!(self.version, PAYLOAD_VERSION_V1 | PAYLOAD_VERSION_V2) {
-            return if self.boot_publication_receipts.is_none() {
-                Ok(())
-            } else {
-                Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(self.version))
-            };
-        }
-
         let required = self.options.run_boot_sync && layout_phase.ordinal() >= ForwardPhase::BootSyncStarted.ordinal();
         if self.boot_publication_receipts.is_some() == required {
             Ok(())
@@ -491,6 +467,41 @@ fn require_option_presence<T>(value: Option<T>, required: bool, error: CodecErro
     Ok(())
 }
 
+/// The generation a record reaches at `phase`, derived from its own options.
+///
+/// A transition is created at `Preparing` with generation 1 and every advance
+/// increments by one, so the generation at a phase is fixed by which phases the
+/// record's options make it traverse. `NewState` that archives a predecessor
+/// passes through `PreviousArchiveIntent` and `PreviousArchived`, which
+/// `ActiveReblit` skips — so the same phase sits four generations higher.
+///
+/// Returns `None` when `phase` is unreachable for this record, which is itself
+/// the answer a caller wants: the record cannot legitimately be there.
+///
+/// Callers previously compared against per-operation literals. Deriving it
+/// keeps one rule for every operation (`plans/future_impl.md` §1.1d).
+pub(crate) fn expected_forward_generation(record: &TransitionRecord, phase: ForwardPhase) -> Option<u64> {
+    let mut current = ForwardPhase::Preparing;
+    let mut generation = 1_u64;
+    if phase == current {
+        return Some(generation);
+    }
+    // The chain is finite and strictly advancing, so the phase count bounds the
+    // walk; the guard makes that explicit rather than trusting the successor fn.
+    for _ in 0..MAX_FORWARD_PHASE_ADVANCES {
+        let next = next_forward_phase(record, current)?;
+        generation = generation.checked_add(1)?;
+        if next == phase {
+            return Some(generation);
+        }
+        current = next;
+    }
+    None
+}
+
+/// `ForwardPhase` has nineteen variants, so no legal walk exceeds that.
+const MAX_FORWARD_PHASE_ADVANCES: usize = 19;
+
 pub(super) fn next_forward_phase(record: &TransitionRecord, current: ForwardPhase) -> Option<ForwardPhase> {
     let after_system = || {
         if record.options.archive_previous {
@@ -739,8 +750,9 @@ pub(super) fn validate_advance(expected: &TransitionRecord, next: &TransitionRec
     if expected.transition_id != next.transition_id {
         return Err(CodecError::TransitionChanged);
     }
-    let receipt_entry = expected.version == PAYLOAD_VERSION
-        && expected.boot_publication_receipts.is_none()
+    // Receipts may appear exactly once, entering at `BootSyncStarted`. Any other
+    // change to them is illegal.
+    let receipt_entry = expected.boot_publication_receipts.is_none()
         && next.boot_publication_receipts.is_some()
         && next.phase == Phase::BootSyncStarted;
     if expected.boot_publication_receipts != next.boot_publication_receipts && !receipt_entry {

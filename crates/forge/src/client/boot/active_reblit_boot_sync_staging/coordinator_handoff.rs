@@ -15,8 +15,8 @@ use crate::{
     },
     db::state::Database,
     transition_identity::{
-        ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, PreviousArchivedBootSyncHandoffSeal,
-        SystemTriggersCompleteCoordinator,
+        ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, NewStateUnarchivedBootSyncHandoffSeal,
+        PreviousArchivedBootSyncHandoffSeal, SystemTriggersCompleteCoordinator,
     },
     transition_journal::{Operation, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord},
 };
@@ -54,13 +54,20 @@ pub(in crate::client) enum ActiveReblitCoordinatorBootSyncStagingError {
 
 /// The booted state is always the record's candidate. How it relates to the
 /// predecessor depends on the operation: ActiveReblit repairs a state in place
-/// (`candidate == previous`), whereas NewState boots a fresh candidate whose
-/// real predecessor was archived to a distinct slot (`candidate != previous`).
+/// (`candidate == previous`), whereas NewState boots a fresh candidate. NewState
+/// has two legitimate shapes — replacing an active state, whose predecessor was
+/// archived to a distinct slot, and a first install, which has no predecessor at
+/// all and therefore archives nothing.
 fn boot_previous_matches_operation(record: &TransitionRecord, boot_state: Option<i32>) -> bool {
     match record.operation {
         Operation::ActiveReblit => record.previous.id == boot_state,
         Operation::NewState => {
-            record.options.archive_previous && record.previous.id.is_some() && record.previous.id != record.candidate.id
+            if record.options.archive_previous {
+                record.previous.id.is_some() && record.previous.id != record.candidate.id
+            } else {
+                // First install: nothing preceded the candidate.
+                record.previous.id.is_none()
+            }
         }
         Operation::ActivateArchived => record.previous.id.is_some() && record.previous.id != record.candidate.id,
     }
@@ -93,6 +100,31 @@ impl CoordinatorActiveReblitBootSyncHandoff {
     /// distinct from the archived predecessor. The operation-aware state gate
     /// admits this shape.
     #[allow(clippy::too_many_arguments)]
+    /// Hand off for a first install: a NewState candidate with no predecessor,
+    /// so boot publication is entered directly from `SystemTriggersComplete`
+    /// without an archive phase (`plans/future_impl.md` §1.1a).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_unarchived_system_triggers_complete(
+        _seal: NewStateUnarchivedBootSyncHandoffSeal,
+        record: TransitionRecord,
+        record_binding: TransitionJournalRecordBinding,
+        journal: TransitionJournalStore,
+        database: Database,
+        installation: Installation,
+        boot_candidate: State,
+        active_state_reservation: CoordinatorActiveStateReservation,
+    ) -> Self {
+        Self {
+            record,
+            record_binding,
+            journal,
+            database,
+            installation,
+            active_reblit: boot_candidate,
+            active_state_reservation,
+        }
+    }
+
     pub(crate) fn from_previous_archived(
         _seal: PreviousArchivedBootSyncHandoffSeal,
         record: TransitionRecord,

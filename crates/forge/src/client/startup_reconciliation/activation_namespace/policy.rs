@@ -268,7 +268,18 @@ fn commit_layouts(record: &TransitionRecord, intent: bool) -> Vec<LayoutAlternat
             PreviousOrigin::Unmanaged => PreviousPlace::TransitionQuarantine,
         },
     };
-    if intent && record.previous.origin != PreviousOrigin::ActiveState && completed != POST_EXCHANGE {
+    // A `SynthesizedEmpty` previous is tolerated in staging at *every* commit
+    // phase, not only at the intent phase (D1.5). A first install has no
+    // predecessor to archive, so the synthesized tree's only route to `Absent`
+    // would be for cleanup to unlink it — and cleanup does not unlink, for the
+    // reason documented at `previous_tree_move.rs`: a same-UID writer can
+    // replace a final pathname after it has been checked, so removal cannot be
+    // made safe. The tree therefore legitimately survives until a later
+    // transition reuses the slot, and demanding `Absent` at the terminal phases
+    // would reject a namespace that the cleanup path is not permitted to
+    // produce. `Absent` stays accepted for the states that do reach it.
+    let tolerate_staging = intent || record.previous.origin == PreviousOrigin::SynthesizedEmpty;
+    if tolerate_staging && record.previous.origin != PreviousOrigin::ActiveState && completed != POST_EXCHANGE {
         vec![POST_EXCHANGE, completed]
     } else {
         vec![completed]

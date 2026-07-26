@@ -267,7 +267,7 @@ impl RevalidatedSysfsPartitionIdentity<'_> {
         self.current.has_same_parent_snapshot(&other.current)
     }
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // accessor retained for the exact-identity consumers; no caller yet
     pub(super) const fn prepared(&self) -> &PreparedSysfsPartitionIdentity {
         self.prepared
     }

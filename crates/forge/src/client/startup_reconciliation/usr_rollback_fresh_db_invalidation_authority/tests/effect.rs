@@ -207,7 +207,7 @@ fn startup_fresh_db_invalidation_uncertain_partial_changed_and_exact_aba_map_to_
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // compile-time signature pin; never called at runtime
 fn _pins_consuming_reconcile_signatures<'reservation>(
     apply: crate::client::startup_reconciliation::UsrRollbackFreshDbInvalidationApplyAuthority<'reservation>,
     finish: crate::client::startup_reconciliation::UsrRollbackFreshDbInvalidationFinishAuthority<'reservation>,

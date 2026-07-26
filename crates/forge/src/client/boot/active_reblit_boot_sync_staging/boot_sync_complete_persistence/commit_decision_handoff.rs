@@ -22,15 +22,17 @@ use crate::{
     db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database},
     installation,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
-        TransitionRecord,
+        CodecError, ForwardPhase, Operation, Phase, StorageError, TransitionJournalRecordBinding,
+        TransitionJournalStore, TransitionRecord, expected_forward_generation,
     },
 };
 
 use super::{ActiveReblitBootSyncCompleteValidationError, CompletedStagedActiveReblitBootSync};
 
-const ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION: u64 = 12;
-const ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION: u64 = 13;
+// Generations are derived from each record's own options rather than fixed per
+// operation: NewState that archives a predecessor traverses four phases
+// ActiveReblit skips, so the same phase sits four generations higher
+// (`plans/future_impl.md` §1.1d).
 
 /// Exact durable `CommitDecided` state retaining every coordinator capability.
 ///
@@ -103,15 +105,17 @@ impl<'plan, 'inventory, Plan> CommittedStagedActiveReblitBootSync<'plan, 'invent
         }
         let expected = self.completed_record.forward_successor(None)?;
         let pair = receipt_pair(&self.receipt);
+        let expected_completed_generation =
+            expected_forward_generation(&self.completed_record, ForwardPhase::BootSyncComplete);
+        let expected_commit_generation = expected_forward_generation(&self.record, ForwardPhase::CommitDecided);
         if expected != self.record
-            || self.completed_record.generation != ACTIVE_REBLIT_BOOT_SYNC_COMPLETE_GENERATION
-            || self.record.generation != ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION
-            || self.record.operation != Operation::ActiveReblit
+            || Some(self.completed_record.generation) != expected_completed_generation
+            || Some(self.record.generation) != expected_commit_generation
+            || !matches!(self.record.operation, Operation::ActiveReblit | Operation::NewState)
             || self.record.phase != Phase::CommitDecided
-            || self.completed_record.options.archive_previous
+            || self.completed_record.options.archive_previous != self.record.options.archive_previous
             || !self.completed_record.options.run_system_triggers
             || !self.completed_record.options.run_boot_sync
-            || self.record.options.archive_previous
             || !self.record.options.run_system_triggers
             || !self.record.options.run_boot_sync
             || self.record.rollback.is_some()

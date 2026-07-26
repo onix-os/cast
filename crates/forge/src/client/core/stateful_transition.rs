@@ -11,6 +11,10 @@ impl Client {
         })
     }
 
+    // Retained as the pre-coordinator route until the crash matrix passes; see
+    // `plans/cleanup_legacy.md` §2. `new_state` now routes through
+    // `apply_new_state_candidate` instead.
+    #[allow(dead_code)] // retained legacy route pending the crash matrix (cleanup_legacy §2)
     fn apply_stateful_candidate(
         &self,
         candidate: fixed_staging::StatefulCandidate,

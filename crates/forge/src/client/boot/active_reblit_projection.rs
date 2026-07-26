@@ -378,7 +378,8 @@ mod asset_plan;
 pub(crate) use asset_plan::{
     ActiveReblitBootAssetPlanError, BootAssetPlanNotApplicable, BootAssetPlanOutcome, BootAssetRole,
     BootSchemaFallback, BootSchemaSource, MAX_BOOT_PLAN_ASSETS, MAX_BOOT_PLAN_SNAPSHOT_DIGESTS, PlannedBootAsset,
-    PlannedBootSchemaRequirement, PreparedActiveReblitBootAssetPlan,
+    PlannedBootSchemaRequirement, PreparedActiveReblitBootAssetPlan, ProspectiveBootApplicability,
+    assess_prospective_boot_applicability, prospective_chain_tail,
 };
 
 #[cfg(test)]

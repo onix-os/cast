@@ -1,6 +1,5 @@
 use super::{
     BootRollback, CodecError, ForwardPhase, Operation, Phase, RollbackAction, RollbackPlan, TransitionRecord,
-    codec::PAYLOAD_VERSION,
     model::CandidateRollback,
     validation::{next_forward_phase, next_rollback_phase, rollback_action_phase, rollback_allowed, validate_advance},
 };
@@ -120,16 +119,13 @@ impl TransitionRecord {
     }
 
     /// Enter boot publication while durably binding the exact committed and
-    /// pending receipt fingerprints. This is the sole v3 `None -> Some`
+    /// pending receipt fingerprints. This is the sole `None -> Some`
     /// receipt-correlation edge; generic forward advancement cannot enter it.
     pub(crate) fn boot_sync_started_successor(
         &self,
         receipts: crate::boot_publication::BootPublicationReceiptPair,
     ) -> Result<Self, CodecError> {
         self.validate()?;
-        if self.version != PAYLOAD_VERSION {
-            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(self.version));
-        }
         let current = self.phase.forward().ok_or(CodecError::IllegalPhaseAdvance {
             current: self.phase,
             next: Phase::BootSyncStarted,
@@ -150,16 +146,13 @@ impl TransitionRecord {
     }
 
     /// Complete boot publication only for the exact receipt pair which the
-    /// validated v3 `BootSyncStarted` record already binds. Generic forward
+    /// validated `BootSyncStarted` record already binds. Generic forward
     /// advancement cannot cross this evidence-bearing boundary.
     pub(crate) fn boot_sync_complete_successor(
         &self,
         expected_pair: crate::boot_publication::BootPublicationReceiptPair,
     ) -> Result<Self, CodecError> {
         self.validate()?;
-        if self.version != PAYLOAD_VERSION {
-            return Err(CodecError::PayloadVersionBootPublicationReceiptsMismatch(self.version));
-        }
         if self.phase != Phase::BootSyncStarted {
             return Err(CodecError::IllegalPhaseAdvance {
                 current: self.phase,

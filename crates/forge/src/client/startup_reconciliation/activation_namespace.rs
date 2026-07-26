@@ -15,6 +15,7 @@
 
 mod activate_archived_complete_route_proof;
 mod activate_archived_finalization_proof;
+mod activation_terminal_proof;
 mod active_reblit_boot_repair_complete_proof;
 mod active_reblit_boot_repair_required_proof;
 mod active_reblit_boot_repair_start_proof;
@@ -126,6 +127,7 @@ pub(super) use active_reblit_finalization_proof::{
     UsrRollbackActiveReblitFinalizationNamespaceProof,
 };
 
+pub(super) use activation_terminal_proof::{ActivationTerminalNamespaceInspection, ActivationTerminalNamespaceProof};
 pub(super) use candidate_preserve_proof::UsrRollbackCandidatePreserveTopology;
 pub(super) use candidate_preserve_proof::UsrRollbackNewStateTargetNormalizeNamespaceReconciliation;
 #[cfg(test)]

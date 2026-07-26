@@ -57,8 +57,9 @@ pub(crate) use root_abi_publication::RootLinksCompleteCoordinator;
 #[allow(unused_imports)] // contract-only until live lifecycle wiring consumes this suffix
 pub(crate) use system_triggers::{
     ActiveReblitBootSyncHandoffFailure, ActiveReblitBootSyncHandoffSeal, ActiveReblitNoBootCompletionFailure,
-    ActiveReblitNoBootTailSeal, PreviousArchiveBootHandoffFailure, PreviousArchiveEffectSeal, PreviousArchiveFailure,
-    PreviousArchivedBootSyncHandoffSeal, PreviousArchivedCoordinator, SystemTriggersCompleteCoordinator,
+    ActiveReblitNoBootTailSeal, NewStateUnarchivedBootSyncHandoffSeal, PreviousArchiveBootHandoffFailure,
+    PreviousArchiveEffectSeal, PreviousArchiveFailure, PreviousArchivedBootSyncHandoffSeal,
+    PreviousArchivedCoordinator, SystemTriggersCompleteCoordinator,
 };
 #[cfg(test)]
 use transaction_isolation::TransactionIsolationAbiFailure;

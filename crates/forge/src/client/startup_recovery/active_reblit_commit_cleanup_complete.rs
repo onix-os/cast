@@ -22,6 +22,7 @@ use super::super::startup_reconciliation::{
 use super::canonical_journal_reopen::{
     CanonicalJournalReopenError, reopen_canonical_journal, try_reopen_canonical_journal,
 };
+use super::reopened_advance::{ReopenedDurableRecord, classify_reopened_record};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::client) enum DurableActiveReblitCommitCleanupRecord {
@@ -223,31 +224,30 @@ fn persist_active_reblit_commit_cleanup_complete_inner(
             drop(successor_binding);
             drop(post_advance_authority);
             match reopened {
-                Ok((reopened, Some(actual))) if actual == source_record => {
-                    drop(reopened);
-                    Err(ActiveReblitCommitCleanupPersistenceError::PostAdvanceValidation {
-                        durable: DurableActiveReblitCommitCleanupRecord::CommitDecided,
-                        stage: ActiveReblitCommitCleanupValidationStage::SameStore,
-                        source: validation,
-                    })
-                }
-                Ok((reopened, Some(actual))) if actual == successor => {
-                    drop(reopened);
-                    Err(ActiveReblitCommitCleanupPersistenceError::PostAdvanceValidation {
-                        durable: DurableActiveReblitCommitCleanupRecord::CommitCleanupComplete,
-                        stage: ActiveReblitCommitCleanupValidationStage::SameStore,
-                        source: validation,
-                    })
-                }
                 Ok((reopened, actual)) => {
+                    let verdict = classify_reopened_record(actual.as_ref(), &source_record, &successor);
                     drop(reopened);
-                    Err(
-                        ActiveReblitCommitCleanupPersistenceError::PostAdvanceValidationAndReopen {
+                    let durable = match verdict {
+                        ReopenedDurableRecord::Source => Some(DurableActiveReblitCommitCleanupRecord::CommitDecided),
+                        ReopenedDurableRecord::Successor => {
+                            Some(DurableActiveReblitCommitCleanupRecord::CommitCleanupComplete)
+                        }
+                        ReopenedDurableRecord::Neither => None,
+                    };
+                    match durable {
+                        Some(durable) => Err(ActiveReblitCommitCleanupPersistenceError::PostAdvanceValidation {
+                            durable,
                             stage: ActiveReblitCommitCleanupValidationStage::SameStore,
-                            validation,
-                            reopen: unexpected_record(&source_record, &successor, actual),
-                        },
-                    )
+                            source: validation,
+                        }),
+                        None => Err(
+                            ActiveReblitCommitCleanupPersistenceError::PostAdvanceValidationAndReopen {
+                                stage: ActiveReblitCommitCleanupValidationStage::SameStore,
+                                validation,
+                                reopen: unexpected_record(&source_record, &successor, actual),
+                            },
+                        ),
+                    }
                 }
                 Err(reopen) => Err(
                     ActiveReblitCommitCleanupPersistenceError::PostAdvanceValidationAndReopen {
@@ -259,26 +259,25 @@ fn persist_active_reblit_commit_cleanup_complete_inner(
             }
         }
         AdvanceOutcome::StorageFailed(advance_error) => match reopened {
-            Ok((reopened, Some(actual))) if actual == source_record => {
-                drop(reopened);
-                Err(ActiveReblitCommitCleanupPersistenceError::Advance {
-                    durable: DurableActiveReblitCommitCleanupRecord::CommitDecided,
-                    source: advance_error,
-                })
-            }
-            Ok((reopened, Some(actual))) if actual == successor => {
-                drop(reopened);
-                Err(ActiveReblitCommitCleanupPersistenceError::Advance {
-                    durable: DurableActiveReblitCommitCleanupRecord::CommitCleanupComplete,
-                    source: advance_error,
-                })
-            }
             Ok((reopened, actual)) => {
+                let verdict = classify_reopened_record(actual.as_ref(), &source_record, &successor);
                 drop(reopened);
-                Err(ActiveReblitCommitCleanupPersistenceError::AdvanceAndReopen {
-                    advance: advance_error,
-                    reopen: unexpected_record(&source_record, &successor, actual),
-                })
+                match verdict {
+                    ReopenedDurableRecord::Source => Err(ActiveReblitCommitCleanupPersistenceError::Advance {
+                        durable: DurableActiveReblitCommitCleanupRecord::CommitDecided,
+                        source: advance_error,
+                    }),
+                    ReopenedDurableRecord::Successor => Err(ActiveReblitCommitCleanupPersistenceError::Advance {
+                        durable: DurableActiveReblitCommitCleanupRecord::CommitCleanupComplete,
+                        source: advance_error,
+                    }),
+                    ReopenedDurableRecord::Neither => {
+                        Err(ActiveReblitCommitCleanupPersistenceError::AdvanceAndReopen {
+                            advance: advance_error,
+                            reopen: unexpected_record(&source_record, &successor, actual),
+                        })
+                    }
+                }
             }
             Err(reopen) => Err(ActiveReblitCommitCleanupPersistenceError::AdvanceAndReopen {
                 advance: advance_error,

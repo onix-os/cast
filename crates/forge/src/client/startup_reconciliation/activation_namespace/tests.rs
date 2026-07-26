@@ -761,12 +761,15 @@ fn startup_activation_policy_cleanup_and_abi_matrix_is_exact() {
         candidate: CandidatePlace::Live,
         previous: PreviousPlace::Absent,
     };
+    // D1.5: a synthesized-empty previous is admitted in staging at every commit
+    // phase, because cleanup never unlinks it. `discarded` stays admitted for
+    // the states that do reach it.
     synthesized.record.phase = Phase::CommitDecided;
     assert_eq!(forward_layouts(&synthesized.record), vec![post, discarded]);
     synthesized.record.phase = Phase::CommitCleanupComplete;
-    assert_eq!(forward_layouts(&synthesized.record), vec![discarded]);
+    assert_eq!(forward_layouts(&synthesized.record), vec![post, discarded]);
     synthesized.record.phase = Phase::Complete;
-    assert_eq!(forward_layouts(&synthesized.record), vec![discarded]);
+    assert_eq!(forward_layouts(&synthesized.record), vec![post, discarded]);
 
     synthesized.record.candidate.id = Some(42);
     write_state_id(&synthesized.installation.staging_path("usr"), b"42");
@@ -781,11 +784,13 @@ fn startup_activation_policy_cleanup_and_abi_matrix_is_exact() {
     fs::rename(&displaced, synthesized.installation.staging_path("usr")).unwrap();
     synthesized.record.phase = Phase::CommitDecided;
     assert_eq!(synthesized.assess(), Ok(()));
+    // D1.5: a synthesized-empty previous left in staging is accepted at the
+    // terminal phases too. Cleanup never unlinks it (`previous_tree_move.rs`),
+    // so this is the namespace a first install actually leaves behind.
     synthesized.record.phase = Phase::CommitCleanupComplete;
-    assert!(matches!(
-        synthesized.assess(),
-        Err(NamespacePolicyConflict::PhaseLayout { .. })
-    ));
+    assert_eq!(synthesized.assess(), Ok(()));
+    synthesized.record.phase = Phase::Complete;
+    assert_eq!(synthesized.assess(), Ok(()));
     synthesized.record.phase = Phase::CommitDecided;
     fs::remove_dir_all(synthesized.installation.staging_path("usr")).unwrap();
     assert_eq!(synthesized.assess(), Ok(()));

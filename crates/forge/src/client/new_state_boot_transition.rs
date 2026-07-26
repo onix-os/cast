@@ -18,7 +18,8 @@ use crate::{
     State, SystemModel,
     state::{self, Selection},
     transition_identity::{
-        NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator, execute_new_state_forward,
+        NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator,
+        SystemTriggersCompleteCoordinator, execute_new_state_forward,
     },
 };
 
@@ -73,7 +74,7 @@ impl Client {
     pub(in crate::client) fn apply_new_state_candidate(
         &self,
         candidate: fixed_staging::StatefulCandidate,
-        previous: state::Id,
+        previous: Option<state::Id>,
         selections: &[Selection],
         summary: &str,
         system_snapshot: SystemModel,
@@ -86,6 +87,20 @@ impl Client {
             active_state,
         } = candidate;
 
+        // Boot applicability must be known before the journal record is written,
+        // because `run_boot_sync` is fixed at creation and validation later
+        // requires receipts exactly when it is set. NewState's row does not exist
+        // yet, so the candidate's selections stand in as the prospective head
+        // (`plans/future_impl.md` §1.1a).
+        let applicability_deadline = deadline_after(BOOT_PUBLICATION_TIMEOUT, "boot applicability deadline")?;
+        let run_boot_sync = self.new_state_boot_applicable(selections, previous, applicability_deadline)?;
+        // A predecessor is archived as the rollback anchor; a first install has
+        // none, so the archive phases never occur.
+        let journal_previous = match previous {
+            Some(previous) => NewStatePrevious::Active(previous),
+            None => NewStatePrevious::SynthesizedEmpty,
+        };
+
         let preflight = JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, None)
             .map_err(|source| LiveNewStateBootError::at("pre-journal client authority", source))?;
         let candidate_path = self.installation.staging_path("usr");
@@ -97,10 +112,10 @@ impl Client {
             identity,
             authority,
             &self.state_db,
-            NewStatePrevious::Active(previous),
+            journal_previous,
             selections,
             summary,
-            true,
+            run_boot_sync,
             |os_info| candidate_metadata::derive_outputs(os_info, &system_snapshot),
             |view| {
                 let (candidate_usr, candidate_usr_path) = view.retained_candidate_usr();
@@ -134,38 +149,118 @@ impl Client {
         )
         .map_err(|source| LiveNewStateBootError::at("journal-coordinated forward prefix", source))?;
 
-        let archived = coordinator
-            .archive_previous_tree()
-            .map_err(|source| LiveNewStateBootError::at("predecessor archive", source))?;
-
         // The candidate state exists only after the forward prefix allocated its
-        // row, so boot applicability is captured here rather than pre-journal.
+        // row, so it is loaded here rather than pre-journal.
         let boot_candidate = self
             .state_db
             .get(allocated)
             .map_err(|source| LiveNewStateBootError::at("candidate state load", source))?;
+
+        // A first install has no predecessor, so the archive phases never occur
+        // and both tails start one step earlier, at `SystemTriggersComplete`.
+        let Some(_) = previous else {
+            if !run_boot_sync {
+                let handoff = coordinator
+                    .commit_new_state_unarchived_without_boot()
+                    .map_err(|source| LiveNewStateBootError::at("unarchived no-boot commit", source))?;
+                self.finish_new_state_transition(handoff.journal, handoff.record, &handoff.active_state_reservation)?;
+                return Ok(boot_candidate);
+            }
+            let stone = self.require_new_state_boot_inputs(&boot_candidate)?;
+            self.complete_new_state_boot(
+                NewStateBootSource::Unarchived(coordinator),
+                &candidate_usr,
+                &boot_candidate,
+                stone,
+            )?;
+            return Ok(boot_candidate);
+        };
+
+        let archived = coordinator
+            .archive_previous_tree()
+            .map_err(|source| LiveNewStateBootError::at("predecessor archive", source))?;
+
+        if !run_boot_sync {
+            // The pre-journal probe already established that this candidate
+            // publishes no bootable plan, and the record says so. Commit
+            // straight from `PreviousArchived` rather than entering boot.
+            let handoff = archived
+                .commit_new_state_without_boot()
+                .map_err(|source| LiveNewStateBootError::at("no-boot commit decision", source))?;
+            self.finish_new_state_transition(handoff.journal, handoff.record, &handoff.active_state_reservation)?;
+            return Ok(boot_candidate);
+        }
+
+        let stone = self.require_new_state_boot_inputs(&boot_candidate)?;
+        self.complete_new_state_boot(
+            NewStateBootSource::Archived(archived),
+            &candidate_usr,
+            &boot_candidate,
+            stone,
+        )?;
+        Ok(boot_candidate)
+    }
+
+    /// Walk a committed transition to its terminal deletion.
+    ///
+    /// Stopping at `CommitDecided` would leave a live journal record, which the
+    /// next startup reports as `RecoveryPending` — the transition would look
+    /// interrupted even though it succeeded.
+    fn finish_new_state_transition(
+        &self,
+        journal: crate::transition_journal::TransitionJournalStore,
+        record: crate::transition_journal::TransitionRecord,
+        reservation: &crate::client::active_state_snapshot::ActiveStateReservation,
+    ) -> Result<(), LiveNewStateBootError> {
+        let journal = crate::client::startup_recovery::finish_activation_after_commit(
+            journal,
+            &self.state_db,
+            &self.installation,
+            record,
+            reservation,
+        )
+        .map_err(|source| LiveNewStateBootError::at("terminal completion", source))?;
+        drop(journal);
+        Ok(())
+    }
+
+    /// Prepare the sealed boot inputs for a candidate the pre-journal probe
+    /// already judged bootable.
+    ///
+    /// Disagreement here means the namespace or database moved after the record
+    /// was written, so the journal now asserts a boot that cannot happen. That
+    /// must fail loudly rather than silently skip boot.
+    fn require_new_state_boot_inputs(
+        &self,
+        boot_candidate: &State,
+    ) -> Result<PreparedActiveReblitStoneBootInputs, LiveNewStateBootError> {
         let input_deadline = deadline_after(BOOT_PUBLICATION_TIMEOUT, "boot input deadline")?;
-        let stone = match PreparedActiveReblitStoneBootInputs::prepare_until(
+        match PreparedActiveReblitStoneBootInputs::prepare_until(
             &self.installation,
             &self.state_db,
             &self.layout_db,
-            &boot_candidate,
+            boot_candidate,
             input_deadline,
         )
         .map_err(|source| LiveNewStateBootError::at("boot applicability", source))?
         {
-            ActiveReblitStoneBootInputsOutcome::Ready(stone) => stone,
-            ActiveReblitStoneBootInputsOutcome::NotApplicable(_) => {
-                return Err(LiveNewStateBootError::at(
-                    "boot applicability",
-                    NewStateBootNotApplicable,
-                ));
-            }
-        };
-
-        self.complete_new_state_boot(archived, &candidate_usr, &boot_candidate, stone)?;
-        Ok(boot_candidate)
+            ActiveReblitStoneBootInputsOutcome::Ready(stone) => Ok(stone),
+            ActiveReblitStoneBootInputsOutcome::NotApplicable(_) => Err(LiveNewStateBootError::at(
+                "boot applicability",
+                NewStateBootNotApplicable,
+            )),
+        }
     }
+}
+
+/// Where a NewState transition enters boot publication.
+///
+/// Replacing an active state enters from `PreviousArchived`, once the
+/// predecessor is the durable rollback anchor. A first install has no
+/// predecessor, so it enters one phase earlier, from `SystemTriggersComplete`.
+pub(in crate::client) enum NewStateBootSource {
+    Archived(PreviousArchivedCoordinator),
+    Unarchived(SystemTriggersCompleteCoordinator),
 }
 
 impl Client {
@@ -176,7 +271,7 @@ impl Client {
     #[allow(dead_code)]
     pub(in crate::client) fn complete_new_state_boot(
         &self,
-        coordinator: PreviousArchivedCoordinator,
+        coordinator: NewStateBootSource,
         boot_candidate_usr: &std::fs::File,
         boot_candidate: &State,
         stone: PreparedActiveReblitStoneBootInputs,
@@ -220,9 +315,16 @@ impl Client {
         let inventory = plan
             .prepare_desired_publication_inventory()
             .map_err(|source| LiveNewStateBootError::at("desired boot publication inventory", source))?;
-        let handoff = coordinator
-            .into_new_state_boot_sync_handoff()
-            .map_err(|source| LiveNewStateBootError::at("new state boot handoff", source))?;
+        // The coordinator is consumed only here, after every boot input is
+        // prepared, so a preparation failure leaves the journal untouched.
+        let handoff = match coordinator {
+            NewStateBootSource::Archived(coordinator) => coordinator
+                .into_new_state_boot_sync_handoff()
+                .map_err(|source| LiveNewStateBootError::at("new state boot handoff", source))?,
+            NewStateBootSource::Unarchived(coordinator) => coordinator
+                .into_new_state_unarchived_boot_sync_handoff()
+                .map_err(|source| LiveNewStateBootError::at("unarchived new state boot handoff", source))?,
+        };
         let staged = self
             .stage_new_state_boot_sync_from_handoff(&plan, &inventory, handoff)
             .map_err(|source| LiveNewStateBootError::at("BootSyncStarted staging", source))?;
@@ -262,3 +364,114 @@ fn deadline_after(duration: Duration, stage: &'static str) -> Result<Instant, Li
         .checked_add(duration)
         .ok_or_else(|| LiveNewStateBootError::at(stage, DeadlineOverflow))
 }
+
+/// Bounds for the pre-allocation layout query. Generous: this reads only the
+/// candidate's own packages, not a whole retained chain.
+const PROSPECTIVE_LAYOUT_BOUNDS: crate::db::layout::QueryBounds = crate::db::layout::QueryBounds {
+    max_rows: 262_144,
+    max_string_bytes: 64 * 1024 * 1024,
+};
+
+impl Client {
+    /// Decide `run_boot_sync` for a NewState transition **before** its state row
+    /// exists, so the journal record is correct at creation.
+    ///
+    /// The candidate's selections stand in as the prospective head; the retained
+    /// tail comes from the current active state's projection, truncated exactly
+    /// as allocating a head would truncate it. Reuses the real plan's rules, so
+    /// this answer cannot drift from the post-allocation plan
+    /// (`plans/future_impl.md` §1.1a).
+    #[allow(dead_code)] // consumed by the coordinated NewState route (Slice 5)
+    pub(in crate::client) fn new_state_boot_applicable(
+        &self,
+        selections: &[Selection],
+        previous: Option<state::Id>,
+        deadline: Instant,
+    ) -> Result<bool, LiveNewStateBootError> {
+        let candidate_packages = selections
+            .iter()
+            .map(|selection| selection.package.clone())
+            .collect::<Vec<_>>();
+        let candidate_layouts = match self
+            .layout_db
+            .query_bounded(&candidate_packages, PROSPECTIVE_LAYOUT_BOUNDS, || {
+                Instant::now() <= deadline
+            })
+            .map_err(|source| LiveNewStateBootError::at("prospective candidate layouts", source))?
+        {
+            crate::db::layout::BoundedQueryOutcome::Complete(layouts) => layouts,
+            bounded => {
+                return Err(LiveNewStateBootError::at(
+                    "prospective candidate layouts",
+                    ProspectiveLayoutsBounded(format!("{bounded:?}")),
+                ));
+            }
+        };
+        let selected = candidate_packages
+            .iter()
+            .map(|package| package.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        // A first install has no retained chain, so the candidate alone decides
+        // applicability. Replacing an active state inherits the tail the new head
+        // would keep.
+        let projection = match previous {
+            Some(previous) => Some(
+                crate::client::active_reblit_boot_projection::PreparedActiveReblitBootProjection::prepare_until(
+                    &self.state_db,
+                    &self.layout_db,
+                    previous,
+                    deadline,
+                )
+                .map_err(|source| LiveNewStateBootError::at("prospective chain projection", source))?,
+            ),
+            None => None,
+        };
+        let tail_states = projection.as_ref().map_or(&[][..], |projection| {
+            crate::client::active_reblit_boot_projection::prospective_chain_tail(projection.states())
+        });
+        let tail_selected = tail_states
+            .iter()
+            .map(|state| {
+                state
+                    .selections
+                    .iter()
+                    .map(|selection| selection.package.as_str())
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .collect::<Vec<_>>();
+        let chain = tail_states
+            .iter()
+            .zip(tail_selected.iter())
+            .map(|(state, selected)| {
+                (
+                    state.id,
+                    selected,
+                    projection
+                        .as_ref()
+                        .expect("a tail exists only with a projection")
+                        .layouts(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        match crate::client::active_reblit_boot_projection::assess_prospective_boot_applicability(
+            &candidate_layouts,
+            &selected,
+            &chain,
+            // Diagnostic label only: the candidate's row does not exist yet, so
+            // errors are attributed to the predecessor when there is one.
+            previous.unwrap_or_default(),
+            deadline,
+        )
+        .map_err(|source| LiveNewStateBootError::at("prospective boot applicability", source))?
+        {
+            crate::client::active_reblit_boot_projection::ProspectiveBootApplicability::Applicable => Ok(true),
+            crate::client::active_reblit_boot_projection::ProspectiveBootApplicability::NotApplicable(_) => Ok(false),
+        }
+    }
+}
+
+#[derive(Debug, ThisError)]
+#[error("the prospective candidate layout query exceeded its bounds: {0}")]
+struct ProspectiveLayoutsBounded(String);

@@ -12,7 +12,10 @@ use super::{
     Selection, State, model,
 };
 
-const MAX_BOOT_HISTORY_STATES: usize = 4;
+/// Bounded retained history beside the head. Exposed so a prospective
+/// (not-yet-allocated) head can compute the same chain the projection will
+/// keep — see `future_impl.md` §1.1a.
+pub(crate) const MAX_BOOT_HISTORY_STATES: usize = 4;
 const BOOT_SELECTION_LIMITS: FrozenBootSelectionLimits = FrozenBootSelectionLimits {
     count: MAX_SELECTIONS_PER_STATE,
     text_bytes: MAX_SELECTION_TEXT_BYTES,

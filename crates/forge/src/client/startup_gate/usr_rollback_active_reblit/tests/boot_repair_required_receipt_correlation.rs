@@ -16,7 +16,7 @@ use crate::{
     },
     db,
     state::TransitionId,
-    transition_journal::{Phase, TransitionJournalStore, TransitionRecord},
+    transition_journal::{TransitionJournalStore, TransitionRecord},
 };
 
 use super::{
@@ -24,9 +24,8 @@ use super::{
     support::{
         BootRepairFixture, CandidateOrigin, Epoch, UsrRestoreOrigin, assert_boot_required_capture_authority_error,
         assert_boot_required_persistence_authority_error, assert_no_boot_synchronize_attempts,
-        assert_no_candidate_effects, assert_pending_phase, build_boot_sync_started, build_legacy_boot_sync_started,
-        drive_boot_sync_started_to_candidate_preserved, enter_boot, expected_boot_repair_required,
-        expected_boot_repair_started, reset_boot_synchronize_observer, reset_candidate_effect_observers,
+        assert_no_candidate_effects, build_boot_sync_started, drive_boot_sync_started_to_candidate_preserved,
+        enter_boot, reset_boot_synchronize_observer, reset_candidate_effect_observers,
     },
 };
 
@@ -74,47 +73,6 @@ fn startup_active_reblit_boot_repair_required_requires_exact_receipts_and_preser
         assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
         assert_no_candidate_effects();
         assert_no_boot_synchronize_attempts();
-    }
-
-    for version in [1, 2] {
-        for epoch in Epoch::ALL {
-            let fixture = build_legacy_boot_sync_started(epoch, BootSyncStartedLayout::Post, version);
-            let preserved = drive_boot_sync_started_to_candidate_preserved(
-                &fixture,
-                UsrRestoreOrigin::AlreadySatisfied,
-                CandidateOrigin::AlreadySatisfied,
-            );
-            assert_eq!(preserved.version, version);
-            assert_eq!(preserved.boot_publication_receipt_correlation().unwrap(), None);
-            let receipt_state = fixture.fixture.database.boot_publication_receipt_state().unwrap();
-            assert_eq!(receipt_state.committed().is_some(), epoch == Epoch::Historical);
-            assert!(receipt_state.pending().is_none());
-            assert!(receipt_state.head().pending().is_none());
-            assert_legacy_ready(&fixture, &preserved);
-            let expected = expected_boot_repair_required(&preserved);
-            let database_before = fixture.fixture.database_snapshot();
-            let namespace_before = fixture.fixture.namespace_snapshot();
-            reset_candidate_effect_observers();
-            reset_boot_synchronize_observer();
-
-            let error = enter_boot(&fixture);
-
-            assert_pending_phase(&error, Phase::BootRepairRequired);
-            assert_eq!(fixture.fixture.canonical_record(), expected);
-            assert_eq!(fixture.fixture.database_snapshot(), database_before);
-            assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
-            assert_no_candidate_effects();
-            assert_no_boot_synchronize_attempts();
-
-            let started = expected_boot_repair_started(&expected);
-            let start_error = enter_boot(&fixture);
-            assert_pending_phase(&start_error, Phase::BootRepairStarted);
-            assert_eq!(fixture.fixture.canonical_record(), started);
-            assert_eq!(fixture.fixture.database_snapshot(), database_before);
-            assert_eq!(fixture.fixture.namespace_snapshot(), namespace_before);
-            assert_no_candidate_effects();
-            assert_no_boot_synchronize_attempts();
-        }
     }
 }
 
@@ -274,25 +232,6 @@ fn assert_deferred(fixture: &BootRepairFixture, record: &TransitionRecord) {
     assert!(matches!(
         admission,
         UsrRollbackActiveReblitBootRepairRequiredAdmission::Deferred
-    ));
-}
-
-fn assert_legacy_ready(fixture: &BootRepairFixture, record: &TransitionRecord) {
-    let journal = open_journal(fixture);
-    let reservation = ActiveStateReservation::acquire().unwrap();
-    let seal = UsrRollbackActiveReblitBootRepairRequiredSeal::new_for_test();
-    let admission = UsrRollbackActiveReblitBootRepairRequiredAuthority::capture(
-        &seal,
-        &fixture.fixture.installation,
-        &journal,
-        &fixture.fixture.database,
-        &reservation,
-        record,
-    )
-    .unwrap();
-    assert!(matches!(
-        admission,
-        UsrRollbackActiveReblitBootRepairRequiredAdmission::ReadyLegacyUnverified(_)
     ));
 }
 

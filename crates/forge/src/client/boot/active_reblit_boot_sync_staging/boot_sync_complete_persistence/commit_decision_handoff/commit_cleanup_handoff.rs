@@ -20,14 +20,13 @@ use crate::{
     db::state::{BootPublicationReceiptPromotionError, BootPublicationReceiptStageOutcome, Database},
     installation,
     transition_journal::{
-        CodecError, Operation, Phase, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
-        TransitionRecord,
+        CodecError, ForwardPhase, Operation, Phase, StorageError, TransitionJournalRecordBinding,
+        TransitionJournalStore, TransitionRecord, expected_forward_generation,
     },
 };
 
 use super::{CommittedStagedActiveReblitBootSync, receipt_pair};
 
-const ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION: u64 = 13;
 const ACTIVE_REBLIT_COMMIT_CLEANUP_COMPLETE_GENERATION: u64 = 14;
 
 /// Exact durable cleanup result retaining every capability required by the
@@ -101,11 +100,16 @@ impl<'plan, 'inventory, Plan> CommitCleanupCompleteStagedActiveReblitBootSync<'p
         let expected = self.commit_decided_record.forward_successor(None)?;
         let pair = receipt_pair(&self.receipt);
         if expected != self.record
-            || self.commit_decided_record.generation != ACTIVE_REBLIT_COMMIT_DECIDED_GENERATION
-            || self.record.generation != ACTIVE_REBLIT_COMMIT_CLEANUP_COMPLETE_GENERATION
-            || self.commit_decided_record.operation != Operation::ActiveReblit
+            || Some(self.commit_decided_record.generation)
+                != expected_forward_generation(&self.commit_decided_record, ForwardPhase::CommitDecided)
+            || Some(self.record.generation)
+                != expected_forward_generation(&self.record, ForwardPhase::CommitCleanupComplete)
+            || !matches!(
+                self.commit_decided_record.operation,
+                Operation::ActiveReblit | Operation::NewState
+            )
+            || self.commit_decided_record.operation != self.record.operation
             || self.commit_decided_record.phase != Phase::CommitDecided
-            || self.record.operation != Operation::ActiveReblit
             || self.record.phase != Phase::CommitCleanupComplete
             || !exact_live_options(&self.commit_decided_record)
             || !exact_live_options(&self.record)
@@ -208,8 +212,14 @@ impl<'plan, 'inventory, Plan> CommittedStagedActiveReblitBootSync<'plan, 'invent
     }
 }
 
+/// The options a live boot-publishing transition must carry.
+///
+/// `archive_previous` is deliberately not constrained: ActiveReblit repairs in
+/// place and never archives, while NewState over an active predecessor always
+/// does. Both publish boot entries, and the generation check already pins which
+/// phase chain the record actually walked (`plans/future_impl.md` §1.1d).
 fn exact_live_options(record: &TransitionRecord) -> bool {
-    !record.options.archive_previous && record.options.run_system_triggers && record.options.run_boot_sync
+    record.options.run_system_triggers && record.options.run_boot_sync
 }
 
 #[path = "commit_cleanup_handoff/complete_handoff.rs"]

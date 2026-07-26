@@ -6,12 +6,15 @@
 //! terminal absence for uninterrupted startup inspection; failure returns
 //! neither a store nor reusable authority.
 
+mod activation_commit_cleanup_complete;
 mod active_reblit_boot_sync_commit_decision;
 mod active_reblit_boot_sync_started_completion;
 mod active_reblit_commit_cleanup_complete;
+pub(in crate::client) use activation_commit_cleanup_complete::finish_activation_after_commit;
 mod active_reblit_commit_cleanup_complete_to_complete;
 mod active_reblit_complete_finalization;
 mod canonical_journal_reopen;
+mod reopened_advance;
 mod usr_exchange_parent_durability;
 mod usr_exchanged_root_abi_normalization;
 mod usr_rollback_activate_archived_candidate_preserve_persistence;

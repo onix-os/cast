@@ -1,8 +1,8 @@
 # Legacy cleanup — audit and phased removal plan
 
-**Status:** plan; nothing removed yet
+**Status:** §§1, 5, 6 complete; §§2-4 blocked on Phase 1 durability closure
 **Audit date:** 2026-07-25
-**Planned against:** `feature/feature_plan` at `0bf2c75a`
+**Planned against:** `feature/feature_plan` at `0bf2c75a`; executed on `feature/cleanup_legacy`
 **Premise:** `os-tools` is unreleased with no installed base, so **no
 backward compatibility is owed to anything**. Formats change directly; old
 shapes get deleted rather than tolerated. See also `plans/future_impl.md`.
@@ -14,17 +14,50 @@ files**. Not all are debt. Breakdown by nature:
 
 | # | Category | Refs | Blocked by |
 |---|---|---|---|
-| 1 | Journal payload version compatibility | 27 | nothing — do now |
+| 1 | Journal payload version compatibility | 27 | nothing — **done** |
 | 2 | Legacy stateful transition path | ~1000 lines | Phase 1 |
 | 3 | Legacy journal guards (`LegacyNoJournal`, `LegacyBlocking`) | 22 | category 2 |
 | 4 | `legacy_boot_repair` | 65 lines | category 2 |
-| 5 | `#[allow(dead_code)]` scaffolding debt | 208 | partly Phase 1 |
-| 6 | `TODO`/`FIXME` | 23 | nothing — audit |
+| 5 | `#[allow(dead_code)]` scaffolding debt | 208 | nothing — **done** |
+| 6 | `TODO`/`FIXME` | 23 → 20, all filed | nothing — **done** |
 | 7 | False positives (fixture paths, test locals) | ~45 | not debt |
 
 ---
 
-## 1. Journal payload version compatibility · E:S R:low · **do first**
+## 1. Journal payload version compatibility · E:S R:low · **DONE**
+
+**Outcome:** collapsed to a single payload version; zero `PAYLOAD_VERSION_V1`/
+`_V2` references remain anywhere. Removed: both legacy constants, the
+`matches!(self.version, V1 | V2 | PAYLOAD_VERSION)` fallback, all three
+version-conditional validation branches, two dead version guards in
+`successors.rs` (already unreachable after `validate()`), and the three
+now-unused `PayloadVersion*Mismatch` error variants.
+
+Invariants were preserved rather than dropped, as the caution below required:
+
+- The V1 "cannot reach `BootRepairComplete` / cannot carry applied boot
+  rollback" rules were *capability* statements about the old format, not
+  invariants of the current one — current records legitimately do both. Deleted.
+- The receipt-entry rule kept its real content (`None -> Some` only at
+  `BootSyncStarted`); only the always-true version clause was dropped.
+- `validate_boot_publication_receipts` kept its unconditional presence rule.
+
+Tests: deleted the wholly-legacy ones (`payload_v1_remains_decodable...`,
+`canonical_v2_full_frame...`, `legacy_payloads_freeze...`,
+`typed_boot_sync_complete_successor_rejects_legacy_payload_versions`,
+`startup_legacy_boot_sync_started_remains_rollback_eligible`,
+`startup_legacy_v2_boot_sync_complete_without_receipt_pair_stays_forward_pending`)
+and trimmed the legacy portions out of four mixed tests. Deleted the dead
+helpers `build_legacy_boot_sync_started`, `legacy_boot_sync_complete_fixture`,
+`assert_legacy_ready`.
+
+The golden-frame fixtures were regenerated and renamed
+(`transition-journal-v1-rollback-decided.*` →
+`transition-journal-rollback-decided.*`). Note the old golden encoded a
+*V1-shaped* record — `BootSyncStarted` with no receipts — which the single
+version makes invalid; the golden now locks a currently-valid record.
+
+### Original entry
 
 **State:** `codec.rs:15-23` defines `PAYLOAD_VERSION_V1 = 1`,
 `PAYLOAD_VERSION_V2 = 2`, `PAYLOAD_VERSION = 3`. `validation.rs:137-155` accepts
@@ -50,7 +83,30 @@ rollback status vs phase). Deleting the *version* condition must not delete the
 
 ---
 
-## 2. Legacy stateful transition path · E:L R:high · **blocked on Phase 1**
+## 2. Legacy stateful transition path · E:L R:high · **UNBLOCKED 2026-07-26**
+
+**`apply_stateful_candidate` now has no production caller.** Both §1.1e
+blockers are fixed (the namespace policy via D1.5, the in-flight marker via a
+guarded clear at terminal finalize), so `state_planning.rs`'s first-install arm
+routes through the coordinator like every other stateful transition.
+
+What remains is the 616-line `client/core/stateful_transition.rs` definition
+plus two test callers in `client/tests/fixed_staging_transition.rs` (:248,
+:339). Removal is now a deletion rather than a migration, but it is not
+mechanical: those two tests cover fixed-staging behaviour that needs either a
+coordinated equivalent or an explicit decision that the coverage moved
+elsewhere. Do it against a clean full-suite baseline; §§3 and 4 follow
+immediately once the path is gone. What remains is the 616-line `client/core/stateful_transition.rs`
+definition plus two test callers in `client/tests/fixed_staging_transition.rs`
+(:248, :339).
+
+Removal is now a deletion rather than a migration, but it is not mechanical:
+those two tests cover fixed-staging behaviour that needs either a coordinated
+equivalent or an explicit decision that the coverage moved elsewhere. Do this
+against a clean full-suite baseline, and expect §§3 and 4 to follow immediately
+once the path is gone.
+
+Original blocker analysis retained below.
 
 **State:** the untethered pre-journal route still drives real transitions:
 `state_planning.rs:115` (`commit_stateful_staging`) and `:185`
@@ -66,6 +122,36 @@ route and its recovery machinery outright.
 
 **Do not start before Phase 1 lands.** This is the safety net for every
 transition today.
+
+**Blocker verified against the code (2026-07-25), not assumed.** Deleting this
+today would remove shipping functionality outright:
+
+- `state_planning.rs:115` drives **ActivateArchived** through
+  `commit_stateful_staging(..., StatefulCandidateOrigin::Archived, ...)`, and
+  there is **no coordinator replacement whatsoever** — no
+  `execute_activate_archived` exists anywhere in the tree. Archived-state
+  activation would simply cease to work.
+- `state_planning.rs:185` drives **NewState** (package install/update) through
+  `apply_stateful_candidate`. A coordinator route does exist
+  (`execute_new_state_forward` → `apply_new_state_candidate`) but is **not
+  wired as the default**; its only caller today is an integration test.
+- Archived-state repair (1.3) likewise has no coordinator route.
+
+So §2 is gated on Phase 1.1 **Slice 5** (wire NewState live), plus Phase 1.2 and
+1.3 being built from scratch, plus the crash matrix — and per
+`destructive-tests-in-vm`, the crash matrix needs the VM (which **is** reachable
+at `192.168.122.148`; confirmed 2026-07-25).
+
+**Phase 1 progress toward unblocking this (2026-07-25):** §1.1a's shared
+applicability rules and prospective probe are shipped, and §1.1b's NewState
+commit-cleanup authority is built and tested (admission gate, record advance,
+same-store + reopened successor revalidation). Remaining before Slice 5 can even
+be attempted: §1.1b's persistence step, then wiring §1.1a. A latent bug was also
+found — the coordinated NewState route currently fails at commit cleanup on a
+real system — see `future_impl.md` §1.1b. Full detail there; this section stays
+blocked until Slice 5, 1.2 and 1.3 all land. §§3 and 4 are in turn
+gated on §2: the `Legacy*` guard variants and `legacy_boot_repair` each still
+have live callers inside the legacy route.
 
 ---
 
@@ -99,10 +185,40 @@ supersedes it.
 
 ---
 
-## 5. `#[allow(dead_code)]` scaffolding debt · E:M R:low · **incremental**
+## 5. `#[allow(dead_code)]` scaffolding debt · E:M R:low · **DONE**
 
-**State:** 208 allows — 199 in `forge`, 5 `container`, 4 `mason`. Only ~13 carry
-a rationale comment; the rest are unexplained.
+**Outcome: every one of the 208 allows now names why it exists (0 undocumented).**
+
+Two measurements corrected the original assessment; both are recorded because
+the wrong version of each is an easy trap to fall into again.
+
+**Correction 1 — the debt was far smaller than it looked.** The original "only
+~13 carry a rationale" was an artefact of grepping the *preceding* line. Most
+rationales are *trailing* comments on the same line
+(`#[allow(dead_code)] // consumed by ...`). Counting both forms: **186 of 208
+were already documented**, leaving 22. Those 22 have been annotated, in these
+groups:
+
+- 8 retained-capture structs in `activation_namespace/capture/model.rs` — their
+  fields hold `File` descriptors open for later revalidation and are never read
+  individually.
+- 7 shared `#[path]` test-support modules included by several test parents, each
+  of which consumes only a subset.
+- 2 archived-state-repair fault-injection arms; 1 compile-time signature pin;
+  1 `getdents64` kernel ABI layout struct; 1 retained accessor; 1 `mason`
+  deadline wrapper.
+
+**Correction 2 — "most allows are stale" is FALSE. Do not mass-delete them.**
+It is tempting to assume an allow on an item that compiles without warnings is
+unnecessary. Measured directly: neutralising all allows and building with
+`--tests` suggested 165 of 199 were stale. Removing those 165 produced **376
+warnings in the production build against a baseline of 0**. The reason is that
+`cargo build -p forge --tests` compiles `cfg(test)`, so test-only items look
+used; in the production build (504 dead items with allows neutralised) they are
+not. Any future audit must check **both** build configurations. The experiment
+was reverted in full.
+
+### Original entry
 
 Two distinct kinds, and they need opposite treatment:
 
@@ -122,13 +238,41 @@ the surrounding design.
 
 ---
 
-## 6. `TODO`/`FIXME` audit · E:S R:low · **independent**
+## 6. `TODO`/`FIXME` audit · E:S R:low · **DONE**
 
-**State:** 23 across `crates/` and `bin/`. Known example now resolved:
-`cli/repo.rs` canonical-output TODO (closed by `1218c00a`).
+**State:** was 23 across `crates/` and `bin/`; **20 remain**. An earlier example
+was already closed by `1218c00a` (`cli/repo.rs` canonical output).
 
-**Action:** trirage each into: fix now (small), file into `future_impl.md`
-(real work), or delete (stale). No TODO should survive without a plan reference.
+**Deleted as stale (done):**
+
+- `registry/plugin/active.rs:5` and `registry/plugin/cobble.rs:12` — bare
+  `// TODO:` markers with no content at all.
+- `dag/src/lib.rs:220` — `// TODO: How tf do i get node value from A to E?`, a
+  scratch note inside a test whose following assertions already answer it.
+
+**Substantive — needs a decision, do not silently "fix":**
+
+- `vfs/src/tree/mod.rs:147` — `// TODO: Reenable` above a commented-out
+  `return Err(e)`. Duplicate-path detection is currently **downgraded from an
+  error to an `eprintln!` warning**. Re-enabling it is a real behaviour change
+  (installs that currently succeed with duplicate reports would start failing),
+  so it needs an explicit decision rather than a cleanup sweep. **D-CL6:** should
+  duplicate paths fail closed?
+
+**Remaining 19 — genuine future-work notes**, spread across `dag` (cycle
+breaking), `vfs`, `forge` (`prune`, `sync`, `cache`, `postblit`, `util`,
+`registry`, `cli/search`, `cli/repo` API overhaul), `mason` (`draft/metadata`
+gitlab/github version parsing, `build/job/phase`), `stone`/`libstone`
+(encoding, error types), `container` (error granularity, mount syscalls). None
+block anything; each is a small independent improvement.
+
+**Filed (done):** all 20 remaining comments are now recorded in
+`plans/future_impl.md` §7.4, grouped by nature (correctness/behaviour, parsing
+gaps, API/ergonomics, blocked-on-upstream, cosmetic). **No `TODO` or `FIXME` in
+the tree lacks a plan reference.**
+
+**Open:** D-CL6 is the only one needing a decision before it can be actioned;
+the rest are small independent improvements that block nothing.
 
 ---
 
@@ -147,16 +291,16 @@ the surrounding design.
 ## Sequencing
 
 ```
-1. Payload version collapse        ── do now, unblocks the restore design
-6. TODO/FIXME triage               ── anytime, independent
-5. dead_code audit                 ── incremental, by module
+1. Payload version collapse        ── DONE
+5. dead_code audit                 ── DONE
+6. TODO/FIXME triage               ── DONE (filed as future_impl.md §7.4)
         ↓ (Phase 1 must land first)
 2. Legacy stateful transition path ── the big one
 3. Legacy journal guards           ── mechanical after 2
 4. legacy_boot_repair              ── deleted with 2
 ```
 
-Categories 1, 5 and 6 are available immediately. Categories 2-4 are gated on
+Categories 1, 5 and 6 are complete. Categories 2-4 are gated on
 Phase 1 durability closure and must not be started before it — the legacy route
 is currently the only proven path for real transitions.
 

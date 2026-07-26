@@ -224,3 +224,71 @@ where
         .map_err(|source| NewStateForwardError::at("system triggers", source))?;
     Ok((complete, allocated))
 }
+
+/// Drive the durable forward prefix for activating an already-archived state.
+///
+/// Shorter than the NewState prefix by design: the state row already exists —
+/// that is what "archived" means — so there is no fresh allocation to correlate
+/// and no `FreshStateAllocating`/`FreshStateAllocated` pair. Everything from
+/// candidate preparation onward is the shared path
+/// (`plans/future_impl.md` §1.2a).
+// Forward scaffolding: consumed once `state_planning.rs` routes activation off
+// the legacy `commit_stateful_staging`.
+#[allow(dead_code)] // consumed by the coordinated ActivateArchived route (§1.2)
+pub(crate) fn execute_activate_archived_forward<SystemError, DeriveMetadata, SystemTrigger>(
+    identity: StatefulTreeIdentity,
+    authority: JournalUsrExchangeAuthority,
+    candidate: state::Id,
+    previous: state::Id,
+    run_boot_sync: bool,
+    derive_metadata: DeriveMetadata,
+    system_trigger: SystemTrigger,
+) -> Result<SystemTriggersCompleteCoordinator, NewStateForwardError>
+where
+    SystemError: StdError + Send + Sync + 'static,
+    DeriveMetadata: FnOnce(Option<&[u8]>) -> Result<CandidateMetadataOutputs, CandidateMetadataError>,
+    SystemTrigger: for<'authority> FnOnce(NewStateSystemTriggerView<'authority>) -> Result<(), SystemError>,
+{
+    if candidate == previous {
+        return Err(NewStateForwardError::at(
+            "transition creation",
+            UnexpectedPreparedOperation,
+        ));
+    }
+    let coordinator = identity
+        .begin_transition(StatefulTransitionRequest::ActivateArchived {
+            candidate,
+            previous,
+            run_system_triggers: true,
+            run_boot_sync,
+        })
+        .map_err(|source| NewStateForwardError::at("transition creation", source))?;
+    let coordinator = coordinator
+        .begin_candidate_prepare()
+        .map_err(|source| NewStateForwardError::at("candidate preparation intent", source))?;
+    let prepared = coordinator
+        .finish_candidate_prepare(derive_metadata)
+        .map_err(|source| NewStateForwardError::at("candidate metadata publication", source))?;
+    let PreparedStatefulTransitionCoordinator::Archived(prepared) = prepared else {
+        return Err(NewStateForwardError::at(
+            "candidate metadata publication",
+            UnexpectedPreparedOperation,
+        ));
+    };
+
+    // Archived activation never runs transaction triggers: the candidate tree
+    // already exists and was built by the transition that first created it, so
+    // there is no isolation root to publish and nothing to run against it.
+    let intent = prepared
+        .begin_usr_exchange_intent()
+        .map_err(|source| NewStateForwardError::at("/usr exchange intent", source))?;
+    let exchanged = intent
+        .execute_usr_exchange(authority)
+        .map_err(|source| NewStateForwardError::at("/usr exchange", source))?;
+    let root_links = exchanged
+        .publish_root_abi()
+        .map_err(|source| NewStateForwardError::at("root ABI publication", source))?;
+    root_links
+        .run_system_triggers(|inner| system_trigger(NewStateSystemTriggerView::from_authority(inner)))
+        .map_err(|source| NewStateForwardError::at("system triggers", source))
+}

@@ -389,7 +389,7 @@ let base = cast.trigger "isolation-root-race" "Retained isolation root race proo
 }
 
 #[test]
-fn apply_new_state_candidate_forwards_and_archives_before_boot_applicability() {
+fn apply_new_state_candidate_forwards_archives_and_commits_without_boot() {
     let temporary = tempfile::tempdir().unwrap();
     let mut client = stateful_test_client(temporary.path());
     let previous = client.state_db.add(&[], Some("previous"), None).unwrap();
@@ -414,23 +414,26 @@ fn apply_new_state_candidate_forwards_and_archives_before_boot_applicability() {
     let candidate = client.materialize_stateful_candidate([&package]).unwrap();
 
     // Drive the coordinated durable route on a live Client. The row is allocated
-    // inside the forward prefix; the whole path runs (inspect → forward prefix →
-    // /usr exchange → transaction/system triggers → predecessor archive) and
-    // then fails cleanly at the boot-applicability boundary because this minimal
-    // candidate carries no bootable payload. That proves the entire client-level
-    // composition executes end-to-end, not merely type-checks.
-    let error = client
+    // inside the forward prefix; the whole path runs — inspect → forward prefix →
+    // /usr exchange → transaction/system triggers → predecessor archive → commit.
+    //
+    // This minimal candidate publishes no kernel, so the pre-journal probe sets
+    // `run_boot_sync = false` and the transition commits without entering boot
+    // (`plans/future_impl.md` §1.1a). It used to fail here instead: a
+    // non-bootable candidate was a hard error, which would have regressed every
+    // package install that ships no kernel.
+    let committed = client
         .apply_new_state_candidate(
             candidate,
-            previous.id,
+            Some(previous.id),
             &[Selection::explicit(package)],
             "new state forward candidate",
             generated_system_snapshot("candidate-package"),
         )
-        .unwrap_err();
-    assert!(
-        format!("{error:#?}").contains("boot applicability"),
-        "coordinated route did not reach the boot-applicability boundary: {error:#?}"
+        .expect("a non-bootable NewState candidate commits without boot");
+    assert_ne!(
+        committed.id, previous.id,
+        "the coordinated route allocated a fresh state distinct from its predecessor"
     );
 
     // The predecessor tree was durably archived into its per-state rollback slot

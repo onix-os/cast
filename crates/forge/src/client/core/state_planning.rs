@@ -177,14 +177,45 @@ impl Client {
                 // durable tree-identity preparation.
                 let candidate = self.materialize_stateful_candidate(selections.iter().map(|s| &s.package))?;
                 let old_state = candidate.active_state.active();
-
-                // Add to db
                 candidate.active_state.revalidate(&self.installation)?;
-                let state = self.state_db.add(selections, Some(&summary.to_string()), None)?;
 
-                self.apply_stateful_candidate(candidate, &state, old_state, system_snapshot)?;
-
-                Ok(Some(state))
+                match old_state {
+                    // Replacing an active state: the journal-coordinated route
+                    // owns the whole transition and allocates the state row
+                    // inside its durable prefix, so a crash can never orphan the
+                    // row from its transition (`plans/future_impl.md` §1.1a).
+                    Some(previous) => {
+                        let state = self
+                            .apply_new_state_candidate(
+                                candidate,
+                                Some(previous),
+                                selections,
+                                &summary.to_string(),
+                                system_snapshot,
+                            )
+                            .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
+                        Ok(Some(state))
+                    }
+                    // First install, on the same coordinated route. This used
+                    // to defer at `CleanupComplete` — the namespace policy
+                    // demanded a synthesized-empty previous be `Absent`, which
+                    // the cleanup path cannot produce because it never unlinks,
+                    // so the record stayed live and startup reported
+                    // `RecoveryPending`. D1.5 admits that previous in staging,
+                    // which lets the terminal chain finish.
+                    None => {
+                        let state = self
+                            .apply_new_state_candidate(
+                                candidate,
+                                None,
+                                selections,
+                                &summary.to_string(),
+                                system_snapshot,
+                            )
+                            .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
+                        Ok(Some(state))
+                    }
+                }
             }
             Scope::Ephemeral { destination } => {
                 let candidate = self.materialize_ephemeral_candidate(selections.iter().map(|s| &s.package))?;

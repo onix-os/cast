@@ -442,11 +442,11 @@ fn run_between_database_captures() {
 fn run_between_database_captures() {}
 
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code)] // shared `#[path]` test-support module; each including parent consumes only a subset
 #[path = "usr_rollback_candidate_preserve_authority/tests/support.rs"]
 mod candidate_test_support;
 #[cfg(test)]
-#[allow(dead_code)]
+#[allow(dead_code)] // shared `#[path]` test-support module; each including parent consumes only a subset
 #[path = "../startup_recovery/test_support.rs"]
 mod test_fixture;
 #[cfg(test)]

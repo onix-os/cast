@@ -217,7 +217,6 @@ mod tests {
 
         assert_eq!(batches.len(), 3);
 
-        // TODO: How tf do i get node value from A to E?
 
         // Batch 0: A and B (no dependencies)
         assert_eq!(batches[0].len(), 2);

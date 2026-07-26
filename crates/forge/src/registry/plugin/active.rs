@@ -2,7 +2,6 @@ use thiserror::Error;
 
 use crate::{Package, Provider, State, db, package};
 
-// TODO:
 #[derive(Debug, Clone)]
 pub struct Active {
     state: Option<State>,

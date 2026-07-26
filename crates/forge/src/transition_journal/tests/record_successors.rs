@@ -189,23 +189,13 @@ fn production_rollback_successor_requires_one_exact_action_outcome_and_persists_
         validate_advance(&complete, &rollback_complete).unwrap();
     }
 
-    let mut v1_required = required.clone();
-    v1_required.version = PAYLOAD_VERSION_V1;
-    v1_required.boot_publication_receipts = None;
-    encode(&v1_required).unwrap();
-    let v1_started = v1_required.boot_repair_started_successor().unwrap();
-    assert_eq!(v1_started.version, PAYLOAD_VERSION_V1);
-    encode(&v1_started).unwrap();
-    assert!(matches!(
-        v1_started.boot_repair_complete_successor(BootRepairOutcome::Applied),
-        Err(CodecError::PayloadVersionPhaseMismatch {
-            version: PAYLOAD_VERSION_V1,
-            phase: Phase::BootRepairComplete,
-        })
-    ));
-    let v1_unverified = v1_started.boot_repair_unverified_successor().unwrap();
-    assert_eq!(v1_unverified.version, PAYLOAD_VERSION_V1);
-    assert_eq!(v1_unverified.phase, Phase::BootRepairUnverified);
+    // `BootRepairStarted` may still resolve to the unverified terminal instead
+    // of a verified completion; that choice is a phase property, not a payload
+    // version property.
+    let started = required.boot_repair_started_successor().unwrap();
+    encode(&started).unwrap();
+    let unverified = started.boot_repair_unverified_successor().unwrap();
+    assert_eq!(unverified.phase, Phase::BootRepairUnverified);
 
     assert!(matches!(
         required.boot_repair_complete_successor(BootRepairOutcome::Applied),

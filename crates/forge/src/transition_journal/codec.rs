@@ -4,8 +4,7 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use super::model::{
-    AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin, RollbackAction,
-    TransitionRecord,
+    AbortDisposition, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin, RollbackAction, TransitionRecord,
 };
 
 pub(super) const MAX_QUARANTINE_NAME_BYTES: usize = 128;
@@ -13,13 +12,9 @@ pub(super) const MAX_QUARANTINE_NAME_BYTES: usize = 128;
 pub(super) const MAGIC: &[u8; 8] = b"CASTSTJ\0";
 pub(super) const FRAME_VERSION: u16 = 1;
 pub(super) const PAYLOAD_FORMAT: &str = "cast-state-transition";
-/// Legacy payloads remain byte-canonically readable and may advance only
-/// where the successor does not require new authenticated receipt evidence.
-pub(super) const PAYLOAD_VERSION_V1: u16 = 1;
-/// The second payload domain adds verified boot-repair completion but carries
-/// no authenticated boot-publication receipt correlation.
-pub(super) const PAYLOAD_VERSION_V2: u16 = 2;
-/// Current write version used for every newly prepared transition.
+/// The only payload version. This project is unreleased and owes no
+/// compatibility to records written by an earlier build, so a payload carrying
+/// any other version is simply invalid rather than upgraded or tolerated.
 pub(super) const PAYLOAD_VERSION: u16 = 3;
 pub(super) const MAGIC_END: usize = MAGIC.len();
 pub(super) const VERSION_END: usize = MAGIC_END + size_of::<u16>();
@@ -52,12 +47,6 @@ pub(crate) enum CodecError {
     UnsupportedPayloadFormat(String),
     #[error("unsupported journal payload version {0}")]
     UnsupportedPayloadVersion(u16),
-    #[error("journal payload version {version} cannot encode phase {phase:?}")]
-    PayloadVersionPhaseMismatch { version: u16, phase: Phase },
-    #[error("journal payload version {version} cannot encode boot rollback status {status:?}")]
-    PayloadVersionBootRollbackMismatch { version: u16, status: BootRollback },
-    #[error("journal payload version {0} cannot carry boot-publication receipt correlation")]
-    PayloadVersionBootPublicationReceiptsMismatch(u16),
     #[error("boot-publication receipt correlation presence is invalid at phase {phase:?}; required={required}")]
     BootPublicationReceiptPresenceMismatch { phase: Phase, required: bool },
     #[error("journal generation must be nonzero")]
