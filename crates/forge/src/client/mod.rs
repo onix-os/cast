@@ -155,6 +155,8 @@ mod boot_asset_snapshots;
 #[allow(dead_code)] // typed SHA-256 identity carried through boot planning and publication
 #[path = "boot/boot_content_identity.rs"]
 mod boot_content_identity;
+#[path = "boot/timeout_policy.rs"]
+mod boot_timeout_policy;
 mod cache;
 mod candidate_metadata;
 mod clean_boot_synchronization;

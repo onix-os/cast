@@ -28,7 +28,7 @@ const MAX_BOOT_PLAN_SYMLINK_HOPS: usize = 32;
 const MAX_BOOT_PLAN_WORK: usize = 2_000_000;
 const MAX_BOOT_PLAN_SINGLE_PATH_BYTES: usize = nix::libc::PATH_MAX as usize - 1;
 const MAX_BOOT_PLAN_PATH_COMPONENTS: usize = 128;
-const BOOT_PLAN_TIMEOUT: Duration = Duration::from_secs(30);
+const BOOT_PLAN_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(30));
 
 /// A complete pure inventory of Stone-owned bytes needed by boot repair.
 ///

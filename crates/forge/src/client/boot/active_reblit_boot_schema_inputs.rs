@@ -30,7 +30,7 @@ const MAX_SCHEMA_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_SCHEMA_TOTAL_BYTES: usize = 5 * MAX_SCHEMA_SOURCE_BYTES;
 const MAX_SCHEMA_WORK: usize = 4_096;
 const MAX_SCHEMA_STATES: usize = 5;
-const SCHEMA_TIMEOUT: Duration = Duration::from_secs(30);
+const SCHEMA_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(30));
 
 #[path = "active_reblit_boot_schema_inputs/generated_os_release.rs"]
 mod generated_os_release;

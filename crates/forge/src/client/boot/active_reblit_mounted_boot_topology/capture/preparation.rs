@@ -32,7 +32,7 @@ use super::{
 #[cfg(test)]
 use super::model::{FixtureBootFilesystemEvidenceFeeds, FixtureMountInfoFeed};
 
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
+const CAPTURE_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(30));
 
 type CaptureResult<T> = Result<T, ActiveReblitMountedBootTopologyCaptureError>;
 

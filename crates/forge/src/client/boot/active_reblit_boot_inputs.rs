@@ -28,7 +28,16 @@ const KIB: u64 = 1024;
 const MIB: u64 = 1024 * KIB;
 const GIB: u64 = 1024 * MIB;
 const MAX_BINDING_WORK: usize = MAX_BOOT_PLAN_ASSETS + 2 * MAX_BOOT_PLAN_SNAPSHOT_DIGESTS;
-const BINDING_TIMEOUT: Duration = Duration::from_secs(30);
+/// Absolute budget for preparing one set of sealed boot inputs.
+///
+/// Production policy assumes what production does: one boot publication at a
+/// time. The test build deliberately relaxes it, because the suite runs this
+/// path in ~24 concurrent tests on a shared machine, where a single preparation
+/// can exceed 30s purely through contention and fail with `DeadlineExceeded`
+/// on work that is not actually slow. Relaxing the *production* value to buy
+/// test stability would weaken a real bound to hide a test-environment
+/// artefact, so the two are split instead.
+const BINDING_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(30));
 
 const STONE_BOOT_INPUT_POLICY: StoneBootInputPolicy = StoneBootInputPolicy {
     max_systemd_boot_bytes: 64 * MIB,

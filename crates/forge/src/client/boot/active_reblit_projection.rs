@@ -13,7 +13,7 @@ const MAX_PROJECTION_PACKAGES: usize = 4_096;
 const MAX_PROJECTION_PACKAGE_ID_BYTES: usize = 1024 * 1024;
 const MAX_PROJECTION_LAYOUT_ROWS: usize = 262_144;
 const MAX_PROJECTION_LAYOUT_STRING_BYTES: usize = 64 * 1024 * 1024;
-const PROJECTION_DATABASE_TIMEOUT: Duration = Duration::from_secs(120);
+const PROJECTION_DATABASE_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(120));
 
 const PROJECTION_POLICY: ProjectionPolicy = ProjectionPolicy {
     max_packages: MAX_PROJECTION_PACKAGES,
