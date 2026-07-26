@@ -847,11 +847,22 @@ complete" and similar as magic numbers, so any renumbering silently changes
 their meaning. This is why the `.ordinal()` audit missed them — they contain no
 `.ordinal()` call at all, only the `forward_ordinal` helper and bare integers.
 
-**This is a pre-existing hazard independent of §1.2b** and worth fixing on its
-own: replace each literal with a named phase comparison
-(`>= ForwardPhase::RootLinksComplete.ordinal()` and so on). Once that is done the
-ordinal move is mechanical, and the class of silent breakage disappears rather
-than being navigated around a fourth time.
+**Fixed 2026-07-26** (commit `489a4369`): all five literals in
+`activation_namespace/policy.rs` are now named phase comparisons
+(`phase >= forward_ordinal(ForwardPhase::RootLinksComplete)` and so on). Green on
+its own, and it removes the silent-renumbering hazard permanently.
+
+**Effect on the ordinal move, measured after the fix:** `activate_archived` goes
+54 failures -> **0/67 green**, `journal_coordinator` 2 -> **0/117 green**,
+`activation_namespace` 11 -> **5**. So the literals were the bulk of it.
+
+**Still blocked on those last 5**, which are behavioural rather than numeric —
+`isolation_abi` crash-prefix/trigger-phase contract, `partial_replacement`
+returning `Err(ActiveReblitWrapper)` where the test expects admission, and the
+cleanup/ABI matrix. Something else still derives meaning from absolute ordinal
+position; find it the same way (it will not contain `.ordinal()` either). The
+ordinal move was reverted; the naming fix and the model foundation are both
+committed and green.
 
 Original correction, retained because the underlying hazard is still real:
 
