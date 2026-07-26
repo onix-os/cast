@@ -1005,8 +1005,24 @@ child process; no other call site exists). No `set_current_dir` anywhere.
    (a struct field, not thread-local, so it cannot leak), and not any fixture
    constant in the receipt-promotion test support.
 
-State: `--test-threads=16` and below is **fully green** (27/27); 24 fails 2.
-Repro: `cargo test -p forge receipt_promotion::completion -- --test-threads=24`.
+State after the two fixes, measured on the full workspace suite:
+
+- **forge at 16 threads: 2757 passed, 1 failed** (was 8-10). The residual is
+  `active_reblit_boot_inputs::failed_final_revalidation_drops_every_prepared_snapshot_descriptor`,
+  which passes in isolation and passes at its own module with 16 threads, so it
+  is the same whole-suite contention class, now rare rather than routine.
+- `receipt_promotion::completion` is 27/27 at 16 threads and below; 24 fails 2.
+- `make test` now defaults to `TEST_THREADS ?= 16`, overridable
+  (`make test TEST_THREADS=1`) for bisects.
+
+**Separately — `mason` has 3 pre-existing failures unrelated to any of this.**
+`planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete`
+fails with `Git(Error(RepositoryDepth { limit: 0 }))`, plus two
+`upstream::git::fixture_import_tests` cases. They fail **identically at 1 thread
+and at 16**, which is what `make test` already did before the thread-cap change,
+so the cap did not cause them. They do stop `make test --workspace` before it
+reaches forge — worth fixing or marking, or full-workspace runs never exercise
+the forge suite at all.
 
 ### 2.2 Live `Ready`-branch boot regression  · E:L R:med
 No single regression drives `Client::verify → complete_active_reblit_boot →
