@@ -859,10 +859,28 @@ have factual answers; only (a) is still a judgement call.
   Recommendation: nested-guest hard destroy, with `dm-flakey` kept in reserve
   for targeted single-fsync-failure cases the coordinator claims to survive.
 
-**Remaining blocker for the crash matrix is now the harness itself** (Phase 2.1,
-E:XL), not the model: provision qemu/libvirt in the VM, build a nested guest
-image, and add reboot-surviving result collection. The current harness never
-reboots.
+**Harness slice landed 2026-07-26:** `misc/scripts/crash-matrix-nested.sh`.
+
+Done and verified running inside the VM:
+- qemu 10.2.1 + qemu-utils provisioned; the invoking user added to `kvm`.
+- `--self-test` proves both primitives the matrix rests on: nested KVM really
+  accelerates a guest, and a SIGKILL power cut lands mid-run. Exits 0 and
+  cleans up its scratch root.
+- The cut is SIGKILL, never a monitor `quit` — `quit` would let qemu flush,
+  defeating the point. This is why `kill -9` on the forge process is *not* a
+  substitute: the page cache outlives the process, so the filesystem still sees
+  every write. Only destroying the machine loses them.
+
+Still to build for a real campaign:
+- A guest image with forge installed, and a way to drive one operation to a
+  chosen journal phase before the cut.
+- Per-phase cut scheduling across the operation matrix (NewState,
+  ActivateArchived, ActiveReblit, archived repair).
+- Reboot-surviving result collection, keyed by the guest's
+  `/proc/sys/kernel/random/boot_id`, plus the startup-gate verdict per run.
+
+The archived-repair marker (§1.3) is a natural first target: it is the newest
+durability claim and has no crash coverage yet.
 
 ### 2.2 Live `Ready`-branch boot regression  · E:L R:med
 No single regression drives `Client::verify → complete_active_reblit_boot →
