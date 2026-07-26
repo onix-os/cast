@@ -882,6 +882,31 @@ Still to build for a real campaign:
 The archived-repair marker (§1.3) is a natural first target: it is the newest
 durability claim and has no crash coverage yet.
 
+### 2.1a `receipt_promotion::completion` concurrency bug  · E:M R:med
+
+Long treated as full-suite flake; it is a real bug. 2-7 tests under
+`receipt_promotion::completion::*` fail in parallel runs with
+`boot-topology typed value or evaluation fingerprint changed`
+(`require_exact_evaluation`, `active_reblit_boot_topology_intent.rs`), on a path
+inside the test's own tempdir. Membership shifts run to run within that module.
+
+**Diagnosed 2026-07-26 as shared mutable state between concurrent tests:**
+
+- `cargo test -p forge client::active_reblit_boot_publication_preflight`
+  reproduces in ~137s (2-4 of 61 fail). Use this, not the ~29-minute full suite.
+- The same run with `-- --test-threads=1` passes 61/61. Serialising the module
+  fixes it, which is the discriminator.
+
+Ruled out: the 30s `BINDING_TIMEOUT` deadline; `remaining_at_admission` (reaches
+only error messages, never the resource policy); every `EvaluationIdentity`
+field (all content-derived); the `arm_*` hooks and the fixture assessment queue
+(all `thread_local!`); global statics in the boot/evaluation stack (none exist).
+
+**Next:** find what two concurrent tests in this module share that is neither
+thread-local nor under their own tempdir. Bisect by running pairs of
+`completion::*` submodules together. Until then a full-suite run cannot
+distinguish a fresh regression from this noise, which taxes every change.
+
 ### 2.2 Live `Ready`-branch boot regression  · E:L R:med
 No single regression drives `Client::verify → complete_active_reblit_boot →
 finalize` end-to-end (CI resolves boot inputs to `NotApplicable`; the VM test
