@@ -787,6 +787,26 @@ Work items, each of which the compiler will point at once the variants exist:
 8. `execute_activate_archived_forward` drives the two new phases and performs
    the move between them.
 
+   **Scoped 2026-07-26 — this is a typestate change, not a function edit.** The
+   driver currently goes straight from `begin_transition(ActivateArchived{..})`
+   to `begin_candidate_prepare()` (`new_state_forward.rs:258-268`). The archived
+   staging move has to sit *between* those, which means the coordinator returned
+   by `begin_transition` gains a new typestate pair — roughly
+   `begin_archived_staging()` -> `complete_archived_staging()` — that only
+   `ActivateArchived` may traverse, with the tree move performed between the
+   intent and completion advances so a crash at either side is recoverable from
+   the record.
+
+   That touches the coordinator's typestate types themselves, not just this
+   function, and it is why steps 1-7 cannot land alone: without this pair,
+   `next_forward_phase` routes ActivateArchived into phases nothing advances
+   through, and every ActivateArchived test stalls (observed: 43 failures).
+
+   Sequence for whoever picks this up: add the typestate pair and the move
+   first, with the phases still unreachable; then apply steps 1-7 so the chain
+   routes into it; then update the ActivateArchived tests. That order keeps the
+   tree building at each step, which the model-first order did not.
+
 **Audit done 2026-07-26 — the ordinal-shift risk is much lower than feared.**
 `.ordinal()` is used in exactly three files (`transition_journal/successors.rs`,
 `transition_journal/validation.rs`, `transition_journal/tests/mod.rs`), and
