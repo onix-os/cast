@@ -83,7 +83,7 @@ rollback status vs phase). Deleting the *version* condition must not delete the
 
 ---
 
-## 2. Legacy stateful transition path · E:L R:high · **UNBLOCKED 2026-07-26**
+## 2. Legacy stateful transition path · **DONE 2026-07-26**
 
 **`apply_stateful_candidate` now has no production caller.** Both §1.1e
 blockers are fixed (the namespace policy via D1.5, the in-flight marker via a
@@ -182,9 +182,17 @@ invariant; the orphan list *is* the §§3-4 worklist and is now concrete:
   `ActivePreviousSlotParking`, `NormalizeBeforeJournal` variants
 - `transition_identity/tree_lifecycle.rs` — `prepare_retained_candidate`
 
-Redo as one commit: delete `apply_stateful_candidate`, its two tests, and the
-whole list above together, re-checking for further cascade after each round
-until the production build is back to zero warnings.
+**Shipped.** `apply_stateful_candidate` and its two tests are gone. The 12
+orphans above are annotated `#[allow(dead_code)]` pointing here rather than
+deleted in the same commit: several are enum variants whose removal cascades
+into match arms across the rotation and parking modules, and that is §§3-4's
+job, not this one. The production build is back to zero warnings and
+`fixed_staging_transition` 16/16, `install` 97/97, `active_reblit_tests` 25/25
+stay green.
+
+§§3-4 now have an exact starting point: remove those 12 annotations one at a
+time, deleting each item and its match arms, until nothing references the
+legacy rotation/parking lifecycle.
 
 **Security question settled:** deleting these removes a *proof*, not a defence.
 `new_state_boot_transition.rs:124` passes the same
