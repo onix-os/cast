@@ -906,10 +906,33 @@ evaluator VM (neither evaluator holds process-global state), and process-global
 `umask` mutation (`tree_marker.rs:931` is correctly isolated in a re-exec'd
 child process; no other call site exists). No `set_current_dir` anywhere.
 
-**Next:** find what two concurrent tests in this module share that is neither
-thread-local nor under their own tempdir. Bisect by running pairs of
-`completion::*` submodules together. Until then a full-suite run cannot
-distinguish a fresh regression from this noise, which taxes every change.
+**Partly fixed 2026-07-26.** Two distinct causes found; a third remains.
+
+1. **Fixed — wall-clock was hashed into evaluation identity.** All four intent
+   evaluators set `limits.timeout = remaining.min(MAX_EVALUATION_TIME)`, and
+   that timeout is hashed into `resource_policy_sha256`, hence into
+   `EvaluationIdentity`. Whenever `remaining` exceeded the 2s constant the `min`
+   clamped and hid it; once evaluation ran long enough for `remaining` to drop
+   below 2s, preparation and revalidation hashed differently and revalidation
+   failed with "typed value or evaluation fingerprint changed" on source that
+   never changed. This was a **production** bug, not a test artefact. Now a
+   fixed constant; the absolute deadline is still enforced by the budget.
+2. **Fixed — production budgets were inherited by a 24-way parallel suite.**
+   Added `client/boot/timeout_policy.rs`: production values stay as written and
+   only the test build scales them (×20). Production runs one boot publication
+   at a time; the suite runs ~24 concurrently on a shared machine, where
+   contention alone exhausted 30s budgets.
+3. **Open.** At `--test-threads=24`, 2 of 27 still fail with `DeadlineExceeded`
+   and a **consistently ~4ms** `remaining_at_admission` on the boot-topology
+   intent. That value is suspiciously constant rather than load-dependent, so
+   the governing deadline is armed shortly before admission from a source not
+   yet identified — it is not `BINDING_TIMEOUT`, `BOOT_TOPOLOGY_TIMEOUT`,
+   `BOOT_PUBLICATION_TIMEOUT` (all scaled), not the per-budget test `clock`
+   (a struct field, not thread-local, so it cannot leak), and not any fixture
+   constant in the receipt-promotion test support.
+
+State: `--test-threads=16` and below is **fully green** (27/27); 24 fails 2.
+Repro: `cargo test -p forge receipt_promotion::completion -- --test-threads=24`.
 
 ### 2.2 Live `Ready`-branch boot regression  · E:L R:med
 No single regression drives `Client::verify → complete_active_reblit_boot →
