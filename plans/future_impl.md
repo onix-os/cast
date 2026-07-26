@@ -818,12 +818,31 @@ Verified: `activate_archived` 67/67, `activation_namespace` 60/60,
 `journal_coordinator` 117/117, `transition_journal` 136/136 — 380 tests, zero
 failures, production build at zero warnings.
 
-Remaining for §1.2b: add the coordinator's `begin_archived_staging()` /
-`complete_archived_staging()` pair with the tree move between the two advances,
-then move the parked ordinals from 19-20 to 1-2 and point
-`next_forward_phase`'s `Preparing` arm at them for `ActivateArchived`. The
-ordinal move and the routing must land together with the coordinator step, since
-that is what makes the phases reachable.
+**Ordinal move: DONE and green** (see the third-table note below).
+
+**Coordinator pair and routing: written and compiling, reverted on test cost.**
+The whole of step 8 was implemented and builds clean at zero warnings:
+
+- `begin_archived_staging()` / `complete_archived_staging()` on the coordinator,
+  each guarded by `require_operation(ActivateArchived)` + `require_phase` and
+  advancing once, following the `begin_candidate_prepare` pattern exactly.
+  `require_operation` already existed.
+- `begin_candidate_prepare`'s expected phase for `ActivateArchived` moved from
+  `Preparing` to `ArchivedCandidateStaged`.
+- `next_forward_phase` routes `Preparing -> StagingIntent -> Staged ->
+  CandidatePrepareStarted` for `ActivateArchived` only.
+- `execute_activate_archived_forward` drives both advances before candidate
+  preparation, so the tree move sits between two durable phases.
+
+**What it costs, and why it was reverted:** making the phases reachable adds two
+generations to every ActivateArchived transition, and the test fixtures assert
+generation counts directly (`startup_recovery/test_support.rs:160`, observed
+`left: 6`). That fails 67 `activate_archived` and 31 `journal_coordinator` tests
+— all of them legitimately, since the chain genuinely got longer.
+
+So the remaining work is *not* design: it is updating generation expectations
+across ~100 tests, plus any fixture that walks the chain. Mechanical, broad, and
+best done in one pass with the four code changes above reapplied together.
 
 Note the parked ordinals are a deliberate temporary: they say "after Complete",
 which is wrong for the chain but harmless while unreachable. They must be
