@@ -901,7 +901,10 @@ inside the test's own tempdir. Membership shifts run to run within that module.
 Ruled out: the 30s `BINDING_TIMEOUT` deadline; `remaining_at_admission` (reaches
 only error messages, never the resource policy); every `EvaluationIdentity`
 field (all content-derived); the `arm_*` hooks and the fixture assessment queue
-(all `thread_local!`); global statics in the boot/evaluation stack (none exist).
+(all `thread_local!`); global statics in the boot/evaluation stack (none exist). Also ruled out: a shared Lua/Gluon
+evaluator VM (neither evaluator holds process-global state), and process-global
+`umask` mutation (`tree_marker.rs:931` is correctly isolated in a re-exec'd
+child process; no other call site exists). No `set_current_dir` anywhere.
 
 **Next:** find what two concurrent tests in this module share that is neither
 thread-local nor under their own tempdir. Bisect by running pairs of
