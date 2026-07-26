@@ -23,10 +23,26 @@
 # It is a guest-environment gap, not a finding.
 #
 # Next, in order:
-#   1. Make the control cell green — find what the install needs that this
-#      initramfs lacks (likely /etc, cache dirs, or a writable XDG root). Until
-#      `control` reports `state=installed`, no other row's state column means
-#      anything.
+#   1. Make the control cell green. **Diagnosed 2026-07-26: the guest needs
+#      dbus.** The install itself works in the minimal initramfs — index, repo
+#      add and the blit all succeed and it prints `Installed bash-completion` —
+#      and then fails at the last step:
+#
+#          Error: install: protect state mutation from interruption:
+#                 failed to connect to dbus: No such file or directory
+#
+#      Forge takes a dbus inhibitor lock so a state mutation cannot be
+#      interrupted. Either run a session dbus-daemon in the guest init, or give
+#      forge a way to proceed without an inhibitor when nothing can interrupt it.
+#      Note the irony worth keeping in mind: the lock that exists to protect
+#      against interruption is what blocks the harness built to interrupt it.
+#
+#      Also note the local-package flow, which is not obvious: `install` takes a
+#      package *name*, not a path, so a `.stone` must first be `cast index`ed and
+#      the resulting `stone.index` added with `repo add file://...`.
+#
+#      Until `control` reports `state=installed`, no other row's state column
+#      means anything.
 #   2. Move cut points from wall-clock delays to specific journal phases.
 #   3. Extend OPS past install to activate-archived, active-reblit, archived
 #      repair.
