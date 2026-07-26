@@ -83,13 +83,20 @@ rollback status vs phase). Deleting the *version* condition must not delete the
 
 ---
 
-## 2. Legacy stateful transition path · E:L R:high · **STILL BLOCKED**
+## 2. Legacy stateful transition path · E:L R:high · **UNBLOCKED 2026-07-26**
 
-**Still has one production caller: the first-install arm of
-`state_planning.rs`.** Routing it through the coordinator was attempted and
-reverted — see Phase 1 §1.1e, second blocker (the in-flight marker is never
-cleared without a predecessor to archive). Once that clear lands, this arm goes
-away and the section below applies. What remains is the 616-line `client/core/stateful_transition.rs`
+**`apply_stateful_candidate` now has no production caller.** Both §1.1e
+blockers are fixed (the namespace policy via D1.5, the in-flight marker via a
+guarded clear at terminal finalize), so `state_planning.rs`'s first-install arm
+routes through the coordinator like every other stateful transition.
+
+What remains is the 616-line `client/core/stateful_transition.rs` definition
+plus two test callers in `client/tests/fixed_staging_transition.rs` (:248,
+:339). Removal is now a deletion rather than a migration, but it is not
+mechanical: those two tests cover fixed-staging behaviour that needs either a
+coordinated equivalent or an explicit decision that the coverage moved
+elsewhere. Do it against a clean full-suite baseline; §§3 and 4 follow
+immediately once the path is gone. What remains is the 616-line `client/core/stateful_transition.rs`
 definition plus two test callers in `client/tests/fixed_staging_transition.rs`
 (:248, :339).
 
