@@ -840,9 +840,25 @@ generation counts directly (`startup_recovery/test_support.rs:160`, observed
 `left: 6`). That fails 67 `activate_archived` and 31 `journal_coordinator` tests
 — all of them legitimately, since the chain genuinely got longer.
 
-So the remaining work is *not* design: it is updating generation expectations
-across ~100 tests, plus any fixture that walks the chain. Mechanical, broad, and
-best done in one pass with the four code changes above reapplied together.
+So the remaining work is *not* design: it is updating generation expectations,
+which are far more centralised than first estimated. Measured, reapplying step 8
+and fixing expectations in order:
+
+- **67 failures -> 18** by bumping the five `Archived` rows in
+  `startup_recovery/test_support.rs::expected_source_generation` by 2. One edit,
+  49 tests. (The earlier "~100 scattered updates" estimate was wrong.)
+- **18 -> 17** by bumping four bare `assert_eq!(record.generation, 12)` literals
+  to 14 in `usr_rollback_activate_archived/tests/` (`finalization_authority_binding.rs`
+  x2, `finalization_root_link_races.rs`, `root_links_terminal_process_kill.rs`).
+- **17 remaining**, and they concentrate in one shared file:
+  `usr_rollback_activate_archived/tests/support.rs` lines 575, 583 and 606, plus
+  `finalization_evidence_races.rs:238`. That concentration suggests one or two
+  more central fixes rather than 17 separate ones — the same pattern as the two
+  above.
+
+Reverted to the green committed state (`activate_archived` 67/67) rather than
+leave 17 failures in the tree. Reapply the four code changes together with the
+two expectation fixes above, then start at `support.rs:575`.
 
 Note the parked ordinals are a deliberate temporary: they say "after Complete",
 which is wrong for the chain but harmless while unreachable. They must be
