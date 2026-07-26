@@ -425,7 +425,35 @@ two transition engines keyed on whether a candidate happens to ship a kernel —
 non-bootable installs through the durable route, bootable ones still legacy.
 That is worse than either engine alone.
 
-### 1.1e First-install terminal completion defers  · **RESOLVED 2026-07-26**
+### 1.1e First-install terminal completion  · **PARTLY RESOLVED 2026-07-26**
+
+**Two blockers, not one. D1.5 cleared the first; the second is open.**
+
+*Cleared (D1.5):* the terminal namespace proof required a `SynthesizedEmpty`
+previous to be `Absent` at `CommitCleanupComplete`, which the cleanup path
+cannot produce because it never unlinks. `commit_layouts` now admits it in
+staging, so the terminal chain finishes.
+
+*Open — the in-flight marker is never cleared for a no-predecessor transition.*
+`new_state_forward.rs:187` allocates the state row via `add_with_transition`,
+which stamps `state.transition_id`. The **only** production code that clears
+that column is `exact_archived_removal.rs:223`, which runs while archiving the
+predecessor. A first install has no predecessor, so the column stays set after
+the transition completes, and the next startup's `audit_in_flight_transition`
+reports `OrphanTransitionRow` — a successful install looks like an interrupted
+one. Caught by `state_creation_records_and_exports_the_generated_snapshot`,
+`export_prefers_a_committed_lua_migration_of_the_system_snapshot` and
+`reused_client_rejects_a_second_state_before_database_allocation`; routing was
+reverted rather than shipped.
+
+**Next step:** give the activation terminal chain its own marker clear —
+`clear_transition_if_matches(candidate, transition)` exists and today has no
+production caller at all. The open question is *ordering*: it must land inside
+the durable terminal chain, not after it, or a crash between completion and the
+clear reintroduces the same orphan. Likely belongs with
+`finalize_activation_complete`, alongside the record delete.
+
+Original diagnosis retained below.
 
 **Resolved by D1.5.** The deferral was the terminal namespace proof: the policy
 required a `SynthesizedEmpty` previous to be `Absent` at `CommitCleanupComplete`,
