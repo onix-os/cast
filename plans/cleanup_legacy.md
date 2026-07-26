@@ -133,11 +133,26 @@ Consequences, both of which must be settled before deleting anything:
   exist today — no `PrivateDeviceProvider` test double anywhere in the tree), or
   the property has to be proven at the `TriggerScope` layer instead of
   end-to-end.
-- More importantly: **it is not yet established that the coordinated route has
-  the same defence at all.** The legacy route demonstrably pins the container
-  root. Whether the coordinated route's container does the same is unverified —
-  and if it does not, deleting the legacy path removes a defence rather than
-  merely a proof of one. Establish that first.
+- **RESOLVED: the coordinated route does have the same defence.**
+  `new_state_boot_transition.rs:124` passes
+  `TriggerScope::RetainedTransaction { kind: Stateful, .. }` — the same pinned
+  scope the legacy route uses — and sources its `isolation_root` from
+  `view.retained_isolation_root()`, i.e. a retained descriptor rather than a
+  re-resolved pathname. That *is* the pinning discipline, so deleting
+  `stateful_transition.rs` removes a proof, not a defence. The security
+  objection to deletion is withdrawn.
+
+So the remaining obstacle is purely a **test-environment** one: the coordinated
+route's trigger container needs a private-device broker that no test double
+provides, so an end-to-end port cannot reach the pin check. Options: add a
+broker test double, or prove the property at the `TriggerScope` layer where no
+container is required. The latter is likely cheaper and tests the actual
+invariant (that the scope carries a retained descriptor).
+
+Note: the `after_stateful_isolation_root_retention` hook I armed at
+`core/state_planning.rs` is at the wrong point for this route — the coordinated
+route retains its isolation root through the view passed to the trigger closure,
+not at that call site. Re-site or remove it when doing the port.
 
 Order: settle the question above, then port both tests and verify they still
 fail-on-regression against the coordinated route, and only then delete
