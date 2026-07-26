@@ -425,7 +425,18 @@ two transition engines keyed on whether a candidate happens to ship a kernel —
 non-bootable installs through the durable route, bootable ones still legacy.
 That is worse than either engine alone.
 
-### 1.1e First-install terminal completion defers  · E:M R:med · **blocks routing first install**
+### 1.1e First-install terminal completion defers  · **RESOLVED 2026-07-26**
+
+**Resolved by D1.5.** The deferral was the terminal namespace proof: the policy
+required a `SynthesizedEmpty` previous to be `Absent` at `CommitCleanupComplete`,
+which the cleanup path cannot produce because it never unlinks. `commit_layouts`
+now admits that previous in staging at the terminal phases, the terminal chain
+finishes, and `state_planning.rs`'s `None` arm routes first install through
+`apply_new_state_candidate` like every other stateful transition.
+`apply_stateful_candidate` no longer has a caller from this arm — see
+`plans/cleanup_legacy.md` §§2-4, which this unblocks.
+
+Original diagnosis retained below.
 
 **Everything up to commit works; the transition does not end.** For a NewState
 record with no predecessor (`SynthesizedEmpty`), the coordinated route runs the
