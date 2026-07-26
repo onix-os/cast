@@ -83,7 +83,21 @@ rollback status vs phase). Deleting the *version* condition must not delete the
 
 ---
 
-## 2. Legacy stateful transition path · E:L R:high · **blocked on Phase 1**
+## 2. Legacy stateful transition path · E:L R:high · **UNBLOCKED 2026-07-26**
+
+**`apply_stateful_candidate` now has no production caller.** Routing first
+install through the coordinator (Phase 1 §1.1e, resolved by D1.5) removed the
+last one. What remains is the 616-line `client/core/stateful_transition.rs`
+definition plus two test callers in `client/tests/fixed_staging_transition.rs`
+(:248, :339).
+
+Removal is now a deletion rather than a migration, but it is not mechanical:
+those two tests cover fixed-staging behaviour that needs either a coordinated
+equivalent or an explicit decision that the coverage moved elsewhere. Do this
+against a clean full-suite baseline, and expect §§3 and 4 to follow immediately
+once the path is gone.
+
+Original blocker analysis retained below.
 
 **State:** the untethered pre-journal route still drives real transitions:
 `state_planning.rs:115` (`commit_stateful_staging`) and `:185`
