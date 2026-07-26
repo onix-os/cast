@@ -1,5 +1,38 @@
 #!/usr/bin/env bash
-# Crash matrix: every operation crossed with every cut point.
+# Crash matrix (`plans/future_impl.md` §2.1): every operation crossed with every
+# cut point. Each cell drives the operation in a nested guest, hard-cuts power,
+# reboots the same disk, and reports.
+#
+# Each cell answers two independent questions, and conflating them is a mistake
+# already made once here:
+#   recovery=  did forge come up at all on the power-cut disk?
+#   state=     did the transition's effect actually land?
+# `list installed` exits non-zero on an uninitialised root, which read as a
+# recovery failure in every cell until the two were split.
+#
+# **What is proven (2026-07-26):** the cut is real (unsynced writes genuinely
+# vanish — `crash-matrix-durability-probe.sh`), forge runs in the guest, forge
+# reports `recovery=clean` after a cut at every tested point, and verdicts
+# survive a reboot.
+#
+# **What is NOT proven: anything in the `state` column.** `CUTS` includes a
+# `control` cell that runs the operation with no cut and shuts down cleanly. It
+# also reports `state=absent` — so the package fails to install in this minimal
+# guest regardless of any power cut. Without that control, "the package never
+# lands after a power cut" would have read as a durability bug across every row.
+# It is a guest-environment gap, not a finding.
+#
+# Next, in order:
+#   1. Make the control cell green — find what the install needs that this
+#      initramfs lacks (likely /etc, cache dirs, or a writable XDG root). Until
+#      `control` reports `state=installed`, no other row's state column means
+#      anything.
+#   2. Move cut points from wall-clock delays to specific journal phases.
+#   3. Extend OPS past install to activate-archived, active-reblit, archived
+#      repair.
+#
+# Runs inside the approved VM only; never on the host. Staged inputs as in
+# `crash-matrix-forge-guest.sh`, plus /tmp/pkg.stone.
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
 KERNEL=$(ls /boot/vmlinuz-* | head -1)
