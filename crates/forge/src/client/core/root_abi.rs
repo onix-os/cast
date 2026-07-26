@@ -142,7 +142,7 @@ fn arm_after_stateful_isolation_root_retention(hook: impl FnOnce() + 'static) {
 }
 
 #[cfg(test)]
-fn after_stateful_isolation_root_retention() {
+pub(super) fn after_stateful_isolation_root_retention() {
     AFTER_STATEFUL_ISOLATION_ROOT_RETENTION.with(|slot| {
         if let Some(hook) = slot.borrow_mut().take() {
             hook();
