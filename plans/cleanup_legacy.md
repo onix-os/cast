@@ -112,9 +112,36 @@ coverage. Surveyed 2026-07-26 — both are portable, and the exact work is:
    `#[cfg(test)] after_stateful_isolation_root_retention()` call to immediately
    after that `create_root_links`, then retarget the test.
 
-Order: port both tests and verify they still fail-on-regression against the
-coordinated route *before* deleting `stateful_transition.rs`. Deleting first
-would make the ports unverifiable. §§3 and 4 follow once the path is gone.
+**Attempted 2026-07-26 — port (2) does not transfer mechanically.** Writing the
+coordinated twin and running it produced, instead of the expected pinned-source
+refusal:
+
+    NewStateForwardError { stage: "transaction triggers",
+      source: Effect { source: Container(PrivateDeviceProviderUnavailable ...) } }
+
+The two routes execute triggers under **different `TriggerScope`s**. The legacy
+path uses `TriggerScope::RetainedTransaction { kind: Stateful }`, whose
+container pins the retained root — which is exactly what the test proves. The
+coordinated route builds its container differently and fails on an unavailable
+private-device broker *before* the pin check is reached, so in this environment
+the substituted root is never even evaluated.
+
+Consequences, both of which must be settled before deleting anything:
+
+- The proof cannot be ported by retargeting the call. Either the coordinated
+  route needs a test-reachable trigger container (a broker stub, which does not
+  exist today — no `PrivateDeviceProvider` test double anywhere in the tree), or
+  the property has to be proven at the `TriggerScope` layer instead of
+  end-to-end.
+- More importantly: **it is not yet established that the coordinated route has
+  the same defence at all.** The legacy route demonstrably pins the container
+  root. Whether the coordinated route's container does the same is unverified —
+  and if it does not, deleting the legacy path removes a defence rather than
+  merely a proof of one. Establish that first.
+
+Order: settle the question above, then port both tests and verify they still
+fail-on-regression against the coordinated route, and only then delete
+`stateful_transition.rs`. Deleting first would make the ports unverifiable. §§3 and 4 follow once the path is gone.
 Do it against a clean full-suite baseline — see §2.1a, which currently makes
 full-suite results ambiguous. What remains is the 616-line `client/core/stateful_transition.rs`
 definition plus two test callers in `client/tests/fixed_staging_transition.rs`
