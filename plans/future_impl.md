@@ -839,14 +839,30 @@ check catches drift. Both tables must be renumbered in step. **Worth collapsing
 into one source of truth independently of this work** — a phase added to one and
 not the other is exactly the silent ordering bug the audit was meant to exclude.
 
-**Why it was reverted:** 43 tests fail, and they are correct to. They assert the
-*old* ActivateArchived chain (`Preparing -> CandidatePrepareStarted`) and carry
-journal fixtures whose encoding shifted with the new discriminants. Migrating
-them is the real remaining cost of §1.2b — mechanical but broad:
-`transition_journal` record-successor tests, `journal_coordinator` (31),
-`activation_namespace` (11), plus the `tests/fixtures/transition-journal-*`
-hex/json pairs. No back-compat concern; the payload version is already a single
-current version, so fixtures are regenerated, not migrated. No back-compat concern for (3): the payload
+**Why it was reverted — and a correction.** 43 tests fail
+(`journal_coordinator` 31, `activation_namespace` 11, `transition_journal` 1).
+
+An earlier note in this file blamed shifted codec discriminants and stored
+fixtures. **That was wrong.** `Phase` derives `Serialize`/`Deserialize` with
+`#[serde(rename_all = "kebab-case")]`, so it encodes *by name*: adding variants
+anywhere in the enum leaves every existing phase's encoding untouched, and the
+`tests/fixtures/transition-journal-*` pairs are unaffected. Declaration order is
+likewise irrelevant to ordering, since `ordinal()` is an explicit table.
+
+The real cause is simpler and more fundamental: **the chain was extended without
+the driver that traverses it.** `next_forward_phase` now routes
+`Preparing -> ArchivedCandidateStagingIntent -> ArchivedCandidateStaged` for
+`ActivateArchived`, but nothing advances a record through those phases and
+nothing performs the staging move they represent — step (8),
+`execute_activate_archived_forward`, was never implemented. Every
+ActivateArchived test therefore stalls at a phase no code drives.
+
+So the ordering constraint for §1.2b is the opposite of what was assumed: the
+model change and the coordinator driver must land **together**, not model-first.
+Steps 1-7 are known-good in isolation (they compile clean with zero warnings and
+the compiler locates all eight match sites); step 8 is the load-bearing one and
+is where the effort actually sits. Test updates follow from the driver, and are
+consequences rather than a separate migration. No back-compat concern for (3): the payload
 version is already collapsed to a single current version.
 
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
