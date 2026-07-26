@@ -811,7 +811,42 @@ Checked specifically for the new phases at ordinals 1-2 (between `Preparing` and
   early side, which is correct for a phase that precedes candidate preparation.
 
 Remaining risk therefore sits in items (3) codec encoding and (5) namespace
-layouts, not in the renumbering. No back-compat concern for (3): the payload
+layouts, not in the renumbering.
+
+**Implementation attempted and reverted 2026-07-26 — every step below is now
+known-good in isolation; the remaining work is test and fixture migration.**
+
+What was done and verified compiling with zero warnings:
+
+- Both enums gained `ArchivedCandidateStagingIntent` / `ArchivedCandidateStaged`
+  immediately after `Preparing`.
+- Ordinals renumbered to 0..20, monotonic, in **both** tables (see hazard below).
+- `MAX_FORWARD_PHASE_ADVANCES` 19 -> 21.
+- `next_forward_phase`: `Preparing if ActivateArchived => StagingIntent`,
+  `StagingIntent => Staged`, `Staged => CandidatePrepareStarted`.
+- `CandidatePlace::Archived` added, matched in `candidate_place_matches` against
+  `TreeLocation::State(slot)` where `slot == record.candidate.id`.
+- `forward_layouts`: `StagingIntent` admits `{Archived, Live}` and
+  `PRE_EXCHANGE` (intent phases admit both sides); `Staged` admits
+  `PRE_EXCHANGE` alone.
+- The compiler located all eight non-exhaustive matches; each was filled.
+
+**Hazard found — a second, duplicated ordinal table.**
+`activation_namespace/policy.rs::forward_ordinal` re-implements
+`ForwardPhase::ordinal` rather than calling it. It does not appear in a
+`.ordinal()` grep, so the original audit missed it; only its exhaustiveness
+check catches drift. Both tables must be renumbered in step. **Worth collapsing
+into one source of truth independently of this work** — a phase added to one and
+not the other is exactly the silent ordering bug the audit was meant to exclude.
+
+**Why it was reverted:** 43 tests fail, and they are correct to. They assert the
+*old* ActivateArchived chain (`Preparing -> CandidatePrepareStarted`) and carry
+journal fixtures whose encoding shifted with the new discriminants. Migrating
+them is the real remaining cost of §1.2b — mechanical but broad:
+`transition_journal` record-successor tests, `journal_coordinator` (31),
+`activation_namespace` (11), plus the `tests/fixtures/transition-journal-*`
+hex/json pairs. No back-compat concern; the payload version is already a single
+current version, so fixtures are regenerated, not migrated. No back-compat concern for (3): the payload
 version is already collapsed to a single current version.
 
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
