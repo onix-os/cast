@@ -892,8 +892,9 @@ inside the test's own tempdir. Membership shifts run to run within that module.
 
 **Diagnosed 2026-07-26 as shared mutable state between concurrent tests:**
 
-- `cargo test -p forge client::active_reblit_boot_publication_preflight`
-  reproduces in ~137s (2-4 of 61 fail). Use this, not the ~29-minute full suite.
+- `cargo test -p forge receipt_promotion::completion` reproduces in ~100s
+  (3 of 27 fail). Use this, not the ~29-minute full suite. The interference is
+  therefore *inside* the `completion` submodule — only 27 tests to bisect.
 - The same run with `-- --test-threads=1` passes 61/61. Serialising the module
   fixes it, which is the discriminator.
 
