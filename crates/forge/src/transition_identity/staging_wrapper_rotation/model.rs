@@ -109,6 +109,7 @@ pub(in crate::transition_identity) enum StagingWrapperRotationError {
     #[error("an active-reblit staging rotation is already reserved")]
     AttemptAlreadyReserved,
     #[error("park the retained active previous-state slot before the live /usr exchange")]
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     ActivePreviousSlotParking(
         #[source]
         Box<crate::transition_identity::active_previous_slot_parking::RetainedActivePreviousSlotParkingFailure>,
@@ -158,6 +159,7 @@ impl NamedWrapper {
 
 #[derive(Clone, Copy)]
 pub(super) enum OriginalWrapperModePolicy {
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     NormalizeBeforeJournal,
     RequirePrivateWithJournal,
 }

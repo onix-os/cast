@@ -11,36 +11,6 @@ impl Client {
         })
     }
 
-    // Retained as the pre-coordinator route until the crash matrix passes; see
-    // `plans/cleanup_legacy.md` §2. `new_state` now routes through
-    // `apply_new_state_candidate` instead.
-    #[allow(dead_code)] // retained legacy route pending the crash matrix (cleanup_legacy §2)
-    fn apply_stateful_candidate(
-        &self,
-        candidate: fixed_staging::StatefulCandidate,
-        state: &State,
-        old_state: Option<state::Id>,
-        system_snapshot: SystemModel,
-    ) -> Result<(), Error> {
-        let fixed_staging::StatefulCandidate {
-            tree,
-            staging,
-            candidate_usr,
-            local_etc,
-            mut active_state,
-        } = candidate;
-        self.apply_stateful_blit_with_capability(
-            tree,
-            Some((&staging, &candidate_usr)),
-            local_etc,
-            state,
-            old_state,
-            &mut active_state,
-            system_snapshot,
-            |_| Ok(()),
-        )
-    }
-
     #[cfg(test)]
     fn apply_stateful_blit_with_checkpoint<F>(
         &self,
@@ -67,6 +37,7 @@ impl Client {
         )
     }
 
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     fn apply_stateful_blit_with_capability<F>(
         &self,
         fstree: vfs::Tree<PendingFile>,
