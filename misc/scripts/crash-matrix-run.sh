@@ -32,8 +32,14 @@
 #                 failed to connect to dbus: No such file or directory
 #
 #      Forge takes a dbus inhibitor lock so a state mutation cannot be
-#      interrupted. Either run a session dbus-daemon in the guest init, or give
-#      forge a way to proceed without an inhibitor when nothing can interrupt it.
+#      interrupted. Attempted 2026-07-26: staging `dbus-daemon`, its ldd closure,
+#      /usr/share/dbus-1, a messagebus passwd/group entry, and starting both a
+#      system and session bus in the guest init was **not** sufficient — forge
+#      still reports the same connect failure. Likely still missing a machine-id
+#      (`dbus-uuidgen --ensure`) and possibly the exact socket path forge looks
+#      for; worth checking what forge actually connects to before adding more.
+#      The cheaper alternative is a forge-side escape hatch: no inhibitor when
+#      there is nothing to inhibit.
 #      Note the irony worth keeping in mind: the lock that exists to protect
 #      against interruption is what blocks the harness built to interrupt it.
 #
