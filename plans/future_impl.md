@@ -649,7 +649,39 @@ a crash between "metadata published to candidate row" and "publication committed
 `run_boot_sync=false, run_system_triggers=false`, no exchange) covering
 `Preparing → CandidatePrepared → TransactionTriggersComplete → publish`, plus a
 startup reconciler for a partial publish. Reuse `ArchivedStateRepairIdentity` as
-the effect layer. **D1.3:** full journal record vs a lighter durable marker,
+the effect layer. **Survey 2026-07-26 — what the marker is actually for.** The plan framed the
+window as "a crash between metadata published to candidate row and publication
+committed", which reads as an in-process gap. It is not: that gap is already
+well covered.
+
+- `publish` derives `RepairLayout` (`Initial` / `CandidateCanonical` /
+  `Complete` / `Preserved`) from the on-disk namespace and resumes from it,
+  with a bounded retry loop and `require_candidate_boundary` reconciliation at
+  every exit. `finish_complete` is pure fsync + revalidation — it performs no
+  database write, so there is no torn in-process commit to protect.
+- The database metadata is written earlier, during preparation
+  (`prepare_retained_candidate` / `decorate_archived`).
+
+**The real gap is cross-restart: there is no startup reconciler for archived
+repair.** `grep` over `startup_gate.rs`, `startup_recovery.rs` and
+`startup_reconciliation.rs` finds no `ArchivedRepair` reference at all. So if
+the process dies after preparation wrote the candidate row but before the tree
+was published, nothing on the next boot notices — the row can describe a
+repaired state whose tree was never swapped, and no later operation is obliged
+to detect it.
+
+That makes the marker's job specific and narrow: **make the next startup
+notice.** Write it before the first mutation, clear it after
+`finish_complete_bounded` succeeds; a marker found at startup means an archived
+repair was interrupted and the candidate row must be reconciled against the
+namespace (`RepairLayout` is the natural vocabulary for that reconciliation, and
+is already implemented). It does *not* need to journal phases — the in-process
+resume already has that covered.
+
+Remaining work: marker format and placement, write/clear siting, a startup hook,
+the reconciler itself, and crash tests. Not yet implemented.
+
+**D1.3:** full journal record vs a lighter durable marker,
 given it never crosses the `/usr`/boot boundary?
 
 **Narrowed 2026-07-26: "a degenerate `ActivateArchived`" is not viable.** The
