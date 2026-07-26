@@ -28,6 +28,11 @@ impl ForwardPhase {
             Self::CommitDecided => 16,
             Self::CommitCleanupComplete => 17,
             Self::Complete => 18,
+            // Parked above the chain: nothing routes into these yet, so keeping
+            // every existing ordinal untouched means no comparison changes.
+            // They move to positions 1-2 when the coordinator step lands.
+            Self::ArchivedCandidateStagingIntent => 19,
+            Self::ArchivedCandidateStaged => 20,
         }
     }
 }
@@ -36,6 +41,8 @@ impl From<ForwardPhase> for Phase {
     fn from(value: ForwardPhase) -> Self {
         match value {
             ForwardPhase::Preparing => Self::Preparing,
+            ForwardPhase::ArchivedCandidateStagingIntent => Self::ArchivedCandidateStagingIntent,
+            ForwardPhase::ArchivedCandidateStaged => Self::ArchivedCandidateStaged,
             ForwardPhase::FreshStateAllocating => Self::FreshStateAllocating,
             ForwardPhase::FreshStateAllocated => Self::FreshStateAllocated,
             ForwardPhase::CandidatePrepareStarted => Self::CandidatePrepareStarted,
@@ -62,6 +69,8 @@ impl Phase {
     pub(super) fn forward(self) -> Option<ForwardPhase> {
         Some(match self {
             Self::Preparing => ForwardPhase::Preparing,
+            Self::ArchivedCandidateStagingIntent => ForwardPhase::ArchivedCandidateStagingIntent,
+            Self::ArchivedCandidateStaged => ForwardPhase::ArchivedCandidateStaged,
             Self::FreshStateAllocating => ForwardPhase::FreshStateAllocating,
             Self::FreshStateAllocated => ForwardPhase::FreshStateAllocated,
             Self::CandidatePrepareStarted => ForwardPhase::CandidatePrepareStarted,
@@ -236,6 +245,7 @@ impl TransitionRecord {
         match self.operation {
             Operation::NewState => {
                 let id_required = match phase {
+                    ForwardPhase::ArchivedCandidateStagingIntent | ForwardPhase::ArchivedCandidateStaged => false,
                     ForwardPhase::Preparing => false,
                     ForwardPhase::FreshStateAllocating => {
                         let Some(rollback) = self.rollback.as_ref() else {
@@ -545,6 +555,8 @@ pub(super) fn next_forward_phase(record: &TransitionRecord, current: ForwardPhas
         ForwardPhase::BootSyncComplete => ForwardPhase::CommitDecided,
         ForwardPhase::CommitDecided => ForwardPhase::CommitCleanupComplete,
         ForwardPhase::CommitCleanupComplete => ForwardPhase::Complete,
+        // Unreachable until the coordinator gains its archived-staging step.
+        ForwardPhase::ArchivedCandidateStagingIntent | ForwardPhase::ArchivedCandidateStaged => return None,
         ForwardPhase::Complete => return None,
     })
 }

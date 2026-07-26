@@ -23,7 +23,9 @@ pub(crate) enum RecoveryDisposition {
 impl Phase {
     fn recovery_disposition(self) -> RecoveryDisposition {
         match self {
-            Self::Preparing
+            Self::ArchivedCandidateStagingIntent
+            | Self::ArchivedCandidateStaged
+            | Self::Preparing
             | Self::FreshStateAllocating
             | Self::FreshStateAllocated
             | Self::CandidatePrepareStarted

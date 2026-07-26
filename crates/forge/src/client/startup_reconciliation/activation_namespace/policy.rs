@@ -231,7 +231,9 @@ fn expected_layouts(record: &TransitionRecord) -> Result<Vec<LayoutAlternative>,
 
 pub(super) fn forward_layouts(record: &TransitionRecord) -> Vec<LayoutAlternative> {
     match record.phase {
-        Phase::Preparing
+        Phase::ArchivedCandidateStagingIntent
+        | Phase::ArchivedCandidateStaged
+        | Phase::Preparing
         | Phase::FreshStateAllocating
         | Phase::FreshStateAllocated
         | Phase::CandidatePrepareStarted
@@ -667,7 +669,10 @@ fn forward_ordinal(phase: ForwardPhase) -> u8 {
         ForwardPhase::BootSyncComplete => 15,
         ForwardPhase::CommitDecided => 16,
         ForwardPhase::CommitCleanupComplete => 17,
+        // Mirrors the parked ordinals in transition_journal/validation.rs.
         ForwardPhase::Complete => 18,
+        ForwardPhase::ArchivedCandidateStagingIntent => 19,
+        ForwardPhase::ArchivedCandidateStaged => 20,
     }
 }
 
