@@ -425,7 +425,7 @@ two transition engines keyed on whether a candidate happens to ship a kernel —
 non-bootable installs through the durable route, bootable ones still legacy.
 That is worse than either engine alone.
 
-### 1.1e First-install terminal completion  · **PARTLY RESOLVED 2026-07-26**
+### 1.1e First-install terminal completion  · **RESOLVED 2026-07-26**
 
 **Two blockers, not one. D1.5 cleared the first; the second is open.**
 
@@ -434,7 +434,7 @@ previous to be `Absent` at `CommitCleanupComplete`, which the cleanup path
 cannot produce because it never unlinks. `commit_layouts` now admits it in
 staging, so the terminal chain finishes.
 
-*Open — the in-flight marker is never cleared for a no-predecessor transition.*
+*Cleared (second blocker) — the in-flight marker.*
 `new_state_forward.rs:187` allocates the state row via `add_with_transition`,
 which stamps `state.transition_id`. The **only** production code that clears
 that column is `exact_archived_removal.rs:223`, which runs while archiving the
@@ -446,12 +446,14 @@ one. Caught by `state_creation_records_and_exports_the_generated_snapshot`,
 `reused_client_rejects_a_second_state_before_database_allocation`; routing was
 reverted rather than shipped.
 
-**Next step:** give the activation terminal chain its own marker clear —
-`clear_transition_if_matches(candidate, transition)` exists and today has no
-production caller at all. The open question is *ordering*: it must land inside
-the durable terminal chain, not after it, or a crash between completion and the
-clear reintroduces the same orphan. Likely belongs with
-`finalize_activation_complete`, alongside the record delete.
+**Fixed** in `finish_activation_after_commit`: a guarded
+`clear_transition_if_matches` immediately before the `Finalize` capture, so the
+clear lands while the record is still live at `Complete`. A crash between the
+clear and the delete leaves ownership `Cleared` with no in-flight row, which
+`inspect_database` already admits, so the next startup finishes the delete;
+deleting first would leave a marked row with no record to recover it from. The
+guard matters because the clear requires exactly one row to change, and a
+transition that archived a predecessor has already had its marker cleared.
 
 Original diagnosis retained below.
 
