@@ -154,9 +154,44 @@ Note: the `after_stateful_isolation_root_retention` hook I armed at
 route retains its isolation root through the view passed to the trigger closure,
 not at that call site. Re-site or remove it when doing the port.
 
-Order: settle the question above, then port both tests and verify they still
-fail-on-regression against the coordinated route, and only then delete
-`stateful_transition.rs`. Deleting first would make the ports unverifiable. §§3 and 4 follow once the path is gone.
+**Executed and reverted 2026-07-26 — the deletion works, but cascades.**
+
+First correction: `stateful_transition.rs` is *not* wholly dead. It is
+`include!`d (not a module), and only `apply_stateful_candidate` is unreachable.
+`apply_stateful_blit_with_checkpoint` and `commit_stateful_staging` are live —
+the latter from `core/state_planning.rs:128`, which §1.2's ActivateArchived
+composition will rewire. So the unit of removal is the one method, ~30 lines,
+not the 616-line file.
+
+Removing that method plus its two tests builds clean and leaves
+`fixed_staging_transition` 16/16, `install` 97/97, `active_reblit_tests` 25/25
+green. But it orphans a subtree that was reachable only through it, taking the
+production build from 0 warnings to 12. Reverted to preserve the zero-warning
+invariant; the orphan list *is* the §§3-4 worklist and is now concrete:
+
+- `client/core/client_model.rs` — `AfterTransactionTriggers` variant
+- `client/core/stateful_transition.rs` — `apply_stateful_blit_with_capability`
+- `client/core/stateful_recovery.rs` — `prepare_stateful_tree_identity_retained`
+- `client/candidate_metadata.rs` — `Stateful` variant, `decorate_stateful`
+- `client/postblit.rs` — `Transaction` variant
+- `transition_identity/active_previous_slot_parking.rs` —
+  `prepare_active_previous_slot_parking`
+- `transition_identity/staging_wrapper_rotation/legacy_lifecycle.rs` —
+  `reserve`, `prepare_active_reblit_staging_rotation`
+- `transition_identity/staging_wrapper_rotation/model.rs` —
+  `ActivePreviousSlotParking`, `NormalizeBeforeJournal` variants
+- `transition_identity/tree_lifecycle.rs` — `prepare_retained_candidate`
+
+Redo as one commit: delete `apply_stateful_candidate`, its two tests, and the
+whole list above together, re-checking for further cascade after each round
+until the production build is back to zero warnings.
+
+**Security question settled:** deleting these removes a *proof*, not a defence.
+`new_state_boot_transition.rs:124` passes the same
+`TriggerScope::RetainedTransaction { kind: Stateful, .. }`, sourcing its
+`isolation_root` from `retained_isolation_root()` as a `&RetainedRootAbi` — the
+retained capability is threaded as a *type*, so the TOCTOU invariant the old
+tests probed at runtime is now enforced structurally. §§3 and 4 follow once the path is gone.
 Do it against a clean full-suite baseline — see §2.1a, which currently makes
 full-suite results ambiguous. What remains is the 616-line `client/core/stateful_transition.rs`
 definition plus two test callers in `client/tests/fixed_staging_transition.rs`
