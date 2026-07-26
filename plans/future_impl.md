@@ -807,6 +807,26 @@ Work items, each of which the compiler will point at once the variants exist:
    routes into it; then update the ActivateArchived tests. That order keeps the
    tree building at each step, which the model-first order did not.
 
+**CORRECTION 2026-07-26 — a third ordering dependency exists, and the audit
+below did not find it.** Adding the two variants after `Preparing` and
+renumbering *both* ordinal tables still breaks 54 `activate_archived` and 11
+`activation_namespace` tests, with **nothing routing into the new phases** —
+`next_forward_phase` was deliberately left untouched, so the phases were
+unreachable. The failures land on rollback phases (observed:
+`CandidatePreserveIntent`), which the forward chain does not touch at all.
+
+So something depends on `Phase`'s *declaration order* beyond the two
+`ordinal()`/`forward_ordinal` tables. `Phase` derives only
+`Serialize/Deserialize/Eq/PartialEq` (serde by name, so not the codec), which
+means the dependency is elsewhere — a discriminant cast, an index, or a
+generated table. **Find it before attempting §1.2b again**: appending the
+variants at the *end* of the enum instead of mid-list would sidestep it
+entirely, since `ordinal()` is an explicit table and declaration order is
+otherwise supposed to be irrelevant. That is likely the cheapest fix and should
+be tried first.
+
+Original audit (accurate as far as it went, but incomplete):
+
 **Audit done 2026-07-26 — the ordinal-shift risk is much lower than feared.**
 `.ordinal()` is used in exactly three files (`transition_journal/successors.rs`,
 `transition_journal/validation.rs`, `transition_journal/tests/mod.rs`), and
