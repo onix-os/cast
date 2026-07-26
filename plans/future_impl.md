@@ -787,9 +787,32 @@ Work items, each of which the compiler will point at once the variants exist:
 8. `execute_activate_archived_forward` drives the two new phases and performs
    the move between them.
 
-Risk concentrates in (2): the ordinal shift touches every phase-ordering
-consumer, and a missed one degrades silently rather than failing to compile.
-Worth a dedicated pass over every `ordinal()` caller.
+**Audit done 2026-07-26 — the ordinal-shift risk is much lower than feared.**
+`.ordinal()` is used in exactly three files (`transition_journal/successors.rs`,
+`transition_journal/validation.rs`, `transition_journal/tests/mod.rs`), and
+*every* use is a relative comparison of the form
+`source.ordinal() >= SomePhase.ordinal()` (or `<`). Verified mechanically: no
+call site consumes an absolute ordinal value.
+
+That means the feared silent degradation cannot occur through the ordinal shift
+itself. Renumbering is safe as long as the new variants are inserted at their
+true chain position; every existing comparison stays correct by construction.
+
+Checked specifically for the new phases at ordinals 1-2 (between `Preparing` and
+`FreshStateAllocating`):
+
+- `source.ordinal() >= FreshStateAllocating.ordinal()` gates "a fresh row may
+  exist". The new phases sort *below* it, so an `ActivateArchived` record parked
+  in archived-staging correctly reports no fresh allocation — which is right,
+  since `ActivateArchived` allocates no row.
+- `>= UsrExchangeIntent`, `>= PreviousArchiveIntent`, `>= TransactionTriggersStarted`,
+  `>= SystemTriggersStarted`, `>= BootSyncStarted` and
+  `< CommitDecided` (`rollback_allowed`) all likewise sort the new phases on the
+  early side, which is correct for a phase that precedes candidate preparation.
+
+Remaining risk therefore sits in items (3) codec encoding and (5) namespace
+layouts, not in the renumbering. No back-compat concern for (3): the payload
+version is already collapsed to a single current version.
 
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
 ActiveReblit forward cleanup/finalization is already journal-durable+resumable
