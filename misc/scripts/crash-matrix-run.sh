@@ -31,15 +31,27 @@
 #          Error: install: protect state mutation from interruption:
 #                 failed to connect to dbus: No such file or directory
 #
-#      Forge takes a dbus inhibitor lock so a state mutation cannot be
-#      interrupted. Attempted 2026-07-26: staging `dbus-daemon`, its ldd closure,
-#      /usr/share/dbus-1, a messagebus passwd/group entry, and starting both a
-#      system and session bus in the guest init was **not** sufficient — forge
-#      still reports the same connect failure. Likely still missing a machine-id
-#      (`dbus-uuidgen --ensure`) and possibly the exact socket path forge looks
-#      for; worth checking what forge actually connects to before adding more.
-#      The cheaper alternative is a forge-side escape hatch: no inhibitor when
-#      there is nothing to inhibit.
+#      **Root cause, read from the source (`forge/src/signal.rs:36-58`): it is
+#      not dbus, it is logind.** `inhibit()` opens the *system* bus and calls
+#      `org.freedesktop.login1` / `org.freedesktop.login1.Manager.Inhibit`. A
+#      bare `dbus-daemon` can never satisfy that — the bus starts fine and
+#      nothing answers the call. Staging dbus-daemon, its ldd closure,
+#      /usr/share/dbus-1 and a messagebus user was therefore never going to work,
+#      and adding a machine-id would not have helped either.
+#
+#      Three real options:
+#        a. Stub `org.freedesktop.login1` in the guest — a small service that
+#           answers `Inhibit` with a dummy fd. Self-contained, no production
+#           change, but another moving part in the initramfs.
+#        b. Give forge an escape hatch (env var/flag) to skip the inhibitor when
+#           nothing can interrupt it. Cheapest, but adds a production path that
+#           exists only for the harness.
+#        c. Run a real init in the guest with logind. Heaviest; effectively the
+#           full-rootfs option.
+#
+#      Note `signal.rs` already has a `#[cfg(test)]` bypass that skips the
+#      inhibitor entirely for unit tests — precedent for (b), and worth reading
+#      before choosing.
 #      Note the irony worth keeping in mind: the lock that exists to protect
 #      against interruption is what blocks the harness built to interrupt it.
 #
