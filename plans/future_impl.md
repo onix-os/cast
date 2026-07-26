@@ -856,13 +856,23 @@ its own, and it removes the silent-renumbering hazard permanently.
 54 failures -> **0/67 green**, `journal_coordinator` 2 -> **0/117 green**,
 `activation_namespace` 11 -> **5**. So the literals were the bulk of it.
 
-**Still blocked on those last 5**, which are behavioural rather than numeric —
-`isolation_abi` crash-prefix/trigger-phase contract, `partial_replacement`
-returning `Err(ActiveReblitWrapper)` where the test expects admission, and the
-cleanup/ABI matrix. Something else still derives meaning from absolute ordinal
-position; find it the same way (it will not contain `.ordinal()` either). The
-ordinal move was reverted; the naming fix and the model foundation are both
-committed and green.
+**Resolved: there is a THIRD duplicated ordinal table.** The last 5 failures
+came from `activation_namespace/policy.rs::forward_phase_ordinal(phase: Phase)`,
+which is distinct from both `ForwardPhase::ordinal`
+(`transition_journal/validation.rs`) and `forward_ordinal(ForwardPhase)` in the
+same file. Renumbering two and leaving the third stale is what kept those tests
+red.
+
+With all three renumbered together the ordinal move is **done and green**:
+`activation_namespace` 60/60, `activate_archived` 67/67, `journal_coordinator`
+117/117, `transition_journal` 136/136 — 380 tests, zero failures, production
+build at zero warnings.
+
+**Standing hazard worth fixing on its own:** three independent tables encode the
+same phase ordering, and only exhaustiveness checking links them. Two of the
+three are invisible to a `.ordinal()` grep. Collapsing them into one source of
+truth would retire a class of silent breakage that cost four separate
+diagnoses in this epic alone.
 
 Original correction, retained because the underlying hazard is still real:
 
