@@ -935,10 +935,26 @@ change; it collapsed `journal_coordinator` 31 -> 17 in one step. Also bump the
 `assert_record_prefix` generations inside the ActivateArchived prefix test
 (`operation_prefixes.rs:121` onward): 17 -> 16.
 
-What remains is a genuine long tail of individually-written generation
-assertions across `journal_coordinator` (16) and `transition_journal` (1). They
-are all the same kind of edit; there is no further central lever, so the last
-stretch is one-by-one.
+Two more central tables exist and are worth applying with the rest — bump only
+their `CandidateKind::Archived` arms by 2:
+
+- `tests/root_abi_publication_support.rs:94` (`Archived => 6`)
+- `tests/usr_exchange_effect.rs:103` (`Archived => 5`)
+
+Plus the `assert_record_prefix` generations inside the ActivateArchived prefix
+test (`operation_prefixes.rs:121` onward).
+
+With all of those, `journal_coordinator` reaches **15 failures** and
+`activate_archived` / `activation_namespace` are fully green.
+
+The final 15 are **not** generation arithmetic and have no central lever. They
+are hook-consumption assertions — `client/core/root_abi.rs:99` and `:111`
+("armed retained root ABI link callback was not reached", "armed retained root
+ABI sync fault was not reached"), `transition_journal/store.rs:218`, and a
+couple of prefix asserts. A test arms a thread-local fault hook and drives a
+flow that must reach it; with two extra phases the flow reaches it differently
+or not at all. Each needs reading individually — expect real thought per case,
+not a bump.
 
 Reverted (uncommitted) rather than ship 16 failures. The derivation fix and the
 model foundation are both committed and green. Reapplying step 8 is now
