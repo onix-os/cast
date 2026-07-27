@@ -259,11 +259,14 @@ fn startup_root_links_complete_fresh_entries_reach_operation_specific_stable_end
                     drop(stable);
                 }
                 OperationKind::Archived => {
-                    assert_eq!(candidate_preserved.generation, 11, "{case}");
+                    // Two higher than the other operations: ActivateArchived
+                    // traverses the durable archived-staging pair before
+                    // candidate preparation (`plans/future_impl.md` §1.2b).
+                    assert_eq!(candidate_preserved.generation, 13, "{case}");
                     let complete_entry = fixture.enter();
                     let rollback_complete = candidate_preserved.rollback_successor(None).unwrap();
                     assert_eq!(rollback_complete.phase, Phase::RollbackComplete, "{case}");
-                    assert_eq!(rollback_complete.generation, 12, "{case}");
+                    assert_eq!(rollback_complete.generation, 14, "{case}");
                     assert_eq!(pending(&complete_entry).phase(), Phase::RollbackComplete, "{case}");
                     assert!(pending(&complete_entry).blockers().is_empty(), "{case}");
                     assert_eq!(fixture.canonical_record(), rollback_complete, "{case}");
