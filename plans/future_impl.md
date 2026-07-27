@@ -850,11 +850,24 @@ and fixing expectations in order:
 - **18 -> 17** by bumping four bare `assert_eq!(record.generation, 12)` literals
   to 14 in `usr_rollback_activate_archived/tests/` (`finalization_authority_binding.rs`
   x2, `finalization_root_link_races.rs`, `root_links_terminal_process_kill.rs`).
-- **17 remaining**, and they concentrate in one shared file:
-  `usr_rollback_activate_archived/tests/support.rs` lines 575, 583 and 606, plus
-  `finalization_evidence_races.rs:238`. That concentration suggests one or two
-  more central fixes rather than 17 separate ones — the same pattern as the two
-  above.
+- **17 remaining, and they are NOT generation expectations.** Confirmed by
+  reapplying everything and reading them: they fail at `.expect()` sites in
+  `usr_rollback_activate_archived/tests/support.rs` (575, 583, 606) with
+  *"exact terminal ActivateArchived evidence did not admit finalization"* — the
+  rollback finalization admission rejects the record outright.
+
+  Every remaining generation reference in that test tree is relative
+  (`fixture.source.generation + 1`) or already fixed, so bumping literals will
+  not help. The rollback path itself must be re-examined: an ActivateArchived
+  rollback record carries a `source: ForwardPhase`, and its admission almost
+  certainly encodes an assumption about the forward chain that a two-phase
+  extension invalidates. Start at whatever `UsrRollbackActivateArchivedFinalizationAdmission`
+  checks before returning `Ready`, and compare against `rollback_layouts` and
+  `validate_rollback_requirement`.
+
+  Note this is the *rollback* half of the operation, which §1.2b never
+  considered — the section scopes only the forward chain. That omission is the
+  actual gap, not a test-fixture detail.
 
 Reverted to the green committed state (`activate_archived` 67/67) rather than
 leave 17 failures in the tree. Reapply the four code changes together with the
