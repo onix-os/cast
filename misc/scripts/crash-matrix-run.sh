@@ -48,10 +48,20 @@
 #           accident; with it unset, behaviour is unchanged (verified: `install`
 #           97/97, `active_reblit_tests` 25/25). Set it in the guest init before
 #           driving any state-mutating cell.
-#           NOT yet verified end-to-end in the guest: the VM became unreachable
-#           before the rebuilt binary could be uploaded. Re-run
-#           `crash-matrix-run.sh` with a freshly staged /tmp/cast to confirm the
-#           control cell reaches `state=installed`.
+#           NOT yet verified end-to-end in the guest. The approved VM lost its
+#           network mid-session: `virsh` reports `ubuntu24.04` running, but it
+#           has no DHCP lease, no ARP entry, and does not answer ping on
+#           192.168.122.148. A `virsh reboot` did not restore it within ~9
+#           minutes. Everything else is in place; only the confirmation run is
+#           outstanding.
+#
+#           To finish: bring the VM's network back, then stage the rebuilt
+#           binary and its nix closure exactly as `crash-matrix-forge-guest.sh`
+#           documents (/tmp/cast, /tmp/libstone.so, /tmp/nixlibs.tgz,
+#           /tmp/pkg.stone), export CAST_ALLOW_UNINHIBITED_TRANSACTION=1 in the
+#           guest init, and run this script. The control cell reaching
+#           `state=installed` is the confirmation; every other cell's `state`
+#           column only becomes meaningful once it does.
 #        c. Run a real init in the guest with logind. Heaviest; effectively the
 #           full-rootfs option.
 #
