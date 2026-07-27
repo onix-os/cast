@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use std::os::unix::fs::MetadataExt as _;
+
 use astr::AStr;
 use fs_err as fs;
 use nix::{
@@ -498,6 +500,7 @@ fn final_revalidation_rejects_state_mutation_after_snapshot_binding() {
 fn failed_final_revalidation_drops_every_prepared_snapshot_descriptor() {
     let fixture = BootInputFixture::new(minimal_entries(b"systemd boot", b"kernel"));
     let captured_descriptor = Cell::<Option<RawFd>>::new(None);
+    let captured_identity = Cell::<Option<(u64, u64)>>::new(None);
     let error = prepare_with_policy_and_checkpoint(
         &fixture.installation,
         &fixture.state_db,
@@ -505,14 +508,19 @@ fn failed_final_revalidation_drops_every_prepared_snapshot_descriptor() {
         &fixture.head,
         StoneBootInputPolicy::production(),
         |snapshots| {
-            captured_descriptor.set(Some(
-                snapshots
-                    .snapshots()
-                    .next()
-                    .expect("prepared plan must own at least one snapshot")
-                    .descriptor()
-                    .as_raw_fd(),
-            ));
+            let descriptor = snapshots
+                .snapshots()
+                .next()
+                .expect("prepared plan must own at least one snapshot")
+                .descriptor();
+            // Record what the descriptor *points at*, not just its number.
+            // Numbers are reused process-wide, so a concurrent test can be
+            // handed this one after it is closed; asserting only `EBADF` then
+            // fails despite correct cleanup. Identity distinguishes "closed"
+            // from "reused" (`plans/future_impl.md` §2.1a).
+            let metadata = fs::metadata(format!("/proc/self/fd/{}", descriptor.as_raw_fd())).ok();
+            captured_identity.set(metadata.map(|metadata| (metadata.dev(), metadata.ino())));
+            captured_descriptor.set(Some(descriptor.as_raw_fd()));
             fixture
                 .state_db
                 .change_summary_for_test(fixture.head.id, Some("force final revalidation failure"))
@@ -529,7 +537,23 @@ fn failed_final_revalidation_drops_every_prepared_snapshot_descriptor() {
     let descriptor = captured_descriptor
         .get()
         .expect("checkpoint must observe a prepared snapshot descriptor");
-    assert_eq!(fcntl(descriptor, FcntlArg::F_GETFD), Err(Errno::EBADF));
+    // Either the number is gone, or it has been handed to something else — both
+    // prove this plan dropped its descriptor. Only "still open on the same
+    // inode" would be a leak.
+    match fcntl(descriptor, FcntlArg::F_GETFD) {
+        Err(Errno::EBADF) => {}
+        Ok(_) => {
+            let now = fs::metadata(format!("/proc/self/fd/{descriptor}"))
+                .ok()
+                .map(|metadata| (metadata.dev(), metadata.ino()));
+            assert_ne!(
+                now,
+                captured_identity.get(),
+                "prepared snapshot descriptor is still open on its original inode",
+            );
+        }
+        Err(other) => panic!("unexpected fcntl error: {other}"),
+    }
 }
 
 #[test]
