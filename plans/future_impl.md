@@ -926,7 +926,21 @@ must now traverse the staging pair first. Eight such call sites:
 same two-call insertion, guarded on `CandidateKind::Archived` — the pattern is
 already applied at `failure_evidence.rs:308` and works.
 
-Reverted (uncommitted) rather than ship 23 failures. The derivation fix and the
+**Second full reapply, with a better technique.** Adding a `#[cfg(test)]`
+convenience on the coordinator —
+`begin_candidate_prepare_through_staging()`, which traverses the staging pair
+only when the record is `ActivateArchived` at `Preparing` — turns the eight
+scattered call sites into a single `sed`. That is worth keeping in the real
+change; it collapsed `journal_coordinator` 31 -> 17 in one step. Also bump the
+`assert_record_prefix` generations inside the ActivateArchived prefix test
+(`operation_prefixes.rs:121` onward): 17 -> 16.
+
+What remains is a genuine long tail of individually-written generation
+assertions across `journal_coordinator` (16) and `transition_journal` (1). They
+are all the same kind of edit; there is no further central lever, so the last
+stretch is one-by-one.
+
+Reverted (uncommitted) rather than ship 16 failures. The derivation fix and the
 model foundation are both committed and green. Reapplying step 8 is now
 mechanical: the four code changes, the three generation-expectation fixes
 (`test_support.rs` Archived rows +2, `generation, 12)` -> 14 in
