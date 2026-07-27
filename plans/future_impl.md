@@ -1262,10 +1262,29 @@ child process; no other call site exists). No `set_current_dir` anywhere.
 
 State after the two fixes, measured on the full workspace suite:
 
-- **forge at 16 threads: 2757 passed, 1 failed** (was 8-10). The residual is
-  `active_reblit_boot_inputs::failed_final_revalidation_drops_every_prepared_snapshot_descriptor`,
-  which passes in isolation and passes at its own module with 16 threads, so it
-  is the same whole-suite contention class, now rare rather than routine.
+- **forge at 16 threads: 2757 passed, 1 failed** (was 8-10).
+
+  **The residual is diagnosed, and it is a test bug — not a budget.**
+  `active_reblit_boot_inputs_tests.rs:498`
+  (`failed_final_revalidation_drops_every_prepared_snapshot_descriptor`)
+  captures a raw file-descriptor *number* and then asserts the descriptor was
+  closed via:
+
+      assert_eq!(fcntl(descriptor, FcntlArg::F_GETFD), Err(Errno::EBADF));
+
+  File-descriptor numbers are reused process-wide. Under concurrency another
+  test opens a file, is handed the same number, and `F_GETFD` succeeds — so the
+  assertion fails even though the descriptor under test was closed correctly.
+  That is precisely why it only fails in whole-suite runs: more concurrent
+  tests, higher chance of reuse. No amount of budget scaling can fix it.
+
+  **Fixing it needs a different mechanism**, since "is this number still valid"
+  is not answerable safely in a multi-threaded process. Options: compare
+  `/proc/self/fd/N` against the original target so a reused number is
+  distinguishable from the original descriptor; or hold the test's own duplicate
+  and assert on identity rather than validity; or serialise this one test. The
+  first keeps the coverage intact and is the only one that actually proves what
+  the test claims.
 - `receipt_promotion::completion` is 27/27 at 16 threads and below; 24 fails 2.
 - `make test` now defaults to `TEST_THREADS ?= 16`, overridable
   (`make test TEST_THREADS=1`) for bisects.
