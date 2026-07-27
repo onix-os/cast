@@ -1290,6 +1290,24 @@ State after the two fixes, measured on the full workspace suite:
   — a straggler from the original completion cluster, which the two budget fixes
   reduced from 8-10 to this one. Same reproduction as §2.1a: it needs the
   whole-suite thread count, passes in isolation and at its own module.
+
+  **Better reproduction, and the obvious explanation ruled out (2026-07-27).**
+  `cargo test -p forge receipt_promotion::completion -- --test-threads=16`
+  **alone** fails 4-5 of 27 — more than the whole-suite run — because in
+  isolation those 27 run far more concurrently than when spread across 2758. At
+  `--test-threads=24` it is 7-8.
+
+  Every failure is `DeadlineExceeded` with `remaining_at_admission` in the
+  *milliseconds*. The boot budgets are provably scaled x20 in test builds
+  (`timeout_policy::tests::the_test_build_actually_scales_budgets` now asserts
+  this, so it cannot silently regress), putting them at 600s+. A 2ms remainder
+  is impossible from any scaled budget.
+
+  So the governing deadline is **not** one of the 13 scaled boot budgets — it is
+  armed elsewhere, near the point of use, and that source is still unfound.
+  Next step: instrument `BootTopologyIntentBudget::new_until` to print its
+  incoming `deadline` and caller. Three rounds of auditing constants have failed
+  to find it; measure instead.
 - `receipt_promotion::completion` is 27/27 at 16 threads and below; 24 fails 2.
 - `make test` now defaults to `TEST_THREADS ?= 16`, overridable
   (`make test TEST_THREADS=1`) for bisects.
