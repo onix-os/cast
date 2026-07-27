@@ -8,6 +8,7 @@
 
 use crate::{
     Installation, db,
+    transition_journal::expected_forward_generation,
     transition_journal::{
         AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin,
         RollbackAction, StorageError, TransitionJournalBinding, TransitionJournalRecordBinding,
@@ -223,6 +224,26 @@ impl UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority<'_> {
     }
 }
 
+/// Generation a `RootLinksComplete` rollback source reaches at
+/// `RollbackComplete`.
+///
+/// Derived rather than written as the literal `12`, which silently encoded the
+/// *length* of the forward chain: extending that chain broke admission with no
+/// compile error (`plans/future_impl.md` §1.2b).
+///
+/// The walk runs against a copy with the rollback plan removed, because
+/// `next_forward_phase` refuses a record that carries one.
+///
+/// The offset was measured, not assumed — two earlier attempts guessed the
+/// forward generation was 8 and the offset 4, and both broke 17 tests. It is
+/// 6 + 6 for this operation.
+fn expected_rollback_complete_generation(record: &TransitionRecord) -> Option<u64> {
+    const ROLLBACK_ADVANCES_TO_COMPLETE: u64 = 6;
+    let mut forward = record.clone();
+    forward.rollback = None;
+    expected_forward_generation(&forward, ForwardPhase::RootLinksComplete)?.checked_add(ROLLBACK_ADVANCES_TO_COMPLETE)
+}
+
 fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
@@ -234,10 +255,11 @@ fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bo
         && record.candidate.id.is_some()
         && record.previous.id.is_some()
         && record.candidate.id != record.previous.id
-        && matches!(
-            (rollback.source, record.generation),
-            (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _) | (ForwardPhase::RootLinksComplete, 12)
-        )
+        && match rollback.source {
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged => true,
+            ForwardPhase::RootLinksComplete => expected_rollback_complete_generation(record) == Some(record.generation),
+            _ => false,
+        }
         && rollback.previous_archive == RollbackAction::NotRequired
         && matches!(
             rollback.usr_exchange,
