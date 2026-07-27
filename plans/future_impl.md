@@ -1278,13 +1278,18 @@ State after the two fixes, measured on the full workspace suite:
   That is precisely why it only fails in whole-suite runs: more concurrent
   tests, higher chance of reuse. No amount of budget scaling can fix it.
 
-  **Fixing it needs a different mechanism**, since "is this number still valid"
-  is not answerable safely in a multi-threaded process. Options: compare
-  `/proc/self/fd/N` against the original target so a reused number is
-  distinguishable from the original descriptor; or hold the test's own duplicate
-  and assert on identity rather than validity; or serialise this one test. The
-  first keeps the coverage intact and is the only one that actually proves what
-  the test claims.
+  **Fixed 2026-07-27.** The test now records what the descriptor *points at*
+  (`/proc/self/fd/N` dev+ino) at capture time, and accepts either `EBADF` or a
+  different identity — both prove the plan dropped its descriptor, while "still
+  open on the original inode" remains a failure. Coverage is unchanged and the
+  race is gone.
+
+  **Whole-suite state after that fix: still 2757/1, but a different test.** The
+  descriptor test no longer appears; the remaining failure is
+  `receipt_promotion::completion::drift::final_return_revalidation_catches_late_drift_after_durable_completion`
+  — a straggler from the original completion cluster, which the two budget fixes
+  reduced from 8-10 to this one. Same reproduction as §2.1a: it needs the
+  whole-suite thread count, passes in isolation and at its own module.
 - `receipt_promotion::completion` is 27/27 at 16 threads and below; 24 fails 2.
 - `make test` now defaults to `TEST_THREADS ?= 16`, overridable
   (`make test TEST_THREADS=1`) for bisects.
