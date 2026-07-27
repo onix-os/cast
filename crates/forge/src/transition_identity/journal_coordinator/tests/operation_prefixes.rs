@@ -39,7 +39,7 @@ fn journal_coordinator_new_state_reaches_candidate_prepared_through_exact_genera
     assert_eq!(coordinator.record().candidate.id, Some(i32::from(allocated)));
     assert_candidate_state_id_absent(&fixture);
 
-    let coordinator = coordinator.begin_candidate_prepare().unwrap();
+    let coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::NewState,
@@ -140,19 +140,19 @@ fn journal_coordinator_archived_activation_reaches_candidate_prepared_without_al
         TransitionOwnership::Cleared
     );
 
-    let coordinator = coordinator.begin_candidate_prepare().unwrap();
+    let coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::ActivateArchived,
         Phase::CandidatePrepareStarted,
-        2,
+        4,
     );
     let coordinator = finish_candidate_prepare(coordinator).unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::ActivateArchived,
         Phase::CandidatePrepared,
-        3,
+        5,
     );
     assert_eq!(fixture.database.audit_in_flight_transition().unwrap(), None);
     assert_candidate_metadata(&fixture);
@@ -188,7 +188,7 @@ fn journal_coordinator_active_reblit_reaches_candidate_prepared_without_allocati
     );
     assert_candidate_state_id_absent(&fixture);
 
-    let coordinator = coordinator.begin_candidate_prepare().unwrap();
+    let coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     assert_record_prefix(
         coordinator.record(),
         Operation::ActiveReblit,
@@ -229,7 +229,7 @@ fn journal_coordinator_creation_captures_exact_epoch_tokens_and_runtime_tree_wit
     assert_eq!(preparing.candidate.usr_runtime_identity, expected_candidate);
     assert_eq!(preparing.previous.usr_runtime_identity, expected_previous);
 
-    let coordinator = coordinator.begin_candidate_prepare().unwrap();
+    let coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     let coordinator = finish_candidate_prepare(coordinator).unwrap();
     let prepared = coordinator.record();
     assert_eq!(prepared.creation_epoch, preparing.creation_epoch);
@@ -760,7 +760,7 @@ fn journal_coordinator_wrong_operation_or_phase_is_rejected_without_record_chang
             .unwrap();
         let before = coordinator.record().clone();
         assert!(matches!(
-            coordinator.begin_candidate_prepare(),
+            coordinator.begin_candidate_prepare_through_staging(),
             Err(StatefulTransitionCoordinatorError::UnexpectedPhase {
                 expected: Phase::FreshStateAllocated,
                 actual: Phase::Preparing,
@@ -824,11 +824,11 @@ fn journal_coordinator_wrong_operation_or_phase_is_rejected_without_record_chang
         let coordinator = identity
             .begin_transition(request(CandidateKind::ActiveReblit, &fixture, false, false))
             .unwrap()
-            .begin_candidate_prepare()
+            .begin_candidate_prepare_through_staging()
             .unwrap();
         let before = coordinator.record().clone();
         assert!(matches!(
-            coordinator.begin_candidate_prepare(),
+            coordinator.begin_candidate_prepare_through_staging(),
             Err(StatefulTransitionCoordinatorError::UnexpectedPhase {
                 expected: Phase::Preparing,
                 actual: Phase::CandidatePrepareStarted,

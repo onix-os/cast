@@ -61,7 +61,7 @@ impl TerminalOperation {
     pub(super) fn generation(self) -> u64 {
         match self {
             Self::NewState => 18,
-            Self::ActivateArchived => 12,
+            Self::ActivateArchived => 14,
             Self::ActiveReblit => 14,
         }
     }

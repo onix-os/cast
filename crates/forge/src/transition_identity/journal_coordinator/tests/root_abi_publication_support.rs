@@ -91,7 +91,7 @@ fn coordinator_ready_for_root_abi_publication_with_previous(
 fn expected_root_links_complete_generation(candidate_kind: CandidateKind) -> u64 {
     match candidate_kind {
         CandidateKind::NewState => 10,
-        CandidateKind::Archived => 6,
+        CandidateKind::Archived => 8,
         CandidateKind::ActiveReblit => 8,
     }
 }

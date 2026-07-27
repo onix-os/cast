@@ -533,7 +533,12 @@ pub(super) fn next_forward_phase(record: &TransitionRecord, current: ForwardPhas
         ForwardPhase::Preparing if matches!(record.operation, Operation::NewState) => {
             ForwardPhase::FreshStateAllocating
         }
+        ForwardPhase::Preparing if matches!(record.operation, Operation::ActivateArchived) => {
+            ForwardPhase::ArchivedCandidateStagingIntent
+        }
         ForwardPhase::Preparing => ForwardPhase::CandidatePrepareStarted,
+        ForwardPhase::ArchivedCandidateStagingIntent => ForwardPhase::ArchivedCandidateStaged,
+        ForwardPhase::ArchivedCandidateStaged => ForwardPhase::CandidatePrepareStarted,
         ForwardPhase::FreshStateAllocating => ForwardPhase::FreshStateAllocated,
         ForwardPhase::FreshStateAllocated => ForwardPhase::CandidatePrepareStarted,
         ForwardPhase::CandidatePrepareStarted => ForwardPhase::CandidatePrepared,
@@ -555,8 +560,6 @@ pub(super) fn next_forward_phase(record: &TransitionRecord, current: ForwardPhas
         ForwardPhase::BootSyncComplete => ForwardPhase::CommitDecided,
         ForwardPhase::CommitDecided => ForwardPhase::CommitCleanupComplete,
         ForwardPhase::CommitCleanupComplete => ForwardPhase::Complete,
-        // Unreachable until the coordinator gains its archived-staging step.
-        ForwardPhase::ArchivedCandidateStagingIntent | ForwardPhase::ArchivedCandidateStaged => return None,
         ForwardPhase::Complete => return None,
     })
 }

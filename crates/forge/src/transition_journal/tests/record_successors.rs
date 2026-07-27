@@ -23,9 +23,15 @@ fn production_forward_successor_inserts_a_state_id_only_at_allocation_completion
     assert_eq!(prepared_intent.phase, Phase::CandidatePrepareStarted);
     assert_eq!(prepared_intent.candidate.id, Some(42));
 
+    // ActivateArchived reaches candidate preparation through the durable
+    // archived-staging pair, not directly (`plans/future_impl.md` §1.2b).
     let mut archived = archived_record(Phase::Preparing);
     archived.generation = 1;
-    let archived_next = archived.forward_successor(None).unwrap();
+    let staging_intent = archived.forward_successor(None).unwrap();
+    assert_eq!(staging_intent.phase, Phase::ArchivedCandidateStagingIntent);
+    let staged = staging_intent.forward_successor(None).unwrap();
+    assert_eq!(staged.phase, Phase::ArchivedCandidateStaged);
+    let archived_next = staged.forward_successor(None).unwrap();
     assert_eq!(archived_next.phase, Phase::CandidatePrepareStarted);
     assert_eq!(archived_next.candidate.id, Some(42));
 }

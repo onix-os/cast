@@ -23,7 +23,7 @@ fn active_reblit_reservation_candidate(
     let coordinator = identity
         .begin_transition(request(CandidateKind::ActiveReblit, &fixture, false, false))
         .unwrap()
-        .begin_candidate_prepare()
+        .begin_candidate_prepare_through_staging()
         .unwrap();
     let prepared = finish_candidate_prepare(coordinator).unwrap();
     let PreparedStatefulTransitionCoordinator::ActiveReblitReservation(prepared) = prepared else {

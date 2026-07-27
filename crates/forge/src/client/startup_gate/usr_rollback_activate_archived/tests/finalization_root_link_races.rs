@@ -50,7 +50,7 @@ fn startup_activate_archived_finalization_root_links_rejects_all_five_link_races
                 CandidateOutcome::AlreadySatisfied,
             );
             let terminal = persist_rollback_complete(&fixture);
-            assert_eq!(terminal.generation, 12);
+            assert_eq!(terminal.generation, 14);
             let database_before = fixture.database_snapshot();
             let root = fixture.fixture.fixture.installation.root.clone();
             let removed = root.join(removed_name);

@@ -52,8 +52,10 @@ fn expected_usr_exchange_predecessor(candidate_kind: CandidateKind) -> (Operatio
         CandidateKind::Archived => (
             Operation::ActivateArchived,
             Phase::CandidatePrepared,
-            3,
-            4,
+            // Two higher than before: ActivateArchived traverses the durable
+            // archived-staging pair (`plans/future_impl.md` §1.2b).
+            5,
+            6,
         ),
         CandidateKind::ActiveReblit => (
             Operation::ActiveReblit,
@@ -284,7 +286,7 @@ fn journal_coordinator_usr_exchange_intent_failure_releases_journal_while_error_
     });
     assert_eq!(
         receiver.recv_timeout(std::time::Duration::from_secs(10)),
-        Ok((Phase::CandidatePrepared, 3)),
+        Ok((Phase::CandidatePrepared, 5)),
         "a returned /usr exchange-intent failure retained the exclusive journal lock"
     );
     worker.join().unwrap();

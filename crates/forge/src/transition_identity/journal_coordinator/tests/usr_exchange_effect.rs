@@ -67,7 +67,7 @@ fn coordinator_from_exchange_fixture_with_options(
             .finish_fresh_allocation(&fixture.database, allocated)
             .unwrap();
     }
-    coordinator = coordinator.begin_candidate_prepare().unwrap();
+    coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     let prepared = finish_candidate_prepare(coordinator).unwrap();
     let ready = match prepared {
         PreparedStatefulTransitionCoordinator::Archived(ready) => {
@@ -100,7 +100,7 @@ fn coordinator_from_exchange_fixture_with_options(
 fn expected_usr_exchanged_generation(candidate_kind: CandidateKind) -> u64 {
     match candidate_kind {
         CandidateKind::NewState => 9,
-        CandidateKind::Archived => 5,
+        CandidateKind::Archived => 7,
         CandidateKind::ActiveReblit => 7,
     }
 }

@@ -264,6 +264,12 @@ where
         })
         .map_err(|source| NewStateForwardError::at("transition creation", source))?;
     let coordinator = coordinator
+        .begin_archived_staging()
+        .map_err(|source| NewStateForwardError::at("archived staging intent", source))?;
+    let coordinator = coordinator
+        .complete_archived_staging()
+        .map_err(|source| NewStateForwardError::at("archived staging completion", source))?;
+    let coordinator = coordinator
         .begin_candidate_prepare()
         .map_err(|source| NewStateForwardError::at("candidate preparation intent", source))?;
     let prepared = coordinator

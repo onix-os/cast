@@ -34,7 +34,7 @@ impl FinalizationFixture {
         assert_eq!(preserved.phase, Phase::CandidatePreserved);
         let terminal = preserved.rollback_successor(None).unwrap();
         assert_eq!(terminal.phase, Phase::RollbackComplete);
-        assert_eq!(terminal.generation, 12);
+        assert_eq!(terminal.generation, 14);
         let journal = fixture.open_journal();
         journal.advance(&fixture.candidate_intent, &preserved).unwrap();
         journal.advance(&preserved, &terminal).unwrap();
