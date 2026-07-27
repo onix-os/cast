@@ -19,8 +19,14 @@ fn admitted(fixture: &SyntheticSysfs) -> io::Result<FixtureSysfsTree> {
     FixtureSysfsTree::admit(parent, root_name)
 }
 
+// Generous on purpose. This is a test-side deadline standing in for a
+// caller's absolute budget, and the work it bounds is not slow — but under a
+// parallel suite, contention alone can exhaust a short window and surface as
+// `DeadlineExceeded` far from anything the test is about
+// (`plans/future_impl.md` §2.1a). Keep it well above any plausible
+// contention stall; these tests never assert on how long the work takes.
 fn future_deadline() -> Instant {
-    Instant::now() + Duration::from_secs(30)
+    Instant::now() + Duration::from_secs(600)
 }
 
 fn measured_preparation_calls(tree: &FixtureSysfsTree, deadline: Instant) -> usize {

@@ -229,8 +229,12 @@ pub(super) fn prepare_static<'stone, 'roots>(
     PreparedActiveReblitBootRenderInputs::prepare_until(stone, roots, &fixture.installation, future_deadline()).unwrap()
 }
 
+// Generous on purpose. This stands in for a caller's absolute budget, and under
+// a parallel suite contention alone can exhaust a short window and surface as
+// `DeadlineExceeded` far from anything the test is about
+// (`plans/future_impl.md` §2.1a). These tests never assert on elapsed time.
 pub(super) fn future_deadline() -> Instant {
-    Instant::now().checked_add(Duration::from_secs(60)).unwrap()
+    Instant::now().checked_add(Duration::from_secs(600)).unwrap()
 }
 
 pub(super) fn expired_deadline() -> Instant {
