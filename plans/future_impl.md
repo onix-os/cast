@@ -888,10 +888,23 @@ and fixing expectations in order:
   returns `None` and admission fails — 17 tests break on the *unmodified*
   baseline. Verified and reverted.
 
-  A working fix needs the forward generation computed from a record *without*
-  its rollback plan (or a rollback-aware variant of the walk). Do that first,
-  independently of §1.2b: it removes a real latent hazard whether or not the
-  archived-staging phases ever land.
+  **Second attempt also failed, same way.** Stripping the rollback plan from a
+  clone before the walk (so `next_forward_phase` accepts it) still breaks the
+  same 17 on the unmodified baseline. Both attempts assumed the forward
+  generation at `RootLinksComplete` is 8, making `12 = 8 + 4`. That assumption
+  is wrong: the chain length depends on the record's own options
+  (`runs_transaction_triggers`, `run_system_triggers`), so there is no single
+  forward generation for the phase.
+
+  **Do not attempt a third derivation from assumed arithmetic.** Measure first:
+  print `expected_forward_generation` for the exact records these tests build
+  (`usr_rollback_activate_archived/tests/support.rs`), and confirm what the
+  decomposition of `12` actually is for each option combination. It may turn out
+  the literal is only correct for one option set, which would make it a latent
+  bug in its own right rather than merely a fragile constant.
+
+  Until measured, the `12` stays. It is documented here as the single blocker
+  for §1.2b's forward chain, and as a standing hazard independent of it.
 
 Reverted to the green committed state (`activate_archived` 67/67) rather than
 leave 17 failures in the tree. Reapply the four code changes together with the
