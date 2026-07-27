@@ -869,6 +869,30 @@ and fixing expectations in order:
   considered — the section scopes only the forward chain. That omission is the
   actual gap, not a test-fixture detail.
 
+  **Located it — a hard-coded generation in PRODUCTION code.**
+  `usr_rollback_activate_archived_finalization_authority.rs:239`:
+
+      (rollback.source, record.generation),
+      (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
+          | (ForwardPhase::RootLinksComplete, 12)
+
+  That `12` is the forward generation at `RootLinksComplete` (8 for
+  ActivateArchived) plus the four rollback advances reaching `RollbackComplete`.
+  Written as a literal it silently encodes the forward chain's *length*, so
+  extending the chain by two breaks admission with no compile error. This is the
+  fourth such dependency found in this epic and the only one in production code.
+
+  **Attempted fix that does NOT work:** replacing it with
+  `expected_forward_generation(record, RootLinksComplete) + 4`. That walks
+  `next_forward_phase`, which bails on a record carrying a rollback plan, so it
+  returns `None` and admission fails — 17 tests break on the *unmodified*
+  baseline. Verified and reverted.
+
+  A working fix needs the forward generation computed from a record *without*
+  its rollback plan (or a rollback-aware variant of the walk). Do that first,
+  independently of §1.2b: it removes a real latent hazard whether or not the
+  archived-staging phases ever land.
+
 Reverted to the green committed state (`activate_archived` 67/67) rather than
 leave 17 failures in the tree. Reapply the four code changes together with the
 two expectation fixes above, then start at `support.rs:575`.
