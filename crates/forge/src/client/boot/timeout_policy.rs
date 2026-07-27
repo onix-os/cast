@@ -45,3 +45,17 @@ pub(in crate::client) const fn boot_budget(production: Duration) -> Duration {
         production
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_test_build_actually_scales_budgets() {
+        assert_eq!(
+            boot_budget(Duration::from_secs(30)),
+            Duration::from_secs(30 * u64::from(TEST_BUDGET_SCALE)),
+            "boot budgets are not being scaled in the test build",
+        );
+    }
+}
