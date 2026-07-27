@@ -43,9 +43,15 @@
 #        a. Stub `org.freedesktop.login1` in the guest — a small service that
 #           answers `Inhibit` with a dummy fd. Self-contained, no production
 #           change, but another moving part in the initramfs.
-#        b. Give forge an escape hatch (env var/flag) to skip the inhibitor when
-#           nothing can interrupt it. Cheapest, but adds a production path that
-#           exists only for the harness.
+#        b. **DONE** — `CAST_ALLOW_UNINHIBITED_TRANSACTION=1` skips the
+#           inhibitor. Opt-in and explicitly named so it cannot be reached by
+#           accident; with it unset, behaviour is unchanged (verified: `install`
+#           97/97, `active_reblit_tests` 25/25). Set it in the guest init before
+#           driving any state-mutating cell.
+#           NOT yet verified end-to-end in the guest: the VM became unreachable
+#           before the rebuilt binary could be uploaded. Re-run
+#           `crash-matrix-run.sh` with a freshly staged /tmp/cast to confirm the
+#           control cell reaches `state=installed`.
 #        c. Run a real init in the guest with logind. Heaviest; effectively the
 #           full-rootfs option.
 #
