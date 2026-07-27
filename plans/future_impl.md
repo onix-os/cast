@@ -903,8 +903,39 @@ and fixing expectations in order:
   the literal is only correct for one option set, which would make it a latent
   bug in its own right rather than merely a fragile constant.
 
-  Until measured, the `12` stays. It is documented here as the single blocker
-  for §1.2b's forward chain, and as a standing hazard independent of it.
+  **Measured and fixed** (commit `16f6ea8b`). A probe printed the real values:
+  the forward generation at `RootLinksComplete` is **6**, not the 8 both guesses
+  assumed, so `12 = 6 + 6` — the rollback offset is 6, not 4. The literal is now
+  `expected_rollback_complete_generation()`, which walks the forward chain on a
+  rollback-stripped clone and adds the offset. Baseline green.
+
+**Step 8 status after that fix — reapplied and measured.** With the derivation in
+place, reapplying all four code changes plus the generation-expectation updates
+gives:
+
+- `activate_archived` **67/67 green** (was 0/67 at worst)
+- `activation_namespace` **60/60 green**
+- `journal_coordinator` 31 -> **23** after updating one test helper
+- `transition_journal` 1 failure
+
+The remaining failures are all one shape: test helpers that call
+`begin_candidate_prepare()` directly on an `ActivateArchived` coordinator, which
+must now traverse the staging pair first. Eight such call sites:
+`failure_evidence.rs` (212, 332, 438, 704), `active_reblit_reservation.rs:26`,
+`usr_exchange_effect.rs:70`, `operation_prefixes.rs` (42, 143). Each needs the
+same two-call insertion, guarded on `CandidateKind::Archived` — the pattern is
+already applied at `failure_evidence.rs:308` and works.
+
+Reverted (uncommitted) rather than ship 23 failures. The derivation fix and the
+model foundation are both committed and green. Reapplying step 8 is now
+mechanical: the four code changes, the three generation-expectation fixes
+(`test_support.rs` Archived rows +2, `generation, 12)` -> 14 in
+`usr_rollback_activate_archived/tests/` **only**, and
+`root_links_terminal_process_harness.rs` ActivateArchived 12 -> 14), then the
+eight call sites.
+
+**Do not** bump `generation, 12)` in `usr_rollback_active_reblit/` — ActiveReblit
+gains no phases, and a blanket sed across `startup_gate/` hits it wrongly.
 
 Reverted to the green committed state (`activate_archived` 67/67) rather than
 leave 17 failures in the tree. Reapply the four code changes together with the
