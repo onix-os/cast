@@ -101,8 +101,40 @@ NewState rollback does finalize (the 8s cut recovers) — so find how that path
 finalizes and why it rejects a pre-exchange source. Expect the same shape as the
 four above.
 
-Regression-checked: `usr_rollback_decision` 19/19, `transition_journal` 136/136,
-`activation_namespace` 60/60, production build at zero warnings.
+**FIX VERIFIED, BUT THE BRANCH IS RED — DO NOT MERGE YET.** The 5s cut now
+reports `recovered-at-7 state=installed`; a pre-exchange crash fully recovers.
+The full suite is **2751 passed, 8 failed**.
+
+One failure was already diagnosed and fixed: the first version of
+`rollback_usr_exchange_is_settled` accepted `NotRequired` for *any* source,
+which weakened a safety check across the whole rollback chain. `NotRequired` is
+only coherent when the exchange was never possible — for a post-exchange source
+the journal itself refuses to build such a record
+(`InvalidRollbackRequirement { possible: true }`). Narrowed to pre-exchange
+sources only; the exclusion tests that caught it now pass.
+
+The remaining 8 are unassessed and each needs individual judgement — they are
+NOT all the same shape:
+
+- `client::active_reblit_mounted_boot_topology::capture::publication_targets::owned_cleanup::restart::tests::component_process_kill::owned_cleanup_components_process_kills_recover_exactly`
+- `client::active_reblit_mounted_boot_topology::capture::publication_targets::owned_cleanup::restart::tests::receipt_replacement_reconstructs_fresh_authority_then_is_already_clean`
+- `client::active_reblit_mounted_boot_topology::capture::publication_targets::owned_cleanup::restart::tests::receipt_stale_cleanup_reconciles_canonical_detached_and_already_clean`
+- `client::startup_gate::usr_rollback_activate_archived::tests::exclusions::startup_activate_archived_complete_route_defers_every_inexact_plan_boundary`
+- `client::startup_gate::usr_rollback_active_reblit::tests::complete_exclusions::startup_active_reblit_complete_route_preserves_operation_and_phase_ordering`
+- `client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_admission_bypasses_other_phases_and_sources`
+- `client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_plan_requires_the_exact_operation_matrix`
+- `client::startup_reconciliation::usr_rollback_fresh_db_invalidation_authority::tests::admission::startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action`
+
+At least two distinct causes are visible. `startup_candidate_preserve_admission_bypasses_other_phases_and_sources`
+fails with `JournalReadDuringEffect(CanonicalChanged)`, which is not an
+exclusion assertion at all. The `owned_cleanup::restart` ones are in a module
+this change does not obviously touch — check whether they are pre-existing or
+load-related before attributing them.
+
+**Before merging:** confirm each failure is either (a) a test encoding the old
+"post-exchange only" contract, which this change deliberately reverses and which
+should be updated, or (b) a real over-acceptance like the one already found. Do
+not assume (a) — the over-widening above proves (b) happens.
 
 ---
 
