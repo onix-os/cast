@@ -130,7 +130,7 @@ pub(super) fn active_reblit_pending_boot_repair_plan_is_exact(record: &Transitio
         && record.candidate.id == record.previous.id
         && rollback.source == ForwardPhase::BootSyncStarted
         && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange)
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
@@ -151,7 +151,7 @@ pub(super) fn active_reblit_completed_boot_repair_plan_is_exact(record: &Transit
         && record.candidate.id == record.previous.id
         && rollback.source == ForwardPhase::BootSyncStarted
         && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange)
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied

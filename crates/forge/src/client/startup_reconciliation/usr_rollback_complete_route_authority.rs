@@ -193,7 +193,7 @@ fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
                 (ForwardPhase::SystemTriggersStarted, 18) | (ForwardPhase::SystemTriggersComplete, 19)
             ))
         && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange)
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied

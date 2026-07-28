@@ -1004,11 +1004,24 @@ pub(super) fn rollback_source_is_supported(source: crate::transition_journal::Fo
 /// `NotRequired` — the pre-exchange case where `/usr` was never touched. That
 /// omission stranded a crash during transaction triggers
 /// (`plans/future_impl.md` §1.4).
-pub(super) fn rollback_usr_exchange_is_settled(action: crate::transition_journal::RollbackAction) -> bool {
-    matches!(
-        action,
-        crate::transition_journal::RollbackAction::Applied
-            | crate::transition_journal::RollbackAction::AlreadySatisfied
-            | crate::transition_journal::RollbackAction::NotRequired
-    )
+pub(super) fn rollback_usr_exchange_is_settled(
+    action: crate::transition_journal::RollbackAction,
+    source: crate::transition_journal::ForwardPhase,
+) -> bool {
+    use crate::transition_journal::{ForwardPhase, RollbackAction};
+    match action {
+        RollbackAction::Applied | RollbackAction::AlreadySatisfied => true,
+        // `NotRequired` is only coherent when the exchange was never possible.
+        // For a post-exchange source the exchange demonstrably happened, so a
+        // plan claiming it needs no action is inexact and must be rejected —
+        // the journal itself refuses to build such a record
+        // (`InvalidRollbackRequirement { possible: true }`).
+        RollbackAction::NotRequired => matches!(
+            source,
+            ForwardPhase::CandidatePrepared
+                | ForwardPhase::TransactionTriggersStarted
+                | ForwardPhase::TransactionTriggersComplete
+        ),
+        _ => false,
+    }
 }

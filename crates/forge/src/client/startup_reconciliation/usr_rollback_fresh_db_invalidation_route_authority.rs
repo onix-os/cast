@@ -181,7 +181,7 @@ fn route_plan_is_exact(record: &TransitionRecord) -> bool {
         && (super::rollback_source_is_supported(rollback.source)
             || system_trigger_candidate_preserved_source_is_exact(record))
         && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange)
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
