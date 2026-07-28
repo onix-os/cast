@@ -1129,6 +1129,37 @@ their cleanup is resumable and audit for any step between the last journal
 advance and a physical cleanup (e.g. staging-wrapper rotation) that a crash
 could strand.
 
+**§1.4 ANSWERED 2026-07-27 — and it found a real gap.** Measured with the crash
+matrix rather than audited by reading (`misc/scripts/crash-matrix-run.sh`):
+
+    CUT       PHASE REACHED                  RECOVERS?
+    control   -                              yes (recovered-at-1)
+    4s        TransactionTriggersStarted     NO  (stalled)
+    5s        TransactionTriggersStarted     NO  (stalled)
+    6s        TransactionTriggersComplete    NO  (stalled)
+    8s        post-exchange                  yes (recovered-at-7)
+
+**A crash during transaction triggers — before the `/usr` exchange — is
+unrecoverable.** The record's `recovery_disposition()` is correctly
+`BeginRollback { source: TransactionTriggersStarted }`
+(`transition_journal/recovery.rs:42` covers every pre-commit phase), but nothing
+*drives* it. `startup_gate` is a chain of phase-specific dispatchers —
+`active_reblit_boot_sync_started`, `usr_rollback_*`, `*_commit_cleanup*` — and
+all of them cover post-exchange phases. A pre-exchange record falls through every
+dispatcher and surfaces as `PendingSystemTransition`; each subsequent invocation
+repeats it unchanged.
+
+Confirmed a genuine stall, not slow convergence: the phase in the error does not
+change across five consecutive driver invocations, whereas post-exchange cuts
+visibly advance `UsrExchanged -> RollbackDecided -> ... -> RollbackComplete`.
+
+**What this needs:** a recovery route for the pre-exchange phases
+(`Preparing` .. `TransactionTriggersComplete`). Nothing in `/usr` has been
+touched at that point, so the correct action is almost certainly to discard the
+candidate and clear the record rather than to reverse anything — much simpler
+than the post-exchange rollback chain. Scope it as its own item; it is the last
+real hole in Phase 1's durability claim.
+
 **Exit Phase 1:** NewState, ActivateArchived, and archived repair each publish a
 durable journal that startup reconciliation resumes/rolls-back across a reboot;
 crash-matrix tests (before/after each persisted boundary) pass in-process, with

@@ -60,6 +60,19 @@ window in question, then check whether recovery converges.
 **Exit:** each operation's cleanup either provably resumes, or a stranded window
 is named with a reproduction.
 
+**STATUS 2026-07-27: done, and it found a stranded window.** A crash during
+transaction triggers (pre-`/usr`-exchange) is unrecoverable — no startup
+dispatcher covers those phases, so the record falls through to
+`PendingSystemTransition` forever. Full evidence in `future_impl.md` §1.4 and in
+`crash-matrix-run.sh`. The 1-2s anomaly that prompted this turned out to be
+timing variance plus a harness artefact (`nothing-staged`), not a defect.
+
+**A2 (new, do next) — pre-exchange recovery route · E:M R:high.** Implement
+recovery for `Preparing` .. `TransactionTriggersComplete`. Nothing in `/usr` has
+been touched at those phases, so discarding the candidate and clearing the
+record should suffice — no reverse exchange needed. This is the last real hole
+in Phase 1's durability claim.
+
 ---
 
 ### B. Finish `cleanup_legacy` §§3–4 · E:S-M R:med
