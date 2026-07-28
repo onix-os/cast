@@ -40,8 +40,20 @@ r: run
 
 TEST_ARGS ?=
 
+# Concurrency ceiling for the suite.
+#
+# Not a stylistic choice. Several boot-path budgets are *absolute* deadlines
+# armed once and inherited by nested stages; production runs one boot
+# publication at a time, while the suite runs that path in many concurrent
+# tests. Above ~16 workers, contention alone exhausts those budgets and
+# surfaces as `DeadlineExceeded` on work that is not slow — see
+# `plans/future_impl.md` §2.1a. 16 is verified green; 24 is not.
+#
+# Override for a bisect with: make test TEST_THREADS=1
+TEST_THREADS ?= 16
+
 test:
-	@cargo test --workspace $(TEST_ARGS) -- --test-threads=1
+	@cargo test --workspace $(TEST_ARGS) -- --test-threads=$(TEST_THREADS)
 
 t: test
 

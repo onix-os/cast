@@ -159,6 +159,7 @@ impl StatefulTreeIdentity {
     /// Prepare from an already-retained candidate `/usr` descriptor. The
     /// public name is compared before marker creation, while every write is
     /// descriptor-relative to the caller's exact inode.
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     pub(crate) fn prepare_retained_candidate(
         installation: &Installation,
         state_db: &db::state::Database,

@@ -209,7 +209,7 @@ fn journal_coordinator_database_commit_and_completion_share_exact_transition_cor
         Phase::FreshStateAllocated,
         3,
     );
-    let coordinator = coordinator.begin_candidate_prepare().unwrap();
+    let coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     let coordinator = finish_candidate_prepare(coordinator).unwrap();
     assert_record_prefix(
         coordinator.record(),
@@ -321,7 +321,7 @@ fn coordinator_at_candidate_prepare_started(
     } else {
         coordinator
     };
-    let coordinator = coordinator.begin_candidate_prepare().unwrap();
+    let coordinator = coordinator.begin_candidate_prepare_through_staging().unwrap();
     (fixture, coordinator)
 }
 
@@ -334,7 +334,14 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
     ] {
         let (fixture, coordinator) = coordinator_at_candidate_prepare_started(candidate_kind);
         let started = coordinator.record().clone();
-        let expected_generation = if candidate_kind == CandidateKind::NewState { 4 } else { 2 };
+        // Archived is two higher than ActiveReblit here: it traverses the
+        // durable archived-staging pair before preparation (§1.2b). The old
+        // `else { 2 }` covered both and silently conflated them.
+        let expected_generation = match candidate_kind {
+            CandidateKind::NewState => 4,
+            CandidateKind::Archived => 4,
+            CandidateKind::ActiveReblit => 2,
+        };
         assert_eq!(started.phase, Phase::CandidatePrepareStarted);
         assert_eq!(started.generation, expected_generation);
         match candidate_kind {
@@ -427,7 +434,7 @@ fn journal_coordinator_candidate_prepare_effect_order_and_failure_preserve_exact
             .clear_transition_if_matches(allocated, &allocated_record.transition_id)
             .unwrap();
         assert!(matches!(
-            coordinator.begin_candidate_prepare(),
+            coordinator.begin_candidate_prepare_through_staging(),
             Err(StatefulTransitionCoordinatorError::FreshAllocationOwnershipMismatch {
                 state,
                 ownership: TransitionOwnership::Cleared,
@@ -693,7 +700,7 @@ fn journal_coordinator_active_reblit_state_id_appearance_before_prepare_intent_b
         write_canonical_file(&occupant, &contents);
         let before = fs::symlink_metadata(&occupant).unwrap();
 
-        assert!(coordinator.begin_candidate_prepare().is_err());
+        assert!(coordinator.begin_candidate_prepare_through_staging().is_err());
 
         let after = fs::symlink_metadata(&occupant).unwrap();
         assert_eq!(reopen_record(&fixture.installation.root), preparing);

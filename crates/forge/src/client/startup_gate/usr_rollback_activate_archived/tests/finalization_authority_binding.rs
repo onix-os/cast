@@ -91,7 +91,7 @@ fn startup_activate_archived_finalization_binding_rejects_same_bytes_on_a_differ
             CandidateOutcome::AlreadySatisfied,
         );
         let terminal = persist_rollback_complete(&fixture);
-        assert_eq!(terminal.generation, 12);
+        assert_eq!(terminal.generation, 14);
         let canonical = fixture
             .fixture
             .fixture
@@ -190,7 +190,7 @@ fn startup_activate_archived_finalization_admits_root_links_only_at_generation_t
         CandidateOutcome::Applied,
     );
     let terminal = persist_rollback_complete(&fixture);
-    assert_eq!(terminal.generation, 12);
+    assert_eq!(terminal.generation, 14);
     let mut wrong_generation = terminal.clone();
     wrong_generation.generation += 1;
     let journal = fixture.open_journal();

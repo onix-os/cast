@@ -231,7 +231,9 @@ fn expected_layouts(record: &TransitionRecord) -> Result<Vec<LayoutAlternative>,
 
 pub(super) fn forward_layouts(record: &TransitionRecord) -> Vec<LayoutAlternative> {
     match record.phase {
-        Phase::Preparing
+        Phase::ArchivedCandidateStagingIntent
+        | Phase::ArchivedCandidateStaged
+        | Phase::Preparing
         | Phase::FreshStateAllocating
         | Phase::FreshStateAllocated
         | Phase::CandidatePrepareStarted
@@ -576,10 +578,15 @@ pub(super) fn candidate_state_id_expectation(record: &TransitionRecord) -> State
         .map(|rollback| rollback.source)
         .map(forward_ordinal)
         .unwrap_or_else(|| forward_phase_ordinal(record.phase));
-    match phase {
-        0..=2 => StateIdExpectation::Absent,
-        3 => StateIdExpectation::Optional(candidate),
-        _ => StateIdExpectation::Present(candidate),
+    // Named rather than numeric. These were bare literals (`0..=2`, `3`), which
+    // silently changed meaning under any phase renumbering and were invisible to
+    // an `.ordinal()` grep — see `plans/future_impl.md` §1.2b.
+    if phase < forward_ordinal(ForwardPhase::CandidatePrepareStarted) {
+        StateIdExpectation::Absent
+    } else if phase == forward_ordinal(ForwardPhase::CandidatePrepareStarted) {
+        StateIdExpectation::Optional(candidate)
+    } else {
+        StateIdExpectation::Present(candidate)
     }
 }
 
@@ -619,9 +626,10 @@ fn previous_state_id_matches(expected: PreviousStateIdExpectation, actual: State
 pub(super) fn root_abi_must_be_complete(record: &TransitionRecord) -> bool {
     if let Some(rollback) = &record.rollback {
         let source = forward_ordinal(rollback.source);
-        return source >= 9 || (source >= 8 && record.phase == Phase::RollbackComplete);
+        return source >= forward_ordinal(ForwardPhase::RootLinksComplete)
+            || (source >= forward_ordinal(ForwardPhase::UsrExchanged) && record.phase == Phase::RollbackComplete);
     }
-    forward_phase_ordinal(record.phase) >= 9
+    forward_phase_ordinal(record.phase) >= forward_ordinal(ForwardPhase::RootLinksComplete)
 }
 
 pub(super) fn isolation_abi_must_be_complete(record: &TransitionRecord) -> bool {
@@ -630,8 +638,9 @@ pub(super) fn isolation_abi_must_be_complete(record: &TransitionRecord) -> bool 
         .as_ref()
         .map(|rollback| forward_ordinal(rollback.source))
         .unwrap_or_else(|| forward_phase_ordinal(record.phase));
-    (matches!(record.operation, Operation::NewState | Operation::ActiveReblit) && phase >= 5)
-        || (record.options.run_system_triggers && phase >= 10)
+    (matches!(record.operation, Operation::NewState | Operation::ActiveReblit)
+        && phase >= forward_ordinal(ForwardPhase::TransactionTriggersStarted))
+        || (record.options.run_system_triggers && phase >= forward_ordinal(ForwardPhase::SystemTriggersStarted))
 }
 
 fn active_reblit_reservation(record: &TransitionRecord) -> ActiveReblitReservation {
@@ -640,58 +649,67 @@ fn active_reblit_reservation(record: &TransitionRecord) -> ActiveReblitReservati
         .as_ref()
         .map(|rollback| forward_ordinal(rollback.source))
         .unwrap_or_else(|| forward_phase_ordinal(record.phase));
-    match phase {
-        0..=3 => ActiveReblitReservation::Absent,
-        4 => ActiveReblitReservation::Optional,
-        _ => ActiveReblitReservation::Required,
+    if phase < forward_ordinal(ForwardPhase::CandidatePrepared) {
+        ActiveReblitReservation::Absent
+    } else if phase == forward_ordinal(ForwardPhase::CandidatePrepared) {
+        ActiveReblitReservation::Optional
+    } else {
+        ActiveReblitReservation::Required
     }
 }
 
 fn forward_ordinal(phase: ForwardPhase) -> u8 {
     match phase {
         ForwardPhase::Preparing => 0,
-        ForwardPhase::FreshStateAllocating => 1,
-        ForwardPhase::FreshStateAllocated => 2,
-        ForwardPhase::CandidatePrepareStarted => 3,
-        ForwardPhase::CandidatePrepared => 4,
-        ForwardPhase::TransactionTriggersStarted => 5,
-        ForwardPhase::TransactionTriggersComplete => 6,
-        ForwardPhase::UsrExchangeIntent => 7,
-        ForwardPhase::UsrExchanged => 8,
-        ForwardPhase::RootLinksComplete => 9,
-        ForwardPhase::SystemTriggersStarted => 10,
-        ForwardPhase::SystemTriggersComplete => 11,
-        ForwardPhase::PreviousArchiveIntent => 12,
-        ForwardPhase::PreviousArchived => 13,
-        ForwardPhase::BootSyncStarted => 14,
-        ForwardPhase::BootSyncComplete => 15,
-        ForwardPhase::CommitDecided => 16,
-        ForwardPhase::CommitCleanupComplete => 17,
-        ForwardPhase::Complete => 18,
+        ForwardPhase::FreshStateAllocating => 3,
+        ForwardPhase::FreshStateAllocated => 4,
+        ForwardPhase::CandidatePrepareStarted => 5,
+        ForwardPhase::CandidatePrepared => 6,
+        ForwardPhase::TransactionTriggersStarted => 7,
+        ForwardPhase::TransactionTriggersComplete => 8,
+        ForwardPhase::UsrExchangeIntent => 9,
+        ForwardPhase::UsrExchanged => 10,
+        ForwardPhase::RootLinksComplete => 11,
+        ForwardPhase::SystemTriggersStarted => 12,
+        ForwardPhase::SystemTriggersComplete => 13,
+        ForwardPhase::PreviousArchiveIntent => 14,
+        ForwardPhase::PreviousArchived => 15,
+        ForwardPhase::BootSyncStarted => 16,
+        ForwardPhase::BootSyncComplete => 17,
+        ForwardPhase::CommitDecided => 18,
+        ForwardPhase::CommitCleanupComplete => 19,
+        // Mirrors the parked ordinals in transition_journal/validation.rs.
+        ForwardPhase::Complete => 20,
+        ForwardPhase::ArchivedCandidateStagingIntent => 1,
+        ForwardPhase::ArchivedCandidateStaged => 2,
     }
 }
 
+// THIRD duplicate of the phase ordering, after `ForwardPhase::ordinal`
+// (transition_journal/validation.rs) and `forward_ordinal` above. All three must
+// be renumbered together; leaving this one stale is what kept 5 namespace tests
+// failing after the other two were corrected.
 fn forward_phase_ordinal(phase: Phase) -> u8 {
     match phase {
         Phase::Preparing => 0,
-        Phase::FreshStateAllocating => 1,
-        Phase::FreshStateAllocated => 2,
-        Phase::CandidatePrepareStarted => 3,
-        Phase::CandidatePrepared => 4,
-        Phase::TransactionTriggersStarted => 5,
-        Phase::TransactionTriggersComplete => 6,
-        Phase::UsrExchangeIntent => 7,
-        Phase::UsrExchanged => 8,
-        Phase::RootLinksComplete => 9,
-        Phase::SystemTriggersStarted => 10,
-        Phase::SystemTriggersComplete => 11,
-        Phase::PreviousArchiveIntent => 12,
-        Phase::PreviousArchived => 13,
-        Phase::BootSyncStarted => 14,
-        Phase::BootSyncComplete => 15,
-        Phase::CommitDecided => 16,
-        Phase::CommitCleanupComplete => 17,
-        Phase::Complete => 18,
+        Phase::FreshStateAllocating => 3,
+        Phase::FreshStateAllocated => 4,
+        Phase::CandidatePrepareStarted => 5,
+        Phase::CandidatePrepared => 6,
+        Phase::TransactionTriggersStarted => 7,
+        Phase::TransactionTriggersComplete => 8,
+        Phase::UsrExchangeIntent => 9,
+        Phase::UsrExchanged => 10,
+        Phase::RootLinksComplete => 11,
+        Phase::SystemTriggersStarted => 12,
+        Phase::SystemTriggersComplete => 13,
+        Phase::PreviousArchiveIntent => 14,
+        Phase::PreviousArchived => 15,
+        Phase::BootSyncStarted => 16,
+        Phase::BootSyncComplete => 17,
+        Phase::CommitDecided => 18,
+        Phase::CommitCleanupComplete => 19,
+        Phase::Complete => 20,
         _ => 18,
     }
 }

@@ -41,7 +41,15 @@ const KIB: usize = 1024;
 const MAX_ROOT_FILESYSTEM_SOURCE_BYTES: usize = 64 * KIB;
 const MAX_ROOT_FILESYSTEM_VALUE_BYTES: usize = 4_095;
 const MAX_ROOT_FILESYSTEM_WORK: usize = 16_384;
-const ROOT_FILESYSTEM_TIMEOUT: Duration = Duration::from_secs(30);
+/// Absolute budget for one intent preparation.
+///
+/// Split for the same reason as `BINDING_TIMEOUT`: production runs one boot
+/// publication at a time, while the suite runs this path in ~24 concurrent
+/// tests on a shared machine, where contention alone can exhaust 30s and
+/// surface as `DeadlineExceeded` on work that is not slow. Relaxing the
+/// production bound to stabilise tests would hide a real limit behind a test
+/// artefact.
+const ROOT_FILESYSTEM_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(30));
 
 const ROOT_FILESYSTEM_POLICY: RootFilesystemIntentPolicy = RootFilesystemIntentPolicy {
     max_source_bytes: MAX_ROOT_FILESYSTEM_SOURCE_BYTES,

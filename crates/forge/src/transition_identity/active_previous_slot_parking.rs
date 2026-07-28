@@ -198,6 +198,7 @@ impl RetainedActivePreviousSlotParking {
 }
 
 impl StatefulTreeIdentity {
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     pub(super) fn prepare_active_previous_slot_parking(
         &self,
         installation: &Installation,

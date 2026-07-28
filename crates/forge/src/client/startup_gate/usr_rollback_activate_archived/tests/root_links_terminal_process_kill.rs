@@ -269,7 +269,7 @@ fn capture_database_at_root(root: &Path, terminal: &TransitionRecord) -> Archive
 fn assert_exact_terminal(record: &TransitionRecord, epoch: ProcessEpoch) {
     assert_eq!(record.operation, Operation::ActivateArchived);
     assert_eq!(record.phase, Phase::RollbackComplete);
-    assert_eq!(record.generation, 12);
+    assert_eq!(record.generation, 14);
     assert_eq!(record.candidate.origin, CandidateOrigin::Archived);
     assert_eq!(record.previous.origin, PreviousOrigin::ActiveState);
     assert_ne!(record.candidate.id, record.previous.id);

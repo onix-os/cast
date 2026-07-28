@@ -106,6 +106,8 @@ pub(super) struct ActiveReblitReservationSeal {
 const BEGIN_FRESH_ALLOCATION: &str = "begin fresh-state allocation";
 const FINISH_FRESH_ALLOCATION: &str = "finish fresh-state allocation";
 const BEGIN_CANDIDATE_PREPARE: &str = "begin candidate preparation";
+const BEGIN_ARCHIVED_STAGING: &str = "begin archived candidate staging";
+const COMPLETE_ARCHIVED_STAGING: &str = "complete archived candidate staging";
 const FINISH_CANDIDATE_PREPARE: &str = "finish candidate preparation";
 
 /// Exclusive, fail-stop owner of one durable state-transition prefix.
@@ -436,12 +438,43 @@ impl StatefulTransitionCoordinator {
         Ok(self)
     }
 
+    /// Persist the intent to move an archived candidate into staging.
+    pub(crate) fn begin_archived_staging(mut self) -> Result<Self, StatefulTransitionCoordinatorError> {
+        self.require_operation(Operation::ActivateArchived, BEGIN_ARCHIVED_STAGING)?;
+        self.require_phase(Phase::Preparing, BEGIN_ARCHIVED_STAGING)?;
+        self.require_record_runtime_evidence()?;
+        self.advance(None)?;
+        Ok(self)
+    }
+
+    /// Record that the archived candidate is durably staged.
+    pub(crate) fn complete_archived_staging(mut self) -> Result<Self, StatefulTransitionCoordinatorError> {
+        self.require_operation(Operation::ActivateArchived, COMPLETE_ARCHIVED_STAGING)?;
+        self.require_phase(Phase::ArchivedCandidateStagingIntent, COMPLETE_ARCHIVED_STAGING)?;
+        self.require_record_runtime_evidence()?;
+        self.advance(None)?;
+        Ok(self)
+    }
+
+    /// Test-only: traverse the archived-staging pair when the operation needs it.
+    #[cfg(test)]
+    pub(crate) fn begin_candidate_prepare_through_staging(self) -> Result<Self, StatefulTransitionCoordinatorError> {
+        let coordinator =
+            if self.record.operation == Operation::ActivateArchived && self.record.phase == Phase::Preparing {
+                self.begin_archived_staging()?.complete_archived_staging()?
+            } else {
+                self
+            };
+        coordinator.begin_candidate_prepare()
+    }
+
     /// Persist candidate-preparation intent from the operation-specific exact
     /// predecessor. New states must first complete correlated DB allocation.
     pub(crate) fn begin_candidate_prepare(mut self) -> Result<Self, StatefulTransitionCoordinatorError> {
         let expected = match self.record.operation {
             Operation::NewState => Phase::FreshStateAllocated,
-            Operation::ActivateArchived | Operation::ActiveReblit => Phase::Preparing,
+            Operation::ActivateArchived => Phase::ArchivedCandidateStaged,
+            Operation::ActiveReblit => Phase::Preparing,
         };
         self.require_phase(expected, BEGIN_CANDIDATE_PREPARE)?;
         let candidate = self.candidate_state()?;

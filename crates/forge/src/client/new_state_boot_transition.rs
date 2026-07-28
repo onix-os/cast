@@ -35,7 +35,7 @@ use super::{
     postblit::{self, TriggerScope},
 };
 
-const BOOT_PUBLICATION_TIMEOUT: Duration = Duration::from_secs(120);
+const BOOT_PUBLICATION_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(120));
 
 type BoxedLiveNewStateError = Box<dyn StdError + Send + Sync + 'static>;
 

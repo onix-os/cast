@@ -10,24 +10,29 @@ impl ForwardPhase {
     pub(super) fn ordinal(self) -> u8 {
         match self {
             Self::Preparing => 0,
-            Self::FreshStateAllocating => 1,
-            Self::FreshStateAllocated => 2,
-            Self::CandidatePrepareStarted => 3,
-            Self::CandidatePrepared => 4,
-            Self::TransactionTriggersStarted => 5,
-            Self::TransactionTriggersComplete => 6,
-            Self::UsrExchangeIntent => 7,
-            Self::UsrExchanged => 8,
-            Self::RootLinksComplete => 9,
-            Self::SystemTriggersStarted => 10,
-            Self::SystemTriggersComplete => 11,
-            Self::PreviousArchiveIntent => 12,
-            Self::PreviousArchived => 13,
-            Self::BootSyncStarted => 14,
-            Self::BootSyncComplete => 15,
-            Self::CommitDecided => 16,
-            Self::CommitCleanupComplete => 17,
-            Self::Complete => 18,
+            Self::FreshStateAllocating => 3,
+            Self::FreshStateAllocated => 4,
+            Self::CandidatePrepareStarted => 5,
+            Self::CandidatePrepared => 6,
+            Self::TransactionTriggersStarted => 7,
+            Self::TransactionTriggersComplete => 8,
+            Self::UsrExchangeIntent => 9,
+            Self::UsrExchanged => 10,
+            Self::RootLinksComplete => 11,
+            Self::SystemTriggersStarted => 12,
+            Self::SystemTriggersComplete => 13,
+            Self::PreviousArchiveIntent => 14,
+            Self::PreviousArchived => 15,
+            Self::BootSyncStarted => 16,
+            Self::BootSyncComplete => 17,
+            Self::CommitDecided => 18,
+            Self::CommitCleanupComplete => 19,
+            Self::Complete => 20,
+            // Parked above the chain: nothing routes into these yet, so keeping
+            // every existing ordinal untouched means no comparison changes.
+            // They move to positions 1-2 when the coordinator step lands.
+            Self::ArchivedCandidateStagingIntent => 1,
+            Self::ArchivedCandidateStaged => 2,
         }
     }
 }
@@ -36,6 +41,8 @@ impl From<ForwardPhase> for Phase {
     fn from(value: ForwardPhase) -> Self {
         match value {
             ForwardPhase::Preparing => Self::Preparing,
+            ForwardPhase::ArchivedCandidateStagingIntent => Self::ArchivedCandidateStagingIntent,
+            ForwardPhase::ArchivedCandidateStaged => Self::ArchivedCandidateStaged,
             ForwardPhase::FreshStateAllocating => Self::FreshStateAllocating,
             ForwardPhase::FreshStateAllocated => Self::FreshStateAllocated,
             ForwardPhase::CandidatePrepareStarted => Self::CandidatePrepareStarted,
@@ -62,6 +69,8 @@ impl Phase {
     pub(super) fn forward(self) -> Option<ForwardPhase> {
         Some(match self {
             Self::Preparing => ForwardPhase::Preparing,
+            Self::ArchivedCandidateStagingIntent => ForwardPhase::ArchivedCandidateStagingIntent,
+            Self::ArchivedCandidateStaged => ForwardPhase::ArchivedCandidateStaged,
             Self::FreshStateAllocating => ForwardPhase::FreshStateAllocating,
             Self::FreshStateAllocated => ForwardPhase::FreshStateAllocated,
             Self::CandidatePrepareStarted => ForwardPhase::CandidatePrepareStarted,
@@ -236,6 +245,7 @@ impl TransitionRecord {
         match self.operation {
             Operation::NewState => {
                 let id_required = match phase {
+                    ForwardPhase::ArchivedCandidateStagingIntent | ForwardPhase::ArchivedCandidateStaged => false,
                     ForwardPhase::Preparing => false,
                     ForwardPhase::FreshStateAllocating => {
                         let Some(rollback) = self.rollback.as_ref() else {
@@ -523,7 +533,12 @@ pub(super) fn next_forward_phase(record: &TransitionRecord, current: ForwardPhas
         ForwardPhase::Preparing if matches!(record.operation, Operation::NewState) => {
             ForwardPhase::FreshStateAllocating
         }
+        ForwardPhase::Preparing if matches!(record.operation, Operation::ActivateArchived) => {
+            ForwardPhase::ArchivedCandidateStagingIntent
+        }
         ForwardPhase::Preparing => ForwardPhase::CandidatePrepareStarted,
+        ForwardPhase::ArchivedCandidateStagingIntent => ForwardPhase::ArchivedCandidateStaged,
+        ForwardPhase::ArchivedCandidateStaged => ForwardPhase::CandidatePrepareStarted,
         ForwardPhase::FreshStateAllocating => ForwardPhase::FreshStateAllocated,
         ForwardPhase::FreshStateAllocated => ForwardPhase::CandidatePrepareStarted,
         ForwardPhase::CandidatePrepareStarted => ForwardPhase::CandidatePrepared,

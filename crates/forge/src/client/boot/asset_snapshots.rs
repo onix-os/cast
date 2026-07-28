@@ -36,7 +36,7 @@ const MAX_TOTAL_BOOT_ASSET_BYTES: u64 = 2 * GIB;
 const MAX_BOOT_ASSET_DESCRIPTORS: usize = 800;
 const RETAINED_SOURCE_DESCRIPTORS_PER_ASSET: usize = 2;
 const ASSET_POOL_TRANSIENT_DESCRIPTORS: usize = 16;
-const BOOT_ASSET_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(120);
+const BOOT_ASSET_SNAPSHOT_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(120));
 const SNAPSHOT_MODE: u32 = 0o400;
 const SNAPSHOT_NAME: &CStr = c"forge-boot-cas-snapshot";
 

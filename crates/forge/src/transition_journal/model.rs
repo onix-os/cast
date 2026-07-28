@@ -118,6 +118,12 @@ pub(crate) enum Phase {
     BootRepairComplete,
     BootRepairUnverified,
     RollbackComplete,
+    // Appended rather than placed in chain order on purpose: something
+    // depends on this enum's declaration order (adding mid-list broke 65
+    // rollback-path tests with the phases unreachable). Chain position is
+    // expressed by `ordinal()`, which is an explicit table.
+    ArchivedCandidateStagingIntent,
+    ArchivedCandidateStaged,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -142,6 +148,12 @@ pub(crate) enum ForwardPhase {
     CommitDecided,
     CommitCleanupComplete,
     Complete,
+    // Appended rather than placed in chain order on purpose: something
+    // depends on this enum's declaration order (adding mid-list broke 65
+    // rollback-path tests with the phases unreachable). Chain position is
+    // expressed by `ordinal()`, which is an explicit table.
+    ArchivedCandidateStagingIntent,
+    ArchivedCandidateStaged,
 }
 
 /// Canonical kernel boot identifier captured when a transition is created.

@@ -202,11 +202,15 @@ impl UsrExchangedCoordinator {
 fn exact_root_links_successor(record: &TransitionRecord) -> Result<TransitionRecord, RootAbiPublicationFailure> {
     let transition_id = record.transition_id.clone();
     let operation = record.operation;
-    let expected_generation = match operation {
-        Operation::NewState => 10,
-        Operation::ActiveReblit => 8,
-        Operation::ActivateArchived => 6,
-    };
+    // Derived from the chain, not tabulated per operation. These were the
+    // literals 10/8/6, which silently encoded each operation's chain *length*:
+    // adding a phase to any one of them broke this contract with no compile
+    // error (`plans/future_impl.md` §1.2b).
+    let expected_generation = crate::transition_journal::expected_forward_generation(
+        record,
+        crate::transition_journal::ForwardPhase::RootLinksComplete,
+    )
+    .expect("the forward chain always reaches RootLinksComplete for a publishing operation");
     let complete = record
         .forward_successor(None)
         .map_err(StatefulTransitionCoordinatorError::from)

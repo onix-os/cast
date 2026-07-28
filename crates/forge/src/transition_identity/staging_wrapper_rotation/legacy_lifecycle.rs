@@ -33,6 +33,7 @@ impl RetainedStagingWrapperRotation {
     /// Reserve and retain one fresh empty replacement. No fallible durability
     /// suffix runs after this returns, so callers can store the attempt before
     /// invoking [`Self::finish_preparation`].
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     pub(super) fn reserve(
         installation: &Installation,
         role: &'static str,
@@ -527,6 +528,7 @@ impl StatefulTreeIdentity {
     /// Reserve the exact empty replacement before a verification reblit can
     /// exchange the candidate into live `/usr`. Exhaustion or collision is
     /// therefore discovered while the old live tree is still untouched.
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     pub(crate) fn prepare_active_reblit_staging_rotation(
         &self,
         installation: &Installation,

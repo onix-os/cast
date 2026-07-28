@@ -83,7 +83,7 @@ rollback status vs phase). Deleting the *version* condition must not delete the
 
 ---
 
-## 2. Legacy stateful transition path · E:L R:high · **UNBLOCKED 2026-07-26**
+## 2. Legacy stateful transition path · **DONE 2026-07-26**
 
 **`apply_stateful_candidate` now has no production caller.** Both §1.1e
 blockers are fixed (the namespace policy via D1.5, the in-flight marker via a
@@ -92,11 +92,116 @@ routes through the coordinator like every other stateful transition.
 
 What remains is the 616-line `client/core/stateful_transition.rs` definition
 plus two test callers in `client/tests/fixed_staging_transition.rs` (:248,
-:339). Removal is now a deletion rather than a migration, but it is not
-mechanical: those two tests cover fixed-staging behaviour that needs either a
-coordinated equivalent or an explicit decision that the coverage moved
-elsewhere. Do it against a clean full-suite baseline; §§3 and 4 follow
-immediately once the path is gone. What remains is the 616-line `client/core/stateful_transition.rs`
+:339). Removal is a deletion rather than a migration, but it is **not** mechanical:
+the two test callers are security proofs, and deleting them silently drops
+coverage. Surveyed 2026-07-26 — both are portable, and the exact work is:
+
+1. `retained_state_id_write_never_targets_a_substituted_usr` (:228) proves the
+   state-ID write follows the retained descriptor rather than a substituted
+   `usr` pathname. Its hook `before_retained_state_metadata` already fires from
+   **shared** code (`core/state_metadata.rs:89`), so the coordinated route
+   triggers it unchanged. Port = retarget the call to
+   `apply_new_state_candidate`; no production change.
+
+2. `stateful_trigger_preparation_never_follows_a_replaced_isolation_root` (:260)
+   proves trigger preparation does not follow a swapped isolation-root symlink.
+   Its hook `after_stateful_isolation_root_retention` fires **only** from
+   `stateful_transition.rs:174` — the legacy path itself — so deleting that file
+   removes the sole call site and the proof with it. The coordinated route does
+   create an isolation root, at `core/state_planning.rs:62`. Port = move the
+   `#[cfg(test)] after_stateful_isolation_root_retention()` call to immediately
+   after that `create_root_links`, then retarget the test.
+
+**Attempted 2026-07-26 — port (2) does not transfer mechanically.** Writing the
+coordinated twin and running it produced, instead of the expected pinned-source
+refusal:
+
+    NewStateForwardError { stage: "transaction triggers",
+      source: Effect { source: Container(PrivateDeviceProviderUnavailable ...) } }
+
+The two routes execute triggers under **different `TriggerScope`s**. The legacy
+path uses `TriggerScope::RetainedTransaction { kind: Stateful }`, whose
+container pins the retained root — which is exactly what the test proves. The
+coordinated route builds its container differently and fails on an unavailable
+private-device broker *before* the pin check is reached, so in this environment
+the substituted root is never even evaluated.
+
+Consequences, both of which must be settled before deleting anything:
+
+- The proof cannot be ported by retargeting the call. Either the coordinated
+  route needs a test-reachable trigger container (a broker stub, which does not
+  exist today — no `PrivateDeviceProvider` test double anywhere in the tree), or
+  the property has to be proven at the `TriggerScope` layer instead of
+  end-to-end.
+- **RESOLVED: the coordinated route does have the same defence.**
+  `new_state_boot_transition.rs:124` passes
+  `TriggerScope::RetainedTransaction { kind: Stateful, .. }` — the same pinned
+  scope the legacy route uses — and sources its `isolation_root` from
+  `view.retained_isolation_root()`, i.e. a retained descriptor rather than a
+  re-resolved pathname. That *is* the pinning discipline, so deleting
+  `stateful_transition.rs` removes a proof, not a defence. The security
+  objection to deletion is withdrawn.
+
+So the remaining obstacle is purely a **test-environment** one: the coordinated
+route's trigger container needs a private-device broker that no test double
+provides, so an end-to-end port cannot reach the pin check. Options: add a
+broker test double, or prove the property at the `TriggerScope` layer where no
+container is required. The latter is likely cheaper and tests the actual
+invariant (that the scope carries a retained descriptor).
+
+Note: the `after_stateful_isolation_root_retention` hook I armed at
+`core/state_planning.rs` is at the wrong point for this route — the coordinated
+route retains its isolation root through the view passed to the trigger closure,
+not at that call site. Re-site or remove it when doing the port.
+
+**Executed and reverted 2026-07-26 — the deletion works, but cascades.**
+
+First correction: `stateful_transition.rs` is *not* wholly dead. It is
+`include!`d (not a module), and only `apply_stateful_candidate` is unreachable.
+`apply_stateful_blit_with_checkpoint` and `commit_stateful_staging` are live —
+the latter from `core/state_planning.rs:128`, which §1.2's ActivateArchived
+composition will rewire. So the unit of removal is the one method, ~30 lines,
+not the 616-line file.
+
+Removing that method plus its two tests builds clean and leaves
+`fixed_staging_transition` 16/16, `install` 97/97, `active_reblit_tests` 25/25
+green. But it orphans a subtree that was reachable only through it, taking the
+production build from 0 warnings to 12. Reverted to preserve the zero-warning
+invariant; the orphan list *is* the §§3-4 worklist and is now concrete:
+
+- `client/core/client_model.rs` — `AfterTransactionTriggers` variant
+- `client/core/stateful_transition.rs` — `apply_stateful_blit_with_capability`
+- `client/core/stateful_recovery.rs` — `prepare_stateful_tree_identity_retained`
+- `client/candidate_metadata.rs` — `Stateful` variant, `decorate_stateful`
+- `client/postblit.rs` — `Transaction` variant
+- `transition_identity/active_previous_slot_parking.rs` —
+  `prepare_active_previous_slot_parking`
+- `transition_identity/staging_wrapper_rotation/legacy_lifecycle.rs` —
+  `reserve`, `prepare_active_reblit_staging_rotation`
+- `transition_identity/staging_wrapper_rotation/model.rs` —
+  `ActivePreviousSlotParking`, `NormalizeBeforeJournal` variants
+- `transition_identity/tree_lifecycle.rs` — `prepare_retained_candidate`
+
+**Shipped.** `apply_stateful_candidate` and its two tests are gone. The 12
+orphans above are annotated `#[allow(dead_code)]` pointing here rather than
+deleted in the same commit: several are enum variants whose removal cascades
+into match arms across the rotation and parking modules, and that is §§3-4's
+job, not this one. The production build is back to zero warnings and
+`fixed_staging_transition` 16/16, `install` 97/97, `active_reblit_tests` 25/25
+stay green.
+
+§§3-4 now have an exact starting point: remove those 12 annotations one at a
+time, deleting each item and its match arms, until nothing references the
+legacy rotation/parking lifecycle.
+
+**Security question settled:** deleting these removes a *proof*, not a defence.
+`new_state_boot_transition.rs:124` passes the same
+`TriggerScope::RetainedTransaction { kind: Stateful, .. }`, sourcing its
+`isolation_root` from `retained_isolation_root()` as a `&RetainedRootAbi` — the
+retained capability is threaded as a *type*, so the TOCTOU invariant the old
+tests probed at runtime is now enforced structurally. §§3 and 4 follow once the path is gone.
+Do it against a clean full-suite baseline — see §2.1a, which currently makes
+full-suite results ambiguous. What remains is the 616-line `client/core/stateful_transition.rs`
 definition plus two test callers in `client/tests/fixed_staging_transition.rs`
 (:248, :339).
 

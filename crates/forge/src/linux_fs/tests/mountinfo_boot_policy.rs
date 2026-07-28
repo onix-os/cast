@@ -19,8 +19,14 @@ const MAJOR: u32 = 259;
 const MINOR: u32 = 17;
 const REQUIRED_MOUNT_OPTIONS: &str = "rw,nosuid,nodev,noexec,nosymfollow";
 
+// Generous on purpose. This is a test-side deadline standing in for a
+// caller's absolute budget, and the work it bounds is not slow — but under a
+// parallel suite, contention alone can exhaust a short window and surface as
+// `DeadlineExceeded` far from anything the test is about
+// (`plans/future_impl.md` §2.1a). Keep it well above any plausible
+// contention stall; these tests never assert on how long the work takes.
 fn future_deadline() -> Instant {
-    Instant::now() + Duration::from_secs(10)
+    Instant::now() + Duration::from_secs(600)
 }
 
 fn record(

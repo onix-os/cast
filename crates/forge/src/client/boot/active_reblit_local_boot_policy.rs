@@ -46,7 +46,7 @@ const MAX_LOCAL_POLICY_TOTAL_NAME_BYTES: usize = 64 * KIB;
 const MAX_LOCAL_CMDLINE_FILE_BYTES: usize = 64 * KIB;
 const MAX_LOCAL_CMDLINE_TOTAL_BYTES: usize = 256 * KIB;
 const MAX_LOCAL_POLICY_WORK: usize = 16_384;
-const LOCAL_POLICY_TIMEOUT: Duration = Duration::from_secs(30);
+const LOCAL_POLICY_TIMEOUT: Duration = crate::client::boot_timeout_policy::boot_budget(Duration::from_secs(30));
 
 const LOCAL_BOOT_POLICY: LocalBootPolicy = LocalBootPolicy {
     max_directory_entries: MAX_LOCAL_POLICY_DIRECTORY_ENTRIES,

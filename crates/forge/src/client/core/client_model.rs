@@ -22,6 +22,7 @@ pub struct Client {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StatefulTransitionCheckpoint {
+    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
     AfterTransactionTriggers,
     BeforeUsrExchange,
     AfterUsrExchange,

@@ -787,9 +787,338 @@ Work items, each of which the compiler will point at once the variants exist:
 8. `execute_activate_archived_forward` drives the two new phases and performs
    the move between them.
 
-Risk concentrates in (2): the ordinal shift touches every phase-ordering
-consumer, and a missed one degrades silently rather than failing to compile.
-Worth a dedicated pass over every `ordinal()` caller.
+   **Scoped 2026-07-26 — this is a typestate change, not a function edit.** The
+   driver currently goes straight from `begin_transition(ActivateArchived{..})`
+   to `begin_candidate_prepare()` (`new_state_forward.rs:258-268`). The archived
+   staging move has to sit *between* those, which means the coordinator returned
+   by `begin_transition` gains a new typestate pair — roughly
+   `begin_archived_staging()` -> `complete_archived_staging()` — that only
+   `ActivateArchived` may traverse, with the tree move performed between the
+   intent and completion advances so a crash at either side is recoverable from
+   the record.
+
+   That touches the coordinator's typestate types themselves, not just this
+   function, and it is why steps 1-7 cannot land alone: without this pair,
+   `next_forward_phase` routes ActivateArchived into phases nothing advances
+   through, and every ActivateArchived test stalls (observed: 43 failures).
+
+   Sequence for whoever picks this up: add the typestate pair and the move
+   first, with the phases still unreachable; then apply steps 1-7 so the chain
+   routes into it; then update the ActivateArchived tests. That order keeps the
+   tree building at each step, which the model-first order did not.
+
+**RESOLVED 2026-07-26 — appending sidesteps it, and the model foundation is
+landed and green.** The two phases now exist in both enums, appended at the end
+rather than in chain order, with their ordinals *parked* at 19-20 above
+`Complete` so no existing ordinal moves and no existing comparison changes.
+Nothing routes into them (`next_forward_phase` returns `None`), so they are
+unreachable by construction.
+
+Verified: `activate_archived` 67/67, `activation_namespace` 60/60,
+`journal_coordinator` 117/117, `transition_journal` 136/136 — 380 tests, zero
+failures, production build at zero warnings.
+
+**Ordinal move: DONE and green** (see the third-table note below).
+
+**Coordinator pair and routing: written and compiling, reverted on test cost.**
+The whole of step 8 was implemented and builds clean at zero warnings:
+
+- `begin_archived_staging()` / `complete_archived_staging()` on the coordinator,
+  each guarded by `require_operation(ActivateArchived)` + `require_phase` and
+  advancing once, following the `begin_candidate_prepare` pattern exactly.
+  `require_operation` already existed.
+- `begin_candidate_prepare`'s expected phase for `ActivateArchived` moved from
+  `Preparing` to `ArchivedCandidateStaged`.
+- `next_forward_phase` routes `Preparing -> StagingIntent -> Staged ->
+  CandidatePrepareStarted` for `ActivateArchived` only.
+- `execute_activate_archived_forward` drives both advances before candidate
+  preparation, so the tree move sits between two durable phases.
+
+**What it costs, and why it was reverted:** making the phases reachable adds two
+generations to every ActivateArchived transition, and the test fixtures assert
+generation counts directly (`startup_recovery/test_support.rs:160`, observed
+`left: 6`). That fails 67 `activate_archived` and 31 `journal_coordinator` tests
+— all of them legitimately, since the chain genuinely got longer.
+
+So the remaining work is *not* design: it is updating generation expectations,
+which are far more centralised than first estimated. Measured, reapplying step 8
+and fixing expectations in order:
+
+- **67 failures -> 18** by bumping the five `Archived` rows in
+  `startup_recovery/test_support.rs::expected_source_generation` by 2. One edit,
+  49 tests. (The earlier "~100 scattered updates" estimate was wrong.)
+- **18 -> 17** by bumping four bare `assert_eq!(record.generation, 12)` literals
+  to 14 in `usr_rollback_activate_archived/tests/` (`finalization_authority_binding.rs`
+  x2, `finalization_root_link_races.rs`, `root_links_terminal_process_kill.rs`).
+- **17 remaining, and they are NOT generation expectations.** Confirmed by
+  reapplying everything and reading them: they fail at `.expect()` sites in
+  `usr_rollback_activate_archived/tests/support.rs` (575, 583, 606) with
+  *"exact terminal ActivateArchived evidence did not admit finalization"* — the
+  rollback finalization admission rejects the record outright.
+
+  Every remaining generation reference in that test tree is relative
+  (`fixture.source.generation + 1`) or already fixed, so bumping literals will
+  not help. The rollback path itself must be re-examined: an ActivateArchived
+  rollback record carries a `source: ForwardPhase`, and its admission almost
+  certainly encodes an assumption about the forward chain that a two-phase
+  extension invalidates. Start at whatever `UsrRollbackActivateArchivedFinalizationAdmission`
+  checks before returning `Ready`, and compare against `rollback_layouts` and
+  `validate_rollback_requirement`.
+
+  Note this is the *rollback* half of the operation, which §1.2b never
+  considered — the section scopes only the forward chain. That omission is the
+  actual gap, not a test-fixture detail.
+
+  **Located it — a hard-coded generation in PRODUCTION code.**
+  `usr_rollback_activate_archived_finalization_authority.rs:239`:
+
+      (rollback.source, record.generation),
+      (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
+          | (ForwardPhase::RootLinksComplete, 12)
+
+  That `12` is the forward generation at `RootLinksComplete` (8 for
+  ActivateArchived) plus the four rollback advances reaching `RollbackComplete`.
+  Written as a literal it silently encodes the forward chain's *length*, so
+  extending the chain by two breaks admission with no compile error. This is the
+  fourth such dependency found in this epic and the only one in production code.
+
+  **Attempted fix that does NOT work:** replacing it with
+  `expected_forward_generation(record, RootLinksComplete) + 4`. That walks
+  `next_forward_phase`, which bails on a record carrying a rollback plan, so it
+  returns `None` and admission fails — 17 tests break on the *unmodified*
+  baseline. Verified and reverted.
+
+  **Second attempt also failed, same way.** Stripping the rollback plan from a
+  clone before the walk (so `next_forward_phase` accepts it) still breaks the
+  same 17 on the unmodified baseline. Both attempts assumed the forward
+  generation at `RootLinksComplete` is 8, making `12 = 8 + 4`. That assumption
+  is wrong: the chain length depends on the record's own options
+  (`runs_transaction_triggers`, `run_system_triggers`), so there is no single
+  forward generation for the phase.
+
+  **Do not attempt a third derivation from assumed arithmetic.** Measure first:
+  print `expected_forward_generation` for the exact records these tests build
+  (`usr_rollback_activate_archived/tests/support.rs`), and confirm what the
+  decomposition of `12` actually is for each option combination. It may turn out
+  the literal is only correct for one option set, which would make it a latent
+  bug in its own right rather than merely a fragile constant.
+
+  **Measured and fixed** (commit `16f6ea8b`). A probe printed the real values:
+  the forward generation at `RootLinksComplete` is **6**, not the 8 both guesses
+  assumed, so `12 = 6 + 6` — the rollback offset is 6, not 4. The literal is now
+  `expected_rollback_complete_generation()`, which walks the forward chain on a
+  rollback-stripped clone and adds the offset. Baseline green.
+
+**Step 8 status after that fix — reapplied and measured.** With the derivation in
+place, reapplying all four code changes plus the generation-expectation updates
+gives:
+
+- `activate_archived` **67/67 green** (was 0/67 at worst)
+- `activation_namespace` **60/60 green**
+- `journal_coordinator` 31 -> **23** after updating one test helper
+- `transition_journal` 1 failure
+
+The remaining failures are all one shape: test helpers that call
+`begin_candidate_prepare()` directly on an `ActivateArchived` coordinator, which
+must now traverse the staging pair first. Eight such call sites:
+`failure_evidence.rs` (212, 332, 438, 704), `active_reblit_reservation.rs:26`,
+`usr_exchange_effect.rs:70`, `operation_prefixes.rs` (42, 143). Each needs the
+same two-call insertion, guarded on `CandidateKind::Archived` — the pattern is
+already applied at `failure_evidence.rs:308` and works.
+
+**Second full reapply, with a better technique.** Adding a `#[cfg(test)]`
+convenience on the coordinator —
+`begin_candidate_prepare_through_staging()`, which traverses the staging pair
+only when the record is `ActivateArchived` at `Preparing` — turns the eight
+scattered call sites into a single `sed`. That is worth keeping in the real
+change; it collapsed `journal_coordinator` 31 -> 17 in one step. Also bump the
+`assert_record_prefix` generations inside the ActivateArchived prefix test
+(`operation_prefixes.rs:121` onward): 17 -> 16.
+
+Two more central tables exist and are worth applying with the rest — bump only
+their `CandidateKind::Archived` arms by 2:
+
+- `tests/root_abi_publication_support.rs:94` (`Archived => 6`)
+- `tests/usr_exchange_effect.rs:103` (`Archived => 5`)
+
+Plus the `assert_record_prefix` generations inside the ActivateArchived prefix
+test (`operation_prefixes.rs:121` onward).
+
+With all of those, `journal_coordinator` reaches **15 failures** and
+`activate_archived` / `activation_namespace` are fully green.
+
+The final 15 are **not** generation arithmetic and have no central lever. They
+are hook-consumption assertions — `client/core/root_abi.rs:99` and `:111`
+("armed retained root ABI link callback was not reached", "armed retained root
+ABI sync fault was not reached"), `transition_journal/store.rs:218`, and a
+couple of prefix asserts. A test arms a thread-local fault hook and drives a
+flow that must reach it; with two extra phases the flow reaches it differently
+or not at all. Each needs reading individually — expect real thought per case,
+not a bump.
+
+Reverted (uncommitted) rather than ship 16 failures. The derivation fix and the
+model foundation are both committed and green. Reapplying step 8 is now
+mechanical: the four code changes, the three generation-expectation fixes
+(`test_support.rs` Archived rows +2, `generation, 12)` -> 14 in
+`usr_rollback_activate_archived/tests/` **only**, and
+`root_links_terminal_process_harness.rs` ActivateArchived 12 -> 14), then the
+eight call sites.
+
+**Do not** bump `generation, 12)` in `usr_rollback_active_reblit/` — ActiveReblit
+gains no phases, and a blanket sed across `startup_gate/` hits it wrongly.
+
+Reverted to the green committed state (`activate_archived` 67/67) rather than
+leave 17 failures in the tree. Reapply the four code changes together with the
+two expectation fixes above, then start at `support.rs:575`.
+
+Note the parked ordinals are a deliberate temporary: they say "after Complete",
+which is wrong for the chain but harmless while unreachable. They must be
+corrected in the same commit that routes into the phases.
+
+**Blocker for that correction, found 2026-07-26 — `policy.rs` hard-codes phase
+ordinals as bare integers.** Moving the parked ordinals from 19-20 to their true
+1-2 position (shifting the rest) was tried in isolation, with declaration order
+unchanged and the phases still unreachable. It fails 54 `activate_archived`, 11
+`activation_namespace` and 2 `journal_coordinator` tests.
+
+The cause is not declaration order (an earlier note here blamed that; it was
+wrong). `activation_namespace/policy.rs` compares ordinals against literals:
+
+    match phase { 0..=2 => Absent, 3 => Optional(candidate), _ => Present(..) }
+    source >= 9 || (source >= 8 && record.phase == Phase::RollbackComplete)
+    forward_phase_ordinal(record.phase) >= 9
+
+Five such sites. They encode "before candidate preparation", "root ABI must be
+complete" and similar as magic numbers, so any renumbering silently changes
+their meaning. This is why the `.ordinal()` audit missed them — they contain no
+`.ordinal()` call at all, only the `forward_ordinal` helper and bare integers.
+
+**Fixed 2026-07-26** (commit `489a4369`): all five literals in
+`activation_namespace/policy.rs` are now named phase comparisons
+(`phase >= forward_ordinal(ForwardPhase::RootLinksComplete)` and so on). Green on
+its own, and it removes the silent-renumbering hazard permanently.
+
+**Effect on the ordinal move, measured after the fix:** `activate_archived` goes
+54 failures -> **0/67 green**, `journal_coordinator` 2 -> **0/117 green**,
+`activation_namespace` 11 -> **5**. So the literals were the bulk of it.
+
+**Resolved: there is a THIRD duplicated ordinal table.** The last 5 failures
+came from `activation_namespace/policy.rs::forward_phase_ordinal(phase: Phase)`,
+which is distinct from both `ForwardPhase::ordinal`
+(`transition_journal/validation.rs`) and `forward_ordinal(ForwardPhase)` in the
+same file. Renumbering two and leaving the third stale is what kept those tests
+red.
+
+With all three renumbered together the ordinal move is **done and green**:
+`activation_namespace` 60/60, `activate_archived` 67/67, `journal_coordinator`
+117/117, `transition_journal` 136/136 — 380 tests, zero failures, production
+build at zero warnings.
+
+**Standing hazard worth fixing on its own:** three independent tables encode the
+same phase ordering, and only exhaustiveness checking links them. Two of the
+three are invisible to a `.ordinal()` grep. Collapsing them into one source of
+truth would retire a class of silent breakage that cost four separate
+diagnoses in this epic alone.
+
+Original correction, retained because the underlying hazard is still real:
+
+**CORRECTION 2026-07-26 — a third ordering dependency exists, and the audit
+below did not find it.** Adding the two variants after `Preparing` and
+renumbering *both* ordinal tables still breaks 54 `activate_archived` and 11
+`activation_namespace` tests, with **nothing routing into the new phases** —
+`next_forward_phase` was deliberately left untouched, so the phases were
+unreachable. The failures land on rollback phases (observed:
+`CandidatePreserveIntent`), which the forward chain does not touch at all.
+
+So something depends on `Phase`'s *declaration order* beyond the two
+`ordinal()`/`forward_ordinal` tables. `Phase` derives only
+`Serialize/Deserialize/Eq/PartialEq` (serde by name, so not the codec), which
+means the dependency is elsewhere — a discriminant cast, an index, or a
+generated table. **Find it before attempting §1.2b again**: appending the
+variants at the *end* of the enum instead of mid-list would sidestep it
+entirely, since `ordinal()` is an explicit table and declaration order is
+otherwise supposed to be irrelevant. That is likely the cheapest fix and should
+be tried first.
+
+Original audit (accurate as far as it went, but incomplete):
+
+**Audit done 2026-07-26 — the ordinal-shift risk is much lower than feared.**
+`.ordinal()` is used in exactly three files (`transition_journal/successors.rs`,
+`transition_journal/validation.rs`, `transition_journal/tests/mod.rs`), and
+*every* use is a relative comparison of the form
+`source.ordinal() >= SomePhase.ordinal()` (or `<`). Verified mechanically: no
+call site consumes an absolute ordinal value.
+
+That means the feared silent degradation cannot occur through the ordinal shift
+itself. Renumbering is safe as long as the new variants are inserted at their
+true chain position; every existing comparison stays correct by construction.
+
+Checked specifically for the new phases at ordinals 1-2 (between `Preparing` and
+`FreshStateAllocating`):
+
+- `source.ordinal() >= FreshStateAllocating.ordinal()` gates "a fresh row may
+  exist". The new phases sort *below* it, so an `ActivateArchived` record parked
+  in archived-staging correctly reports no fresh allocation — which is right,
+  since `ActivateArchived` allocates no row.
+- `>= UsrExchangeIntent`, `>= PreviousArchiveIntent`, `>= TransactionTriggersStarted`,
+  `>= SystemTriggersStarted`, `>= BootSyncStarted` and
+  `< CommitDecided` (`rollback_allowed`) all likewise sort the new phases on the
+  early side, which is correct for a phase that precedes candidate preparation.
+
+Remaining risk therefore sits in items (3) codec encoding and (5) namespace
+layouts, not in the renumbering.
+
+**Implementation attempted and reverted 2026-07-26 — every step below is now
+known-good in isolation; the remaining work is test and fixture migration.**
+
+What was done and verified compiling with zero warnings:
+
+- Both enums gained `ArchivedCandidateStagingIntent` / `ArchivedCandidateStaged`
+  immediately after `Preparing`.
+- Ordinals renumbered to 0..20, monotonic, in **both** tables (see hazard below).
+- `MAX_FORWARD_PHASE_ADVANCES` 19 -> 21.
+- `next_forward_phase`: `Preparing if ActivateArchived => StagingIntent`,
+  `StagingIntent => Staged`, `Staged => CandidatePrepareStarted`.
+- `CandidatePlace::Archived` added, matched in `candidate_place_matches` against
+  `TreeLocation::State(slot)` where `slot == record.candidate.id`.
+- `forward_layouts`: `StagingIntent` admits `{Archived, Live}` and
+  `PRE_EXCHANGE` (intent phases admit both sides); `Staged` admits
+  `PRE_EXCHANGE` alone.
+- The compiler located all eight non-exhaustive matches; each was filled.
+
+**Hazard found — a second, duplicated ordinal table.**
+`activation_namespace/policy.rs::forward_ordinal` re-implements
+`ForwardPhase::ordinal` rather than calling it. It does not appear in a
+`.ordinal()` grep, so the original audit missed it; only its exhaustiveness
+check catches drift. Both tables must be renumbered in step. **Worth collapsing
+into one source of truth independently of this work** — a phase added to one and
+not the other is exactly the silent ordering bug the audit was meant to exclude.
+
+**Why it was reverted — and a correction.** 43 tests fail
+(`journal_coordinator` 31, `activation_namespace` 11, `transition_journal` 1).
+
+An earlier note in this file blamed shifted codec discriminants and stored
+fixtures. **That was wrong.** `Phase` derives `Serialize`/`Deserialize` with
+`#[serde(rename_all = "kebab-case")]`, so it encodes *by name*: adding variants
+anywhere in the enum leaves every existing phase's encoding untouched, and the
+`tests/fixtures/transition-journal-*` pairs are unaffected. Declaration order is
+likewise irrelevant to ordering, since `ordinal()` is an explicit table.
+
+The real cause is simpler and more fundamental: **the chain was extended without
+the driver that traverses it.** `next_forward_phase` now routes
+`Preparing -> ArchivedCandidateStagingIntent -> ArchivedCandidateStaged` for
+`ActivateArchived`, but nothing advances a record through those phases and
+nothing performs the staging move they represent — step (8),
+`execute_activate_archived_forward`, was never implemented. Every
+ActivateArchived test therefore stalls at a phase no code drives.
+
+So the ordering constraint for §1.2b is the opposite of what was assumed: the
+model change and the coordinator driver must land **together**, not model-first.
+Steps 1-7 are known-good in isolation (they compile clean with zero warnings and
+the compiler locates all eight match sites); step 8 is the load-bearing one and
+is where the effort actually sits. Test updates follow from the driver, and are
+consequences rather than a separate migration. No back-compat concern for (3): the payload
+version is already collapsed to a single current version.
 
 ### 1.4 Forward cleanup crash-safety audit (NewState path)  · E:M R:high
 ActiveReblit forward cleanup/finalization is already journal-durable+resumable
@@ -881,6 +1210,116 @@ Still to build for a real campaign:
 
 The archived-repair marker (§1.3) is a natural first target: it is the newest
 durability claim and has no crash coverage yet.
+
+### 2.1a `receipt_promotion::completion` concurrency bug  · E:M R:med
+
+Long treated as full-suite flake; it is a real bug. 2-7 tests under
+`receipt_promotion::completion::*` fail in parallel runs with
+`boot-topology typed value or evaluation fingerprint changed`
+(`require_exact_evaluation`, `active_reblit_boot_topology_intent.rs`), on a path
+inside the test's own tempdir. Membership shifts run to run within that module.
+
+**Diagnosed 2026-07-26 as shared mutable state between concurrent tests:**
+
+- `cargo test -p forge receipt_promotion::completion` reproduces in ~100s
+  (3 of 27 fail). Use this, not the ~29-minute full suite. The interference is
+  therefore *inside* the `completion` submodule — only 27 tests to bisect.
+- The same run with `-- --test-threads=1` passes 61/61. Serialising the module
+  fixes it, which is the discriminator.
+
+Ruled out: the 30s `BINDING_TIMEOUT` deadline; `remaining_at_admission` (reaches
+only error messages, never the resource policy); every `EvaluationIdentity`
+field (all content-derived); the `arm_*` hooks and the fixture assessment queue
+(all `thread_local!`); global statics in the boot/evaluation stack (none exist). Also ruled out: a shared Lua/Gluon
+evaluator VM (neither evaluator holds process-global state), and process-global
+`umask` mutation (`tree_marker.rs:931` is correctly isolated in a re-exec'd
+child process; no other call site exists). No `set_current_dir` anywhere.
+
+**Partly fixed 2026-07-26.** Two distinct causes found; a third remains.
+
+1. **Fixed — wall-clock was hashed into evaluation identity.** All four intent
+   evaluators set `limits.timeout = remaining.min(MAX_EVALUATION_TIME)`, and
+   that timeout is hashed into `resource_policy_sha256`, hence into
+   `EvaluationIdentity`. Whenever `remaining` exceeded the 2s constant the `min`
+   clamped and hid it; once evaluation ran long enough for `remaining` to drop
+   below 2s, preparation and revalidation hashed differently and revalidation
+   failed with "typed value or evaluation fingerprint changed" on source that
+   never changed. This was a **production** bug, not a test artefact. Now a
+   fixed constant; the absolute deadline is still enforced by the budget.
+2. **Fixed — production budgets were inherited by a 24-way parallel suite.**
+   Added `client/boot/timeout_policy.rs`: production values stay as written and
+   only the test build scales them (×20). Production runs one boot publication
+   at a time; the suite runs ~24 concurrently on a shared machine, where
+   contention alone exhausted 30s budgets.
+3. **Open.** At `--test-threads=24`, 2 of 27 still fail with `DeadlineExceeded`
+   and a **consistently ~4ms** `remaining_at_admission` on the boot-topology
+   intent. That value is suspiciously constant rather than load-dependent, so
+   the governing deadline is armed shortly before admission from a source not
+   yet identified — it is not `BINDING_TIMEOUT`, `BOOT_TOPOLOGY_TIMEOUT`,
+   `BOOT_PUBLICATION_TIMEOUT` (all scaled), not the per-budget test `clock`
+   (a struct field, not thread-local, so it cannot leak), and not any fixture
+   constant in the receipt-promotion test support.
+
+State after the two fixes, measured on the full workspace suite:
+
+- **forge at 16 threads: 2757 passed, 1 failed** (was 8-10).
+
+  **The residual is diagnosed, and it is a test bug — not a budget.**
+  `active_reblit_boot_inputs_tests.rs:498`
+  (`failed_final_revalidation_drops_every_prepared_snapshot_descriptor`)
+  captures a raw file-descriptor *number* and then asserts the descriptor was
+  closed via:
+
+      assert_eq!(fcntl(descriptor, FcntlArg::F_GETFD), Err(Errno::EBADF));
+
+  File-descriptor numbers are reused process-wide. Under concurrency another
+  test opens a file, is handed the same number, and `F_GETFD` succeeds — so the
+  assertion fails even though the descriptor under test was closed correctly.
+  That is precisely why it only fails in whole-suite runs: more concurrent
+  tests, higher chance of reuse. No amount of budget scaling can fix it.
+
+  **Fixed 2026-07-27.** The test now records what the descriptor *points at*
+  (`/proc/self/fd/N` dev+ino) at capture time, and accepts either `EBADF` or a
+  different identity — both prove the plan dropped its descriptor, while "still
+  open on the original inode" remains a failure. Coverage is unchanged and the
+  race is gone.
+
+  **Whole-suite state after that fix: still 2757/1, but a different test.** The
+  descriptor test no longer appears; the remaining failure is
+  `receipt_promotion::completion::drift::final_return_revalidation_catches_late_drift_after_durable_completion`
+  — a straggler from the original completion cluster, which the two budget fixes
+  reduced from 8-10 to this one. Same reproduction as §2.1a: it needs the
+  whole-suite thread count, passes in isolation and at its own module.
+
+  **Better reproduction, and the obvious explanation ruled out (2026-07-27).**
+  `cargo test -p forge receipt_promotion::completion -- --test-threads=16`
+  **alone** fails 4-5 of 27 — more than the whole-suite run — because in
+  isolation those 27 run far more concurrently than when spread across 2758. At
+  `--test-threads=24` it is 7-8.
+
+  Every failure is `DeadlineExceeded` with `remaining_at_admission` in the
+  *milliseconds*. The boot budgets are provably scaled x20 in test builds
+  (`timeout_policy::tests::the_test_build_actually_scales_budgets` now asserts
+  this, so it cannot silently regress), putting them at 600s+. A 2ms remainder
+  is impossible from any scaled budget.
+
+  So the governing deadline is **not** one of the 13 scaled boot budgets — it is
+  armed elsewhere, near the point of use, and that source is still unfound.
+  Next step: instrument `BootTopologyIntentBudget::new_until` to print its
+  incoming `deadline` and caller. Three rounds of auditing constants have failed
+  to find it; measure instead.
+- `receipt_promotion::completion` is 27/27 at 16 threads and below; 24 fails 2.
+- `make test` now defaults to `TEST_THREADS ?= 16`, overridable
+  (`make test TEST_THREADS=1`) for bisects.
+
+**Separately — `mason` has 3 pre-existing failures unrelated to any of this.**
+`planner::hermetic_tests::offline_execution_fixture_archives_are_real_locked_and_complete`
+fails with `Git(Error(RepositoryDepth { limit: 0 }))`, plus two
+`upstream::git::fixture_import_tests` cases. They fail **identically at 1 thread
+and at 16**, which is what `make test` already did before the thread-cap change,
+so the cap did not cause them. They do stop `make test --workspace` before it
+reaches forge — worth fixing or marking, or full-workspace runs never exercise
+the forge suite at all.
 
 ### 2.2 Live `Ready`-branch boot regression  · E:L R:med
 No single regression drives `Client::verify → complete_active_reblit_boot →
@@ -1217,3 +1656,18 @@ default mount points), **D4.3** (per-adapter vs global evaluator-policy version 
 load-bearing), **D4.4/4.5** (config-root + repo trusted-owner models),
 **D5.1/5.2/5.3** (security design confirmations), **D7.1/7.3** (timeout macro,
 capacity thresholds).
+
+### Session plan (decided 2026-07-26)
+
+Order: item 1 first (it gates verification of everything else), then 2, 4, 3.
+
+1. **Root-cause the `completion` concurrency bug properly** — no serialisation
+   workaround. Bisect the 27 tests to find the shared mutable state.
+2. **Port `stateful_trigger_preparation_never_follows_a_replaced_isolation_root`
+   to the coordinated route, prove it still catches the substitution, then
+   delete `stateful_transition.rs`.** Never delete the security proof first.
+3. **Build the full crash matrix** — every operation crossed with every journal
+   phase, not a single scenario.
+4. **Insert the archived-staging phases at ordinals 1-2 and shift the rest**,
+   with a dedicated audit pass over every `ordinal()` caller to catch the
+   silent-degradation risk.

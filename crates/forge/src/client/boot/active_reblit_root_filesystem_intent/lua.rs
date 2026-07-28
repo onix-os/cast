@@ -54,7 +54,10 @@ impl<'budget> LuaRootFilesystemIntentEvaluator<'budget> {
         budget: &'budget mut RootFilesystemIntentBudget,
     ) -> Result<Self, ActiveReblitRootFilesystemIntentError> {
         budget.require_deadline()?;
-        let remaining = budget.remaining_duration()?;
+        // Called for its check, not its value: it fails if the caller's absolute
+        // deadline has already passed. The duration itself must not reach
+        // `limits` — see the timeout comment below.
+        budget.remaining_duration()?;
         let mut limits = Limits::default();
         limits.max_source_bytes = budget.policy.max_source_bytes;
         limits.max_explicit_input_bytes = 0;
@@ -62,7 +65,21 @@ impl<'budget> LuaRootFilesystemIntentEvaluator<'budget> {
         limits.max_imported_file_bytes = 0;
         limits.max_imports = 0;
         limits.max_import_graph_bytes = budget.policy.max_source_bytes;
-        limits.timeout = remaining.min(MAX_EVALUATION_TIME);
+        // A fixed policy value, never the remaining budget. This timeout is
+        // hashed into `resource_policy_sha256` and therefore into
+        // `EvaluationIdentity`, so deriving it from wall-clock remaining time
+        // makes the identity of *identical source* vary between evaluations.
+        // Whenever `remaining` exceeds this constant the `min` clamps and hides
+        // the bug; once evaluation runs long enough for `remaining` to drop
+        // below it, the preparing and revalidating evaluations hash differently
+        // and revalidation fails with "typed value or evaluation fingerprint
+        // changed" on source that never changed.
+        //
+        // The absolute deadline is not weakened: it is owned by the caller's
+        // budget and enforced by `require_deadline` here and at every
+        // surrounding checkpoint, which is the stronger authority this adapter
+        // exists to preserve.
+        limits.timeout = MAX_EVALUATION_TIME;
 
         Ok(Self {
             engine: LuaEngine::new(limits),
