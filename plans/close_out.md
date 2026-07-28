@@ -143,8 +143,11 @@ Phase 0 no longer describes reality and is actively misleading:
 - **0.2** — the `forge-focused-tests.mk` line it names is already gone.
 - **0.4** — asks to resolve 18 compiler warnings; there are zero.
 
-Verify 0.3 and 0.5, then mark the section closed. Cheap, and it stops the next
-reader planning around problems that no longer exist.
+**DONE 2026-07-27.** All six verified individually; 0.3 (flake pins 1.94.1
+exactly) and 0.5 (host-scratch helper) were already satisfied bar one script,
+whose `${TMPDIR:-/tmp}` fallback is now routed through
+`lib/host-scratch-root.sh`. Phase 0 marked closed in `future_impl.md` with the
+evidence for each item.
 
 ---
 

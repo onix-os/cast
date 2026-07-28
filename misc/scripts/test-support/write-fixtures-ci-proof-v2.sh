@@ -2,6 +2,10 @@
 
 set -eu
 
+# A saturated /tmp must not stop a host gate from starting when the repository
+# filesystem has capacity — see misc/scripts/lib/host-scratch-root.sh.
+. "$(dirname -- "$0")/../lib/host-scratch-root.sh"
+
 if [ "$#" -ne 2 ]; then
     printf 'usage: %s <absolute-output-path> <canonical-git-commit>\n' "$0" >&2
     exit 2
@@ -44,7 +48,7 @@ if [ -L "$ledger_calculator" ] || [ ! -f "$ledger_calculator" ] \
 fi
 
 umask 077
-work=$(mktemp -d "${TMPDIR:-/tmp}/cast-proof-v2-generator.XXXXXXXXXXXX")
+work=$(mktemp -d "${CAST_HOST_SCRATCH_ROOT}/cast-proof-v2-generator.XXXXXXXXXXXX")
 complete=0
 cleanup() {
     status=$?

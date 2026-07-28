@@ -31,7 +31,27 @@ Legend — **E** effort (S/M/L/XL), **R** risk (low/med/high/critical),
 
 ---
 
-## Phase 0 — Safe prerequisites (unblock trust; do first)
+## Phase 0 — Safe prerequisites · **CLOSED 2026-07-27**
+
+Verified item by item rather than assumed; every one is already satisfied, and
+the section was actively misleading about the state of the tree.
+
+- **0.1** — `startup_reconciliation_database_phase_matrix_is_exact` passes.
+- **0.2** — the `forge-focused-tests.mk` line naming the removed test is gone.
+- **0.3** — `flake.nix:22` pins `rust-bin.stable."1.94.1"` exactly and owns the
+  rustfmt policy in the flake, as the item asked.
+- **0.4** — asks to resolve 18 forge warnings; the production build emits
+  **zero**.
+- **0.5** — `misc/scripts/lib/host-scratch-root.sh` exists and every host script
+  now uses it. The last `${TMPDIR:-/tmp}` fallback
+  (`test-support/write-fixtures-ci-proof-v2.sh`) was routed through it on
+  2026-07-27 — worth having done, since `/tmp` saturation genuinely halted work
+  during this epic.
+- **0.6** — already dropped.
+
+Original text retained below for provenance.
+
+### Phase 0 (historical)
 
 These are low-risk and clear the ground so later phases are trustworthy. None
 touch boot behavior.
