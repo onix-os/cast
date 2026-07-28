@@ -131,6 +131,35 @@ exclusion assertion at all. The `owned_cleanup::restart` ones are in a module
 this change does not obviously touch — check whether they are pre-existing or
 load-related before attributing them.
 
+**Triaged 2026-07-27. Suite is now 2754 passed / 5 failed, and every failure is
+understood:**
+
+- **3 x `owned_cleanup::restart`** — NOT caused by this change. They pass 5/5 in
+  ~4s in isolation and fail only under whole-suite contention (the same group
+  took 208s in the failing run). I initially misattributed these by comparing
+  runs under different load; the correct comparison is isolation-vs-isolation.
+- **1 x `startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action`**
+  — FIXED. It used `TransactionTriggersComplete` as its "unsupported source"
+  case, which this change makes legitimately supported for NewState. Re-pointed
+  at `Preparing`, which remains unsupported.
+- **1 x `startup_candidate_preserve_plan_requires_the_exact_operation_matrix`**
+  — STILL FAILING, and needs a judgement call. It asserts
+  `usr_exchange = NotRequired` is always inexact. That is now true only for
+  post-exchange sources. Pairing `NotRequired` with a post-exchange source
+  (`UsrExchanged`) to preserve the assertion's intent did **not** work — the
+  plan was still accepted, so something else in `candidate_preserve_plan_is_exact`
+  admits that combination. Understand that path before editing the test; do not
+  simply delete the assertion.
+
+**A second over-widening was found and fixed during triage.** The shared
+predicates were applied to *all* operations, but only NewState's pre-exchange
+window was ever measured. `rollback_source_is_supported` and
+`rollback_usr_exchange_is_settled` now take the operation and permit
+pre-exchange rollback for NewState only. ActiveReblit and ActivateArchived very
+likely have the same gap — their pre-exchange phases map to `BeginRollback`
+too — but extend deliberately, with a crash-matrix cell per operation, rather
+than by widening a shared predicate.
+
 **Before merging:** confirm each failure is either (a) a test encoding the old
 "post-exchange only" contract, which this change deliberately reverses and which
 should be updated, or (b) a real over-acceptance like the one already found. Do
