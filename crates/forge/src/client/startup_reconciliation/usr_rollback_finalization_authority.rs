@@ -254,7 +254,15 @@ fn rollback_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
         && record.candidate.id.is_some()
         && matches!(
             (rollback.source, record.generation),
-            (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
+            // Pre-exchange sources reach `RollbackComplete` by a shorter route
+            // (no reverse exchange), so their generation is not fixed and is
+            // left unconstrained here (`plans/future_impl.md` §1.4).
+            (
+                ForwardPhase::CandidatePrepared
+                    | ForwardPhase::TransactionTriggersStarted
+                    | ForwardPhase::TransactionTriggersComplete,
+                _,
+            ) | (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
                 | (ForwardPhase::RootLinksComplete, 18)
                 | (ForwardPhase::SystemTriggersStarted, 19)
                 | (ForwardPhase::SystemTriggersComplete, 20)
