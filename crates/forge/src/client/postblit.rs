@@ -69,7 +69,7 @@ pub(super) enum RetainedEphemeralPhase {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum TriggerScope<'a> {
     /// A stateful transaction trigger, isolated to the staged `/usr`.
-    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
+    #[allow(dead_code)] // reachable only from #[cfg(test)] callers; NOT dead — see plans/cleanup_legacy.md §§3-4
     Transaction(&'a Installation),
 
     /// An inactive-state transaction trigger whose complete execution view is

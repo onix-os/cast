@@ -194,26 +194,38 @@ stay green.
 time, deleting each item and its match arms, until nothing references the
 legacy rotation/parking lifecycle.
 
-**Attempted 2026-07-27 — the seven functions delete cleanly; the five enum
-variants cascade into tests.** Removing
-`apply_stateful_blit_with_capability`, `prepare_stateful_tree_identity_retained`,
-`decorate_stateful`, `prepare_active_previous_slot_parking`, `reserve`,
-`prepare_active_reblit_staging_rotation` and `prepare_retained_candidate` leaves
-the production build compiling with no errors. That part is mechanical.
+**RESOLVED 2026-07-27 — the 12 "orphans" are not orphans, and must not be
+deleted.**
 
-The variants are not. Two findings:
+An earlier attempt here concluded "the seven functions delete cleanly" on the
+strength of `cargo build -p forge` succeeding. That check was wrong: it builds
+the *production* configuration only. Repeating the deletion and building with
+`--tests`:
 
-- `StatefulTransitionCheckpoint::AfterTransactionTriggers` is *compared against*
-  in `client/tests/stateful_candidate_metadata.rs:155` and
-  `client/active_reblit_tests.rs:143,198` but is no longer *constructed* — only
-  the deleted `apply_stateful_candidate` emitted it. Those comparisons can never
-  be true now, so those tests are silently passing without exercising what they
-  name. Worth checking whether the coordinated route has an equivalent
-  checkpoint before deleting the assertions.
-- `decorate_stateful` is used by four test files
-  (`stateful_candidate_metadata.rs` x2, `stateful_previous_tree_recovery.rs`,
-  `stateful_journal_and_identity_preflight.rs`). Each is a coverage decision, not
-  a deletion: does the coordinated metadata path already prove what these prove?
+    cargo build -p forge          ->  0 errors
+    cargo build -p forge --tests  ->  7 errors
+
+Every one of the seven is reachable from `#[cfg(test)]` code. The clearest case:
+`apply_stateful_blit_with_capability` is called by
+`apply_stateful_blit_with_checkpoint`, which is itself `#[cfg(test)]` — so in a
+production build the callee looks dead while remaining live test infrastructure.
+Three tests depend on the `AfterTransactionTriggers` checkpoint it emits, and
+they assert it fired (`stateful_candidate_metadata.rs:173`, "transaction
+boundary did not run"), so they are **not** silently passing as an earlier note
+here claimed.
+
+Action taken: the 12 `#[allow(dead_code)]` rationales, which said "orphaned ...
+delete with §§3-4", now say "reachable only from `#[cfg(test)]` callers; NOT
+dead". The annotations stay.
+
+**So §§3 and 4 are not blocked on deleting these — they were never deletable.**
+What remains for §§3-4 is only the genuinely legacy enums
+(`ArchiveJournalGuard::LegacyNoJournal`, `JournalAcquisition::LegacyBlocking`,
+`legacy_boot_repair`), and each needs the same `--tests` check before removal.
+
+**Rule for this codebase: a dead-code warning from the production build proves
+nothing on its own. Always confirm with `cargo build -p forge --tests` before
+deleting.**
 
 Reverted rather than guess at those. The remaining `Stateful` and `Transaction`
 names also collide across enums — `postblit::RetainedTransactionKind::Stateful`

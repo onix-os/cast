@@ -30,7 +30,7 @@ BUG_REPORT_URL="https://github.com/AerynOS/os-info/issues""#;
 enum MetadataContext {
     ArchivedRepair,
     Ephemeral,
-    #[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
+    #[allow(dead_code)] // reachable only from #[cfg(test)] callers; NOT dead — see plans/cleanup_legacy.md §§3-4
     Stateful,
 }
 
@@ -60,7 +60,7 @@ pub(super) fn decorate_archived(
     decorate_retained(MetadataContext::ArchivedRepair, usr, usr_path, snapshot)
 }
 
-#[allow(dead_code)] // orphaned by the legacy stateful route removal; delete with plans/cleanup_legacy.md §§3-4
+#[allow(dead_code)] // reachable only from #[cfg(test)] callers; NOT dead — see plans/cleanup_legacy.md §§3-4
 pub(super) fn decorate_stateful(
     identity: &StatefulTreeIdentity,
     snapshot: &SystemModel,
