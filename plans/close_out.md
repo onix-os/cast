@@ -67,11 +67,42 @@ dispatcher covers those phases, so the record falls through to
 `crash-matrix-run.sh`. The 1-2s anomaly that prompted this turned out to be
 timing variance plus a harness artefact (`nothing-staged`), not a defect.
 
-**A2 (new, do next) — pre-exchange recovery route · E:M R:high.** Implement
-recovery for `Preparing` .. `TransactionTriggersComplete`. Nothing in `/usr` has
-been touched at those phases, so discarding the candidate and clearing the
-record should suffice — no reverse exchange needed. This is the last real hole
-in Phase 1's durability claim.
+**A2 — pre-exchange recovery route · E:M R:high · MOSTLY DONE 2026-07-27.**
+
+The journal model already supported this: `rollback_allowed` permits
+pre-exchange sources and the derived plan correctly carries
+`usr_exchange: NotRequired`. Every blocker was in the startup dispatch layer,
+and each was the same shape — a hard-coded post-exchange assumption, duplicated.
+
+Fixed, in order (each verified by re-running the 5s cut and watching the chain
+advance one phase further):
+
+1. `rollback_decision_source_is_supported` — allowlist covering only
+   post-exchange phases.
+2. The decision authority's `(Phase, UsrExchangeLayout)` match — an
+   `unreachable!()` for pre-exchange, plus an overloaded `None` that meant
+   "parent durability required". Split into an explicit not-required case.
+3. `rollback_source_is_supported` — **the same allowlist was duplicated across
+   9 sites** in 7 rollback authorities. Extracted to one predicate in
+   `startup_reconciliation`.
+4. `rollback_usr_exchange_is_settled` — the check that the exchange needs no
+   further action was duplicated across **11 sites**, and every copy omitted
+   `NotRequired`. Also extracted to one predicate.
+
+Chain now runs: `TransactionTriggersStarted -> RollbackDecided ->
+CandidatePreserveIntent -> CandidatePreserved -> FreshDbInvalidationIntent ->
+FreshDbInvalidated -> RollbackComplete`. It previously never left
+`TransactionTriggersStarted`.
+
+**Remaining: the final `FinalizeRollback` step.** The record reaches
+`RollbackComplete` and stalls there. Note there are finalization authorities for
+ActivateArchived and ActiveReblit but none named for NewState, yet post-exchange
+NewState rollback does finalize (the 8s cut recovers) — so find how that path
+finalizes and why it rejects a pre-exchange source. Expect the same shape as the
+four above.
+
+Regression-checked: `usr_rollback_decision` 19/19, `transition_journal` 136/136,
+`activation_namespace` 60/60, production build at zero warnings.
 
 ---
 
