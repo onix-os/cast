@@ -194,6 +194,31 @@ stay green.
 time, deleting each item and its match arms, until nothing references the
 legacy rotation/parking lifecycle.
 
+**Attempted 2026-07-27 — the seven functions delete cleanly; the five enum
+variants cascade into tests.** Removing
+`apply_stateful_blit_with_capability`, `prepare_stateful_tree_identity_retained`,
+`decorate_stateful`, `prepare_active_previous_slot_parking`, `reserve`,
+`prepare_active_reblit_staging_rotation` and `prepare_retained_candidate` leaves
+the production build compiling with no errors. That part is mechanical.
+
+The variants are not. Two findings:
+
+- `StatefulTransitionCheckpoint::AfterTransactionTriggers` is *compared against*
+  in `client/tests/stateful_candidate_metadata.rs:155` and
+  `client/active_reblit_tests.rs:143,198` but is no longer *constructed* — only
+  the deleted `apply_stateful_candidate` emitted it. Those comparisons can never
+  be true now, so those tests are silently passing without exercising what they
+  name. Worth checking whether the coordinated route has an equivalent
+  checkpoint before deleting the assertions.
+- `decorate_stateful` is used by four test files
+  (`stateful_candidate_metadata.rs` x2, `stateful_previous_tree_recovery.rs`,
+  `stateful_journal_and_identity_preflight.rs`). Each is a coverage decision, not
+  a deletion: does the coordinated metadata path already prove what these prove?
+
+Reverted rather than guess at those. The remaining `Stateful` and `Transaction`
+names also collide across enums — `postblit::RetainedTransactionKind::Stateful`
+is live — so check which enum a warning refers to before deleting a line.
+
 **Security question settled:** deleting these removes a *proof*, not a defence.
 `new_state_boot_transition.rs:124` passes the same
 `TriggerScope::RetainedTransaction { kind: Stateful, .. }`, sourcing its
