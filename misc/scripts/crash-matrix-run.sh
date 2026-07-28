@@ -28,11 +28,22 @@
 # column readable: absence in a cut cell now means the cut prevented the effect,
 # not that the guest cannot install.
 #
-# **`recovery=FAILED` at the 3s cut is a finding, not a harness artefact** — the
-# control and 0s cells in the same run recover cleanly. Something about being
-# interrupted 3s in leaves the installation unable to come up. Reproduce it and
-# capture the startup error before drawing conclusions; that is exactly the
-# class of defect §2.1 exists to surface.
+# **FIRST REAL DEFECT FOUND (2026-07-27).** The 3s cut reproduces reliably and
+# the startup error is:
+#
+#     Error: repo: setup client: establish clean system-client startup baseline:
+#       state transition <id> at UsrExchanged requires BeginRollback { source:
+#       UsrExchanged }; recovery effects remain blocked by []
+#
+# A power cut at `UsrExchanged` leaves a journal record that startup correctly
+# identifies as needing rollback — and then refuses to proceed, reporting an
+# **empty** blocker list. An empty `blocked by []` alongside a refusal to
+# recover is self-contradictory: either something blocks recovery and should be
+# named, or nothing does and recovery should run. Control and 0s cells in the
+# same run recover cleanly, so this is specific to being interrupted with the
+# exchange durable but the transition unfinished.
+#
+# Not yet diagnosed further. See `plans/future_impl.md` §2.1.
 #
 # Note `install` takes a package *name*, not a path: a local `.stone` is
 # `cast index`ed and added via `repo add file://.../stone.index` first. Passing a
@@ -90,7 +101,7 @@ else
     # Two independent questions. "Does forge come up at all" is the recovery
     # verdict; "did the package land" is the transition outcome. Conflating them
     # made an uninitialised root read as a recovery failure.
-    if cast -D /mnt/root repo list >/dev/null 2>&1; then R=clean; else R=FAILED; fi
+    if REC=$(cast -D /mnt/root repo list 2>&1); then R=clean; else R=FAILED; echo "RECOVERY-ERROR: $REC"; fi
     if cast -D /mnt/root list installed 2>/dev/null | grep -q bash-completion; then S=installed; else S=absent; fi
     echo "recovery=$R state=$S"
     echo "CELL-VERDICT-END"
@@ -122,5 +133,8 @@ for op in "${OPS[@]}"; do
     timeout 180 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; run check '$enc'" > "$W/o2" 2>&1 || true
     v=$(grep -oE 'recovery=[A-Za-z]+ state=[A-Za-z]+' "$W/o2" | head -1)
     printf '%-20s %-6s %s\n' "$op" "${cut}s" "${v:-NO-VERDICT}"
+    if [[ ${v:-} == *FAILED* || -z ${v:-} ]]; then
+        echo "--- verdict phase output ---"; sed -n '/CELL-VERDICT-BEGIN/,/CELL-VERDICT-END/p' "$W/o2"
+    fi
   done
 done
