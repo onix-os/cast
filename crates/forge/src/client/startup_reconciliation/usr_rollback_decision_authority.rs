@@ -133,6 +133,7 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
             }
         };
 
+        let mut usr_exchange_not_required = false;
         let usr_exchange = match (record.phase, namespace.layout()) {
             (Phase::UsrExchangeIntent, UsrExchangeLayout::Pre) => Some(InitialRollbackAction::AlreadySatisfied),
             (Phase::UsrExchangeIntent, UsrExchangeLayout::Post) => None,
@@ -174,6 +175,27 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                     UsrRollbackDecisionDeferral::IncompatibleEvidence,
                 ));
             }
+            // Pre-exchange sources. `/usr` was never touched, so there is no
+            // exchange to reverse and the plan carries no usr action; the
+            // rollback chain only has to discard the candidate. A `Post` layout
+            // at these phases contradicts the record — the exchange happened but
+            // the journal never recorded reaching it — so defer rather than
+            // guess (`plans/future_impl.md` §1.4).
+            (
+                Phase::CandidatePrepared | Phase::TransactionTriggersStarted | Phase::TransactionTriggersComplete,
+                UsrExchangeLayout::Pre,
+            ) => {
+                usr_exchange_not_required = true;
+                None
+            }
+            (
+                Phase::CandidatePrepared | Phase::TransactionTriggersStarted | Phase::TransactionTriggersComplete,
+                UsrExchangeLayout::Post,
+            ) => {
+                return Ok(UsrRollbackDecisionAdmission::Deferred(
+                    UsrRollbackDecisionDeferral::IncompatibleEvidence,
+                ));
+            }
             _ => unreachable!("rollback-decision admission is restricted to exact /usr or ActiveReblit boot sources"),
         };
         let retained_state_db = state_db.clone();
@@ -190,18 +212,32 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
             journal_record_binding,
             _active_state_reservation: active_state_reservation,
         };
-        Ok(match usr_exchange {
-            Some(usr_exchange) => UsrRollbackDecisionAdmission::Ready(Self {
+        // `None` from the match is overloaded: for `UsrExchangeIntent + Pre` it
+        // means the exchange parent still needs normalising, while for a
+        // pre-exchange source it means there is simply no exchange to reverse.
+        // The flag separates them.
+        Ok(match (usr_exchange, usr_exchange_not_required) {
+            (Some(usr_exchange), _) => UsrRollbackDecisionAdmission::Ready(Self {
                 observations: rollback_observations(
                     record.operation,
-                    usr_exchange,
+                    Some(usr_exchange),
                     previous_archive_observation(record.phase),
                 ),
                 evidence,
             }),
-            None => UsrRollbackDecisionAdmission::ParentDurabilityRequired(UsrExchangeParentDurabilityAuthority {
+            (None, true) => UsrRollbackDecisionAdmission::Ready(Self {
+                observations: rollback_observations(
+                    record.operation,
+                    None,
+                    previous_archive_observation(record.phase),
+                ),
                 evidence,
             }),
+            (None, false) => {
+                UsrRollbackDecisionAdmission::ParentDurabilityRequired(UsrExchangeParentDurabilityAuthority {
+                    evidence,
+                })
+            }
         })
     }
 
@@ -246,7 +282,19 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
 fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
     matches!(
         record.phase,
-        Phase::UsrExchangeIntent | Phase::UsrExchanged | Phase::RootLinksComplete
+        // Pre-exchange. Nothing in `/usr` has been touched at these phases, so
+        // the derived plan carries `usr_exchange: NotRequired` and the rollback
+        // chain only has to discard the candidate. Without them a crash during
+        // transaction triggers is unrecoverable: the record's disposition is
+        // `BeginRollback`, but no dispatcher accepts it, so every startup
+        // repeats the same `PendingSystemTransition` forever
+        // (`plans/future_impl.md` §1.4).
+        Phase::CandidatePrepared
+            | Phase::TransactionTriggersStarted
+            | Phase::TransactionTriggersComplete
+            | Phase::UsrExchangeIntent
+            | Phase::UsrExchanged
+            | Phase::RootLinksComplete
     ) || matches!(
         (record.operation, record.phase, record.generation),
         (Operation::NewState, Phase::SystemTriggersStarted, 11)
@@ -335,7 +383,7 @@ impl<'reservation> UsrExchangeParentDurabilityAuthority<'reservation> {
         let operation = self.evidence.record.operation;
         Ok(UsrRollbackDecisionAuthority {
             evidence: self.evidence,
-            observations: rollback_observations(operation, InitialRollbackAction::Pending, None),
+            observations: rollback_observations(operation, Some(InitialRollbackAction::Pending), None),
         })
     }
 
@@ -352,13 +400,15 @@ impl<'reservation> UsrExchangeParentDurabilityAuthority<'reservation> {
 
 fn rollback_observations(
     operation: Operation,
-    usr_exchange: InitialRollbackAction,
+    usr_exchange: Option<InitialRollbackAction>,
     previous_archive: Option<InitialRollbackAction>,
 ) -> RollbackObservations {
     RollbackObservations {
         allocated_candidate_id: None,
         previous_archive,
-        usr_exchange: Some(usr_exchange),
+        // `None` here means the exchange never happened, so the derived plan
+        // carries `usr_exchange: NotRequired`.
+        usr_exchange,
         candidate: InitialRollbackAction::Pending,
         fresh_db: (operation == Operation::NewState).then_some(InitialRollbackAction::Pending),
     }
