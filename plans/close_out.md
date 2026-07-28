@@ -226,6 +226,24 @@ subsumed by A above, but as its own effort:
 - Enough invocations for incremental recovery to converge, with the phase
   tracked so a genuine stall is distinguishable from slow progress
 
+**Started 2026-07-27, and it found the harness's real limit.** An `activate`
+operation (install, then `cast state activate 1`) now exists in `OPS` and runs,
+but its cells cannot be trusted: the setup install takes several seconds, so a
+wall-clock cut at 10-16s most likely lands inside the *install* rather than the
+ActivateArchived transition — and the `recovered-at-9` signature it reports is
+the same one NewState rollback produces.
+
+**So the next step for D is not more operations, it is phase-targeted cuts.**
+Wall-clock delays cannot isolate one operation's window when the setup preceding
+it takes seconds. The `arm_*` fault hooks already exist for most journal
+boundaries; arm one at the phase under test and cut there. Every operation added
+before that lands will produce cells that look green without testing what they
+name — the same trap as the earlier `state=absent` column.
+
+Specifically still unmeasured: whether ActiveReblit and ActivateArchived share
+the pre-exchange recovery gap. The §1.4 fix was deliberately scoped to NewState
+because that is the only operation whose window was measured.
+
 **§2.1a is closed** — the `receipt_promotion::completion` cluster was
 test-side `future_deadline()` helpers hard-coding short windows that contention
 exhausted. Suite is green at 16 and 24 threads.
