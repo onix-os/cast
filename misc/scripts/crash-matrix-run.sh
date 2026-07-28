@@ -54,14 +54,35 @@
 # `cast index`ed and added via `repo add file://.../stone.index` first. Passing a
 # path silently yields "no package found" and an all-absent state column.
 #
+# **Widened sweep, 2026-07-27** (install x six cut points):
+#
+#     CUT       VERDICT
+#     control   recovery=clean   driver=recovered-at-1  state=installed
+#     0s        recovery=clean   driver=recovered-at-1  state=installed
+#     1s        recovery=clean   driver=FAILED          state=absent
+#     2s        recovery=PENDING driver=FAILED          state=absent
+#     3s        recovery=PENDING driver=recovered-at-7  state=installed
+#     5s        recovery=PENDING driver=recovered-at-9  state=installed
+#
+# The 1s and 2s cells do not converge within the 15 driver invocations this
+# script allows, while 0s, 3s and 5s all do. That non-monotonic shape is
+# interesting — a narrow window that behaves worse than cuts on either side of
+# it — but it is NOT yet a defect claim.
+#
+# Before treating it as one, rule out the mistake this harness already made
+# once: raise the invocation cap and check whether the phase in the error keeps
+# *advancing*. Recovery is incremental, so "still pending after N tries" and
+# "cannot recover" look identical at a fixed N. It is only a defect if the phase
+# stops changing.
+#
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
 KERNEL=$(ls /boot/vmlinuz-* | head -1)
 
 # Operations that write durable state without needing network.
-OPS=("install_/pkg.stone" "repo_list")
+OPS=(install)
 # When to cut, relative to the operation starting. 0 = as early as possible.
-CUTS=(control 0 1 3)
+CUTS=(control 0 1 2 3 5)
 
 mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
