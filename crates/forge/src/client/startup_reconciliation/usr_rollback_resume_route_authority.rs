@@ -145,7 +145,15 @@ fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
     record.rollback.as_ref().is_some_and(|rollback| {
         matches!(
             rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
+            // Pre-exchange sources: nothing in `/usr` was touched, so the plan
+            // carries `usr_exchange: NotRequired` and this route only has to
+            // carry the candidate discard through (`plans/future_impl.md` §1.4).
+            ForwardPhase::CandidatePrepared
+                | ForwardPhase::TransactionTriggersStarted
+                | ForwardPhase::TransactionTriggersComplete
+                | ForwardPhase::UsrExchangeIntent
+                | ForwardPhase::UsrExchanged
+                | ForwardPhase::RootLinksComplete
         ) || matches!(
             (record.operation, record.phase, rollback.source, record.generation),
             (
@@ -261,6 +269,9 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
                 (rollback.usr_exchange, layout),
                 (RollbackAction::Pending, UsrExchangeLayout::Post)
                     | (RollbackAction::AlreadySatisfied, UsrExchangeLayout::Pre)
+                    // Pre-exchange: there is no exchange to reverse, and the
+                    // namespace must still be pre-exchange to prove it.
+                    | (RollbackAction::NotRequired, UsrExchangeLayout::Pre)
             ),
             Phase::UsrRestored => matches!(
                 (rollback.usr_exchange, layout),

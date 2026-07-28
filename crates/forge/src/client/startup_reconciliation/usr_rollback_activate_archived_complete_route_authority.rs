@@ -11,8 +11,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin,
-        RollbackAction, StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        AbortDisposition, BootRollback, CandidateOrigin, Operation, Phase, PreviousOrigin, RollbackAction,
+        StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -192,15 +192,9 @@ fn activate_archived_complete_route_plan_is_exact(record: &TransitionRecord) -> 
         && record.candidate.id.is_some()
         && record.previous.id.is_some()
         && record.candidate.id != record.previous.id
-        && matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        )
+        && super::rollback_source_is_supported(record.operation, rollback.source)
         && rollback.previous_archive == RollbackAction::NotRequired
-        && matches!(
-            rollback.usr_exchange,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
-        )
+        && super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied

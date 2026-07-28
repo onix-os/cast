@@ -31,7 +31,27 @@ Legend — **E** effort (S/M/L/XL), **R** risk (low/med/high/critical),
 
 ---
 
-## Phase 0 — Safe prerequisites (unblock trust; do first)
+## Phase 0 — Safe prerequisites · **CLOSED 2026-07-27**
+
+Verified item by item rather than assumed; every one is already satisfied, and
+the section was actively misleading about the state of the tree.
+
+- **0.1** — `startup_reconciliation_database_phase_matrix_is_exact` passes.
+- **0.2** — the `forge-focused-tests.mk` line naming the removed test is gone.
+- **0.3** — `flake.nix:22` pins `rust-bin.stable."1.94.1"` exactly and owns the
+  rustfmt policy in the flake, as the item asked.
+- **0.4** — asks to resolve 18 forge warnings; the production build emits
+  **zero**.
+- **0.5** — `misc/scripts/lib/host-scratch-root.sh` exists and every host script
+  now uses it. The last `${TMPDIR:-/tmp}` fallback
+  (`test-support/write-fixtures-ci-proof-v2.sh`) was routed through it on
+  2026-07-27 — worth having done, since `/tmp` saturation genuinely halted work
+  during this epic.
+- **0.6** — already dropped.
+
+Original text retained below for provenance.
+
+### Phase 0 (historical)
 
 These are low-risk and clear the ground so later phases are trustworthy. None
 touch boot behavior.
@@ -1128,6 +1148,37 @@ cleanup (`rotate_active_reblit_staging`, `archive_previous`,
 their cleanup is resumable and audit for any step between the last journal
 advance and a physical cleanup (e.g. staging-wrapper rotation) that a crash
 could strand.
+
+**§1.4 ANSWERED 2026-07-27 — and it found a real gap.** Measured with the crash
+matrix rather than audited by reading (`misc/scripts/crash-matrix-run.sh`):
+
+    CUT       PHASE REACHED                  RECOVERS?
+    control   -                              yes (recovered-at-1)
+    4s        TransactionTriggersStarted     NO  (stalled)
+    5s        TransactionTriggersStarted     NO  (stalled)
+    6s        TransactionTriggersComplete    NO  (stalled)
+    8s        post-exchange                  yes (recovered-at-7)
+
+**A crash during transaction triggers — before the `/usr` exchange — is
+unrecoverable.** The record's `recovery_disposition()` is correctly
+`BeginRollback { source: TransactionTriggersStarted }`
+(`transition_journal/recovery.rs:42` covers every pre-commit phase), but nothing
+*drives* it. `startup_gate` is a chain of phase-specific dispatchers —
+`active_reblit_boot_sync_started`, `usr_rollback_*`, `*_commit_cleanup*` — and
+all of them cover post-exchange phases. A pre-exchange record falls through every
+dispatcher and surfaces as `PendingSystemTransition`; each subsequent invocation
+repeats it unchanged.
+
+Confirmed a genuine stall, not slow convergence: the phase in the error does not
+change across five consecutive driver invocations, whereas post-exchange cuts
+visibly advance `UsrExchanged -> RollbackDecided -> ... -> RollbackComplete`.
+
+**What this needs:** a recovery route for the pre-exchange phases
+(`Preparing` .. `TransactionTriggersComplete`). Nothing in `/usr` has been
+touched at that point, so the correct action is almost certainly to discard the
+candidate and clear the record rather than to reverse anything — much simpler
+than the post-exchange rollback chain. Scope it as its own item; it is the last
+real hole in Phase 1's durability claim.
 
 **Exit Phase 1:** NewState, ActivateArchived, and archived repair each publish a
 durable journal that startup reconciliation resumes/rolls-back across a reboot;

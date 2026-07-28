@@ -972,3 +972,74 @@ fn run_before_final_tree_reopen() {}
 
 #[cfg(test)]
 mod tests;
+
+/// Forward phases a rollback may be entered from.
+///
+/// One definition, deliberately. This list was duplicated across every rollback
+/// authority, and each copy silently encoded the assumption that rollback only
+/// ever starts after the `/usr` exchange. That assumption made a crash during
+/// transaction triggers unrecoverable — the record's disposition was
+/// `BeginRollback`, but every authority rejected the source, so startup repeated
+/// the same pending transition forever (`plans/future_impl.md` §1.4).
+///
+/// Pre-exchange sources are included: nothing in `/usr` has been touched, so the
+/// derived plan carries `usr_exchange: NotRequired` and the chain only has to
+/// discard the candidate.
+pub(super) fn rollback_source_is_supported(
+    operation: crate::transition_journal::Operation,
+    source: crate::transition_journal::ForwardPhase,
+) -> bool {
+    use crate::transition_journal::{ForwardPhase, Operation};
+    // Pre-exchange rollback is enabled for NewState only, because that is the
+    // operation whose stranded window was actually measured (a `cast install`
+    // power-cut during transaction triggers). ActiveReblit and ActivateArchived
+    // very likely have the same gap — their pre-exchange phases map to
+    // `BeginRollback` too — but nothing has demonstrated it, and widening a
+    // rollback admission on an untested operation is how a corrupt record gets
+    // accepted. Extend deliberately, with a crash-matrix cell per operation.
+    if matches!(
+        source,
+        ForwardPhase::CandidatePrepared
+            | ForwardPhase::TransactionTriggersStarted
+            | ForwardPhase::TransactionTriggersComplete
+    ) {
+        return operation == Operation::NewState;
+    }
+    matches!(
+        source,
+        ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
+    )
+}
+
+/// Whether a rollback plan's `/usr` exchange no longer needs action.
+///
+/// One definition, for the same reason as `rollback_source_is_supported`: this
+/// check was duplicated through the whole rollback tail, and every copy omitted
+/// `NotRequired` — the pre-exchange case where `/usr` was never touched. That
+/// omission stranded a crash during transaction triggers
+/// (`plans/future_impl.md` §1.4).
+pub(super) fn rollback_usr_exchange_is_settled(
+    operation: crate::transition_journal::Operation,
+    action: crate::transition_journal::RollbackAction,
+    source: crate::transition_journal::ForwardPhase,
+) -> bool {
+    use crate::transition_journal::{ForwardPhase, Operation, RollbackAction};
+    match action {
+        RollbackAction::Applied | RollbackAction::AlreadySatisfied => true,
+        // `NotRequired` is only coherent when the exchange was never possible.
+        // For a post-exchange source the exchange demonstrably happened, so a
+        // plan claiming it needs no action is inexact and must be rejected —
+        // the journal itself refuses to build such a record
+        // (`InvalidRollbackRequirement { possible: true }`).
+        RollbackAction::NotRequired => {
+            operation == Operation::NewState
+                && matches!(
+                    source,
+                    ForwardPhase::CandidatePrepared
+                        | ForwardPhase::TransactionTriggersStarted
+                        | ForwardPhase::TransactionTriggersComplete
+                )
+        }
+        _ => false,
+    }
+}

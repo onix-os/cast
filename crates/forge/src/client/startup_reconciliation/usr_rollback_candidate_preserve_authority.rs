@@ -197,10 +197,8 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         let Some(rollback) = record.rollback.as_ref() else {
             return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
         };
-        if !matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !system_trigger_candidate_preserve_source_is_exact(record)
+        if !super::rollback_source_is_supported(record.operation, rollback.source)
+            && !system_trigger_candidate_preserve_source_is_exact(record)
             && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
         {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
@@ -520,16 +518,11 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::CandidatePreserveIntent
-        || (!matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !system_trigger_candidate_preserve_source_is_exact(record)
+        || (!super::rollback_source_is_supported(record.operation, rollback.source)
+            && !system_trigger_candidate_preserve_source_is_exact(record)
             && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
-        || !matches!(
-            rollback.usr_exchange,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
-        )
+        || !super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
             != if boot_source {

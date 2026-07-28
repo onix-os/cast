@@ -60,6 +60,111 @@ window in question, then check whether recovery converges.
 **Exit:** each operation's cleanup either provably resumes, or a stranded window
 is named with a reproduction.
 
+**STATUS 2026-07-27: done, and it found a stranded window.** A crash during
+transaction triggers (pre-`/usr`-exchange) is unrecoverable — no startup
+dispatcher covers those phases, so the record falls through to
+`PendingSystemTransition` forever. Full evidence in `future_impl.md` §1.4 and in
+`crash-matrix-run.sh`. The 1-2s anomaly that prompted this turned out to be
+timing variance plus a harness artefact (`nothing-staged`), not a defect.
+
+**A2 — pre-exchange recovery route · E:M R:high · MOSTLY DONE 2026-07-27.**
+
+The journal model already supported this: `rollback_allowed` permits
+pre-exchange sources and the derived plan correctly carries
+`usr_exchange: NotRequired`. Every blocker was in the startup dispatch layer,
+and each was the same shape — a hard-coded post-exchange assumption, duplicated.
+
+Fixed, in order (each verified by re-running the 5s cut and watching the chain
+advance one phase further):
+
+1. `rollback_decision_source_is_supported` — allowlist covering only
+   post-exchange phases.
+2. The decision authority's `(Phase, UsrExchangeLayout)` match — an
+   `unreachable!()` for pre-exchange, plus an overloaded `None` that meant
+   "parent durability required". Split into an explicit not-required case.
+3. `rollback_source_is_supported` — **the same allowlist was duplicated across
+   9 sites** in 7 rollback authorities. Extracted to one predicate in
+   `startup_reconciliation`.
+4. `rollback_usr_exchange_is_settled` — the check that the exchange needs no
+   further action was duplicated across **11 sites**, and every copy omitted
+   `NotRequired`. Also extracted to one predicate.
+
+Chain now runs: `TransactionTriggersStarted -> RollbackDecided ->
+CandidatePreserveIntent -> CandidatePreserved -> FreshDbInvalidationIntent ->
+FreshDbInvalidated -> RollbackComplete`. It previously never left
+`TransactionTriggersStarted`.
+
+**Remaining: the final `FinalizeRollback` step.** The record reaches
+`RollbackComplete` and stalls there. Note there are finalization authorities for
+ActivateArchived and ActiveReblit but none named for NewState, yet post-exchange
+NewState rollback does finalize (the 8s cut recovers) — so find how that path
+finalizes and why it rejects a pre-exchange source. Expect the same shape as the
+four above.
+
+**FIX VERIFIED, BUT THE BRANCH IS RED — DO NOT MERGE YET.** The 5s cut now
+reports `recovered-at-7 state=installed`; a pre-exchange crash fully recovers.
+The full suite is **2751 passed, 8 failed**.
+
+One failure was already diagnosed and fixed: the first version of
+`rollback_usr_exchange_is_settled` accepted `NotRequired` for *any* source,
+which weakened a safety check across the whole rollback chain. `NotRequired` is
+only coherent when the exchange was never possible — for a post-exchange source
+the journal itself refuses to build such a record
+(`InvalidRollbackRequirement { possible: true }`). Narrowed to pre-exchange
+sources only; the exclusion tests that caught it now pass.
+
+The remaining 8 are unassessed and each needs individual judgement — they are
+NOT all the same shape:
+
+- `client::active_reblit_mounted_boot_topology::capture::publication_targets::owned_cleanup::restart::tests::component_process_kill::owned_cleanup_components_process_kills_recover_exactly`
+- `client::active_reblit_mounted_boot_topology::capture::publication_targets::owned_cleanup::restart::tests::receipt_replacement_reconstructs_fresh_authority_then_is_already_clean`
+- `client::active_reblit_mounted_boot_topology::capture::publication_targets::owned_cleanup::restart::tests::receipt_stale_cleanup_reconciles_canonical_detached_and_already_clean`
+- `client::startup_gate::usr_rollback_activate_archived::tests::exclusions::startup_activate_archived_complete_route_defers_every_inexact_plan_boundary`
+- `client::startup_gate::usr_rollback_active_reblit::tests::complete_exclusions::startup_active_reblit_complete_route_preserves_operation_and_phase_ordering`
+- `client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_admission_bypasses_other_phases_and_sources`
+- `client::startup_reconciliation::usr_rollback_candidate_preserve_authority::tests::admission::startup_candidate_preserve_plan_requires_the_exact_operation_matrix`
+- `client::startup_reconciliation::usr_rollback_fresh_db_invalidation_authority::tests::admission::startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action`
+
+At least two distinct causes are visible. `startup_candidate_preserve_admission_bypasses_other_phases_and_sources`
+fails with `JournalReadDuringEffect(CanonicalChanged)`, which is not an
+exclusion assertion at all. The `owned_cleanup::restart` ones are in a module
+this change does not obviously touch — check whether they are pre-existing or
+load-related before attributing them.
+
+**Triaged 2026-07-27. Suite is now 2754 passed / 5 failed, and every failure is
+understood:**
+
+- **3 x `owned_cleanup::restart`** — NOT caused by this change. They pass 5/5 in
+  ~4s in isolation and fail only under whole-suite contention (the same group
+  took 208s in the failing run). I initially misattributed these by comparing
+  runs under different load; the correct comparison is isolation-vs-isolation.
+- **1 x `startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action`**
+  — FIXED. It used `TransactionTriggersComplete` as its "unsupported source"
+  case, which this change makes legitimately supported for NewState. Re-pointed
+  at `Preparing`, which remains unsupported.
+- **1 x `startup_candidate_preserve_plan_requires_the_exact_operation_matrix`**
+  — STILL FAILING, and needs a judgement call. It asserts
+  `usr_exchange = NotRequired` is always inexact. That is now true only for
+  post-exchange sources. Pairing `NotRequired` with a post-exchange source
+  (`UsrExchanged`) to preserve the assertion's intent did **not** work — the
+  plan was still accepted, so something else in `candidate_preserve_plan_is_exact`
+  admits that combination. Understand that path before editing the test; do not
+  simply delete the assertion.
+
+**A second over-widening was found and fixed during triage.** The shared
+predicates were applied to *all* operations, but only NewState's pre-exchange
+window was ever measured. `rollback_source_is_supported` and
+`rollback_usr_exchange_is_settled` now take the operation and permit
+pre-exchange rollback for NewState only. ActiveReblit and ActivateArchived very
+likely have the same gap — their pre-exchange phases map to `BeginRollback`
+too — but extend deliberately, with a crash-matrix cell per operation, rather
+than by widening a shared predicate.
+
+**Before merging:** confirm each failure is either (a) a test encoding the old
+"post-exchange only" contract, which this change deliberately reverses and which
+should be updated, or (b) a real over-acceptance like the one already found. Do
+not assume (a) — the over-widening above proves (b) happens.
+
 ---
 
 ### B. Finish `cleanup_legacy` §§3–4 · E:S-M R:med
@@ -99,8 +204,11 @@ Phase 0 no longer describes reality and is actively misleading:
 - **0.2** — the `forge-focused-tests.mk` line it names is already gone.
 - **0.4** — asks to resolve 18 compiler warnings; there are zero.
 
-Verify 0.3 and 0.5, then mark the section closed. Cheap, and it stops the next
-reader planning around problems that no longer exist.
+**DONE 2026-07-27.** All six verified individually; 0.3 (flake pins 1.94.1
+exactly) and 0.5 (host-scratch helper) were already satisfied bar one script,
+whose `${TMPDIR:-/tmp}` fallback is now routed through
+`lib/host-scratch-root.sh`. Phase 0 marked closed in `future_impl.md` with the
+evidence for each item.
 
 ---
 
