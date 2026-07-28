@@ -28,22 +28,27 @@
 # column readable: absence in a cut cell now means the cut prevented the effect,
 # not that the guest cannot install.
 #
-# **FIRST REAL DEFECT FOUND (2026-07-27).** The 3s cut reproduces reliably and
-# the startup error is:
+# **RESULT: the durability machinery works.** Verified 2026-07-27, cut 3s into a
+# real install:
 #
-#     Error: repo: setup client: establish clean system-client startup baseline:
-#       state transition <id> at UsrExchanged requires BeginRollback { source:
-#       UsrExchanged }; recovery effects remain blocked by []
+#     install  3s  recovery=PENDING driver=recovered-at-9 state=installed
 #
-# A power cut at `UsrExchanged` leaves a journal record that startup correctly
-# identifies as needing rollback — and then refuses to proceed, reporting an
-# **empty** blocker list. An empty `blocked by []` alongside a refusal to
-# recover is self-contradictory: either something blocks recovery and should be
-# named, or nothing does and recovery should run. Control and 0s cells in the
-# same run recover cleanly, so this is specific to being interrupted with the
-# exchange durable but the transition unfinished.
+# Read that carefully, because a first pass got it wrong. A power cut at
+# `UsrExchanged` leaves a record needing rollback. Read-only commands then
+# *correctly refuse* — `recovery=PENDING` is right, not a failure. A mutating
+# command drives the rollback chain one durable phase per invocation:
 #
-# Not yet diagnosed further. See `plans/future_impl.md` §2.1.
+#     UsrExchanged -> RollbackDecided -> ReverseExchangeIntent -> UsrRestored
+#     -> CandidatePreserveIntent -> CandidatePreserved -> FreshDbInvalidationIntent -> ...
+#
+# It converges after 9 invocations and the install then completes:
+# `state=installed`. Recovery is correct; it is simply incremental.
+#
+# **The earlier "recovery=FAILED, first real defect" reading was a harness
+# artefact** — the probe drove recovery six times and read "not finished yet" as
+# "cannot recover". Any future cell that reports a recovery failure must first
+# rule this out by driving the mutating path until it either converges or
+# genuinely stops advancing (the phase in the error must stop changing).
 #
 # Note `install` takes a package *name*, not a path: a local `.stone` is
 # `cast index`ed and added via `repo add file://.../stone.index` first. Passing a
@@ -101,9 +106,19 @@ else
     # Two independent questions. "Does forge come up at all" is the recovery
     # verdict; "did the package land" is the transition outcome. Conflating them
     # made an uninitialised root read as a recovery failure.
-    if REC=$(cast -D /mnt/root repo list 2>&1); then R=clean; else R=FAILED; echo "RECOVERY-ERROR: $REC"; fi
+    # Two distinct questions. A read-only command may legitimately refuse to act
+    # on a system with a pending transition, so it cannot tell us whether
+    # recovery *works* — only a path that drives recovery can.
+    if REC=$(cast -D /mnt/root repo list 2>&1); then R=clean; else R=PENDING; echo "READONLY: $REC"; fi
+    # Recovery appears to advance one phase per invocation, so drive it
+    # repeatedly and report whether it converges or stalls.
+    D=FAILED
+    for attempt in $(seq 1 15); do
+        if DRV=$(cast -D /mnt/root -y install bash-completion 2>&1); then D=recovered-at-$attempt; break; fi
+        if [ "$attempt" -ge 14 ]; then echo "DRIVER-$attempt: $(echo "$DRV" | tail -1 | cut -c1-160)"; fi
+    done
     if cast -D /mnt/root list installed 2>/dev/null | grep -q bash-completion; then S=installed; else S=absent; fi
-    echo "recovery=$R state=$S"
+    echo "recovery=$R driver=$D state=$S"
     echo "CELL-VERDICT-END"
     poweroff -f
 fi
@@ -130,8 +145,10 @@ for op in "${OPS[@]}"; do
     kill -KILL $QPID 2>/dev/null || true; wait $QPID 2>/dev/null || true
     for _ in $(seq 1 30); do kill -0 $QPID 2>/dev/null || break; sleep 1; done; sleep 2
     fi
-    timeout 180 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; run check '$enc'" > "$W/o2" 2>&1 || true
-    v=$(grep -oE 'recovery=[A-Za-z]+ state=[A-Za-z]+' "$W/o2" | head -1)
+    timeout 600 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; run check '$enc'" > "$W/o2" 2>&1 || true
+    # `|| true`: a missing verdict makes grep exit non-zero, and under `set -e`
+    # the assignment inherits that and kills the run with no output at all.
+    v=$(grep -oE 'recovery=[A-Za-z]+ driver=[A-Za-z0-9-]+ state=[A-Za-z]+' "$W/o2" | head -1 || true)
     printf '%-20s %-6s %s\n' "$op" "${cut}s" "${v:-NO-VERDICT}"
     if [[ ${v:-} == *FAILED* || -z ${v:-} ]]; then
         echo "--- verdict phase output ---"; sed -n '/CELL-VERDICT-BEGIN/,/CELL-VERDICT-END/p' "$W/o2"
