@@ -218,10 +218,31 @@ Action taken: the 12 `#[allow(dead_code)]` rationales, which said "orphaned ...
 delete with §§3-4", now say "reachable only from `#[cfg(test)]` callers; NOT
 dead". The annotations stay.
 
-**So §§3 and 4 are not blocked on deleting these — they were never deletable.**
-What remains for §§3-4 is only the genuinely legacy enums
-(`ArchiveJournalGuard::LegacyNoJournal`, `JournalAcquisition::LegacyBlocking`,
-`legacy_boot_repair`), and each needs the same `--tests` check before removal.
+**And §§3-4 are blocked by the same fact.** `ExchangeJournalGuard::LegacyNoJournal`
+is reached from `exchange_forward_validated`, called at
+`core/stateful_transition.rs:315` — inside `apply_stateful_blit_with_capability`,
+the function proven above to be `#[cfg(test)]`-live. The legacy guard enums
+cannot go while that path exists, and that path cannot go without deleting the
+tests that depend on it.
+
+So the cleanup epic has a single real decision left, and it is a **coverage**
+decision, not a mechanical one:
+
+> Do the tests that exercise the legacy stateful path
+> (`stateful_candidate_metadata`, `stateful_previous_tree_recovery`,
+> `stateful_journal_and_identity_preflight`, and the `AfterTransactionTriggers`
+> checkpoint assertions) prove anything the coordinated route does not already
+> prove?
+
+- If **yes**, they must be ported to the coordinated route first — and note the
+  earlier finding that a naive port fails, because the coordinated route's
+  trigger container needs a private-device broker no test double provides
+  (§2, "Attempted 2026-07-27").
+- If **no**, delete tests and legacy path together in one commit, and §§3-4
+  collapse mechanically behind them.
+
+Nothing further in §§2-4 can proceed until that is answered. It is a judgement
+about what the tests are worth, not something to derive from the compiler.
 
 **Rule for this codebase: a dead-code warning from the production build proves
 nothing on its own. Always confirm with `cargo build -p forge --tests` before
