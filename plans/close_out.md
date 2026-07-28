@@ -131,25 +131,29 @@ exclusion assertion at all. The `owned_cleanup::restart` ones are in a module
 this change does not obviously touch — check whether they are pre-existing or
 load-related before attributing them.
 
-**Triaged 2026-07-27. Suite is now 2754 passed / 5 failed, and every failure is
-understood:**
+**RESOLVED 2026-07-27 — suite green at 2759/0, merged to `develop`.**
 
-- **3 x `owned_cleanup::restart`** — NOT caused by this change. They pass 5/5 in
-  ~4s in isolation and fail only under whole-suite contention (the same group
-  took 208s in the failing run). I initially misattributed these by comparing
-  runs under different load; the correct comparison is isolation-vs-isolation.
-- **1 x `startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action`**
-  — FIXED. It used `TransactionTriggersComplete` as its "unsupported source"
-  case, which this change makes legitimately supported for NewState. Re-pointed
-  at `Preparing`, which remains unsupported.
-- **1 x `startup_candidate_preserve_plan_requires_the_exact_operation_matrix`**
-  — STILL FAILING, and needs a judgement call. It asserts
-  `usr_exchange = NotRequired` is always inexact. That is now true only for
-  post-exchange sources. Pairing `NotRequired` with a post-exchange source
-  (`UsrExchanged`) to preserve the assertion's intent did **not** work — the
-  plan was still accepted, so something else in `candidate_preserve_plan_is_exact`
-  admits that combination. Understand that path before editing the test; do not
-  simply delete the assertion.
+Triage of the 8 failures:
+
+- **3 x `owned_cleanup::restart`** — not caused by this change. They pass 5/5 in
+  ~4s in isolation and fail only under whole-suite contention. Initially
+  misattributed by comparing runs under different load; the valid comparison is
+  isolation-vs-isolation.
+- **1 x fresh-db exclusion** — used `TransactionTriggersComplete` as its
+  "unsupported source" case, which this change legitimately makes supported for
+  NewState. Re-pointed at `Preparing`, still unsupported.
+- **4 x remaining** — all one cause: a **third over-widening**. An earlier raw
+  `matches!(rollback.usr_exchange, Applied | AlreadySatisfied | NotRequired)` in
+  `candidate_preserve_plan_is_exact` was never converted to the shared
+  predicate, so the operation/source narrowing never reached it and it accepted
+  `NotRequired` unconditionally. Routing it through
+  `rollback_usr_exchange_is_settled` fixed all four.
+
+That third instance is the important one: it is exactly the failure mode this
+epic exists to prevent — a corrupt record accepted at startup — and it survived
+two rounds of narrowing because a raw check was left behind when the shared
+predicate was introduced. **When extracting a predicate, grep for every raw copy
+of the condition, not just the ones the compiler points at.**
 
 **A second over-widening was found and fixed during triage.** The shared
 predicates were applied to *all* operations, but only NewState's pre-exchange
