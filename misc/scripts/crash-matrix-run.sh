@@ -129,6 +129,32 @@
 # (`plans/future_impl.md` §1.4); whether ActiveReblit and ActivateArchived share
 # the gap is still unmeasured.
 #
+# **Phase-targeted cuts, added 2026-07-27.** A `CUTS` entry of the form
+# `phase:<Phase>` or `phase:<Operation>.<Phase>` exports `CAST_CRASH_AT_PHASE`
+# in the guest. `transition_journal::store::advance` prints `CAST-AT-PHASE` and
+# parks once the record is durable at that phase; the harness waits for the
+# marker and cuts power there instead of after N seconds.
+#
+# Parking rather than aborting is deliberate: aborting leaves the page cache
+# intact, so unsynced writes survive and the cell proves nothing. Only
+# destroying the guest loses them.
+#
+# The `Operation.Phase` form exists because a run may perform more than one
+# transition — an activation is preceded by an install that passes through the
+# same phases, so a bare phase target lands in the setup.
+#
+# Verified against the known defect: `phase:TransactionTriggersStarted` on
+# `install` cuts exactly there and recovery converges (`recovered-at-7`).
+#
+# **Open: `OPS=(activate)` does not produce an ActivateArchived transition.**
+# Both `phase:ActivateArchived.TransactionTriggersStarted` and
+# `phase:ActivateArchived.CandidatePrepared` report `CELL-OP-DONE` without the
+# marker ever printing, so `cast state activate 1` in this guest is not driving
+# the journal route the target names — it may be failing silently, or taking a
+# different path. Diagnose that before drawing any conclusion about whether
+# ActivateArchived shares NewState's pre-exchange recovery gap; the cells it
+# currently produces prove nothing about that question.
+#
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
 KERNEL=$(ls /boot/vmlinuz-* | head -1)
@@ -136,7 +162,7 @@ KERNEL=$(ls /boot/vmlinuz-* | head -1)
 # Operations that write durable state without needing network.
 OPS=(activate)
 # When to cut, relative to the operation starting. 0 = as early as possible.
-CUTS=(10 12 14 16)
+CUTS=(phase:ActivateArchived.CandidatePrepared)
 
 mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
@@ -150,6 +176,8 @@ export LD_LIBRARY_PATH=/bin
 # No session manager in this guest, so nothing can interrupt a transaction and
 # forge's logind inhibitor cannot be satisfied (`plans/future_impl.md` §2.1).
 export CAST_ALLOW_UNINHIBITED_TRANSACTION=1
+CRASH_PHASE=$(sed -n 's/.*cell_phase=\([A-Za-z.]*\).*/\1/p' /proc/cmdline | tr '.' ':')
+if [ -n "$CRASH_PHASE" ]; then export CAST_CRASH_AT_PHASE="$CRASH_PHASE"; fi
 stage_and_activate() {
     stage_and_install
     # State 1 is archived once the install created state 2; activating it back
@@ -227,20 +255,32 @@ chmod +x "$W/ir/init"
 
 run() { exec qemu-system-x86_64 -enable-kvm -m 2048 -display none -no-reboot \
     -kernel "$KERNEL" -initrd "$W/initrd.gz" \
-    -append "console=ttyS0 cell_mode=$1 cell_op=$2" \
+    -append "console=ttyS0 cell_mode=$1 cell_op=$2 cell_phase=${3:-}" \
     -drive "file=$W/d.img,format=raw,if=virtio,cache=writeback" -serial stdio -monitor none; }
 
 printf '%-20s %-6s %s\n' OPERATION CUT VERDICT
 for op in "${OPS[@]}"; do
   enc=${op// /_}
   for cut in "${CUTS[@]}"; do
+    case "$cut" in phase:*) PHASE_ARG=${cut#phase:} ;; *) PHASE_ARG="" ;; esac
     qemu-img create -f raw "$W/d.img" 256M >/dev/null; mkfs.ext4 -q -F "$W/d.img"
     if [ "$cut" = control ]; then
         timeout 240 bash -c "$(declare -f run); W='$W'; KERNEL='$KERNEL'; run control '$enc'" > "$W/o1" 2>&1 || true
     else
-    run write "$enc" > "$W/o1" 2>&1 & QPID=$!
+    run write "$enc" "$PHASE_ARG" > "$W/o1" 2>&1 & QPID=$!
     for _ in $(seq 1 90); do grep -q CELL-READY "$W/o1" 2>/dev/null && break; sleep 1; done
-    sleep "$cut"
+    case "$cut" in
+        phase:*)
+            # Cut exactly when the record is durable at the named phase, rather
+            # than after N seconds. A wall-clock cut cannot isolate one
+            # transition's window when the setup before it takes seconds.
+            for _ in $(seq 1 120); do grep -q "CAST-AT-PHASE" "$W/o1" 2>/dev/null && break; sleep 1; done
+            if ! grep -q "CAST-AT-PHASE" "$W/o1"; then
+                echo "phase ${cut#phase:} never reached"; tail -4 "$W/o1"
+            fi
+            ;;
+        *) sleep "$cut" ;;
+    esac
     kill -KILL $QPID 2>/dev/null || true; wait $QPID 2>/dev/null || true
     for _ in $(seq 1 30); do kill -0 $QPID 2>/dev/null || break; sleep 1; done; sleep 2
     fi

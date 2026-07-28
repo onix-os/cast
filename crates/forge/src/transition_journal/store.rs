@@ -599,7 +599,11 @@ impl TransitionJournalStore {
         if existing.record != *expected {
             return Err(StorageError::ExpectedRecordMismatch);
         }
-        self.publish_record(&framed, Some(existing))
+        let published = self.publish_record(&framed, Some(existing));
+        if published.is_ok() {
+            park_for_phase_targeted_crash(next.operation, next.phase);
+        }
+        published
     }
 
     fn publish_record(&self, framed: &[u8], existing: Option<LoadedRecord>) -> Result<(), StorageError> {
@@ -925,5 +929,51 @@ impl TransitionJournalStore {
         journal_update_durability_boundary(JournalUpdateDurabilityBoundary::UpdateFinalDirectorySynced);
         durability_checkpoint(DurabilityCheckpoint::JournalDirectorySynced);
         Ok(())
+    }
+}
+
+/// Park forever once a named phase is durable, so a harness can cut power at
+/// exactly that point.
+///
+/// Wall-clock delays cannot isolate one transition's window when the setup
+/// preceding it takes seconds — a cut aimed at an activation lands in the
+/// install instead, and the resulting cell looks green without testing what it
+/// names (`plans/future_impl.md` §2.1). This gives the crash matrix a precise
+/// boundary: the record is already durable at `phase` when the marker prints,
+/// so whatever the cut destroys is exactly what a power loss at that phase
+/// would destroy.
+///
+/// Parking rather than aborting is deliberate. Aborting the process leaves the
+/// page cache intact, so unsynced writes survive and the test proves nothing;
+/// only destroying the machine loses them. The harness waits for the marker and
+/// then kills the guest.
+///
+/// Opt-in and explicitly named, like `CAST_ALLOW_UNINHIBITED_TRANSACTION`, so it
+/// cannot be reached by accident.
+fn park_for_phase_targeted_crash(operation: super::model::Operation, phase: Phase) {
+    let Some(target) = std::env::var_os("CAST_CRASH_AT_PHASE") else {
+        return;
+    };
+    let Some(target) = target.to_str() else {
+        return;
+    };
+    // `Phase` alone, or `Operation:Phase` when a run performs more than one
+    // transition and only the later one is under test — an activation is
+    // preceded by an install that passes through the same phases, so without
+    // the operation the cut lands in the setup.
+    let matches_target = match target.split_once(':') {
+        Some((wanted_operation, wanted_phase)) => {
+            wanted_operation.eq_ignore_ascii_case(&format!("{operation:?}"))
+                && wanted_phase.eq_ignore_ascii_case(&format!("{phase:?}"))
+        }
+        None => target.eq_ignore_ascii_case(&format!("{phase:?}")),
+    };
+    if !matches_target {
+        return;
+    }
+    // Line-buffered stderr reaches the guest console before the park.
+    eprintln!("CAST-AT-PHASE {operation:?}:{phase:?}");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
     }
 }
