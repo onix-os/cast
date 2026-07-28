@@ -518,16 +518,11 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::CandidatePreserveIntent
-        || (!super::rollback_source_is_supported(record.operation, rollback.source) && !system_trigger_candidate_preserve_source_is_exact(record)
+        || (!super::rollback_source_is_supported(record.operation, rollback.source)
+            && !system_trigger_candidate_preserve_source_is_exact(record)
             && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
-        // `NotRequired` is the pre-exchange case: `/usr` was never touched, so
-        // there was no exchange to reverse and the candidate discard is all that
-        // remains (`plans/future_impl.md` §1.4).
-        || !matches!(
-            rollback.usr_exchange,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied | RollbackAction::NotRequired
-        )
+        || !super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
             != if boot_source {

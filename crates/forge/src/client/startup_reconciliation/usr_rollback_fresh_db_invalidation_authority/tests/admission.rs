@@ -134,10 +134,10 @@ fn startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_f
     changed.rollback = None;
     cases.push(("rollback", changed));
     let mut changed = exact.clone();
-        // `Preparing`, not `TransactionTriggersComplete`: the latter is now a
+    // `Preparing`, not `TransactionTriggersComplete`: the latter is now a
     // supported pre-exchange rollback source for NewState
     // (`plans/future_impl.md` §1.4), so it no longer proves exclusion.
-changed.rollback.as_mut().unwrap().source = ForwardPhase::Preparing;
+    changed.rollback.as_mut().unwrap().source = ForwardPhase::Preparing;
     cases.push(("source", changed));
     let mut changed = exact.clone();
     changed.rollback.as_mut().unwrap().previous_archive = RollbackAction::Applied;
