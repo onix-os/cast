@@ -233,6 +233,25 @@ wall-clock cut at 10-16s most likely lands inside the *install* rather than the
 ActivateArchived transition — and the `recovered-at-9` signature it reports is
 the same one NewState rollback produces.
 
+**Phase-targeted cuts landed 2026-07-27.** `CAST_CRASH_AT_PHASE` (accepting
+`Phase` or `Operation:Phase`) makes `transition_journal::store::advance` print
+`CAST-AT-PHASE` and park once the record is durable at that phase; the harness
+cuts power on the marker. Parking rather than aborting is the point — aborting
+leaves the page cache intact, so unsynced writes survive and the cell proves
+nothing. Verified against the known defect: `phase:TransactionTriggersStarted`
+on `install` cuts exactly there and recovery converges.
+
+**Still open, and now precisely stated:** `OPS=(activate)` does not produce an
+ActivateArchived transition. Targets at both
+`ActivateArchived.TransactionTriggersStarted` and
+`ActivateArchived.CandidatePrepared` report `CELL-OP-DONE` without the marker
+printing, so `cast state activate 1` in the guest is not driving the journal
+route those targets name. Diagnose that first — until it does, the `activate`
+cells say nothing about whether ActivateArchived shares NewState's pre-exchange
+gap.
+
+Original note, still true of any operation added before targeting worked:
+
 **So the next step for D is not more operations, it is phase-targeted cuts.**
 Wall-clock delays cannot isolate one operation's window when the setup preceding
 it takes seconds. The `arm_*` fault hooks already exist for most journal
