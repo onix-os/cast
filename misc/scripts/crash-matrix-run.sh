@@ -54,6 +54,36 @@
 # `cast index`ed and added via `repo add file://.../stone.index` first. Passing a
 # path silently yields "no package found" and an all-absent state column.
 #
+# **DEFECT FOUND 2026-07-27 — pre-exchange crashes are unrecoverable.**
+#
+#     CUT       PHASE REACHED                  RECOVERS?
+#     control   -                              yes (recovered-at-1)
+#     4s        TransactionTriggersStarted     NO  (stalled)
+#     5s        TransactionTriggersStarted     NO  (stalled)
+#     6s        TransactionTriggersComplete    NO  (stalled)
+#     8s        post-exchange                  yes (recovered-at-7)
+#
+# A power cut during transaction triggers — before the `/usr` exchange — leaves
+# a journal record whose `recovery_disposition()` is `BeginRollback`, and no
+# startup route drives it. `startup_gate` is a chain of phase-specific
+# dispatchers (`active_reblit_boot_sync_started`, `usr_rollback_*`,
+# `*_commit_cleanup*`) that all cover *post-exchange* phases; a pre-exchange
+# record falls through every one and surfaces as `PendingSystemTransition`.
+# Every subsequent invocation repeats it, so the system never recovers.
+#
+# This is distinguishable from slow recovery because the driver now tracks the
+# *phase* in the error: a genuine stall is the phase not changing across five
+# consecutive attempts. Post-exchange cuts advance
+# `UsrExchanged -> RollbackDecided -> ... -> RollbackComplete` and converge.
+#
+# `driver=nothing-staged` is NOT a durability outcome — it means the cut landed
+# before the package was indexed, so there was nothing to install and nothing to
+# recover. Do not read it as a stall.
+#
+# Note `install` takes a package *name*, not a path: a local `.stone` is
+# `cast index`ed and added via `repo add file://.../stone.index` first. Passing a
+# path silently yields "no package found" and an all-absent state column.
+#
 # **Widened sweep, 2026-07-27** (install x six cut points):
 #
 #     CUT       VERDICT
@@ -82,7 +112,7 @@ KERNEL=$(ls /boot/vmlinuz-* | head -1)
 # Operations that write durable state without needing network.
 OPS=(install)
 # When to cut, relative to the operation starting. 0 = as early as possible.
-CUTS=(control 0 1 2 3 5)
+CUTS=(control 3 4 5 6 8)
 
 mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
@@ -134,9 +164,27 @@ else
     # Recovery appears to advance one phase per invocation, so drive it
     # repeatedly and report whether it converges or stalls.
     D=FAILED
-    for attempt in $(seq 1 15); do
+    # Recovery is incremental: one durable phase per invocation. So "still
+    # pending after N tries" and "cannot recover" are indistinguishable at a
+    # fixed N — that confusion already produced one false defect report. Track
+    # the phase in the error instead: a genuine stall is the phase *not*
+    # changing across several attempts.
+    PREV_PHASE=""; STALL=0
+    for attempt in $(seq 1 60); do
         if DRV=$(cast -D /mnt/root -y install bash-completion 2>&1); then D=recovered-at-$attempt; break; fi
-        if [ "$attempt" -ge 14 ]; then echo "DRIVER-$attempt: $(echo "$DRV" | tail -1 | cut -c1-160)"; fi
+        # "no package found" means the cut landed before the repo was indexed,
+        # so there is nothing to install and nothing to recover. That is not a
+        # durability outcome and must not be reported as a stall.
+        case "$DRV" in *"no package found"*) D=nothing-staged; break ;; esac
+        PHASE=$(echo "$DRV" | grep -oE 'at [A-Za-z]+ requires' | head -1 | awk '{print $2}')
+        if [ "$PHASE" = "$PREV_PHASE" ]; then
+            STALL=$((STALL + 1))
+            if [ "$STALL" -ge 5 ]; then D=stalled-at-${PHASE:-unknown}; echo "STALL: $(echo "$DRV" | tail -1 | cut -c1-200)"; break; fi
+        else
+            STALL=0
+            echo "PHASE-$attempt: ${PHASE:-?}"
+        fi
+        PREV_PHASE=$PHASE
     done
     if cast -D /mnt/root list installed 2>/dev/null | grep -q bash-completion; then S=installed; else S=absent; fi
     echo "recovery=$R driver=$D state=$S"
@@ -171,7 +219,7 @@ for op in "${OPS[@]}"; do
     # the assignment inherits that and kills the run with no output at all.
     v=$(grep -oE 'recovery=[A-Za-z]+ driver=[A-Za-z0-9-]+ state=[A-Za-z]+' "$W/o2" | head -1 || true)
     printf '%-20s %-6s %s\n' "$op" "${cut}s" "${v:-NO-VERDICT}"
-    if [[ ${v:-} == *FAILED* || -z ${v:-} ]]; then
+    if [[ ${v:-} == *FAILED* || ${v:-} == *stalled* || -z ${v:-} ]]; then
         echo "--- verdict phase output ---"; sed -n '/CELL-VERDICT-BEGIN/,/CELL-VERDICT-END/p' "$W/o2"
     fi
   done
