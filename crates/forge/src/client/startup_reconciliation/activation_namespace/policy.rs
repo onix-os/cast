@@ -658,58 +658,23 @@ fn active_reblit_reservation(record: &TransitionRecord) -> ActiveReblitReservati
     }
 }
 
+/// Position in the forward chain.
+///
+/// Delegates to `ForwardPhase::ordinal`, which is the single source of truth.
+/// These were two independently maintained tables duplicating that ordering, and
+/// keeping three copies in step by hand caused four separate misdiagnoses while
+/// adding the archived-staging phases — the duplicates are invisible to a
+/// `.ordinal()` grep, so nothing pointed at them (`plans/future_impl.md` §1.2b).
 fn forward_ordinal(phase: ForwardPhase) -> u8 {
-    match phase {
-        ForwardPhase::Preparing => 0,
-        ForwardPhase::FreshStateAllocating => 3,
-        ForwardPhase::FreshStateAllocated => 4,
-        ForwardPhase::CandidatePrepareStarted => 5,
-        ForwardPhase::CandidatePrepared => 6,
-        ForwardPhase::TransactionTriggersStarted => 7,
-        ForwardPhase::TransactionTriggersComplete => 8,
-        ForwardPhase::UsrExchangeIntent => 9,
-        ForwardPhase::UsrExchanged => 10,
-        ForwardPhase::RootLinksComplete => 11,
-        ForwardPhase::SystemTriggersStarted => 12,
-        ForwardPhase::SystemTriggersComplete => 13,
-        ForwardPhase::PreviousArchiveIntent => 14,
-        ForwardPhase::PreviousArchived => 15,
-        ForwardPhase::BootSyncStarted => 16,
-        ForwardPhase::BootSyncComplete => 17,
-        ForwardPhase::CommitDecided => 18,
-        ForwardPhase::CommitCleanupComplete => 19,
-        // Mirrors the parked ordinals in transition_journal/validation.rs.
-        ForwardPhase::Complete => 20,
-        ForwardPhase::ArchivedCandidateStagingIntent => 1,
-        ForwardPhase::ArchivedCandidateStaged => 2,
-    }
+    phase.ordinal()
 }
 
-// THIRD duplicate of the phase ordering, after `ForwardPhase::ordinal`
-// (transition_journal/validation.rs) and `forward_ordinal` above. All three must
-// be renumbered together; leaving this one stale is what kept 5 namespace tests
-// failing after the other two were corrected.
+/// Position in the forward chain for any phase.
+///
+/// Rollback phases have no forward position; they answer with `CommitDecided`,
+/// which is what the previous hand-written `_ => 18` arm meant.
 fn forward_phase_ordinal(phase: Phase) -> u8 {
-    match phase {
-        Phase::Preparing => 0,
-        Phase::FreshStateAllocating => 3,
-        Phase::FreshStateAllocated => 4,
-        Phase::CandidatePrepareStarted => 5,
-        Phase::CandidatePrepared => 6,
-        Phase::TransactionTriggersStarted => 7,
-        Phase::TransactionTriggersComplete => 8,
-        Phase::UsrExchangeIntent => 9,
-        Phase::UsrExchanged => 10,
-        Phase::RootLinksComplete => 11,
-        Phase::SystemTriggersStarted => 12,
-        Phase::SystemTriggersComplete => 13,
-        Phase::PreviousArchiveIntent => 14,
-        Phase::PreviousArchived => 15,
-        Phase::BootSyncStarted => 16,
-        Phase::BootSyncComplete => 17,
-        Phase::CommitDecided => 18,
-        Phase::CommitCleanupComplete => 19,
-        Phase::Complete => 20,
-        _ => 18,
-    }
+    phase
+        .forward()
+        .map_or_else(|| ForwardPhase::CommitDecided.ordinal(), ForwardPhase::ordinal)
 }

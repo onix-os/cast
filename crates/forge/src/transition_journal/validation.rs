@@ -7,7 +7,10 @@ use super::{
 };
 
 impl ForwardPhase {
-    pub(super) fn ordinal(self) -> u8 {
+    /// Position in the forward chain. The single source of truth for phase
+    /// ordering — `activation_namespace::policy` delegates to it rather than
+    /// keeping its own table.
+    pub(crate) fn ordinal(self) -> u8 {
         match self {
             Self::Preparing => 0,
             Self::FreshStateAllocating => 3,
@@ -66,7 +69,7 @@ impl From<ForwardPhase> for Phase {
 }
 
 impl Phase {
-    pub(super) fn forward(self) -> Option<ForwardPhase> {
+    pub(crate) fn forward(self) -> Option<ForwardPhase> {
         Some(match self {
             Self::Preparing => ForwardPhase::Preparing,
             Self::ArchivedCandidateStagingIntent => ForwardPhase::ArchivedCandidateStagingIntent,
