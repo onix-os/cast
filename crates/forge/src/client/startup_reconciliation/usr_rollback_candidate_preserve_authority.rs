@@ -197,7 +197,7 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         let Some(rollback) = record.rollback.as_ref() else {
             return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
         };
-        if !super::rollback_source_is_supported(rollback.source)
+        if !super::rollback_source_is_supported(record.operation, rollback.source)
             && !system_trigger_candidate_preserve_source_is_exact(record)
             && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
         {
@@ -518,7 +518,7 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::CandidatePreserveIntent
-        || (!super::rollback_source_is_supported(rollback.source) && !system_trigger_candidate_preserve_source_is_exact(record)
+        || (!super::rollback_source_is_supported(record.operation, rollback.source) && !system_trigger_candidate_preserve_source_is_exact(record)
             && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         // `NotRequired` is the pre-exchange case: `/usr` was never touched, so

@@ -985,15 +985,29 @@ mod tests;
 /// Pre-exchange sources are included: nothing in `/usr` has been touched, so the
 /// derived plan carries `usr_exchange: NotRequired` and the chain only has to
 /// discard the candidate.
-pub(super) fn rollback_source_is_supported(source: crate::transition_journal::ForwardPhase) -> bool {
+pub(super) fn rollback_source_is_supported(
+    operation: crate::transition_journal::Operation,
+    source: crate::transition_journal::ForwardPhase,
+) -> bool {
+    use crate::transition_journal::{ForwardPhase, Operation};
+    // Pre-exchange rollback is enabled for NewState only, because that is the
+    // operation whose stranded window was actually measured (a `cast install`
+    // power-cut during transaction triggers). ActiveReblit and ActivateArchived
+    // very likely have the same gap — their pre-exchange phases map to
+    // `BeginRollback` too — but nothing has demonstrated it, and widening a
+    // rollback admission on an untested operation is how a corrupt record gets
+    // accepted. Extend deliberately, with a crash-matrix cell per operation.
+    if matches!(
+        source,
+        ForwardPhase::CandidatePrepared
+            | ForwardPhase::TransactionTriggersStarted
+            | ForwardPhase::TransactionTriggersComplete
+    ) {
+        return operation == Operation::NewState;
+    }
     matches!(
         source,
-        crate::transition_journal::ForwardPhase::CandidatePrepared
-            | crate::transition_journal::ForwardPhase::TransactionTriggersStarted
-            | crate::transition_journal::ForwardPhase::TransactionTriggersComplete
-            | crate::transition_journal::ForwardPhase::UsrExchangeIntent
-            | crate::transition_journal::ForwardPhase::UsrExchanged
-            | crate::transition_journal::ForwardPhase::RootLinksComplete
+        ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
     )
 }
 
@@ -1005,10 +1019,11 @@ pub(super) fn rollback_source_is_supported(source: crate::transition_journal::Fo
 /// omission stranded a crash during transaction triggers
 /// (`plans/future_impl.md` §1.4).
 pub(super) fn rollback_usr_exchange_is_settled(
+    operation: crate::transition_journal::Operation,
     action: crate::transition_journal::RollbackAction,
     source: crate::transition_journal::ForwardPhase,
 ) -> bool {
-    use crate::transition_journal::{ForwardPhase, RollbackAction};
+    use crate::transition_journal::{ForwardPhase, Operation, RollbackAction};
     match action {
         RollbackAction::Applied | RollbackAction::AlreadySatisfied => true,
         // `NotRequired` is only coherent when the exchange was never possible.
@@ -1016,12 +1031,15 @@ pub(super) fn rollback_usr_exchange_is_settled(
         // plan claiming it needs no action is inexact and must be rejected —
         // the journal itself refuses to build such a record
         // (`InvalidRollbackRequirement { possible: true }`).
-        RollbackAction::NotRequired => matches!(
-            source,
-            ForwardPhase::CandidatePrepared
-                | ForwardPhase::TransactionTriggersStarted
-                | ForwardPhase::TransactionTriggersComplete
-        ),
+        RollbackAction::NotRequired => {
+            operation == Operation::NewState
+                && matches!(
+                    source,
+                    ForwardPhase::CandidatePrepared
+                        | ForwardPhase::TransactionTriggersStarted
+                        | ForwardPhase::TransactionTriggersComplete
+                )
+        }
         _ => false,
     }
 }

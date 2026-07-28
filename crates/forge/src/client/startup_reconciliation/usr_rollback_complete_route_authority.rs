@@ -187,13 +187,13 @@ fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
     record.operation == Operation::NewState
         && record.phase == Phase::FreshDbInvalidated
         && record.candidate.id.is_some()
-        && (super::rollback_source_is_supported(rollback.source)
+        && (super::rollback_source_is_supported(record.operation, rollback.source)
             || matches!(
                 (rollback.source, record.generation),
                 (ForwardPhase::SystemTriggersStarted, 18) | (ForwardPhase::SystemTriggersComplete, 19)
             ))
         && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
+        && super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
