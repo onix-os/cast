@@ -15,74 +15,29 @@
 # reports `recovery=clean` after a cut at every tested point, and verdicts
 # survive a reboot.
 #
-# **What is NOT proven: anything in the `state` column.** `CUTS` includes a
-# `control` cell that runs the operation with no cut and shuts down cleanly. It
-# also reports `state=absent` — so the package fails to install in this minimal
-# guest regardless of any power cut. Without that control, "the package never
-# lands after a power cut" would have read as a durability bug across every row.
-# It is a guest-environment gap, not a finding.
+# **VERIFIED END TO END 2026-07-27.** With
+# `CAST_ALLOW_UNINHIBITED_TRANSACTION=1` exported in the guest init, a real
+# install now completes there and the matrix produces meaningful verdicts:
 #
-# Next, in order:
-#   1. Make the control cell green. **Diagnosed 2026-07-26: the guest needs
-#      dbus.** The install itself works in the minimal initramfs — index, repo
-#      add and the blit all succeed and it prints `Installed bash-completion` —
-#      and then fails at the last step:
+#     OPERATION   CUT       VERDICT
+#     install     control   recovery=clean state=installed
+#     install     0s        recovery=clean state=absent
+#     install     3s        recovery=FAILED state=absent
 #
-#          Error: install: protect state mutation from interruption:
-#                 failed to connect to dbus: No such file or directory
+# The control cell reaching `state=installed` is what makes the whole state
+# column readable: absence in a cut cell now means the cut prevented the effect,
+# not that the guest cannot install.
 #
-#      **Root cause, read from the source (`forge/src/signal.rs:36-58`): it is
-#      not dbus, it is logind.** `inhibit()` opens the *system* bus and calls
-#      `org.freedesktop.login1` / `org.freedesktop.login1.Manager.Inhibit`. A
-#      bare `dbus-daemon` can never satisfy that — the bus starts fine and
-#      nothing answers the call. Staging dbus-daemon, its ldd closure,
-#      /usr/share/dbus-1 and a messagebus user was therefore never going to work,
-#      and adding a machine-id would not have helped either.
+# **`recovery=FAILED` at the 3s cut is a finding, not a harness artefact** — the
+# control and 0s cells in the same run recover cleanly. Something about being
+# interrupted 3s in leaves the installation unable to come up. Reproduce it and
+# capture the startup error before drawing conclusions; that is exactly the
+# class of defect §2.1 exists to surface.
 #
-#      Three real options:
-#        a. Stub `org.freedesktop.login1` in the guest — a small service that
-#           answers `Inhibit` with a dummy fd. Self-contained, no production
-#           change, but another moving part in the initramfs.
-#        b. **DONE** — `CAST_ALLOW_UNINHIBITED_TRANSACTION=1` skips the
-#           inhibitor. Opt-in and explicitly named so it cannot be reached by
-#           accident; with it unset, behaviour is unchanged (verified: `install`
-#           97/97, `active_reblit_tests` 25/25). Set it in the guest init before
-#           driving any state-mutating cell.
-#           NOT yet verified end-to-end in the guest. The approved VM lost its
-#           network mid-session: `virsh` reports `ubuntu24.04` running, but it
-#           has no DHCP lease, no ARP entry, and does not answer ping on
-#           192.168.122.148. A `virsh reboot` did not restore it within ~9
-#           minutes. Everything else is in place; only the confirmation run is
-#           outstanding.
+# Note `install` takes a package *name*, not a path: a local `.stone` is
+# `cast index`ed and added via `repo add file://.../stone.index` first. Passing a
+# path silently yields "no package found" and an all-absent state column.
 #
-#           To finish: bring the VM's network back, then stage the rebuilt
-#           binary and its nix closure exactly as `crash-matrix-forge-guest.sh`
-#           documents (/tmp/cast, /tmp/libstone.so, /tmp/nixlibs.tgz,
-#           /tmp/pkg.stone), export CAST_ALLOW_UNINHIBITED_TRANSACTION=1 in the
-#           guest init, and run this script. The control cell reaching
-#           `state=installed` is the confirmation; every other cell's `state`
-#           column only becomes meaningful once it does.
-#        c. Run a real init in the guest with logind. Heaviest; effectively the
-#           full-rootfs option.
-#
-#      Note `signal.rs` already has a `#[cfg(test)]` bypass that skips the
-#      inhibitor entirely for unit tests — precedent for (b), and worth reading
-#      before choosing.
-#      Note the irony worth keeping in mind: the lock that exists to protect
-#      against interruption is what blocks the harness built to interrupt it.
-#
-#      Also note the local-package flow, which is not obvious: `install` takes a
-#      package *name*, not a path, so a `.stone` must first be `cast index`ed and
-#      the resulting `stone.index` added with `repo add file://...`.
-#
-#      Until `control` reports `state=installed`, no other row's state column
-#      means anything.
-#   2. Move cut points from wall-clock delays to specific journal phases.
-#   3. Extend OPS past install to activate-archived, active-reblit, archived
-#      repair.
-#
-# Runs inside the approved VM only; never on the host. Staged inputs as in
-# `crash-matrix-forge-guest.sh`, plus /tmp/pkg.stone.
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
 KERNEL=$(ls /boot/vmlinuz-* | head -1)
@@ -101,6 +56,16 @@ cat > "$W/ir/init" <<'INIT'
 /bin/busybox --install -s /bin
 mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev
 export LD_LIBRARY_PATH=/bin
+# No session manager in this guest, so nothing can interrupt a transaction and
+# forge's logind inhibitor cannot be satisfied (`plans/future_impl.md` §2.1).
+export CAST_ALLOW_UNINHIBITED_TRANSACTION=1
+stage_and_install() {
+    mkdir -p /mnt/repo
+    cp /pkg.stone /mnt/repo/
+    cast index /mnt/repo 2>&1 | tail -1
+    cast -D /mnt/root -y repo add local file:///mnt/repo/stone.index 2>&1 | tail -1
+    cast -D /mnt/root -y install bash-completion 2>&1 | tail -2
+}
 MODE=$(sed -n 's/.*cell_mode=\([a-z]*\).*/\1/p' /proc/cmdline)
 OP=$(sed -n 's/.*cell_op=\([a-zA-Z0-9_./-]*\).*/\1/p' /proc/cmdline | tr '_' ' ')
 mount -t ext4 /dev/vda /mnt || { echo "CELL-FAIL mount"; poweroff -f; }
@@ -109,15 +74,14 @@ mkdir -p /mnt/root
 echo "BOOT-ID $(cat /proc/sys/kernel/random/boot_id)"
 if [ "$MODE" = write ]; then
     echo "CELL-READY"
-    cast -D /mnt/root -y $OP >/dev/null 2>&1
+    stage_and_install >/dev/null 2>&1
     echo "CELL-OP-DONE"
     while :; do sleep 1; done
 elif [ "$MODE" = control ]; then
     # No cut: let the operation finish and shut down cleanly. Without this the
     # `state` column cannot be read — an absent package could equally mean the
     # cut worked or the install never works in this guest.
-    cast -D /mnt/root -y $OP >/tmp/op 2>&1
-    echo "CONTROL-OP-OUTPUT:"; tail -4 /tmp/op
+    stage_and_install
     sync
     echo "CELL-OP-DONE"
     poweroff -f
