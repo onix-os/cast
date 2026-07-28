@@ -261,10 +261,7 @@ fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bo
             _ => false,
         }
         && rollback.previous_archive == RollbackAction::NotRequired
-        && matches!(
-            rollback.usr_exchange,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
-        )
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied

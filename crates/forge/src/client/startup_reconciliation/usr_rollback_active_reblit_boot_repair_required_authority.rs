@@ -194,10 +194,7 @@ fn active_reblit_boot_repair_required_plan_is_exact(record: &TransitionRecord) -
         && record.candidate.id == record.previous.id
         && rollback.source == ForwardPhase::BootSyncStarted
         && rollback.previous_archive == RollbackAction::NotRequired
-        && matches!(
-            rollback.usr_exchange,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
-        )
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied

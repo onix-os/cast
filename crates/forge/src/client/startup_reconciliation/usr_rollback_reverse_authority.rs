@@ -258,16 +258,15 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::ReverseExchangeIntent
-        || (!matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !matches!(
-            (record.operation, rollback.source, record.generation),
-            (Operation::NewState, ForwardPhase::SystemTriggersStarted, 13)
-                | (Operation::NewState, ForwardPhase::SystemTriggersComplete, 14)
-                | (Operation::ActiveReblit, ForwardPhase::SystemTriggersStarted, 11)
-                | (Operation::ActiveReblit, ForwardPhase::SystemTriggersComplete, 12)
-        ) && !boot_source)
+        || (!super::rollback_source_is_supported(rollback.source)
+            && !matches!(
+                (record.operation, rollback.source, record.generation),
+                (Operation::NewState, ForwardPhase::SystemTriggersStarted, 13)
+                    | (Operation::NewState, ForwardPhase::SystemTriggersComplete, 14)
+                    | (Operation::ActiveReblit, ForwardPhase::SystemTriggersStarted, 11)
+                    | (Operation::ActiveReblit, ForwardPhase::SystemTriggersComplete, 12)
+            )
+            && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
         || rollback.usr_exchange != RollbackAction::Pending
         || rollback.candidate.action != RollbackAction::Pending

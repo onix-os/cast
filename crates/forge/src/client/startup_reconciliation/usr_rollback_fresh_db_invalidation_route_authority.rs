@@ -60,10 +60,8 @@ impl<'reservation> UsrRollbackFreshDbInvalidationRouteAuthority<'reservation> {
         let Some(rollback) = record.rollback.as_ref() else {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::Deferred);
         };
-        if !matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !system_trigger_candidate_preserved_source_is_exact(record)
+        if !super::rollback_source_is_supported(rollback.source)
+            && !system_trigger_candidate_preserved_source_is_exact(record)
         {
             return Ok(UsrRollbackFreshDbInvalidationRouteAdmission::NotApplicable);
         }
@@ -180,15 +178,10 @@ fn route_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     record.operation == Operation::NewState
         && record.phase == Phase::CandidatePreserved
-        && (matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) || system_trigger_candidate_preserved_source_is_exact(record))
+        && (super::rollback_source_is_supported(rollback.source)
+            || system_trigger_candidate_preserved_source_is_exact(record))
         && rollback.previous_archive == RollbackAction::NotRequired
-        && matches!(
-            rollback.usr_exchange,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
-        )
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied

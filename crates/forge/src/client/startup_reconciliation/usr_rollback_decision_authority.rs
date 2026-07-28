@@ -226,11 +226,7 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
                 evidence,
             }),
             (None, true) => UsrRollbackDecisionAdmission::Ready(Self {
-                observations: rollback_observations(
-                    record.operation,
-                    None,
-                    previous_archive_observation(record.phase),
-                ),
+                observations: rollback_observations(record.operation, None, previous_archive_observation(record.phase)),
                 evidence,
             }),
             (None, false) => {

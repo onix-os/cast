@@ -197,10 +197,8 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         let Some(rollback) = record.rollback.as_ref() else {
             return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
         };
-        if !matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !system_trigger_candidate_preserve_source_is_exact(record)
+        if !super::rollback_source_is_supported(rollback.source)
+            && !system_trigger_candidate_preserve_source_is_exact(record)
             && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
         {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
@@ -520,15 +518,15 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::CandidatePreserveIntent
-        || (!matches!(
-            rollback.source,
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
-        ) && !system_trigger_candidate_preserve_source_is_exact(record)
+        || (!super::rollback_source_is_supported(rollback.source) && !system_trigger_candidate_preserve_source_is_exact(record)
             && !boot_source)
         || rollback.previous_archive != RollbackAction::NotRequired
+        // `NotRequired` is the pre-exchange case: `/usr` was never touched, so
+        // there was no exchange to reverse and the candidate discard is all that
+        // remains (`plans/future_impl.md` §1.4).
         || !matches!(
             rollback.usr_exchange,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
+            RollbackAction::Applied | RollbackAction::AlreadySatisfied | RollbackAction::NotRequired
         )
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot

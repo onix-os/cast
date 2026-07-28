@@ -972,3 +972,43 @@ fn run_before_final_tree_reopen() {}
 
 #[cfg(test)]
 mod tests;
+
+/// Forward phases a rollback may be entered from.
+///
+/// One definition, deliberately. This list was duplicated across every rollback
+/// authority, and each copy silently encoded the assumption that rollback only
+/// ever starts after the `/usr` exchange. That assumption made a crash during
+/// transaction triggers unrecoverable — the record's disposition was
+/// `BeginRollback`, but every authority rejected the source, so startup repeated
+/// the same pending transition forever (`plans/future_impl.md` §1.4).
+///
+/// Pre-exchange sources are included: nothing in `/usr` has been touched, so the
+/// derived plan carries `usr_exchange: NotRequired` and the chain only has to
+/// discard the candidate.
+pub(super) fn rollback_source_is_supported(source: crate::transition_journal::ForwardPhase) -> bool {
+    matches!(
+        source,
+        crate::transition_journal::ForwardPhase::CandidatePrepared
+            | crate::transition_journal::ForwardPhase::TransactionTriggersStarted
+            | crate::transition_journal::ForwardPhase::TransactionTriggersComplete
+            | crate::transition_journal::ForwardPhase::UsrExchangeIntent
+            | crate::transition_journal::ForwardPhase::UsrExchanged
+            | crate::transition_journal::ForwardPhase::RootLinksComplete
+    )
+}
+
+/// Whether a rollback plan's `/usr` exchange no longer needs action.
+///
+/// One definition, for the same reason as `rollback_source_is_supported`: this
+/// check was duplicated through the whole rollback tail, and every copy omitted
+/// `NotRequired` — the pre-exchange case where `/usr` was never touched. That
+/// omission stranded a crash during transaction triggers
+/// (`plans/future_impl.md` §1.4).
+pub(super) fn rollback_usr_exchange_is_settled(action: crate::transition_journal::RollbackAction) -> bool {
+    matches!(
+        action,
+        crate::transition_journal::RollbackAction::Applied
+            | crate::transition_journal::RollbackAction::AlreadySatisfied
+            | crate::transition_journal::RollbackAction::NotRequired
+    )
+}
