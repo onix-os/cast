@@ -105,14 +105,38 @@
 # "cannot recover" look identical at a fixed N. It is only a defect if the phase
 # stops changing.
 #
+# **`activate` operation added 2026-07-27 — and it exposes the harness's limit.**
+# `OPS=(activate)` installs, then runs `cast state activate 1` to drive an
+# ActivateArchived transition. Every cut from 5s to 16s recovers:
+#
+#     activate  control  recovered-at-1  state=installed
+#     activate  10s      recovered-at-9  state=installed
+#     activate  14s      recovered-at-9  state=installed
+#     activate  16s      recovered-at-1  state=installed
+#
+# **Do not read that as "ActivateArchived pre-exchange recovery works."** The
+# `recovered-at-9` signature is the same one NewState rollback produces, and the
+# setup install takes several seconds, so those cuts most likely landed inside
+# the *install*, not the activation. Wall-clock cuts cannot reliably target one
+# operation's window when the setup that precedes it takes seconds.
+#
+# This is exactly why §2.1 calls for cuts targeted at journal *phases* rather
+# than delays: arm an existing `arm_*` fault hook at the phase under test and
+# cut there. Until that lands, this operation's cells prove the harness runs,
+# not that the transition is durable.
+#
+# Note the pre-exchange rollback fix is deliberately scoped to NewState
+# (`plans/future_impl.md` §1.4); whether ActiveReblit and ActivateArchived share
+# the gap is still unmeasured.
+#
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
 KERNEL=$(ls /boot/vmlinuz-* | head -1)
 
 # Operations that write durable state without needing network.
-OPS=(install)
+OPS=(activate)
 # When to cut, relative to the operation starting. 0 = as early as possible.
-CUTS=(control 3 4 5 6 8)
+CUTS=(10 12 14 16)
 
 mkdir -p "$W/ir"/{bin,proc,sys,dev,mnt}
 cp /usr/bin/busybox "$W/ir/bin/"; cp /tmp/cast "$W/ir/bin/cast"; chmod +x "$W/ir/bin/cast"
@@ -126,6 +150,12 @@ export LD_LIBRARY_PATH=/bin
 # No session manager in this guest, so nothing can interrupt a transaction and
 # forge's logind inhibitor cannot be satisfied (`plans/future_impl.md` §2.1).
 export CAST_ALLOW_UNINHIBITED_TRANSACTION=1
+stage_and_activate() {
+    stage_and_install
+    # State 1 is archived once the install created state 2; activating it back
+    # drives an ActivateArchived transition.
+    cast -D /mnt/root -y state activate 1 2>&1 | tail -2
+}
 stage_and_install() {
     mkdir -p /mnt/repo
     cp /pkg.stone /mnt/repo/
@@ -141,14 +171,14 @@ mkdir -p /mnt/root
 echo "BOOT-ID $(cat /proc/sys/kernel/random/boot_id)"
 if [ "$MODE" = write ]; then
     echo "CELL-READY"
-    stage_and_install >/dev/null 2>&1
+    case "$OP" in activate) stage_and_activate >/dev/null 2>&1 ;; *) stage_and_install >/dev/null 2>&1 ;; esac
     echo "CELL-OP-DONE"
     while :; do sleep 1; done
 elif [ "$MODE" = control ]; then
     # No cut: let the operation finish and shut down cleanly. Without this the
     # `state` column cannot be read — an absent package could equally mean the
     # cut worked or the install never works in this guest.
-    stage_and_install
+    case "$OP" in activate) stage_and_activate ;; *) stage_and_install ;; esac
     sync
     echo "CELL-OP-DONE"
     poweroff -f
