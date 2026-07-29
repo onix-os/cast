@@ -15,10 +15,40 @@ reboot: a nested guest whose unsynced writes are genuinely lost
 interrupted install recovering to `state=installed`
 (`crash-matrix-run.sh`).
 
-All three operations publish a durable journal that startup reconciliation
-resumes: NewState including first install (§1.1), ActivateArchived through the
-archived-staging pair (§1.2/§1.2b), archived repair via its interruption marker
-(§1.3).
+**CORRECTION 2026-07-29 — ActivateArchived is NOT on the coordinated route.**
+This section previously claimed all three operations publish a durable journal.
+Two do:
+
+- **NewState** (§1.1) — `state_planning.rs` routes both arms through
+  `apply_new_state_candidate`. Verified in production and by the crash matrix.
+- **Archived repair** (§1.3) — the interruption marker is armed in
+  `repair_archived_state_with_checkpoint` and read by `startup_gate`.
+
+**ActivateArchived is not.** `cast state activate` reaches
+`activate_state_with_checkpoint`, which calls `commit_stateful_staging`
+(`state_planning.rs:115`) — the legacy path, whose exchange goes through
+`exchange_forward_validated` and `ExchangeJournalGuard::LegacyNoJournal`, an
+assertion that *no journal is present*. The coordinated route built in
+§1.2/§1.2b, `execute_activate_archived_forward`, has **zero callers** — not
+production, not tests.
+
+So the archived-staging phase, its durable pair, and the pre-exchange rollback
+scoping for ActivateArchived are all unreachable today. The code is correct and
+tested at the unit level; nothing calls it.
+
+How this was found: the crash matrix's phase-targeted cut at
+`ActivateArchived.CandidatePrepared` never fired. A journal transition that
+never happens cannot be cut — the harness proved the absence, which reading the
+code had not.
+
+**This also corrects the §§3-4 conclusion in `cleanup_legacy.md`.** That note
+said `LegacyNoJournal` was pinned by `#[cfg(test)]`-live code. It is worse than
+that: it is pinned by *live production code*, because activation still uses it.
+
+**Next: wire activation to the coordinated route** — replace the
+`commit_stateful_staging` call at `state_planning.rs:115` with
+`execute_activate_archived_forward`, the item §1.2 always listed as remaining.
+Until that lands, Phase 1's exit criterion is met for two operations, not three.
 
 Supporting state: forge suite 2759/0, production build at zero warnings, one
 source of truth for phase ordinals, `develop` holds everything, branches cleaned.
