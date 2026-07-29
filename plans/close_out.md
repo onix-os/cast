@@ -134,6 +134,31 @@ Steps remaining:
    not print for a passing cell), or it runs and the transition still does not
    reach that phase.
 
+   **Diagnosed 2026-07-29 — the harness was never driving an activation.**
+   Tracing the write phase showed `cast state activate 1` failing with
+   `state 1 already active`: the first install *creates* state 1, so activating
+   it is a no-op error. The cell was green because nothing happened, which is
+   the same false-green the `state=absent` column produced earlier.
+
+   Attempting to create a second state (remove the package, archiving state 1)
+   then surfaced a second, more interesting failure:
+
+       Error: remove: materialize a stateful candidate through retained fixed
+       staging: fixed staging contains crash or foreign evidence and was left
+       untouched: "/mnt/root/.cast/root/staging", first entry "usr"
+
+   **This may be a real consequence of D1.5.** That decision relaxed the
+   namespace policy so a `SynthesizedEmpty` previous may remain in staging after
+   a first install, on the grounds that cleanup never unlinks and the slot would
+   be reused later. If the *next* transition instead rejects that leftover as
+   foreign evidence, the slot is not reusable and a first install wedges every
+   subsequent stateful operation in a fresh installation.
+
+   Verify before concluding: reproduce outside the guest (install into a fresh
+   root, then remove) and check whether the same rejection occurs. If it does,
+   D1.5 needs revisiting — either cleanup must remove the synthesized tree after
+   all, or materialization must recognise and reuse it.
+
    **Do not treat step 3 as proven until that marker fires.** The unit suites
    only show nothing regressed; the whole point of this work was that
    ActivateArchived's durability was theoretical, and a green unit suite is
