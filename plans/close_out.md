@@ -112,10 +112,34 @@ Steps remaining:
    packages being installed, which is why a fresh one is wrong here: it describes
    the wrong state.
 
-   Remaining work for step 3 is therefore: source the candidate's recorded
-   system model (the archived state's own selections), build the closure from it,
-   drop the `system_snapshot: SystemModel` parameter in favour of that, then swap
-   the call site.
+   **Step 3 LANDED 2026-07-29.** The snapshot is sourced the same way
+   `verify.rs:313` does it — `load_or_create_system_snapshot` against the
+   candidate's own state directory, so the derived outputs match the stored
+   provenance. `activate_state_with_checkpoint` now calls
+   `apply_activate_archived_candidate`, replacing the entire legacy prologue
+   (identity preparation, `stage_archived_candidate` with its "already applied"
+   resume branch, `verify_pre_exchange`) and the `commit_stateful_staging` call.
+
+   Verified: `activate_archived` 67/67, `journal_coordinator` 117/117,
+   production and test builds at zero warnings.
+
+   `finish_applied_archived_candidate_stage` became test-only as a result and is
+   annotated accordingly — the coordinated route journals the staging move rather
+   than resuming an already-applied one.
+
+   **STILL UNVERIFIED AT THE GUEST LEVEL, AND THIS MATTERS.** A phase-targeted
+   cut at `ActivateArchived.CandidatePrepared` *still* reports `CELL-OP-DONE`
+   without the marker firing. Either the guest's `cast state activate 1` is not
+   running (its output is captured in the write-phase log, which the runner does
+   not print for a passing cell), or it runs and the transition still does not
+   reach that phase.
+
+   **Do not treat step 3 as proven until that marker fires.** The unit suites
+   only show nothing regressed; the whole point of this work was that
+   ActivateArchived's durability was theoretical, and a green unit suite is
+   exactly what it looked like before. Next step: surface the write-phase log for
+   passing cells, confirm the activate command succeeds in the guest, and only
+   then read the cell verdicts.
 
    (Superseded framing, retained because it was wrong in an instructive way: I
    had posed this as "does activation re-derive metadata?", which assumed the
