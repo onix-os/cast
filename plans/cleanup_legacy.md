@@ -75,10 +75,49 @@ the property, then port or delete. The archived-activation half of that work is
 done (13 tests retired, 1 re-pointed); the ActiveReblit and root-ABI halves are
 not.
 
-Order: remove the `Archived` arm of `commit_stateful_staging` and
-`stateful_recovery.rs` first (nothing reaches it), then the ActiveReblit/Fresh
-arms with their test triage, then the guards and `legacy_boot_repair` collapse
-on their own.
+**Confirmed 2026-07-30: all three production operations are coordinated.**
+
+| operation | production entry |
+|---|---|
+| NewState | `apply_new_state_candidate` (`state_planning.rs:170,189`) |
+| ActiveReblit / verify | `apply_active_reblit_candidate` (`verify.rs:295`) |
+| ActivateArchived | `apply_activate_archived_candidate` (merged 2026-07-30) |
+
+Nothing else reaches `commit_stateful_staging`.
+
+### The triage list — this is the actual remaining work
+
+Removing the route deletes these 34 tests. They are the only callers, but several
+assert properties whose coordinated equivalent is **not** obvious, so each needs
+checking before deletion. Grouped by risk:
+
+**Likely already covered by the coordinated suites** (`journal_coordinator`
+`root_abi_publication_*` is 15 tests; `usr_rollback_*` authorities are dozens):
+
+- `root_abi_preflight.rs` (4): live/absent root-ABI replacement at the exchange
+  boundary, post-exchange publication conflict reversal.
+- `stateful_previous_tree_recovery.rs` (5): archive/restore fault suffix routing.
+- `stateful_activation_recovery.rs` (7 remaining): fresh/previous reverse
+  retention, racing empty destinations, quarantine uniqueness.
+
+**Needs a named counterpart before deleting — no obvious coordinated twin:**
+
+- `first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr`
+- `missing_live_usr_between_identity_check_and_exchange_is_never_recreated`
+- `duplicate_permanent_tree_tokens_block_exchange_and_retain_both_trees`
+- `recovery_rejects_same_content_marker_name_substitution_without_repair`
+- `recovery_rejects_whole_directory_same_token_substitution_without_exchange`
+- `orphan_transition_row_blocks_marker_publication_before_activation`
+- `unresolved_journal_evidence_blocks_marker_publication_before_activation`
+- the 7 in `stateful_quarantine_recovery.rs` (deterministic collision handling,
+  durability-fault resumption, marker recreation refusal)
+
+That second group is why this is not a delete-and-run. Each is a substitution or
+adversarial-namespace proof, which is the class of test this epic exists to keep.
+
+Order once the triage is done: production route (`apply_stateful_blit`,
+`commit_stateful_staging`, `stateful_recovery.rs`), then the guards and
+`legacy_boot_repair`, which collapse on their own.
 
 ---
 
