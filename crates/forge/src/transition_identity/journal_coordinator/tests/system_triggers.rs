@@ -307,25 +307,24 @@ fn journal_coordinator_system_triggers_complete_exact_new_state_and_active_rebli
 }
 
 #[test]
-fn journal_coordinator_system_triggers_reject_archived_or_disabled_paths_without_effect() {
+fn journal_coordinator_system_triggers_run_for_archived_and_reject_disabled_paths() {
     {
+        // Archived activation used to be refused here for having no isolation
+        // view. It now acquires its own, so its system triggers run like any
+        // other operation's — and they must, because `cast state activate`
+        // reaches this path (`plans/close_out.md`).
         let (fixture, coordinator) =
             coordinator_ready_for_system_triggers(CandidateKind::Archived, true);
-        let source = coordinator.record().clone();
         let calls = std::cell::Cell::new(0usize);
-        let failure = coordinator
+        let complete = coordinator
             .run_system_triggers(|_| {
                 calls.set(calls.get() + 1);
                 Ok::<(), TriggerEffectError>(())
             })
-            .unwrap_err();
-        assert!(matches!(
-            failure,
-            StatefulSystemTriggerFailure::ArchivedIsolationUnsupported { transition_id }
-                if transition_id == source.transition_id
-        ));
-        assert_eq!(calls.get(), 0);
-        assert_eq!(read_canonical(&fixture.installation.root), source);
+            .expect("archived activation runs system triggers against its own isolation");
+        assert_eq!(calls.get(), 1, "the archived trigger effect must actually run");
+        assert_eq!(complete.record().phase, Phase::SystemTriggersComplete);
+        assert_eq!(read_canonical(&fixture.installation.root), *complete.record());
     }
 
     for candidate_kind in [CandidateKind::NewState, CandidateKind::ActiveReblit] {

@@ -59,7 +59,10 @@ impl Client {
         // the read-only proof so the same names can be revalidated at the
         // exchange boundary without reopening mutable path authority.
         let live_root_abi = preflight_root_links(&self.installation.root)?;
-        let isolation_root = create_root_links(&self.installation.isolation_dir())?;
+        // The isolation root is no longer published here: the coordinator
+        // acquires and retains its own, so publishing a second one from a
+        // pathname would reintroduce exactly the caller-supplied capability the
+        // retained discipline removes (`plans/close_out.md`).
 
         let archived_usr = self.installation.root_path(new.id.to_string()).join("usr");
         active_state.revalidate(&self.installation)?;
