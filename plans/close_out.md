@@ -212,9 +212,32 @@ Steps remaining:
 
    `checkpoint` and `isolation_root` are correct to drop — the coordinated route
    uses journal phases, and it now acquires its own isolation. **`skip_triggers`
-   is not.** It is a user-facing flag and the swap silently ignores it, so
-   `cast state activate` now always runs triggers. `live_root_abi` needs the same
-   judgement. Neither can be left as a `let _` when the branch lands.
+   is not.** It is a public API parameter
+   (`Client::activate_state(id, skip_triggers, skip_boot)`), and the swap
+   silently ignores it, so `cast state activate` now always runs triggers.
+   `live_root_abi` needs the same judgement. Neither can be left as a `let _`
+   when the branch lands.
+
+   **Wiring it is not plumbing — the coordinated route has no skip path at all.**
+   Scoped 2026-07-29:
+
+   - The *journal chain* already supports it: `next_forward_phase` sends
+     `RootLinksComplete -> after_system()` when `!options.run_system_triggers`
+     (`validation.rs:556-557`).
+   - The *typestate* does not. `run_system_triggers` is the only exit from
+     `RootLinksCompleteCoordinator`, and it always advances through
+     `SystemTriggersStarted -> SystemTriggersComplete`.
+   - So a skip cannot simply produce a `SystemTriggersCompleteCoordinator`:
+     skipping lands the record on `PreviousArchiveIntent`, while
+     `archive_previous_tree` requires `Phase::SystemTriggersComplete` as its
+     source. The tail needs a second entry point, not a flag.
+   - **Both forward functions hardcode `run_system_triggers: true`**
+     (`new_state_forward.rs:175` and `:263`), so NewState has the same gap. It
+     has simply never been exercised, because nothing passes the flag down.
+
+   Sequence this before rewriting the 15 checkpoint tests: several of them
+   exercise trigger phases, and writing them against the current call site would
+   bake the dropped flag into the new coverage.
 
    **STILL UNVERIFIED AT THE GUEST LEVEL, AND THIS MATTERS.** A phase-targeted
    cut at `ActivateArchived.CandidatePrepared` *still* reports `CELL-OP-DONE`
