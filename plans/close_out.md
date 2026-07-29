@@ -45,10 +45,33 @@ code had not.
 said `LegacyNoJournal` was pinned by `#[cfg(test)]`-live code. It is worse than
 that: it is pinned by *live production code*, because activation still uses it.
 
-**Next: wire activation to the coordinated route** — replace the
-`commit_stateful_staging` call at `state_planning.rs:115` with
-`execute_activate_archived_forward`, the item §1.2 always listed as remaining.
-Until that lands, Phase 1's exit criterion is met for two operations, not three.
+**Wiring activation to the coordinated route — the remaining work, mapped.**
+
+Step 1 is **done** (2026-07-29): the archived-to-staging move now happens
+*inside* the durable pair. `StatefulTransitionCoordinator::stage_archived_candidate`
+runs between `begin_archived_staging` and `complete_archived_staging`, so a crash
+mid-move leaves a record at `ArchivedCandidateStagingIntent` that recovery can
+act on, rather than an orphaned tree in staging. The legacy route performed this
+move outside the journal entirely (`state_planning.rs`, before
+`commit_stateful_staging`) — precisely the untracked window §1.2 exists to close.
+Verified: `journal_coordinator` 117/117, `transition_journal` 136/136,
+`activate_archived` 67/67.
+
+Steps remaining:
+
+2. **A client wrapper** — the analogue of `apply_new_state_candidate`
+   (`new_state_boot_transition.rs:74`). It must acquire the preflight identity
+   and authority, build the `derive_metadata` and `system_trigger` closures, and
+   drive `execute_activate_archived_forward` plus its commit tail. This is the
+   bulk of the work and is why §1.2 was always listed as an open item.
+3. **Replace the call site** at `state_planning.rs:115`, deleting the
+   pre-journal `stage_archived_candidate` call above it (the move now belongs to
+   the coordinator).
+4. **Then §§3-4 unblock**: activation is the last production user of
+   `ExchangeJournalGuard::LegacyNoJournal`.
+
+Until step 3 lands, Phase 1's exit criterion is met for two operations, not
+three, and the crash matrix cannot exercise ActivateArchived at all.
 
 Supporting state: forge suite 2759/0, production build at zero warnings, one
 source of truth for phase ordinals, `develop` holds everything, branches cleaned.
