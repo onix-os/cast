@@ -32,7 +32,7 @@ impl StatefulTreeIdentity {
     /// retires the wrapper the staging exchange displaced, so the *next*
     /// activation fails with `PreviousArchiveSlotExists` — only the legacy route
     /// ever called the retirement (`plans/close_out.md`).
-    pub(crate) fn retire_displaced_archived_candidate_slot_with_journal(
+    pub(in crate::transition_identity) fn retire_displaced_archived_candidate_slot_with_journal(
         &self,
         installation: &Installation,
         candidate: state::Id,
