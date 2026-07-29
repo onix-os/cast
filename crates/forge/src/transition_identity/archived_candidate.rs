@@ -18,7 +18,7 @@ use thiserror::Error;
 
 use super::{
     ROOTS_RELATIVE, RetainedDirectory, RetainedDirectoryWitness, StatefulTreeIdentity, canonical_state_name,
-    open_optional_retained_tree, state_slot_marker::RetainedStateSlotMarker,
+    journal_coordinator, open_optional_retained_tree, state_slot_marker::RetainedStateSlotMarker,
 };
 use crate::{Installation, linux_fs::renameat2_exchange_once, state};
 
@@ -27,6 +27,29 @@ use self::slot_marker_transfer::MarkerLocation;
 pub(super) use slot_lifecycle::parking_name as archived_candidate_parking_name;
 
 const STAGING_NAME: &CStr = c"staging";
+
+/// Journal expectation for an archived-candidate move. Mirrors
+/// `ArchiveJournalGuard` in `previous_tree_move.rs`, for the same reason: a
+/// legacy entry point treats a present journal as an unreconciled crash, while a
+/// coordinated caller proves with an unforgeable seal that it owns the exact
+/// durable record whose journal is intentionally retained across this move.
+#[derive(Clone, Copy)]
+enum ArchivedCandidateJournalGuard<'authority> {
+    LegacyNoJournal,
+    Coordinator(&'authority journal_coordinator::ArchivedCandidateStagingEffectSeal),
+}
+
+impl ArchivedCandidateJournalGuard<'_> {
+    fn require(self, identity: &StatefulTreeIdentity) -> Result<(), super::Error> {
+        match self {
+            Self::LegacyNoJournal => identity.require_no_journal(),
+            Self::Coordinator(seal) => {
+                let _seal = seal;
+                Ok(())
+            }
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetainedArchivedCandidateMoveOutcome {
@@ -250,7 +273,29 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         candidate: state::Id,
     ) -> Result<(), RetainedArchivedCandidateMoveFailure> {
-        self.move_archived_candidate(installation, candidate, MoveDirection::Stage)
+        self.move_archived_candidate(
+            installation,
+            candidate,
+            MoveDirection::Stage,
+            ArchivedCandidateJournalGuard::LegacyNoJournal,
+        )
+    }
+
+    /// Coordinator-only staging move. The seal proves the caller owns the exact
+    /// durable `ArchivedCandidateStagingIntent`; the journal stays retained
+    /// across the move rather than blocking it.
+    pub(super) fn stage_archived_candidate_with_journal(
+        &self,
+        installation: &Installation,
+        candidate: state::Id,
+        seal: &journal_coordinator::ArchivedCandidateStagingEffectSeal,
+    ) -> Result<(), RetainedArchivedCandidateMoveFailure> {
+        self.move_archived_candidate(
+            installation,
+            candidate,
+            MoveDirection::Stage,
+            ArchivedCandidateJournalGuard::Coordinator(seal),
+        )
     }
 
     pub(crate) fn rearchive_archived_candidate(
@@ -258,7 +303,12 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         candidate: state::Id,
     ) -> Result<(), RetainedArchivedCandidateMoveFailure> {
-        self.move_archived_candidate(installation, candidate, MoveDirection::Rearchive)
+        self.move_archived_candidate(
+            installation,
+            candidate,
+            MoveDirection::Rearchive,
+            ArchivedCandidateJournalGuard::LegacyNoJournal,
+        )
     }
 
     // Reachable only from `#[cfg(test)]` callers since activation moved to the
@@ -271,7 +321,12 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         candidate: state::Id,
     ) -> Result<(), ArchivedCandidateError> {
-        self.finish_applied_archived_candidate_move(installation, candidate, MoveDirection::Stage)
+        self.finish_applied_archived_candidate_move(
+            installation,
+            candidate,
+            MoveDirection::Stage,
+            ArchivedCandidateJournalGuard::LegacyNoJournal,
+        )
     }
 
     pub(crate) fn finish_applied_archived_candidate_rearchive(
@@ -279,7 +334,12 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         candidate: state::Id,
     ) -> Result<(), ArchivedCandidateError> {
-        self.finish_applied_archived_candidate_move(installation, candidate, MoveDirection::Rearchive)
+        self.finish_applied_archived_candidate_move(
+            installation,
+            candidate,
+            MoveDirection::Rearchive,
+            ArchivedCandidateJournalGuard::LegacyNoJournal,
+        )
     }
 
     fn move_archived_candidate(
@@ -287,6 +347,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         candidate: state::Id,
         direction: MoveDirection,
+        guard: ArchivedCandidateJournalGuard<'_>,
     ) -> Result<(), RetainedArchivedCandidateMoveFailure> {
         let not_applied = |source| RetainedArchivedCandidateMoveFailure {
             outcome: RetainedArchivedCandidateMoveOutcome::NotApplied,
@@ -300,7 +361,8 @@ impl StatefulTreeIdentity {
             outcome: RetainedArchivedCandidateMoveOutcome::Ambiguous,
             source,
         };
-        self.require_no_journal()
+        guard
+            .require(self)
             .map_err(|source| not_applied(identity("check journal before archived-candidate move", source)))?;
         installation
             .revalidate_root_directory()
@@ -350,7 +412,7 @@ impl StatefulTreeIdentity {
                     )
                 })?;
             if let Err((outcome, source)) =
-                self.ensure_slot_marker_location(installation, attempt, MarkerLocation::Candidate)
+                self.ensure_slot_marker_location(installation, attempt, MarkerLocation::Candidate, guard)
             {
                 return Err(preparation_failure(
                     outcome,
@@ -384,14 +446,15 @@ impl StatefulTreeIdentity {
                 .map_err(|source| identity("sync roots parent before archived-candidate exchange", source))?;
 
             before_exchange();
-            self.require_no_journal()
+            guard
+                .require(self)
                 .map_err(|source| identity("recheck journal before archived-candidate exchange", source))?;
             self.revalidate_base(installation, attempt)?;
             self.require_move_layout(attempt, direction.before(), direction.marker_before())?;
             checkpoint(RetainedArchivedCandidateMoveFaultPoint::BeforeExchange)
         })();
         if let Err(source) = preflight {
-            let result = self.reconcile_preflight_failure(installation, attempt, direction, source);
+            let result = self.reconcile_preflight_failure(installation, attempt, direction, guard, source);
             if result.is_ok() && direction == MoveDirection::Rearchive {
                 *retained = None;
             }
@@ -429,7 +492,7 @@ impl StatefulTreeIdentity {
             }));
         }
 
-        let finish = self.finish_move(installation, attempt, direction);
+        let finish = self.finish_move(installation, attempt, direction, guard);
         if finish.is_ok() && direction == MoveDirection::Rearchive {
             *retained = None;
         }
@@ -489,6 +552,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         candidate: state::Id,
         direction: MoveDirection,
+        guard: ArchivedCandidateJournalGuard<'_>,
     ) -> Result<(), ArchivedCandidateError> {
         let mut retained = self
             .archived_candidate_attempt
@@ -499,7 +563,7 @@ impl StatefulTreeIdentity {
         })?;
         require_attempt_state(attempt, candidate)?;
         self.revalidate_base(installation, attempt)?;
-        self.finish_move(installation, attempt, direction)?;
+        self.finish_move(installation, attempt, direction, guard)?;
         if direction == MoveDirection::Rearchive {
             *retained = None;
         }
@@ -511,10 +575,11 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         attempt: &mut RetainedArchivedCandidateAttempt,
         direction: MoveDirection,
+        guard: ArchivedCandidateJournalGuard<'_>,
     ) -> Result<(), ArchivedCandidateError> {
         let marker_location = self.retained_slot_marker_location(attempt)?;
         self.require_move_layout(attempt, direction.after(), marker_location)?;
-        self.ensure_slot_marker_location(installation, attempt, direction.marker_after())
+        self.ensure_slot_marker_location(installation, attempt, direction.marker_after(), guard)
             .map_err(|(_, source)| source)?;
         checkpoint(RetainedArchivedCandidateMoveFaultPoint::CandidatePostSync)?;
         self.candidate
@@ -527,7 +592,8 @@ impl StatefulTreeIdentity {
             .sync("sync roots parent after archived-candidate exchange")
             .map_err(|source| identity("sync roots parent after archived-candidate exchange", source))?;
         checkpoint(RetainedArchivedCandidateMoveFaultPoint::FinalRevalidation)?;
-        self.require_no_journal()
+        guard
+            .require(self)
             .map_err(|source| identity("recheck journal after archived-candidate exchange", source))?;
         self.revalidate_base(installation, attempt)?;
         self.require_move_layout(attempt, direction.after(), direction.marker_after())
@@ -538,6 +604,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         attempt: &mut RetainedArchivedCandidateAttempt,
         direction: MoveDirection,
+        guard: ArchivedCandidateJournalGuard<'_>,
         primary: ArchivedCandidateError,
     ) -> Result<(), RetainedArchivedCandidateMoveFailure> {
         let layout = self
@@ -553,7 +620,7 @@ impl StatefulTreeIdentity {
                 source: primary,
             }),
             Ok(layout) if layout == direction.after() => {
-                self.finish_move(installation, attempt, direction).map_err(|finish| {
+                self.finish_move(installation, attempt, direction, guard).map_err(|finish| {
                     RetainedArchivedCandidateMoveFailure {
                         outcome: RetainedArchivedCandidateMoveOutcome::Applied,
                         source: ArchivedCandidateError::AppliedAfterPreflightFailure {

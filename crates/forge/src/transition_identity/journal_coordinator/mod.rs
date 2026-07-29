@@ -104,6 +104,22 @@ pub(super) struct ActiveReblitReservationSeal {
     _private: (),
 }
 
+/// Unforgeable proof that a journal-coordinated caller owns the exact durable
+/// `ArchivedCandidateStagingIntent` record and may move the archived candidate
+/// into staging while its transition journal is retained.
+///
+/// The staging move is the one physical effect of `ActivateArchived`'s durable
+/// pair, so it needs what `PreviousArchiveEffectSeal` gives the predecessor
+/// archive. Without it the coordinated route cannot run at all: the legacy entry
+/// point requires journal *absence*, and a coordinated caller can never satisfy
+/// that — it is holding the very record that makes the move intended and
+/// recoverable. That mismatch shipped, and only wiring the call site exposed it
+/// (`plans/close_out.md`).
+#[derive(Debug)]
+pub(super) struct ArchivedCandidateStagingEffectSeal {
+    _private: (),
+}
+
 const BEGIN_FRESH_ALLOCATION: &str = "begin fresh-state allocation";
 const FINISH_FRESH_ALLOCATION: &str = "finish fresh-state allocation";
 const BEGIN_CANDIDATE_PREPARE: &str = "begin candidate preparation";
@@ -464,8 +480,13 @@ impl StatefulTransitionCoordinator {
     ) -> Result<(), StatefulTransitionCoordinatorError> {
         self.require_operation(Operation::ActivateArchived, "stage archived candidate")?;
         self.require_phase(Phase::ArchivedCandidateStagingIntent, "stage archived candidate")?;
+        // Sealed, not legacy: the phase check immediately above *is* the proof
+        // the seal stands for. The legacy entry point requires journal absence,
+        // which a coordinated caller can never satisfy — it is holding the very
+        // record that makes this move intended and recoverable.
+        let seal = ArchivedCandidateStagingEffectSeal { _private: () };
         self.identity
-            .stage_archived_candidate(installation, candidate)
+            .stage_archived_candidate_with_journal(installation, candidate, &seal)
             .map_err(|source| StatefulTransitionCoordinatorError::ArchivedCandidateStaging(Box::new(source)))
     }
 

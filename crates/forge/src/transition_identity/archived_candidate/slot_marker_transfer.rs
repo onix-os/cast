@@ -60,6 +60,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         attempt: &mut RetainedArchivedCandidateAttempt,
         desired: MarkerLocation,
+        guard: super::ArchivedCandidateJournalGuard<'_>,
     ) -> Result<(), (PreparationOutcome, ArchivedCandidateError)> {
         before_slot_marker_location();
         let current = self
@@ -76,7 +77,7 @@ impl StatefulTreeIdentity {
                 ));
             }
             return self
-                .finish_slot_marker_transfer(installation, attempt, desired)
+                .finish_slot_marker_transfer(installation, attempt, desired, guard)
                 .map_err(|source| (PreparationOutcome::Applied, source));
         }
         if current == desired {
@@ -85,7 +86,7 @@ impl StatefulTreeIdentity {
                 attempt.rearchive_preparation_applied = true;
             }
             return self
-                .finish_slot_marker_transfer(installation, attempt, desired)
+                .finish_slot_marker_transfer(installation, attempt, desired, guard)
                 .map_err(|source| (PreparationOutcome::Applied, source));
         }
 
@@ -126,7 +127,7 @@ impl StatefulTreeIdentity {
                 if desired == MarkerLocation::Candidate {
                     attempt.rearchive_preparation_applied = true;
                 }
-                self.finish_slot_marker_transfer(installation, attempt, desired)
+                self.finish_slot_marker_transfer(installation, attempt, desired, guard)
                     .map_err(|source| (PreparationOutcome::Applied, source))
             }
             location => Err((
@@ -144,6 +145,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         attempt: &mut RetainedArchivedCandidateAttempt,
         desired: MarkerLocation,
+        guard: super::ArchivedCandidateJournalGuard<'_>,
     ) -> Result<(), ArchivedCandidateError> {
         attempt
             .slot_marker
@@ -159,7 +161,8 @@ impl StatefulTreeIdentity {
             .sync("sync displaced wrapper after state-slot marker transfer")
             .map_err(|source| identity("sync displaced wrapper after state-slot marker transfer", source))?;
         checkpoint(RetainedArchivedCandidateMoveFaultPoint::FinalSlotMarkerRevalidation)?;
-        self.require_no_journal()
+        guard
+            .require(self)
             .map_err(|source| identity("recheck journal after state-slot marker transfer", source))?;
         self.revalidate_base(installation, attempt)?;
         if self.retained_slot_marker_location(attempt)? != desired {
