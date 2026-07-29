@@ -48,6 +48,16 @@ pub(in crate::client) struct LiveNewStateBootError {
 }
 
 impl LiveNewStateBootError {
+    #[cfg(test)]
+    pub(in crate::client) fn stage(&self) -> &'static str {
+        self.stage
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn source_ref(&self) -> &(dyn StdError + Send + Sync + 'static) {
+        self.source.as_ref()
+    }
+
     fn at(stage: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
         Self {
             stage,
