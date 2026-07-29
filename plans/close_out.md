@@ -1,38 +1,58 @@
 # Close-out plan — what remains after Phase 1
 
-## ⚠ SHIPPED REGRESSION — fix before anything else (found 2026-07-29)
+## FIXED 2026-07-29 — first install wedged the next stateful operation
 
-**A first install wedges the next stateful operation.** Reproduced on `develop`,
-on a normal root (not just the crash-matrix guest):
+**Symptom.** On a normal root (not just the crash-matrix guest):
 
     cast -D <root> repo add local file://.../stone.index
     cast -D <root> install bash-completion     # succeeds
-    cast -D <root> remove bash-completion      # FAILS
+    cast -D <root> remove bash-completion      # FAILED
 
     Error: remove: materialize a stateful candidate through retained fixed
     staging: fixed staging contains crash or foreign evidence and was left
     untouched: "<root>/.cast/root/staging", first entry "usr"
 
-**Diagnosis.** D1.5 relaxed the namespace policy so a `SynthesizedEmpty`
-previous may remain in staging after a first install, on the reasoning that
-cleanup never unlinks and the slot would be reused later. The slot is not
-reused: materialization rejects it.
+**Cause — not what the first diagnosis said.** This was blamed on D1.5 leaving a
+`SynthesizedEmpty` previous behind. It is older and simpler than that, and it was
+never a regression: *both* routes have always had the gap.
 
-The leftover `staging/usr` contains exactly one entry — `.cast-tree-id`, the
-tree marker. So it *is* the synthesized-empty tree D1.5 intended to leave;
-materialization's emptiness check simply does not account for the marker and
-classifies its own artefact as foreign evidence.
+The NewState forward exchange swaps the candidate with the live `/usr`, so
+whatever was live lands in fixed staging. With a predecessor, the journal's
+archive advance moves it into that state's slot. A **first install has no
+predecessor and therefore no slot**, so `new_state_boot_transition.rs:161`
+returns straight to commit and the displaced tree stays in staging forever. The
+legacy route carries the identical `if archive_previous && let Some(previous)`
+guard (`stateful_transition.rs:448`), so it leaks the same way — this predates
+the coordinated route entirely.
 
-**Likely fix:** extend what fixed-staging materialization treats as reusable to
-include a `usr` holding only `.cast-tree-id`. A normalization path already
-exists — see `exact_empty_legacy_staging_is_normalized_without_replacing_its_inode`
-— so this is probably widening that predicate rather than new machinery. Confirm
-the marker is the *only* permitted entry; anything else must stay foreign.
+The displaced tree is cast's *own* pre-install `/usr` placeholder: it does not
+exist before `apply_new_state_candidate` runs, and it holds exactly one entry,
+`.cast-tree-id`.
 
-**Why no test caught it:** every stateful test either starts from a root that
-already has an active state, or performs one operation. The failing sequence is
-first-install-then-anything, which nothing exercised. Add that as a test with
-the fix.
+**Fix — reclaim it at the reusable side** (`fixed_staging.rs`,
+`reclaim_displaced_placeholder`). `prepare_empty` retires an exactly-shaped
+placeholder to an unguessable private name, re-authenticates the inode through
+it, and removes it.
+
+Chosen over disposing in the transition tail because a crash between the exchange
+and any tail-side disposal leaves the identical residue — the reusable side has
+to cope with it regardless, so one place makes the next operation self-healing at
+every crash point rather than only those a new journal phase would cover.
+
+**What keeps it safe.** The admitted shape is exact and only cast can produce it:
+
+- staging holds `usr` and nothing else — any sibling is unexplained residue and
+  is never touched;
+- `usr` holds `.cast-tree-id` and nothing else.
+
+A candidate is only *named* `usr` after its blit completes (an interrupted blit
+leaves `.cast-usr-<hex>.tmp`), and every real state tree also carries `.stateID`.
+So a marker-only `usr` can be neither an interrupted candidate nor a displaced
+state tree. Three tests cover it: the first-install-then-second-operation
+sequence, a sibling-residue refusal, and a refusal for `.stateID`/content.
+
+**Why nothing caught it:** every stateful test either starts from a root that
+already has an active state, or performs exactly one operation.
 
 
 Written 2026-07-27, after Phase 1's durability epic closed. This supersedes the
@@ -205,17 +225,11 @@ Steps remaining:
        staging: fixed staging contains crash or foreign evidence and was left
        untouched: "/mnt/root/.cast/root/staging", first entry "usr"
 
-   **This may be a real consequence of D1.5.** That decision relaxed the
-   namespace policy so a `SynthesizedEmpty` previous may remain in staging after
-   a first install, on the grounds that cleanup never unlinks and the slot would
-   be reused later. If the *next* transition instead rejects that leftover as
-   foreign evidence, the slot is not reusable and a first install wedges every
-   subsequent stateful operation in a fresh installation.
-
-   Verify before concluding: reproduce outside the guest (install into a fresh
-   root, then remove) and check whether the same rejection occurs. If it does,
-   D1.5 needs revisiting — either cleanup must remove the synthesized tree after
-   all, or materialization must recognise and reuse it.
+   **Fixed 2026-07-29** — see the section at the top of this file. Not a D1.5
+   consequence: the NewState exchange displaces the live `/usr` into staging and
+   the no-predecessor path has no archive advance to move it out, in both the
+   coordinated and the legacy route. Reproduced as a unit test and reclaimed in
+   `prepare_empty`, so the harness can now drive a second state.
 
    **Do not treat step 3 as proven until that marker fires.** The unit suites
    only show nothing regressed; the whole point of this work was that

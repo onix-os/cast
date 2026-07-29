@@ -583,3 +583,131 @@ fn private_usr_residue(staging: &Path) -> PathBuf {
     assert_eq!(candidates.len(), 1, "expected one private candidate /usr residue");
     candidates.into_iter().next().unwrap()
 }
+
+#[test]
+fn a_first_install_leaves_fixed_staging_ready_for_the_next_operation() {
+    // The no-previous case: a fresh installation with no active state, which is
+    // what a first install actually is. Every other stateful end-to-end test
+    // starts from an existing active state and stops after one operation, so
+    // nothing here ever checked that a second operation can still run.
+    //
+    // It could not. The forward exchange displaces the live `/usr` into fixed
+    // staging, and with no predecessor there is no archive advance to move it
+    // out, so the placeholder stayed and every later stateful operation failed
+    // its `NotEmpty` gate — a first install wedged the installation.
+    let temporary = tempfile::tempdir().unwrap();
+    let mut client = stateful_test_client(temporary.path());
+    let package = package::Id::from("first-install-e2e");
+    client
+        .layout_db
+        .add(
+            &package,
+            &StonePayloadLayoutRecord {
+                uid: 0,
+                gid: 0,
+                mode: nix::libc::S_IFDIR | 0o755,
+                tag: 0,
+                file: StonePayloadLayoutFile::Directory("share/first-install-input".into()),
+            },
+        )
+        .unwrap();
+    let candidate = client.materialize_stateful_candidate([&package]).unwrap();
+
+    let committed = client
+        .apply_new_state_candidate(
+            candidate,
+            None,
+            &[Selection::explicit(package.clone())],
+            "first install",
+            generated_system_snapshot("first-install"),
+        )
+        .expect("a first install commits");
+    // The real second operation runs in a fresh process against the installation
+    // the first one left behind; this client cached `active_state` at build time.
+    client.installation.active_state = Some(committed.id);
+
+    // Exactly the displaced placeholder, and nothing else: a marker-only `usr`
+    // with no `.stateID`, which only cast's own pre-install `/usr` can be.
+    let staging = client.installation.staging_dir();
+    assert_eq!(entry_names(&staging), [OsString::from("usr")]);
+    assert_eq!(entry_names(&staging.join("usr")), [OsString::from(".cast-tree-id")]);
+
+    // The operation that used to fail: any second stateful operation, which is
+    // how this surfaced in the VM (`install` then `remove`).
+    let second = client
+        .materialize_stateful_candidate([&package])
+        .expect("a second stateful operation must not be wedged by the first install");
+
+    assert_eq!(
+        directory_identity(&staging.join("usr")),
+        file_identity(&second.candidate_usr),
+        "staging/usr must now be the new candidate, not the reclaimed placeholder",
+    );
+}
+
+#[test]
+fn residue_beside_a_reclaimable_placeholder_is_never_touched() {
+    // Reclamation admits one exact shape. A sibling entry means the staging
+    // directory holds something unexplained, and crash evidence outranks
+    // convenience: the operation must still refuse, byte for byte.
+    let temporary = tempfile::tempdir().unwrap();
+    let client = stateful_test_client(temporary.path());
+    let staging = client.installation.staging_dir();
+    let placeholder = staging.join("usr");
+    fs::create_dir(&placeholder).unwrap();
+    fs::write(placeholder.join(".cast-tree-id"), b"marker").unwrap();
+    let residue = staging.join("crash-evidence");
+    fs::write(&residue, b"retain me").unwrap();
+
+    let result = client.materialize_stateful_candidate(std::iter::empty::<&package::Id>());
+
+    assert!(matches!(result, Err(Error::StatefulCandidateMaterialization { .. })));
+    assert_eq!(fs::read(&residue).unwrap(), b"retain me");
+    assert_eq!(fs::read(placeholder.join(".cast-tree-id")).unwrap(), b"marker");
+}
+
+#[test]
+fn a_staging_usr_that_is_not_a_directory_is_never_reclaimed() {
+    // Reclamation opens `usr` with O_DIRECTORY|O_NOFOLLOW. A file or symlink
+    // there is residue like any other, and must reach the ordinary refusal
+    // rather than reclamation's own diagnostic.
+    let temporary = tempfile::tempdir().unwrap();
+    let client = stateful_test_client(temporary.path());
+    let staging = client.installation.staging_dir();
+    fs::write(staging.join("usr"), b"not a directory").unwrap();
+
+    let result = client.materialize_stateful_candidate(std::iter::empty::<&package::Id>());
+
+    let Err(Error::StatefulCandidateMaterialization { source }) = result else {
+        panic!("a non-directory usr must be refused");
+    };
+    assert!(
+        source.to_string().contains("crash or foreign evidence"),
+        "expected the ordinary residue refusal, got: {source}",
+    );
+    assert_eq!(fs::read(staging.join("usr")).unwrap(), b"not a directory");
+}
+
+#[test]
+fn a_populated_staging_usr_is_never_reclaimed() {
+    // The discriminator that makes reclamation safe: a real state tree carries
+    // `.stateID`, and a completed candidate carries content. Either one means
+    // this is not the pre-install placeholder, and it must survive untouched.
+    for extra in [".stateID", "lib"] {
+        let temporary = tempfile::tempdir().unwrap();
+        let client = stateful_test_client(temporary.path());
+        let staging = client.installation.staging_dir();
+        let occupied = staging.join("usr");
+        fs::create_dir(&occupied).unwrap();
+        fs::write(occupied.join(".cast-tree-id"), b"marker").unwrap();
+        fs::write(occupied.join(extra), b"do not delete me").unwrap();
+
+        let result = client.materialize_stateful_candidate(std::iter::empty::<&package::Id>());
+
+        assert!(
+            matches!(result, Err(Error::StatefulCandidateMaterialization { .. })),
+            "{extra} must not be reclaimed",
+        );
+        assert_eq!(fs::read(occupied.join(extra)).unwrap(), b"do not delete me");
+    }
+}
