@@ -7,6 +7,20 @@ use crate::state::TransitionId;
 
 use super::codec::{CodecError, MAX_QUARANTINE_NAME_BYTES, PAYLOAD_FORMAT, PAYLOAD_VERSION};
 
+/// The parking name a predecessor archive can return its slot to, and which
+/// family that name belongs to.
+///
+/// `reused_wrapper` discriminates the two deterministic name families and drives
+/// whether adoption rebuilds a `state_slot_marker`: a reused activation wrapper
+/// (`archived_candidate_parking_name`) versus a freshly created slot
+/// (`previous_slot_parking_name`).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PreviousArchiveSlot {
+    pub(crate) parking_name: QuarantineName,
+    pub(crate) reused_wrapper: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub(crate) struct QuarantineName(String);
@@ -406,6 +420,20 @@ pub(crate) struct TransitionRecord {
     pub(crate) rollback: Option<RollbackPlan>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) boot_publication_receipts: Option<BootPublicationReceiptPair>,
+    /// Where a completed predecessor archive can return its slot.
+    ///
+    /// Recorded before the publishing rename consumes the parking name, because
+    /// after it the evidence is gone: a successful archive renames the slot from
+    /// its parking name into the canonical decimal state name, so the namespace
+    /// no longer records which name it came from or which family it belonged to.
+    /// A rollback that must un-archive has to put the slot back somewhere exact,
+    /// and inferring it is not sound — see
+    /// `plans/previous-restore-recovery-identity.md`, decision D-PR1.
+    ///
+    /// Present exactly for records at or past the archive phases when
+    /// `options.archive_previous` holds; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) previous_archive_slot: Option<PreviousArchiveSlot>,
     pub(crate) candidate: Candidate,
     pub(crate) previous: Previous,
     pub(crate) options: TransitionOptions,
@@ -442,6 +470,7 @@ impl TransitionRecord {
             phase: Phase::Preparing,
             rollback: None,
             boot_publication_receipts: None,
+            previous_archive_slot: None,
             candidate: Candidate {
                 id: candidate_id,
                 origin: candidate_origin,

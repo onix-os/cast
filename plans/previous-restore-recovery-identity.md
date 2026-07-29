@@ -217,6 +217,33 @@ The options considered and rejected are kept below for the record.
 
 Option 2 is the only one that makes recovery *exact*; 1 and 3 both infer.
 
+## Implementation status (2026-07-30)
+
+**Step 1 of D-PR1 is done and green:** `TransitionRecord` carries
+`previous_archive_slot: Option<PreviousArchiveSlot>` with `parking_name` +
+`reused_wrapper`, additive-optional exactly like `boot_publication_receipts`, and
+`CodecError::PreviousArchiveSlotPresenceMismatch` exists for its invariant.
+
+**The presence invariant is written but deliberately not enabled.** It belongs in
+`validate_previous_archive_slot`, mirroring `validate_boot_publication_receipts`:
+
+    let required = self.options.archive_previous
+        && layout_phase.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal();
+
+Enabling it before a producer exists fails **28** existing journal tests, because
+every record at or past the archive phases is then invalid. So the invariant and
+its producer must land in the same commit — enable it *with* step 2, not before.
+
+**Step 2 (the producer) is the next piece**, and the seam is already settled
+above: split selection from creation. Selection is read-only
+(`find_reusable_previous_state_slot` authenticates; the fresh loop only probes
+`child_name_exists`), so the coordinator can select `(parking_name,
+reused_wrapper)`, carry it into the `PreviousArchiveIntent` advance, and let
+`create_previous_archive_attempt` consume the recorded name instead of choosing
+one. Then enable the invariant.
+
+Steps A (recovery identity constructor) and B (attempt adoption) follow, unchanged.
+
 ## Sizing
 
 The earlier "~500 lines mirroring the reverse authority" estimate covered only

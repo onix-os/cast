@@ -62,6 +62,7 @@ fn new_state_record(phase: Phase) -> TransitionRecord {
         format: PAYLOAD_FORMAT.to_owned(),
         version: PAYLOAD_VERSION,
         generation: 7,
+        previous_archive_slot: None,
         transition_id: id(),
         creation_epoch: runtime_epoch(),
         operation: Operation::NewState,
