@@ -268,6 +268,12 @@ pub(crate) enum ArchivedCandidateError {
 }
 
 impl StatefulTreeIdentity {
+    // Reachable only from `#[cfg(test)]` callers since activation moved to the
+    // coordinated route, which stages through `stage_archived_candidate_with_journal`.
+    // NOT dead — `cargo build -p forge --tests` fails without it
+    // (`plans/cleanup_legacy.md` §§3-4 decides its fate with the other legacy
+    // entry points).
+    #[allow(dead_code)]
     pub(crate) fn stage_archived_candidate(
         &self,
         installation: &Installation,
