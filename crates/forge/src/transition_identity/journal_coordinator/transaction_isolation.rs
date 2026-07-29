@@ -18,8 +18,10 @@ use super::super::{Error as IdentityError, RetainedDirectory, StatefulTreeIdenti
 use super::{
     PreparedTransactionIsolationCoordinator, PreparedTransactionTriggerCoordinator, StatefulTransitionCoordinator,
     StatefulTransitionCoordinatorError, TransactionTriggerOperationReadiness, TransactionTriggerReadiness,
+    candidate_preparation::{PreparedArchivedIsolationCoordinator, PreparedArchivedTransitionCoordinator},
 };
 
+const PREPARE_ARCHIVED_ISOLATION: &str = "prepare archived isolation";
 const PREPARE_TRANSACTION_ISOLATION: &str = "publish retained transaction isolation ABI";
 const ISOLATION_RELATIVE: &std::ffi::CStr = c".cast/root/isolation";
 const ISOLATION_ABI_NAMES: [&[u8]; 5] = [b"sbin", b"bin", b"lib", b"lib64", b"lib32"];
@@ -155,6 +157,98 @@ impl PreparedTransactionIsolationCoordinator {
     }
 }
 
+impl PreparedArchivedTransitionCoordinator {
+    /// Acquire the isolation root archived activation's system triggers run
+    /// against.
+    ///
+    /// Archived activation never runs transaction triggers, so it never reached
+    /// `prepare_for_transaction_triggers` — and the system-trigger step used to
+    /// reject it outright for having no isolation view, which made the whole
+    /// coordinated route unrunnable (`plans/close_out.md`).
+    ///
+    /// It acquires its own rather than accepting one from the client. The
+    /// retained-capability guarantee that `cleanup_legacy.md` §2 relies on —
+    /// isolation is published from a capability the coordinator holds, not a
+    /// pathname a caller supplies — then holds for all three operations instead
+    /// of two.
+    ///
+    /// The preflight omits only the transaction-trigger operation's own staging
+    /// reservation, which archived activation has no equivalent of; the metadata
+    /// sandwich and pre-exchange installation checks are the same.
+    pub(super) fn prepare_archived_isolation(
+        self,
+        installation: &Installation,
+    ) -> Result<PreparedArchivedIsolationCoordinator, TransactionIsolationAbiFailure> {
+        let Self {
+            coordinator,
+            metadata,
+            provenance,
+        } = self;
+        let transition_id = coordinator.record.transition_id.clone();
+        let preflight = |source| TransactionIsolationAbiFailure::Preflight {
+            transition_id: transition_id.clone(),
+            source,
+        };
+        coordinator
+            .require_operation(Operation::ActivateArchived, PREPARE_ARCHIVED_ISOLATION)
+            .map_err(preflight)?;
+        coordinator
+            .require_phase(Phase::CandidatePrepared, PREPARE_ARCHIVED_ISOLATION)
+            .map_err(preflight)?;
+        let candidate = coordinator.candidate_state().map_err(preflight)?;
+
+        let archived_preflight = || -> Result<(), StatefulTransitionCoordinatorError> {
+            coordinator.require_prepared_metadata_sandwich(candidate, &metadata, &provenance)?;
+            require_pre_exchange_installation(&coordinator.identity, installation)?;
+            coordinator.require_prepared_metadata_sandwich(candidate, &metadata, &provenance)?;
+            require_pre_exchange_installation(&coordinator.identity, installation)
+        };
+
+        archived_preflight().map_err(preflight)?;
+        let directory = RetainedDirectory::open_beneath(
+            installation.root_directory(),
+            ISOLATION_RELATIVE,
+            installation.isolation_dir(),
+        )
+        .map_err(StatefulTransitionCoordinatorError::Identity)
+        .map_err(preflight)?;
+        require_no_unexpected_isolation_entries(&directory).map_err(preflight)?;
+
+        // Opening and ABI preflight may take time. Rebind every semantic and
+        // namespace witness immediately before the monotonic publication.
+        archived_preflight().map_err(preflight)?;
+        directory
+            .revalidate_beneath(installation.root_directory(), ISOLATION_RELATIVE)
+            .map_err(StatefulTransitionCoordinatorError::Identity)
+            .map_err(preflight)?;
+        require_no_unexpected_isolation_entries(&directory).map_err(preflight)?;
+
+        let root_abi =
+            create_root_links_retained(&installation.isolation_dir(), &directory.file).map_err(|source| {
+                TransactionIsolationAbiFailure::Publication {
+                    transition_id: transition_id.clone(),
+                    source,
+                }
+            })?;
+        let isolation = RetainedTransactionIsolationAbi {
+            installation: installation.clone(),
+            directory,
+            root_abi,
+        };
+
+        archived_preflight().map_err(preflight)?;
+        isolation
+            .require_staged(&coordinator.identity)
+            .map_err(|source| TransactionIsolationAbiFailure::FinalEvidence { transition_id, source })?;
+        Ok(PreparedArchivedIsolationCoordinator {
+            coordinator,
+            metadata,
+            provenance,
+            isolation,
+        })
+    }
+}
+
 fn require_isolation_preflight(
     coordinator: &StatefulTransitionCoordinator,
     candidate: crate::state::Id,
@@ -231,11 +325,17 @@ fn require_pre_exchange_installation(
 }
 
 impl RetainedTransactionIsolationAbi {
-    fn require_staged(&self, identity: &StatefulTreeIdentity) -> Result<(), StatefulTransitionCoordinatorError> {
+    pub(super) fn require_staged(
+        &self,
+        identity: &StatefulTreeIdentity,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
         self.require(identity, false)
     }
 
-    fn require_live(&self, identity: &StatefulTreeIdentity) -> Result<(), StatefulTransitionCoordinatorError> {
+    pub(super) fn require_live(
+        &self,
+        identity: &StatefulTreeIdentity,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
         self.require(identity, true)
     }
 

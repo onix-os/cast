@@ -19,8 +19,8 @@ use crate::{db, state::TransitionId, transition_journal::Phase};
 
 use super::super::CandidateMetadataProof;
 use super::{
-    PreparedArchivedTransitionCoordinator, StatefulTransitionCoordinator, StatefulTransitionCoordinatorError,
-    TransactionTriggerReadiness, TransactionTriggersCompleteCoordinator,
+    StatefulTransitionCoordinator, StatefulTransitionCoordinatorError, TransactionTriggerReadiness,
+    TransactionTriggersCompleteCoordinator, candidate_preparation::PreparedArchivedIsolationCoordinator,
 };
 
 const BEGIN_USR_EXCHANGE_INTENT: &str = "begin /usr exchange intent";
@@ -42,7 +42,12 @@ pub(crate) struct UsrExchangeIntentCoordinator {
 #[derive(Debug)]
 pub(super) enum UsrExchangeReadiness {
     TransactionTriggers(TransactionTriggerReadiness),
-    Archived,
+    /// Archived activation runs no transaction triggers, but still runs system
+    /// triggers, which need an isolation root. It acquires its own rather than
+    /// accepting one from the client, so the retained-capability guarantee is
+    /// structural for all three operations rather than two
+    /// (`plans/close_out.md`, decided 2026-07-29).
+    Archived(super::transaction_isolation::RetainedTransactionIsolationAbi),
 }
 
 /// Fail-stop result of publishing the `/usr` exchange intent.
@@ -91,21 +96,22 @@ impl TransactionTriggersCompleteCoordinator {
     }
 }
 
-impl PreparedArchivedTransitionCoordinator {
+impl PreparedArchivedIsolationCoordinator {
     /// Persist `/usr` exchange intent directly from archived
     /// `CandidatePrepared`; archived activation never runs transaction
-    /// triggers.
+    /// triggers, but carries the isolation ABI its system triggers need.
     pub(super) fn begin_usr_exchange_intent(self) -> Result<UsrExchangeIntentCoordinator, UsrExchangeIntentFailure> {
         let Self {
             coordinator,
             metadata,
             provenance,
+            isolation,
         } = self;
         begin_usr_exchange_intent(
             coordinator,
             metadata,
             provenance,
-            UsrExchangeReadiness::Archived,
+            UsrExchangeReadiness::Archived(isolation),
             Phase::CandidatePrepared,
         )
     }
@@ -186,7 +192,10 @@ impl UsrExchangeReadiness {
     ) -> Result<(), StatefulTransitionCoordinatorError> {
         match self {
             Self::TransactionTriggers(readiness) => readiness.require_staged(identity),
-            Self::Archived => Ok(()),
+            // Was `Ok(())` when this variant carried nothing. Now that archived
+            // activation retains its own isolation ABI, it is revalidated on the
+            // same schedule as every other operation's.
+            Self::Archived(isolation) => isolation.require_staged(identity),
         }
     }
 
@@ -196,7 +205,7 @@ impl UsrExchangeReadiness {
     ) -> Result<(), StatefulTransitionCoordinatorError> {
         match self {
             Self::TransactionTriggers(readiness) => readiness.require_live(identity),
-            Self::Archived => Ok(()),
+            Self::Archived(isolation) => isolation.require_live(identity),
         }
     }
 }

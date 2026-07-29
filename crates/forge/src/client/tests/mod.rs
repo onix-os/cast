@@ -156,6 +156,53 @@ fn inspect_test_executable(
     )
 }
 
+/// Add an archived state carrying the metadata provenance a real transition
+/// would have written for it.
+///
+/// `state_db.add` writes no provenance row, which is fine for the legacy
+/// activation path — it treats absent metadata as legitimate for an archived
+/// candidate. The coordinated route is strictly stronger: it *verifies* the
+/// candidate's stored provenance against freshly derived outputs
+/// (`candidate_preparation.rs`), so a state that never had provenance cannot be
+/// activated through it. Fixtures that stand in for "a state some earlier
+/// transition created" must therefore seed it, exactly as that transition would.
+fn add_state_with_metadata(client: &Client, summary: &str, snapshot: &SystemModel) -> State {
+    // A distinct transition per state: `insert_fresh_metadata_provenance_if_transition_matches`
+    // only writes while the row still carries the transition that created it.
+    let transition = state::TransitionId::generate().unwrap();
+    let provenance = db::state::MetadataProvenance::from_outputs(
+        candidate_metadata::GENERIC_OS_RELEASE.as_bytes(),
+        snapshot.encoded().as_bytes(),
+    );
+    let state = client
+        .state_db
+        .add_with_transition(&transition, &[], Some(summary), None)
+        .unwrap();
+    client
+        .state_db
+        .insert_fresh_metadata_provenance_if_transition_matches(state.id, &transition, &provenance)
+        .unwrap();
+    client
+        .state_db
+        .clear_transition_if_matches(state.id, &transition)
+        .unwrap();
+    state
+}
+
+/// Write the on-disk metadata outputs a real transition publishes into a tree.
+///
+/// The companion to `add_state_with_metadata`: that seeds the *database*
+/// provenance, this writes the *tree* outputs it is checked against. The
+/// coordinated activation route reads both and requires them to agree, so a
+/// fixture standing in for an already-created state needs both halves.
+fn record_candidate_metadata(root: &Path, snapshot: SystemModel) {
+    let release = root.join("usr/lib/os-release");
+    fs::create_dir_all(release.parent().expect("os-release has a parent")).unwrap();
+    fs::write(&release, candidate_metadata::GENERIC_OS_RELEASE).unwrap();
+    fs::set_permissions(&release, Permissions::from_mode(0o644)).unwrap();
+    record_system_snapshot(root, snapshot).unwrap();
+}
+
 fn stateful_test_client(root: &Path) -> Client {
     let installation = test_installation(root);
     Client::builder("state-snapshot-test", installation)

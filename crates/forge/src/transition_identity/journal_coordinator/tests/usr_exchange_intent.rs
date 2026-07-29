@@ -1,6 +1,6 @@
 enum TestUsrExchangeReady {
     TransactionTriggers(TransactionTriggersCompleteCoordinator),
-    Archived(PreparedArchivedTransitionCoordinator),
+    Archived(PreparedArchivedIsolationCoordinator),
 }
 
 impl TestUsrExchangeReady {
@@ -28,6 +28,9 @@ fn coordinator_ready_for_usr_exchange(
         let PreparedStatefulTransitionCoordinator::Archived(prepared) = prepared else {
             panic!("archived activation acquired transaction-trigger authority")
         };
+        // Archived activation acquires its own isolation ABI here, exactly where
+        // the other operations acquire theirs; its system triggers need one.
+        let prepared = prepared.prepare_archived_isolation(&fixture.installation).unwrap();
         return (fixture, TestUsrExchangeReady::Archived(prepared));
     }
 

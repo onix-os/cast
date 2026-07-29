@@ -42,7 +42,8 @@ pub(crate) use active_reblit_forward::{
 use active_reblit_reservation::ActiveReblitReservationFailure;
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{
-    PreparedActiveReblitReservationCoordinator, PreparedArchivedTransitionCoordinator,
+    PreparedActiveReblitReservationCoordinator, PreparedArchivedIsolationCoordinator,
+    PreparedArchivedTransitionCoordinator,
     PreparedStatefulTransitionCoordinator, PreparedTransactionIsolationCoordinator,
     PreparedTransactionTriggerCoordinator, TransactionTriggersCompleteCoordinator,
 };

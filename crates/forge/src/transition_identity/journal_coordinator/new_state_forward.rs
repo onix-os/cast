@@ -296,6 +296,9 @@ where
     // Archived activation never runs transaction triggers: the candidate tree
     // already exists and was built by the transition that first created it, so
     // there is no isolation root to publish and nothing to run against it.
+    let prepared = prepared
+        .prepare_archived_isolation(installation)
+        .map_err(|source| NewStateForwardError::at("archived isolation publication", source))?;
     let intent = prepared
         .begin_usr_exchange_intent()
         .map_err(|source| NewStateForwardError::at("/usr exchange intent", source))?;

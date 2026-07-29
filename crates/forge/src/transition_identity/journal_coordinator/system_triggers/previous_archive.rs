@@ -448,8 +448,16 @@ const COMMIT_NEW_STATE_WITHOUT_BOOT: &str = "commit new state without boot";
 /// A NewState transition that archived its predecessor and carries no bootable
 /// payload, so it commits directly from `PreviousArchived`.
 fn exact_new_state_no_boot_source(record: &TransitionRecord) -> bool {
-    record.operation == crate::transition_journal::Operation::NewState
-        && record.phase == Phase::PreviousArchived
+    // Both operations that make a *candidate* live reach `PreviousArchived` and
+    // may commit from there without boot; ActiveReblit does not — it has its own
+    // no-boot tail, because its candidate and previous are the same state.
+    // Widened deliberately and by naming the operations, not by dropping the
+    // check: an over-broad admission here is exactly the failure mode the
+    // rollback predicates already produced twice (`plans/close_out.md`).
+    matches!(
+        record.operation,
+        crate::transition_journal::Operation::NewState | crate::transition_journal::Operation::ActivateArchived
+    ) && record.phase == Phase::PreviousArchived
         && record.rollback.is_none()
         && record.options.archive_previous
         && !record.options.run_boot_sync
