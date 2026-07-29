@@ -205,6 +205,17 @@ Steps remaining:
    3. Then confirm at guest level — the phase-targeted cut at
       `ActivateArchived.CandidatePrepared` must actually fire.
 
+   **OPEN LOOSE END IN THE SWAP ITSELF (found 2026-07-29).**
+   `state_planning.rs` discards four inputs:
+
+       let _ = (skip_triggers, live_root_abi, isolation_root, &mut checkpoint);
+
+   `checkpoint` and `isolation_root` are correct to drop — the coordinated route
+   uses journal phases, and it now acquires its own isolation. **`skip_triggers`
+   is not.** It is a user-facing flag and the swap silently ignores it, so
+   `cast state activate` now always runs triggers. `live_root_abi` needs the same
+   judgement. Neither can be left as a `let _` when the branch lands.
+
    **STILL UNVERIFIED AT THE GUEST LEVEL, AND THIS MATTERS.** A phase-targeted
    cut at `ActivateArchived.CandidatePrepared` *still* reports `CELL-OP-DONE`
    without the marker firing. Either the guest's `cast state activate 1` is not
