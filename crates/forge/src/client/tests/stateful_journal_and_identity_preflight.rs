@@ -188,24 +188,27 @@ fn candidate_pre_journal_legacy_hardlinked_archived_payload_fails_before_marker_
         .client
         .activate_state(fixture.candidate.id, true, true)
         .unwrap_err();
-    let Error::StatefulTreeIdentityPreparationFailed {
-        candidate,
-        previous: Some(previous),
-        location,
-        source,
-    } = error
-    else {
-        panic!("expected archived candidate identity preparation failure");
+    // The coordinated route reports preparation failures through its own
+    // wrapper; the property under test is unchanged — the hardlinked payload is
+    // refused at identity preparation, before any marker or exchange.
+    let Error::CoordinatedNewState(boxed) = error else {
+        panic!("expected coordinated archived activation failure: {error:?}");
     };
-    assert_eq!(candidate, fixture.candidate.id);
-    assert_eq!(previous, fixture.previous.id);
-    assert_eq!(location, archived_usr);
-    let Error::StatefulTreeIdentity { source } = *source else {
-        panic!("expected tree identity source");
+    let failure = boxed
+        .downcast_ref::<crate::client::new_state_boot_transition::LiveNewStateBootError>()
+        .unwrap_or_else(|| panic!("expected live new-state boot error, got {boxed:#?}"));
+    assert_eq!(
+        failure.stage(),
+        "archived candidate identity",
+        "hardlink refusal must happen at identity preparation, not later",
+    );
+    let authority_source = failure
+        .source_ref()
+        .downcast_ref::<crate::client::JournalUsrExchangeAuthorityError>()
+        .unwrap_or_else(|| panic!("expected exchange-authority source, got {failure:#?}"));
+    let crate::client::JournalUsrExchangeAuthorityError::Identity(identity_source) = authority_source else {
+        panic!("expected identity source, got {authority_source:#?}");
     };
-    let identity_source = source
-        .downcast_ref::<crate::transition_identity::Error>()
-        .unwrap_or_else(|| panic!("expected transition identity source, got {source:#?}"));
     let crate::transition_identity::Error::CandidateInventory(inventory_source) = identity_source else {
         panic!("expected candidate inventory source, got {identity_source:#?}");
     };

@@ -91,6 +91,19 @@ pub(crate) struct PreparedArchivedTransitionCoordinator {
     pub(super) provenance: db::state::MetadataProvenance,
 }
 
+/// Archived activation once it retains its own isolation ABI.
+///
+/// The archived counterpart of `PreparedTransactionTriggerCoordinator`: same
+/// position in the prefix, minus the transaction-trigger runner archived
+/// activation has no use for.
+#[derive(Debug)]
+pub(crate) struct PreparedArchivedIsolationCoordinator {
+    pub(super) coordinator: StatefulTransitionCoordinator,
+    pub(super) metadata: CandidateMetadataProof,
+    pub(super) provenance: db::state::MetadataProvenance,
+    pub(super) isolation: super::transaction_isolation::RetainedTransactionIsolationAbi,
+}
+
 /// Proof-bearing authority after transaction triggers are durably complete.
 #[derive(Debug)]
 pub(crate) struct TransactionTriggersCompleteCoordinator {
@@ -384,6 +397,17 @@ impl PreparedArchivedTransitionCoordinator {
         // Keeping the proof borrowed here ensures the archived typestate
         // cannot accidentally become a proof-free coordinator accessor.
         let _metadata = &self.metadata;
+        &self.coordinator.record
+    }
+}
+
+impl PreparedArchivedIsolationCoordinator {
+    #[cfg(test)]
+    pub(crate) fn record(&self) -> &TransitionRecord {
+        // Same discipline as the typestate above: the proof and the retained
+        // isolation stay borrowed so this cannot become a proof-free accessor.
+        let _metadata = &self.metadata;
+        let _isolation = &self.isolation;
         &self.coordinator.record
     }
 }

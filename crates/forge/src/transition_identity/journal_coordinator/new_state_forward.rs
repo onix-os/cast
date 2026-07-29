@@ -22,7 +22,8 @@ use crate::{
 use super::super::{CandidateMetadataError, CandidateMetadataOutputs, StatefulTreeIdentity};
 use super::{
     NewStatePrevious, PreparedStatefulTransitionCoordinator, StatefulTransitionRequest,
-    SystemTriggersCompleteCoordinator, system_triggers::StatefulSystemTriggerAuthority,
+    PreviousArchivedCoordinator, SystemTriggersCompleteCoordinator,
+    system_triggers::StatefulSystemTriggerAuthority,
     transaction_triggers::StatefulTransactionTriggerAuthority,
 };
 
@@ -241,10 +242,11 @@ pub(crate) fn execute_activate_archived_forward<SystemError, DeriveMetadata, Sys
     installation: &Installation,
     candidate: state::Id,
     previous: state::Id,
+    run_system_triggers: bool,
     run_boot_sync: bool,
     derive_metadata: DeriveMetadata,
     system_trigger: SystemTrigger,
-) -> Result<SystemTriggersCompleteCoordinator, NewStateForwardError>
+) -> Result<PreviousArchivedCoordinator, NewStateForwardError>
 where
     SystemError: StdError + Send + Sync + 'static,
     DeriveMetadata: FnOnce(Option<&[u8]>) -> Result<CandidateMetadataOutputs, CandidateMetadataError>,
@@ -260,7 +262,7 @@ where
         .begin_transition(StatefulTransitionRequest::ActivateArchived {
             candidate,
             previous,
-            run_system_triggers: true,
+            run_system_triggers,
             run_boot_sync,
         })
         .map_err(|source| NewStateForwardError::at("transition creation", source))?;
@@ -271,7 +273,7 @@ where
     // performed this move outside the journal entirely
     // (`state_planning.rs`, before `commit_stateful_staging`), which is exactly
     // the untracked window §1.2 exists to close.
-    let coordinator = coordinator
+    let mut coordinator = coordinator
         .begin_archived_staging()
         .map_err(|source| NewStateForwardError::at("archived staging intent", source))?;
     coordinator
@@ -296,6 +298,9 @@ where
     // Archived activation never runs transaction triggers: the candidate tree
     // already exists and was built by the transition that first created it, so
     // there is no isolation root to publish and nothing to run against it.
+    let prepared = prepared
+        .prepare_archived_isolation(installation)
+        .map_err(|source| NewStateForwardError::at("archived isolation publication", source))?;
     let intent = prepared
         .begin_usr_exchange_intent()
         .map_err(|source| NewStateForwardError::at("/usr exchange intent", source))?;
@@ -305,7 +310,19 @@ where
     let root_links = exchanged
         .publish_root_abi()
         .map_err(|source| NewStateForwardError::at("root ABI publication", source))?;
-    root_links
+    // `--skip-triggers` is honoured here rather than dropped at the call site.
+    // Both arms end at the same durable `PreviousArchived`; they differ only in
+    // whether the two system-trigger phases and their effect happen at all, and
+    // the record records which.
+    if !run_system_triggers {
+        return root_links
+            .skip_system_triggers()
+            .map_err(|source| NewStateForwardError::at("predecessor archive without system triggers", source));
+    }
+    let complete = root_links
         .run_system_triggers(|inner| system_trigger(NewStateSystemTriggerView::from_authority(inner)))
-        .map_err(|source| NewStateForwardError::at("system triggers", source))
+        .map_err(|source| NewStateForwardError::at("system triggers", source))?;
+    complete
+        .archive_previous_tree()
+        .map_err(|source| NewStateForwardError::at("predecessor archive", source))
 }

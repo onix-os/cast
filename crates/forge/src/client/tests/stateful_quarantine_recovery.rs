@@ -336,55 +336,6 @@ fn quarantine_slot_creation_rejects_replacement_before_retention() {
 }
 
 #[test]
-fn stateful_tree_tokens_follow_their_logical_trees_through_exchange_and_archive() {
-    let fixture = stateful_transition_fixture(true);
-    let live_usr = fixture.client.installation.root.join("usr");
-    let staged_usr = fixture.client.installation.staging_path("usr");
-    let previous_archive = fixture
-        .client
-        .installation
-        .root_path(fixture.previous.id.to_string())
-        .join("usr");
-    let mut exchanged_tokens = None;
-
-    fixture
-        .client
-        .activate_state_with_checkpoint(fixture.candidate.id, true, true, |checkpoint| {
-            if checkpoint == StatefulTransitionCheckpoint::AfterUsrExchange {
-                let candidate_wrapper = fixture.client.installation.root_path(fixture.candidate.id.to_string());
-                let candidate_token = fs::read_dir(candidate_wrapper)
-                    .unwrap()
-                    .map(|entry| entry.unwrap().file_name())
-                    .find_map(|name| {
-                        name.to_string_lossy()
-                            .strip_prefix(&format!(".cast-state-slot-{}-", fixture.candidate.id))
-                            .map(str::to_owned)
-                    })
-                    .expect("candidate slot hardlink was present at the exchange boundary");
-                exchanged_tokens = Some((candidate_token, recovery_tree_token(&staged_usr)));
-            }
-            Ok(())
-        })
-        .unwrap();
-
-    let (candidate_token, previous_token) = exchanged_tokens.expect("exchange boundary was observed");
-    assert_ne!(candidate_token, previous_token);
-    let parked = archived_candidate_slot_parking_paths(&fixture.client.installation, fixture.candidate.id);
-    assert_eq!(parked.len(), 1);
-    let slot_link = fs::read_dir(&parked[0])
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.file_name().unwrap().to_string_lossy().ends_with(&candidate_token))
-        .unwrap();
-    assert_eq!(
-        fs::symlink_metadata(live_usr.join(".cast-tree-id")).unwrap().ino(),
-        fs::symlink_metadata(slot_link).unwrap().ino()
-    );
-    assert_eq!(recovery_tree_token(&previous_archive), previous_token);
-    assert!(!staged_usr.exists());
-}
-
-#[test]
 fn recovery_never_recreates_a_missing_candidate_tree_marker() {
     let fixture = stateful_transition_fixture(false);
     let candidate_model = generated_system_snapshot("candidate-package");

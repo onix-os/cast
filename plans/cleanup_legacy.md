@@ -48,6 +48,40 @@ files**. Not all are debt. Breakdown by nature:
    wiring is merged but not yet proven at guest level (`close_out.md`), so
    confirm before assuming §§3-4 are unblocked.
 
+## §§2-4 UNBLOCKED 2026-07-29 — the legacy route has no production callers
+
+Measured on `feature/wire_state_activate`, once `cast state activate` moved to
+the coordinated route:
+
+- `Client::apply_stateful_blit` (the `pub` entry) has **zero callers anywhere**
+  in the workspace.
+- `apply_stateful_blit_with_checkpoint` is called **only from `#[cfg(test)]`**
+  (`root_abi_preflight.rs`, `active_reblit_tests.rs`, and the recovery suites).
+- The one remaining production call to `commit_stateful_staging`
+  (`stateful_transition.rs:210`) is reached only through those test entries, and
+  passes only `Fresh` or `ActiveReblit` — **no production code passes
+  `StatefulCandidateOrigin::Archived` any more.**
+
+So the whole legacy stateful transition route is now dead production code, and
+§§3-4 follow mechanically from removing it. That is the state finding 2 above
+warned to confirm rather than assume; it is now confirmed by measurement.
+
+**Scope of the removal, and why it is not a one-liner.** Deleting the route also
+deletes the only caller of a large test surface that still asserts live
+properties — ActiveReblit reblit behaviour and root-ABI preflight among them —
+reached through the legacy entry. Each of those needs the same treatment the
+archived-activation tests just got: confirm the coordinated counterpart proves
+the property, then port or delete. The archived-activation half of that work is
+done (13 tests retired, 1 re-pointed); the ActiveReblit and root-ABI halves are
+not.
+
+Order: remove the `Archived` arm of `commit_stateful_staging` and
+`stateful_recovery.rs` first (nothing reaches it), then the ActiveReblit/Fresh
+arms with their test triage, then the guards and `legacy_boot_repair` collapse
+on their own.
+
+---
+
 ## 3. Legacy journal guards · E:S R:med · **follows category 2**
 
 **State:** `ArchiveJournalGuard::LegacyNoJournal`

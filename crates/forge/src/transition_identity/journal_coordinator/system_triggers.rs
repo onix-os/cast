@@ -230,10 +230,6 @@ impl RootLinksCompleteCoordinator {
             record_binding,
         } = self;
         let transition_id = coordinator.record.transition_id.clone();
-        if matches!(readiness, UsrExchangeReadiness::Archived) {
-            return Err(StatefulSystemTriggerFailure::ArchivedIsolationUnsupported { transition_id });
-        }
-
         let preflight = |source| StatefulSystemTriggerFailure::Preflight {
             transition_id: transition_id.clone(),
             source,
@@ -362,15 +358,16 @@ where
             transition_id: transition_id.clone(),
             source,
         })?;
-    let expected_generation = match (record.operation, expected_phase) {
-        (Operation::NewState, Phase::SystemTriggersStarted) => 11,
-        (Operation::NewState, Phase::SystemTriggersComplete) => 12,
-        (Operation::ActiveReblit, Phase::SystemTriggersStarted) => 9,
-        (Operation::ActiveReblit, Phase::SystemTriggersComplete) => 10,
-        (Operation::ActivateArchived, Phase::SystemTriggersStarted) => 7,
-        (Operation::ActivateArchived, Phase::SystemTriggersComplete) => 8,
-        _ => record.generation.saturating_add(1),
-    };
+    // Derived from the record's own chain rather than tabulated per operation.
+    // The table that used to live here duplicated `expected_forward_generation`
+    // and went stale the moment the archived-staging pair was inserted: its
+    // ActivateArchived rows still described the pre-pair chain, and nothing
+    // noticed because the route they govern had no callers
+    // (`plans/close_out.md`, standing hazards).
+    let expected_generation = expected_phase
+        .forward()
+        .and_then(|target| crate::transition_journal::expected_forward_generation(record, target))
+        .unwrap_or_else(|| record.generation.saturating_add(1));
     if successor.phase != expected_phase || successor.generation != expected_generation {
         return Err(StatefulSystemTriggerFailure::SuccessorContract {
             transition_id: transition_id.clone(),
@@ -693,9 +690,7 @@ fn require_same_store_record_binding(
 fn system_trigger_isolation_view(readiness: &UsrExchangeReadiness) -> (&Installation, &crate::client::RetainedRootAbi) {
     match readiness {
         UsrExchangeReadiness::TransactionTriggers(readiness) => readiness.isolation_view(),
-        UsrExchangeReadiness::Archived => {
-            unreachable!("archived isolation is rejected before system-trigger journal intent")
-        }
+        UsrExchangeReadiness::Archived(isolation) => isolation.view(),
     }
 }
 

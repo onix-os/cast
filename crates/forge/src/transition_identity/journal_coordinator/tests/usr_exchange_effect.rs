@@ -71,7 +71,7 @@ fn coordinator_from_exchange_fixture_with_options(
     let prepared = finish_candidate_prepare(coordinator).unwrap();
     let ready = match prepared {
         PreparedStatefulTransitionCoordinator::Archived(ready) => {
-            TestUsrExchangeReady::Archived(ready)
+            TestUsrExchangeReady::Archived(ready.prepare_archived_isolation(&fixture.installation).unwrap())
         }
         PreparedStatefulTransitionCoordinator::NewStateIsolation(ready) => {
             let ready = ready

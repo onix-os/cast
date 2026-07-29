@@ -42,7 +42,8 @@ pub(crate) use active_reblit_forward::{
 use active_reblit_reservation::ActiveReblitReservationFailure;
 #[allow(unused_imports)] // contract-only typestates until live lifecycle wiring
 pub(crate) use candidate_preparation::{
-    PreparedActiveReblitReservationCoordinator, PreparedArchivedTransitionCoordinator,
+    PreparedActiveReblitReservationCoordinator, PreparedArchivedIsolationCoordinator,
+    PreparedArchivedTransitionCoordinator,
     PreparedStatefulTransitionCoordinator, PreparedTransactionIsolationCoordinator,
     PreparedTransactionTriggerCoordinator, TransactionTriggersCompleteCoordinator,
 };
@@ -101,6 +102,22 @@ pub(super) struct UsrExchangeEffectSeal {
 /// strict clean-baseline and journal-absence guards.
 #[derive(Debug)]
 pub(super) struct ActiveReblitReservationSeal {
+    _private: (),
+}
+
+/// Unforgeable proof that a journal-coordinated caller owns the exact durable
+/// `ArchivedCandidateStagingIntent` record and may move the archived candidate
+/// into staging while its transition journal is retained.
+///
+/// The staging move is the one physical effect of `ActivateArchived`'s durable
+/// pair, so it needs what `PreviousArchiveEffectSeal` gives the predecessor
+/// archive. Without it the coordinated route cannot run at all: the legacy entry
+/// point requires journal *absence*, and a coordinated caller can never satisfy
+/// that — it is holding the very record that makes the move intended and
+/// recoverable. That mismatch shipped, and only wiring the call site exposed it
+/// (`plans/close_out.md`).
+#[derive(Debug)]
+pub(super) struct ArchivedCandidateStagingEffectSeal {
     _private: (),
 }
 
@@ -458,14 +475,19 @@ impl StatefulTransitionCoordinator {
     /// advance leaves a record recovery can act on, instead of an orphaned tree
     /// in staging with nothing pointing at it (`plans/future_impl.md` §1.2).
     pub(crate) fn stage_archived_candidate(
-        &self,
+        &mut self,
         installation: &crate::Installation,
         candidate: state::Id,
     ) -> Result<(), StatefulTransitionCoordinatorError> {
         self.require_operation(Operation::ActivateArchived, "stage archived candidate")?;
         self.require_phase(Phase::ArchivedCandidateStagingIntent, "stage archived candidate")?;
+        // Sealed, not legacy: the phase check immediately above *is* the proof
+        // the seal stands for. The legacy entry point requires journal absence,
+        // which a coordinated caller can never satisfy — it is holding the very
+        // record that makes this move intended and recoverable.
+        let seal = ArchivedCandidateStagingEffectSeal { _private: () };
         self.identity
-            .stage_archived_candidate(installation, candidate)
+            .stage_archived_candidate_with_journal(installation, candidate, &seal)
             .map_err(|source| StatefulTransitionCoordinatorError::ArchivedCandidateStaging(Box::new(source)))
     }
 

@@ -287,6 +287,7 @@ fn journal_coordinator_provenance_is_revalidated_before_trigger_and_exchange_int
         _ => panic!("archived activation received transaction-trigger authority"),
     };
     let record = prepared.record().clone();
+    let prepared = prepared.prepare_archived_isolation(&fixture.installation).unwrap();
     fixture
         .database
         .delete_metadata_provenance_for_test(fixture.candidate_state)
