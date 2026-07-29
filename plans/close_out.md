@@ -85,8 +85,41 @@ Steps remaining:
    the wrapper `try_clone()`s that descriptor — a dup of the same inode, no path
    lookup — so the handle outlives the borrow without reopening a pathname.
 
-   **Now blocked on a different, semantic question: does the coordinated
-   ActivateArchived route need to derive candidate metadata at all?**
+   **Metadata question ANSWERED 2026-07-29 by reading
+   `candidate_preparation.rs:130-145`, and the answer is neither "legacy is
+   right" nor "coordinator is right".**
+
+   For `ActivateArchived` the coordinator does not *decorate* — it **verifies**:
+
+       let provenance = state_database.required_metadata_provenance(candidate)?;
+       let outputs = derive_metadata(os_info.as_deref())?;
+       provenance.require_outputs(candidate, outputs.os_release(), outputs.system_model())?;
+
+   The closure reconstructs what the metadata *should* be so it can be checked
+   against the stored provenance; the branch is commented "substitute read-only
+   verification for a candidate that still requires publication". Nothing is
+   rewritten. So the legacy route's `metadata.is_none()` allowance and the
+   coordinator's demand are not in conflict — the coordinator is doing something
+   strictly stronger.
+
+   **Consequence for the wrapper:** it must pass a closure that reproduces *the
+   archived state's own* metadata, so the equality check succeeds. A snapshot
+   generated from the current installation model would describe different
+   packages and fail `require_outputs`. So the parameter is not dropped — it must
+   become the candidate's stored system model.
+
+   `generate_system_snapshot(current, repositories, packages)` builds from the
+   packages being installed, which is why a fresh one is wrong here: it describes
+   the wrong state.
+
+   Remaining work for step 3 is therefore: source the candidate's recorded
+   system model (the archived state's own selections), build the closure from it,
+   drop the `system_snapshot: SystemModel` parameter in favour of that, then swap
+   the call site.
+
+   (Superseded framing, retained because it was wrong in an instructive way: I
+   had posed this as "does activation re-derive metadata?", which assumed the
+   closure mutates. It does not.)
 
    `execute_activate_archived_forward` requires a `derive_metadata` closure. The
    legacy route does not: `commit_stateful_staging` guards with
