@@ -1,4 +1,15 @@
 use super::*;
+use crate::transition_journal::PreviousArchiveSlot;
+
+/// Re-validate a namespace name through the journal model's newtype.
+///
+/// The producing helpers already build these via `QuarantineName::parse`, so
+/// this cannot widen what is accepted; it re-establishes the bound at the
+/// journal boundary rather than trusting the caller.
+fn quarantine_name_of(name: &std::ffi::CStr) -> Result<crate::transition_journal::QuarantineName, Error> {
+    crate::transition_journal::QuarantineName::parse(name.to_string_lossy().as_ref())
+        .map_err(Error::InvalidReusableArchivedCandidateParkingName)
+}
 
 /// Proof that a physical previous-tree restore is being driven by the startup
 /// crash-recovery path, which legitimately runs with the transition journal
@@ -387,6 +398,51 @@ impl StatefulTreeIdentity {
                 },
             }),
         }
+    }
+
+    /// Choose the parking name a completed archive can be reversed to, without
+    /// mutating anything.
+    ///
+    /// The archive itself consumes this evidence: publishing renames the slot
+    /// from its parking name into the canonical decimal state name, after which
+    /// the namespace no longer records where it came from. So the name has to be
+    /// durable in the journal *before* the archive runs, which means choosing it
+    /// has to be separable from creating the slot — that is all this does
+    /// (`plans/previous-restore-recovery-identity.md`, D-PR1).
+    ///
+    /// Read-only by construction: the reuse scan only authenticates an existing
+    /// marker-only wrapper, and the fresh branch only probes for a free name.
+    pub(super) fn select_previous_archive_slot(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+    ) -> Result<PreviousArchiveSlot, Error> {
+        let roots_path = installation.root_path("");
+        let roots = RetainedDirectory::open_beneath(installation.root_directory(), ROOTS_RELATIVE, roots_path.clone())?;
+        let staging = roots.open_child(c"staging", installation.staging_dir())?;
+
+        if let Some(reusable) = self.find_reusable_previous_state_slot(installation, &roots, &staging, state)? {
+            return Ok(PreviousArchiveSlot {
+                parking_name: quarantine_name_of(&reusable.parking_name)?,
+                reused_wrapper: true,
+            });
+        }
+
+        for index in 0..MAX_PREVIOUS_SLOT_PARKING_CANDIDATES {
+            let parking_name = previous_slot_parking_name(state, self.previous.marker.token().as_str(), index)?;
+            let parking_path = roots_path.join(parking_name.to_string_lossy().as_ref());
+            if roots.child_name_exists(&parking_name, parking_path)? {
+                continue;
+            }
+            return Ok(PreviousArchiveSlot {
+                parking_name: quarantine_name_of(&parking_name)?,
+                reused_wrapper: false,
+            });
+        }
+        Err(Error::PreviousArchiveParkingExhausted {
+            state: i32::from(state),
+            limit: MAX_PREVIOUS_SLOT_PARKING_CANDIDATES,
+        })
     }
 
     fn create_previous_archive_attempt(

@@ -203,6 +203,14 @@ fn rollback_decided(current: &TransitionRecord) -> TransitionRecord {
     next
 }
 
+fn previous_archive_slot() -> PreviousArchiveSlot {
+    PreviousArchiveSlot {
+        parking_name: QuarantineName::parse(".previous-slot-1-".to_owned() + &"a".repeat(32) + "-0")
+            .expect("test parking name is a valid quarantine name"),
+        reused_wrapper: false,
+    }
+}
+
 fn advance_record(current: &TransitionRecord, phase: Phase) -> TransitionRecord {
     if phase == Phase::RollbackDecided {
         return rollback_decided(current);
@@ -213,6 +221,12 @@ fn advance_record(current: &TransitionRecord, phase: Phase) -> TransitionRecord 
     next.phase = phase;
     if phase == Phase::BootSyncStarted && next.boot_publication_receipts.is_none() {
         next.boot_publication_receipts = Some(boot_publication_receipts());
+    }
+    // The parking name a real archive records before it consumes the evidence.
+    // Attached on the same schedule as the receipt pair above, so these model
+    // fixtures stay legal records rather than un-reversible ones.
+    if phase == Phase::PreviousArchiveIntent && next.previous_archive_slot.is_none() {
+        next.previous_archive_slot = Some(previous_archive_slot());
     }
     if (current.phase, phase) == (Phase::FreshStateAllocating, Phase::FreshStateAllocated) {
         next.candidate.id = Some(42);

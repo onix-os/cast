@@ -150,10 +150,17 @@ impl super::RootLinksCompleteCoordinator {
         )
         .map_err(preflight)?;
 
+        let previous_id = coordinator.record.previous.id.map(state::Id::from).ok_or_else(|| {
+            PreviousArchiveFailure::SourceContract {
+                transition_id: transition_id.clone(),
+            }
+        })?;
+        let slot = select_archive_slot(&coordinator, authority.installation(), previous_id, &transition_id)?;
+
         // Intent is durable before the physical move, exactly as in the
         // triggered tail.
-        let intent =
-            archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent").map_err(|stage| {
+        let intent = archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent", Some(slot))
+            .map_err(|stage| {
                 PreviousArchiveFailure::SuccessorContract {
                     transition_id: transition_id.clone(),
                     stage,
@@ -220,10 +227,19 @@ impl SystemTriggersCompleteCoordinator {
         )
         .map_err(preflight)?;
 
+        // Selected before the intent advance, so the parking name is durable
+        // before the archive consumes it.
+        let previous_id = coordinator.record.previous.id.map(state::Id::from).ok_or_else(|| {
+            PreviousArchiveFailure::SourceContract {
+                transition_id: transition_id.clone(),
+            }
+        })?;
+        let slot = select_archive_slot(&coordinator, authority.installation(), previous_id, &transition_id)?;
+
         // Intent is durable before the physical move: a crash after this record
         // leaves startup reconciliation to complete or reverse the archive.
-        let intent =
-            archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent").map_err(|stage| {
+        let intent = archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent", Some(slot))
+            .map_err(|stage| {
                 PreviousArchiveFailure::SuccessorContract {
                     transition_id: transition_id.clone(),
                     stage,
@@ -290,7 +306,7 @@ fn finish_previous_archive(
 
         // Completion is durable only after the move succeeded.
         let archived =
-            archive_successor(&coordinator.record, Phase::PreviousArchived, "archived").map_err(|stage| {
+            archive_successor(&coordinator.record, Phase::PreviousArchived, "archived", None).map_err(|stage| {
                 PreviousArchiveFailure::SuccessorContract {
                     transition_id: transition_id.clone(),
                     stage,
@@ -452,12 +468,38 @@ fn archive_successor(
     record: &TransitionRecord,
     expected_phase: Phase,
     stage: &'static str,
+    slot: Option<crate::transition_journal::PreviousArchiveSlot>,
 ) -> Result<TransitionRecord, &'static str> {
-    let successor = record.forward_successor(None).map_err(|_| stage)?;
+    let mut successor = record.forward_successor(None).map_err(|_| stage)?;
     if successor.phase != expected_phase {
         return Err(stage);
     }
+    // Carried into the intent record and then forward: the parking name must be
+    // durable before the publishing rename consumes it, and must persist for as
+    // long as the archive is reversible.
+    if let Some(slot) = slot {
+        successor.previous_archive_slot = Some(slot);
+    }
     Ok(successor)
+}
+
+/// Choose the parking name this archive can be reversed to.
+///
+/// Runs before the intent advance, so the evidence is durable before any
+/// namespace change (`plans/previous-restore-recovery-identity.md`, D-PR1).
+fn select_archive_slot(
+    coordinator: &StatefulTransitionCoordinator,
+    installation: &crate::Installation,
+    previous_id: state::Id,
+    transition_id: &TransitionId,
+) -> Result<crate::transition_journal::PreviousArchiveSlot, PreviousArchiveFailure> {
+    coordinator
+        .identity
+        .select_previous_archive_slot(installation, previous_id)
+        .map_err(|source| PreviousArchiveFailure::PhysicalArchive {
+            transition_id: transition_id.clone(),
+            source: Box::new(source),
+        })
 }
 
 /// Durably advance the record binding without re-running the tree/root-ABI
