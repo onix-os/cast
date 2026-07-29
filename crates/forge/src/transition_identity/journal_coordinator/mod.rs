@@ -439,6 +439,18 @@ impl StatefulTransitionCoordinator {
         Ok(self)
     }
 
+    /// The retained candidate `/usr` descriptor.
+    ///
+    /// Exposed so a boot tail can be handed the *retained* handle rather than
+    /// reopening the staging pathname. NewState never needs this — its handle
+    /// comes from materialisation — but ActivateArchived's candidate already
+    /// existed, so without an accessor the only alternative is re-resolving a
+    /// final pathname, which `previous_tree_move.rs` documents as unsafe: a
+    /// same-UID writer can replace that name after it is checked.
+    pub(crate) fn retained_candidate_usr(&self) -> (&std::fs::File, &std::path::Path) {
+        self.identity.retained_candidate_usr()
+    }
+
     /// Move the archived candidate into staging.
     ///
     /// Called between `begin_archived_staging` and `complete_archived_staging`

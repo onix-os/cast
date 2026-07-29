@@ -80,8 +80,34 @@ Steps remaining:
    pre-journal `stage_archived_candidate` call above it (the move now belongs to
    the coordinator).
 
-   **Blocked on one design question: where the boot tail's candidate `&File`
-   comes from.** `complete_new_state_boot` needs an owned `&std::fs::File` for
+   **Descriptor question RESOLVED 2026-07-29.** `StatefulTransitionCoordinator`
+   and `PreviousArchivedCoordinator` now expose `retained_candidate_usr()`, and
+   the wrapper `try_clone()`s that descriptor — a dup of the same inode, no path
+   lookup — so the handle outlives the borrow without reopening a pathname.
+
+   **Now blocked on a different, semantic question: does the coordinated
+   ActivateArchived route need to derive candidate metadata at all?**
+
+   `execute_activate_archived_forward` requires a `derive_metadata` closure. The
+   legacy route does not: `commit_stateful_staging` guards with
+   `if candidate_origin != StatefulCandidateOrigin::Archived && metadata.is_none()`,
+   i.e. absent metadata is *legitimate* for an archived candidate — its metadata
+   was decorated when the state was created and has not changed.
+
+   So either the coordinator's signature over-demands for this operation and the
+   closure should be optional (or a no-op that revalidates the existing
+   provenance), or the coordinated route genuinely should re-derive and the
+   legacy path was skipping something. That is a correctness question about what
+   metadata means for a re-activated state, not a plumbing detail, and it should
+   be answered before the call site is swapped.
+
+   Also note: `activate_state_with_checkpoint` has no `system_snapshot` in scope
+   at all — `new_state` generates one, activation never did. Whatever the answer,
+   the wrapper's `system_snapshot: SystemModel` parameter is probably wrong for
+   this operation.
+
+   (Superseded blocker, retained for context: where the boot tail's candidate
+   `&File` comes from.) `complete_new_state_boot` needs an owned `&std::fs::File` for
    the staged candidate `/usr`. NewState has one because materialization produced
    it (`StatefulCandidate::candidate_usr`). ActivateArchived has no equivalent —
    its candidate already existed, and the legacy route never needed a handle

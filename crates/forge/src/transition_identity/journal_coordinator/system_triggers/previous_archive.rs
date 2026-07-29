@@ -206,6 +206,12 @@ impl SystemTriggersCompleteCoordinator {
 }
 
 impl PreviousArchivedCoordinator {
+    /// The retained candidate `/usr` descriptor, for a boot tail that must not
+    /// reopen the staging pathname (see the coordinator's accessor).
+    pub(crate) fn retained_candidate_usr(&self) -> (&std::fs::File, &std::path::Path) {
+        self.coordinator.retained_candidate_usr()
+    }
+
     /// Hand the retained stores into boot publication for the freshly booted
     /// NewState candidate. The predecessor has already been durably archived,
     /// so `boot::synchronize` can enumerate it as an immediate rollback entry.

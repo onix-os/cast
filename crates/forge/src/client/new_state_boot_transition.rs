@@ -228,7 +228,6 @@ impl Client {
         candidate: &State,
         previous: &State,
         archived_usr: &std::path::Path,
-        candidate_usr: &std::fs::File,
         active_state: super::active_state_authority::ActiveStateAuthority,
         local_etc: &super::transaction_root::RetainedLocalEtc,
         tree: &vfs::Tree<super::PendingFile>,
@@ -285,7 +284,18 @@ impl Client {
         }
 
         let stone = self.require_new_state_boot_inputs(candidate)?;
-        self.complete_new_state_boot(NewStateBootSource::Archived(archived), candidate_usr, candidate, stone)?;
+        // The retained descriptor, not a reopened pathname: the candidate moved
+        // into staging under the coordinator, and re-resolving that name would
+        // reintroduce the substitution window the retained-descriptor discipline
+        // exists to close (`previous_tree_move.rs`).
+        //
+        // `try_clone` duplicates the descriptor — same inode, no path lookup —
+        // so the handle outlives the borrow without weakening that property.
+        let (retained_candidate_usr, _) = archived.retained_candidate_usr();
+        let candidate_usr = retained_candidate_usr
+            .try_clone()
+            .map_err(|source| LiveNewStateBootError::at("retain staged candidate descriptor", source))?;
+        self.complete_new_state_boot(NewStateBootSource::Archived(archived), &candidate_usr, candidate, stone)?;
         Ok(())
     }
 
