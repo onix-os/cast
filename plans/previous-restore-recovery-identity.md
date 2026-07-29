@@ -164,6 +164,40 @@ only rule needed is the unconditional invariant:
 
 Doing `cleanup_legacy.md` §1 first makes this a pure addition.
 
+### Where the write goes — resolved 2026-07-29 by reading the archive path
+
+D-PR1 fixes *what* is recorded; this fixes *where*, which the note left open and
+which is the whole ordering constraint.
+
+The parking name is consumed by `finish_previous_archive_slot_creation`
+(`previous_tree_move.rs:457`), which renames `parking_name -> <decimal state
+name>`. That call sits in `move_previous`'s preflight — i.e. **inside the effect**,
+after `PreviousArchiveIntent` is already durable. So the record cannot simply be
+written "just before the rename": mid-effect record writes are what the effect
+seal exists to forbid.
+
+The seam that does work is to **split selection from creation**:
+
+1. *Selection* is read-only. `find_reusable_previous_state_slot` authenticates an
+   existing marker-only wrapper, and the fresh-slot loop only probes
+   `child_name_exists` to find a free index. Neither has to mutate to decide
+   `(parking_name, reused_wrapper)`.
+2. The coordinator selects, then advances to `PreviousArchiveIntent` **carrying**
+   `previous_archive_slot`. The evidence is durable before any namespace change.
+3. `create_previous_archive_attempt` then uses the recorded name instead of
+   choosing one.
+
+This satisfies the ordering constraint exactly, and moves no mutation ahead of
+the intent record.
+
+**One behaviour change, and it is an improvement.** Today the fresh-slot loop
+treats a name collision as "try the next index". With the name recorded, a
+collision must be a hard error rather than a silent renumber — the record would
+otherwise describe a slot that is not the one in use. Since a transition holds
+the journal, no other transition can be competing; the only racer is a hostile
+same-UID writer, which this codebase already treats as adversarial. Failing
+deterministically is the correct response to that, not renumbering.
+
 The options considered and rejected are kept below for the record.
 
 ### Options considered
