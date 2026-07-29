@@ -903,6 +903,17 @@ impl RetainedIdentity {
         })
     }
 
+    /// Follow this retained tree to the pathname it was just moved to.
+    ///
+    /// See `TreeMarkerStore::rebind_moved_pathname`: the retained descriptor and
+    /// marker are untouched, and the new name is proven to resolve to the tree
+    /// already held before it is adopted.
+    fn rebind_moved_pathname(&mut self, path: PathBuf) -> Result<(), Error> {
+        self.revalidate_retained()?;
+        self.store.rebind_moved_pathname(path)?;
+        self.revalidate_retained().map_err(Error::from)
+    }
+
     /// This method is intentionally incapable of reaching marker creation.
     fn verify_named_read_only(&self, path: &Path) -> Result<(), Error> {
         self.revalidate_retained()?;

@@ -284,8 +284,15 @@ impl StatefulTreeIdentity {
     /// Coordinator-only staging move. The seal proves the caller owns the exact
     /// durable `ArchivedCandidateStagingIntent`; the journal stays retained
     /// across the move rather than blocking it.
+    ///
+    /// Takes `&mut self` because the move renames the tree this identity is
+    /// holding. The retained descriptor follows the inode, but the candidate's
+    /// *pathname* does not, and every later named check resolves that pathname.
+    /// Leaving it at the archived slot is what made the coordinated route fail
+    /// its own metadata publication with `pin named /usr directory ... NotFound`
+    /// (`plans/close_out.md`).
     pub(super) fn stage_archived_candidate_with_journal(
-        &self,
+        &mut self,
         installation: &Installation,
         candidate: state::Id,
         seal: &journal_coordinator::ArchivedCandidateStagingEffectSeal,
@@ -295,7 +302,16 @@ impl StatefulTreeIdentity {
             candidate,
             MoveDirection::Stage,
             ArchivedCandidateJournalGuard::Coordinator(seal),
-        )
+        )?;
+        // Only after the move is known applied: the candidate now answers to
+        // the staging name, and proving that is what adopting it requires.
+        let staged = installation.staging_path("usr");
+        self.candidate.rebind_moved_pathname(staged).map_err(|source| {
+            RetainedArchivedCandidateMoveFailure {
+                outcome: RetainedArchivedCandidateMoveOutcome::Applied,
+                source: identity("rebind candidate pathname after archived staging move", source),
+            }
+        })
     }
 
     pub(crate) fn rearchive_archived_candidate(

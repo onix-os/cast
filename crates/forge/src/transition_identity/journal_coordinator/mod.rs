@@ -474,7 +474,7 @@ impl StatefulTransitionCoordinator {
     /// advance leaves a record recovery can act on, instead of an orphaned tree
     /// in staging with nothing pointing at it (`plans/future_impl.md` §1.2).
     pub(crate) fn stage_archived_candidate(
-        &self,
+        &mut self,
         installation: &crate::Installation,
         candidate: state::Id,
     ) -> Result<(), StatefulTransitionCoordinatorError> {

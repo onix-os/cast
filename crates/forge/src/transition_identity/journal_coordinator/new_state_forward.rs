@@ -271,7 +271,7 @@ where
     // performed this move outside the journal entirely
     // (`state_planning.rs`, before `commit_stateful_staging`), which is exactly
     // the untracked window §1.2 exists to close.
-    let coordinator = coordinator
+    let mut coordinator = coordinator
         .begin_archived_staging()
         .map_err(|source| NewStateForwardError::at("archived staging intent", source))?;
     coordinator

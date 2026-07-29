@@ -139,6 +139,26 @@ impl TreeMarkerStore {
         &self.path
     }
 
+    /// Follow this retained tree to a pathname it was just moved to.
+    ///
+    /// A transition can rename the tree it is holding — `ActivateArchived` moves
+    /// the candidate from its state slot into staging before publishing
+    /// metadata. The retained descriptor follows the inode across that rename,
+    /// but `path` does not, and every later `verify_named_read_only` check
+    /// resolves `path`. Left stale it names a directory that no longer exists.
+    ///
+    /// This does **not** re-retain: `usr` and `witness` are untouched, so the
+    /// descriptor remains the authority. The new pathname is proven to resolve
+    /// to that same descriptor first, so adopting it can only ever narrow to the
+    /// tree already held — never swap in a different one.
+    pub(crate) fn rebind_moved_pathname(&mut self, path: PathBuf) -> Result<(), TreeMarkerError> {
+        let named = Self::open_path(path.clone())?;
+        self.require_same_directory(&named)?;
+        self.validate_usr()?;
+        self.path = path;
+        Ok(())
+    }
+
     pub(crate) fn revalidate_directory(&self) -> Result<(), TreeMarkerError> {
         self.validate_usr()
     }
