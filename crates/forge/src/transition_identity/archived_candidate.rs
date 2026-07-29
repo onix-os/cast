@@ -261,6 +261,11 @@ impl StatefulTreeIdentity {
         self.move_archived_candidate(installation, candidate, MoveDirection::Rearchive)
     }
 
+    // Reachable only from `#[cfg(test)]` callers since activation moved to the
+    // coordinated route, which journals the staging move rather than resuming an
+    // already-applied one. NOT dead — confirm with `cargo build -p forge
+    // --tests` before deleting (`plans/cleanup_legacy.md`).
+    #[allow(dead_code)]
     pub(crate) fn finish_applied_archived_candidate_stage(
         &self,
         installation: &Installation,

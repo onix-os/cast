@@ -1,5 +1,40 @@
 # Close-out plan — what remains after Phase 1
 
+## ⚠ SHIPPED REGRESSION — fix before anything else (found 2026-07-29)
+
+**A first install wedges the next stateful operation.** Reproduced on `develop`,
+on a normal root (not just the crash-matrix guest):
+
+    cast -D <root> repo add local file://.../stone.index
+    cast -D <root> install bash-completion     # succeeds
+    cast -D <root> remove bash-completion      # FAILS
+
+    Error: remove: materialize a stateful candidate through retained fixed
+    staging: fixed staging contains crash or foreign evidence and was left
+    untouched: "<root>/.cast/root/staging", first entry "usr"
+
+**Diagnosis.** D1.5 relaxed the namespace policy so a `SynthesizedEmpty`
+previous may remain in staging after a first install, on the reasoning that
+cleanup never unlinks and the slot would be reused later. The slot is not
+reused: materialization rejects it.
+
+The leftover `staging/usr` contains exactly one entry — `.cast-tree-id`, the
+tree marker. So it *is* the synthesized-empty tree D1.5 intended to leave;
+materialization's emptiness check simply does not account for the marker and
+classifies its own artefact as foreign evidence.
+
+**Likely fix:** extend what fixed-staging materialization treats as reusable to
+include a `usr` holding only `.cast-tree-id`. A normalization path already
+exists — see `exact_empty_legacy_staging_is_normalized_without_replacing_its_inode`
+— so this is probably widening that predicate rather than new machinery. Confirm
+the marker is the *only* permitted entry; anything else must stay foreign.
+
+**Why no test caught it:** every stateful test either starts from a root that
+already has an active state, or performs one operation. The failing sequence is
+first-install-then-anything, which nothing exercised. Add that as a test with
+the fix.
+
+
 Written 2026-07-27, after Phase 1's durability epic closed. This supersedes the
 ordering in `future_impl.md` for everything still open; the detail for each item
 still lives in that file (and in `cleanup_legacy.md`), which this one points at
@@ -15,10 +50,210 @@ reboot: a nested guest whose unsynced writes are genuinely lost
 interrupted install recovering to `state=installed`
 (`crash-matrix-run.sh`).
 
-All three operations publish a durable journal that startup reconciliation
-resumes: NewState including first install (§1.1), ActivateArchived through the
-archived-staging pair (§1.2/§1.2b), archived repair via its interruption marker
-(§1.3).
+**CORRECTION 2026-07-29 — ActivateArchived is NOT on the coordinated route.**
+This section previously claimed all three operations publish a durable journal.
+Two do:
+
+- **NewState** (§1.1) — `state_planning.rs` routes both arms through
+  `apply_new_state_candidate`. Verified in production and by the crash matrix.
+- **Archived repair** (§1.3) — the interruption marker is armed in
+  `repair_archived_state_with_checkpoint` and read by `startup_gate`.
+
+**ActivateArchived is not.** `cast state activate` reaches
+`activate_state_with_checkpoint`, which calls `commit_stateful_staging`
+(`state_planning.rs:115`) — the legacy path, whose exchange goes through
+`exchange_forward_validated` and `ExchangeJournalGuard::LegacyNoJournal`, an
+assertion that *no journal is present*. The coordinated route built in
+§1.2/§1.2b, `execute_activate_archived_forward`, has **zero callers** — not
+production, not tests.
+
+So the archived-staging phase, its durable pair, and the pre-exchange rollback
+scoping for ActivateArchived are all unreachable today. The code is correct and
+tested at the unit level; nothing calls it.
+
+How this was found: the crash matrix's phase-targeted cut at
+`ActivateArchived.CandidatePrepared` never fired. A journal transition that
+never happens cannot be cut — the harness proved the absence, which reading the
+code had not.
+
+**This also corrects the §§3-4 conclusion in `cleanup_legacy.md`.** That note
+said `LegacyNoJournal` was pinned by `#[cfg(test)]`-live code. It is worse than
+that: it is pinned by *live production code*, because activation still uses it.
+
+**Wiring activation to the coordinated route — the remaining work, mapped.**
+
+Step 1 is **done** (2026-07-29): the archived-to-staging move now happens
+*inside* the durable pair. `StatefulTransitionCoordinator::stage_archived_candidate`
+runs between `begin_archived_staging` and `complete_archived_staging`, so a crash
+mid-move leaves a record at `ArchivedCandidateStagingIntent` that recovery can
+act on, rather than an orphaned tree in staging. The legacy route performed this
+move outside the journal entirely (`state_planning.rs`, before
+`commit_stateful_staging`) — precisely the untracked window §1.2 exists to close.
+Verified: `journal_coordinator` 117/117, `transition_journal` 136/136,
+`activate_archived` 67/67.
+
+Steps remaining:
+
+2. **A client wrapper** — **done** (2026-07-29).
+   `apply_activate_archived_candidate` sits beside `apply_new_state_candidate`
+   in `new_state_boot_transition.rs` (it needs that module's private
+   `LiveNewStateBootError::at` and boot tail, so a separate module does not
+   work). It prepares the identity against the *archived* tree via
+   `prepare_candidate` — the candidate has not moved to staging yet — then drives
+   the coordinator, archives the predecessor, and takes either the no-boot commit
+   or the boot tail.
+
+   One thing worth knowing before touching it: ActivateArchived takes a
+   **system**-trigger closure only, not a transaction one. Its candidate was
+   built when the state was created, so transaction triggers have nothing to do.
+   Passing the transaction closure compiles as far as the trigger view and then
+   fails on `retained_candidate_usr` — the error does not name the real mistake.
+
+   Verified: `journal_coordinator` 117/117, `activate_archived` 67/67,
+   `install` 97/97, both builds at zero warnings.
+3. **Replace the call site** at `state_planning.rs:115`, deleting the
+   pre-journal `stage_archived_candidate` call above it (the move now belongs to
+   the coordinator).
+
+   **Descriptor question RESOLVED 2026-07-29.** `StatefulTransitionCoordinator`
+   and `PreviousArchivedCoordinator` now expose `retained_candidate_usr()`, and
+   the wrapper `try_clone()`s that descriptor — a dup of the same inode, no path
+   lookup — so the handle outlives the borrow without reopening a pathname.
+
+   **Metadata question ANSWERED 2026-07-29 by reading
+   `candidate_preparation.rs:130-145`, and the answer is neither "legacy is
+   right" nor "coordinator is right".**
+
+   For `ActivateArchived` the coordinator does not *decorate* — it **verifies**:
+
+       let provenance = state_database.required_metadata_provenance(candidate)?;
+       let outputs = derive_metadata(os_info.as_deref())?;
+       provenance.require_outputs(candidate, outputs.os_release(), outputs.system_model())?;
+
+   The closure reconstructs what the metadata *should* be so it can be checked
+   against the stored provenance; the branch is commented "substitute read-only
+   verification for a candidate that still requires publication". Nothing is
+   rewritten. So the legacy route's `metadata.is_none()` allowance and the
+   coordinator's demand are not in conflict — the coordinator is doing something
+   strictly stronger.
+
+   **Consequence for the wrapper:** it must pass a closure that reproduces *the
+   archived state's own* metadata, so the equality check succeeds. A snapshot
+   generated from the current installation model would describe different
+   packages and fail `require_outputs`. So the parameter is not dropped — it must
+   become the candidate's stored system model.
+
+   `generate_system_snapshot(current, repositories, packages)` builds from the
+   packages being installed, which is why a fresh one is wrong here: it describes
+   the wrong state.
+
+   **Step 3 LANDED 2026-07-29.** The snapshot is sourced the same way
+   `verify.rs:313` does it — `load_or_create_system_snapshot` against the
+   candidate's own state directory, so the derived outputs match the stored
+   provenance. `activate_state_with_checkpoint` now calls
+   `apply_activate_archived_candidate`, replacing the entire legacy prologue
+   (identity preparation, `stage_archived_candidate` with its "already applied"
+   resume branch, `verify_pre_exchange`) and the `commit_stateful_staging` call.
+
+   Verified: `activate_archived` 67/67, `journal_coordinator` 117/117,
+   production and test builds at zero warnings.
+
+   `finish_applied_archived_candidate_stage` became test-only as a result and is
+   annotated accordingly — the coordinated route journals the staging move rather
+   than resuming an already-applied one.
+
+   **STILL UNVERIFIED AT THE GUEST LEVEL, AND THIS MATTERS.** A phase-targeted
+   cut at `ActivateArchived.CandidatePrepared` *still* reports `CELL-OP-DONE`
+   without the marker firing. Either the guest's `cast state activate 1` is not
+   running (its output is captured in the write-phase log, which the runner does
+   not print for a passing cell), or it runs and the transition still does not
+   reach that phase.
+
+   **Diagnosed 2026-07-29 — the harness was never driving an activation.**
+   Tracing the write phase showed `cast state activate 1` failing with
+   `state 1 already active`: the first install *creates* state 1, so activating
+   it is a no-op error. The cell was green because nothing happened, which is
+   the same false-green the `state=absent` column produced earlier.
+
+   Attempting to create a second state (remove the package, archiving state 1)
+   then surfaced a second, more interesting failure:
+
+       Error: remove: materialize a stateful candidate through retained fixed
+       staging: fixed staging contains crash or foreign evidence and was left
+       untouched: "/mnt/root/.cast/root/staging", first entry "usr"
+
+   **This may be a real consequence of D1.5.** That decision relaxed the
+   namespace policy so a `SynthesizedEmpty` previous may remain in staging after
+   a first install, on the grounds that cleanup never unlinks and the slot would
+   be reused later. If the *next* transition instead rejects that leftover as
+   foreign evidence, the slot is not reusable and a first install wedges every
+   subsequent stateful operation in a fresh installation.
+
+   Verify before concluding: reproduce outside the guest (install into a fresh
+   root, then remove) and check whether the same rejection occurs. If it does,
+   D1.5 needs revisiting — either cleanup must remove the synthesized tree after
+   all, or materialization must recognise and reuse it.
+
+   **Do not treat step 3 as proven until that marker fires.** The unit suites
+   only show nothing regressed; the whole point of this work was that
+   ActivateArchived's durability was theoretical, and a green unit suite is
+   exactly what it looked like before. Next step: surface the write-phase log for
+   passing cells, confirm the activate command succeeds in the guest, and only
+   then read the cell verdicts.
+
+   (Superseded framing, retained because it was wrong in an instructive way: I
+   had posed this as "does activation re-derive metadata?", which assumed the
+   closure mutates. It does not.)
+
+   `execute_activate_archived_forward` requires a `derive_metadata` closure. The
+   legacy route does not: `commit_stateful_staging` guards with
+   `if candidate_origin != StatefulCandidateOrigin::Archived && metadata.is_none()`,
+   i.e. absent metadata is *legitimate* for an archived candidate — its metadata
+   was decorated when the state was created and has not changed.
+
+   So either the coordinator's signature over-demands for this operation and the
+   closure should be optional (or a no-op that revalidates the existing
+   provenance), or the coordinated route genuinely should re-derive and the
+   legacy path was skipping something. That is a correctness question about what
+   metadata means for a re-activated state, not a plumbing detail, and it should
+   be answered before the call site is swapped.
+
+   Also note: `activate_state_with_checkpoint` has no `system_snapshot` in scope
+   at all — `new_state` generates one, activation never did. Whatever the answer,
+   the wrapper's `system_snapshot: SystemModel` parameter is probably wrong for
+   this operation.
+
+   (Superseded blocker, retained for context: where the boot tail's candidate
+   `&File` comes from.) `complete_new_state_boot` needs an owned `&std::fs::File` for
+   the staged candidate `/usr`. NewState has one because materialization produced
+   it (`StatefulCandidate::candidate_usr`). ActivateArchived has no equivalent —
+   its candidate already existed, and the legacy route never needed a handle
+   because it passed `&tree_identity` instead.
+
+   Two options, and the choice is a descriptor-provenance decision this codebase
+   is deliberate about, so it should not be guessed:
+
+   - **Open the staged `/usr` by path after the coordinator's staging move.**
+     Simple, but re-resolves a pathname the retained-descriptor discipline exists
+     to avoid — a same-UID writer can replace a final pathname after it is
+     checked (`previous_tree_move.rs:658` documents the reasoning).
+   - **Have the identity or coordinator hand out an owned retained handle.** The
+     handle already exists — `NewStateSystemTriggerView::retained_candidate_usr`
+     returns `&File` — but only borrowed for the closure's lifetime, so this
+     needs a deliberate API addition rather than a cast.
+
+   The second is almost certainly right, but it widens a retained-capability API
+   and deserves its own review.
+
+   Everything else for step 3 is mechanical: the coordinated route replaces the
+   whole `prepare_stateful_tree_identity` / `stage_archived_candidate` /
+   `verify_pre_exchange` prologue, including its "already applied" resume branch,
+   because the coordinator now owns that move.
+4. **Then §§3-4 unblock**: activation is the last production user of
+   `ExchangeJournalGuard::LegacyNoJournal`.
+
+Until step 3 lands, Phase 1's exit criterion is met for two operations, not
+three, and the crash matrix cannot exercise ActivateArchived at all.
 
 Supporting state: forge suite 2759/0, production build at zero warnings, one
 source of truth for phase ordinals, `develop` holds everything, branches cleaned.

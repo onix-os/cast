@@ -49,7 +49,8 @@ pub(crate) use candidate_preparation::{
 use candidate_preparation::{TransactionTriggerOperationReadiness, TransactionTriggerReadiness};
 pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use new_state_forward::{
-    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView, execute_new_state_forward,
+    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView, execute_activate_archived_forward,
+    execute_new_state_forward,
 };
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[allow(unused_imports)] // contract-only until the next durable forward phase is implemented
@@ -436,6 +437,36 @@ impl StatefulTransitionCoordinator {
         self.advance(Some(i32::from(state)))?;
         self.identity.candidate_state_id = RetainedCandidateStateId::KnownIdAbsent(state);
         Ok(self)
+    }
+
+    /// The retained candidate `/usr` descriptor.
+    ///
+    /// Exposed so a boot tail can be handed the *retained* handle rather than
+    /// reopening the staging pathname. NewState never needs this — its handle
+    /// comes from materialisation — but ActivateArchived's candidate already
+    /// existed, so without an accessor the only alternative is re-resolving a
+    /// final pathname, which `previous_tree_move.rs` documents as unsafe: a
+    /// same-UID writer can replace that name after it is checked.
+    pub(crate) fn retained_candidate_usr(&self) -> (&std::fs::File, &std::path::Path) {
+        self.identity.retained_candidate_usr()
+    }
+
+    /// Move the archived candidate into staging.
+    ///
+    /// Called between `begin_archived_staging` and `complete_archived_staging`
+    /// so the move is bracketed by durable phases: a crash before the second
+    /// advance leaves a record recovery can act on, instead of an orphaned tree
+    /// in staging with nothing pointing at it (`plans/future_impl.md` §1.2).
+    pub(crate) fn stage_archived_candidate(
+        &self,
+        installation: &crate::Installation,
+        candidate: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        self.require_operation(Operation::ActivateArchived, "stage archived candidate")?;
+        self.require_phase(Phase::ArchivedCandidateStagingIntent, "stage archived candidate")?;
+        self.identity
+            .stage_archived_candidate(installation, candidate)
+            .map_err(|source| StatefulTransitionCoordinatorError::ArchivedCandidateStaging(Box::new(source)))
     }
 
     /// Persist the intent to move an archived candidate into staging.
