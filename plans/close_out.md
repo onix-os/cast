@@ -239,6 +239,41 @@ Steps remaining:
    exercise trigger phases, and writing them against the current call site would
    bake the dropped flag into the new coverage.
 
+   **PROGRESS 2026-07-29 (branch `feature/wire_state_activate`, 10 commits).**
+   Wiring the call site turned up six production defects, none of which any unit
+   test could have found, because the route had no callers:
+
+   1. `move_archived_candidate` asserted journal *absence* — six sites across
+      three files. Sealed via `ArchivedCandidateJournalGuard`.
+   2. The candidate's retained pathname was not followed across the staging
+      move. `TreeMarkerStore::rebind_moved_pathname` (descriptor untouched).
+   3. Archived activation had no isolation root, so its system triggers were
+      rejected outright. It now acquires its own.
+   4. A hard-coded generation table whose `ActivateArchived` rows predated the
+      archived-staging pair, duplicating `expected_forward_generation`.
+   5. `exact_new_state_no_boot_source` was NewState-only.
+   6. The displaced archived wrapper was never retired, so a *second*
+      activation failed with `PreviousArchiveSlotExists`.
+
+   Plus `--skip-triggers`, which the swap discarded: `skip_system_triggers` is
+   now a real second entry into the archive tail.
+
+   `client::tests` is at **14 failing, from 17**. All 14 are the legacy
+   checkpoint contract: they drive `activate_state_with_checkpoint` with a
+   `StatefulTransitionCheckpoint` closure, which the coordinated route never
+   invokes — 7 now fail as `unwrap_err() on an Ok value`, i.e. the operation
+   simply succeeds.
+
+   **They cannot be re-pointed, and they should not be deleted casually.** Each
+   asserts an in-process recovery property of the legacy route. The coordinated
+   counterparts are the journal rollback authorities
+   (`startup_gate::usr_rollback_activate_archived`,
+   `usr_rollback_candidate_preserve_authority::archived_effect`,
+   `usr_rollback_reverse_authority` — dozens of tests). The remaining work is to
+   walk the 14 one at a time, confirm the counterpart proves the same property,
+   and delete or re-express accordingly. That judgement is the last thing
+   standing between this branch and merge.
+
    **STILL UNVERIFIED AT THE GUEST LEVEL, AND THIS MATTERS.** A phase-targeted
    cut at `ActivateArchived.CandidatePrepared` *still* reports `CELL-OP-DONE`
    without the marker firing. Either the guest's `cast state activate 1` is not
