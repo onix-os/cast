@@ -49,6 +49,8 @@ pub(crate) enum CodecError {
     UnsupportedPayloadVersion(u16),
     #[error("boot-publication receipt correlation presence is invalid at phase {phase:?}; required={required}")]
     BootPublicationReceiptPresenceMismatch { phase: Phase, required: bool },
+    #[error("previous-archive slot presence is invalid at phase {phase:?}; required={required}")]
+    PreviousArchiveSlotPresenceMismatch { phase: Phase, required: bool },
     #[error("journal generation must be nonzero")]
     ZeroGeneration,
     #[error("journal generation counter is exhausted")]
