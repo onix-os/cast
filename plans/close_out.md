@@ -79,6 +79,33 @@ Steps remaining:
 3. **Replace the call site** at `state_planning.rs:115`, deleting the
    pre-journal `stage_archived_candidate` call above it (the move now belongs to
    the coordinator).
+
+   **Blocked on one design question: where the boot tail's candidate `&File`
+   comes from.** `complete_new_state_boot` needs an owned `&std::fs::File` for
+   the staged candidate `/usr`. NewState has one because materialization produced
+   it (`StatefulCandidate::candidate_usr`). ActivateArchived has no equivalent —
+   its candidate already existed, and the legacy route never needed a handle
+   because it passed `&tree_identity` instead.
+
+   Two options, and the choice is a descriptor-provenance decision this codebase
+   is deliberate about, so it should not be guessed:
+
+   - **Open the staged `/usr` by path after the coordinator's staging move.**
+     Simple, but re-resolves a pathname the retained-descriptor discipline exists
+     to avoid — a same-UID writer can replace a final pathname after it is
+     checked (`previous_tree_move.rs:658` documents the reasoning).
+   - **Have the identity or coordinator hand out an owned retained handle.** The
+     handle already exists — `NewStateSystemTriggerView::retained_candidate_usr`
+     returns `&File` — but only borrowed for the closure's lifetime, so this
+     needs a deliberate API addition rather than a cast.
+
+   The second is almost certainly right, but it widens a retained-capability API
+   and deserves its own review.
+
+   Everything else for step 3 is mechanical: the coordinated route replaces the
+   whole `prepare_stateful_tree_identity` / `stage_archived_candidate` /
+   `verify_pre_exchange` prologue, including its "already applied" resume branch,
+   because the coordinator now owns that move.
 4. **Then §§3-4 unblock**: activation is the last production user of
    `ExchangeJournalGuard::LegacyNoJournal`.
 
