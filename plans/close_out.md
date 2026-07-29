@@ -162,6 +162,29 @@ Steps remaining:
    annotated accordingly — the coordinated route journals the staging move rather
    than resuming an already-applied one.
 
+   **REVERTED 2026-07-29 — the swap breaks 17 tests, and that is a coverage
+   decision, not a bug.** `client::tests::archived_activation_*` (and
+   `stateful_activation_recovery.rs`) assert the *legacy* recovery contract —
+   error shapes like `Error::StatefulTransitionUsrRestored`, sticky rearchive
+   preparation, applied-staging-suffix resume. The coordinated route produces
+   different errors and handles those recoveries through the journal instead.
+
+   My group checks missed them: I ran `activate_archived` and
+   `journal_coordinator`, and these live under `client::tests::archived_activation_*`.
+   Only the full suite caught it. **Group runs are not a substitute for the full
+   suite when a change reroutes an operation.**
+
+   The accessor, the wrapper and the staging-move-inside-the-pair all remain
+   merged and green; only the call-site swap is reverted. To land it:
+
+   1. Decide, test by test, whether those 17 prove something the coordinated
+      route does not already prove. Several look like genuine recovery coverage
+      (rearchive reversal, presync-fault stickiness) rather than stale
+      assertions.
+   2. Port what transfers, delete what does not, in the same commit as the swap.
+   3. Then confirm at guest level — the phase-targeted cut at
+      `ActivateArchived.CandidatePrepared` must actually fire.
+
    **STILL UNVERIFIED AT THE GUEST LEVEL, AND THIS MATTERS.** A phase-targeted
    cut at `ActivateArchived.CandidatePrepared` *still* reports `CELL-OP-DONE`
    without the marker firing. Either the guest's `cast state activate 1` is not
