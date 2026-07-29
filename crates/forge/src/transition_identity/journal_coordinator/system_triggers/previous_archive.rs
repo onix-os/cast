@@ -22,6 +22,7 @@ use crate::transition_journal::TransitionJournalRecordBinding;
 type BoxedAdvanceError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 const ARCHIVE_PREVIOUS: &str = "archive the previous state tree";
+const SKIP_SYSTEM_TRIGGERS: &str = "archive the previous state tree without system triggers";
 const HAND_OFF_NEW_STATE_BOOT: &str = "hand off new state boot synchronization";
 
 /// Unforgeable proof that a journal-coordinated caller owns the exact durable
@@ -100,6 +101,91 @@ pub(crate) enum PreviousArchiveBootHandoffFailure {
     },
 }
 
+impl super::RootLinksCompleteCoordinator {
+    /// Archive the predecessor without running system triggers.
+    ///
+    /// `cast state activate --skip-triggers` is a real flag, and the coordinated
+    /// route had no way to honour it: `run_system_triggers` was the only exit
+    /// from `RootLinksComplete`, so the swapped call site simply discarded the
+    /// flag (`plans/close_out.md`).
+    ///
+    /// The journal chain already modelled this — `next_forward_phase` sends
+    /// `RootLinksComplete -> PreviousArchiveIntent` when
+    /// `!options.run_system_triggers` — so no phase is skipped or invented here.
+    /// Only the trigger effect and its two phases are absent, which is exactly
+    /// what the caller asked for, and the record says so.
+    pub(crate) fn skip_system_triggers(self) -> Result<PreviousArchivedCoordinator, PreviousArchiveFailure> {
+        let Self {
+            coordinator,
+            metadata,
+            provenance,
+            authority,
+            readiness,
+            record_binding,
+        } = self;
+        let transition_id = coordinator.record.transition_id.clone();
+
+        // Same admission as the ordinary tail, minus the source phase: a
+        // predecessor must exist and be scheduled for archiving.
+        if coordinator.record.options.run_system_triggers
+            || !coordinator.record.options.archive_previous
+            || coordinator.record.previous.id.is_none()
+        {
+            return Err(PreviousArchiveFailure::SourceContract { transition_id });
+        }
+        let preflight = |source| PreviousArchiveFailure::Preflight {
+            transition_id: transition_id.clone(),
+            source,
+        };
+        coordinator
+            .require_phase(Phase::RootLinksComplete, SKIP_SYSTEM_TRIGGERS)
+            .map_err(preflight)?;
+        require_system_trigger_same_store_evidence(
+            &coordinator,
+            &metadata,
+            &provenance,
+            &authority,
+            &readiness,
+            &record_binding,
+        )
+        .map_err(preflight)?;
+
+        // Intent is durable before the physical move, exactly as in the
+        // triggered tail.
+        let intent =
+            archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent").map_err(|stage| {
+                PreviousArchiveFailure::SuccessorContract {
+                    transition_id: transition_id.clone(),
+                    stage,
+                }
+            })?;
+        let (coordinator, record_binding) = advance_bound_system_trigger_record(
+            coordinator,
+            &metadata,
+            &provenance,
+            &authority,
+            &readiness,
+            record_binding,
+            intent,
+        )
+        .map_err(|source| PreviousArchiveFailure::Advance {
+            transition_id: transition_id.clone(),
+            stage: "intent",
+            source: Box::new(source),
+        })?;
+
+        finish_previous_archive(
+            coordinator,
+            metadata,
+            provenance,
+            authority,
+            readiness,
+            record_binding,
+            transition_id,
+        )
+    }
+}
+
 impl SystemTriggersCompleteCoordinator {
     /// Durably archive the displaced predecessor tree, advancing the journal
     /// through `PreviousArchiveIntent → PreviousArchived`.
@@ -158,6 +244,35 @@ impl SystemTriggersCompleteCoordinator {
             source: Box::new(source),
         })?;
 
+        finish_previous_archive(
+            coordinator,
+            metadata,
+            provenance,
+            authority,
+            readiness,
+            record_binding,
+            transition_id,
+        )
+    }
+}
+
+/// Physically archive the predecessor and persist `PreviousArchived`.
+///
+/// Shared by both ways of reaching a durable `PreviousArchiveIntent`: the
+/// ordinary system-trigger tail, and `skip_system_triggers` for a caller that
+/// asked not to run them (`cast state activate --skip-triggers`). Only the route
+/// to the intent record differs; everything after it is identical, so it lives
+/// here rather than being written twice.
+fn finish_previous_archive(
+    coordinator: StatefulTransitionCoordinator,
+    metadata: CandidateMetadataProof,
+    provenance: db::state::MetadataProvenance,
+    authority: crate::client::PublishedJournalRootAbiAuthority,
+    readiness: UsrExchangeReadiness,
+    record_binding: TransitionJournalRecordBinding,
+    transition_id: TransitionId,
+) -> Result<PreviousArchivedCoordinator, PreviousArchiveFailure> {
+    {
         // Physical move of the exact staged predecessor into its state slot.
         let previous_id = coordinator.record.previous.id.map(state::Id::from).ok_or_else(|| {
             PreviousArchiveFailure::SourceContract {

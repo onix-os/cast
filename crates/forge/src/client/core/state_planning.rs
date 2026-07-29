@@ -89,7 +89,11 @@ impl Client {
         // `commit_stateful_staging`, whose exchange asserts through
         // `ExchangeJournalGuard::LegacyNoJournal` that no journal exists, so
         // ActivateArchived was never actually durable.
-        let _ = (skip_triggers, live_root_abi, isolation_root, &mut checkpoint);
+        // `checkpoint` and `isolation_root` are genuinely obsolete here: the
+        // coordinated route drives recovery through journal phases, and acquires
+        // its own isolation ABI. `skip_triggers` is not — it is a live CLI flag
+        // and is threaded through below.
+        let _ = (live_root_abi, &mut checkpoint);
         self.apply_activate_archived_candidate(
             &new,
             &old,
@@ -98,6 +102,7 @@ impl Client {
             &local_etc,
             &fstree,
             system_snapshot,
+            !skip_triggers,
             !skip_boot,
         )
         .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
