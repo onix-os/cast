@@ -238,6 +238,7 @@ where
 pub(crate) fn execute_activate_archived_forward<SystemError, DeriveMetadata, SystemTrigger>(
     identity: StatefulTreeIdentity,
     authority: JournalUsrExchangeAuthority,
+    installation: &Installation,
     candidate: state::Id,
     previous: state::Id,
     run_boot_sync: bool,
@@ -263,9 +264,19 @@ where
             run_boot_sync,
         })
         .map_err(|source| NewStateForwardError::at("transition creation", source))?;
+    // The move sits between two durable advances, which is the whole point of
+    // the pair: a crash before `complete_archived_staging` leaves a record at
+    // `ArchivedCandidateStagingIntent` that recovery can act on, rather than an
+    // orphaned tree in staging with nothing pointing at it. The legacy route
+    // performed this move outside the journal entirely
+    // (`state_planning.rs`, before `commit_stateful_staging`), which is exactly
+    // the untracked window §1.2 exists to close.
     let coordinator = coordinator
         .begin_archived_staging()
         .map_err(|source| NewStateForwardError::at("archived staging intent", source))?;
+    coordinator
+        .stage_archived_candidate(installation, candidate)
+        .map_err(|source| NewStateForwardError::at("archived candidate staging move", source))?;
     let coordinator = coordinator
         .complete_archived_staging()
         .map_err(|source| NewStateForwardError::at("archived staging completion", source))?;

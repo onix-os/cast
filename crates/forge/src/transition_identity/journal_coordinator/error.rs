@@ -28,6 +28,8 @@ pub(crate) enum StatefulTransitionCoordinatorError {
     RuntimeTreeIdentityChanged { tree: &'static str },
     #[error("revalidate retained state-transition tree identity")]
     Identity(#[source] super::super::Error),
+    #[error("move the archived candidate into staging")]
+    ArchivedCandidateStaging(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("construct or advance the canonical state-transition record")]
     Record(#[from] CodecError),
     #[error("create or advance the durable state-transition journal")]
