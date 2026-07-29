@@ -346,21 +346,25 @@ struct StatefulTransitionFixture {
 fn stateful_transition_fixture(archive_candidate: bool) -> StatefulTransitionFixture {
     let temporary = tempfile::tempdir().unwrap();
     let mut client = stateful_test_client(temporary.path());
-    let previous = client.state_db.add(&[], Some("previous"), None).unwrap();
-    let candidate = client.state_db.add(&[], Some("candidate"), None).unwrap();
+    let previous_model = generated_system_snapshot("previous-package");
+    let candidate_model = generated_system_snapshot("candidate-package");
+    // Both states carry metadata provenance, because both stand in for states an
+    // earlier transition created. The coordinated activation route verifies the
+    // candidate's stored provenance instead of tolerating its absence, so a
+    // fixture without it cannot be activated at all.
+    let previous = add_state_with_metadata(&client, "previous", &previous_model);
+    let candidate = add_state_with_metadata(&client, "candidate", &candidate_model);
     client.installation.active_state = Some(previous.id);
 
-    let previous_model = generated_system_snapshot("previous-package");
     let previous_snapshot = previous_model.encoded().to_owned();
     record_state_id(&client.installation.root, previous.id).unwrap();
-    record_system_snapshot(&client.installation.root, previous_model).unwrap();
+    record_candidate_metadata(&client.installation.root, previous_model);
 
-    let candidate_model = generated_system_snapshot("candidate-package");
     let candidate_snapshot = candidate_model.encoded().to_owned();
     if archive_candidate {
         let candidate_root = client.installation.root_path(candidate.id.to_string());
         record_state_id(&candidate_root, candidate.id).unwrap();
-        record_system_snapshot(&candidate_root, candidate_model).unwrap();
+        record_candidate_metadata(&candidate_root, candidate_model);
     } else {
         // Production fresh-state activation receives an already
         // materialized staging /usr from blit_root. Candidate metadata is
