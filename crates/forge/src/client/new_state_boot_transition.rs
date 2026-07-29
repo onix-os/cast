@@ -19,7 +19,7 @@ use crate::{
     state::{self, Selection},
     transition_identity::{
         NewStatePrevious, PreparedActiveReblitBootStateRoots, PreviousArchivedCoordinator,
-        SystemTriggersCompleteCoordinator, execute_new_state_forward,
+        SystemTriggersCompleteCoordinator, execute_activate_archived_forward, execute_new_state_forward,
     },
 };
 
@@ -199,6 +199,94 @@ impl Client {
             stone,
         )?;
         Ok(boot_candidate)
+    }
+
+    /// Coordinated durable `ActivateArchived` apply: make an already-archived
+    /// state live again, archiving the predecessor as the rollback anchor.
+    ///
+    /// The mirror of `apply_new_state_candidate`, and the piece §1.2 always
+    /// listed as remaining. Without it the coordinated route existed but had no
+    /// caller — `cast state activate` reached `commit_stateful_staging`, whose
+    /// exchange asserts through `ExchangeJournalGuard::LegacyNoJournal` that no
+    /// journal is present, so the archived-staging pair and every crash-matrix
+    /// claim about this operation were unreachable
+    /// (`plans/close_out.md`, correction 2026-07-29).
+    ///
+    /// Two things differ from NewState:
+    ///
+    /// - **No allocation.** The candidate row exists, so the identity is
+    ///   prepared against the *archived* tree rather than an unallocated
+    ///   staging one, and there is no allocated id to read back.
+    /// - **The staging move belongs to the coordinator.** The legacy route moved
+    ///   the archived tree into staging before committing, outside the journal.
+    ///   That move now sits between `begin_archived_staging` and
+    ///   `complete_archived_staging`, so a crash mid-move leaves a record
+    ///   recovery can act on rather than an orphan.
+    #[allow(dead_code)] // wired at the `state activate` call site next
+    pub(in crate::client) fn apply_activate_archived_candidate(
+        &self,
+        candidate: &State,
+        previous: &State,
+        archived_usr: &std::path::Path,
+        candidate_usr: &std::fs::File,
+        active_state: super::active_state_authority::ActiveStateAuthority,
+        local_etc: &super::transaction_root::RetainedLocalEtc,
+        tree: &vfs::Tree<super::PendingFile>,
+        system_snapshot: SystemModel,
+        run_boot_sync: bool,
+    ) -> Result<(), LiveNewStateBootError> {
+        let preflight = JournalUsrExchangeAuthorityPreflight::inspect(&self.installation, active_state, None)
+            .map_err(|source| LiveNewStateBootError::at("pre-journal client authority", source))?;
+
+        // Prepared against the archived tree: the candidate has not moved into
+        // staging yet, and moving it is the coordinator's job.
+        let (identity, authority) = preflight
+            .prepare_candidate(&self.state_db, archived_usr, candidate.id)
+            .map_err(|source| LiveNewStateBootError::at("archived candidate identity", source))?;
+
+        let coordinator = execute_activate_archived_forward(
+            identity,
+            authority,
+            &self.installation,
+            candidate.id,
+            previous.id,
+            run_boot_sync,
+            |os_info| candidate_metadata::derive_outputs(os_info, &system_snapshot),
+            // ActivateArchived runs system triggers only — its candidate was
+            // already built when the state was created, so there is nothing for
+            // transaction triggers to do.
+            |view| {
+                let (installation, retained_usr, isolation_root) = view.retained_view();
+                let live_usr_path = installation.root.join("usr");
+                Client::apply_triggers(
+                    TriggerScope::System {
+                        installation,
+                        isolation_root,
+                        local_etc,
+                        retained_usr,
+                        live_usr_path: &live_usr_path,
+                    },
+                    tree,
+                )
+            },
+        )
+        .map_err(|source| LiveNewStateBootError::at("journal-coordinated forward prefix", source))?;
+
+        let archived = coordinator
+            .archive_previous_tree()
+            .map_err(|source| LiveNewStateBootError::at("predecessor archive", source))?;
+
+        if !run_boot_sync {
+            let handoff = archived
+                .commit_new_state_without_boot()
+                .map_err(|source| LiveNewStateBootError::at("no-boot commit decision", source))?;
+            self.finish_new_state_transition(handoff.journal, handoff.record, &handoff.active_state_reservation)?;
+            return Ok(());
+        }
+
+        let stone = self.require_new_state_boot_inputs(candidate)?;
+        self.complete_new_state_boot(NewStateBootSource::Archived(archived), candidate_usr, candidate, stone)?;
+        Ok(())
     }
 
     /// Walk a committed transition to its terminal deletion.

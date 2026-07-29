@@ -49,7 +49,8 @@ pub(crate) use candidate_preparation::{
 use candidate_preparation::{TransactionTriggerOperationReadiness, TransactionTriggerReadiness};
 pub(crate) use error::StatefulTransitionCoordinatorError;
 pub(crate) use new_state_forward::{
-    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView, execute_new_state_forward,
+    NewStateForwardError, NewStateSystemTriggerView, NewStateTransactionTriggerView, execute_activate_archived_forward,
+    execute_new_state_forward,
 };
 pub(crate) use request::{NewStatePrevious, StatefulTransitionRequest};
 #[allow(unused_imports)] // contract-only until the next durable forward phase is implemented

@@ -108,7 +108,7 @@ pub(crate) use journal_coordinator::{
     NewStateTransactionTriggerView, NewStateUnarchivedBootSyncHandoffSeal, PreviousArchiveBootHandoffFailure,
     PreviousArchivedBootSyncHandoffSeal, PreviousArchivedCoordinator, StatefulTransitionCoordinator,
     StatefulTransitionCoordinatorError, StatefulTransitionRequest, SystemTriggersCompleteCoordinator,
-    execute_active_reblit_forward, execute_new_state_forward,
+    execute_activate_archived_forward, execute_active_reblit_forward, execute_new_state_forward,
 };
 pub(crate) use legacy_boot_repair::{LegacyBootRepairAuthority, LegacyBootRepairAuthorityError};
 use namespace_helpers::*;
