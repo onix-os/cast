@@ -171,6 +171,7 @@ impl RetainedFixedStaging {
             Err(source) => return Err(source),
         };
         let staging_witness = require_staging_policy(&staging, &staging_path, true)?;
+        reclaim_displaced_placeholder(&staging, &staging_path)?;
         require_empty(&staging, &staging_path)?;
 
         let mut retained = Self {
@@ -331,25 +332,11 @@ impl RetainedFixedStaging {
     }
 
     fn create_private_candidate_usr(&self) -> Result<(CString, PathBuf, std::fs::File), FixedStagingError> {
-        let mut random = [0_u8; 16];
-        loop {
-            // SAFETY: getrandom receives a complete writable byte buffer.
-            let read = unsafe { nix::libc::getrandom(random.as_mut_ptr().cast(), random.len(), 0) };
-            if read == random.len() as isize {
-                break;
-            }
-            let source = io::Error::last_os_error();
-            if source.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(FixedStagingError::Io {
-                operation: "generate private candidate /usr name",
-                path: self.staging_path.clone(),
-                source,
-            });
-        }
-        let temporary_name = CString::new(format!(".cast-usr-{:032x}.tmp", u128::from_ne_bytes(random)))
-            .expect("formatted random candidate /usr name contains no NUL");
+        let temporary_name = random_private_name(
+            ".cast-usr-",
+            "generate private candidate /usr name",
+            &self.staging_path,
+        )?;
         let temporary_path = self.staging_path.join(temporary_name.to_string_lossy().as_ref());
         // SAFETY: the retained staging descriptor and private component remain
         // live. mkdirat neither follows nor replaces the temporary name.
@@ -630,6 +617,157 @@ fn require_no_acl(file: &std::fs::File, path: &Path) -> Result<(), FixedStagingE
     })
 }
 
+/// Draw one unguessable name below fixed staging.
+///
+/// Shared by candidate creation and placeholder reclamation so both get the
+/// same "no other writer can predict this name" property from one place.
+fn random_private_name(prefix: &str, operation: &'static str, path: &Path) -> Result<CString, FixedStagingError> {
+    let mut random = [0_u8; 16];
+    loop {
+        // SAFETY: getrandom receives a complete writable byte buffer.
+        let read = unsafe { nix::libc::getrandom(random.as_mut_ptr().cast(), random.len(), 0) };
+        if read == random.len() as isize {
+            break;
+        }
+        let source = io::Error::last_os_error();
+        if source.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(FixedStagingError::Io {
+            operation,
+            path: path.to_owned(),
+            source,
+        });
+    }
+    Ok(
+        CString::new(format!("{prefix}{:032x}.tmp", u128::from_ne_bytes(random)))
+            .expect("formatted random private name contains no NUL"),
+    )
+}
+
+/// The only entry a freshly created `/usr` placeholder ever carries.
+const TREE_MARKER_NAME: &CStr = c".cast-tree-id";
+
+/// Reclaim the pre-install `/usr` placeholder a first install displaces here.
+///
+/// A NewState forward exchange swaps the candidate with the live `/usr`, so
+/// whatever was live lands in fixed staging. With a predecessor the journal's
+/// archive advance moves it into that state's slot; a *first* install has no
+/// predecessor and therefore no slot, so the placeholder cast created moments
+/// earlier for its own exchange stays here and wedges the next stateful
+/// operation with `NotEmpty`. Both the coordinated and the legacy route have
+/// always skipped this case — see `plans/close_out.md`.
+///
+/// Reclaiming here rather than in the transition tail is deliberate: a crash
+/// between the exchange and any tail-side disposal would leave exactly the same
+/// residue, so the reusable side has to cope with it regardless. Doing it in one
+/// place makes the next operation self-healing at every crash point instead of
+/// only the ones a new journal phase would cover.
+///
+/// The admitted shape is exact, and only cast can produce it:
+///
+/// - staging holds `usr` and nothing else — a sibling entry is unexplained
+///   residue and is never touched;
+/// - `usr` holds `.cast-tree-id` and nothing else. A candidate is only *named*
+///   `usr` after its blit completes (an interrupted blit leaves
+///   `.cast-usr-<hex>.tmp`), and every real state tree also carries `.stateID`,
+///   so a marker-only `usr` cannot be an interrupted candidate or a displaced
+///   state tree.
+///
+/// Anything else falls through untouched and is reported by `require_empty`.
+fn reclaim_displaced_placeholder(staging: &std::fs::File, staging_path: &Path) -> Result<(), FixedStagingError> {
+    if bounded_directory_inventory(staging, staging_path, 2)? != [OsString::from("usr")] {
+        return Ok(());
+    }
+    let usr_path = staging_path.join("usr");
+    let usr = match open_directory(staging, c"usr", &usr_path, "inspect displaced staging /usr") {
+        Ok(usr) => usr,
+        // A `usr` that is not a plain directory — a file, a symlink, or one that
+        // vanished mid-inspection — is never the placeholder. Fall through so
+        // `require_empty` refuses it and names the entry, rather than reporting
+        // reclamation's own diagnostic for residue it does not own.
+        Err(FixedStagingError::Io { source, .. })
+            if matches!(
+                source.raw_os_error(),
+                Some(nix::libc::ENOTDIR | nix::libc::ELOOP | nix::libc::ENOENT)
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(source) => return Err(source),
+    };
+    let witness = DirectoryWitness::from(&usr, &usr_path, "inspect displaced staging /usr")?;
+    if witness.owner != unsafe { nix::libc::geteuid() } {
+        return Ok(());
+    }
+    if bounded_directory_inventory(&usr, &usr_path, 2)? != [OsString::from(".cast-tree-id")] {
+        return Ok(());
+    }
+
+    // Move it off its final name before removing anything. A same-UID writer
+    // may replace `usr` between the check above and any unlink, so the retained
+    // descriptor and an unguessable name are what make the removal exact — the
+    // same discipline `previous_tree_move.rs` documents for retained inodes.
+    let private = random_private_name(
+        ".cast-reclaim-",
+        "generate placeholder reclamation name",
+        staging_path,
+    )?;
+    let private_path = staging_path.join(private.to_string_lossy().as_ref());
+    linux_fs::renameat2_noreplace_once(staging, c"usr", staging, &private).map_err(|source| {
+        FixedStagingError::Io {
+            operation: "retire displaced staging /usr to a private name",
+            path: private_path.clone(),
+            source,
+        }
+    })?;
+
+    // Re-authenticate through the private name: only now is it certain the
+    // inode just retired is the one inspected above and not a replacement.
+    let retired = open_directory(staging, &private, &private_path, "reopen retired staging /usr")?;
+    let retired_witness = DirectoryWitness::from(&retired, &private_path, "reopen retired staging /usr")?;
+    if (retired_witness.device, retired_witness.inode) != (witness.device, witness.inode) {
+        return Err(FixedStagingError::Changed { path: private_path });
+    }
+    // Contents are re-checked against the retained descriptor, because the
+    // window between the first inventory and the rename is writable.
+    if let Some(entry) = bounded_directory_inventory(&retired, &private_path, 2)?
+        .into_iter()
+        .find(|name| name.as_os_str().as_encoded_bytes() != TREE_MARKER_NAME.to_bytes())
+    {
+        return Err(FixedStagingError::NotEmpty {
+            path: private_path,
+            entry,
+        });
+    }
+
+    // SAFETY: both syscalls receive the live retained descriptors and names
+    // with no path separator; neither follows a symlink.
+    if unsafe { nix::libc::unlinkat(retired.as_raw_fd(), TREE_MARKER_NAME.as_ptr(), 0) } != 0 {
+        let source = io::Error::last_os_error();
+        if source.kind() != io::ErrorKind::NotFound {
+            return Err(FixedStagingError::Io {
+                operation: "remove the reclaimed placeholder tree marker",
+                path: private_path.join(".cast-tree-id"),
+                source,
+            });
+        }
+    }
+    // SAFETY: as above; AT_REMOVEDIR removes the directory only when empty.
+    if unsafe { nix::libc::unlinkat(staging.as_raw_fd(), private.as_ptr(), nix::libc::AT_REMOVEDIR) } != 0 {
+        return Err(FixedStagingError::Io {
+            operation: "remove the reclaimed placeholder",
+            path: private_path,
+            source: io::Error::last_os_error(),
+        });
+    }
+    staging.sync_all().map_err(|source| FixedStagingError::Io {
+        operation: "sync fixed staging after placeholder reclamation",
+        path: staging_path.to_owned(),
+        source,
+    })
+}
+
 fn require_empty(file: &std::fs::File, path: &Path) -> Result<(), FixedStagingError> {
     if let Some(entry) = first_directory_entry(file, path)? {
         return Err(FixedStagingError::NotEmpty {
@@ -641,6 +779,16 @@ fn require_empty(file: &std::fs::File, path: &Path) -> Result<(), FixedStagingEr
 }
 
 fn first_directory_entry(file: &std::fs::File, path: &Path) -> Result<Option<OsString>, FixedStagingError> {
+    Ok(bounded_directory_inventory(file, path, 1)?.into_iter().next())
+}
+
+/// Read at most `limit` real entries, so "exactly these names" is decidable
+/// without an unbounded scan of a directory another process may be filling.
+fn bounded_directory_inventory(
+    file: &std::fs::File,
+    path: &Path,
+    limit: usize,
+) -> Result<Vec<OsString>, FixedStagingError> {
     // SAFETY: fcntl receives one live directory descriptor and returns a new
     // close-on-exec descriptor on success.
     let duplicate = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_DUPFD_CLOEXEC, 0) };
@@ -676,7 +824,11 @@ fn first_directory_entry(file: &std::fs::File, path: &Path) -> Result<Option<OsS
         });
     }
 
+    let mut names = Vec::new();
     let result = loop {
+        if names.len() == limit {
+            break Ok(names);
+        }
         // SAFETY: Linux exposes thread-local errno through this pointer.
         unsafe { *nix::libc::__errno_location() = 0 };
         // SAFETY: stream remains live and exclusively used here.
@@ -684,7 +836,7 @@ fn first_directory_entry(file: &std::fs::File, path: &Path) -> Result<Option<OsS
         if entry.is_null() {
             let source = io::Error::last_os_error();
             break if source.raw_os_error() == Some(0) {
-                Ok(None)
+                Ok(names)
             } else {
                 Err(FixedStagingError::Io {
                     operation: "read fixed-staging inventory",
@@ -698,7 +850,7 @@ fn first_directory_entry(file: &std::fs::File, path: &Path) -> Result<Option<OsS
         if matches!(name, b"." | b"..") {
             continue;
         }
-        break Ok(Some(OsString::from_vec(name.to_vec())));
+        names.push(OsString::from_vec(name.to_vec()));
     };
 
     // SAFETY: stream was returned by fdopendir and remains live.
