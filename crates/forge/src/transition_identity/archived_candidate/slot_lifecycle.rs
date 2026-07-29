@@ -21,6 +21,36 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         candidate: state::Id,
     ) -> Result<(), ArchivedCandidateError> {
+        self.retire_displaced_archived_candidate_slot_guarded(
+            installation,
+            candidate,
+            super::ArchivedCandidateJournalGuard::LegacyNoJournal,
+        )
+    }
+
+    /// Coordinator-only retirement. Without this the coordinated route never
+    /// retires the wrapper the staging exchange displaced, so the *next*
+    /// activation fails with `PreviousArchiveSlotExists` — only the legacy route
+    /// ever called the retirement (`plans/close_out.md`).
+    pub(crate) fn retire_displaced_archived_candidate_slot_with_journal(
+        &self,
+        installation: &Installation,
+        candidate: state::Id,
+        seal: &crate::transition_identity::journal_coordinator::ArchivedCandidateStagingEffectSeal,
+    ) -> Result<(), ArchivedCandidateError> {
+        self.retire_displaced_archived_candidate_slot_guarded(
+            installation,
+            candidate,
+            super::ArchivedCandidateJournalGuard::Coordinator(seal),
+        )
+    }
+
+    fn retire_displaced_archived_candidate_slot_guarded(
+        &self,
+        installation: &Installation,
+        candidate: state::Id,
+        guard: super::ArchivedCandidateJournalGuard<'_>,
+    ) -> Result<(), ArchivedCandidateError> {
         let mut retained = self
             .archived_candidate_attempt
             .lock()
@@ -33,12 +63,12 @@ impl StatefulTreeIdentity {
         if attempt.parking_name.is_some()
             && matches!(self.displaced_slot_location(attempt), Ok(DisplacedSlotLocation::Parked))
         {
-            self.finish_displaced_slot_retirement(installation, attempt)?;
+            self.finish_displaced_slot_retirement(installation, attempt, guard)?;
             *retained = None;
             return Ok(());
         }
 
-        self.require_retirement_layout(installation, attempt)?;
+        self.require_retirement_layout(installation, attempt, guard)?;
         self.select_parking_name(attempt)?;
         let parking_name = attempt.parking_name.as_ref().expect("parking name was selected");
         match self.displaced_slot_location(attempt)? {
@@ -67,7 +97,7 @@ impl StatefulTreeIdentity {
             DisplacedSlotLocation::Parked => {}
         }
 
-        self.finish_displaced_slot_retirement(installation, attempt)?;
+        self.finish_displaced_slot_retirement(installation, attempt, guard)?;
         *retained = None;
         Ok(())
     }
@@ -152,8 +182,10 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         attempt: &RetainedArchivedCandidateAttempt,
+        guard: super::ArchivedCandidateJournalGuard<'_>,
     ) -> Result<(), ArchivedCandidateError> {
-        self.require_no_journal()
+        guard
+            .require(self)
             .map_err(|source| identity("check journal before displaced-slot retirement", source))?;
         self.revalidate_base(installation, attempt)?;
         let actual = self.wrapper_layout(attempt)?;
@@ -249,6 +281,7 @@ impl StatefulTreeIdentity {
         &self,
         installation: &Installation,
         attempt: &RetainedArchivedCandidateAttempt,
+        guard: super::ArchivedCandidateJournalGuard<'_>,
     ) -> Result<(), ArchivedCandidateError> {
         if self.displaced_slot_location(attempt)? != DisplacedSlotLocation::Parked {
             return Err(ArchivedCandidateError::DisplacedSlotRetireReportedSuccessWithoutMove);
@@ -259,7 +292,8 @@ impl StatefulTreeIdentity {
             .sync("sync roots after displaced staging wrapper retirement")
             .map_err(|source| identity("sync roots after displaced staging wrapper retirement", source))?;
         checkpoint(RetainedArchivedCandidateMoveFaultPoint::FinalDisplacedSlotRetirementRevalidation)?;
-        self.require_no_journal()
+        guard
+            .require(self)
             .map_err(|source| identity("recheck journal after displaced-slot retirement", source))?;
         self.revalidate_base(installation, attempt)?;
         attempt

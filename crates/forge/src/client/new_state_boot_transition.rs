@@ -273,6 +273,12 @@ impl Client {
         )
         .map_err(|source| LiveNewStateBootError::at("journal-coordinated forward prefix", source))?;
         let archived = coordinator;
+        // The staging exchange displaced the candidate's old wrapper to its
+        // canonical state name; retiring it is what lets a later activation
+        // archive into that name again.
+        archived
+            .retire_displaced_archived_slot(&self.installation, candidate.id)
+            .map_err(|source| LiveNewStateBootError::at("displaced archived-slot retirement", source))?;
 
         if !run_boot_sync {
             let handoff = archived

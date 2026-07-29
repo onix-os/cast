@@ -321,6 +321,30 @@ fn finish_previous_archive(
 }
 
 impl PreviousArchivedCoordinator {
+    /// Retire the wrapper the archived-candidate staging exchange displaced.
+    ///
+    /// The exchange leaves the old staging wrapper parked under the candidate's
+    /// canonical state name. Only the legacy route ever retired it, so the
+    /// coordinated route left it behind and the *next* activation failed with
+    /// `PreviousArchiveSlotExists` — activate 2, then activate 1, and the second
+    /// one refuses. Caught by
+    /// `repeated_archived_activations_reuse_wrapper_slots_beyond_the_scan_bound`
+    /// (`plans/close_out.md`).
+    ///
+    /// Runs after the predecessor archive so the previous tree is already out of
+    /// staging, matching where the legacy route did it.
+    pub(crate) fn retire_displaced_archived_slot(
+        &self,
+        installation: &crate::Installation,
+        candidate: state::Id,
+    ) -> Result<(), StatefulTransitionCoordinatorError> {
+        let seal = super::super::ArchivedCandidateStagingEffectSeal { _private: () };
+        self.coordinator
+            .identity
+            .retire_displaced_archived_candidate_slot_with_journal(installation, candidate, &seal)
+            .map_err(|source| StatefulTransitionCoordinatorError::ArchivedCandidateStaging(Box::new(source)))
+    }
+
     /// The retained candidate `/usr` descriptor, for a boot tail that must not
     /// reopen the staging pathname (see the coordinator's accessor).
     pub(crate) fn retained_candidate_usr(&self) -> (&std::fs::File, &std::path::Path) {
