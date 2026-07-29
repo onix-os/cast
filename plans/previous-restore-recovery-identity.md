@@ -234,6 +234,36 @@ Enabling it before a producer exists fails **28** existing journal tests, becaus
 every record at or past the archive phases is then invalid. So the invariant and
 its producer must land in the same commit — enable it *with* step 2, not before.
 
+**Step 2 is in progress on `feature/previous_archive_producer` (`38ba33c6`), NOT
+merged — 20 journal fixtures still red.** What exists there:
+
+- `StatefulTreeIdentity::select_previous_archive_slot` — read-only selection
+  returning `(parking_name, reused_wrapper)`; reuse scan authenticates, fresh
+  branch only probes for a free name.
+- `select_archive_slot` runs *before* the `PreviousArchiveIntent` advance in both
+  archive entry points (triggered tail and `skip_system_triggers`), and
+  `archive_successor` carries the slot into the intent record.
+- The presence invariant is enabled.
+- `advance_record` attaches a slot at `PreviousArchiveIntent`, mirroring how it
+  already attaches `boot_publication_receipts` at `BootSyncStarted`. That took
+  the failures 28 -> 20.
+
+The remaining 20 are two kinds, both fixture-side:
+
+1. records built *directly* at or past the archive phases without going through
+   `advance_record` (they need the field set at construction);
+2. the golden-bytes tests (`record_contract.rs`) — the canonical JSON gained a
+   field, so the locked bytes must be regenerated. Regenerate deliberately and
+   eyeball the diff; that file exists to catch exactly this kind of silent
+   change.
+
+Step 4 (`create_previous_archive_attempt` consuming the recorded name rather
+than choosing its own) is **not started**. Until it lands the record is
+descriptive, not authoritative — and the collision-is-an-error behaviour change
+described above arrives with it.
+
+**Original plan for step 2 follows.**
+
 **Step 2 (the producer) is the next piece**, and the seam is already settled
 above: split selection from creation. Selection is read-only
 (`find_reusable_previous_state_slot` authenticates; the fresh loop only probes
