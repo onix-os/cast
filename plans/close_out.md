@@ -1,5 +1,40 @@
 # Close-out plan — what remains after Phase 1
 
+## ⚠ SHIPPED REGRESSION — fix before anything else (found 2026-07-29)
+
+**A first install wedges the next stateful operation.** Reproduced on `develop`,
+on a normal root (not just the crash-matrix guest):
+
+    cast -D <root> repo add local file://.../stone.index
+    cast -D <root> install bash-completion     # succeeds
+    cast -D <root> remove bash-completion      # FAILS
+
+    Error: remove: materialize a stateful candidate through retained fixed
+    staging: fixed staging contains crash or foreign evidence and was left
+    untouched: "<root>/.cast/root/staging", first entry "usr"
+
+**Diagnosis.** D1.5 relaxed the namespace policy so a `SynthesizedEmpty`
+previous may remain in staging after a first install, on the reasoning that
+cleanup never unlinks and the slot would be reused later. The slot is not
+reused: materialization rejects it.
+
+The leftover `staging/usr` contains exactly one entry — `.cast-tree-id`, the
+tree marker. So it *is* the synthesized-empty tree D1.5 intended to leave;
+materialization's emptiness check simply does not account for the marker and
+classifies its own artefact as foreign evidence.
+
+**Likely fix:** extend what fixed-staging materialization treats as reusable to
+include a `usr` holding only `.cast-tree-id`. A normalization path already
+exists — see `exact_empty_legacy_staging_is_normalized_without_replacing_its_inode`
+— so this is probably widening that predicate rather than new machinery. Confirm
+the marker is the *only* permitted entry; anything else must stay foreign.
+
+**Why no test caught it:** every stateful test either starts from a root that
+already has an active state, or performs one operation. The failing sequence is
+first-install-then-anything, which nothing exercised. Add that as a test with
+the fix.
+
+
 Written 2026-07-27, after Phase 1's durability epic closed. This supersedes the
 ordering in `future_impl.md` for everything still open; the detail for each item
 still lives in that file (and in `cleanup_legacy.md`), which this one points at
