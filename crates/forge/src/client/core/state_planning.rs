@@ -36,7 +36,7 @@ impl Client {
     {
         self.require_stateful_scope()?;
         let local_etc = transaction_root::prepare_local_etc(&self.installation)?;
-        let active_state = active_state_authority::ActiveStateAuthority::acquire(&self.installation)?;
+        let mut active_state = active_state_authority::ActiveStateAuthority::acquire(&self.installation)?;
         // Fetch the new state
         let new = self.state_db.get(id).map_err(|_| Error::StateDoesntExist(id))?;
 
@@ -63,44 +63,71 @@ impl Client {
 
         let archived_usr = self.installation.root_path(new.id.to_string()).join("usr");
         active_state.revalidate(&self.installation)?;
+        let tree_identity = self
+            .prepare_stateful_tree_identity(&archived_usr, new.id)
+            .map_err(|source| Error::StatefulTreeIdentityPreparationFailed {
+                candidate: new.id,
+                previous: Some(old.id),
+                location: archived_usr.clone(),
+                source: Box::new(source.into()),
+            })?;
+        active_state.refresh_after_tree_identity_preparation(&self.installation)?;
+        live_root_abi.revalidate()?;
 
-        // The candidate's *own* recorded system model, loaded from its state
-        // directory. The coordinated route does not decorate metadata for an
-        // archived candidate — it verifies, checking derived outputs against the
-        // provenance the database already holds
-        // (`candidate_preparation.rs`, "substitute read-only verification").
-        // A snapshot generated from the current installation model would
-        // describe different packages and fail that equality check.
-        let system_snapshot = self.load_or_create_system_snapshot(
-            system_model::snapshot_path(&self.installation.root_path(new.id.to_string())),
-            &new,
-        )?;
+        // Exchange the exact archived-state wrapper with the fixed staging
+        // wrapper. Both inodes remain retained so a racing path replacement
+        // is classified instead of overwritten or adopted.
+        match tree_identity.stage_archived_candidate(&self.installation, new.id) {
+            Ok(()) => {}
+            Err(failure) if failure.outcome() == RetainedArchivedCandidateMoveOutcome::Applied => {
+                // The exchange already happened. Resume only its idempotent
+                // durability suffix; repeating the exchange would undo it.
+                if let Err(primary) = tree_identity
+                    .finish_applied_archived_candidate_stage(&self.installation, new.id)
+                    .map_err(Error::from)
+                {
+                    return Err(self.preserve_unswapped_candidate(
+                        new.id,
+                        Some(old.id),
+                        StatefulCandidateOrigin::Archived,
+                        primary,
+                        &tree_identity,
+                        &mut checkpoint,
+                    ));
+                }
+            }
+            Err(failure) => return Err(failure.into()),
+        }
+        if let Err(primary) = tree_identity.verify_pre_exchange(
+            &self.installation.staging_path("usr"),
+            &self.installation.root.join("usr"),
+        ) {
+            return Err(self.preserve_unswapped_candidate(
+                new.id,
+                Some(old.id),
+                StatefulCandidateOrigin::Archived,
+                primary.into(),
+                &tree_identity,
+                &mut checkpoint,
+            ));
+        }
 
-        // The coordinated durable route owns the whole transition. The
-        // archived-to-staging move now happens between two durable journal
-        // phases rather than before the commit, so a crash mid-move leaves a
-        // record recovery can act on instead of an orphaned tree
-        // (`plans/future_impl.md` §1.2).
-        //
-        // This replaces the legacy prologue wholesale — identity preparation,
-        // `stage_archived_candidate` with its "already applied" resume branch,
-        // and `verify_pre_exchange` — because the coordinator performs and
-        // journals that move itself. The legacy path reached
-        // `commit_stateful_staging`, whose exchange asserts through
-        // `ExchangeJournalGuard::LegacyNoJournal` that no journal exists, so
-        // ActivateArchived was never actually durable.
-        let _ = (skip_triggers, live_root_abi, isolation_root, &mut checkpoint);
-        self.apply_activate_archived_candidate(
-            &new,
-            &old,
-            &archived_usr,
-            active_state,
-            &local_etc,
+        self.commit_stateful_staging(
             &fstree,
-            system_snapshot,
+            &new,
+            Some(&old),
+            StatefulCandidateOrigin::Archived,
+            true,
+            !skip_triggers,
             !skip_boot,
-        )
-        .map_err(|source| Error::CoordinatedNewState(Box::new(source)))?;
+            &tree_identity,
+            None,
+            live_root_abi,
+            &isolation_root,
+            &local_etc,
+            &active_state,
+            &mut checkpoint,
+        )?;
 
         Ok(old_id)
     }
