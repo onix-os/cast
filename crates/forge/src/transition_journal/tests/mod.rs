@@ -62,7 +62,12 @@ fn new_state_record(phase: Phase) -> TransitionRecord {
         format: PAYLOAD_FORMAT.to_owned(),
         version: PAYLOAD_VERSION,
         generation: 7,
-        previous_archive_slot: None,
+        // Present exactly when the record is at or past the archive phases, the
+        // same rule the model enforces. A fixture built directly at one of those
+        // phases is standing in for a record a real archive wrote, and a real
+        // archive always recorded where its slot came from.
+        previous_archive_slot: (forward.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal())
+            .then(previous_archive_slot),
         transition_id: id(),
         creation_epoch: runtime_epoch(),
         operation: Operation::NewState,
@@ -138,6 +143,9 @@ fn reblit_record(phase: Phase) -> TransitionRecord {
     record.previous.id = Some(42);
     record.previous.origin = PreviousOrigin::ActiveReblitCorrupt;
     record.options.archive_previous = false;
+    // The slot exists only to reverse an archive. No archive, no slot — the
+    // model enforces exactly that pairing.
+    record.previous_archive_slot = None;
     record
 }
 
@@ -149,6 +157,7 @@ fn without_previous_archive(mut record: TransitionRecord, origin: PreviousOrigin
     record.previous.id = None;
     record.previous.origin = origin;
     record.options.archive_previous = false;
+    record.previous_archive_slot = None;
     record
 }
 

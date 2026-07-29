@@ -1,13 +1,13 @@
 use super::*;
-use crate::transition_journal::PreviousArchiveSlot;
+use crate::transition_journal::{PreviousArchiveSlot, QuarantineName};
 
 /// Re-validate a namespace name through the journal model's newtype.
 ///
 /// The producing helpers already build these via `QuarantineName::parse`, so
 /// this cannot widen what is accepted; it re-establishes the bound at the
 /// journal boundary rather than trusting the caller.
-fn quarantine_name_of(name: &std::ffi::CStr) -> Result<crate::transition_journal::QuarantineName, Error> {
-    crate::transition_journal::QuarantineName::parse(name.to_string_lossy().as_ref())
+fn quarantine_name_of(name: &CStr) -> Result<QuarantineName, Error> {
+    QuarantineName::parse(name.to_string_lossy().as_ref())
         .map_err(Error::InvalidReusableArchivedCandidateParkingName)
 }
 

@@ -185,8 +185,10 @@ impl TransitionRecord {
             (None, None) => return Err(CodecError::MissingRollbackPlan),
         };
         self.validate_boot_publication_receipts(layout_phase)?;
-        self.validate_previous_archive_slot(layout_phase)?;
         self.validate_option_reachability(layout_phase)?;
+        // After reachability: a record with a disabled phase must still report
+        // the disabled phase, not a slot-presence mismatch derived from it.
+        self.validate_previous_archive_slot(layout_phase)?;
         self.validate_candidate_layout(layout_phase)?;
         self.validate_relationships()?;
         if let Some(rollback) = &self.rollback {
