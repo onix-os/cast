@@ -59,11 +59,23 @@ Verified: `journal_coordinator` 117/117, `transition_journal` 136/136,
 
 Steps remaining:
 
-2. **A client wrapper** — the analogue of `apply_new_state_candidate`
-   (`new_state_boot_transition.rs:74`). It must acquire the preflight identity
-   and authority, build the `derive_metadata` and `system_trigger` closures, and
-   drive `execute_activate_archived_forward` plus its commit tail. This is the
-   bulk of the work and is why §1.2 was always listed as an open item.
+2. **A client wrapper** — **done** (2026-07-29).
+   `apply_activate_archived_candidate` sits beside `apply_new_state_candidate`
+   in `new_state_boot_transition.rs` (it needs that module's private
+   `LiveNewStateBootError::at` and boot tail, so a separate module does not
+   work). It prepares the identity against the *archived* tree via
+   `prepare_candidate` — the candidate has not moved to staging yet — then drives
+   the coordinator, archives the predecessor, and takes either the no-boot commit
+   or the boot tail.
+
+   One thing worth knowing before touching it: ActivateArchived takes a
+   **system**-trigger closure only, not a transaction one. Its candidate was
+   built when the state was created, so transaction triggers have nothing to do.
+   Passing the transaction closure compiles as far as the trigger view and then
+   fails on `retained_candidate_usr` — the error does not name the real mistake.
+
+   Verified: `journal_coordinator` 117/117, `activate_archived` 67/67,
+   `install` 97/97, both builds at zero warnings.
 3. **Replace the call site** at `state_planning.rs:115`, deleting the
    pre-journal `stage_archived_candidate` call above it (the move now belongs to
    the coordinator).
