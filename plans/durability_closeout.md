@@ -199,6 +199,47 @@ the over-widening that produced the defect fixed above. Shorten the list as each
 is measured and fixed; the test fails on any addition, and on any removal that
 is not recorded.
 
+### A1c RESULT 2026-07-30 — eight of fourteen closed, six deliberately left
+
+Fixed (`2df2200c`), all pre-exchange: NewState `Preparing`,
+`FreshStateAllocating`, `FreshStateAllocated`, `CandidatePrepareStarted`;
+ActivateArchived `Preparing`, `CandidatePrepareStarted`; ActiveReblit
+`Preparing`, `CandidatePrepareStarted`. Nothing in `/usr` has been touched at
+any of them, so admitting them only required the head and tail to agree.
+
+It took **three** predicate fixes, and the tests caught two mistakes that would
+otherwise have shipped:
+
+1. Widening only the decision gate **moved** the stall to `RollbackDecided`
+   instead of removing it — the resume route held a *third* hand-kept copy of
+   the source list. It now delegates to `rollback_source_is_supported`.
+2. `NewState ⇒ fresh_db == Pending` assumed the crash happened after fresh-state
+   allocation, so a rollback from `Preparing` carried the correct `NotRequired`
+   and was refused for it. Now `fresh_db_rollback_is_possible`.
+3. The fresh-db invalidation gate asserted `external_effects_may_remain`
+   outright, so a rollback beginning before the transaction triggers reached
+   `FreshDbInvalidationIntent` and **stalled two phases deeper than the test
+   could see**. Now derived.
+
+That third one changed the test, not just the code:
+`admitted_rollback_resume_routes_always_have_a_consuming_successor` now walks
+the **whole chain** to `RollbackComplete`, bounded so a non-advancing chain
+fails rather than hangs. Checking only the first successor certifies that a
+rollback *starts*; only the full walk shows it *finishes*, and only the second
+keeps a machine bootable.
+
+Also corrected during the fix: adding `Preparing` to the source list let a plan
+claim `fresh_db: Pending` at a phase where nothing was allocated. The gate now
+cross-checks the two.
+
+**Suite 2754/0, zero production warnings.**
+
+**The six left are a different problem.** All post-exchange, where recovery has
+real work to undo — reverse the exchange, restore the previous state, repair
+boot. Do not close them by widening a predicate; each needs a crash-matrix cell
+proving the effect actually runs (task A2, and the phase hook only started
+working on 2026-07-30).
+
 Original reasoning, kept because it is how the gap was found:
 `Phase::recovery_disposition` (`transition_journal/recovery.rs`) maps *all* of
 `Preparing`, `FreshStateAllocating`, `FreshStateAllocated`,
@@ -341,6 +382,16 @@ A hard-coded value silently encoding structure:
   you need.** A test helper deriving `layout` from the phase made the
   pre-exchange rollback unrepresentable — the bug and the blindness to it had
   the same root.
+- **An admission predicate that names an operation is usually standing in for a
+  phase comparison it should be deriving.** Found five times in two days:
+  `operation == NewState` for pre-exchange sources, `!= ActivateArchived` for
+  external effects (×3 copies), `NewState ⇒ fresh_db == Pending`. Every one
+  encoded "the crash happened late" and stranded a rollback that happened early.
+  Treat any surviving `match record.operation` inside an admission gate as
+  suspect until shown otherwise.
+- **Checking one step of a chain proves the chain starts, not that it ends.**
+  The rollback-chain test verified only the first successor and would have
+  certified a chain that dies at step three. Walk to the terminal phase.
 
 And the method lesson that broke two deadlocks after repeated guessing failed:
 **measure the value, do not derive it from assumed arithmetic.** Instrument and
