@@ -23,6 +23,22 @@ impl ExchangeJournalGuard<'_> {
 enum JournalAcquisition<'authority> {
     LegacyBlocking,
     CoordinatorNonblocking(&'authority crate::client::JournalUsrExchangePreparationSeal),
+    /// The dispatcher already holds the journal, so a blocking acquisition
+    /// would deadlock against itself; and a clean baseline is by definition
+    /// wrong here — a record legitimately exists, which is why recovery runs.
+    RecoveryNonblocking(&'authority super::previous_tree_move::PreviousRestoreRecoverySeal),
+}
+
+/// Which tree plays the `previous` role, and where it lives.
+///
+/// The ordinary route models one topology — candidate staged, previous live —
+/// which is the *pre*-exchange shape. After a completed archive the namespace is
+/// the opposite: the candidate is live at `/usr`, staging is empty, and the
+/// predecessor sits in its state slot. Recovery has to describe that.
+#[derive(Clone, Copy)]
+enum PreviousPreparation {
+    LiveUsr,
+    ArchivedSlot(state::Id),
 }
 
 impl JournalAcquisition<'_> {
@@ -37,7 +53,17 @@ impl JournalAcquisition<'_> {
                 let _seal = seal;
                 TransitionJournalStore::try_open_in_retained_cast(cast, root)
             }
+            Self::RecoveryNonblocking(seal) => {
+                let _seal = seal;
+                TransitionJournalStore::try_open_in_retained_cast(cast, root)
+            }
         }
+    }
+
+    /// Whether preparation demands an empty journal and database baseline.
+    /// False only for recovery: it runs *because* a record exists.
+    const fn requires_clean_baseline(self) -> bool {
+        !matches!(self, Self::RecoveryNonblocking(_))
     }
 }
 
@@ -110,6 +136,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::ExistingId(candidate_state),
             JournalAcquisition::LegacyBlocking,
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -131,6 +158,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::UnknownIdAbsent,
             JournalAcquisition::LegacyBlocking,
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -153,6 +181,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
             JournalAcquisition::LegacyBlocking,
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -175,6 +204,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::ExistingId(candidate_state),
             JournalAcquisition::LegacyBlocking,
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -194,6 +224,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::UnknownIdAbsent,
             JournalAcquisition::LegacyBlocking,
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -215,6 +246,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
             JournalAcquisition::LegacyBlocking,
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -238,6 +270,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::ExistingId(candidate_state),
             JournalAcquisition::CoordinatorNonblocking(seal),
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -257,6 +290,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::UnknownIdAbsent,
             JournalAcquisition::CoordinatorNonblocking(seal),
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -279,6 +313,7 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
             JournalAcquisition::CoordinatorNonblocking(seal),
             CandidateNameAuthority::Pathname,
+            PreviousPreparation::LiveUsr,
         )
     }
 
@@ -313,6 +348,48 @@ impl StatefulTreeIdentity {
             CandidateStatePreparation::KnownIdAbsent(candidate_state),
             JournalAcquisition::CoordinatorNonblocking(seal),
             CandidateNameAuthority::RetainedStaging,
+            PreviousPreparation::LiveUsr,
+        )
+    }
+
+    /// Prepare an identity for the **post-archive** topology, so a startup
+    /// dispatcher can reverse a completed predecessor archive.
+    ///
+    /// Every other `prepare*` variant models the pre-exchange shape — candidate
+    /// staged, previous live — and after a completed archive that shape no
+    /// longer exists: the candidate is live at `/usr`, staging is empty, and the
+    /// predecessor is in its state slot. Preparation used to die at
+    /// `pin named /usr directory -> NotFound`, which is why the dispatcher could
+    /// not be built (`plans/previous-restore-recovery-identity.md`).
+    ///
+    /// Three things differ, and each is load-bearing:
+    ///
+    /// - the previous store opens the **archived slot**, not live `/usr`;
+    /// - the journal is taken **non-blocking**, because the dispatcher already
+    ///   holds it and a blocking acquisition would deadlock against itself;
+    /// - the clean-baseline requirement is dropped, because a record legitimately
+    ///   exists — that record is the reason recovery is running.
+    pub(crate) fn prepare_previous_restore_recovery(
+        installation: &Installation,
+        state_db: &db::state::Database,
+        candidate_state: state::Id,
+        previous_state: state::Id,
+        seal: &super::previous_tree_move::PreviousRestoreRecoverySeal,
+    ) -> Result<Self, Error> {
+        // The candidate is already live: the exchange completed before the
+        // archive this is reversing.
+        let candidate_path = installation.root.join("usr");
+        Self::prepare_candidate(
+            installation,
+            state_db,
+            &candidate_path,
+            None,
+            // The live candidate already carries its own `.stateID`; the archive
+            // being reversed happened after it was published.
+            CandidateStatePreparation::ExistingId(candidate_state),
+            JournalAcquisition::RecoveryNonblocking(seal),
+            CandidateNameAuthority::Pathname,
+            PreviousPreparation::ArchivedSlot(previous_state),
         )
     }
 
@@ -324,9 +401,13 @@ impl StatefulTreeIdentity {
         candidate_state: CandidateStatePreparation,
         journal_acquisition: JournalAcquisition<'_>,
         candidate_name_authority: CandidateNameAuthority,
+        previous_preparation: PreviousPreparation,
     ) -> Result<Self, Error> {
         let root = &installation.root;
-        let previous_path = root.join("usr");
+        let previous_path = match previous_preparation {
+            PreviousPreparation::LiveUsr => root.join("usr"),
+            PreviousPreparation::ArchivedSlot(state) => installation.root_path(state.to_string()).join("usr"),
+        };
         // Lock ordering is installation lock (owned by Installation), state
         // database (already opened), then journal lock. Do not invent a second
         // lock for marker publication.
@@ -337,10 +418,17 @@ impl StatefulTreeIdentity {
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         let journal = journal?;
-        let baseline = require_clean_baseline(&journal, state_db);
+        // Recovery deliberately skips this: it runs because a durable record
+        // exists, so demanding a clean baseline would refuse every case the
+        // dispatcher was built for.
+        let baseline = journal_acquisition
+            .requires_clean_baseline()
+            .then(|| require_clean_baseline(&journal, state_db));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
-        baseline?;
+        if let Some(baseline) = baseline {
+            baseline?;
+        }
 
         let candidate_name = candidate_name_authority.retain(installation)?;
 
@@ -355,11 +443,22 @@ impl StatefulTreeIdentity {
         } else {
             TreeMarkerStore::open_path(candidate_path)?
         };
-        let previous_store = open_or_synthesize_live_usr(installation)?;
-        let previous_classification = installation.active_state.map_or(
-            RetainedPreviousClassification::SynthesizedEmpty,
-            RetainedPreviousClassification::Active,
-        );
+        let (previous_store, previous_classification) = match previous_preparation {
+            PreviousPreparation::LiveUsr => (
+                open_or_synthesize_live_usr(installation)?,
+                installation.active_state.map_or(
+                    RetainedPreviousClassification::SynthesizedEmpty,
+                    RetainedPreviousClassification::Active,
+                ),
+            ),
+            // The archived predecessor already exists and is never synthesized:
+            // if it is missing, the archive being reversed did not happen the way
+            // the record says, and guessing is exactly what must not happen.
+            PreviousPreparation::ArchivedSlot(state) => (
+                TreeMarkerStore::open_path(previous_path.clone())?,
+                RetainedPreviousClassification::Active(state),
+            ),
+        };
         if candidate_state.requires_absent_id() {
             state_tree_metadata::RetainedTreeStateId::require_absent(&candidate_store)?;
         }
@@ -376,7 +475,22 @@ impl StatefulTreeIdentity {
         let candidate_name_check = candidate_name
             .open(installation, candidate_path)
             .and_then(|named| candidate_store.require_same_directory(&named).map_err(Error::from));
-        let previous_name = require_named_live_usr(installation, previous_store.retained_directory(), &previous_path);
+        // The previous tree is only reachable through the live `/usr` *name* in
+        // the pre-exchange topology. After an archive it answers to its state
+        // slot instead, so revalidating it through `usr` would compare it
+        // against the candidate and report `LiveUsrChanged`.
+        let previous_name = match previous_preparation {
+            PreviousPreparation::LiveUsr => {
+                require_named_live_usr(installation, previous_store.retained_directory(), &previous_path)
+            }
+            PreviousPreparation::ArchivedSlot(_) => {
+                installation.revalidate_root_directory().map_err(Error::from).and_then(|()| {
+                    TreeMarkerStore::open_path(previous_path.clone())
+                        .map_err(Error::from)
+                        .and_then(|named| previous_store.require_same_directory(&named).map_err(Error::from))
+                })
+            }
+        };
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         candidate_name_check?;
