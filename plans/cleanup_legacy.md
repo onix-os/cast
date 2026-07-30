@@ -100,7 +100,25 @@ checking before deletion. Grouped by risk:
 - `stateful_activation_recovery.rs` (7 remaining): fresh/previous reverse
   retention, racing empty destinations, quarantine uniqueness.
 
-**Needs a named counterpart before deleting — no obvious coordinated twin:**
+**Decisive finding 2026-07-30: candidate quarantine is legacy-only.**
+`quarantine_candidate` has exactly one non-test caller —
+`stateful_recovery.rs:370` — and it begins with `require_no_journal()`, so a
+coordinated transition can never reach it. The journal's equivalent is
+`usr_rollback_candidate_preserve_authority` (candidate preserve + disposition).
+That resolves the seven `stateful_quarantine_recovery.rs` tests below: they
+exercise a subsystem that dies with the route, not a property the coordinated
+route also has. They go together with `candidate_quarantine.rs`.
+
+Named counterparts for the rest:
+
+| legacy test area | coordinated counterpart |
+|---|---|
+| quarantine collision / durability faults | `usr_rollback_candidate_preserve_authority` |
+| root-ABI preflight + exchange boundary | `journal_coordinator::root_abi_publication_*` (15 tests) |
+| previous archive/restore suffix routing | `previous_tree_move` suffix tests + the recovery identity + adoption landed 2026-07-30 |
+| marker/token substitution refusal | `transition_identity` (158 tests) |
+
+**Still needs a named counterpart before deleting:**
 
 - `first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr`
 - `missing_live_usr_between_identity_check_and_exchange_is_never_recreated`
