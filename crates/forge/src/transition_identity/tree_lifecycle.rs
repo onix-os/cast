@@ -1,5 +1,6 @@
 use super::candidate_state_authority::CandidateStatePreparation;
 use super::*;
+use super::previous_tree_move::PreviousRestoreRecoverySeal;
 
 #[derive(Clone, Copy)]
 enum ExchangeJournalGuard<'authority> {
@@ -26,7 +27,13 @@ enum JournalAcquisition<'authority> {
     /// The dispatcher already holds the journal, so a blocking acquisition
     /// would deadlock against itself; and a clean baseline is by definition
     /// wrong here — a record legitimately exists, which is why recovery runs.
-    RecoveryNonblocking(&'authority super::previous_tree_move::PreviousRestoreRecoverySeal),
+    // Forward scaffolding: the recovery primitives are proven by
+    // `stateful_previous_tree_recovery` but have no production caller until the
+    // PreviousRestore rollback dispatcher is built. NOT dead — confirm with
+    // `cargo build -p forge --tests` before deleting
+    // (`plans/previous-restore-recovery-identity.md`).
+    #[allow(dead_code)]
+    RecoveryNonblocking(&'authority PreviousRestoreRecoverySeal),
 }
 
 /// Which tree plays the `previous` role, and where it lives.
@@ -38,6 +45,12 @@ enum JournalAcquisition<'authority> {
 #[derive(Clone, Copy)]
 enum PreviousPreparation {
     LiveUsr,
+    // Forward scaffolding: the recovery primitives are proven by
+    // `stateful_previous_tree_recovery` but have no production caller until the
+    // PreviousRestore rollback dispatcher is built. NOT dead — confirm with
+    // `cargo build -p forge --tests` before deleting
+    // (`plans/previous-restore-recovery-identity.md`).
+    #[allow(dead_code)]
     ArchivedSlot(state::Id),
 }
 
@@ -369,12 +382,18 @@ impl StatefulTreeIdentity {
     ///   holds it and a blocking acquisition would deadlock against itself;
     /// - the clean-baseline requirement is dropped, because a record legitimately
     ///   exists — that record is the reason recovery is running.
+    // Forward scaffolding: the recovery primitives are proven by
+    // `stateful_previous_tree_recovery` but have no production caller until the
+    // PreviousRestore rollback dispatcher is built. NOT dead — confirm with
+    // `cargo build -p forge --tests` before deleting
+    // (`plans/previous-restore-recovery-identity.md`).
+    #[allow(dead_code)]
     pub(crate) fn prepare_previous_restore_recovery(
         installation: &Installation,
         state_db: &db::state::Database,
         candidate_state: state::Id,
         previous_state: state::Id,
-        seal: &super::previous_tree_move::PreviousRestoreRecoverySeal,
+        seal: &PreviousRestoreRecoverySeal,
     ) -> Result<Self, Error> {
         // The candidate is already live: the exchange completed before the
         // archive this is reversing.
