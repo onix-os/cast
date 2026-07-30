@@ -131,11 +131,26 @@ route — the route is just how they drive it. So they should be **re-pointed, n
 deleted**: `run` to `apply_active_reblit_candidate`, `apply_fresh_candidate` to
 `apply_new_state_candidate`.
 
-The catch is the same one the archived-activation port hit: several pass a
-`StatefulTransitionCheckpoint` closure to inject faults, and the coordinated
-route has no checkpoint mechanism. Each such test needs re-expressing as a
-journal-phase fault-hook test, exactly as was done for activation. Tests passing
-`|_| Ok(())` re-point trivially; only the fault-injecting ones need work.
+Measured split of the 34 call sites:
+
+| helper | trivial `\|_\| Ok(())` | fault-injecting |
+|---|---|---|
+| `active_reblit_tests::run` | 19 | 7 |
+| `apply_fresh_candidate` | 6 | 2 |
+
+**Re-pointing is not a signature swap, even for the trivial 25.** The legacy
+helpers take a `vfs` tree and blit it; the coordinated entries take an
+already-materialized `fixed_staging::StatefulCandidate`
+(`apply_active_reblit_candidate(candidate, state, system_snapshot)`). So every
+call site needs a materialization step added, not just a renamed callee.
+
+The 9 fault-injecting sites need the same treatment the archived-activation port
+got: re-expressed as journal-phase fault-hook tests, because the coordinated
+route has no checkpoint mechanism at all.
+
+Estimate honestly: ~25 mechanical edits plus 9 genuine test rewrites, in the
+reblit and metadata paths. That is the whole of what stands between here and
+§§2-4 being done.
 
 Do that first. Once both helpers are off the legacy route, the deletion is
 mechanical: 34 tests, `apply_stateful_blit*`, `commit_stateful_staging`,
