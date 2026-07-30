@@ -96,6 +96,14 @@ impl TransitionRecord {
             next: self.phase,
         })?;
         let next_phase = next_forward_phase(self, current).ok_or(CodecError::TerminalPhaseAdvance)?;
+        if next_phase == ForwardPhase::PreviousArchiveIntent {
+            // The intent record must carry the parking name it can be reversed
+            // to, so this advance has to name it. Same contract as
+            // `BootSyncStarted` below, and refusing here beats letting the
+            // generic advance fail validation for a field it never had a way to
+            // supply.
+            return Err(CodecError::ExplicitPreviousArchiveIntentSuccessorRequired);
+        }
         if next_phase == ForwardPhase::BootSyncStarted {
             return Err(CodecError::ExplicitBootSyncStartedSuccessorRequired);
         }
@@ -148,6 +156,41 @@ impl TransitionRecord {
     /// Complete boot publication only for the exact receipt pair which the
     /// validated `BootSyncStarted` record already binds. Generic forward
     /// advancement cannot cross this evidence-bearing boundary.
+    /// Advance into `PreviousArchiveIntent` carrying the parking name the
+    /// archive can later be reversed to.
+    ///
+    /// Shaped like `boot_sync_complete_successor` below, and for the same
+    /// reason: the successor phase *requires* a field the source does not have,
+    /// so the constructor must take it and build a complete record before
+    /// validating. Injecting it after a generic `forward_successor` cannot work
+    /// — that call validates internally and would reject the record for the very
+    /// field about to be added
+    /// (`plans/previous-restore-recovery-identity.md`, D-PR1).
+    pub(crate) fn previous_archive_intent_successor(
+        &self,
+        slot: crate::transition_journal::PreviousArchiveSlot,
+    ) -> Result<Self, CodecError> {
+        self.validate()?;
+        let current = self.phase.forward().ok_or(CodecError::IllegalPhaseAdvance {
+            current: self.phase,
+            next: self.phase,
+        })?;
+        let next_phase = next_forward_phase(self, current).ok_or(CodecError::TerminalPhaseAdvance)?;
+        if next_phase != ForwardPhase::PreviousArchiveIntent {
+            return Err(CodecError::IllegalPhaseAdvance {
+                current: self.phase,
+                next: next_phase.into(),
+            });
+        }
+
+        let mut next = self.clone();
+        next.generation = self.generation.checked_add(1).ok_or(CodecError::GenerationExhausted)?;
+        next.phase = next_phase.into();
+        next.previous_archive_slot = Some(slot);
+        validate_advance(self, &next)?;
+        Ok(next)
+    }
+
     pub(crate) fn boot_sync_complete_successor(
         &self,
         expected_pair: crate::boot_publication::BootPublicationReceiptPair,

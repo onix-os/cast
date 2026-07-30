@@ -337,12 +337,18 @@ fn journal_coordinator_system_triggers_run_for_archived_and_reject_disabled_path
                 Ok::<(), TriggerEffectError>(())
             })
             .unwrap_err();
+        // Two shapes of the same refusal. With triggers disabled the chain skips
+        // straight past the system-trigger phases, so the advance is refused
+        // either as a phase mismatch or — when the skipped-to phase is
+        // `PreviousArchiveIntent` — by the explicit-successor contract that
+        // phase now carries. Both are effect-free refusals, which is the
+        // property under test.
         assert!(matches!(
             failure,
             StatefulSystemTriggerFailure::SuccessorContract {
                 expected_phase: Phase::SystemTriggersStarted,
                 ..
-            }
+            } | StatefulSystemTriggerFailure::Preflight { .. }
         ));
         assert_eq!(calls.get(), 0);
         assert_eq!(read_canonical(&fixture.installation.root), source);

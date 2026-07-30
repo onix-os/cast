@@ -470,15 +470,15 @@ fn archive_successor(
     stage: &'static str,
     slot: Option<crate::transition_journal::PreviousArchiveSlot>,
 ) -> Result<TransitionRecord, &'static str> {
-    let mut successor = record.forward_successor(None).map_err(|_| stage)?;
+    // The intent successor requires the parking name, so it is built complete by
+    // its own constructor rather than patched after a generic advance — see
+    // `previous_archive_intent_successor`.
+    let successor = match slot {
+        Some(slot) => record.previous_archive_intent_successor(slot).map_err(|_| stage)?,
+        None => record.forward_successor(None).map_err(|_| stage)?,
+    };
     if successor.phase != expected_phase {
         return Err(stage);
-    }
-    // Carried into the intent record and then forward: the parking name must be
-    // durable before the publishing rename consumes it, and must persist for as
-    // long as the archive is reversible.
-    if let Some(slot) = slot {
-        successor.previous_archive_slot = Some(slot);
     }
     Ok(successor)
 }

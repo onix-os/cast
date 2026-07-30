@@ -55,6 +55,16 @@ fn startup_activate_archived_complete_route_production_defers_inexact_plan_and_t
     rollback.source = ForwardPhase::PreviousArchiveIntent;
     rollback.previous_archive = RollbackAction::AlreadySatisfied;
     rollback.external_effects_may_remain = true;
+    // Moving the rollback source past the archive makes the parking name
+    // required: a rollback that has to un-archive needs somewhere exact to put
+    // the slot back. Only the *plan* is meant to be inexact here.
+    inexact.previous_archive_slot = Some(crate::transition_journal::PreviousArchiveSlot {
+        parking_name: crate::transition_journal::QuarantineName::parse(
+            ".previous-slot-1-".to_owned() + &"a".repeat(32) + "-0",
+        )
+        .unwrap(),
+        reused_wrapper: false,
+    });
     let database_before = fixture.database_snapshot();
     let namespace_before = fixture.namespace_snapshot();
     fs::write(
