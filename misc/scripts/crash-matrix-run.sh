@@ -180,8 +180,19 @@ CRASH_PHASE=$(sed -n 's/.*cell_phase=\([A-Za-z.]*\).*/\1/p' /proc/cmdline | tr '
 if [ -n "$CRASH_PHASE" ]; then export CAST_CRASH_AT_PHASE="$CRASH_PHASE"; fi
 stage_and_activate() {
     stage_and_install
-    # State 1 is archived once the install created state 2; activating it back
-    # drives an ActivateArchived transition.
+    # The install created state *1*, not state 2 — this is a fresh root. So
+    # `activate 1` was a no-op error ("state 1 already active") and no
+    # ActivateArchived transition ever happened, which is why the phase-targeted
+    # marker never fired and the cell reported a meaningless green.
+    #
+    # Create a second state first, so state 1 is genuinely archived and
+    # activating it back drives a real ActivateArchived transition. Removing the
+    # package is the cheapest way to get one.
+    #
+    # This sequence only became possible on 2026-07-30: a first install used to
+    # leave its displaced /usr placeholder in fixed staging, so the next stateful
+    # operation refused with "fixed staging contains crash or foreign evidence".
+    cast -D /mnt/root -y remove bash-completion 2>&1 | tail -2
     cast -D /mnt/root -y state activate 1 2>&1 | tail -2
 }
 stage_and_install() {

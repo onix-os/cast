@@ -31,6 +31,49 @@ Two earlier false-greens are the reason this is gated rather than assumed: the
 `cast state activate 1` was failing with `state 1 already active` and nothing was
 happening.
 
+### A1 RESULT 2026-07-30 — the false green is gone, and it exposed a stall
+
+Two harness bugs had to be fixed before the cell meant anything:
+
+1. **The guest kernel is `0600` root-only**, so qemu never booted:
+   `could not open kernel file ... Permission denied`. The "never reached"
+   message was printed by a run that never ran. Stage a readable copy
+   (`sudo cp /boot/vmlinuz-* /tmp/vmlinuz && sudo chmod 644`) and point
+   `KERNEL` at it.
+2. **`stage_and_activate` never produced an ActivateArchived transition.** Its
+   comment claimed "the install created state 2", but on a fresh root the
+   install creates state **1**, so `cast state activate 1` was a no-op error and
+   the marker could never fire. It now installs, *removes* (creating state 2 and
+   archiving state 1), then activates 1. That sequence only became possible on
+   2026-07-30 — a first install used to leave its displaced `/usr` placeholder in
+   fixed staging and wedge the next operation.
+
+With both fixed, the cell produces a real verdict for the first time:
+
+    activate  phase:ActivateArchived.CandidatePrepared
+      recovery=PENDING  driver=stalled-at-CandidatePreserveIntent  state=absent
+
+    PHASE-1: CandidatePreserveIntent
+    STALL: state transition 33c7e4db... at CandidatePreserveIntent requires
+           ResumeRollback { phase: CandidatePreserveIntent }
+
+**Do not call this a defect yet — apply the harness's own standing rule.**
+Recovery is incremental, so "still pending after N invocations" and "cannot
+recover" look identical at a fixed N. Raise the driver invocation cap well above
+15 and check whether the phase keeps *advancing*. It is only a defect if the
+phase stops changing. This exact confusion already produced one false defect
+report during Phase 1.
+
+If the phase genuinely stops at `CandidatePreserveIntent`, this is serious:
+`state=absent` means the guest is left with no state at all, and the rollback
+cannot resume — an ActivateArchived rollback that bricks. That would also answer
+A3 for ActivateArchived in the worst way.
+
+Note the marker still printed "never reached", so the cut did not land at
+`CandidatePrepared` even though a real transition occurred. Reconcile that too:
+either the target phase is not on this operation's chain, or the cut landed
+elsewhere.
+
 ### A2. Extend `OPS` past install
 
 Order: **archived repair first** — it is the newest durability claim and has zero
