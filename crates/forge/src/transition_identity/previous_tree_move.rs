@@ -1,5 +1,8 @@
 use super::*;
+use std::ffi::CString;
+
 use crate::transition_journal::{PreviousArchiveSlot, QuarantineName};
+use super::reusable_previous_slot::ReusablePreviousStateSlot;
 
 /// Re-validate a namespace name through the journal model's newtype.
 ///
@@ -81,7 +84,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
     ) -> Result<(), RetainedPreviousMoveFailure> {
-        self.archive_previous_guarded(installation, state, ArchiveJournalGuard::LegacyNoJournal)
+        self.archive_previous_guarded(installation, state, ArchiveJournalGuard::LegacyNoJournal, None)
     }
 
     /// Coordinator-only archive. The seal proves the caller owns the exact
@@ -92,8 +95,9 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
         seal: &journal_coordinator::PreviousArchiveEffectSeal,
+        recorded: &PreviousArchiveSlot,
     ) -> Result<(), RetainedPreviousMoveFailure> {
-        self.archive_previous_guarded(installation, state, ArchiveJournalGuard::Coordinator(seal))
+        self.archive_previous_guarded(installation, state, ArchiveJournalGuard::Coordinator(seal), Some(recorded))
     }
 
     fn archive_previous_guarded(
@@ -101,8 +105,15 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
         guard: ArchiveJournalGuard<'_>,
+        recorded: Option<&PreviousArchiveSlot>,
     ) -> Result<(), RetainedPreviousMoveFailure> {
-        let result = self.move_previous(installation, state, RetainedPreviousMoveDirection::Archive, guard);
+        let result = self.move_previous_recorded(
+            installation,
+            state,
+            RetainedPreviousMoveDirection::Archive,
+            guard,
+            recorded,
+        );
         match result {
             Err(failure) if failure.outcome == RetainedPreviousMoveOutcome::NotApplied => {
                 match self.finish_not_applied_previous_archive_guarded(installation, state, guard) {
@@ -247,6 +258,17 @@ impl StatefulTreeIdentity {
         direction: RetainedPreviousMoveDirection,
         guard: ArchiveJournalGuard<'_>,
     ) -> Result<(), RetainedPreviousMoveFailure> {
+        self.move_previous_recorded(installation, state, direction, guard, None)
+    }
+
+    fn move_previous_recorded(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        direction: RetainedPreviousMoveDirection,
+        guard: ArchiveJournalGuard<'_>,
+        recorded: Option<&PreviousArchiveSlot>,
+    ) -> Result<(), RetainedPreviousMoveFailure> {
         let not_applied = |source| RetainedPreviousMoveFailure {
             outcome: RetainedPreviousMoveOutcome::NotApplied,
             source,
@@ -279,7 +301,7 @@ impl StatefulTreeIdentity {
                 }));
             }
             *retained = Some(
-                self.create_previous_archive_attempt(installation, state, &name)
+                self.create_previous_archive_attempt(installation, state, &name, recorded)
                     .map_err(not_applied)?,
             );
             created_now = true;
@@ -450,6 +472,7 @@ impl StatefulTreeIdentity {
         installation: &Installation,
         state: state::Id,
         name: &CStr,
+        recorded: Option<&PreviousArchiveSlot>,
     ) -> Result<RetainedPreviousArchiveAttempt, Error> {
         let roots_path = installation.root_path("");
         let roots = RetainedDirectory::open_beneath(installation.root_directory(), ROOTS_RELATIVE, roots_path.clone())?;
@@ -471,6 +494,28 @@ impl StatefulTreeIdentity {
         // free pool after a later restore instead of leaking one wrapper per
         // successful activation.
         let reusable = self.find_reusable_previous_state_slot(installation, &roots, &staging, state)?;
+
+        // A journal-coordinated archive already recorded which name it will use,
+        // before that evidence could be consumed by the publishing rename. Honour
+        // it rather than re-deciding: a second, independent choice could disagree
+        // with the record, and the record is what a later rollback trusts
+        // (`plans/previous-restore-recovery-identity.md`, D-PR1).
+        if let Some(recorded) = recorded {
+            let expected = CString::new(recorded.parking_name.as_str())
+                .map_err(|_| Error::PreviousArchiveSlotRecordUnusable {
+                    state: i32::from(state),
+                })?;
+            return self.create_recorded_previous_archive_attempt(
+                &roots,
+                &roots_path,
+                name,
+                state,
+                &expected,
+                recorded.reused_wrapper,
+                reusable,
+            );
+        }
+
         let (parking_name, slot, state_slot_marker) = match reusable {
             Some(reusable) => (reusable.parking_name, reusable.slot, Some(reusable.marker)),
             None => {
@@ -509,6 +554,58 @@ impl StatefulTreeIdentity {
             state_slot_marker,
         };
         Ok(attempt)
+    }
+
+    /// Build the archive attempt at the name the journal already recorded.
+    ///
+    /// Deliberately does *not* fall back to another index if the recorded name
+    /// is taken. The un-recorded path renumbers because any free name will do;
+    /// here the name is durable evidence a later rollback depends on, so a
+    /// collision means the namespace disagrees with the record and the honest
+    /// answer is to stop. A transition holds the journal, so no other transition
+    /// can be competing — the only racer is a hostile same-UID writer, which
+    /// this codebase already treats as adversarial.
+    #[allow(clippy::too_many_arguments)]
+    fn create_recorded_previous_archive_attempt(
+        &self,
+        roots: &RetainedDirectory,
+        roots_path: &Path,
+        name: &CStr,
+        state: state::Id,
+        parking_name: &CStr,
+        reused_wrapper: bool,
+        reusable: Option<ReusablePreviousStateSlot>,
+    ) -> Result<RetainedPreviousArchiveAttempt, Error> {
+        let staging = roots.open_child(c"staging", roots_path.join("staging"))?;
+        let parking_path = roots_path.join(parking_name.to_string_lossy().as_ref());
+
+        let (slot, state_slot_marker) = if reused_wrapper {
+            // The record says a wrapper was reused, so one must still be there
+            // under exactly that name.
+            let reusable = reusable.filter(|found| found.parking_name.as_c_str() == parking_name).ok_or(
+                Error::PreviousArchiveSlotRecordUnusable {
+                    state: i32::from(state),
+                },
+            )?;
+            (reusable.slot, Some(reusable.marker))
+        } else {
+            if roots.child_name_exists(parking_name, parking_path.clone())? {
+                return Err(Error::PreviousArchiveSlotRecordUnusable {
+                    state: i32::from(state),
+                });
+            }
+            let slot = RetainedDirectory::create_private_previous_slot(roots, parking_name, parking_path)?;
+            (slot, None)
+        };
+
+        Ok(RetainedPreviousArchiveAttempt {
+            name: name.to_owned(),
+            parking_name: parking_name.to_owned(),
+            roots: roots.clone_retained()?,
+            staging,
+            slot,
+            state_slot_marker,
+        })
     }
 
     fn finish_previous_archive_slot_creation(

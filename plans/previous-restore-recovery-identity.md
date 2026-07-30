@@ -281,10 +281,19 @@ correct and reusable:
    eyeball the diff; that file exists to catch exactly this kind of silent
    change.
 
-Step 4 (`create_previous_archive_attempt` consuming the recorded name rather
-than choosing its own) is **not started**. Until it lands the record is
-descriptive, not authoritative — and the collision-is-an-error behaviour change
-described above arrives with it.
+**Step 4 is done.** `create_previous_archive_attempt` now takes the recorded slot
+and, when present, builds the attempt at that exact name via
+`create_recorded_previous_archive_attempt`. The name is read back from the
+*durable record* inside `archive_previous_tree`, not from the in-memory
+selection — what governs the move is what survived the crash window.
+
+The collision behaviour change landed with it, as designed: the recorded path
+never renumbers. A taken parking name, or a `reused_wrapper: true` record whose
+wrapper is no longer there, is `Error::PreviousArchiveSlotRecordUnusable` rather
+than a silent second choice. The un-recorded (legacy) path still renumbers,
+because there any free name will do.
+
+Covered by `previous_archive_uses_the_slot_its_record_named`.
 
 **Original plan for step 2 follows.**
 

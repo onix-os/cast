@@ -91,6 +91,8 @@ pub(crate) enum Error {
     DuplicateReusableArchivedCandidateSlots { state: i32 },
     #[error("construct a bounded reusable archived-candidate slot name")]
     InvalidReusableArchivedCandidateParkingName(#[source] crate::transition_journal::CodecError),
+    #[error("state {state} recorded an archive parking slot that its namespace no longer matches")]
+    PreviousArchiveSlotRecordUnusable { state: i32 },
     #[error(
         "previous-state archive failed before application and exact-slot retirement also failed: primary: {primary}; retirement: {cleanup}"
     )]
