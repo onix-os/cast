@@ -262,6 +262,47 @@ have caught both this and the bug already fixed.
 Do this before B: same failure shape, and B's boot-repair path sits directly
 downstream.
 
+### A2 RUN 2026-07-31 — the chain advances; a terminal stall remains
+
+First guest-level run with the fixed binary (`2df2200c`) and the phase hook on
+the coordinated route. The rollback **advances** where it previously froze:
+
+    PHASE-1: CandidatePreserveIntent
+    PHASE-2: CandidatePreserved
+    PHASE-3: RollbackComplete
+    STALL: ... at RollbackComplete requires FinalizeRollback
+    recovery=PENDING  driver=stalled-at-RollbackComplete  state=absent
+
+Against 26 consecutive attempts frozen at `CandidatePreserveIntent` before the
+fix, that is the pre-exchange closure working outside a unit test.
+
+**New defect: the terminal `FinalizeRollback` step is refused.** The chain now
+reaches `RollbackComplete` and cannot finalize, so the machine still never
+recovers — the stall moved, it did not disappear. This is invisible to
+`admitted_rollback_resume_routes_always_have_a_consuming_successor`, which
+matches `_ => true` for completed-action and terminal phases and only gates the
+intents. **Extend that test to the terminal phases before fixing the
+authority** — that omission is the third time in this section that an unchecked
+segment of the chain is exactly where it died.
+
+**Two reasons this cell still does not test what it names:**
+
+1. `CAST-AT-PHASE` *still* never printed, so the phase-targeted cut did not
+   fire even with the hook on `advance_record_binding`. Diagnose in the guest
+   directly: confirm `CAST_CRASH_AT_PHASE` is actually set (`cell_phase` is
+   parsed off `/proc/cmdline` with a `sed`/`tr` pair that has never been
+   verified end to end), then confirm the activation reaches
+   `CandidatePrepared` at all.
+2. `state=absent` with the marker absent means the harness fell back to killing
+   the guest 120s after `CELL-READY`, which landed **inside the install**. So
+   the rollback measured above is a *NewState* rollback, not ActivateArchived.
+
+Fix (1) before drawing any ActivateArchived conclusion from this cell. The
+harness's `KERNEL=` line was also still pointing at the root-only
+`/boot/vmlinuz-*` — that fix had been written in this plan but never applied to
+the script; it now prefers a readable `/tmp/vmlinuz` and exits loudly instead of
+printing "phase never reached" for a guest that never booted.
+
 ### A2. Extend `OPS` past install
 
 Order: **archived repair first** — it is the newest durability claim and has zero

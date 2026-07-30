@@ -167,7 +167,16 @@
 #
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
-KERNEL=$(ls /boot/vmlinuz-* | head -1)
+# Distro kernels are `0600 root:root`, so qemu cannot open them as this user and
+# fails with "could not open kernel file ... Permission denied" — a cell that
+# never boots still prints "phase never reached", which reads as a real result.
+# Prefer a readable staged copy and fail loudly rather than produce that.
+KERNEL=${KERNEL:-/tmp/vmlinuz}
+if [ ! -r "$KERNEL" ]; then
+    echo "kernel '$KERNEL' is not readable by $(id -un)." >&2
+    echo "stage one:  sudo cp \$(ls /boot/vmlinuz-* | head -1) /tmp/vmlinuz && sudo chmod 644 /tmp/vmlinuz" >&2
+    exit 1
+fi
 
 # Operations that write durable state without needing network.
 OPS=(activate)
