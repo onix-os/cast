@@ -143,66 +143,62 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
 
 fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
     record.rollback.as_ref().is_some_and(|rollback| {
-        matches!(
-            rollback.source,
-            // Pre-exchange sources: nothing in `/usr` was touched, so the plan
-            // carries `usr_exchange: NotRequired` and this route only has to
-            // carry the candidate discard through (`plans/future_impl.md` §1.4).
-            ForwardPhase::CandidatePrepared
-                | ForwardPhase::TransactionTriggersStarted
-                | ForwardPhase::TransactionTriggersComplete
-                | ForwardPhase::UsrExchangeIntent
-                | ForwardPhase::UsrExchanged
-                | ForwardPhase::RootLinksComplete
-        ) || matches!(
-            (record.operation, record.phase, rollback.source, record.generation),
-            (
-                Operation::NewState,
-                Phase::RollbackDecided,
-                ForwardPhase::SystemTriggersStarted,
-                12,
-            ) | (
-                Operation::NewState,
-                Phase::RollbackDecided,
-                ForwardPhase::SystemTriggersComplete,
-                13,
-            ) | (
-                Operation::NewState,
-                Phase::RollbackDecided,
-                ForwardPhase::PreviousArchived,
-                15,
-            ) | (
-                Operation::NewState,
-                Phase::UsrRestored,
-                ForwardPhase::SystemTriggersStarted,
-                14,
-            ) | (
-                Operation::NewState,
-                Phase::UsrRestored,
-                ForwardPhase::SystemTriggersComplete,
-                15,
-            ) | (
-                Operation::ActiveReblit,
-                Phase::RollbackDecided,
-                ForwardPhase::SystemTriggersStarted,
-                10,
-            ) | (
-                Operation::ActiveReblit,
-                Phase::RollbackDecided,
-                ForwardPhase::SystemTriggersComplete,
-                11,
-            ) | (
-                Operation::ActiveReblit,
-                Phase::UsrRestored,
-                ForwardPhase::SystemTriggersStarted,
-                12,
-            ) | (
-                Operation::ActiveReblit,
-                Phase::UsrRestored,
-                ForwardPhase::SystemTriggersComplete,
-                13,
+        // Delegated rather than listed. This was a third hand-kept copy of the
+        // same source list, and it stranded a rollback the decision gate had
+        // already accepted: the record reached `RollbackDecided` and then sat
+        // there, because this route would not carry it forward. One definition
+        // means the head and tail cannot disagree again.
+        super::rollback_source_is_supported(record, rollback.source)
+            || matches!(
+                (record.operation, record.phase, rollback.source, record.generation),
+                (
+                    Operation::NewState,
+                    Phase::RollbackDecided,
+                    ForwardPhase::SystemTriggersStarted,
+                    12,
+                ) | (
+                    Operation::NewState,
+                    Phase::RollbackDecided,
+                    ForwardPhase::SystemTriggersComplete,
+                    13,
+                ) | (
+                    Operation::NewState,
+                    Phase::RollbackDecided,
+                    ForwardPhase::PreviousArchived,
+                    15,
+                ) | (
+                    Operation::NewState,
+                    Phase::UsrRestored,
+                    ForwardPhase::SystemTriggersStarted,
+                    14,
+                ) | (
+                    Operation::NewState,
+                    Phase::UsrRestored,
+                    ForwardPhase::SystemTriggersComplete,
+                    15,
+                ) | (
+                    Operation::ActiveReblit,
+                    Phase::RollbackDecided,
+                    ForwardPhase::SystemTriggersStarted,
+                    10,
+                ) | (
+                    Operation::ActiveReblit,
+                    Phase::RollbackDecided,
+                    ForwardPhase::SystemTriggersComplete,
+                    11,
+                ) | (
+                    Operation::ActiveReblit,
+                    Phase::UsrRestored,
+                    ForwardPhase::SystemTriggersStarted,
+                    12,
+                ) | (
+                    Operation::ActiveReblit,
+                    Phase::UsrRestored,
+                    ForwardPhase::SystemTriggersComplete,
+                    13,
+                )
             )
-        ) || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
+            || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
     })
 }
 
@@ -251,9 +247,10 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
     {
         return false;
     }
-    let fresh_is_exact = match record.operation {
-        Operation::NewState => rollback.fresh_db == RollbackAction::Pending,
-        Operation::ActivateArchived | Operation::ActiveReblit => rollback.fresh_db == RollbackAction::NotRequired,
+    let fresh_is_exact = if record.fresh_db_rollback_is_possible(rollback.source) {
+        rollback.fresh_db == RollbackAction::Pending
+    } else {
+        rollback.fresh_db == RollbackAction::NotRequired
     };
     let candidate_disposition_is_exact = match record.operation {
         Operation::ActivateArchived => rollback.candidate.disposition == AbortDisposition::Rearchive,

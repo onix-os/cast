@@ -238,9 +238,23 @@ fn fresh_db_invalidation_plan_is_exact(record: &TransitionRecord) -> bool {
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
         && rollback.candidate.disposition == AbortDisposition::Quarantine
+        // The row must actually be possible at this source. Checking only for
+        // `Pending` accepted a plan claiming an allocation that never happened
+        // — `source: Preparing` with `fresh_db: Pending` is incoherent, and the
+        // journal would never build it.
+        && record.fresh_db_rollback_is_possible(rollback.source)
         && rollback.fresh_db == RollbackAction::Pending
         && rollback.boot == BootRollback::NotRequired
-        && rollback.external_effects_may_remain
+        // Derived, not asserted true. Hard-coding it required the crash to have
+        // happened after the transaction triggers, so a rollback that began
+        // before them reached this phase and then stalled here with no route
+        // out — the gap this whole section keeps rediscovering.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_fresh_db_invalidation_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
+    fresh_db_invalidation_plan_is_exact(record)
 }
 
 fn require_journal_record_binding(

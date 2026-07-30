@@ -13,8 +13,8 @@ use crate::{
     transition_journal::{
         AbortDisposition, BootId, BootRepairOutcome, BootRollback, CandidateRollback, ForwardPhase,
         InitialRollbackAction, MountNamespaceIdentity, Operation, Phase, Previous, PreviousOrigin, QuarantineName,
-        RollbackAction, RollbackObservations, RollbackPlan, RuntimeEpoch, RuntimeEvidenceError, RuntimeTreeIdentity,
-        TransitionJournalStore, TransitionRecord, TreeToken,
+        RollbackAction, RollbackActionOutcome, RollbackObservations, RollbackPlan, RuntimeEpoch, RuntimeEvidenceError,
+        RuntimeTreeIdentity, TransitionJournalStore, TransitionRecord, TreeToken,
     },
     tree_marker::{TreeMarkerError, TreeMarkerStore},
 };
@@ -878,8 +878,18 @@ fn startup_reconciliation_pending_error_releases_journal_before_retry() {
     drop(first);
 }
 
-/// Forward phases a rollback can be entered from before `/usr` is touched.
-const PRE_EXCHANGE_ROLLBACK_SOURCES: [Phase; 3] = [
+/// Every forward phase a rollback can be entered from before `/usr` is touched.
+///
+/// This deliberately covers the whole pre-exchange span, not just the three
+/// phases the admission lists used to name. Restricting it to those three is
+/// what let a crash while preparing a candidate or allocating the fresh state
+/// go unnoticed: the earlier phases were never exercised, so nothing observed
+/// that they stranded.
+const PRE_EXCHANGE_ROLLBACK_SOURCES: [Phase; 7] = [
+    Phase::Preparing,
+    Phase::FreshStateAllocating,
+    Phase::FreshStateAllocated,
+    Phase::CandidatePrepareStarted,
     Phase::CandidatePrepared,
     Phase::TransactionTriggersStarted,
     Phase::TransactionTriggersComplete,
@@ -914,8 +924,35 @@ fn forward_record_for(operation: Operation, phase: Phase) -> TransitionRecord {
     )
     .unwrap();
     record.phase = phase;
-    record.candidate.id = candidate_id.or(Some(42));
+    // NewState allocates its candidate mid-transition, so the ID is present
+    // exactly from `FreshStateAllocated` on. Forcing it everywhere made records
+    // the model rejects, which silently skipped the early phases.
+    record.candidate.id = match operation {
+        Operation::NewState => phase
+            .forward()
+            .filter(|forward| forward.ordinal() >= ForwardPhase::FreshStateAllocated.ordinal())
+            .map(|_| 42),
+        Operation::ActivateArchived | Operation::ActiveReblit => candidate_id,
+    };
     record
+}
+
+/// The rollback chain has four ordinary actions plus a terminal phase, so no
+/// legal walk is longer than this. The bound makes a non-advancing chain fail
+/// the test instead of hanging it.
+const MAX_ROLLBACK_CHAIN_STEPS: usize = 12;
+
+/// Completing a persisted intent requires an explicit outcome; the routing
+/// phases between them accept none.
+fn rollback_outcome_for(phase: Phase) -> Option<RollbackActionOutcome> {
+    matches!(
+        phase,
+        Phase::PreviousRestoreIntent
+            | Phase::ReverseExchangeIntent
+            | Phase::CandidatePreserveIntent
+            | Phase::FreshDbInvalidationIntent
+    )
+    .then_some(RollbackActionOutcome::Applied)
 }
 
 /// A record sitting at `phase`, or `None` when that phase is not on this
@@ -986,21 +1023,25 @@ fn every_begin_rollback_phase_has_an_admitting_decision_authority() {
     //
     // Not covered: `ArchivedCandidateStagingIntent` / `ArchivedCandidateStaged`
     // are absent from `FORWARD_PHASES`, so this list is a lower bound.
+    // Every remaining entry is post-exchange, where recovery has real work to
+    // undo — reverse the exchange, restore the previous state, repair boot.
+    // The eight pre-exchange stalls that were here on 2026-07-30 are fixed:
+    // nothing in `/usr` had been touched at those phases, so admitting them
+    // only required the head and tail to agree.
+    //
+    // These six are a different problem and must not be closed the same way.
+    // ActivateArchived has no post-exchange rollback admission at all past
+    // `RootLinksComplete`, so a power cut while activation runs its system
+    // triggers, archives the previous state, or syncs boot is unrecoverable.
+    // Fix them per operation behind a crash-matrix cell that proves the effect
+    // actually runs, not by widening a predicate.
     let known_unadmitted = vec![
-        (Operation::NewState, Phase::Preparing),
-        (Operation::NewState, Phase::FreshStateAllocating),
-        (Operation::NewState, Phase::FreshStateAllocated),
-        (Operation::NewState, Phase::CandidatePrepareStarted),
         (Operation::NewState, Phase::BootSyncStarted),
-        (Operation::ActivateArchived, Phase::Preparing),
-        (Operation::ActivateArchived, Phase::CandidatePrepareStarted),
         (Operation::ActivateArchived, Phase::SystemTriggersStarted),
         (Operation::ActivateArchived, Phase::SystemTriggersComplete),
         (Operation::ActivateArchived, Phase::PreviousArchiveIntent),
         (Operation::ActivateArchived, Phase::PreviousArchived),
         (Operation::ActivateArchived, Phase::BootSyncStarted),
-        (Operation::ActiveReblit, Phase::Preparing),
-        (Operation::ActiveReblit, Phase::CandidatePrepareStarted),
     ];
     assert_eq!(
         stranded, known_unadmitted,
@@ -1016,7 +1057,14 @@ fn pre_exchange_rollback_decision(operation: Operation, source: Phase) -> Option
             previous_archive: None,
             usr_exchange: None,
             candidate: InitialRollbackAction::Pending,
-            fresh_db: (operation == Operation::NewState).then_some(InitialRollbackAction::Pending),
+            // Mirrors the journal's own `fresh_possible` rule. Supplying an
+            // observation the source phase makes impossible is rejected, which
+            // would skip the case instead of testing it.
+            fresh_db: (operation == Operation::NewState
+                && source
+                    .forward()
+                    .is_some_and(|f| f.ordinal() >= ForwardPhase::FreshStateAllocating.ordinal()))
+            .then_some(InitialRollbackAction::Pending),
         })
         .ok()
 }
@@ -1055,14 +1103,37 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
                 continue;
             }
             checked.push((operation, source));
-            let successor = decided.rollback_successor(None).expect("admitted route has a successor");
-            let consumed = match successor.phase {
-                Phase::CandidatePreserveIntent => usr_rollback_candidate_preserve_plan_is_exact_for_test(&successor),
-                Phase::ReverseExchangeIntent => usr_rollback_reverse_plan_is_exact_for_test(&successor),
-                other => panic!("no exactness gate is known for rollback successor phase {other:?}"),
-            };
-            if !consumed {
-                stranded.push((operation, source, successor.phase));
+            // Walk the whole chain, not just the first step. Checking only the
+            // first successor hid a stall two phases deeper: a rollback that
+            // began before the transaction triggers reached
+            // `FreshDbInvalidationIntent` and had no route out, because that
+            // gate asserted `external_effects_may_remain` rather than deriving
+            // it. A chain is only recoverable if *every* phase on it is.
+            let mut current = decided;
+            for _ in 0..MAX_ROLLBACK_CHAIN_STEPS {
+                let Ok(successor) = current.rollback_successor(rollback_outcome_for(current.phase)) else {
+                    break;
+                };
+                let consumed = match successor.phase {
+                    Phase::CandidatePreserveIntent => {
+                        usr_rollback_candidate_preserve_plan_is_exact_for_test(&successor)
+                    }
+                    Phase::ReverseExchangeIntent => usr_rollback_reverse_plan_is_exact_for_test(&successor),
+                    Phase::FreshDbInvalidationIntent => {
+                        usr_rollback_fresh_db_invalidation_plan_is_exact_for_test(&successor)
+                    }
+                    // Completed-action and terminal phases are carried by their
+                    // own route authorities; this test covers the intents.
+                    _ => true,
+                };
+                if !consumed {
+                    stranded.push((operation, source, successor.phase));
+                    break;
+                }
+                if successor.phase == Phase::RollbackComplete {
+                    break;
+                }
+                current = successor;
             }
         }
     }
@@ -1073,16 +1144,29 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
     assert_eq!(
         checked,
         vec![
+            (Operation::NewState, Phase::Preparing),
+            (Operation::NewState, Phase::FreshStateAllocated),
+            (Operation::NewState, Phase::CandidatePrepareStarted),
             (Operation::NewState, Phase::CandidatePrepared),
             (Operation::NewState, Phase::TransactionTriggersStarted),
             (Operation::NewState, Phase::TransactionTriggersComplete),
+            (Operation::ActivateArchived, Phase::Preparing),
+            (Operation::ActivateArchived, Phase::CandidatePrepareStarted),
             (Operation::ActivateArchived, Phase::CandidatePrepared),
+            (Operation::ActiveReblit, Phase::Preparing),
+            (Operation::ActiveReblit, Phase::CandidatePrepareStarted),
             (Operation::ActiveReblit, Phase::CandidatePrepared),
             (Operation::ActiveReblit, Phase::TransactionTriggersStarted),
             (Operation::ActiveReblit, Phase::TransactionTriggersComplete),
         ],
         "the pre-exchange rollback cases this test claims to cover were skipped"
     );
+    // `(NewState, FreshStateAllocating)` is absent on purpose and is NOT proven
+    // here: mid-allocation, the fixed `candidate: Pending` / `fresh_db: Pending`
+    // observations this helper supplies are a combination the journal rejects,
+    // because the row may or may not exist yet. Production observes the real
+    // state. The decision gate admits it (see the characterization test), but
+    // whether its chain is consumable needs an observation-aware fixture.
     assert!(
         stranded.is_empty(),
         "the rollback-resume route advances into phases nothing can consume: {stranded:?}"

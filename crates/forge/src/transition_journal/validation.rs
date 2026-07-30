@@ -219,8 +219,8 @@ impl TransitionRecord {
     /// rejected rather than silently un-reversible
     /// (`plans/previous-restore-recovery-identity.md`, D-PR1).
     fn validate_previous_archive_slot(&self, layout_phase: ForwardPhase) -> Result<(), CodecError> {
-        let required = self.options.archive_previous
-            && layout_phase.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal();
+        let required =
+            self.options.archive_previous && layout_phase.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal();
         if self.previous_archive_slot.is_some() == required {
             Ok(())
         } else {
@@ -415,6 +415,21 @@ impl TransitionRecord {
         (self.runs_transaction_triggers() && source.ordinal() >= ForwardPhase::TransactionTriggersStarted.ordinal())
             || (self.options.run_system_triggers && source.ordinal() >= ForwardPhase::SystemTriggersStarted.ordinal())
             || source == ForwardPhase::BootSyncStarted
+    }
+
+    /// Whether a fresh database row exists to invalidate during rollback.
+    ///
+    /// Only NewState allocates one, and only from `FreshStateAllocating` on.
+    /// The rollback tail encoded this as a bare `operation == NewState`, which
+    /// silently assumed the crash happened after the allocation — so a NewState
+    /// rollback from `Preparing` carried the correct `fresh_db: NotRequired`
+    /// and was then refused for not saying `Pending`.
+    ///
+    /// This is the same rule `successors::rollback_decision` applies when it
+    /// builds the plan, kept in one place so the two cannot disagree.
+    pub(crate) fn fresh_db_rollback_is_possible(&self, source: ForwardPhase) -> bool {
+        matches!(self.operation, Operation::NewState)
+            && source.ordinal() >= ForwardPhase::FreshStateAllocating.ordinal()
     }
 
     pub(super) fn candidate_disposition_for(&self, source: ForwardPhase) -> AbortDisposition {

@@ -1014,18 +1014,16 @@ pub(super) fn rollback_source_is_supported(
     source: crate::transition_journal::ForwardPhase,
 ) -> bool {
     use crate::transition_journal::ForwardPhase;
-    matches!(
-        source,
-        // Pre-exchange: nothing in `/usr` has been touched, so the derived plan
-        // carries `usr_exchange: NotRequired` and the chain only has to discard
-        // the candidate.
-        ForwardPhase::CandidatePrepared
-            | ForwardPhase::TransactionTriggersStarted
-            | ForwardPhase::TransactionTriggersComplete
-            | ForwardPhase::UsrExchangeIntent
-            | ForwardPhase::UsrExchanged
-            | ForwardPhase::RootLinksComplete
-    ) && crate::transition_journal::expected_forward_generation(record, source).is_some()
+    // Pre-exchange is expressed as an ordinal comparison, deliberately matching
+    // `rollback_decision_source_is_supported` exactly. These two are the head
+    // and tail of one contract, and every time they have been maintained as
+    // separate lists they have drifted and stranded a rollback.
+    (source.ordinal() < ForwardPhase::UsrExchangeIntent.ordinal()
+        || matches!(
+            source,
+            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged | ForwardPhase::RootLinksComplete
+        ))
+        && crate::transition_journal::expected_forward_generation(record, source).is_some()
 }
 
 /// Whether a rollback plan's `/usr` exchange no longer needs action.

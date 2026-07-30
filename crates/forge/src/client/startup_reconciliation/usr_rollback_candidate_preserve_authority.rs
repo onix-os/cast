@@ -533,9 +533,10 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     {
         return false;
     }
-    let fresh_is_exact = match record.operation {
-        Operation::NewState => rollback.fresh_db == RollbackAction::Pending,
-        Operation::ActivateArchived | Operation::ActiveReblit => rollback.fresh_db == RollbackAction::NotRequired,
+    let fresh_is_exact = if record.fresh_db_rollback_is_possible(rollback.source) {
+        rollback.fresh_db == RollbackAction::Pending
+    } else {
+        rollback.fresh_db == RollbackAction::NotRequired
     };
     let disposition_is_exact = match record.operation {
         Operation::ActivateArchived => rollback.candidate.disposition == AbortDisposition::Rearchive,

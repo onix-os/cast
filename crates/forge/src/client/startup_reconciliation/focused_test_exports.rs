@@ -31,6 +31,7 @@ pub(in crate::client) use super::{
     usr_rollback_finalization_authority::arm_between_usr_rollback_finalization_database_captures,
     usr_rollback_fresh_db_invalidation_authority::{
         arm_between_usr_rollback_fresh_db_invalidation_database_captures, fresh_db_invalidation_removal_call_count,
+        usr_rollback_fresh_db_invalidation_plan_is_exact_for_test,
     },
     usr_rollback_fresh_db_invalidation_route_authority::arm_between_usr_rollback_fresh_db_invalidation_route_database_captures,
     usr_rollback_resume_route_authority::arm_between_usr_rollback_resume_route_database_captures,

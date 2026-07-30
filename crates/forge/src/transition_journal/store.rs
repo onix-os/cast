@@ -961,9 +961,7 @@ impl TransitionJournalStore {
 fn phase_targeted_crash_target() -> Option<&'static str> {
     static TARGET: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     TARGET
-        .get_or_init(|| {
-            std::env::var_os("CAST_CRASH_AT_PHASE").and_then(|value| value.to_str().map(str::to_owned))
-        })
+        .get_or_init(|| std::env::var_os("CAST_CRASH_AT_PHASE").and_then(|value| value.to_str().map(str::to_owned)))
         .as_deref()
 }
 

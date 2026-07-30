@@ -276,29 +276,38 @@ impl<'reservation> UsrRollbackDecisionAuthority<'reservation> {
 }
 
 fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
-    matches!(
-        record.phase,
-        // Pre-exchange. Nothing in `/usr` has been touched at these phases, so
-        // the derived plan carries `usr_exchange: NotRequired` and the rollback
-        // chain only has to discard the candidate. Without them a crash during
-        // transaction triggers is unrecoverable: the record's disposition is
-        // `BeginRollback`, but no dispatcher accepts it, so every startup
-        // repeats the same `PendingSystemTransition` forever
-        // (`plans/future_impl.md` §1.4).
-        Phase::CandidatePrepared
-            | Phase::TransactionTriggersStarted
-            | Phase::TransactionTriggersComplete
-            | Phase::UsrExchangeIntent
-            | Phase::UsrExchanged
-            | Phase::RootLinksComplete
-    ) || matches!(
-        (record.operation, record.phase, record.generation),
-        (Operation::NewState, Phase::SystemTriggersStarted, 11)
-            | (Operation::NewState, Phase::SystemTriggersComplete, 12)
-            | (Operation::NewState, Phase::PreviousArchived, 14)
-            | (Operation::ActiveReblit, Phase::SystemTriggersStarted, 9)
-            | (Operation::ActiveReblit, Phase::SystemTriggersComplete, 10)
-    ) || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
+    // Every pre-exchange phase, derived from the ordinal rather than listed.
+    //
+    // Nothing in `/usr` has been touched before `UsrExchangeIntent`, so the
+    // derived plan carries `usr_exchange: NotRequired` and the chain only has
+    // to discard the candidate. The list this replaces started at
+    // `CandidatePrepared` and silently stranded everything earlier: a crash
+    // while preparing a candidate, allocating the fresh state, or staging an
+    // archived candidate left a record whose disposition is `BeginRollback`
+    // that no dispatcher would accept, so every startup repeated the same
+    // `PendingSystemTransition` forever (`plans/future_impl.md` §1.4, and again
+    // 2026-07-30).
+    //
+    // Chain membership is required so an operation cannot claim a phase it
+    // never passes through — activation never runs transaction triggers.
+    let pre_exchange = record.phase.forward().is_some_and(|source| {
+        source.ordinal() < crate::transition_journal::ForwardPhase::UsrExchangeIntent.ordinal()
+            && crate::transition_journal::expected_forward_generation(record, source).is_some()
+    });
+    pre_exchange
+        || matches!(
+            record.phase,
+            Phase::UsrExchangeIntent | Phase::UsrExchanged | Phase::RootLinksComplete
+        )
+        || matches!(
+            (record.operation, record.phase, record.generation),
+            (Operation::NewState, Phase::SystemTriggersStarted, 11)
+                | (Operation::NewState, Phase::SystemTriggersComplete, 12)
+                | (Operation::NewState, Phase::PreviousArchived, 14)
+                | (Operation::ActiveReblit, Phase::SystemTriggersStarted, 9)
+                | (Operation::ActiveReblit, Phase::SystemTriggersComplete, 10)
+        )
+        || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
 }
 
 #[cfg(test)]

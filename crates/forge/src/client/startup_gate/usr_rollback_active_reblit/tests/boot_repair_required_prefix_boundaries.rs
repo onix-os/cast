@@ -310,9 +310,10 @@ fn sibling_prefixes(source: &TransitionRecord, kind: OperationKind) -> SiblingPr
 fn assert_prefix_plan_refused(record: &TransitionRecord) {
     // Refusal must not depend on the observed layout, so every resume-route
     // assertion below covers both.
-    let resume_refused =
-        |record| !usr_rollback_resume_route_plan_is_exact_for_test(record, false)
-            && !usr_rollback_resume_route_plan_is_exact_for_test(record, true);
+    let resume_refused = |record| {
+        !usr_rollback_resume_route_plan_is_exact_for_test(record, false)
+            && !usr_rollback_resume_route_plan_is_exact_for_test(record, true)
+    };
     match record.phase {
         Phase::RollbackDecided | Phase::UsrRestored => {
             assert!(resume_refused(record));
