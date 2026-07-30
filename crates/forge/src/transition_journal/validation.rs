@@ -186,6 +186,9 @@ impl TransitionRecord {
         };
         self.validate_boot_publication_receipts(layout_phase)?;
         self.validate_option_reachability(layout_phase)?;
+        // After reachability: a record with a disabled phase must still report
+        // the disabled phase, not a slot-presence mismatch derived from it.
+        self.validate_previous_archive_slot(layout_phase)?;
         self.validate_candidate_layout(layout_phase)?;
         self.validate_relationships()?;
         if let Some(rollback) = &self.rollback {
@@ -201,6 +204,27 @@ impl TransitionRecord {
             Ok(())
         } else {
             Err(CodecError::BootPublicationReceiptPresenceMismatch {
+                phase: self.phase,
+                required,
+            })
+        }
+    }
+
+    /// The parking name must be present exactly while an archive can still be
+    /// reversed, and absent otherwise.
+    ///
+    /// Mirrors `validate_boot_publication_receipts`: presence is a function of
+    /// the options and the phase, not of who wrote the record, so a record that
+    /// reached the archive phases without recording where its slot came from is
+    /// rejected rather than silently un-reversible
+    /// (`plans/previous-restore-recovery-identity.md`, D-PR1).
+    fn validate_previous_archive_slot(&self, layout_phase: ForwardPhase) -> Result<(), CodecError> {
+        let required = self.options.archive_previous
+            && layout_phase.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal();
+        if self.previous_archive_slot.is_some() == required {
+            Ok(())
+        } else {
+            Err(CodecError::PreviousArchiveSlotPresenceMismatch {
                 phase: self.phase,
                 required,
             })

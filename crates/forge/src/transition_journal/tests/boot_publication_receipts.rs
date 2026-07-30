@@ -21,7 +21,7 @@ fn payload_v3_boot_publication_receipts_are_canonical_and_version_gated() {
     let payload = std::str::from_utf8(&framed[HEADER_SIZE..]).unwrap();
     let receipts_json = serde_json::to_string(&receipts).unwrap();
     assert!(payload.contains(&format!(
-        "\"rollback\":null,\"boot_publication_receipts\":{receipts_json},\"candidate\":"
+        "\"rollback\":null,\"boot_publication_receipts\":{receipts_json},"
     )));
     assert_eq!(decode(&framed).unwrap(), started);
     assert_eq!(encode(&decode(&framed).unwrap()).unwrap(), framed);

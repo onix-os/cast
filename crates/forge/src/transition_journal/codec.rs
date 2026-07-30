@@ -158,6 +158,8 @@ pub(crate) enum CodecError {
     ExplicitBootRepairSuccessorRequired(Phase),
     #[error("entering boot-sync-started requires the typed receipt-bearing successor")]
     ExplicitBootSyncStartedSuccessorRequired,
+    #[error("advancing into PreviousArchiveIntent requires the explicit parking-slot successor")]
+    ExplicitPreviousArchiveIntentSuccessorRequired,
     #[error("entering boot-sync-complete requires the typed receipt-bound successor")]
     ExplicitBootSyncCompleteSuccessorRequired,
     #[error("boot-publication receipt correlation changed outside entry to boot-sync-started")]

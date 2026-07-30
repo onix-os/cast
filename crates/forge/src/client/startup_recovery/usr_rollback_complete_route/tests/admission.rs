@@ -98,6 +98,15 @@ fn startup_usr_rollback_complete_route_defers_inexact_phase_plan_and_non_absent_
         committed: None,
         pending: BootPublicationReceiptFingerprint::from_bytes([0x52; 32]),
     });
+    // A post-archive rollback source requires the parking name: reversing an
+    // archive needs somewhere exact to put the slot back.
+    boot_repair.previous_archive_slot = Some(crate::transition_journal::PreviousArchiveSlot {
+        parking_name: crate::transition_journal::QuarantineName::parse(
+            ".previous-slot-1-".to_owned() + &"a".repeat(32) + "-0",
+        )
+        .unwrap(),
+        reused_wrapper: false,
+    });
     assert_eq!(
         boot_repair.rollback_successor(None).unwrap().phase,
         Phase::BootRepairRequired

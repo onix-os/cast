@@ -612,6 +612,17 @@ pub(super) fn exchange_usr_layout(root: &Path) {
     fs::rename(&parked, &staging).unwrap();
 }
 
+/// The parking name a real archive would have recorded before consuming it.
+fn fixture_previous_archive_slot() -> crate::transition_journal::PreviousArchiveSlot {
+    crate::transition_journal::PreviousArchiveSlot {
+        parking_name: crate::transition_journal::QuarantineName::parse(
+            ".previous-slot-1-".to_owned() + &"a".repeat(32) + "-0",
+        )
+        .expect("fixture parking name is a valid quarantine name"),
+        reused_wrapper: false,
+    }
+}
+
 fn persist_source_record(
     installation: &Installation,
     database: &db::state::Database,
@@ -626,6 +637,9 @@ fn persist_source_record(
         let allocated = (record.phase == Phase::FreshStateAllocating).then_some(candidate.into());
         let next = match record.forward_successor(allocated) {
             Ok(next) => next,
+            Err(CodecError::ExplicitPreviousArchiveIntentSuccessorRequired) => record
+                .previous_archive_intent_successor(fixture_previous_archive_slot())
+                .unwrap(),
             Err(CodecError::ExplicitBootSyncStartedSuccessorRequired) => {
                 let receipts = stage_test_boot_publication_receipts(database, &record.transition_id, historical);
                 record.boot_sync_started_successor(receipts).unwrap()

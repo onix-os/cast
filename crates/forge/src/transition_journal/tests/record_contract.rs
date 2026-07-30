@@ -527,3 +527,23 @@ fn preparing_pins_epoch_tokens_runtime_witnesses_and_operation_relationships_fai
     let invalid = without_previous_archive(new_state_record(Phase::Preparing), PreviousOrigin::Unmanaged);
     assert_eq!(invalid.commit_disposition(), CommitDisposition::Quarantine);
 }
+
+#[test]
+#[ignore = "regeneration helper for the golden fixtures"]
+fn regenerate_golden_fixtures() {
+    let source = new_state_record(Phase::BootSyncStarted);
+    let value = rollback_decided(&source);
+    let frame = encode(&value).unwrap();
+    let json = &frame[HEADER_SIZE..];
+    std::fs::write(
+        "../../tests/fixtures/transition-journal-rollback-decided.json",
+        [json, b"\n"].concat(),
+    )
+    .unwrap();
+    let hex: String = frame.iter().map(|byte| format!("{byte:02x}")).collect();
+    std::fs::write(
+        "../../tests/fixtures/transition-journal-rollback-decided.hex",
+        format!("{hex}\n"),
+    )
+    .unwrap();
+}

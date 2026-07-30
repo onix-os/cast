@@ -65,6 +65,15 @@ fn startup_activate_archived_finalization_rejects_valid_terminal_lookalike_plan_
     rollback.source = ForwardPhase::PreviousArchiveIntent;
     rollback.previous_archive = RollbackAction::AlreadySatisfied;
     rollback.external_effects_may_remain = true;
+    // A post-archive rollback source requires the parking name: reversing an
+    // archive needs somewhere exact to put the slot back.
+    inexact_source.previous_archive_slot = Some(crate::transition_journal::PreviousArchiveSlot {
+        parking_name: crate::transition_journal::QuarantineName::parse(
+            ".previous-slot-1-".to_owned() + &"a".repeat(32) + "-0",
+        )
+        .unwrap(),
+        reused_wrapper: false,
+    });
     let terminal_lookalike = inexact_source.rollback_successor(None).unwrap();
     assert_eq!(terminal_lookalike.phase, Phase::RollbackComplete);
     fs::write(
