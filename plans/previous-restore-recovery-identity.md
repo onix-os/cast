@@ -305,7 +305,31 @@ reused_wrapper)`, carry it into the `PreviousArchiveIntent` advance, and let
 `create_previous_archive_attempt` consume the recorded name instead of choosing
 one. Then enable the invariant.
 
-Steps A (recovery identity constructor) and B (attempt adoption) follow, unchanged.
+**Steps A and B are done (2026-07-30).**
+
+- **A** — `StatefulTreeIdentity::prepare_previous_restore_recovery`. The plan
+  named three hardcoded points; there was a **fourth**: `require_named_live_usr`
+  revalidates the previous tree through the live `/usr` *name* unconditionally,
+  and after an archive that name holds the candidate — so it reported
+  `LiveUsrChanged`, comparing the predecessor against the candidate. The archived
+  branch now revalidates through the slot the tree actually answers to.
+  `PreviousRestoreRecoverySeal` already existed as forward scaffolding and now
+  has its real caller.
+- **B** — `adopt_previous_archive_attempt`. Four fields come from the namespace;
+  `parking_name` and `reused_wrapper` come from the record, because publication
+  consumed the on-disk evidence. Adoption refuses if the published slot is
+  missing or the parking name is occupied: either means the namespace disagrees
+  with the record, and inferring is what D-PR1 exists to prevent.
+
+Exit criteria met: `a_fresh_identity_after_the_archive_cannot_restore_the_previous_tree`
+is now `..._can_restore_...`, and
+`adoption_round_trips_a_completed_archive_back_out_of_its_slot` drives the whole
+sequence — archive, drop the identity, prepare for recovery, watch the restore be
+refused without an attempt, adopt, and restore the exact archived inode back into
+staging.
+
+**Still outstanding:** the VM reboot matrix. In-process fixtures cannot prove
+cross-reboot behaviour, and that was always part of this plan's exit criteria.
 
 ## Sizing
 
