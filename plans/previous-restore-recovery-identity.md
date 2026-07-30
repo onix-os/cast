@@ -234,8 +234,31 @@ Enabling it before a producer exists fails **28** existing journal tests, becaus
 every record at or past the archive phases is then invalid. So the invariant and
 its producer must land in the same commit — enable it *with* step 2, not before.
 
-**Step 2 is in progress on `feature/previous_archive_producer` (`38ba33c6`), NOT
-merged — 20 journal fixtures still red.** What exists there:
+**Step 2 is on `feature/previous_archive_producer`, NOT merged — 14 failures, and
+the cause is a real design error in the injection point, not fixtures.**
+
+`archive_successor` injects the slot *after* calling `record.forward_successor`.
+But `forward_successor` validates the successor internally, and the successor is
+at `PreviousArchiveIntent`, where the new invariant requires the slot. So it
+fails before the injection ever happens:
+
+    SuccessorContract { stage: "intent" }
+
+**The fix has an exact precedent in this module.** `boot_sync_complete_successor(expected_pair)`
+exists for the identical reason — receipts must be present at `BootSyncStarted`,
+so the successor constructor *takes* them rather than having them bolted on
+afterwards. The archive path needs the same shape:
+
+    fn previous_archive_intent_successor(&self, slot: PreviousArchiveSlot)
+        -> Result<Self, CodecError>
+
+Build the successor with the slot already set, then validate. Do not relax the
+invariant to work around this — the invariant is the point.
+
+The journal-model fixtures are already correct and green (136/0); it is only this
+one injection site that is wrong.
+
+What exists on the branch:
 
 - `StatefulTreeIdentity::select_previous_archive_slot` — read-only selection
   returning `(parking_name, reused_wrapper)`; reuse scan authenticates, fresh
@@ -248,7 +271,8 @@ merged — 20 journal fixtures still red.** What exists there:
   already attaches `boot_publication_receipts` at `BootSyncStarted`. That took
   the failures 28 -> 20.
 
-The remaining 20 are two kinds, both fixture-side:
+Fixture work already done there (28 -> 0 in the journal group), all of it
+correct and reusable:
 
 1. records built *directly* at or past the archive phases without going through
    `advance_record` (they need the field set at construction);
