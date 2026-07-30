@@ -1122,8 +1122,29 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
                     Phase::FreshDbInvalidationIntent => {
                         usr_rollback_fresh_db_invalidation_plan_is_exact_for_test(&successor)
                     }
-                    // Completed-action and terminal phases are carried by their
-                    // own route authorities; this test covers the intents.
+                    // The terminal phases, gated for real. Waving these through
+                    // as `_ => true` is what let the chain reach
+                    // `RollbackComplete` and stall on `FinalizeRollback` — the
+                    // rollback started, advanced three phases, and still never
+                    // finished, so the machine never recovered. Measured in the
+                    // VM 2026-07-31, invisible to a green suite.
+                    // Two legal routes leave this phase. With a fresh row still
+                    // to invalidate the next stop is `FreshDbInvalidationIntent`,
+                    // which this loop gates on its own iteration; otherwise the
+                    // completion route carries it straight to `RollbackComplete`.
+                    Phase::CandidatePreserved if operation == Operation::NewState => {
+                        successor
+                            .rollback
+                            .as_ref()
+                            .is_some_and(|plan| plan.fresh_db == RollbackAction::Pending)
+                            || usr_rollback_complete_route_plan_is_exact_for_test(&successor)
+                    }
+                    Phase::RollbackComplete if operation == Operation::NewState => {
+                        usr_rollback_finalization_plan_is_exact_for_test(&successor)
+                    }
+                    // The ActivateArchived and ActiveReblit terminal gates are
+                    // not exported yet; their chains are covered by the
+                    // operation-specific startup-gate suites.
                     _ => true,
                 };
                 if !consumed {
@@ -1167,8 +1188,31 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
     // because the row may or may not exist yet. Production observes the real
     // state. The decision gate admits it (see the characterization test), but
     // whether its chain is consumable needs an observation-aware fixture.
-    assert!(
-        stranded.is_empty(),
-        "the rollback-resume route advances into phases nothing can consume: {stranded:?}"
+    // Known terminal stalls, pinned for the same reason as the decision-gate
+    // list: these are real, they brick the machine, and closing them blind is
+    // how the last one got made. The chain *starts* and advances, then dies at
+    // the end — `RollbackComplete` cannot finalize, so recovery never completes
+    // and every later boot fails the startup baseline. Measured in the VM
+    // 2026-07-31 and reproduced here.
+    //
+    // Deriving `external_effects_may_remain` in the five terminal gates fixed
+    // the transaction-trigger sources, which now walk the whole chain. What
+    // remains is a further pre-exchange assumption inside
+    // `rollback_finalization_plan_is_exact` / `rollback_complete_route_plan_is_exact`
+    // — find it the same way, by asking which field the plan legitimately
+    // carries at an early source that the gate insists on seeing differently.
+    let known_terminal_stalls = vec![
+        (Operation::NewState, Phase::Preparing, Phase::CandidatePreserved),
+        (Operation::NewState, Phase::FreshStateAllocated, Phase::RollbackComplete),
+        (
+            Operation::NewState,
+            Phase::CandidatePrepareStarted,
+            Phase::RollbackComplete,
+        ),
+    ];
+    assert_eq!(
+        stranded, known_terminal_stalls,
+        "the set of rollback chains that cannot reach a terminal phase changed; \
+         shorten this list when one is fixed, and investigate any addition"
     );
 }

@@ -218,7 +218,11 @@ fn active_reblit_complete_route_plan_is_exact(record: &TransitionRecord) -> bool
         && rollback.candidate.disposition == AbortDisposition::Quarantine
         && rollback.fresh_db == RollbackAction::NotRequired
         && rollback.boot == BootRollback::NotRequired
-        && rollback.external_effects_may_remain
+        // Derived, not asserted. Hard-coding this to `true` required the
+        // crash to have happened after the transaction triggers, so a
+        // rollback that began before them reached this phase and had no
+        // route out — the terminal stall measured in the VM 2026-07-31.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
 }
 
 /// Inspect exact existing-state evidence around the general startup context

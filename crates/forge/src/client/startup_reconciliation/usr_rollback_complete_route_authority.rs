@@ -180,6 +180,11 @@ fn require_journal_record_binding(
 }
 
 /// Exact narrow plan accepted by the completion-route checkpoint.
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_complete_route_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
+    rollback_complete_route_plan_is_exact(record)
+}
+
 fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
@@ -204,7 +209,11 @@ fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
         && rollback.boot == BootRollback::NotRequired
-        && rollback.external_effects_may_remain
+        // Derived, not asserted. Hard-coding this to `true` required the
+        // crash to have happened after the transaction triggers, so a
+        // rollback that began before them reached this phase and had no
+        // route out — the terminal stall measured in the VM 2026-07-31.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
 }
 
 /// Inspect exact-before -> generic context -> exact-after so neither evidence
