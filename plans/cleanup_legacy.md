@@ -118,7 +118,31 @@ Named counterparts for the rest:
 | previous archive/restore suffix routing | `previous_tree_move` suffix tests + the recovery identity + adoption landed 2026-07-30 |
 | marker/token substitution refusal | `transition_identity` (158 tests) |
 
-**Still needs a named counterpart before deleting:**
+**The real last blocker is two test helpers, not the 34 tests (attempted and
+reverted 2026-07-30).** Deleting the 34 with named counterparts is mechanical and
+was done cleanly in a scratch branch. What stops the route removal is that two
+helpers still drive it, and each fans out to a large live test surface:
+
+- `active_reblit_tests.rs::run` -> ~25 ActiveReblit tests
+- `stateful_candidate_metadata.rs::apply_fresh_candidate` -> ~8 metadata tests
+
+Those tests are about *reblit and metadata behaviour*, not about the legacy
+route — the route is just how they drive it. So they should be **re-pointed, not
+deleted**: `run` to `apply_active_reblit_candidate`, `apply_fresh_candidate` to
+`apply_new_state_candidate`.
+
+The catch is the same one the archived-activation port hit: several pass a
+`StatefulTransitionCheckpoint` closure to inject faults, and the coordinated
+route has no checkpoint mechanism. Each such test needs re-expressing as a
+journal-phase fault-hook test, exactly as was done for activation. Tests passing
+`|_| Ok(())` re-point trivially; only the fault-injecting ones need work.
+
+Do that first. Once both helpers are off the legacy route, the deletion is
+mechanical: 34 tests, `apply_stateful_blit*`, `commit_stateful_staging`,
+`stateful_recovery.rs`, `candidate_quarantine.rs`, then the guards and
+`legacy_boot_repair` collapse on their own.
+
+**Named counterparts confirmed for deletion (no further work needed):**
 
 - `first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr`
 - `missing_live_usr_between_identity_check_and_exchange_is_never_recreated`
