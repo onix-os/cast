@@ -950,11 +950,25 @@ impl TransitionJournalStore {
 ///
 /// Opt-in and explicitly named, like `CAST_ALLOW_UNINHIBITED_TRANSACTION`, so it
 /// cannot be reached by accident.
+/// Read once per process, not once per advance.
+///
+/// `env::var_os` takes std's global environment lock, and this hook runs while
+/// the journal operation lock is held. Paying that on every phase advance
+/// lengthens the critical section for a value that cannot legitimately change
+/// mid-process — a diagnostic making the durability it observes measurably
+/// worse. Reading it once removes the cost entirely when the hook is unarmed,
+/// which is every case except a crash-matrix guest.
+fn phase_targeted_crash_target() -> Option<&'static str> {
+    static TARGET: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    TARGET
+        .get_or_init(|| {
+            std::env::var_os("CAST_CRASH_AT_PHASE").and_then(|value| value.to_str().map(str::to_owned))
+        })
+        .as_deref()
+}
+
 fn park_for_phase_targeted_crash(operation: super::model::Operation, phase: Phase) {
-    let Some(target) = std::env::var_os("CAST_CRASH_AT_PHASE") else {
-        return;
-    };
-    let Some(target) = target.to_str() else {
+    let Some(target) = phase_targeted_crash_target() else {
         return;
     };
     // `Phase` alone, or `Operation:Phase` when a run performs more than one

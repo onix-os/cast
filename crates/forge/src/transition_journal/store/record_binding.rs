@@ -178,6 +178,17 @@ impl TransitionJournalStore {
         let journal = self.revalidate_retained_cast_binding_locked(cast_directory)?;
         self.revalidate_exact_public_state(&journal, Some(&loaded))?;
         let published = self.publish_record_retained(&framed, next, Some(loaded))?;
+        // The record is durable here, so this is the exact boundary a power cut
+        // at `next.phase` would land on — the same point the unbound `advance`
+        // parks at.
+        //
+        // This route did not have the hook, and that made every phase-targeted
+        // crash-matrix cell inert the moment an operation moved onto the
+        // coordinated route. `CAST_CRASH_AT_PHASE` was silently ignored, the
+        // harness reported "phase never reached", and the cell fell back to
+        // proving nothing. All three operations are coordinated now, so the
+        // hook has to live on the path they actually take.
+        super::park_for_phase_targeted_crash(next.operation, next.phase);
         drop(expected);
 
         public_binding_revalidation_boundary(PublicBindingRevalidationBoundary::BeforeBoundAdvanceFinalBinding);
