@@ -278,12 +278,45 @@ fix, that is the pre-exchange closure working outside a unit test.
 
 **New defect: the terminal `FinalizeRollback` step is refused.** The chain now
 reaches `RollbackComplete` and cannot finalize, so the machine still never
-recovers — the stall moved, it did not disappear. This is invisible to
-`admitted_rollback_resume_routes_always_have_a_consuming_successor`, which
-matches `_ => true` for completed-action and terminal phases and only gates the
-intents. **Extend that test to the terminal phases before fixing the
-authority** — that omission is the third time in this section that an unchecked
-segment of the chain is exactly where it died.
+recovers — the stall moved, it did not disappear.
+
+### A2b PARTLY FIXED 2026-07-31 (`27e8f548`) — three terminal stalls left
+
+The five terminal and route gates (`usr_rollback_complete_route`,
+`usr_rollback_finalization`, both ActiveReblit twins, and
+`usr_rollback_fresh_db_invalidation_route`) each asserted
+`rollback.external_effects_may_remain` outright — instances six through ten of
+the same pattern. Deriving it fixed every transaction-trigger source, which now
+walks the **entire** chain, `RollbackDecided` through `RollbackComplete`, and
+finalizes. Suite 2754/0.
+
+Three stalls remain, now pinned in
+`admitted_rollback_resume_routes_always_have_a_consuming_successor` and
+reproducible in-process rather than only in a guest:
+
+| source | dies at |
+|---|---|
+| NewState @ `Preparing` | `CandidatePreserved` |
+| NewState @ `FreshStateAllocated` | `RollbackComplete` |
+| NewState @ `CandidatePrepareStarted` | `RollbackComplete` |
+
+**Where to look:** a further pre-exchange assumption inside
+`rollback_finalization_plan_is_exact` and `rollback_complete_route_plan_is_exact`.
+Find it the same way every one of these has been found — ask which field the
+plan legitimately carries at an early source that the gate insists on seeing
+differently.
+
+**The test that existed to catch this waved it through.** The chain walk matched
+`_ => true` for completed-action and terminal phases, so it gated the intents
+and ignored precisely where the chain died. A VM run found it; the test written
+that same day for that exact purpose did not. Third occurrence — an unchecked
+segment is where it fails. Note also that `CandidatePreserved` has **two** legal
+exits depending on whether a fresh row still needs invalidating; gating only the
+completion route there produces a false stall for every NewState source.
+
+The ActivateArchived and ActiveReblit terminal gates are still not exported and
+so still unchecked by this test. Export them next; on the evidence so far,
+assume they hide the same thing.
 
 **Two reasons this cell still does not test what it names:**
 
