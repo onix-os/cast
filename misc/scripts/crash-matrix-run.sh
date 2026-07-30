@@ -248,7 +248,7 @@ else
         PHASE=$(echo "$DRV" | grep -oE 'at [A-Za-z]+ requires' | head -1 | awk '{print $2}')
         if [ "$PHASE" = "$PREV_PHASE" ]; then
             STALL=$((STALL + 1))
-            if [ "$STALL" -ge 5 ]; then D=stalled-at-${PHASE:-unknown}; echo "STALL: $(echo "$DRV" | tail -1 | cut -c1-200)"; break; fi
+            if [ "$STALL" -ge "${STALL_LIMIT:-5}" ]; then D=stalled-at-${PHASE:-unknown}; echo "STALL: $(echo "$DRV" | tail -1 | cut -c1-200)"; break; fi
         else
             STALL=0
             echo "PHASE-$attempt: ${PHASE:-?}"

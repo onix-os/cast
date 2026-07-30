@@ -57,17 +57,38 @@ With both fixed, the cell produces a real verdict for the first time:
     STALL: state transition 33c7e4db... at CandidatePreserveIntent requires
            ResumeRollback { phase: CandidatePreserveIntent }
 
-**Do not call this a defect yet — apply the harness's own standing rule.**
-Recovery is incremental, so "still pending after N invocations" and "cannot
-recover" look identical at a fixed N. Raise the driver invocation cap well above
-15 and check whether the phase keeps *advancing*. It is only a defect if the
-phase stops changing. This exact confusion already produced one false defect
-report during Phase 1.
+**CONFIRMED A DEFECT 2026-07-30.** The standing rule was applied rather than
+skipped: recovery is incremental, so "still pending after N tries" and "cannot
+recover" are indistinguishable at a fixed N, and that confusion already produced
+one false defect report in Phase 1. So the stall threshold was raised to 25 and
+every attempt's phase printed:
 
-If the phase genuinely stops at `CandidatePreserveIntent`, this is serious:
-`state=absent` means the guest is left with no state at all, and the rollback
-cannot resume — an ActivateArchived rollback that bricks. That would also answer
-A3 for ActivateArchived in the worst way.
+    TRY-1:  CandidatePreserveIntent
+    TRY-2:  CandidatePreserveIntent
+    ...
+    TRY-26: CandidatePreserveIntent
+    STALL: state transition fe527020... at CandidatePreserveIntent
+           requires ResumeRollback { phase: CandidatePreserveIntent }
+
+**26 consecutive attempts, the phase never moves.** The record advances exactly
+once — `RollbackDecided -> CandidatePreserveIntent` — and then stops forever.
+`state=absent`: the guest is left with no installed state at all.
+
+**This is an ActivateArchived rollback that bricks the system.** Nothing on the
+startup path can resume from `CandidatePreserveIntent` for this operation, so
+every subsequent command fails the startup baseline and the machine never
+recovers.
+
+It also answers A3 for ActivateArchived, in the worst way: this operation does
+**not** share NewState's working pre-exchange recovery. The §1.4 fix was scoped
+to NewState deliberately, and this is the consequence — measured, not assumed.
+
+**Next:** find which admission refuses `(ActivateArchived, CandidatePreserveIntent)`.
+NewState's equivalent works, so compare against it — the Phase 1 pattern was a
+hard-coded post-exchange assumption duplicated across authorities, and
+`rollback_source_is_supported` / `rollback_usr_exchange_is_settled` are now
+operation-aware and permit pre-exchange rollback **for NewState only**. That is
+the first place to look.
 
 Note the marker still printed "never reached", so the cut did not land at
 `CandidatePrepared` even though a real transition occurred. Reconcile that too:
