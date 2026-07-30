@@ -295,10 +295,18 @@ fn finish_previous_archive(
                 transition_id: transition_id.clone(),
             }
         })?;
+        // Read back from the durable record, not from the in-memory selection:
+        // what governs the move is what survived the crash window, and the two
+        // are only the same if the intent advance really persisted.
+        let recorded_slot = coordinator.record.previous_archive_slot.clone().ok_or_else(|| {
+            PreviousArchiveFailure::SourceContract {
+                transition_id: transition_id.clone(),
+            }
+        })?;
         let seal = PreviousArchiveEffectSeal { _private: () };
         coordinator
             .identity
-            .archive_previous_with_journal(authority.installation(), previous_id, &seal)
+            .archive_previous_with_journal(authority.installation(), previous_id, &seal, &recorded_slot)
             .map_err(|source| PreviousArchiveFailure::PhysicalArchive {
                 transition_id: transition_id.clone(),
                 source: Box::new(source),

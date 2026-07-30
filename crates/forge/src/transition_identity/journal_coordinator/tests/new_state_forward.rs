@@ -264,3 +264,37 @@ fn new_state_previous_archived_hands_off_into_boot_with_candidate_state() {
         handoff.record().candidate.id
     );
 }
+
+#[test]
+fn previous_archive_uses_the_slot_its_record_named() {
+    // The point of recording the parking name is that the archive is governed by
+    // the record rather than by a second, independent choice. Prove both halves:
+    // the record names a slot, and the tree lands under that exact name.
+    let (fixture, coordinator) = coordinator_ready_for_system_triggers(CandidateKind::NewState, true);
+    let complete = coordinator
+        .run_system_triggers(|_| Ok::<(), TriggerEffectError>(()))
+        .expect("system triggers complete");
+
+    let archived = complete.archive_previous_tree().expect("predecessor archives");
+    let record = archived.record();
+    let slot = record
+        .previous_archive_slot
+        .as_ref()
+        .expect("a completed archive records where its slot can be returned to");
+
+    // The parking name is free again precisely because publication consumed it —
+    // which is why it had to be recorded before the archive rather than inferred
+    // after (`plans/previous-restore-recovery-identity.md`, D-PR1).
+    assert!(
+        !fixture.installation.root_path(slot.parking_name.as_str()).exists(),
+        "publication should have consumed the parking name",
+    );
+    assert!(
+        fixture
+            .installation
+            .root_path(fixture.previous_state.to_string())
+            .join("usr")
+            .exists(),
+        "the predecessor tree should be published under its canonical state name",
+    );
+}
