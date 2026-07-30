@@ -4,8 +4,24 @@ Successor to `close_out.md`, `cleanup_legacy.md` and
 `previous-restore-recovery-identity.md` (retired 2026-07-30; full text in git at
 `fe12e530`). Only open work is kept here.
 
-**State of `develop` at time of writing:** suite green 2752/0, production build at
-zero warnings, all three stateful operations on the coordinated journal route.
+**State of `develop` at time of writing:** production build at zero warnings, all
+three stateful operations on the coordinated journal route.
+
+**On "suite green 2752/0" — read that number with care.** This machine is never
+idle: five-plus QEMU guests (one up eight days) plus several projects' builds run
+concurrently as its normal state, with load average ~32 on 24 cores. Under that
+load a handful of timing tests fail nondeterministically — `Timeout`,
+`AcquireLock { WouldBlock }`, "cooperating writer did not acquire" — and a
+*different* one each run. The unmodified baseline fails the same way. So `2752/0`
+was a lucky draw, not a property of the tree, and a single red run here is not
+evidence of a regression.
+
+The usable test for a regression on this machine is **repetition, not
+isolation**: run the suite more than once and treat only a test that fails in
+multiple runs as real. Anything that fails once and passes in isolation is load.
+Do not "fix" those by loosening durability — the deadlines are test-side
+(`timeout_policy::tests::the_test_build_actually_scales_budgets` guards the
+production budgets).
 
 ---
 
@@ -83,17 +99,127 @@ It also answers A3 for ActivateArchived, in the worst way: this operation does
 **not** share NewState's working pre-exchange recovery. The §1.4 fix was scoped
 to NewState deliberately, and this is the consequence — measured, not assumed.
 
-**Next:** find which admission refuses `(ActivateArchived, CandidatePreserveIntent)`.
-NewState's equivalent works, so compare against it — the Phase 1 pattern was a
-hard-coded post-exchange assumption duplicated across authorities, and
-`rollback_source_is_supported` / `rollback_usr_exchange_is_settled` are now
-operation-aware and permit pre-exchange rollback **for NewState only**. That is
-the first place to look.
+### A1 FIXED 2026-07-30 — five bricking windows, not one
 
-Note the marker still printed "never reached", so the cut did not land at
-`CandidatePrepared` even though a real transition occurred. Reconcile that too:
-either the target phase is not on this operation's chain, or the cut landed
-elsewhere.
+Reproduced in-process, so this no longer needs a VM run to study. Walking every
+operation against every pre-exchange crash source gave:
+
+| operation @ crash source | route admits | tail consumes | before |
+|---|---|---|---|
+| NewState @ CandidatePrepared | ✗ | — | **stalls at RollbackDecided** |
+| NewState @ TransactionTriggersStarted | ✓ | ✓ | recovers |
+| NewState @ TransactionTriggersComplete | ✓ | ✓ | recovers |
+| ActivateArchived @ CandidatePrepared | ✓ | ✗ | **stalls at CandidatePreserveIntent** |
+| ActiveReblit @ CandidatePrepared | ✗ | — | **stalls at RollbackDecided** |
+| ActiveReblit @ TransactionTriggersStarted | ✓ | ✗ | **stalls at CandidatePreserveIntent** |
+| ActiveReblit @ TransactionTriggersComplete | ✓ | ✗ | **stalls at CandidatePreserveIntent** |
+
+Exactly one case recovered: NewState during transaction triggers — the single
+window §1.4 ever measured. Everything else bricked.
+
+Two causes, both the standing hazard below (a hard-coded value encoding
+structure), and both now derived instead:
+
+1. `rollback_source_is_supported` / `rollback_usr_exchange_is_settled` gated
+   pre-exchange sources to NewState. But the gates that *decide* to roll back
+   (`rollback_decision_source_is_supported`, `is_usr_exchange_rollback_source`)
+   never had that restriction, so the system persisted `RollbackDecided` and
+   then refused to carry it out. **Being cautious in one half of a two-sided
+   contract is not caution — the asymmetry is what bricks the machine.**
+   `usr_exchange_is_settled` now reads the journal's own `usr_possible` rule
+   backwards (`source.ordinal() < UsrExchangeIntent.ordinal()`).
+2. `external_effects_may_remain == (operation != ActivateArchived)` was a
+   stand-in for "did we get past transaction triggers", false pre-exchange for
+   every operation. It was a fourth copy of a derivation that already existed
+   three times. Now one method, `expected_external_effects_may_remain`.
+
+Guarded by `admitted_rollback_resume_routes_always_have_a_consuming_successor`,
+which fails if the head and tail drift apart again.
+
+**The test that was supposed to catch this passed while asserting nothing.**
+Its helper hard-coded `layout = Post` for `RollbackDecided`, so no caller could
+express a pre-exchange rollback: all seven cases hit a `continue` and the
+assertion ran on an empty set. The layout is now a caller-supplied fact, and the
+test names its expected coverage so a silent skip fails instead of passing.
+Same shape as the two false greens above — worth assuming the next one exists.
+
+### A1b RECONCILED 2026-07-30 — the phase hook was on the abandoned route
+
+The `CAST-AT-PHASE` marker printed "never reached" while a real transition was
+running because `park_for_phase_targeted_crash` lived only in the unbound
+`store::advance`. Every coordinated transition publishes through
+`advance_record_binding`, which never called it.
+
+So `CAST_CRASH_AT_PHASE` was **silently inert for exactly the operations this
+matrix exists to test** — the epic moved all three onto the coordinated route
+and left the crash hook behind. Any phase-targeted cell run since then measured
+nothing. The hook is now on both publish paths.
+
+That is the fourth false green in this section, all the same shape: a cell looks
+green because the thing it names never ran (root-only kernel → qemu never
+booted; `activate 1` no-op → no transition; inert phase hook → no cut; vacuous
+test → no assertion). **Assume a fifth exists.** Before believing any green
+cell, confirm the operation under test actually ran: `CAST-AT-PHASE` present for
+phase cuts, and a non-empty `state=` column.
+
+### A1c. Unmeasured neighbour — sources *below* `CandidatePrepared`
+
+`rollback_allowed` (the journal) permits a rollback from any source with
+ordinal `< CommitDecided`, which includes `Preparing`,
+`CandidatePrepareStarted`, and — for ActivateArchived —
+`ArchivedCandidateStagingIntent` / `ArchivedCandidateStaged`. But
+`rollback_decision_source_is_supported` admits none of them, so a crash there
+never reaches `RollbackDecided` at all.
+
+**MEASURED IN-PROCESS 2026-07-30 — fourteen stranded pairs, and it is a lower
+bound.** `every_begin_rollback_phase_has_an_admitting_decision_authority` walks
+every forward phase of every operation, keeps the ones whose
+`recovery_disposition` is `BeginRollback`, and asks whether any authority admits
+the decision. Fourteen say no:
+
+| operation | phases with no admitting authority |
+|---|---|
+| NewState | `Preparing`, `FreshStateAllocating`, `FreshStateAllocated`, `CandidatePrepareStarted`, `BootSyncStarted` |
+| ActivateArchived | `Preparing`, `CandidatePrepareStarted`, `SystemTriggersStarted`, `SystemTriggersComplete`, `PreviousArchiveIntent`, `PreviousArchived`, `BootSyncStarted` |
+| ActiveReblit | `Preparing`, `CandidatePrepareStarted` |
+
+**ActivateArchived has no post-exchange rollback admission beyond
+`RootLinksComplete` at all** — the decision gate's `(operation, phase,
+generation)` table contains only NewState and ActiveReblit rows. A power cut
+while activation runs its system triggers, archives the previous state, or syncs
+boot leaves the machine unable to recover.
+
+The list is a lower bound: `ArchivedCandidateStagingIntent` and
+`ArchivedCandidateStaged` are missing from the test's `FORWARD_PHASES` constant,
+so they were never examined.
+
+The test **pins this list rather than asserting it empty**. Closing fourteen
+admission gates at once with no crash-matrix cell behind any of them is exactly
+the over-widening that produced the defect fixed above. Shorten the list as each
+is measured and fixed; the test fails on any addition, and on any removal that
+is not recorded.
+
+Original reasoning, kept because it is how the gap was found:
+`Phase::recovery_disposition` (`transition_journal/recovery.rs`) maps *all* of
+`Preparing`, `FreshStateAllocating`, `FreshStateAllocated`,
+`CandidatePrepareStarted`, `ArchivedCandidateStagingIntent` and
+`ArchivedCandidateStaged` to `BeginRollback { source }`. But
+`rollback_decision_source_is_supported` admits none of them. So startup decides
+to roll back, no authority accepts the decision, and the boot stalls — the exact
+§1.4 shape, for six more phases.
+
+These are reachable: a power cut during `cast install` setup or during archived
+candidate staging lands squarely in them.
+
+The real invariant is stronger than the one now tested: **every phase whose
+disposition is `BeginRollback` must have an admitting decision authority, and
+the resulting chain must be consumable end to end.** The current test starts
+from the decision gate's own list, so it cannot see this. Rewrite it to start
+from `recovery_disposition` instead — that is the actual contract, and it would
+have caught both this and the bug already fixed.
+
+Do this before B: same failure shape, and B's boot-repair path sits directly
+downstream.
 
 ### A2. Extend `OPS` past install
 
@@ -207,6 +333,14 @@ A hard-coded value silently encoding structure:
 - **Unit tests of a route with no callers prove it compiles, not that it runs.**
   Wiring `cast state activate` exposed seven defects that every prior green run
   had missed.
+- **A test whose loop can `continue` past every case passes while asserting
+  nothing.** The pre-exchange rollback test skipped all seven of its cases for
+  days. Any test that filters cases must name the coverage it expects, so a
+  silent skip fails instead of going green.
+- **A predicate that infers a fact it should be given cannot express the case
+  you need.** A test helper deriving `layout` from the phase made the
+  pre-exchange rollback unrepresentable — the bug and the blindness to it had
+  the same root.
 
 And the method lesson that broke two deadlocks after repeated guessing failed:
 **measure the value, do not derive it from assumed arithmetic.** Instrument and

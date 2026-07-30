@@ -125,9 +125,12 @@
 # cut there. Until that lands, this operation's cells prove the harness runs,
 # not that the transition is durable.
 #
-# Note the pre-exchange rollback fix is deliberately scoped to NewState
-# (`plans/future_impl.md` §1.4); whether ActiveReblit and ActivateArchived share
-# the gap is still unmeasured.
+# The pre-exchange rollback fix used to be scoped to NewState
+# (`plans/future_impl.md` §1.4). That scoping was itself the bug: the gates that
+# *decide* to roll back never had the restriction, so ActivateArchived and
+# ActiveReblit persisted `RollbackDecided` and were then refused forever.
+# Measured here on 2026-07-30, fixed the same day, and now covered in-process by
+# `admitted_rollback_resume_routes_always_have_a_consuming_successor`.
 #
 # **Phase-targeted cuts, added 2026-07-27.** A `CUTS` entry of the form
 # `phase:<Phase>` or `phase:<Operation>.<Phase>` exports `CAST_CRASH_AT_PHASE`
@@ -146,14 +149,21 @@
 # Verified against the known defect: `phase:TransactionTriggersStarted` on
 # `install` cuts exactly there and recovery converges (`recovered-at-7`).
 #
-# **Open: `OPS=(activate)` does not produce an ActivateArchived transition.**
-# Both `phase:ActivateArchived.TransactionTriggersStarted` and
-# `phase:ActivateArchived.CandidatePrepared` report `CELL-OP-DONE` without the
-# marker ever printing, so `cast state activate 1` in this guest is not driving
-# the journal route the target names — it may be failing silently, or taking a
-# different path. Diagnose that before drawing any conclusion about whether
-# ActivateArchived shares NewState's pre-exchange recovery gap; the cells it
-# currently produces prove nothing about that question.
+# **Resolved 2026-07-30: the marker never printed because the hook was on the
+# wrong route.** `park_for_phase_targeted_crash` lived only in the unbound
+# `store::advance`, but every coordinated transition publishes through
+# `advance_record_binding`. So `CAST_CRASH_AT_PHASE` was silently inert for the
+# exact operations this matrix exists to test, and the harness reported "phase
+# never reached" while a real transition was running. The hook is now on both
+# publish paths.
+#
+# Two other false greens preceded it, all the same shape — a cell that looks
+# green because the thing it names never ran:
+#   * the guest kernel was `0600`, so qemu never booted at all;
+#   * `activate 1` on a fresh root failed with "state 1 already active".
+# Assume the next one exists. Before believing any green cell, confirm the
+# operation under test actually ran: `CAST-AT-PHASE` present for phase cuts,
+# and a non-empty `state=` column.
 #
 set -euo pipefail
 W=$(mktemp -d); chmod 700 "$W"; trap "rm -rf '$W'" EXIT
