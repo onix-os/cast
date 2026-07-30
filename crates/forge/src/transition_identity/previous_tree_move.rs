@@ -467,6 +467,86 @@ impl StatefulTreeIdentity {
         })
     }
 
+    /// Rebuild the archive attempt from disk so a completed archive can be
+    /// reversed after a restart.
+    ///
+    /// `move_previous` refuses a `Restore` when no attempt is retained, and the
+    /// attempt is per-process in-memory state that dies with the transition that
+    /// made it. That is the second of the two walls this plan documents: even
+    /// given an identity, restore could not proceed
+    /// (`plans/previous-restore-recovery-identity.md`).
+    ///
+    /// Four fields come straight from the namespace. The two that drive slot
+    /// retirement — `parking_name` and `state_slot_marker` — come from the
+    /// **record**, because a successful archive consumed the on-disk evidence
+    /// when it renamed the slot into its canonical name. That is exactly what
+    /// D-PR1 recorded them for.
+    #[cfg(test)]
+    pub(crate) fn adopt_previous_archive_attempt_for_test(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        recorded: &PreviousArchiveSlot,
+    ) -> Result<(), Error> {
+        self.adopt_previous_archive_attempt(installation, state, recorded)
+    }
+
+    pub(super) fn adopt_previous_archive_attempt(
+        &self,
+        installation: &Installation,
+        state: state::Id,
+        recorded: &PreviousArchiveSlot,
+    ) -> Result<(), Error> {
+        let roots_path = installation.root_path("");
+        let roots = RetainedDirectory::open_beneath(installation.root_directory(), ROOTS_RELATIVE, roots_path.clone())?;
+        let staging = roots.open_child(c"staging", installation.staging_dir())?;
+
+        // The published slot must already exist: adoption reverses a *completed*
+        // archive, so a missing canonical name means the namespace disagrees
+        // with the record.
+        let name = canonical_state_name(state)?;
+        let slot_path = roots_path.join(name.to_string_lossy().as_ref());
+        let slot = roots
+            .open_optional_child(&name, slot_path.clone())?
+            .ok_or(Error::PreviousArchiveSlotRecordUnusable {
+                state: i32::from(state),
+            })?;
+
+        let parking_name = CString::new(recorded.parking_name.as_str()).map_err(|_| {
+            Error::PreviousArchiveSlotRecordUnusable {
+                state: i32::from(state),
+            }
+        })?;
+        // The parking name must be free — publication consumed it. If something
+        // occupies it, retirement would collide and this is not a namespace the
+        // record describes.
+        if roots.child_name_exists(&parking_name, roots_path.join(recorded.parking_name.as_str()))? {
+            return Err(Error::PreviousArchiveSlotRecordUnusable {
+                state: i32::from(state),
+            });
+        }
+
+        let state_slot_marker = if recorded.reused_wrapper {
+            Some(state_slot_marker::RetainedStateSlotMarker::open_expected(&slot, state, &self.previous.marker)?)
+        } else {
+            None
+        };
+
+        let mut retained = self
+            .previous_archive_attempt
+            .lock()
+            .map_err(|_| Error::PreviousArchiveAttemptLockPoisoned)?;
+        *retained = Some(RetainedPreviousArchiveAttempt {
+            name,
+            parking_name,
+            roots,
+            staging,
+            slot,
+            state_slot_marker,
+        });
+        Ok(())
+    }
+
     fn create_previous_archive_attempt(
         &self,
         installation: &Installation,

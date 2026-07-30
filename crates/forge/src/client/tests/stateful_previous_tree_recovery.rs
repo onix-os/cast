@@ -944,3 +944,67 @@ fn retained_reverse_exchange_post_move_faults_finish_without_a_second_exchange()
         assert_fresh_candidate_quarantined_and_invalidated(&fixture);
     }
 }
+
+#[test]
+fn adoption_round_trips_a_completed_archive_back_out_of_its_slot() {
+    // The pair of walls this plan documented, both now down: an identity can be
+    // built for the post-archive topology, and the archive attempt can be
+    // rebuilt from disk so `restore_previous` will act on it. Before either, a
+    // completed archive was unreversible after a restart.
+    let fixture = stateful_transition_fixture(false);
+    let installation = &fixture.client.installation;
+    let archived = installation.root_path(fixture.previous.id.to_string()).join("usr");
+    let staged_usr = installation.staging_path("usr");
+
+    {
+        let identity = exchanged_stateful_identity(&fixture);
+        identity.archive_previous(installation, fixture.previous.id).unwrap();
+    }
+    assert!(archived.exists(), "the predecessor is archived");
+    // Captured after the archive: this is the exact inode a restore must bring
+    // back, and comparing against a pre-exchange reading would compare the wrong
+    // tree.
+    let archived_inode = fs::symlink_metadata(&archived).unwrap().ino();
+    assert!(!staged_usr.exists(), "staging is empty after the archive");
+
+    let seal = crate::transition_identity::PreviousRestoreRecoverySeal::for_recovery();
+    let recovery = crate::transition_identity::StatefulTreeIdentity::prepare_previous_restore_recovery(
+        installation,
+        &fixture.client.state_db,
+        fixture.candidate.id,
+        fixture.previous.id,
+        &seal,
+    )
+    .expect("recovery identity for the post-archive namespace");
+
+    // Without adoption the restore is refused outright — the attempt is
+    // per-process state that died with the archiving identity.
+    let refused = recovery
+        .restore_previous(installation, fixture.previous.id)
+        .expect_err("a fresh identity has no retained archive attempt");
+    assert_eq!(refused.outcome(), RetainedPreviousMoveOutcome::NotApplied);
+
+    // The record carries what publication consumed: which parking name the slot
+    // came from, and which family it belonged to.
+    let recorded = crate::transition_journal::PreviousArchiveSlot {
+        parking_name: crate::transition_journal::QuarantineName::parse(
+            ".previous-slot-".to_owned() + &fixture.previous.id.to_string() + "-" + &"a".repeat(32) + "-0",
+        )
+        .unwrap(),
+        reused_wrapper: false,
+    };
+    recovery
+        .adopt_previous_archive_attempt_for_test(installation, fixture.previous.id, &recorded)
+        .expect("adoption rebuilds the attempt from the published slot");
+
+    recovery
+        .restore_previous(installation, fixture.previous.id)
+        .expect("the adopted attempt lets the completed archive be reversed");
+
+    assert!(!archived.exists(), "the archived tree left its slot");
+    assert_eq!(
+        fs::symlink_metadata(&staged_usr).unwrap().ino(),
+        archived_inode,
+        "the exact archived inode is back in staging",
+    );
+}
