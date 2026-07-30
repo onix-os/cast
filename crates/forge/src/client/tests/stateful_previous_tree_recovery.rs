@@ -15,7 +15,7 @@ fn exchanged_stateful_identity(fixture: &StatefulTransitionFixture) -> StatefulT
 /// PreviousRestore rollback dispatcher needs a recovery-side attempt adoption
 /// rebuilt from on-disk evidence — a journal-aware guard alone is not enough.
 #[test]
-fn a_fresh_identity_after_the_archive_cannot_restore_the_previous_tree() {
+fn a_fresh_identity_after_the_archive_can_restore_the_previous_tree() {
     let fixture = stateful_transition_fixture(false);
     let installation = &fixture.client.installation;
     let archived = installation.root_path(fixture.previous.id.to_string()).join("usr");
@@ -30,23 +30,42 @@ fn a_fresh_identity_after_the_archive_cannot_restore_the_previous_tree() {
     }
     let archived_inode = fs::symlink_metadata(&archived).unwrap().ino();
 
-    // The ordinary preparation route is not merely unable to compensate — it
-    // cannot produce an identity at all. It pins the staged candidate, and the
-    // archive moved the predecessor out of staging, so nothing remains there.
-    let prepared = fixture
+    // The ordinary preparation route still cannot describe this namespace: it
+    // pins the staged candidate, and the archive moved the predecessor out of
+    // staging. This is the wall the recovery constructor exists to get past, so
+    // it is asserted rather than assumed.
+    let error = fixture
         .client
-        .prepare_stateful_tree_identity(&staged_usr, fixture.candidate.id);
-    let error = prepared
+        .prepare_stateful_tree_identity(&staged_usr, fixture.candidate.id)
         .err()
-        .expect("preparation cannot succeed once the archive emptied staging");
+        .expect("the pre-exchange route cannot describe a post-archive namespace");
     assert!(
         format!("{error:?}").contains("staging/usr") && format!("{error:?}").contains("NotFound"),
-        "expected the missing staged tree to block preparation, got {error:?}",
+        "expected the missing staged tree to block ordinary preparation, got {error:?}",
     );
+
+    // The recovery route describes the post-archive topology and succeeds:
+    // candidate live at `/usr`, predecessor in its state slot, journal taken
+    // without blocking, no clean-baseline demand.
+    let seal = crate::transition_identity::PreviousRestoreRecoverySeal::for_recovery();
+    let recovery = crate::transition_identity::StatefulTreeIdentity::prepare_previous_restore_recovery(
+        installation,
+        &fixture.client.state_db,
+        fixture.candidate.id,
+        fixture.previous.id,
+        &seal,
+    )
+    .expect("recovery can describe the post-archive namespace");
+
+    // And it describes the *right* trees: the previous side is the archived
+    // slot, not live `/usr`.
+    recovery
+        .verify_previous_for_recovery(&archived)
+        .expect("the recovery identity's previous side is the archived predecessor");
     assert_eq!(
         fs::symlink_metadata(&archived).unwrap().ino(),
         archived_inode,
-        "the failed preparation left the archived predecessor exactly in place",
+        "preparing for recovery moved nothing",
     );
 }
 
