@@ -401,6 +401,22 @@ impl TransitionRecord {
         matches!(self.operation, Operation::NewState | Operation::ActiveReblit)
     }
 
+    /// Whether any effect outside `/usr` may have escaped before the crash.
+    ///
+    /// One definition, for the same reason as the phase ordinals. This was
+    /// three identical copies here and in `successors`, plus a fourth in
+    /// disguise across the rollback tail —
+    /// `external_effects_may_remain == (operation != ActivateArchived)`. That
+    /// disguised copy silently assumed every rollback begins *after* the
+    /// transaction triggers ran. A pre-exchange crash makes it false for every
+    /// operation, so the tail refused the very plans the journal had just
+    /// built, and recovery stalled forever with nothing installed.
+    pub(crate) fn expected_external_effects_may_remain(&self, source: ForwardPhase) -> bool {
+        (self.runs_transaction_triggers() && source.ordinal() >= ForwardPhase::TransactionTriggersStarted.ordinal())
+            || (self.options.run_system_triggers && source.ordinal() >= ForwardPhase::SystemTriggersStarted.ordinal())
+            || source == ForwardPhase::BootSyncStarted
+    }
+
     pub(super) fn candidate_disposition_for(&self, source: ForwardPhase) -> AbortDisposition {
         match self.operation {
             Operation::NewState | Operation::ActiveReblit => AbortDisposition::Quarantine,
@@ -453,11 +469,7 @@ impl TransitionRecord {
             });
         }
 
-        let external_effects_may_remain = (self.runs_transaction_triggers()
-            && rollback.source.ordinal() >= ForwardPhase::TransactionTriggersStarted.ordinal())
-            || (self.options.run_system_triggers
-                && rollback.source.ordinal() >= ForwardPhase::SystemTriggersStarted.ordinal())
-            || rollback.source == ForwardPhase::BootSyncStarted;
+        let external_effects_may_remain = self.expected_external_effects_may_remain(rollback.source);
         if rollback.external_effects_may_remain != external_effects_may_remain {
             return Err(CodecError::InvalidExternalEffectsEvidence {
                 expected: external_effects_may_remain,

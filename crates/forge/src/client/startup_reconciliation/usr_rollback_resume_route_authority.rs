@@ -260,7 +260,7 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
         Operation::NewState | Operation::ActiveReblit => rollback.candidate.disposition == AbortDisposition::Quarantine,
     };
     let external_effects_are_exact =
-        rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived);
+        rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source);
     fresh_is_exact
         && candidate_disposition_is_exact
         && external_effects_are_exact
@@ -284,12 +284,26 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
         }
 }
 
+/// The observed `/usr` layout is a caller-supplied fact, never derived from
+/// the phase.
+///
+/// This deliberately takes the layout rather than inferring it. Inferring
+/// `RollbackDecided => Post` silently encoded the assumption that a rollback
+/// only ever begins after the exchange, so no caller could express the
+/// pre-exchange case at all: a test covering it skipped every one of its cases
+/// and passed while asserting nothing.
 #[cfg(test)]
-pub(in crate::client) fn usr_rollback_resume_route_plan_is_exact_for_test(record: &TransitionRecord) -> bool {
-    let layout = match record.phase {
-        Phase::RollbackDecided => UsrExchangeLayout::Post,
-        Phase::UsrRestored => UsrExchangeLayout::Pre,
-        _ => return false,
+pub(in crate::client) fn usr_rollback_resume_route_plan_is_exact_for_test(
+    record: &TransitionRecord,
+    layout_is_post_exchange: bool,
+) -> bool {
+    if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored) {
+        return false;
+    }
+    let layout = if layout_is_post_exchange {
+        UsrExchangeLayout::Post
+    } else {
+        UsrExchangeLayout::Pre
     };
     is_usr_exchange_rollback_source(record) && route_evidence_is_exact(record, layout)
 }

@@ -259,11 +259,7 @@ impl TransitionRecord {
             } else {
                 BootRollback::NotRequired
             },
-            external_effects_may_remain: (self.runs_transaction_triggers()
-                && source.ordinal() >= ForwardPhase::TransactionTriggersStarted.ordinal())
-                || (self.options.run_system_triggers
-                    && source.ordinal() >= ForwardPhase::SystemTriggersStarted.ordinal())
-                || boot_possible,
+            external_effects_may_remain: self.expected_external_effects_may_remain(source),
         });
         validate_advance(self, &next)?;
         Ok(next)

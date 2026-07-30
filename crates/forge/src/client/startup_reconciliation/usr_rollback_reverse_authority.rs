@@ -258,7 +258,7 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
     if record.phase != Phase::ReverseExchangeIntent
-        || (!super::rollback_source_is_supported(record.operation, rollback.source)
+        || (!super::rollback_source_is_supported(record, rollback.source)
             && !matches!(
                 (record.operation, rollback.source, record.generation),
                 (Operation::NewState, ForwardPhase::SystemTriggersStarted, 13)
@@ -289,7 +289,7 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     fresh_is_exact
         && candidate_disposition_is_exact
-        && rollback.external_effects_may_remain == (record.operation != Operation::ActivateArchived)
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
 }
 
 fn require_journal_record_binding(

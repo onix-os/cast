@@ -121,9 +121,18 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
     assert_eq!(wrong_plan.fixture.namespace_snapshot(), wrong_plan_namespace);
     assert_complete_route_journal_only();
 
-    // A valid generic rollback plan that also derives RollbackComplete must
-    // not widen this operation-specific route beyond its three exact no-boot
-    // /usr sources.
+    // Pre-exchange sources are in scope for this route as of 2026-07-30, so
+    // this plan is now *accepted* rather than refused.
+    //
+    // It used to assert refusal, on the rule that the route had three exact
+    // no-boot `/usr` sources. That scoping was the bug: a crash before the
+    // exchange left ActiveReblit with a persisted rollback decision that
+    // nothing would carry out, and the boot stalled forever. Refusing here was
+    // the machine failing to recover, not the route staying narrow.
+    //
+    // The route is still bounded, and the `BootSyncStarted` case above is what
+    // proves it — that source remains unsupported and still stops at
+    // `CandidatePreserved`.
     let route_inexact = build_active(
         Epoch::Historical,
         CandidateSource::Intent,
@@ -153,8 +162,13 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
 
     let route_inexact_error = enter_candidate(&route_inexact);
 
-    assert_pending_phase(&route_inexact_error, Phase::CandidatePreserved);
-    assert_eq!(route_inexact.fixture.canonical_record(), completion_lookalike);
+    assert_pending_phase(&route_inexact_error, Phase::RollbackComplete);
+    assert_eq!(
+        route_inexact.fixture.canonical_record(),
+        completion_lookalike.rollback_successor(None).unwrap()
+    );
+    // Still journal-only: admitting the source must not have produced an
+    // effect, because a pre-exchange rollback has nothing left to undo.
     assert_eq!(route_inexact.fixture.database_snapshot(), route_inexact_database);
     assert_eq!(route_inexact.fixture.namespace_snapshot(), route_inexact_namespace);
     assert_no_candidate_effects();

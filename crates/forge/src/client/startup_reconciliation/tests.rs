@@ -877,3 +877,214 @@ fn startup_reconciliation_pending_error_releases_journal_before_retry() {
     worker.join().unwrap();
     drop(first);
 }
+
+/// Forward phases a rollback can be entered from before `/usr` is touched.
+const PRE_EXCHANGE_ROLLBACK_SOURCES: [Phase; 3] = [
+    Phase::CandidatePrepared,
+    Phase::TransactionTriggersStarted,
+    Phase::TransactionTriggersComplete,
+];
+
+fn forward_record_for(operation: Operation, phase: Phase) -> TransitionRecord {
+    // Each operation has its own legal candidate/previous shape. Only
+    // `NewState` allocates its candidate during the transition; the other two
+    // adopt an existing state and must name it up front, and `ActiveReblit`
+    // reblits the active state onto itself.
+    let (candidate_id, previous_id, previous_origin) = match operation {
+        Operation::NewState => (None, None, PreviousOrigin::SynthesizedEmpty),
+        Operation::ActivateArchived => (Some(42), Some(7), PreviousOrigin::ActiveState),
+        Operation::ActiveReblit => (Some(42), Some(42), PreviousOrigin::ActiveReblitCorrupt),
+    };
+    let mut record = TransitionRecord::preparing(
+        transition_id(),
+        epoch(1),
+        operation,
+        candidate_id,
+        tree_token('a'),
+        runtime_tree(10),
+        Previous {
+            id: previous_id,
+            tree_token: tree_token('b'),
+            usr_runtime_identity: runtime_tree(20),
+            origin: previous_origin,
+        },
+        true,
+        true,
+        QuarantineName::parse("failed-startup-reconciliation").unwrap(),
+    )
+    .unwrap();
+    record.phase = phase;
+    record.candidate.id = candidate_id.or(Some(42));
+    record
+}
+
+/// A record sitting at `phase`, or `None` when that phase is not on this
+/// operation's forward chain.
+///
+/// The generation is taken from `expected_forward_generation` rather than left
+/// at its constructed value, because several admission gates still match on
+/// `(operation, phase, generation)` tuples. A fixture with the wrong generation
+/// is refused for a reason that has nothing to do with what is being tested.
+fn chain_record_for(operation: Operation, phase: Phase) -> Option<TransitionRecord> {
+    let forward = phase.forward()?;
+    let mut record = forward_record_for(operation, phase);
+    record.generation = crate::transition_journal::expected_forward_generation(&record, forward)?;
+    Some(record)
+}
+
+/// Every phase startup would begin a rollback from must have an authority that
+/// accepts that decision.
+///
+/// This is the contract `admitted_rollback_resume_routes_always_have_a_consuming_successor`
+/// cannot see, because that test starts from the decision gate's own list and
+/// so can never notice a phase the gate omits. This one starts from
+/// `recovery_disposition`, which is what startup actually consults. If it says
+/// `BeginRollback` and no authority admits the source, the boot stalls with the
+/// journal pinned — the §1.4 failure, which has now recurred twice.
+#[test]
+fn every_begin_rollback_phase_has_an_admitting_decision_authority() {
+    let mut stranded = Vec::new();
+    let mut checked = 0_usize;
+    for operation in [
+        Operation::NewState,
+        Operation::ActivateArchived,
+        Operation::ActiveReblit,
+    ] {
+        for phase in FORWARD_PHASES {
+            let Some(record) = chain_record_for(operation, phase) else {
+                continue;
+            };
+            if !matches!(
+                record.recovery_disposition(),
+                crate::transition_journal::RecoveryDisposition::BeginRollback { .. }
+            ) {
+                continue;
+            }
+            checked += 1;
+            if !usr_rollback_decision_source_is_supported_for_test(&record) {
+                stranded.push((operation, phase));
+            }
+        }
+    }
+    assert!(checked > 0, "no BeginRollback phase was exercised");
+    // These are known, unfixed stalls, pinned deliberately rather than asserted
+    // empty. Every pair here is a phase where startup decides to roll back and
+    // no authority admits the decision, so the boot stalls with the journal
+    // pinned — the same failure that was just fixed for the pre-exchange
+    // sources, measured 2026-07-30.
+    //
+    // ActivateArchived is the worst of them: it has no post-exchange rollback
+    // admission at all beyond `RootLinksComplete`, because the decision gate's
+    // `(operation, phase, generation)` table contains only NewState and
+    // ActiveReblit rows.
+    //
+    // Pinned instead of emptied because closing fourteen admission gates at
+    // once, with no crash-matrix cell behind any of them, is precisely the
+    // over-widening that produced the original defect. Fix them deliberately,
+    // per operation, and shorten this list as each one is measured — the test
+    // fails if a new stall appears *or* if one is fixed without updating here.
+    //
+    // Not covered: `ArchivedCandidateStagingIntent` / `ArchivedCandidateStaged`
+    // are absent from `FORWARD_PHASES`, so this list is a lower bound.
+    let known_unadmitted = vec![
+        (Operation::NewState, Phase::Preparing),
+        (Operation::NewState, Phase::FreshStateAllocating),
+        (Operation::NewState, Phase::FreshStateAllocated),
+        (Operation::NewState, Phase::CandidatePrepareStarted),
+        (Operation::NewState, Phase::BootSyncStarted),
+        (Operation::ActivateArchived, Phase::Preparing),
+        (Operation::ActivateArchived, Phase::CandidatePrepareStarted),
+        (Operation::ActivateArchived, Phase::SystemTriggersStarted),
+        (Operation::ActivateArchived, Phase::SystemTriggersComplete),
+        (Operation::ActivateArchived, Phase::PreviousArchiveIntent),
+        (Operation::ActivateArchived, Phase::PreviousArchived),
+        (Operation::ActivateArchived, Phase::BootSyncStarted),
+        (Operation::ActiveReblit, Phase::Preparing),
+        (Operation::ActiveReblit, Phase::CandidatePrepareStarted),
+    ];
+    assert_eq!(
+        stranded, known_unadmitted,
+        "the set of phases that strand a rollback decision changed; \
+         shorten this list when one is fixed, and investigate any addition"
+    );
+}
+
+fn pre_exchange_rollback_decision(operation: Operation, source: Phase) -> Option<TransitionRecord> {
+    chain_record_for(operation, source)?
+        .rollback_decision(RollbackObservations {
+            allocated_candidate_id: None,
+            previous_archive: None,
+            usr_exchange: None,
+            candidate: InitialRollbackAction::Pending,
+            fresh_db: (operation == Operation::NewState).then_some(InitialRollbackAction::Pending),
+        })
+        .ok()
+}
+
+/// The rollback-resume route must never advance a record into a phase whose own
+/// authority refuses it.
+///
+/// These are two independent copies of the same admission condition, and they
+/// disagreed. The resume route accepted the pre-exchange sources for *every*
+/// operation, while candidate preservation accepted them for `NewState` only.
+/// An ActivateArchived pre-exchange rollback therefore advanced exactly once,
+/// `RollbackDecided -> CandidatePreserveIntent`, and was then refused forever:
+/// startup demanded `ResumeRollback { CandidatePreserveIntent }` on every boot
+/// and the machine never recovered. Measured in the crash matrix on 2026-07-30
+/// as 26 consecutive attempts with the phase never moving and `state=absent`.
+#[test]
+fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
+    let mut stranded = Vec::new();
+    let mut checked = Vec::new();
+    for operation in [
+        Operation::NewState,
+        Operation::ActivateArchived,
+        Operation::ActiveReblit,
+    ] {
+        for source in PRE_EXCHANGE_ROLLBACK_SOURCES {
+            // Not every source is on every operation's chain: only NewState
+            // and ActiveReblit run transaction triggers. A source the journal
+            // refuses to build is not a gap.
+            let Some(decided) = pre_exchange_rollback_decision(operation, source) else {
+                continue;
+            };
+            // Pre-exchange by construction, so `/usr` is still in its original
+            // layout. This is the fact the crashed machine presents at boot.
+            if !usr_rollback_resume_route_plan_is_exact_for_test(&decided, false) {
+                stranded.push((operation, source, Phase::RollbackDecided));
+                continue;
+            }
+            checked.push((operation, source));
+            let successor = decided.rollback_successor(None).expect("admitted route has a successor");
+            let consumed = match successor.phase {
+                Phase::CandidatePreserveIntent => usr_rollback_candidate_preserve_plan_is_exact_for_test(&successor),
+                Phase::ReverseExchangeIntent => usr_rollback_reverse_plan_is_exact_for_test(&successor),
+                other => panic!("no exactness gate is known for rollback successor phase {other:?}"),
+            };
+            if !consumed {
+                stranded.push((operation, source, successor.phase));
+            }
+        }
+    }
+    // Guard against the failure mode this test already had once: both gates
+    // above `continue`, so a predicate that refuses everything makes the
+    // assertion below vacuously true. Naming the expected coverage means a
+    // silent skip fails instead of passing.
+    assert_eq!(
+        checked,
+        vec![
+            (Operation::NewState, Phase::CandidatePrepared),
+            (Operation::NewState, Phase::TransactionTriggersStarted),
+            (Operation::NewState, Phase::TransactionTriggersComplete),
+            (Operation::ActivateArchived, Phase::CandidatePrepared),
+            (Operation::ActiveReblit, Phase::CandidatePrepared),
+            (Operation::ActiveReblit, Phase::TransactionTriggersStarted),
+            (Operation::ActiveReblit, Phase::TransactionTriggersComplete),
+        ],
+        "the pre-exchange rollback cases this test claims to cover were skipped"
+    );
+    assert!(
+        stranded.is_empty(),
+        "the rollback-resume route advances into phases nothing can consume: {stranded:?}"
+    );
+}

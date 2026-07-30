@@ -204,13 +204,13 @@ fn active_reblit_complete_route_plan_is_exact(record: &TransitionRecord) -> bool
         && record.phase == Phase::CandidatePreserved
         && record.candidate.id.is_some()
         && record.candidate.id == record.previous.id
-        && (super::rollback_source_is_supported(record.operation, rollback.source)
+        && (super::rollback_source_is_supported(record, rollback.source)
             || matches!(
                 (rollback.source, record.generation),
                 (ForwardPhase::SystemTriggersStarted, 14) | (ForwardPhase::SystemTriggersComplete, 15)
             ))
         && rollback.previous_archive == RollbackAction::NotRequired
-        && super::rollback_usr_exchange_is_settled(record.operation, rollback.usr_exchange, rollback.source)
+        && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied

@@ -93,7 +93,8 @@ fn exact_active_reblit_prefix_admissions() {
     let decision_error = enter_boot(&fixture);
     assert_pending_phase(&decision_error, Phase::RollbackDecided);
     let decision = fixture.fixture.canonical_record();
-    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&decision));
+    // This fixture crashed at `BootSyncStarted`, long after the exchange.
+    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&decision, true));
     assert_resume_ready(&fixture, &decision);
 
     let route_error = enter_boot(&fixture);
@@ -112,7 +113,8 @@ fn exact_active_reblit_prefix_admissions() {
     let reverse_error = enter_boot(&fixture);
     assert_pending_phase(&reverse_error, Phase::UsrRestored);
     let restored = fixture.fixture.canonical_record();
-    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&restored));
+    // The reverse exchange has been applied, so `/usr` is back to pre-exchange.
+    assert!(usr_rollback_resume_route_plan_is_exact_for_test(&restored, false));
     assert_resume_ready(&fixture, &restored);
 
     let candidate_route_error = enter_boot(&fixture);
@@ -138,9 +140,19 @@ fn sibling_and_legacy_plan_predicates_are_rejected() {
     for kind in [OperationKind::NewState, OperationKind::Archived] {
         let fixture = Fixture::boot_sync_started(kind, BootSyncStartedLayout::Post, false);
         let prefixes = sibling_prefixes(&fixture.source, kind);
-        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(&prefixes.decision));
+        // A sibling operation's prefix is refused whatever `/usr` looks like,
+        // so both layouts are asserted rather than one chosen arbitrarily.
+        for post_exchange in [false, true] {
+            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
+                &prefixes.decision,
+                post_exchange
+            ));
+            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
+                &prefixes.restored,
+                post_exchange
+            ));
+        }
         assert!(!usr_rollback_reverse_plan_is_exact_for_test(&prefixes.reverse));
-        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(&prefixes.restored));
         assert!(!usr_rollback_candidate_preserve_plan_is_exact_for_test(
             &prefixes.candidate_intent
         ));
@@ -296,16 +308,21 @@ fn sibling_prefixes(source: &TransitionRecord, kind: OperationKind) -> SiblingPr
 }
 
 fn assert_prefix_plan_refused(record: &TransitionRecord) {
+    // Refusal must not depend on the observed layout, so every resume-route
+    // assertion below covers both.
+    let resume_refused =
+        |record| !usr_rollback_resume_route_plan_is_exact_for_test(record, false)
+            && !usr_rollback_resume_route_plan_is_exact_for_test(record, true);
     match record.phase {
         Phase::RollbackDecided | Phase::UsrRestored => {
-            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(record));
+            assert!(resume_refused(record));
         }
         Phase::ReverseExchangeIntent => assert!(!usr_rollback_reverse_plan_is_exact_for_test(record)),
         Phase::CandidatePreserveIntent => {
             assert!(!usr_rollback_candidate_preserve_plan_is_exact_for_test(record));
         }
         _ => {
-            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(record));
+            assert!(resume_refused(record));
             assert!(!usr_rollback_reverse_plan_is_exact_for_test(record));
             assert!(!usr_rollback_candidate_preserve_plan_is_exact_for_test(record));
         }
