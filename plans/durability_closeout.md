@@ -426,33 +426,40 @@ assume they hide the same thing.
    `(ActivateArchived, PreviousArchived)` the one to fix first, with a
    ready-made reproduction that does not depend on the phase-cut machinery.
 
-### Post-exchange admission — written, not landed
+### Post-exchange admission — LANDED 2026-07-31 (`16015ec5`), effects still missing
 
-`plans/post-exchange-admission.patch` holds a working change that admits every
-post-exchange source for every operation, deriving the generation from
-`expected_forward_generation` instead of the hand-kept
-`(operation, phase, generation)` table (itself another instance of the pattern —
-that table is why ActivateArchived had no post-exchange admission at all).
+Every post-exchange source is now admitted for every operation, with the
+generation derived from `expected_forward_generation` instead of the hand-kept
+`(operation, phase, generation)` table — that table was itself an instance of
+the pattern, and the reason ActivateArchived had no post-exchange admission at
+all. **All six pinned decision-gate stalls are gone; both pinned lists now
+assert empty.**
 
-It was deliberately **not** committed. Applying it makes all six pinned
-decision-gate stalls admit, and fails exactly two exclusion tests that encode
-the old scoping:
+Two exclusion tests encoded the old scoping and were updated deliberately:
 
-- `startup_system_trigger_sources_require_post_and_exclude_activate_archived`
-  asserts ActivateArchived is *not* admitted at `SystemTriggers*`; the "pending,
-  unchanged" it protects is the brick, not a safety property.
-- `startup_active_reblit_boot_repair_required_prefix_boundaries_are_exact_and_effect_free`
+- `..._require_post_and_exclude_activate_archived` → renamed
+  `..._require_post_for_every_operation`. The "not supported, record unchanged,
+  still pending" it asserted *was* the brick — the one reproducible in 40s by
+  `install → remove → activate`. Its genuine invariant is kept: a pre-exchange
+  namespace at a post-exchange source is incoherent evidence and is still
+  refused, for every operation.
+- `..._boot_repair_required_prefix_boundaries_...` — its sibling loop excluded
+  NewState and ActivateArchived at `BootSyncStarted`, two of the six stalls. The
+  neighbouring `BootSyncComplete` rejection still holds, since that phase maps
+  to `RollForward`, not `BeginRollback`.
 
-**Admission alone is not the fix.** Post-exchange rollback has real work to
-undo — reverse the exchange, restore the archived previous state — and those
-effects do not exist for ActivateArchived. Admitting the decision without them
-lets recovery begin work it cannot finish, which is worse than stalling. Land
-the patch **with** the effects, not before, and update the two exclusion tests
-in the same change so the contract moves deliberately rather than by accident.
+> **ADMISSION ONLY — the recovery is not complete.** The reverse-exchange and
+> previous-restore effects do not exist for ActivateArchived, and the
+> boot-repair authorities remain ActiveReblit's alone. These chains are expected
+> to advance and then stall where the effects are missing. This was a
+> deliberate, requested step to make the next gap visible and reproducible.
+> **An empty pinned list is not evidence that post-exchange recovery works.**
+> The same warning is repeated at both gates and both tests in the source; do
+> not delete it until a crash-matrix cell proves the effects run.
 
-Note the pattern: three separate over-widenings during this work were caught
-only by exclusion tests. These two are the same signal. Read them as a contract
-being violated, not as noise to silence.
+**Next:** run the 40-second `install → remove → activate` cell again and read
+where it stalls now. That is the cheapest possible pointer at which effect to
+implement first.
 
    Note the remove step only became possible on 2026-07-30 — before the
    first-install staging fix, a displaced `/usr` placeholder wedged the next
