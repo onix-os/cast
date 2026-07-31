@@ -79,10 +79,19 @@ fn startup_active_reblit_finalization_rejects_a_valid_terminal_lookalike_plan_an
     let namespace_before = lookalike.fixture.namespace_snapshot();
     reset_candidate_effect_observers();
 
-    let plan_error = enter_candidate(&lookalike);
-
-    assert_pending_phase(&plan_error, Phase::RollbackComplete);
-    assert_eq!(lookalike.fixture.canonical_record(), terminal_lookalike);
+    // This is no longer a lookalike: a pre-exchange ActiveReblit rollback is a
+    // real plan that must finalize. It used to be refused because the
+    // finalization gate's source list started at `UsrExchangeIntent`, so a
+    // crash before the exchange walked the whole chain and then could not
+    // finish — the machine stayed unrecovered. Refusing here was the defect,
+    // not the boundary.
+    //
+    // Boundedness of this route is still covered, by
+    // `startup_active_reblit_finalization_admits_root_links_only_at_generation_*`
+    // and by the wrong-topology half below.
+    let finalized = enter_clean_candidate(&lookalike);
+    assert_canonical_absent(&lookalike.fixture.installation.root);
+    drop(finalized);
     assert_eq!(lookalike.fixture.database_snapshot(), database_before);
     assert_eq!(lookalike.fixture.namespace_snapshot(), namespace_before);
     assert_no_candidate_effects();

@@ -253,13 +253,17 @@ fn active_reblit_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
         && record.phase == Phase::RollbackComplete
         && record.candidate.id.is_some()
         && record.candidate.id == record.previous.id
-        && matches!(
+        // Pre-exchange sources reach `RollbackComplete` by the short route, so
+        // their generation is not fixed and they were excluded entirely — the
+        // same stall fixed for NewState in `ab949007`, present here too.
+        && (matches!(
             (rollback.source, record.generation),
             (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
                 | (ForwardPhase::RootLinksComplete, 14)
                 | (ForwardPhase::SystemTriggersStarted, 15)
                 | (ForwardPhase::SystemTriggersComplete, 16)
-        )
+        ) || (rollback.source.ordinal() < ForwardPhase::UsrExchangeIntent.ordinal()
+            && super::rollback_source_is_supported(record, rollback.source)))
         && rollback.previous_archive == RollbackAction::NotRequired
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(

@@ -258,6 +258,14 @@ fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bo
         && match rollback.source {
             ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged => true,
             ForwardPhase::RootLinksComplete => expected_rollback_complete_generation(record) == Some(record.generation),
+            // Pre-exchange sources reach `RollbackComplete` by the short route,
+            // so their generation is not fixed. Excluding them left an
+            // ActivateArchived rollback begun before the exchange walking the
+            // whole chain and then unable to finalize — the same stall fixed
+            // for NewState in `ab949007`, present here too.
+            source if source.ordinal() < ForwardPhase::UsrExchangeIntent.ordinal() => {
+                super::rollback_source_is_supported(record, source)
+            }
             _ => false,
         }
         && rollback.previous_archive == RollbackAction::NotRequired
