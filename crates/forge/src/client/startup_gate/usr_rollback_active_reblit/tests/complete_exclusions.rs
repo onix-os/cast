@@ -5,7 +5,10 @@ use std::fs;
 use crate::{
     boot_publication::{BootPublicationReceiptFingerprint, BootPublicationReceiptPair},
     client::{startup_gate, startup_reconciliation::RecoveryBlocker},
-    transition_journal::{BootRollback, ForwardPhase, Phase, RollbackAction, RollbackActionOutcome, encode},
+    transition_journal::{
+        BootRollback, ForwardPhase, InitialRollbackAction, Phase, RollbackAction, RollbackActionOutcome,
+        RollbackObservations, encode, expected_forward_generation,
+    },
 };
 
 use super::{
@@ -139,14 +142,36 @@ fn startup_active_reblit_complete_route_preserves_operation_and_phase_ordering()
         RollbackActionOutcome::AlreadySatisfied,
         CandidateOrigin::AlreadySatisfied,
     );
-    let mut completion_lookalike = persist_candidate_preserved(&route_inexact, CandidateOrigin::AlreadySatisfied);
-    let rollback = completion_lookalike.rollback.as_mut().unwrap();
-    rollback.source = ForwardPhase::TransactionTriggersComplete;
-    rollback.usr_exchange = RollbackAction::NotRequired;
+    persist_candidate_preserved(&route_inexact, CandidateOrigin::AlreadySatisfied);
+    // Built by the journal rather than by rewriting a post-exchange record.
+    // Editing `source` and `usr_exchange` in place left the generation counting
+    // a reverse exchange this plan says never happened, so the record asserted
+    // that the route admits evidence no real history produces. The route's
+    // generation bound now derives what the source implies, and it refuses it.
+    let mut forward = route_inexact.fixture.source.clone();
+    forward.phase = Phase::TransactionTriggersComplete;
+    forward.generation = expected_forward_generation(&forward, ForwardPhase::TransactionTriggersComplete)
+        .expect("ActiveReblit runs its transaction triggers");
+    let completion_lookalike = forward
+        .rollback_decision(RollbackObservations {
+            allocated_candidate_id: None,
+            previous_archive: None,
+            usr_exchange: None,
+            candidate: InitialRollbackAction::Pending,
+            fresh_db: None,
+        })
+        .unwrap()
+        .rollback_successor(None)
+        .unwrap()
+        .rollback_successor(Some(RollbackActionOutcome::AlreadySatisfied))
+        .unwrap();
+    assert_eq!(completion_lookalike.phase, Phase::CandidatePreserved);
+    let rollback = completion_lookalike.rollback.as_ref().unwrap();
+    assert_eq!(rollback.usr_exchange, RollbackAction::NotRequired);
     assert_eq!(rollback.previous_archive, RollbackAction::NotRequired);
     assert_eq!(rollback.fresh_db, RollbackAction::NotRequired);
     assert_eq!(rollback.boot, BootRollback::NotRequired);
-    rollback.external_effects_may_remain = true;
+    assert!(rollback.external_effects_may_remain);
     assert_eq!(
         completion_lookalike.rollback_successor(None).unwrap().phase,
         Phase::RollbackComplete

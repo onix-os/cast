@@ -677,25 +677,58 @@ below rather than disguised as a refusal there.
 
 Four stalls remain, pinned, and **none of them is a predicate**:
 
-    NewState         @ BootSyncStarted      -> FreshDbInvalidated
+    NewState         @ BootSyncStarted       -> CandidatePreserved
     ActivateArchived @ PreviousArchiveIntent -> PreviousRestoreIntent
     ActivateArchived @ PreviousArchived      -> PreviousRestoreIntent
     ActivateArchived @ BootSyncStarted       -> PreviousRestoreIntent
 
-### Still hand-written: the four per-operation terminal gates
+Two missing effects, not four bugs: the previous-restore dispatcher (below) and
+sibling boot repair (§B).
+
+### A3c 2026-08-01 — the four per-operation terminal gates
 
 `usr_rollback_activate_archived_{finalization,complete_route}_authority` and the
-ActiveReblit pair were not touched by the above and still carry every rule the
-six shared gates just shed: their own source tuple tables,
+ActiveReblit pair were untouched by the above and still carried every rule the
+six shared gates had shed: their own source tuple tables,
 `previous_archive == NotRequired`, the disposition by operation name, and — in
 both ActivateArchived gates — a surviving `!rollback.external_effects_may_remain`,
-the exact "disguised copy" this plan already recorded as fixed everywhere. It
-was not.
+the exact "disguised copy" this plan had already recorded as fixed everywhere.
+It was not.
 
-They are invisible to the new walk because its `_ => true` arm waves the
-ActivateArchived and ActiveReblit terminal phases through. Deriving them and
-replacing that arm with real calls is the next step, and until it happens **the
-post-exchange list's four entries are a lower bound.**
+They were invisible because the walk's `_ => true` arm waved every
+operation-specific terminal phase through. **A phase nothing calls is a phase
+nothing checks** — that arm is now `terminal_gate_admits`, which dispatches to
+the real predicate for each `(operation, phase)` pair.
+
+Wiring it surfaced one bug no derivation would have found:
+`active_reblit_finalization_plan_is_exact` demanded `boot == NotRequired` at
+`RollbackComplete`. But `NotRequired` is only one of the two ways a rollback
+legitimately arrives there — the other is through the boot-repair route
+ActiveReblit owns, which leaves the action `Applied`, `AlreadySatisfied`, or
+`Unverified`. So an ActiveReblit boot-sync crash could complete its repair and
+still never finalize. Now only `PendingUnverifiable` is refused, because that
+repair is still owed. The *route* gates keep the absolute check, correctly: a
+plan with repair outstanding belongs on the repair route, not on completion.
+
+**This one was load-bearing, and two tests had frozen it.**
+`boot_repair_complete_route_matrix` asserted the record stays at
+`RollbackComplete` on the next entry, and
+`..._all_journal_faults_converge_without_finalization` said so in its name.
+Neither was idempotence: `recovery_disposition` returns `FinalizeRollback` for
+those records, so the journal was asking for a finalization the gate refused —
+the §1.4 head/tail disagreement, at the last phase. The whole ActiveReblit
+boot-repair path therefore ended with the journal record still on disk, which
+fails the startup baseline on every later boot. Both tests now assert the
+finalization; the second is renamed `..._converge_and_finalize`.
+
+`expected_rollback_complete_generation` and its hand-written
+`ROLLBACK_ADVANCES_TO_COMPLETE = 6` are gone, subsumed by
+`rollback_generation_is_reachable`.
+
+The NewState boot-sync stall also moved one phase earlier — `CandidatePreserved`
+rather than `FreshDbInvalidated` — because that is the first phase whose plan
+routes to `BootRepairRequired`, and the walk now asks there. Same stall, earlier
+and more accurate detection.
 
 ### The previous-restore effect does not exist — confirmed by grep, not by inference
 
@@ -722,8 +755,30 @@ lease, consuming dispatcher that mints `PreviousRestoreRecoverySeal`, and the
 **before** the reverse step, since the restore precedes the reverse exchange in
 the chain.
 
+The physical sequence is already built and proven in-process; the dispatcher
+only has to drive it under a sealed admission:
+
+    StatefulTreeIdentity::prepare_previous_restore_recovery(
+        installation, state_db, candidate_state, previous_state, &seal)?
+        .adopt_previous_archive_attempt(installation, previous_state, &recorded_slot)?
+        .restore_previous_with_journal(installation, previous_state, &seal)?
+
+`adopt_previous_archive_attempt` is `pub(super)` today and needs widening to
+`pub(crate)`; its `_for_test` twin already is. The recorded slot comes from
+`record.previous_archive_slot`, which the presence invariant guarantees is
+`Some` at exactly these phases — that is what D-PR1 was for.
+
+The two admission typestates fall out of `policy.rs`, which already names the
+two legal layouts for this phase: `PREVIOUS_ARCHIVED` (the predecessor is still
+in its slot) is Apply, and `POST_EXCHANGE` (it is already back in staging) is
+Finish, completing with `AlreadySatisfied` through
+`finish_applied_previous_restore_with_journal`. Same shape as the reverse
+gate's POST/PRE split.
+
 Acceptance test, already established and needing no crash injection: the 41-second
-`install -> remove -> activate` cell on a real guest.
+`install -> remove -> activate` cell on a real guest. Then §A4's reboot matrix,
+which `previous-restore-recovery-identity.md` left outstanding for exactly this
+reason — in-process fixtures cannot prove cross-reboot behaviour.
 
 ### A4. Cross-reboot proof for previous-restore
 
@@ -871,6 +926,20 @@ A hard-coded value silently encoding structure:
   pre-exchange list was empty while `PreviousRestoreIntent` had no implementation
   at all. Before trusting one, ask whether anything in the walk actually calls
   production code for that phase, or whether a `_ => true` arm waves it through.
+- **A test that asserts "nothing happened on the next entry" may be asserting a
+  stall.** Two ActiveReblit tests froze the boot-repair finalization refusal as
+  if it were idempotence, one of them in its own name. The check that tells them
+  apart is `recovery_disposition`: if it names an action, a gate refusing that
+  action is a bug, not a boundary.
+- **Fixtures that hold a pending diagnostic hold the journal lock and the state
+  database.** A following entry that only reads is fine; one that finalizes
+  blocks until the deadline and looks exactly like a hang. Drop the previous
+  entry's result — and the clean startup itself — before asserting against the
+  same root.
+- **A catch-all arm in an invariant walk is an exemption list you cannot see.**
+  Four terminal gates kept every hard-coded rule the shared tail had shed,
+  purely because `_ => true` covered them. Replacing it with a real dispatch
+  found a bug in the first minute. Enumerate the arm; do not default it.
 - **Tests that assert admission cannot catch over-widening.** Loosening a gate
   never strands a chain, so every "nothing is stranded" test stays green through
   it. All four over-widenings committed during this work were caught by older

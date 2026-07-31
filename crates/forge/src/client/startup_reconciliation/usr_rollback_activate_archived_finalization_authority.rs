@@ -8,11 +8,10 @@
 
 use crate::{
     Installation, db,
-    transition_journal::expected_forward_generation,
     transition_journal::{
-        AbortDisposition, BootRollback, CandidateOrigin, ForwardPhase, Operation, Phase, PreviousOrigin,
-        RollbackAction, StorageError, TransitionJournalBinding, TransitionJournalRecordBinding,
-        TransitionJournalRecordDeleteError, TransitionJournalStore, TransitionRecord,
+        BootRollback, CandidateOrigin, Operation, Phase, PreviousOrigin, RollbackAction, StorageError,
+        TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalRecordDeleteError,
+        TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -237,13 +236,6 @@ impl UsrRollbackActivateArchivedFinalizationAfterDeleteAuthority<'_> {
 /// The offset was measured, not assumed — two earlier attempts guessed the
 /// forward generation was 8 and the offset 4, and both broke 17 tests. It is
 /// 6 + 6 for this operation.
-fn expected_rollback_complete_generation(record: &TransitionRecord) -> Option<u64> {
-    const ROLLBACK_ADVANCES_TO_COMPLETE: u64 = 6;
-    let mut forward = record.clone();
-    forward.rollback = None;
-    expected_forward_generation(&forward, ForwardPhase::RootLinksComplete)?.checked_add(ROLLBACK_ADVANCES_TO_COMPLETE)
-}
-
 fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
@@ -255,29 +247,43 @@ fn activate_archived_finalization_plan_is_exact(record: &TransitionRecord) -> bo
         && record.candidate.id.is_some()
         && record.previous.id.is_some()
         && record.candidate.id != record.previous.id
-        && match rollback.source {
-            ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged => true,
-            ForwardPhase::RootLinksComplete => expected_rollback_complete_generation(record) == Some(record.generation),
-            // Pre-exchange sources reach `RollbackComplete` by the short route,
-            // so their generation is not fixed. Excluding them left an
-            // ActivateArchived rollback begun before the exchange walking the
-            // whole chain and then unable to finalize — the same stall fixed
-            // for NewState in `ab949007`, present here too.
-            source if source.ordinal() < ForwardPhase::UsrExchangeIntent.ordinal() => {
-                super::rollback_source_is_supported(record, source)
-            }
-            _ => false,
+        // One derived chain check in place of a per-source table plus a
+        // hand-written `ROLLBACK_ADVANCES_TO_COMPLETE = 6`. That table named
+        // only the three phases around the exchange, so an activation cut
+        // during its system triggers, its previous-archive, or its boot sync
+        // walked its whole rollback and then could not finalize.
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
         }
-        && rollback.previous_archive == RollbackAction::NotRequired
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Rearchive
-        && rollback.fresh_db == RollbackAction::NotRequired
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
+        && if record.fresh_db_rollback_is_possible(rollback.source) {
+            rollback.fresh_db.resolved()
+        } else {
+            rollback.fresh_db == RollbackAction::NotRequired
+        }
+        // Absolute on purpose: this gate ends the rollback, so a plan with
+        // boot repair still outstanding belongs on the repair route instead.
         && rollback.boot == BootRollback::NotRequired
-        && !rollback.external_effects_may_remain
+        // Derived, not asserted false. This is the "disguised copy" of the
+        // external-effects rule the rest of the tail already shed — hard-coding
+        // it required the crash to have happened before any trigger ran, so an
+        // activation cut during its system triggers was refused here forever.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_activate_archived_finalization_plan_is_exact_for_test(
+    record: &TransitionRecord,
+) -> bool {
+    activate_archived_finalization_plan_is_exact(record)
 }
 
 fn require_journal_record_binding(

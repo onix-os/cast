@@ -11,8 +11,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, CandidateOrigin, Operation, Phase, PreviousOrigin, RollbackAction,
-        StorageError, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootRollback, CandidateOrigin, Operation, Phase, PreviousOrigin, RollbackAction, StorageError,
+        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -192,17 +192,39 @@ fn activate_archived_complete_route_plan_is_exact(record: &TransitionRecord) -> 
         && record.candidate.id.is_some()
         && record.previous.id.is_some()
         && record.candidate.id != record.previous.id
-        && super::rollback_source_is_supported(record, rollback.source)
-        && rollback.previous_archive == RollbackAction::NotRequired
+        // Derived for the same reasons as the sibling gates: this delegated to
+        // a predicate that only ever admitted pre-exchange sources, so every
+        // post-exchange activation rollback reached `CandidatePreserved` and
+        // had no route to completion.
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Rearchive
-        && rollback.fresh_db == RollbackAction::NotRequired
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
+        && if record.fresh_db_rollback_is_possible(rollback.source) {
+            rollback.fresh_db.resolved()
+        } else {
+            rollback.fresh_db == RollbackAction::NotRequired
+        }
+        // Absolute on purpose: this route ends the rollback, so a plan with
+        // boot repair still outstanding belongs on the repair route instead.
         && rollback.boot == BootRollback::NotRequired
-        && !rollback.external_effects_may_remain
+        // The second surviving copy of the disguised external-effects rule.
+        && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_activate_archived_complete_route_plan_is_exact_for_test(
+    record: &TransitionRecord,
+) -> bool {
+    activate_archived_complete_route_plan_is_exact(record)
 }
 
 fn inspect_current_database(

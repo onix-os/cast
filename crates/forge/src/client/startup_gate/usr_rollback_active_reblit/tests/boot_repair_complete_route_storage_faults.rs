@@ -14,12 +14,13 @@ use crate::{
 use super::{
     super::test_fixture::BootSyncStartedLayout,
     support::{
-        CandidateOrigin, Epoch, UsrRestoreOrigin, assert_boot_complete_persistence_advance,
+        CandidateOrigin, Epoch, UsrRestoreOrigin, assert_boot_complete_persistence_advance, assert_canonical_absent,
         assert_fresh_existing_candidate_database, assert_no_boot_synchronize_attempts, assert_no_candidate_effects,
         assert_pending_phase, boot_active_wrapper_path, build_boot_sync_started, canonical_record,
-        drive_boot_sync_started_to_candidate_preserved, enter_boot, enter_fresh_handles, expected_boot_repair_required,
-        expected_boot_repair_rollback_complete, install_persistent_boot_database, release_boot_handles,
-        reset_boot_synchronize_observer, reset_candidate_effect_observers, seed_boot_repair_complete_for_test,
+        drive_boot_sync_started_to_candidate_preserved, enter_boot, enter_clean_fresh_handles, enter_fresh_handles,
+        expected_boot_repair_required, expected_boot_repair_rollback_complete, install_persistent_boot_database,
+        release_boot_handles, reset_boot_synchronize_observer, reset_candidate_effect_observers,
+        seed_boot_repair_complete_for_test,
     },
 };
 
@@ -59,7 +60,7 @@ const JOURNAL_FAULTS: [JournalFault; 5] = [
 ];
 
 #[test]
-fn startup_active_reblit_boot_repair_complete_all_journal_faults_converge_without_finalization() {
+fn startup_active_reblit_boot_repair_complete_all_journal_faults_converge_and_finalize() {
     for fault in JOURNAL_FAULTS {
         let mut fixture = build_boot_sync_started(Epoch::Current, BootSyncStartedLayout::Post);
         install_persistent_boot_database(&mut fixture);
@@ -71,6 +72,7 @@ fn startup_active_reblit_boot_repair_complete_all_journal_faults_converge_withou
         let required = expected_boot_repair_required(&preserved);
         let required_entry = enter_boot(&fixture);
         assert_pending_phase(&required_entry, Phase::BootRepairRequired);
+        drop(required_entry);
         let complete = seed_boot_repair_complete_for_test(&fixture, &required, BootRepairOutcome::Applied);
         let expected = expected_boot_repair_rollback_complete(&complete);
         let database_before = fixture.fixture.database_snapshot();
@@ -103,11 +105,39 @@ fn startup_active_reblit_boot_repair_complete_all_journal_faults_converge_withou
         assert_no_candidate_effects();
         assert_no_boot_synchronize_attempts();
 
+        // The first entry's pending diagnostic keeps the journal lock and the
+        // active-state reservation alive. A later *pending* entry tolerates
+        // that; a finalizing one needs both, so it must be released here.
+        drop(first);
         let retained = release_boot_handles(fixture);
-        let second = enter_fresh_handles(retained.path());
+        // A fault that stopped before the route leaves that advance for this
+        // entry; one that stopped after it has nothing left to route.
+        if matches!(
+            fault.durable,
+            DurableUsrRollbackActiveReblitBootRepairCompleteRecord::BootRepairComplete
+        ) {
+            let routed = enter_fresh_handles(retained.path());
+            assert_pending_phase(&routed, Phase::RollbackComplete);
+            assert_eq!(canonical_record(retained.path()), expected);
+            // The pending diagnostic retains the journal lock; the finalizing
+            // entry below blocks on it forever otherwise.
+            drop(routed);
+        }
 
-        assert_pending_phase(&second, Phase::RollbackComplete);
-        assert_eq!(canonical_record(retained.path()), expected);
+        // Then it finalizes. Every fault used to stop here at
+        // `RollbackComplete` forever, which is what named this test
+        // "converge_without_finalization" — but that was the terminal stall,
+        // not convergence: `recovery_disposition` says `FinalizeRollback`, and
+        // the gate refused only because it demanded `boot == NotRequired`, a
+        // value a repaired boot never carries. What the faults must prove is
+        // that they never *skip* work, and that still holds: the wrapper, the
+        // database, and the absence of any candidate or boot effect are all
+        // asserted below.
+        // Released before the assertions below: a live clean startup holds the
+        // state database exclusively, and they open their own connection.
+        drop(enter_clean_fresh_handles(retained.path()));
+
+        assert_canonical_absent(retained.path());
         assert!(wrapper.join("usr").is_dir());
         assert_fresh_existing_candidate_database(retained.path(), &expected, &provenance);
         assert_no_candidate_effects();

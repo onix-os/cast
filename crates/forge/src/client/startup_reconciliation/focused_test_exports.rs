@@ -21,12 +21,24 @@ pub(in crate::client) use super::usr_rollback_reverse_authority::{
     arm_between_usr_rollback_reverse_database_captures, usr_rollback_reverse_plan_is_exact_for_test,
 };
 pub(in crate::client) use super::{
-    usr_rollback_activate_archived_complete_route_authority::arm_between_usr_rollback_activate_archived_complete_route_database_captures,
-    usr_rollback_activate_archived_finalization_authority::arm_between_usr_rollback_activate_archived_finalization_database_captures,
+    usr_rollback_activate_archived_complete_route_authority::{
+        arm_between_usr_rollback_activate_archived_complete_route_database_captures,
+        usr_rollback_activate_archived_complete_route_plan_is_exact_for_test,
+    },
+    usr_rollback_activate_archived_finalization_authority::{
+        arm_between_usr_rollback_activate_archived_finalization_database_captures,
+        usr_rollback_activate_archived_finalization_plan_is_exact_for_test,
+    },
     usr_rollback_active_reblit_boot_repair_complete_authority::arm_between_usr_rollback_active_reblit_boot_repair_complete_database_captures,
     usr_rollback_active_reblit_boot_repair_required_authority::arm_between_usr_rollback_active_reblit_boot_repair_required_database_captures,
-    usr_rollback_active_reblit_complete_route_authority::arm_between_usr_rollback_active_reblit_complete_route_database_captures,
-    usr_rollback_active_reblit_finalization_authority::arm_between_usr_rollback_active_reblit_finalization_database_captures,
+    usr_rollback_active_reblit_complete_route_authority::{
+        arm_between_usr_rollback_active_reblit_complete_route_database_captures,
+        usr_rollback_active_reblit_complete_route_plan_is_exact_for_test,
+    },
+    usr_rollback_active_reblit_finalization_authority::{
+        arm_between_usr_rollback_active_reblit_finalization_database_captures,
+        usr_rollback_active_reblit_finalization_plan_is_exact_for_test,
+    },
     usr_rollback_complete_route_authority::{
         arm_between_usr_rollback_complete_route_database_captures, usr_rollback_complete_route_plan_is_exact_for_test,
     },

@@ -13,8 +13,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootRollback, Operation, Phase, RollbackAction, StorageError, TransitionJournalRecordBinding,
+        TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -204,25 +204,38 @@ fn active_reblit_complete_route_plan_is_exact(record: &TransitionRecord) -> bool
         && record.phase == Phase::CandidatePreserved
         && record.candidate.id.is_some()
         && record.candidate.id == record.previous.id
-        && (super::rollback_source_is_supported(record, rollback.source)
-            || matches!(
-                (rollback.source, record.generation),
-                (ForwardPhase::SystemTriggersStarted, 14) | (ForwardPhase::SystemTriggersComplete, 15)
-            ))
-        && rollback.previous_archive == RollbackAction::NotRequired
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Quarantine
-        && rollback.fresh_db == RollbackAction::NotRequired
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
+        && if record.fresh_db_rollback_is_possible(rollback.source) {
+            rollback.fresh_db.resolved()
+        } else {
+            rollback.fresh_db == RollbackAction::NotRequired
+        }
+        // Absolute on purpose: this route ends the rollback, so a plan with
+        // boot repair still outstanding belongs on the repair route instead.
         && rollback.boot == BootRollback::NotRequired
         // Derived, not asserted. Hard-coding this to `true` required the
         // crash to have happened after the transaction triggers, so a
         // rollback that began before them reached this phase and had no
         // route out — the terminal stall measured in the VM 2026-07-31.
         && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
+}
+
+#[cfg(test)]
+pub(in crate::client) fn usr_rollback_active_reblit_complete_route_plan_is_exact_for_test(
+    record: &TransitionRecord,
+) -> bool {
+    active_reblit_complete_route_plan_is_exact(record)
 }
 
 /// Inspect exact existing-state evidence around the general startup context

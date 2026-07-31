@@ -986,6 +986,47 @@ fn test_previous_archive_slot() -> crate::transition_journal::PreviousArchiveSlo
 /// the test instead of hanging it.
 const MAX_ROLLBACK_CHAIN_STEPS: usize = 12;
 
+/// Whether the operation-specific gate that owns a terminal rollback phase
+/// admits this record.
+///
+/// The walks used to wave every one of these through with `_ => true`, which
+/// is how four gates kept their own source tables, their own
+/// `previous_archive == NotRequired`, and — in both ActivateArchived gates — a
+/// hard-coded `!external_effects_may_remain`, long after the shared tail had
+/// derived all three. A phase nothing calls is a phase nothing checks.
+fn terminal_gate_admits(operation: Operation, record: &TransitionRecord) -> bool {
+    // A plan with boot repair still outstanding routes to `BootRepairRequired`
+    // rather than to completion, so the completion gates are not its consumer
+    // and asking them would report a stall that is not one. The boot-repair
+    // authorities are ActiveReblit's alone (§B), which is exactly why the
+    // NewState entry below stays pinned.
+    if record
+        .rollback
+        .as_ref()
+        .is_some_and(|rollback| rollback.boot == BootRollback::PendingUnverifiable)
+    {
+        return operation == Operation::ActiveReblit;
+    }
+    match (operation, record.phase) {
+        (Operation::ActivateArchived, Phase::CandidatePreserved) => {
+            usr_rollback_activate_archived_complete_route_plan_is_exact_for_test(record)
+        }
+        (Operation::ActivateArchived, Phase::RollbackComplete) => {
+            usr_rollback_activate_archived_finalization_plan_is_exact_for_test(record)
+        }
+        (Operation::ActiveReblit, Phase::CandidatePreserved) => {
+            usr_rollback_active_reblit_complete_route_plan_is_exact_for_test(record)
+        }
+        (Operation::ActiveReblit, Phase::RollbackComplete) => {
+            usr_rollback_active_reblit_finalization_plan_is_exact_for_test(record)
+        }
+        // NewState routes out of `CandidatePreserved` without a gate of its
+        // own; its terminal pair is checked directly by the callers.
+        (Operation::NewState, _) => true,
+        (_, _) => true,
+    }
+}
+
 /// Completing a persisted intent requires an explicit outcome; the routing
 /// phases between them accept none.
 fn rollback_outcome_for(phase: Phase) -> Option<RollbackActionOutcome> {
@@ -1186,9 +1227,9 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
                     Phase::RollbackComplete if operation == Operation::NewState => {
                         usr_rollback_finalization_plan_is_exact_for_test(&successor)
                     }
-                    // The ActivateArchived and ActiveReblit terminal gates are
-                    // not exported yet; their chains are covered by the
-                    // operation-specific startup-gate suites.
+                    Phase::CandidatePreserved | Phase::FreshDbInvalidated | Phase::RollbackComplete => {
+                        terminal_gate_admits(operation, &successor)
+                    }
                     _ => true,
                 };
                 if !consumed {
@@ -1353,12 +1394,11 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
                     Phase::FreshDbInvalidated if operation == Operation::NewState => {
                         usr_rollback_complete_route_plan_is_exact_for_test(&successor)
                     }
-                    Phase::RollbackComplete if operation == Operation::NewState => {
-                        usr_rollback_finalization_plan_is_exact_for_test(&successor)
+                    Phase::CandidatePreserved | Phase::FreshDbInvalidated | Phase::RollbackComplete => {
+                        terminal_gate_admits(operation, &successor)
                     }
-                    // As in the pre-exchange walk: the ActivateArchived and
-                    // ActiveReblit terminal gates are not exported here and are
-                    // covered by their own startup-gate suites.
+                    // `BootRepairRequired` and the phases past it: reaching one
+                    // ends this walk, and whether the repair itself runs is §B.
                     _ => true,
                 };
                 if !consumed {
@@ -1410,16 +1450,16 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
     // - `PreviousRestoreIntent` has no authority, dispatcher, or persistence
     //   boundary. `ActivateArchived` archives the state it replaces, so any
     //   cut after that archive routes here and stops.
-    // - `FreshDbInvalidated` with boot repair outstanding routes to
-    //   `BootRepairRequired`, whose authorities exist for `ActiveReblit`
-    //   alone (§B). A `NewState` or `ActivateArchived` cut during boot sync
-    //   walks its whole chain and then has nowhere to go.
+    // - A plan with boot repair outstanding routes to `BootRepairRequired`,
+    //   whose authorities exist for `ActiveReblit` alone (§B). A `NewState` or
+    //   `ActivateArchived` cut during boot sync reaches the first phase that
+    //   would route there and has nowhere to go.
     //
     // Shorten this list only when the effect exists and a crash-matrix cell
     // shows it running. Widening a predicate cannot close any of them, and
     // trying would only move the stall one phase later.
     let known_post_exchange_stalls: Vec<(Operation, Phase, Phase)> = vec![
-        (Operation::NewState, Phase::BootSyncStarted, Phase::FreshDbInvalidated),
+        (Operation::NewState, Phase::BootSyncStarted, Phase::CandidatePreserved),
         (
             Operation::ActivateArchived,
             Phase::PreviousArchiveIntent,
