@@ -317,6 +317,33 @@ rollback never made:
 
 That is **thirteen** instances of one pattern across this work.
 
+### A2e CLOSED 2026-07-31 (`a61eede9`) — the siblings had it too
+
+Predicted from the pattern, then confirmed: `activate_archived_finalization_plan_is_exact`
+and `active_reblit_finalization_plan_is_exact` both carried hand-kept source
+lists starting at `UsrExchangeIntent`, so every pre-exchange source fell through
+to `_ => false`. An ActivateArchived or ActiveReblit rollback begun before the
+exchange walked its entire chain and then could not finalize — the identical
+stall just fixed for NewState, sitting unfixed in both siblings. **Instances
+fourteen and fifteen.**
+
+Found by taking the pattern seriously enough to go looking, not by a failing
+test or a VM run. That is the first time in this work the heuristic paid forward
+rather than explaining a defect after the fact — **treat any remaining
+hand-kept source list in this subsystem as a defect until shown otherwise.**
+
+**A third over-widening, again caught only by an exclusion test.**
+`startup_active_reblit_finalization_rejects_a_valid_terminal_lookalike_plan_and_wrong_topology`
+asserted that a pre-exchange ActiveReblit rollback must be *refused* — the
+machine failing to recover, mistaken for a boundary. Updated to assert it
+finalizes; the route's boundedness still rests on
+`admits_root_links_only_at_generation_*` and the wrong-topology half.
+
+None of the three over-widenings committed in this work were caught by the
+admission-side invariants added alongside them. That is structural, not luck:
+loosening a gate never strands a chain, so every "nothing is stranded" test
+stays green through it.
+
 `admitted_rollback_resume_routes_always_have_a_consuming_successor` now asserts
 its stranded list is **empty**, not pinned: every pre-exchange source, for every
 operation, walks its chain to a terminal phase and finalizes. Suite 2753/1, the
