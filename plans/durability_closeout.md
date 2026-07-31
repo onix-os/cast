@@ -406,11 +406,25 @@ assume they hide the same thing.
    inferred a slow install from a timeout that happened somewhere in the
    sequence, without timing the install by itself.
 
-   **The hang is later in `stage_and_activate`**, which runs install → *remove*
-   → activate. Install is 26s and the whole cell had 600s, so the stall is in
-   the remove step or the activation. Bisect it: run `OPS=(install)` (26s,
-   proven), then a cell that installs and removes, then the full sequence.
-   Whichever step stops producing `CELL-OP-DONE` is the one to debug.
+   **Nothing hangs at all.** The full `stage_and_activate` sequence
+   (install → remove → activate) finishes in **40 seconds** under a `control`
+   cut. So neither "slow install" nor "hung remove" is right, and the cause of
+   the 600s phase-cut timeout is still unidentified — do not guess a third time,
+   instrument the write-mode guest directly and compare it against control mode.
+
+   **But the control cell found something better than the timeout would have:**
+
+       activate  control
+         recovery=PENDING  driver=stalled-at-PreviousArchived  state=absent
+         requires BeginRollback { source: PreviousArchived }
+
+   **That is one of the six pinned post-exchange stalls, reproduced on a real
+   guest** — `(ActivateArchived, PreviousArchived)`, startup decides to roll
+   back and no authority admits the decision. It needs **no crash injection at
+   all**: a plain install, remove, activate reaches it. The pinned list was
+   derived in-process; this confirms it is live, and makes
+   `(ActivateArchived, PreviousArchived)` the one to fix first, with a
+   ready-made reproduction that does not depend on the phase-cut machinery.
 
    Note the remove step only became possible on 2026-07-30 — before the
    first-install staging fix, a displaced `/usr` placeholder wedged the next
