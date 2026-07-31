@@ -983,6 +983,29 @@ fn park_for_phase_targeted_crash(operation: super::model::Operation, phase: Phas
     if !matches_target {
         return;
     }
+    // Two independent witnesses, because the console one has been unreliable
+    // and cost four wrong diagnoses of why the marker "never fired".
+    //
+    // The file is the load-bearing one: it survives any console redirection,
+    // pipe buffering, or output filtering between here and the harness, so its
+    // presence proves this function was *entered* even when nothing appears on
+    // the serial log. A harness that sees the file but no console line is
+    // looking at a plumbing bug; one that sees neither is looking at a hook
+    // that was never reached, and those need opposite fixes.
+    // Written next to the journal, deliberately, not to `/tmp`: the guest's
+    // `/tmp` is tmpfs and dies with the power cut, so a witness there cannot be
+    // read by the verdict boot that follows. This path is on the same durable
+    // filesystem as the record whose advance is being observed, so it survives
+    // exactly as long as the evidence it describes.
+    //
+    // `CAST_CRASH_AT_PHASE` is already opt-in and crash-matrix-only, so this
+    // write never happens on a real system.
+    if let Some(directory) = std::env::var_os("CAST_CRASH_AT_PHASE_WITNESS") {
+        let _ = std::fs::write(
+            Path::new(&directory).join("cast-at-phase"),
+            format!("{operation:?}:{phase:?}\n"),
+        );
+    }
     // Line-buffered stderr reaches the guest console before the park.
     eprintln!("CAST-AT-PHASE {operation:?}:{phase:?}");
     loop {

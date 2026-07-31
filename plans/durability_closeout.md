@@ -417,13 +417,33 @@ assume they hide the same thing.
    the marker (fixed in `crash-matrix-run.sh`, but the cell *still* times out,
    so that was not the cause either).
 
-   **Stop guessing and instrument.** The next person should run the guest by
-   hand with `CAST_CRASH_AT_PHASE` set and watch whether `park_for_phase_targeted_crash`
-   is entered at all — a `dmesg`-visible write or a file touch in the guest
-   proves entry without depending on console plumbing. Do not propose a fifth
-   cause without that evidence. Note the cell is *useful as-is*: it produces a
-   real recovery verdict on the fallback cut, which is how the result above was
-   obtained.
+   **The instrument is now in place.** `park_for_phase_targeted_crash` writes a
+   `cast-at-phase` witness file before parking, into the directory named by
+   `CAST_CRASH_AT_PHASE_WITNESS`. Point that at a path on the guest's **durable
+   disk** (under `/mnt/root`), never `/tmp` — the guest's `/tmp` is tmpfs and
+   dies with the power cut, so a witness there cannot be read by the verdict
+   boot that follows.
+
+   Read it in the *verdict* boot, not the write boot: if the hook parks, the
+   write boot never returns from the operation, so any check placed after the
+   call is unreachable by construction. That subtlety is why the first attempt
+   at this instrument was wrong.
+
+   The two witnesses then separate the remaining possibilities cleanly:
+
+   | file present | console line | meaning |
+   |---|---|---|
+   | yes | yes | works; the timeout is in the harness's wait logic |
+   | yes | no | console plumbing ate the marker |
+   | no | no | the hook is never entered — look at the target match |
+
+   **Do not propose a fifth cause without reading that table.** Four have been
+   wrong already: hook on the wrong route (true, fixed), cmdline parsing (ruled
+   out), install throughput (falsified at 26s), and `>/dev/null 2>&1` in write
+   mode (fixed, but not the cause).
+
+   Note the cell is *useful as-is*: it produces a real recovery verdict on the
+   fallback cut, which is how the `recovered-at-4` result above was obtained.
 
    **Superseded note — it is not install throughput.** A plain
    `OPS=(install) CUTS=(control)` cell completes in **26 seconds wall clock**,
