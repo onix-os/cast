@@ -290,21 +290,41 @@ the same pattern. Deriving it fixed every transaction-trigger source, which now
 walks the **entire** chain, `RollbackDecided` through `RollbackComplete`, and
 finalizes. Suite 2754/0.
 
-Three stalls remain, now pinned in
-`admitted_rollback_resume_routes_always_have_a_consuming_successor` and
-reproducible in-process rather than only in a guest:
+### A2c 2026-07-31 (`f3a924c9`) — one terminal stall left, cause identified
 
-| source | dies at |
-|---|---|
-| NewState @ `Preparing` | `CandidatePreserved` |
-| NewState @ `FreshStateAllocated` | `RollbackComplete` |
-| NewState @ `CandidatePrepareStarted` | `RollbackComplete` |
+`rollback_finalization_plan_is_exact` held an eleventh hand-kept source list,
+starting at `CandidatePrepared`. A rollback begun while allocating the fresh
+state or preparing the candidate therefore walked the entire chain and then
+could not finalize — recovery did everything asked of it except finish. Both
+now finalize. Suite 2754/0.
 
-**Where to look:** a further pre-exchange assumption inside
-`rollback_finalization_plan_is_exact` and `rollback_complete_route_plan_is_exact`.
-Find it the same way every one of these has been found — ask which field the
-plan legitimately carries at an early source that the gate insists on seeing
-differently.
+One remains, pinned:
+
+| source | dies at | cause |
+|---|---|---|
+| NewState @ `Preparing` | `RollbackComplete` | gate requires `candidate.id.is_some()` |
+
+A rollback begun at `Preparing` never allocated a candidate, so `None` is
+correct there and finalization refuses forever. **Decide which is true before
+changing it:** either the decision authority always observes an allocated ID by
+persist time (making the fixture unrepresentative — supply one), or the gate
+must accept an absent candidate below `FreshStateAllocating`. Do not simply drop
+the check.
+
+**One earlier entry here was wrong.** `(NewState, Preparing) dies at
+CandidatePreserved` was not a product defect — the test gated that phase with
+`rollback_complete_route_plan_is_exact`, which actually gates
+`FreshDbInvalidated`. Wrong predicate, false stall.
+
+**And the fix regressed something on the way in.** Delegating the source check
+to `rollback_source_is_supported` accepted `RootLinksComplete` at *any*
+generation, defeating a deliberate generation-18 pin. The new invariant tests
+did not catch it — they assert chains are *admitted*, and loosening a gate never
+strands anything. A pre-existing *exclusion* test did.
+
+**Keep both families of test.** Everything added in this section asserts
+admission; the two over-widenings committed here were caught only by tests
+asserting refusal. They fail on opposite mistakes and this subsystem needs both.
 
 **The test that existed to catch this waved it through.** The chain walk matched
 `_ => true` for completed-action and terminal phases, so it gated the intents
@@ -466,6 +486,11 @@ A hard-coded value silently encoding structure:
 - **Checking one step of a chain proves the chain starts, not that it ends.**
   The rollback-chain test verified only the first successor and would have
   certified a chain that dies at step three. Walk to the terminal phase.
+- **Tests that assert admission cannot catch over-widening.** Loosening a gate
+  never strands a chain, so every "nothing is stranded" test stays green through
+  it. Both over-widenings committed during this work were caught by older tests
+  asserting a plan is *refused*. When touching an admission predicate, run the
+  exclusion suites — and when adding one, add its refusal twin.
 
 And the method lesson that broke two deadlocks after repeated guessing failed:
 **measure the value, do not derive it from assumed arithmetic.** Instrument and
