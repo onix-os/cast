@@ -542,6 +542,31 @@ avoid shipping.
 All three operations are coordinated, so the legacy route is dead production code
 reachable only from tests. Measured 2026-07-30.
 
+### Started 2026-07-31 (`abc19913`)
+
+`apply_stateful_blit` is deleted. It had **zero callers** — one occurrence in
+the whole workspace, its own definition — and its body was already just an
+`Err(FixedStagingCapabilityRequired)` stub. Nothing depended on it, so the
+"34 blocking call sites" count below was slightly pessimistic: that entry point
+was not blocking anything.
+
+The rest of the estimate holds. The remaining 34 sites reach the legacy route
+through `apply_stateful_blit_with_checkpoint` / `_with_capability`:
+
+| file | sites |
+|---|---|
+| `tests/stateful_journal_and_identity_preflight.rs` | 8 |
+| `tests/stateful_activation_recovery.rs` | 7 |
+| `tests/stateful_quarantine_recovery.rs` | 7 |
+| `tests/stateful_previous_tree_recovery.rs` | 5 |
+| `tests/root_abi_preflight.rs` | 4 |
+| `active_reblit_tests.rs` | 2 |
+| `tests/stateful_candidate_metadata.rs` | 1 |
+
+Before porting them, check for more of the same: grep the legacy route for other
+entry points with no non-test callers. Dead stubs delete for free and shrink the
+job; only the genuinely-reached ones need the materialization work.
+
 ### The blocker: two test helpers
 
 | helper | trivial `\|_\| Ok(())` | fault-injecting |
