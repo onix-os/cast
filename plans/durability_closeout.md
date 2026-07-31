@@ -399,12 +399,22 @@ assume they hide the same thing.
    about a guest that had not got there yet, and three separate diagnoses blamed
    the hook for what was a clock.
 
-   **The real A2 blocker is guest install throughput.** Before any phase cell
-   can target an operation that runs *after* an install, find out why the
-   install is this slow — nested-KVM without `-cpu host` passthrough, no virtio
-   caching on the setup path, or a genuinely hung step. Time a plain
-   `OPS=(install) CUTS=(control)` cell first and read `CELL-OP-DONE`'s latency;
-   that number sizes every other cell in this section.
+   **CORRECTED 2026-07-31 — it is not install throughput.** A plain
+   `OPS=(install) CUTS=(control)` cell completes in **26 seconds wall clock**,
+   `recovery=clean driver=recovered-at-1 state=installed`. The install is fast.
+   The earlier "the setup install never completes" reading was wrong: it
+   inferred a slow install from a timeout that happened somewhere in the
+   sequence, without timing the install by itself.
+
+   **The hang is later in `stage_and_activate`**, which runs install → *remove*
+   → activate. Install is 26s and the whole cell had 600s, so the stall is in
+   the remove step or the activation. Bisect it: run `OPS=(install)` (26s,
+   proven), then a cell that installs and removes, then the full sequence.
+   Whichever step stops producing `CELL-OP-DONE` is the one to debug.
+
+   Note the remove step only became possible on 2026-07-30 — before the
+   first-install staging fix, a displaced `/usr` placeholder wedged the next
+   operation — so it is the newest and least-exercised part of this harness.
 2. `state=absent` with the marker absent means the harness fell back to killing
    the guest 120s after `CELL-READY`, which landed **inside the install**. So
    the rollback measured above is a *NewState* rollback, not ActivateArchived.
