@@ -603,6 +603,128 @@ in minutes what three crash-matrix sessions had not.
 Keep both. The cells prove effects run; the paired-invariant tests prove the
 contract is not self-contradictory. This gap was the second kind.
 
+### A3b 2026-07-31 — the post-exchange span, asked the same question
+
+The pre-exchange chain-walk test was pinned empty, and nothing asked the same
+question of the sources where a rollback has physical work to do. Asking it
+(`admitted_post_exchange_rollback_routes_always_have_a_consuming_successor`, all
+eight post-exchange sources × three operations = 20 buildable cases) found
+**six more instances of the pattern and two genuinely missing effects.**
+
+The six were the same shape as the sixteen before them, in five separate gates:
+
+| gate | hard-coded rule | derived from |
+|---|---|---|
+| resume route | nine `(operation, phase, source, generation)` tuples | `rollback_source_is_on_chain` |
+| resume route, reverse, preserve, fresh-db, complete, finalize | `operation == ActiveReblit && source == BootSyncStarted` | `boot_rollback_is_possible(source)` |
+| all six | `previous_archive == NotRequired` | `previous_restore_rollback_is_possible` |
+| all six | `ActivateArchived ⇒ Rearchive` | `candidate_disposition_for` |
+| reverse | `NewState ⇒ fresh_db == Pending` | `fresh_db_rollback_is_possible` |
+| preserve, fresh-db, complete, finalize | four more source tuple tables | `rollback_source_is_on_chain` |
+
+Each hand-kept table was a copy of the journal's own forward chain, and each was
+incomplete in the way copies always are. Concretely, before this: an
+`ActivateArchived` cut during its system triggers reached `RollbackDecided` and
+stopped — the decision gate admitted it (landed `16015ec5`), the resume route
+had no row for it. That is the §1.4 stall moved one phase later, which is
+exactly what the ADMISSION ONLY caveat warned would happen.
+
+**`rollback_evidence_is_on_chain(record)` now answers this for every gate.** A
+phase the record's options never make it traverse is not a source it can claim;
+a phase past `CommitDecided` is not a source at all. There is nothing left to
+keep in sync.
+
+#### The tables had one real job, and dropping it was caught immediately
+
+Replacing them with chain membership alone lost the **generation** column, and
+three exclusion tests failed on the next full run — the fourth time in this
+epic that an exclusion test caught an over-widening the admission invariants
+waved through. The generation is what ties a rollback to the exact forward
+phase it began at: without it, a plan whose `source` was edited while its
+generation stayed put was admitted.
+
+So the check is kept and derived too, as `rollback_generation_is_reachable`:
+replay the plan — forward to the source, one advance for the decision, then the
+advances the plan's own action states account for — and require the record's
+generation to land in that span. It is a span rather than a value because one
+cost is genuinely ambiguous: `AlreadySatisfied` is legal both as a
+decision-time observation (no intent phase, no advances) and as the outcome of
+completing an intent (two advances). Taking both keeps it from ever refusing a
+legal record, and it still rejects every edit above, which move the generation
+outside the span entirely. `RollbackComplete` is the one phase with two
+routes, and the plan says which: `boot == NotRequired` means it came straight
+from the last ordinary action, a resolved boot means it came through the whole
+repair tail.
+
+`expected_rollback_complete_generation`'s hard-coded
+`ROLLBACK_ADVANCES_TO_COMPLETE = 6` in the ActivateArchived finalization gate is
+the same fact, still hand-written; it goes when that gate is derived (below).
+
+One test needed a real fix rather than an update:
+`startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_fresh_action`
+swapped `plan.source` between three phases while leaving the generation, so it
+had been asserting the gate admits evidence no legal record carries. It now
+shifts the generation with the source.
+
+One exclusion test was retired on purpose, not updated:
+`sibling_and_legacy_plan_predicates_are_rejected` asserted that a NewState or
+ActivateArchived boot-sync rollback prefix is refused by the shared gates, on
+the premise that only ActiveReblit can crash during boot sync. It cannot — the
+journal builds those plans — so refusing them *was* the stall. The shared gates
+now admit them at the layout each phase implies and refuse the other; the
+sibling gap that genuinely remains is the boot-repair tail, and it is pinned
+below rather than disguised as a refusal there.
+
+Four stalls remain, pinned, and **none of them is a predicate**:
+
+    NewState         @ BootSyncStarted      -> FreshDbInvalidated
+    ActivateArchived @ PreviousArchiveIntent -> PreviousRestoreIntent
+    ActivateArchived @ PreviousArchived      -> PreviousRestoreIntent
+    ActivateArchived @ BootSyncStarted       -> PreviousRestoreIntent
+
+### Still hand-written: the four per-operation terminal gates
+
+`usr_rollback_activate_archived_{finalization,complete_route}_authority` and the
+ActiveReblit pair were not touched by the above and still carry every rule the
+six shared gates just shed: their own source tuple tables,
+`previous_archive == NotRequired`, the disposition by operation name, and — in
+both ActivateArchived gates — a surviving `!rollback.external_effects_may_remain`,
+the exact "disguised copy" this plan already recorded as fixed everywhere. It
+was not.
+
+They are invisible to the new walk because its `_ => true` arm waves the
+ActivateArchived and ActiveReblit terminal phases through. Deriving them and
+replacing that arm with real calls is the next step, and until it happens **the
+post-exchange list's four entries are a lower bound.**
+
+### The previous-restore effect does not exist — confirmed by grep, not by inference
+
+`PreviousRestoreIntent` is fully supported by the journal: `next_rollback_phase`
+routes into it, `rollback_successor` records its outcome, `policy.rs` knows its
+two legal namespace layouts, and `usr_rollback_resume_route.rs` names the phase
+explicitly as a successor it will persist. `crate::transition_identity` even has
+the physical half — `restore_previous_with_journal`,
+`finish_applied_previous_restore_with_journal`, and a
+`PreviousRestoreRecoverySeal` whose own doc comment says it "must only ever be
+created by [the `PreviousRestore` rollback dispatcher]".
+
+**That dispatcher was never written.** There is no
+`usr_rollback_previous_restore_authority.rs`, no dispatch, no persistence
+boundary; the seal's only callers in the whole workspace are tests. So the
+record advances `RollbackDecided -> PreviousRestoreIntent` and stalls there
+forever, and every tail gate's `previous_archive == NotRequired` was consistent
+with that — it encoded a world where the restore never happens.
+
+The remaining work is the client trio, modelled on the reverse trio
+(437 + 87 + 402 + 52 lines): authority with its namespace proof and effect
+lease, consuming dispatcher that mints `PreviousRestoreRecoverySeal`, and the
+`PreviousRestoredToStaging` persistence boundary. It slots into `startup_gate.rs`
+**before** the reverse step, since the restore precedes the reverse exchange in
+the chain.
+
+Acceptance test, already established and needing no crash injection: the 41-second
+`install -> remove -> activate` cell on a real guest.
+
 ### A4. Cross-reboot proof for previous-restore
 
 `previous-restore-recovery-identity.md`'s implementation is complete in-process
@@ -739,11 +861,27 @@ A hard-coded value silently encoding structure:
 - **Checking one step of a chain proves the chain starts, not that it ends.**
   The rollback-chain test verified only the first successor and would have
   certified a chain that dies at step three. Walk to the terminal phase.
+- **A fixture that silently fails validation removes a case from coverage
+  without removing it from the list.** Every post-exchange test record at
+  `PreviousArchiveIntent` or later, and every one at `BootSyncStarted`, was
+  rejected for a missing `previous_archive_slot` / `boot_publication_receipts`
+  — the exact phases where a rollback has the most to undo. Separating
+  "unbuildable" from "refused" in the assertion is what made it visible.
+- **An empty pinned list means the gates agree, not that the path works.** Every
+  pre-exchange list was empty while `PreviousRestoreIntent` had no implementation
+  at all. Before trusting one, ask whether anything in the walk actually calls
+  production code for that phase, or whether a `_ => true` arm waves it through.
 - **Tests that assert admission cannot catch over-widening.** Loosening a gate
   never strands a chain, so every "nothing is stranded" test stays green through
-  it. Both over-widenings committed during this work were caught by older tests
-  asserting a plan is *refused*. When touching an admission predicate, run the
-  exclusion suites — and when adding one, add its refusal twin.
+  it. All four over-widenings committed during this work were caught by older
+  tests asserting a plan is *refused*. When touching an admission predicate, run
+  the exclusion suites — and when adding one, add its refusal twin.
+- **Before deleting a hard-coded table, name every fact it encoded.** The
+  `(operation, phase, source, generation)` tables were mostly a stale copy of
+  the forward chain, but the generation column was load-bearing and nothing
+  else checked it. Deriving the structural part and dropping the rest silently
+  removed a real constraint; three exclusion tests caught it on the next full
+  run. Replace each fact, then delete.
 
 And the method lesson that broke two deadlocks after repeated guessing failed:
 **measure the value, do not derive it from assumed arithmetic.** Instrument and
