@@ -126,7 +126,7 @@ impl RollbackAction {
         self != Self::NotRequired
     }
 
-    fn resolved(self) -> bool {
+    pub(crate) fn resolved(self) -> bool {
         matches!(self, Self::Applied | Self::AlreadySatisfied)
     }
 }
@@ -432,7 +432,27 @@ impl TransitionRecord {
             && source.ordinal() >= ForwardPhase::FreshStateAllocating.ordinal()
     }
 
-    pub(super) fn candidate_disposition_for(&self, source: ForwardPhase) -> AbortDisposition {
+    /// Whether an archived predecessor exists to restore during rollback.
+    ///
+    /// Presence is a function of this record's own options and the source
+    /// phase, exactly as `rollback_decision` computes `previous_possible` and
+    /// `validate_rollback_plan` re-checks it. The rollback tail instead keyed
+    /// it on the operation name — `NewState` may carry `Pending`, everything
+    /// else must say `NotRequired` — which is false: `ActivateArchived` takes
+    /// the currently active state as its predecessor and therefore archives it.
+    /// A plain `install -> remove -> activate` cut after the archive builds a
+    /// plan carrying `Pending` that every tail gate then refuses.
+    pub(crate) fn previous_restore_rollback_is_possible(&self, source: ForwardPhase) -> bool {
+        self.options.archive_previous && source.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal()
+    }
+
+    /// Where the candidate goes when this rollback discards it.
+    ///
+    /// `pub(crate)` because the rollback tail was re-deriving it from the
+    /// operation alone — `ActivateArchived => Rearchive` — and so contradicted
+    /// the one exception encoded here, refusing the plan the journal had just
+    /// built for an activation cut during its system triggers.
+    pub(crate) fn candidate_disposition_for(&self, source: ForwardPhase) -> AbortDisposition {
         match self.operation {
             Operation::NewState | Operation::ActiveReblit => AbortDisposition::Quarantine,
             Operation::ActivateArchived if source == ForwardPhase::SystemTriggersStarted => {
@@ -446,7 +466,7 @@ impl TransitionRecord {
         validate_rollback_requirement(
             "previous-archive",
             rollback.previous_archive,
-            self.options.archive_previous && rollback.source.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal(),
+            self.previous_restore_rollback_is_possible(rollback.source),
         )?;
         validate_rollback_requirement(
             "usr-exchange",
@@ -620,6 +640,116 @@ pub(super) fn next_forward_phase(record: &TransitionRecord, current: ForwardPhas
 
 pub(super) fn rollback_allowed(_record: &TransitionRecord, source: ForwardPhase) -> bool {
     source.ordinal() < ForwardPhase::CommitDecided.ordinal() && source != ForwardPhase::BootSyncComplete
+}
+
+/// Whether boot publication may need repairing during rollback.
+///
+/// `rollback_decision` derives this from the source phase alone, with no
+/// reference to the operation. The rollback tail wrote it as
+/// `operation == ActiveReblit && source == BootSyncStarted`, which strands a
+/// `NewState` or `ActivateArchived` crash during boot sync: the journal builds
+/// the only legal plan (`PendingUnverifiable`) and the gate demands
+/// `NotRequired`.
+pub(crate) fn boot_rollback_is_possible(source: ForwardPhase) -> bool {
+    source == ForwardPhase::BootSyncStarted
+}
+
+/// Every forward phase this record could legitimately have rolled back from.
+///
+/// The head gates each kept their own list of `(operation, phase, generation)`
+/// tuples for this, and the lists disagreed — which is the entire §1.4 failure
+/// mode. Chain membership answers it for any record: a phase the record's own
+/// options never make it traverse is not a source it can claim, and
+/// `rollback_allowed` already states where rolling back stops being legal.
+pub(crate) fn rollback_source_is_on_chain(record: &TransitionRecord, source: ForwardPhase) -> bool {
+    rollback_allowed(record, source) && expected_forward_generation(record, source).is_some()
+}
+
+/// The whole chain check a rollback admission gate needs: the plan names a
+/// source this record could have reached, and the record's generation is
+/// reachable from it by the route the plan describes.
+///
+/// One predicate, so the six gates that used to answer this with six partly
+/// overlapping tables cannot disagree again.
+pub(crate) fn rollback_evidence_is_on_chain(record: &TransitionRecord) -> bool {
+    record.rollback.as_ref().is_some_and(|plan| {
+        rollback_source_is_on_chain(record, plan.source) && rollback_generation_is_reachable(record)
+    })
+}
+
+/// Whether this record's generation is reachable from the source its plan
+/// names, by the route its plan describes.
+///
+/// This is the one job the tuple tables genuinely did. Dropping them for
+/// chain membership alone would have accepted a plan whose source was edited
+/// without its generation — the generation is what ties a rollback to the
+/// exact forward phase it began at, and two gates' exclusion tests caught the
+/// loss immediately.
+///
+/// A range rather than a single value, because one cost is genuinely
+/// ambiguous: `AlreadySatisfied` is legal both as a decision-time observation
+/// (no intent phase, no advances) and as the outcome of completing an intent
+/// (two advances). The bound takes both, so it never refuses a legal record —
+/// and it still rejects the edits above, which move the generation outside the
+/// span entirely.
+pub(crate) fn rollback_generation_is_reachable(record: &TransitionRecord) -> bool {
+    let Some(plan) = record.rollback.as_ref() else {
+        return false;
+    };
+    let Some(source_generation) = expected_forward_generation(record, plan.source) else {
+        return false;
+    };
+    // Persisting the decision is always exactly one advance.
+    let (mut minimum, mut maximum) = (1_u64, 1_u64);
+    let consumed = match rollback_action_phase(record.phase) {
+        Some((index, completed)) => {
+            let own = if completed { 2 } else { 1 };
+            minimum += own;
+            maximum += own;
+            index
+        }
+        None => {
+            let (least, most) = match record.phase {
+                Phase::RollbackDecided => (0, 0),
+                Phase::BootRepairRequired => (1, 1),
+                Phase::BootRepairStarted => (2, 2),
+                Phase::BootRepairComplete | Phase::BootRepairUnverified => (3, 3),
+                // One route or the other, decided by the plan rather than
+                // spanned: a rollback with no boot repair to do reaches
+                // completion straight from the last ordinary action, and one
+                // that repaired boot came through the whole tail.
+                Phase::RollbackComplete => match plan.boot {
+                    BootRollback::NotRequired => (1, 1),
+                    BootRollback::Applied | BootRollback::AlreadySatisfied | BootRollback::Unverified => (4, 4),
+                    // Still outstanding, so this phase is not reachable yet.
+                    BootRollback::PendingUnverifiable => return false,
+                },
+                _ => return false,
+            };
+            minimum += least;
+            maximum += most;
+            4
+        }
+    };
+    for action in &rollback_actions(plan)[..consumed] {
+        match action {
+            // Only reachable through an intent and its completion.
+            RollbackAction::Applied => {
+                minimum += 2;
+                maximum += 2;
+            }
+            RollbackAction::AlreadySatisfied => maximum += 2,
+            // Not required, or not yet routed to.
+            RollbackAction::NotRequired | RollbackAction::Pending => {}
+        }
+    }
+    let (Some(least), Some(most)) = (
+        source_generation.checked_add(minimum),
+        source_generation.checked_add(maximum),
+    ) else {
+        return false;
+    };
+    (least..=most).contains(&record.generation)
 }
 
 fn validate_rollback_requirement(
