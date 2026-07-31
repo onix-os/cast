@@ -304,9 +304,27 @@ for op in "${OPS[@]}"; do
             # Cut exactly when the record is durable at the named phase, rather
             # than after N seconds. A wall-clock cut cannot isolate one
             # transition's window when the setup before it takes seconds.
-            for _ in $(seq 1 120); do grep -q "CAST-AT-PHASE" "$W/o1" 2>/dev/null && break; sleep 1; done
+            # Stop as soon as either outcome is decided: the marker printed, or
+            # the operation finished without ever reaching that phase. Waiting a
+            # fixed 120s conflated the two — a nested-KVM install can outlast it,
+            # so the guest was killed mid-setup and the cell reported "phase
+            # never reached" for a phase the run had simply not got to yet.
+            # `state=absent` in the verdict is the tell.
+            PHASE_WAIT=${PHASE_WAIT:-600}
+            for _ in $(seq 1 "$PHASE_WAIT"); do
+                grep -q "CAST-AT-PHASE" "$W/o1" 2>/dev/null && break
+                grep -q "CELL-OP-DONE" "$W/o1" 2>/dev/null && break
+                sleep 1
+            done
             if ! grep -q "CAST-AT-PHASE" "$W/o1"; then
-                echo "phase ${cut#phase:} never reached"; tail -4 "$W/o1"
+                # These need opposite fixes, so never report them the same way.
+                if grep -q "CELL-OP-DONE" "$W/o1" 2>/dev/null; then
+                    echo "NOT-ON-CHAIN: ${cut#phase:} — operation completed without reaching it"
+                else
+                    echo "TIMED-OUT: ${cut#phase:} not reached in ${PHASE_WAIT}s, and the operation had not finished"
+                    echo "  (raise PHASE_WAIT; this cell proves nothing about that phase)"
+                fi
+                tail -4 "$W/o1"
             fi
             ;;
         *) sleep "$cut" ;;
