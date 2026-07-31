@@ -103,6 +103,13 @@ fn startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_f
                     FreshRowLayout::Present,
                 );
                 let mut exact = fixture.record.clone();
+                // The generation moves with the source. It is what ties a
+                // rollback to the forward phase it began at, so leaving it
+                // behind would make this assert that the gate admits a plan
+                // whose source and generation disagree — evidence no legal
+                // record ever carries.
+                let original = exact.rollback.as_ref().unwrap().source;
+                exact.generation = shifted_generation(&exact, original, source);
                 let plan = exact.rollback.as_mut().unwrap();
                 plan.source = source;
                 plan.usr_exchange = usr_exchange;
@@ -167,4 +174,20 @@ fn startup_fresh_db_invalidation_plan_accepts_only_the_exact_new_state_pending_f
             "inexact {field} was accepted"
         );
     }
+}
+
+/// The generation `record` would carry if its rollback had begun at `to`
+/// instead of `from`, so a source swap in a fixture stays coherent.
+fn shifted_generation(
+    record: &crate::transition_journal::TransitionRecord,
+    from: ForwardPhase,
+    to: ForwardPhase,
+) -> u64 {
+    let mut forward = record.clone();
+    forward.rollback = None;
+    let at = |phase| {
+        crate::transition_journal::expected_forward_generation(&forward, phase)
+            .expect("fixture source is on the record's own forward chain")
+    };
+    record.generation + at(to) - at(from)
 }

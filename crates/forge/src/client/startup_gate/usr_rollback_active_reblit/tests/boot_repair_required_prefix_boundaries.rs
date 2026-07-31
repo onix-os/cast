@@ -149,20 +149,36 @@ fn sibling_and_legacy_plan_predicates_are_rejected() {
     for kind in [OperationKind::NewState, OperationKind::Archived] {
         let fixture = Fixture::boot_sync_started(kind, BootSyncStartedLayout::Post, false);
         let prefixes = sibling_prefixes(&fixture.source, kind);
-        // A sibling operation's prefix is refused whatever `/usr` looks like,
-        // so both layouts are asserted rather than one chosen arbitrarily.
-        for post_exchange in [false, true] {
-            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
-                &prefixes.decision,
-                post_exchange
-            ));
-            assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
-                &prefixes.restored,
-                post_exchange
-            ));
-        }
-        assert!(!usr_rollback_reverse_plan_is_exact_for_test(&prefixes.reverse));
-        assert!(!usr_rollback_candidate_preserve_plan_is_exact_for_test(
+        // These prefixes used to be asserted refused, on the premise that only
+        // ActiveReblit can crash during boot sync. It cannot: `BootSyncStarted`
+        // is a legal rollback source for every operation — the journal builds
+        // these very plans — and refusing the shared gates left a NewState or
+        // ActivateArchived boot-sync crash with a decision it could never act
+        // on. So the shared route, reverse, and preserve gates now admit them,
+        // each at the layout its own phase implies, and refuse the other.
+        //
+        // What still has no sibling implementation is the *boot repair* tail
+        // these chains end in; that stall is pinned in
+        // `admitted_post_exchange_rollback_routes_always_have_a_consuming_successor`
+        // rather than disguised as a refusal here.
+        assert!(usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.decision,
+            true
+        ));
+        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.decision,
+            false
+        ));
+        assert!(usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.restored,
+            false
+        ));
+        assert!(!usr_rollback_resume_route_plan_is_exact_for_test(
+            &prefixes.restored,
+            true
+        ));
+        assert!(usr_rollback_reverse_plan_is_exact_for_test(&prefixes.reverse));
+        assert!(usr_rollback_candidate_preserve_plan_is_exact_for_test(
             &prefixes.candidate_intent
         ));
     }

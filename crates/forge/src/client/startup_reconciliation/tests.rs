@@ -895,6 +895,22 @@ const PRE_EXCHANGE_ROLLBACK_SOURCES: [Phase; 7] = [
     Phase::TransactionTriggersComplete,
 ];
 
+/// Every forward phase a rollback can be entered from after `/usr` was swapped.
+///
+/// The pre-exchange span above proved its own chains walk to a terminal phase.
+/// Nothing asked the same question of the sources where recovery has real work
+/// to undo, which is exactly where the undo effects turn out not to exist.
+const POST_EXCHANGE_ROLLBACK_SOURCES: [Phase; 8] = [
+    Phase::UsrExchangeIntent,
+    Phase::UsrExchanged,
+    Phase::RootLinksComplete,
+    Phase::SystemTriggersStarted,
+    Phase::SystemTriggersComplete,
+    Phase::PreviousArchiveIntent,
+    Phase::PreviousArchived,
+    Phase::BootSyncStarted,
+];
+
 fn forward_record_for(operation: Operation, phase: Phase) -> TransitionRecord {
     // Each operation has its own legal candidate/previous shape. Only
     // `NewState` allocates its candidate during the transition; the other two
@@ -934,7 +950,35 @@ fn forward_record_for(operation: Operation, phase: Phase) -> TransitionRecord {
             .map(|_| 42),
         Operation::ActivateArchived | Operation::ActiveReblit => candidate_id,
     };
+    // Two fields whose presence validation derives from options-and-phase, and
+    // which the live path stages through explicit successors. Leaving them
+    // unset made every fixture at `PreviousArchiveIntent` or later, and every
+    // fixture at `BootSyncStarted`, fail validation — so the phases where a
+    // rollback has the most to undo were silently absent from coverage. Mirror
+    // the presence rules exactly rather than setting them unconditionally,
+    // which would break the earlier phases the same way.
+    let forward = phase.forward();
+    if record.options.archive_previous
+        && forward.is_some_and(|forward| forward.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal())
+    {
+        record.previous_archive_slot = Some(test_previous_archive_slot());
+    }
+    if record.options.run_boot_sync
+        && forward.is_some_and(|forward| forward.ordinal() >= ForwardPhase::BootSyncStarted.ordinal())
+    {
+        record.boot_publication_receipts = Some(test_boot_publication_receipt_pair());
+    }
     record
+}
+
+/// The parking name a real archive records before it consumes the slot, which
+/// is what makes the archive reversible at all.
+fn test_previous_archive_slot() -> crate::transition_journal::PreviousArchiveSlot {
+    crate::transition_journal::PreviousArchiveSlot {
+        parking_name: QuarantineName::parse(".previous-slot-1-".to_owned() + &"a".repeat(32) + "-0")
+            .expect("fixture parking name is a valid quarantine name"),
+        reused_wrapper: false,
+    }
 }
 
 /// The rollback chain has four ordinary actions plus a terminal phase, so no
@@ -1212,6 +1256,189 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
     assert_eq!(
         stranded, known_terminal_stalls,
         "the set of rollback chains that cannot reach a terminal phase changed; \
+         shorten this list when one is fixed, and investigate any addition"
+    );
+}
+
+/// A post-exchange rollback decision with every effect the source phase makes
+/// possible observed as still outstanding.
+///
+/// This is the worst legal case and the one recovery exists for: `/usr` was
+/// swapped, the predecessor may have been archived, and none of it has been
+/// undone. Observing an effect the source cannot have produced is rejected by
+/// the journal, which would skip the case rather than test it.
+fn post_exchange_rollback_decision(operation: Operation, source: Phase) -> Option<TransitionRecord> {
+    let record = chain_record_for(operation, source)?;
+    let forward = source.forward()?;
+    let previous_archive = (record.options.archive_previous
+        && forward.ordinal() >= ForwardPhase::PreviousArchiveIntent.ordinal())
+    .then_some(InitialRollbackAction::Pending);
+    let fresh_db = (operation == Operation::NewState
+        && forward.ordinal() >= ForwardPhase::FreshStateAllocating.ordinal())
+    .then_some(InitialRollbackAction::Pending);
+    record
+        .rollback_decision(RollbackObservations {
+            allocated_candidate_id: None,
+            previous_archive,
+            usr_exchange: Some(InitialRollbackAction::Pending),
+            candidate: InitialRollbackAction::Pending,
+            fresh_db,
+        })
+        .ok()
+}
+
+/// The same question as the pre-exchange walk, asked of the sources where the
+/// rollback has physical work to do.
+///
+/// The pre-exchange span is now clean, which made it easy to read the empty
+/// pinned lists as "rollback recovery works". It does not. Every gap the
+/// pre-exchange work closed was an *admission* predicate; nothing checked that
+/// the phases those admissions route into have a consumer at all.
+///
+/// `PreviousRestoreIntent` does not. The journal builds the plan, the resume
+/// route persists the advance into it (`usr_rollback_resume_route.rs` names the
+/// phase explicitly), the namespace policy knows its layout — and there is no
+/// authority, no dispatcher, and no persistence boundary anywhere in
+/// `crate::client` that consumes it. `PreviousRestoreRecoverySeal` says in its
+/// own doc comment that it is minted by "the `PreviousRestore` rollback
+/// dispatcher"; that dispatcher was never written, and the seal's only callers
+/// are tests. A rollback that must un-archive the predecessor therefore
+/// advances one step and then stalls forever, which is the §1.4 failure again
+/// with the effect missing instead of the predicate.
+#[test]
+fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
+    let mut stranded = Vec::new();
+    let mut checked = Vec::new();
+    let mut unbuildable = Vec::new();
+    for operation in [
+        Operation::NewState,
+        Operation::ActivateArchived,
+        Operation::ActiveReblit,
+    ] {
+        for source in POST_EXCHANGE_ROLLBACK_SOURCES {
+            let Some(decided) = post_exchange_rollback_decision(operation, source) else {
+                // The journal refuses to build this plan at all, which is a
+                // different fact from a gate refusing it and must not be
+                // conflated with coverage.
+                unbuildable.push((operation, source));
+                continue;
+            };
+            // Post-exchange by construction: the candidate is live in `/usr`
+            // and the original is displaced. This is what the crashed machine
+            // presents at boot, and it is the layout the decision was made
+            // under.
+            if !usr_rollback_resume_route_plan_is_exact_for_test(&decided, true) {
+                stranded.push((operation, source, Phase::RollbackDecided));
+                continue;
+            }
+            checked.push((operation, source));
+            let mut current = decided;
+            for _ in 0..MAX_ROLLBACK_CHAIN_STEPS {
+                let Ok(successor) = current.rollback_successor(rollback_outcome_for(current.phase)) else {
+                    break;
+                };
+                let consumed = match successor.phase {
+                    // No consumer exists. Not "the gate refuses this record" —
+                    // there is no gate. Hard-coded `false` rather than a call,
+                    // because there is nothing to call; this arm disappears
+                    // when the effect is implemented.
+                    Phase::PreviousRestoreIntent => false,
+                    Phase::CandidatePreserveIntent => {
+                        usr_rollback_candidate_preserve_plan_is_exact_for_test(&successor)
+                    }
+                    Phase::ReverseExchangeIntent => usr_rollback_reverse_plan_is_exact_for_test(&successor),
+                    Phase::FreshDbInvalidationIntent => {
+                        usr_rollback_fresh_db_invalidation_plan_is_exact_for_test(&successor)
+                    }
+                    Phase::FreshDbInvalidated if operation == Operation::NewState => {
+                        usr_rollback_complete_route_plan_is_exact_for_test(&successor)
+                    }
+                    Phase::RollbackComplete if operation == Operation::NewState => {
+                        usr_rollback_finalization_plan_is_exact_for_test(&successor)
+                    }
+                    // As in the pre-exchange walk: the ActivateArchived and
+                    // ActiveReblit terminal gates are not exported here and are
+                    // covered by their own startup-gate suites.
+                    _ => true,
+                };
+                if !consumed {
+                    stranded.push((operation, source, successor.phase));
+                    break;
+                }
+                if matches!(successor.phase, Phase::RollbackComplete | Phase::BootRepairRequired) {
+                    break;
+                }
+                current = successor;
+            }
+        }
+    }
+    assert_eq!(
+        checked,
+        vec![
+            (Operation::NewState, Phase::UsrExchangeIntent),
+            (Operation::NewState, Phase::UsrExchanged),
+            (Operation::NewState, Phase::RootLinksComplete),
+            (Operation::NewState, Phase::SystemTriggersStarted),
+            (Operation::NewState, Phase::SystemTriggersComplete),
+            (Operation::NewState, Phase::BootSyncStarted),
+            (Operation::ActivateArchived, Phase::UsrExchangeIntent),
+            (Operation::ActivateArchived, Phase::UsrExchanged),
+            (Operation::ActivateArchived, Phase::RootLinksComplete),
+            (Operation::ActivateArchived, Phase::SystemTriggersStarted),
+            (Operation::ActivateArchived, Phase::SystemTriggersComplete),
+            (Operation::ActivateArchived, Phase::PreviousArchiveIntent),
+            (Operation::ActivateArchived, Phase::PreviousArchived),
+            (Operation::ActivateArchived, Phase::BootSyncStarted),
+            (Operation::ActiveReblit, Phase::UsrExchangeIntent),
+            (Operation::ActiveReblit, Phase::UsrExchanged),
+            (Operation::ActiveReblit, Phase::RootLinksComplete),
+            (Operation::ActiveReblit, Phase::SystemTriggersStarted),
+            (Operation::ActiveReblit, Phase::SystemTriggersComplete),
+            (Operation::ActiveReblit, Phase::BootSyncStarted),
+        ],
+        "the post-exchange rollback cases this test claims to cover were skipped \
+         (unbuildable: {unbuildable:?}, stranded: {stranded:?})"
+    );
+    // Pinned, not empty, and for a different reason than any list above.
+    //
+    // The pre-exchange stalls were predicate disagreements: two gates copying
+    // the same rule and copying it differently, fixable by deriving the rule
+    // once. Every entry left here names a rollback phase with no
+    // implementation behind it at all, so there is nothing to derive — the
+    // code has to be written.
+    //
+    // - `PreviousRestoreIntent` has no authority, dispatcher, or persistence
+    //   boundary. `ActivateArchived` archives the state it replaces, so any
+    //   cut after that archive routes here and stops.
+    // - `FreshDbInvalidated` with boot repair outstanding routes to
+    //   `BootRepairRequired`, whose authorities exist for `ActiveReblit`
+    //   alone (§B). A `NewState` or `ActivateArchived` cut during boot sync
+    //   walks its whole chain and then has nowhere to go.
+    //
+    // Shorten this list only when the effect exists and a crash-matrix cell
+    // shows it running. Widening a predicate cannot close any of them, and
+    // trying would only move the stall one phase later.
+    let known_post_exchange_stalls: Vec<(Operation, Phase, Phase)> = vec![
+        (Operation::NewState, Phase::BootSyncStarted, Phase::FreshDbInvalidated),
+        (
+            Operation::ActivateArchived,
+            Phase::PreviousArchiveIntent,
+            Phase::PreviousRestoreIntent,
+        ),
+        (
+            Operation::ActivateArchived,
+            Phase::PreviousArchived,
+            Phase::PreviousRestoreIntent,
+        ),
+        (
+            Operation::ActivateArchived,
+            Phase::BootSyncStarted,
+            Phase::PreviousRestoreIntent,
+        ),
+    ];
+    assert_eq!(
+        stranded, known_post_exchange_stalls,
+        "the set of post-exchange rollback chains that cannot reach a terminal phase changed; \
          shorten this list when one is fixed, and investigate any addition"
     );
 }
