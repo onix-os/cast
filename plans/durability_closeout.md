@@ -437,10 +437,27 @@ assume they hide the same thing.
    | yes | no | console plumbing ate the marker |
    | no | no | the hook is never entered — look at the target match |
 
+   **First run of the instrument was INCONCLUSIVE — do not read it as
+   evidence.** The cell reported `TIMED-OUT` with no console marker, and the
+   witness appeared absent, but the loopback mount used to probe the disk
+   silently failed (`ls` of the image root returned nothing), so the disk was
+   never actually read. Absence of the file was not observed; absence of a
+   readable mount was.
+
+   Probe procedure, corrected — both mistakes were made on the first attempt:
+
+   - The witness lands at **`root/cast-at-phase` inside the image**, not at the
+     image root: the guest mounts `/dev/vda` at `/mnt` and writes to
+     `/mnt/root`.
+   - **Do not discard mount errors.** Run the mount without `2>/dev/null` and
+     confirm the image root lists non-empty before drawing any conclusion from
+     a missing file.
+
    **Do not propose a fifth cause without reading that table.** Four have been
    wrong already: hook on the wrong route (true, fixed), cmdline parsing (ruled
    out), install throughput (falsified at 26s), and `>/dev/null 2>&1` in write
-   mode (fixed, but not the cause).
+   mode (fixed, but not the cause). Every one of them came from treating a
+   composite observation as if it isolated a single step.
 
    Note the cell is *useful as-is*: it produces a real recovery verdict on the
    fallback cut, which is how the `recovered-at-4` result above was obtained.

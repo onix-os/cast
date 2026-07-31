@@ -196,7 +196,12 @@ export LD_LIBRARY_PATH=/bin
 # forge's logind inhibitor cannot be satisfied (`plans/future_impl.md` §2.1).
 export CAST_ALLOW_UNINHIBITED_TRANSACTION=1
 CRASH_PHASE=$(sed -n 's/.*cell_phase=\([A-Za-z.]*\).*/\1/p' /proc/cmdline | tr '.' ':')
-if [ -n "$CRASH_PHASE" ]; then export CAST_CRASH_AT_PHASE="$CRASH_PHASE"; fi
+if [ -n "$CRASH_PHASE" ]; then
+    export CAST_CRASH_AT_PHASE="$CRASH_PHASE"
+    # Durable disk, not /tmp: the guest's tmpfs dies with the power cut, so a
+    # witness written there cannot be read by the verdict boot that follows.
+    export CAST_CRASH_AT_PHASE_WITNESS=/mnt/root
+fi
 stage_and_activate() {
     stage_and_install
     # The install created state *1*, not state 2 — this is a fresh root. So
