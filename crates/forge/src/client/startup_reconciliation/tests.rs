@@ -1199,18 +1199,14 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
     // `rollback_finalization_plan_is_exact` / `rollback_complete_route_plan_is_exact`
     // — find it the same way, by asking which field the plan legitimately
     // carries at an early source that the gate insists on seeing differently.
-    // One left. `rollback_finalization_plan_is_exact` requires
-    // `record.candidate.id.is_some()`, but a NewState rollback begun at
-    // `Preparing` never allocated a candidate, so the field is legitimately
-    // `None` and finalization refuses forever. The chain does everything
-    // asked of it and then cannot finish.
-    //
-    // Decide deliberately which is true before changing it: either the
-    // decision authority always observes an allocated ID by the time it
-    // persists (in which case this fixture is unrepresentative and should
-    // supply one), or the finalization gate must accept an absent candidate
-    // for sources below `FreshStateAllocating`. Do not just drop the check.
-    let known_terminal_stalls = vec![(Operation::NewState, Phase::Preparing, Phase::RollbackComplete)];
+    // Empty, and it must stay that way: every pre-exchange rollback source now
+    // walks its whole chain to a terminal phase. The last entry here was
+    // NewState @ `Preparing` stalling on `FinalizeRollback` because the gate
+    // demanded a candidate ID that a rollback begun before allocation never
+    // has. A real guest confirmed it — a killed install reproduces exactly that
+    // — so the gate now requires the ID only when one could have been
+    // allocated.
+    let known_terminal_stalls: Vec<(Operation, Phase, Phase)> = Vec::new();
     assert_eq!(
         stranded, known_terminal_stalls,
         "the set of rollback chains that cannot reach a terminal phase changed; \

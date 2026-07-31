@@ -256,7 +256,14 @@ fn rollback_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
     };
     record.operation == Operation::NewState
         && record.phase == Phase::RollbackComplete
-        && record.candidate.id.is_some()
+        // Required exactly when a candidate could have been allocated. NewState
+        // allocates from `FreshStateAllocated` on, so a rollback begun before
+        // that legitimately carries `None` — demanding an ID there refused the
+        // plan forever and the machine could never finish recovering. Confirmed
+        // on a real guest 2026-07-31: a killed install rolls back from an early
+        // phase, walks the whole chain, and stalls on `FinalizeRollback`.
+        && (record.candidate.id.is_some()
+            || rollback.source.ordinal() < ForwardPhase::FreshStateAllocated.ordinal())
         // Pre-exchange sources reach `RollbackComplete` by a shorter route (no
         // reverse exchange), so their generation is not fixed and is left
         // unconstrained. Delegated rather than listed: this was yet another
@@ -280,10 +287,18 @@ fn rollback_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
         && rollback.candidate.disposition == AbortDisposition::Quarantine
-        && matches!(
-            rollback.fresh_db,
-            RollbackAction::Applied | RollbackAction::AlreadySatisfied
-        )
+        // Resolved only if a row could ever have existed. Demanding
+        // `Applied | AlreadySatisfied` unconditionally assumed the allocation
+        // had happened, so a rollback begun before it carried the correct
+        // `NotRequired` and was refused for it.
+        && if record.fresh_db_rollback_is_possible(rollback.source) {
+            matches!(
+                rollback.fresh_db,
+                RollbackAction::Applied | RollbackAction::AlreadySatisfied
+            )
+        } else {
+            rollback.fresh_db == RollbackAction::NotRequired
+        }
         && rollback.boot == BootRollback::NotRequired
         // Derived, not asserted. Hard-coding this to `true` required the
         // crash to have happened after the transaction triggers, so a
