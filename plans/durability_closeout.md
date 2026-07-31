@@ -399,7 +399,33 @@ assume they hide the same thing.
    about a guest that had not got there yet, and three separate diagnoses blamed
    the hook for what was a clock.
 
-   **CORRECTED 2026-07-31 — it is not install throughput.** A plain
+   **RECOVERY CONFIRMED WORKING 2026-07-31.** The same cell that reported
+   `state=absent` and a frozen phase all morning now reports:
+
+       driver=recovered-at-4  state=installed
+       PHASE-1: CandidatePreserveIntent
+       PHASE-2: CandidatePreserved
+       PHASE-3: RollbackComplete
+
+   The rollback walks its chain, finalizes, and the guest comes back with state
+   installed. That is the day's fixes verified end to end outside the suite.
+
+   **The marker is still not the blocker it appeared to be — and three
+   diagnoses of it have now been wrong.** In order: the hook was on the wrong
+   route (true, and fixed); the cmdline parsing (ruled out by replay); install
+   throughput (falsified — 26s); and `>/dev/null 2>&1` in write mode discarding
+   the marker (fixed in `crash-matrix-run.sh`, but the cell *still* times out,
+   so that was not the cause either).
+
+   **Stop guessing and instrument.** The next person should run the guest by
+   hand with `CAST_CRASH_AT_PHASE` set and watch whether `park_for_phase_targeted_crash`
+   is entered at all — a `dmesg`-visible write or a file touch in the guest
+   proves entry without depending on console plumbing. Do not propose a fifth
+   cause without that evidence. Note the cell is *useful as-is*: it produces a
+   real recovery verdict on the fallback cut, which is how the result above was
+   obtained.
+
+   **Superseded note — it is not install throughput.** A plain
    `OPS=(install) CUTS=(control)` cell completes in **26 seconds wall clock**,
    `recovery=clean driver=recovered-at-1 state=installed`. The install is fast.
    The earlier "the setup install never completes" reading was wrong: it

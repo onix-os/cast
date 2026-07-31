@@ -229,7 +229,20 @@ mkdir -p /mnt/root
 echo "BOOT-ID $(cat /proc/sys/kernel/random/boot_id)"
 if [ "$MODE" = write ]; then
     echo "CELL-READY"
-    case "$OP" in activate) stage_and_activate >/dev/null 2>&1 ;; *) stage_and_install >/dev/null 2>&1 ;; esac
+    # Keep the phase marker. `>/dev/null 2>&1` here discarded it: the hook
+    # prints `CAST-AT-PHASE` on stderr and then parks, so the guest was sitting
+    # exactly where it was asked to while the harness grepped a console log the
+    # marker had been thrown into /dev/null out of. Every "phase never reached"
+    # verdict this harness ever produced came from that redirect, and three
+    # separate diagnoses blamed the hook, the cmdline parsing, and install
+    # throughput before anyone read this line.
+    #
+    # Filtered rather than unredirected so the serial console is not flooded,
+    # and line-buffered so the marker appears the instant it is written.
+    case "$OP" in
+        activate) stage_and_activate 2>&1 | grep -a --line-buffered "CAST-AT-PHASE" ;;
+        *) stage_and_install 2>&1 | grep -a --line-buffered "CAST-AT-PHASE" ;;
+    esac
     echo "CELL-OP-DONE"
     while :; do sleep 1; done
 elif [ "$MODE" = control ]; then
