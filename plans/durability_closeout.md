@@ -457,9 +457,29 @@ Two exclusion tests encoded the old scoping and were updated deliberately:
 > The same warning is repeated at both gates and both tests in the source; do
 > not delete it until a crash-matrix cell proves the effects run.
 
-**Next:** run the 40-second `install → remove → activate` cell again and read
-where it stalls now. That is the cheapest possible pointer at which effect to
-implement first.
+**Measured on a real guest immediately after landing (41s, control cut):**
+
+    before:  stalled-at-PreviousArchived   requires BeginRollback { PreviousArchived }
+    after:   stalled-at-RollbackDecided    requires ResumeRollback { RollbackDecided }
+
+The decision now persists — the record advanced `PreviousArchived →
+RollbackDecided` — and the chain stops one step further in, exactly as the
+admission-only caveat predicts.
+
+**The next gap, identified:** `route_evidence_is_exact`
+(`usr_rollback_resume_route_authority.rs`) requires
+`previous_archive == RollbackAction::NotRequired` for ActivateArchived. A
+rollback from `PreviousArchived` legitimately carries `Pending` — the archive
+really happened and must be reversed. **Instance sixteen of the pattern**, and
+the same shape as the fifteen before it.
+
+**But do not fix it the same way.** Admitting it routes to
+`PreviousRestoreIntent`, which needs the actual previous-restore effect — the
+work `previous-restore-recovery-identity.md` built in-process (task #5) but
+never proved across a reboot (§A4). This is where predicate-widening stops being
+sufficient and the effects have to exist. Wire the effect and the admission
+together, and use this 41-second cell as the acceptance test: it needs no crash
+injection, no phase-cut machinery, and no VM timing budget.
 
    Note the remove step only became possible on 2026-07-30 — before the
    first-install staging fix, a displaced `/usr` placeholder wedged the next
