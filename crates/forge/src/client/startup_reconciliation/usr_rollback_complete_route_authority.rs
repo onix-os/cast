@@ -10,8 +10,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootRollback, Operation, Phase, RollbackAction, StorageError, TransitionJournalRecordBinding,
+        TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -192,22 +192,25 @@ fn rollback_complete_route_plan_is_exact(record: &TransitionRecord) -> bool {
     record.operation == Operation::NewState
         && record.phase == Phase::FreshDbInvalidated
         && record.candidate.id.is_some()
-        && (super::rollback_source_is_supported(record, rollback.source)
-            || matches!(
-                (rollback.source, record.generation),
-                (ForwardPhase::SystemTriggersStarted, 18) | (ForwardPhase::SystemTriggersComplete, 19)
-            ))
-        && rollback.previous_archive == RollbackAction::NotRequired
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Quarantine
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
         && matches!(
             rollback.fresh_db,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
+        // Kept absolute on purpose, unlike the fields above. This route ends
+        // the rollback; a plan with boot repair outstanding must route to
+        // `BootRepairRequired` instead, through its own authority.
         && rollback.boot == BootRollback::NotRequired
         // Derived, not asserted. Hard-coding this to `true` required the
         // crash to have happened after the transaction triggers, so a

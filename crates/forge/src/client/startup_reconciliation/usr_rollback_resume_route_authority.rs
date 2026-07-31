@@ -3,8 +3,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootRollback, Phase, RollbackAction, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
@@ -142,64 +142,19 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
 }
 
 fn is_usr_exchange_rollback_source(record: &TransitionRecord) -> bool {
-    record.rollback.as_ref().is_some_and(|rollback| {
-        // Delegated rather than listed. This was a third hand-kept copy of the
-        // same source list, and it stranded a rollback the decision gate had
-        // already accepted: the record reached `RollbackDecided` and then sat
-        // there, because this route would not carry it forward. One definition
-        // means the head and tail cannot disagree again.
-        super::rollback_source_is_supported(record, rollback.source)
-            || matches!(
-                (record.operation, record.phase, rollback.source, record.generation),
-                (
-                    Operation::NewState,
-                    Phase::RollbackDecided,
-                    ForwardPhase::SystemTriggersStarted,
-                    12,
-                ) | (
-                    Operation::NewState,
-                    Phase::RollbackDecided,
-                    ForwardPhase::SystemTriggersComplete,
-                    13,
-                ) | (
-                    Operation::NewState,
-                    Phase::RollbackDecided,
-                    ForwardPhase::PreviousArchived,
-                    15,
-                ) | (
-                    Operation::NewState,
-                    Phase::UsrRestored,
-                    ForwardPhase::SystemTriggersStarted,
-                    14,
-                ) | (
-                    Operation::NewState,
-                    Phase::UsrRestored,
-                    ForwardPhase::SystemTriggersComplete,
-                    15,
-                ) | (
-                    Operation::ActiveReblit,
-                    Phase::RollbackDecided,
-                    ForwardPhase::SystemTriggersStarted,
-                    10,
-                ) | (
-                    Operation::ActiveReblit,
-                    Phase::RollbackDecided,
-                    ForwardPhase::SystemTriggersComplete,
-                    11,
-                ) | (
-                    Operation::ActiveReblit,
-                    Phase::UsrRestored,
-                    ForwardPhase::SystemTriggersStarted,
-                    12,
-                ) | (
-                    Operation::ActiveReblit,
-                    Phase::UsrRestored,
-                    ForwardPhase::SystemTriggersComplete,
-                    13,
-                )
-            )
-            || (record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
-    })
+    // Chain membership, not a list. The nine `(operation, phase, source,
+    // generation)` tuples this replaces were a hand-kept copy of the journal's
+    // own forward chain, and they were incomplete in exactly the way such
+    // copies always are: `ActivateArchived` appeared in none of them, so once
+    // the decision gate began admitting post-exchange sources for every
+    // operation, an activation that crashed during its system triggers, its
+    // previous-archive, or its boot sync reached `RollbackDecided` and stopped
+    // there forever — the §1.4 stall, moved one phase later.
+    //
+    // The generation columns were not duplication and are not dropped:
+    // `rollback_evidence_is_on_chain` derives that bound too, from the plan the
+    // record carries.
+    crate::transition_journal::rollback_evidence_is_on_chain(record)
 }
 
 fn require_journal_record_binding(
@@ -223,19 +178,20 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
-    let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
-    // NewState may have archived its predecessor before crashing; that plan
-    // restores it (Pending) as the first rollback action. Every other operation
-    // archives nothing, so its predecessor rollback stays NotRequired.
-    let previous_archive_is_exact = match record.operation {
-        Operation::NewState => matches!(
-            rollback.previous_archive,
-            RollbackAction::NotRequired | RollbackAction::Pending
-        ),
-        Operation::ActivateArchived | Operation::ActiveReblit => {
-            rollback.previous_archive == RollbackAction::NotRequired
-        }
-    };
+    // Both derived from the source phase and this record's own options, which
+    // is how the journal builds the plan in the first place. Naming operations
+    // here made two separate claims that are simply untrue: that only
+    // `ActiveReblit` can crash during boot sync, and that only `NewState`
+    // archives a predecessor. `ActivateArchived` does both.
+    let boot_source = crate::transition_journal::boot_rollback_is_possible(rollback.source);
+    //
+    // When a restore is possible the plan's own per-phase validation already
+    // constrains which value is legal at this exact phase, so restating it
+    // here would only be a fourth copy to fall out of date. When it is not
+    // possible, `NotRequired` is the only encodable value and saying so is
+    // still worth it: it catches a plan built for a different record.
+    let previous_archive_is_exact = record.previous_restore_rollback_is_possible(rollback.source)
+        || rollback.previous_archive == RollbackAction::NotRequired;
     if !previous_archive_is_exact
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
@@ -252,10 +208,8 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
     } else {
         rollback.fresh_db == RollbackAction::NotRequired
     };
-    let candidate_disposition_is_exact = match record.operation {
-        Operation::ActivateArchived => rollback.candidate.disposition == AbortDisposition::Rearchive,
-        Operation::NewState | Operation::ActiveReblit => rollback.candidate.disposition == AbortDisposition::Quarantine,
-    };
+    let candidate_disposition_is_exact =
+        rollback.candidate.disposition == record.candidate_disposition_for(rollback.source);
     let external_effects_are_exact =
         rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source);
     fresh_is_exact

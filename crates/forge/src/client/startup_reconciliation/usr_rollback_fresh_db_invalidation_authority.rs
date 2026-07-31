@@ -11,8 +11,8 @@ mod effect_reconciliation;
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootRollback, Operation, Phase, RollbackAction, StorageError, TransitionJournalRecordBinding,
+        TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -223,28 +223,38 @@ fn fresh_db_invalidation_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
-    record.operation == Operation::NewState
-        && record.phase == Phase::FreshDbInvalidationIntent
+    record.phase == Phase::FreshDbInvalidationIntent
         && record.candidate.id.is_some()
-        && (super::rollback_source_is_supported(record, rollback.source)
-            || matches!(
-                (rollback.source, record.generation),
-                (ForwardPhase::SystemTriggersStarted, 17) | (ForwardPhase::SystemTriggersComplete, 18)
-            ))
-        && rollback.previous_archive == RollbackAction::NotRequired
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        // Settled by the time this phase is reached, exactly as at the reverse
+        // and candidate-preserve gates.
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Quarantine
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
         // The row must actually be possible at this source. Checking only for
         // `Pending` accepted a plan claiming an allocation that never happened
         // — `source: Preparing` with `fresh_db: Pending` is incoherent, and the
         // journal would never build it.
         && record.fresh_db_rollback_is_possible(rollback.source)
         && rollback.fresh_db == RollbackAction::Pending
-        && rollback.boot == BootRollback::NotRequired
+        // Derived from the source, not asserted absent. A crash during boot
+        // sync builds the only legal plan (`PendingUnverifiable`) and the boot
+        // repair runs *after* the ordinary actions, so demanding `NotRequired`
+        // here stranded the chain one phase before its terminal route.
+        && rollback.boot
+            == if crate::transition_journal::boot_rollback_is_possible(rollback.source) {
+                BootRollback::PendingUnverifiable
+            } else {
+                BootRollback::NotRequired
+            }
         // Derived, not asserted true. Hard-coding it required the crash to have
         // happened after the transaction triggers, so a rollback that began
         // before them reached this phase and then stalled here with no route

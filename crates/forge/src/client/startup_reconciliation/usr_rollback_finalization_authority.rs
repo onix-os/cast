@@ -9,9 +9,8 @@
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalBinding, TransitionJournalRecordBinding, TransitionJournalRecordDeleteError,
-        TransitionJournalStore, TransitionRecord,
+        BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError, TransitionJournalBinding,
+        TransitionJournalRecordBinding, TransitionJournalRecordDeleteError, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -272,21 +271,18 @@ fn rollback_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
         // walked the whole chain and then could not finalize — the machine
         // recovered everything except the ability to finish
         // (`plans/future_impl.md` §1.4, and the VM run 2026-07-31).
-        && (matches!(
-            (rollback.source, record.generation),
-            (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
-                | (ForwardPhase::RootLinksComplete, 18)
-                | (ForwardPhase::SystemTriggersStarted, 19)
-                | (ForwardPhase::SystemTriggersComplete, 20)
-        ) || (rollback.source.ordinal() < ForwardPhase::UsrExchangeIntent.ordinal()
-            && super::rollback_source_is_supported(record, rollback.source)))
-        && rollback.previous_archive == RollbackAction::NotRequired
+        && crate::transition_journal::rollback_evidence_is_on_chain(record)
+        && if record.previous_restore_rollback_is_possible(rollback.source) {
+            rollback.previous_archive.resolved()
+        } else {
+            rollback.previous_archive == RollbackAction::NotRequired
+        }
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
             rollback.candidate.action,
             RollbackAction::Applied | RollbackAction::AlreadySatisfied
         )
-        && rollback.candidate.disposition == AbortDisposition::Quarantine
+        && rollback.candidate.disposition == record.candidate_disposition_for(rollback.source)
         // Resolved only if a row could ever have existed. Demanding
         // `Applied | AlreadySatisfied` unconditionally assumed the allocation
         // had happened, so a rollback begun before it carried the correct

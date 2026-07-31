@@ -19,8 +19,7 @@ mod target_normalization;
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, TransitionJournalRecordBinding,
-        TransitionJournalStore, TransitionRecord,
+        BootRollback, Phase, RollbackAction, TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
     },
 };
 
@@ -194,13 +193,10 @@ impl<'reservation> UsrRollbackCandidatePreserveAuthority<'reservation> {
         if record.phase != Phase::CandidatePreserveIntent {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
-        let Some(rollback) = record.rollback.as_ref() else {
+        if record.rollback.is_none() {
             return Ok(UsrRollbackCandidatePreserveAdmission::Deferred);
-        };
-        if !super::rollback_source_is_supported(record, rollback.source)
-            && !system_trigger_candidate_preserve_source_is_exact(record)
-            && !(record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted)
-        {
+        }
+        if !crate::transition_journal::rollback_evidence_is_on_chain(record) {
             return Ok(UsrRollbackCandidatePreserveAdmission::NotApplicable);
         }
 
@@ -516,12 +512,17 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
-    let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
+    let boot_source = crate::transition_journal::boot_rollback_is_possible(rollback.source);
+    // As at the reverse gate: reaching this phase means the previous restore,
+    // if one was ever possible, is already settled.
+    let previous_archive_is_exact = if record.previous_restore_rollback_is_possible(rollback.source) {
+        rollback.previous_archive.resolved()
+    } else {
+        rollback.previous_archive == RollbackAction::NotRequired
+    };
     if record.phase != Phase::CandidatePreserveIntent
-        || (!super::rollback_source_is_supported(record, rollback.source)
-            && !system_trigger_candidate_preserve_source_is_exact(record)
-            && !boot_source)
-        || rollback.previous_archive != RollbackAction::NotRequired
+        || !crate::transition_journal::rollback_evidence_is_on_chain(record)
+        || !previous_archive_is_exact
         || !super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
@@ -538,43 +539,10 @@ fn candidate_preserve_plan_is_exact(record: &TransitionRecord) -> bool {
     } else {
         rollback.fresh_db == RollbackAction::NotRequired
     };
-    let disposition_is_exact = match record.operation {
-        Operation::ActivateArchived => rollback.candidate.disposition == AbortDisposition::Rearchive,
-        Operation::NewState | Operation::ActiveReblit => rollback.candidate.disposition == AbortDisposition::Quarantine,
-    };
+    let disposition_is_exact = rollback.candidate.disposition == record.candidate_disposition_for(rollback.source);
     fresh_is_exact
         && disposition_is_exact
         && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
-}
-
-fn system_trigger_candidate_preserve_source_is_exact(record: &TransitionRecord) -> bool {
-    let Some(rollback) = record.rollback.as_ref() else {
-        return false;
-    };
-    matches!(
-        (record.operation, record.phase, rollback.source, record.generation),
-        (
-            Operation::NewState,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersStarted,
-            15,
-        ) | (
-            Operation::NewState,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersComplete,
-            16,
-        ) | (
-            Operation::ActiveReblit,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersStarted,
-            13,
-        ) | (
-            Operation::ActiveReblit,
-            Phase::CandidatePreserveIntent,
-            ForwardPhase::SystemTriggersComplete,
-            14,
-        )
-    )
 }
 
 #[cfg(test)]

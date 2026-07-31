@@ -14,8 +14,8 @@ mod effect_reconciliation;
 use crate::{
     Installation, db,
     transition_journal::{
-        AbortDisposition, BootRollback, ForwardPhase, Operation, Phase, RollbackAction, StorageError,
-        TransitionJournalRecordBinding, TransitionJournalStore, TransitionRecord,
+        BootRollback, Phase, RollbackAction, StorageError, TransitionJournalRecordBinding, TransitionJournalStore,
+        TransitionRecord,
     },
 };
 
@@ -256,18 +256,21 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     let Some(rollback) = record.rollback.as_ref() else {
         return false;
     };
-    let boot_source = record.operation == Operation::ActiveReblit && rollback.source == ForwardPhase::BootSyncStarted;
+    let boot_source = crate::transition_journal::boot_rollback_is_possible(rollback.source);
+    // Reaching this phase means every earlier action in the plan is settled:
+    // `next_rollback_phase` selects the first `Pending` action in order, and
+    // the previous restore comes before the reverse exchange. So an archive
+    // that happened must already be undone, and one that never happened stays
+    // `NotRequired`. The flat `!= NotRequired` this replaces refused the first
+    // case outright, which is every `ActivateArchived` cut after its archive.
+    let previous_archive_is_exact = if record.previous_restore_rollback_is_possible(rollback.source) {
+        rollback.previous_archive.resolved()
+    } else {
+        rollback.previous_archive == RollbackAction::NotRequired
+    };
     if record.phase != Phase::ReverseExchangeIntent
-        || (!super::rollback_source_is_supported(record, rollback.source)
-            && !matches!(
-                (record.operation, rollback.source, record.generation),
-                (Operation::NewState, ForwardPhase::SystemTriggersStarted, 13)
-                    | (Operation::NewState, ForwardPhase::SystemTriggersComplete, 14)
-                    | (Operation::ActiveReblit, ForwardPhase::SystemTriggersStarted, 11)
-                    | (Operation::ActiveReblit, ForwardPhase::SystemTriggersComplete, 12)
-            )
-            && !boot_source)
-        || rollback.previous_archive != RollbackAction::NotRequired
+        || !crate::transition_journal::rollback_evidence_is_on_chain(record)
+        || !previous_archive_is_exact
         || rollback.usr_exchange != RollbackAction::Pending
         || rollback.candidate.action != RollbackAction::Pending
         || rollback.boot
@@ -279,14 +282,17 @@ fn reverse_plan_is_exact(record: &TransitionRecord) -> bool {
     {
         return false;
     }
-    let fresh_is_exact = match record.operation {
-        Operation::NewState => rollback.fresh_db == RollbackAction::Pending,
-        Operation::ActivateArchived | Operation::ActiveReblit => rollback.fresh_db == RollbackAction::NotRequired,
+    // Both derived, for the same reason as the two above. `operation ==
+    // NewState` assumed the crash happened after the allocation, and the
+    // disposition arm contradicted the journal's own exception for an
+    // activation cut during its system triggers.
+    let fresh_is_exact = if record.fresh_db_rollback_is_possible(rollback.source) {
+        rollback.fresh_db == RollbackAction::Pending
+    } else {
+        rollback.fresh_db == RollbackAction::NotRequired
     };
-    let candidate_disposition_is_exact = match record.operation {
-        Operation::ActivateArchived => rollback.candidate.disposition == AbortDisposition::Rearchive,
-        Operation::NewState | Operation::ActiveReblit => rollback.candidate.disposition == AbortDisposition::Quarantine,
-    };
+    let candidate_disposition_is_exact =
+        rollback.candidate.disposition == record.candidate_disposition_for(rollback.source);
     fresh_is_exact
         && candidate_disposition_is_exact
         && rollback.external_effects_may_remain == record.expected_external_effects_may_remain(rollback.source)
