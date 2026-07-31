@@ -1,16 +1,4 @@
 impl Client {
-    pub fn apply_stateful_blit(
-        &self,
-        _fstree: vfs::Tree<PendingFile>,
-        _state: &State,
-        _old_state: Option<state::Id>,
-        _system_snapshot: SystemModel,
-    ) -> Result<(), Error> {
-        Err(Error::FixedStagingCapabilityRequired {
-            operation: "apply a stateful blit",
-        })
-    }
-
     #[cfg(test)]
     fn apply_stateful_blit_with_checkpoint<F>(
         &self,
