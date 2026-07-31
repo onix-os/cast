@@ -1128,16 +1128,14 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
                     // rollback started, advanced three phases, and still never
                     // finished, so the machine never recovered. Measured in the
                     // VM 2026-07-31, invisible to a green suite.
-                    // Two legal routes leave this phase. With a fresh row still
-                    // to invalidate the next stop is `FreshDbInvalidationIntent`,
-                    // which this loop gates on its own iteration; otherwise the
-                    // completion route carries it straight to `RollbackComplete`.
-                    Phase::CandidatePreserved if operation == Operation::NewState => {
-                        successor
-                            .rollback
-                            .as_ref()
-                            .is_some_and(|plan| plan.fresh_db == RollbackAction::Pending)
-                            || usr_rollback_complete_route_plan_is_exact_for_test(&successor)
+                    // `rollback_complete_route_plan_is_exact` gates
+                    // `FreshDbInvalidated`, not this phase — using it here was
+                    // simply the wrong predicate and produced a false stall.
+                    // Which authority carries NewState from `CandidatePreserved`
+                    // straight to `RollbackComplete` when no fresh row was ever
+                    // allocated is still unidentified; see the plan.
+                    Phase::FreshDbInvalidated if operation == Operation::NewState => {
+                        usr_rollback_complete_route_plan_is_exact_for_test(&successor)
                     }
                     Phase::RollbackComplete if operation == Operation::NewState => {
                         usr_rollback_finalization_plan_is_exact_for_test(&successor)
@@ -1201,15 +1199,18 @@ fn admitted_rollback_resume_routes_always_have_a_consuming_successor() {
     // `rollback_finalization_plan_is_exact` / `rollback_complete_route_plan_is_exact`
     // — find it the same way, by asking which field the plan legitimately
     // carries at an early source that the gate insists on seeing differently.
-    let known_terminal_stalls = vec![
-        (Operation::NewState, Phase::Preparing, Phase::CandidatePreserved),
-        (Operation::NewState, Phase::FreshStateAllocated, Phase::RollbackComplete),
-        (
-            Operation::NewState,
-            Phase::CandidatePrepareStarted,
-            Phase::RollbackComplete,
-        ),
-    ];
+    // One left. `rollback_finalization_plan_is_exact` requires
+    // `record.candidate.id.is_some()`, but a NewState rollback begun at
+    // `Preparing` never allocated a candidate, so the field is legitimately
+    // `None` and finalization refuses forever. The chain does everything
+    // asked of it and then cannot finish.
+    //
+    // Decide deliberately which is true before changing it: either the
+    // decision authority always observes an allocated ID by the time it
+    // persists (in which case this fixture is unrepresentative and should
+    // supply one), or the finalization gate must accept an absent candidate
+    // for sources below `FreshStateAllocating`. Do not just drop the check.
+    let known_terminal_stalls = vec![(Operation::NewState, Phase::Preparing, Phase::RollbackComplete)];
     assert_eq!(
         stranded, known_terminal_stalls,
         "the set of rollback chains that cannot reach a terminal phase changed; \

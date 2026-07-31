@@ -257,21 +257,22 @@ fn rollback_finalization_plan_is_exact(record: &TransitionRecord) -> bool {
     record.operation == Operation::NewState
         && record.phase == Phase::RollbackComplete
         && record.candidate.id.is_some()
-        && matches!(
+        // Pre-exchange sources reach `RollbackComplete` by a shorter route (no
+        // reverse exchange), so their generation is not fixed and is left
+        // unconstrained. Delegated rather than listed: this was yet another
+        // hand-kept copy that started at `CandidatePrepared`, so a rollback
+        // begun while allocating the fresh state or preparing the candidate
+        // walked the whole chain and then could not finalize — the machine
+        // recovered everything except the ability to finish
+        // (`plans/future_impl.md` §1.4, and the VM run 2026-07-31).
+        && (matches!(
             (rollback.source, record.generation),
-            // Pre-exchange sources reach `RollbackComplete` by a shorter route
-            // (no reverse exchange), so their generation is not fixed and is
-            // left unconstrained here (`plans/future_impl.md` §1.4).
-            (
-                ForwardPhase::CandidatePrepared
-                    | ForwardPhase::TransactionTriggersStarted
-                    | ForwardPhase::TransactionTriggersComplete,
-                _,
-            ) | (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
+            (ForwardPhase::UsrExchangeIntent | ForwardPhase::UsrExchanged, _)
                 | (ForwardPhase::RootLinksComplete, 18)
                 | (ForwardPhase::SystemTriggersStarted, 19)
                 | (ForwardPhase::SystemTriggersComplete, 20)
-        )
+        ) || (rollback.source.ordinal() < ForwardPhase::UsrExchangeIntent.ordinal()
+            && super::rollback_source_is_supported(record, rollback.source)))
         && rollback.previous_archive == RollbackAction::NotRequired
         && super::rollback_usr_exchange_is_settled(rollback.usr_exchange, rollback.source)
         && matches!(
