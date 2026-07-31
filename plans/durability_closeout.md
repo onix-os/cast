@@ -426,6 +426,34 @@ assume they hide the same thing.
    `(ActivateArchived, PreviousArchived)` the one to fix first, with a
    ready-made reproduction that does not depend on the phase-cut machinery.
 
+### Post-exchange admission — written, not landed
+
+`plans/post-exchange-admission.patch` holds a working change that admits every
+post-exchange source for every operation, deriving the generation from
+`expected_forward_generation` instead of the hand-kept
+`(operation, phase, generation)` table (itself another instance of the pattern —
+that table is why ActivateArchived had no post-exchange admission at all).
+
+It was deliberately **not** committed. Applying it makes all six pinned
+decision-gate stalls admit, and fails exactly two exclusion tests that encode
+the old scoping:
+
+- `startup_system_trigger_sources_require_post_and_exclude_activate_archived`
+  asserts ActivateArchived is *not* admitted at `SystemTriggers*`; the "pending,
+  unchanged" it protects is the brick, not a safety property.
+- `startup_active_reblit_boot_repair_required_prefix_boundaries_are_exact_and_effect_free`
+
+**Admission alone is not the fix.** Post-exchange rollback has real work to
+undo — reverse the exchange, restore the archived previous state — and those
+effects do not exist for ActivateArchived. Admitting the decision without them
+lets recovery begin work it cannot finish, which is worse than stalling. Land
+the patch **with** the effects, not before, and update the two exclusion tests
+in the same change so the contract moves deliberately rather than by accident.
+
+Note the pattern: three separate over-widenings during this work were caught
+only by exclusion tests. These two are the same signal. Read them as a contract
+being violated, not as noise to silence.
+
    Note the remove step only became possible on 2026-07-30 — before the
    first-install staging fix, a displaced `/usr` placeholder wedged the next
    operation — so it is the newest and least-exercised part of this harness.
