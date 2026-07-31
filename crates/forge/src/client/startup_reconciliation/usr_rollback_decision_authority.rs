@@ -299,15 +299,32 @@ fn rollback_decision_source_is_supported(record: &TransitionRecord) -> bool {
             record.phase,
             Phase::UsrExchangeIntent | Phase::UsrExchanged | Phase::RootLinksComplete
         )
-        || matches!(
-            (record.operation, record.phase, record.generation),
-            (Operation::NewState, Phase::SystemTriggersStarted, 11)
-                | (Operation::NewState, Phase::SystemTriggersComplete, 12)
-                | (Operation::NewState, Phase::PreviousArchived, 14)
-                | (Operation::ActiveReblit, Phase::SystemTriggersStarted, 9)
-                | (Operation::ActiveReblit, Phase::SystemTriggersComplete, 10)
-        )
-        || (record.operation == Operation::ActiveReblit && record.phase == Phase::BootSyncStarted)
+        // Post-exchange sources, with the generation *derived* rather than
+        // listed per operation. The table this replaces carried only NewState
+        // and ActiveReblit rows, so ActivateArchived had no post-exchange
+        // rollback admission at all beyond `RootLinksComplete`: a plain
+        // install → remove → activate stalls at `PreviousArchived` on a real
+        // guest, with no crash injection involved (VM run 2026-07-31).
+        //
+        // ADMISSION ONLY — READ BEFORE RELYING ON THIS. The reverse-exchange
+        // and previous-restore effects for the ActivateArchived post-exchange
+        // chain are NOT implemented. These rollbacks are expected to advance
+        // and then stall further in. This was a deliberate, requested step to
+        // make the next gap visible; it is not a completed recovery path. Do
+        // not delete this note until the effects exist and a crash-matrix cell
+        // proves they run.
+        || (matches!(
+            record.phase,
+            Phase::SystemTriggersStarted
+                | Phase::SystemTriggersComplete
+                | Phase::PreviousArchiveIntent
+                | Phase::PreviousArchived
+                | Phase::BootSyncStarted
+        ) && record
+            .phase
+            .forward()
+            .and_then(|source| crate::transition_journal::expected_forward_generation(record, source))
+            == Some(record.generation))
 }
 
 #[cfg(test)]

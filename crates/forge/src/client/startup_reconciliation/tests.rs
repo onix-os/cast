@@ -1035,14 +1035,16 @@ fn every_begin_rollback_phase_has_an_admitting_decision_authority() {
     // triggers, archives the previous state, or syncs boot is unrecoverable.
     // Fix them per operation behind a crash-matrix cell that proves the effect
     // actually runs, not by widening a predicate.
-    let known_unadmitted = vec![
-        (Operation::NewState, Phase::BootSyncStarted),
-        (Operation::ActivateArchived, Phase::SystemTriggersStarted),
-        (Operation::ActivateArchived, Phase::SystemTriggersComplete),
-        (Operation::ActivateArchived, Phase::PreviousArchiveIntent),
-        (Operation::ActivateArchived, Phase::PreviousArchived),
-        (Operation::ActivateArchived, Phase::BootSyncStarted),
-    ];
+    // Empty: every phase whose disposition is `BeginRollback` now has an
+    // admitting decision authority.
+    //
+    // ADMISSION ONLY for the post-exchange sources. This test asks whether the
+    // *decision* is accepted, not whether the chain it starts can be carried
+    // out. The ActivateArchived reverse-exchange and previous-restore effects
+    // do not exist yet, so those rollbacks are expected to advance and stall
+    // further in — see `admitted_rollback_resume_routes_always_have_a_consuming_successor`
+    // for where. An empty list here is not evidence that recovery works.
+    let known_unadmitted: Vec<(Operation, Phase)> = Vec::new();
     assert_eq!(
         stranded, known_unadmitted,
         "the set of phases that strand a rollback decision changed; \

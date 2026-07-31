@@ -78,9 +78,18 @@ fn decision_post_pre_and_sibling_boundaries() {
         assert!(matches!(pre_admission, UsrRollbackDecisionAdmission::Deferred(_)));
     }
 
+    // Every operation is admitted at `BootSyncStarted` as of 2026-07-31.
+    // NewState and ActivateArchived used to be excluded here, which left a
+    // crash during boot sync with a `BeginRollback` disposition that no
+    // authority would accept — the boot stalled and never recovered.
+    //
+    // ADMISSION ONLY: the boot-repair authorities are still ActiveReblit's
+    // alone, so the sibling operations are expected to advance and then stall
+    // where those effects are missing. This asserts the decision is accepted,
+    // not that boot repair runs.
     for kind in [OperationKind::NewState, OperationKind::Archived] {
         let sibling = Fixture::boot_sync_started(kind, BootSyncStartedLayout::Post, false);
-        assert!(!usr_rollback_decision_source_is_supported_for_test(&sibling.source));
+        assert!(usr_rollback_decision_source_is_supported_for_test(&sibling.source));
     }
     let mut wrong_phase = post_source;
     wrong_phase.phase = Phase::BootSyncComplete;

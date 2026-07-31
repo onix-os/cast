@@ -272,7 +272,7 @@ fn startup_system_trigger_post_sources_reach_the_exact_terminal_outcome() {
 }
 
 #[test]
-fn startup_system_trigger_sources_require_post_and_exclude_activate_archived() {
+fn startup_system_trigger_sources_require_post_for_every_operation() {
     for historical in [false, true] {
         for kind in [OperationKind::NewState, OperationKind::ActiveReblit] {
             for source in [Phase::SystemTriggersStarted, Phase::SystemTriggersComplete] {
@@ -288,14 +288,28 @@ fn startup_system_trigger_sources_require_post_and_exclude_activate_archived() {
             }
         }
 
+        // ActivateArchived is admitted here as of 2026-07-31. It used to assert
+        // the opposite, and the "record unchanged, still pending" that refusal
+        // produced was the machine failing to recover: a plain
+        // install → remove → activate stalls at `PreviousArchived` on a real
+        // guest with no crash injection at all.
+        //
+        // The reverse-exchange and previous-restore effects are still missing,
+        // so the chain is expected to advance and then stall further in. This
+        // asserts admission and the pre-exchange requirement, not that recovery
+        // completes.
         for source in [Phase::SystemTriggersStarted, Phase::SystemTriggersComplete] {
             let fixture = Fixture::system_trigger(OperationKind::Archived, source, true, historical);
-            assert!(!usr_rollback_decision_source_is_supported_for_test(&fixture.source));
-            let before = fixture.canonical_bytes();
-            let error = fixture.enter();
+            assert!(usr_rollback_decision_source_is_supported_for_test(&fixture.source));
+
+            // A pre-exchange namespace at a post-exchange source is still
+            // incoherent evidence and must be refused, for every operation.
+            let pre = Fixture::system_trigger(OperationKind::Archived, source, false, historical);
+            let before = pre.canonical_bytes();
+            let error = pre.enter();
             assert_eq!(pending(&error).phase(), source);
-            assert_eq!(fixture.canonical_bytes(), before);
-            fixture.assert_source_unchanged();
+            assert_eq!(pre.canonical_bytes(), before);
+            pre.assert_source_unchanged();
         }
     }
 }
