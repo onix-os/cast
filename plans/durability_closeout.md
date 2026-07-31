@@ -298,18 +298,30 @@ state or preparing the candidate therefore walked the entire chain and then
 could not finalize — recovery did everything asked of it except finish. Both
 now finalize. Suite 2754/0.
 
-One remains, pinned:
+### A2d CLOSED 2026-07-31 (`ab949007`) — no pre-exchange stalls remain
 
-| source | dies at | cause |
-|---|---|---|
-| NewState @ `Preparing` | `RollbackComplete` | gate requires `candidate.id.is_some()` |
+The last one, NewState @ `Preparing`, is fixed, and **the VM answered the
+question rather than a guess**. The timed-out activate run below was not wasted:
+its killed install rolled back from an early phase, walked the whole chain, and
+stalled on `FinalizeRollback` — reproducing on a real guest exactly the case
+pinned in-process. Production genuinely carries no candidate ID at `Preparing`,
+so the gate was wrong, not the fixture.
 
-A rollback begun at `Preparing` never allocated a candidate, so `None` is
-correct there and finalization refuses forever. **Decide which is true before
-changing it:** either the decision authority always observes an allocated ID by
-persist time (making the fixture unrepresentative — supply one), or the gate
-must accept an absent candidate below `FreshStateAllocating`. Do not simply drop
-the check.
+Two more instances of the pattern, both assuming an allocation a pre-exchange
+rollback never made:
+
+- `record.candidate.id.is_some()` — now required only when one could have been
+  allocated (`source >= FreshStateAllocated`).
+- `fresh_db ∈ {Applied, AlreadySatisfied}` — now `NotRequired` when
+  `fresh_db_rollback_is_possible` is false.
+
+That is **thirteen** instances of one pattern across this work.
+
+`admitted_rollback_resume_routes_always_have_a_consuming_successor` now asserts
+its stranded list is **empty**, not pinned: every pre-exchange source, for every
+operation, walks its chain to a terminal phase and finalizes. Suite 2753/1, the
+single failure being the known load-sensitive `receipt_promotion` cluster that
+also fails on an unmodified baseline and passes in isolation.
 
 **One earlier entry here was wrong.** `(NewState, Preparing) dies at
 CandidatePreserved` was not a product defect — the test gated that phase with
@@ -348,19 +360,24 @@ assume they hide the same thing.
    yields exactly `ActivateArchived:CandidatePrepared`, which is what the hook
    compares against. The env var is set correctly.
 
-   **Most likely remaining cause: the wait was too short.** The harness gave the
-   marker 120s and then killed the guest regardless. A nested-KVM install can
-   outlast that, which fits `state=absent` — the cut landed mid-setup, before
-   activation began, so the phase was never reached *yet*. Fixed in
-   `0c224582`: the wait now ends as soon as either outcome is decided and
-   reports them separately, because they need opposite fixes —
+   **ANSWERED 2026-07-31: the phase machinery was never broken.** With the
+   separated diagnostic (`0c224582`) and `PHASE_WAIT=600`, the cell prints:
 
-       NOT-ON-CHAIN: <phase> — operation completed without reaching it
-       TIMED-OUT:    <phase> not reached in Ns, and the operation had not finished
+       TIMED-OUT: ActivateArchived.CandidatePrepared not reached in 600s,
+                  and the operation had not finished
 
-   Default `PHASE_WAIT=600`, overridable. Re-run the activate cell and read
-   which line appears; that single word decides whether the target phase is
-   wrong or the budget was.
+   The hook fires, the env var is set, the `sed`/`tr` parse is correct. **The
+   setup install never completes in the nested guest** — not in 120s, not in
+   600s. Every "phase never reached" this harness ever printed was a statement
+   about a guest that had not got there yet, and three separate diagnoses blamed
+   the hook for what was a clock.
+
+   **The real A2 blocker is guest install throughput.** Before any phase cell
+   can target an operation that runs *after* an install, find out why the
+   install is this slow — nested-KVM without `-cpu host` passthrough, no virtio
+   caching on the setup path, or a genuinely hung step. Time a plain
+   `OPS=(install) CUTS=(control)` cell first and read `CELL-OP-DONE`'s latency;
+   that number sizes every other cell in this section.
 2. `state=absent` with the marker absent means the harness fell back to killing
    the guest 120s after `CELL-READY`, which landed **inside the install**. So
    the rollback measured above is a *NewState* rollback, not ActivateArchived.
