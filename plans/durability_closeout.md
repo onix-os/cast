@@ -563,9 +563,12 @@ through `apply_stateful_blit_with_checkpoint` / `_with_capability`:
 | `active_reblit_tests.rs` | 2 |
 | `tests/stateful_candidate_metadata.rs` | 1 |
 
-Before porting them, check for more of the same: grep the legacy route for other
-entry points with no non-test callers. Dead stubs delete for free and shrink the
-job; only the genuinely-reached ones need the materialization work.
+**That search is done — there are no more free deletions.** Checked
+2026-07-31: `commit_stateful_staging` (8 uses), `require_no_journal` (19),
+`quarantine_candidate` (1, production, `stateful_recovery.rs:370`), and
+`apply_stateful_blit_with_capability` (1, from the `_with_checkpoint` wrapper)
+are all genuinely reached. Nothing else collapses without the test ports first,
+so the remaining job is the real one below, not a smaller one hiding inside it.
 
 ### The blocker: two test helpers
 
