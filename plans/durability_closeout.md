@@ -341,11 +341,26 @@ assume they hide the same thing.
 **Two reasons this cell still does not test what it names:**
 
 1. `CAST-AT-PHASE` *still* never printed, so the phase-targeted cut did not
-   fire even with the hook on `advance_record_binding`. Diagnose in the guest
-   directly: confirm `CAST_CRASH_AT_PHASE` is actually set (`cell_phase` is
-   parsed off `/proc/cmdline` with a `sed`/`tr` pair that has never been
-   verified end to end), then confirm the activation reaches
-   `CandidatePrepared` at all.
+   fire even with the hook on `advance_record_binding`.
+
+   **Ruled out 2026-07-31: the cmdline parsing is fine.** Replaying the guest's
+   `sed`/`tr` pair against a real `cell_phase=ActivateArchived.CandidatePrepared`
+   yields exactly `ActivateArchived:CandidatePrepared`, which is what the hook
+   compares against. The env var is set correctly.
+
+   **Most likely remaining cause: the wait was too short.** The harness gave the
+   marker 120s and then killed the guest regardless. A nested-KVM install can
+   outlast that, which fits `state=absent` — the cut landed mid-setup, before
+   activation began, so the phase was never reached *yet*. Fixed in
+   `0c224582`: the wait now ends as soon as either outcome is decided and
+   reports them separately, because they need opposite fixes —
+
+       NOT-ON-CHAIN: <phase> — operation completed without reaching it
+       TIMED-OUT:    <phase> not reached in Ns, and the operation had not finished
+
+   Default `PHASE_WAIT=600`, overridable. Re-run the activate cell and read
+   which line appears; that single word decides whether the target phase is
+   wrong or the budget was.
 2. `state=absent` with the marker absent means the harness fell back to killing
    the guest 120s after `CELL-READY`, which landed **inside the install**. So
    the rollback measured above is a *NewState* rollback, not ActivateArchived.
