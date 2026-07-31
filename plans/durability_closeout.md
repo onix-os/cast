@@ -481,13 +481,37 @@ cache intact, unsynced writes survive, and the cell proves nothing.
 Every operation added before phase targeting works produces cells that look green
 without testing what they name.
 
-### A3. The unmeasured question
+### A3. ANSWERED 2026-07-31 — yes, and worse than the question assumed
 
 **Do ActiveReblit and ActivateArchived share NewState's pre-exchange recovery
-gap?** The §1.4 fix was deliberately scoped to NewState because that is the only
-operation whose window was ever measured. Extend deliberately, with a
-crash-matrix cell per operation — *not* by widening a shared predicate. Two
-over-widenings during Phase 1 came from exactly that shortcut.
+gap?** They did, and NewState had it too. The §1.4 scoping was not a
+conservative subset of a working mechanism; it was the mechanism working for
+exactly one measured window and silently bricking every other.
+
+Measured, not inferred:
+
+- **ActivateArchived** — 26 consecutive recovery attempts frozen at
+  `CandidatePreserveIntent`, `state=absent`, on a real guest.
+- **ActiveReblit** — stranded from `CandidatePrepared`,
+  `TransactionTriggersStarted` and `TransactionTriggersComplete`.
+- **NewState** — also stranded from `Preparing`, `FreshStateAllocating`,
+  `FreshStateAllocated` and `CandidatePrepareStarted`. The operation the fix was
+  scoped *to* was itself only half covered.
+
+All fixed. Every pre-exchange source of every operation now decides, routes,
+walks its whole chain, and finalizes; the stranded lists assert empty.
+
+**The original instruction here was half right.** "Not by widening a shared
+predicate" correctly predicted the danger — three over-widenings happened during
+this work, every one caught by an *exclusion* test rather than by the admission
+invariants added alongside. But "a crash-matrix cell per operation" was not what
+found these. The head/tail asymmetry was visible in the source the whole time:
+the gates that *decide* to roll back never carried the NewState restriction the
+gates that *carry it out* did. One in-process test comparing the two ends found
+in minutes what three crash-matrix sessions had not.
+
+Keep both. The cells prove effects run; the paired-invariant tests prove the
+contract is not self-contradictory. This gap was the second kind.
 
 ### A4. Cross-reboot proof for previous-restore
 
