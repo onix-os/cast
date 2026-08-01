@@ -557,6 +557,29 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
 }
 
+/// Whether a parked archived-candidate slot is this activation's own displaced
+/// slot, rather than residue left beside a canonical one.
+///
+/// `MoveDirection::Stage` sets the slot marker to `Displaced` on success, so an
+/// in-flight `ActivateArchived` *is supposed to* leave its source slot parked —
+/// that is what frees the canonical state name for the live candidate. The
+/// shape that is genuine residue, and which
+/// `startup_candidate_preserve_refuses_unmodeled_parking_for_new_and_archived_states`
+/// pins, is a parking name **beside** a canonical slot: an abandoned staging
+/// move rather than a completed one.
+///
+/// Refusing on the presence of a parking wrapper alone conflated the two, and
+/// stalled the activation rollback at `CandidatePreserveIntent` on a real guest
+/// (2026-08-02), whose roots held exactly `ArchivedCandidateParking { state: 1 }`
+/// and no `State(1)`.
+fn is_own_displaced_candidate_slot(record: &TransitionRecord, state: i32, snapshot: &NamespaceSnapshot) -> bool {
+    record.operation == Operation::ActivateArchived
+        && record.candidate.id == Some(state)
+        && !snapshot
+            .wrappers()
+            .any(|wrapper| matches!(wrapper.role, TreeLocation::State(canonical) if canonical == state))
+}
+
 /// Whether a parked previous slot is the one this record's own rollback just
 /// vacated, rather than arbitrary residue.
 ///
@@ -588,7 +611,9 @@ fn candidate_preserve_topology_after_phase(
     assess_snapshot_layout(record, snapshot)?;
     if record.operation != Operation::ActiveReblit
         && snapshot.wrappers().any(|wrapper| match wrapper.role {
-            TreeLocation::ArchivedCandidateParking { .. } => true,
+            TreeLocation::ArchivedCandidateParking { state, .. } => {
+                !is_own_displaced_candidate_slot(record, state, snapshot)
+            }
             TreeLocation::PreviousParking { state, .. } => !is_own_vacated_previous_parking(record, state),
             _ => false,
         })
