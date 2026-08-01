@@ -17,6 +17,7 @@ use super::{
     require_same_store_record_binding, require_system_trigger_same_store_evidence, state,
 };
 use crate::state::TransitionId;
+use crate::transition_identity::COORDINATED_IDENTITY_OPENED_ITS_JOURNAL;
 use crate::transition_journal::TransitionJournalRecordBinding;
 
 type BoxedAdvanceError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -160,11 +161,9 @@ impl super::RootLinksCompleteCoordinator {
         // Intent is durable before the physical move, exactly as in the
         // triggered tail.
         let intent = archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent", Some(slot))
-            .map_err(|stage| {
-                PreviousArchiveFailure::SuccessorContract {
-                    transition_id: transition_id.clone(),
-                    stage,
-                }
+            .map_err(|stage| PreviousArchiveFailure::SuccessorContract {
+                transition_id: transition_id.clone(),
+                stage,
             })?;
         let (coordinator, record_binding) = advance_bound_system_trigger_record(
             coordinator,
@@ -239,11 +238,9 @@ impl SystemTriggersCompleteCoordinator {
         // Intent is durable before the physical move: a crash after this record
         // leaves startup reconciliation to complete or reverse the archive.
         let intent = archive_successor(&coordinator.record, Phase::PreviousArchiveIntent, "intent", Some(slot))
-            .map_err(|stage| {
-                PreviousArchiveFailure::SuccessorContract {
-                    transition_id: transition_id.clone(),
-                    stage,
-                }
+            .map_err(|stage| PreviousArchiveFailure::SuccessorContract {
+                transition_id: transition_id.clone(),
+                stage,
             })?;
         let (coordinator, record_binding) = advance_bound_system_trigger_record(
             coordinator,
@@ -298,11 +295,14 @@ fn finish_previous_archive(
         // Read back from the durable record, not from the in-memory selection:
         // what governs the move is what survived the crash window, and the two
         // are only the same if the intent advance really persisted.
-        let recorded_slot = coordinator.record.previous_archive_slot.clone().ok_or_else(|| {
-            PreviousArchiveFailure::SourceContract {
-                transition_id: transition_id.clone(),
-            }
-        })?;
+        let recorded_slot =
+            coordinator
+                .record
+                .previous_archive_slot
+                .clone()
+                .ok_or_else(|| PreviousArchiveFailure::SourceContract {
+                    transition_id: transition_id.clone(),
+                })?;
         let seal = PreviousArchiveEffectSeal { _private: () };
         coordinator
             .identity
@@ -433,7 +433,7 @@ impl PreviousArchivedCoordinator {
                 PreviousArchivedBootSyncHandoffSeal { _private: () },
                 record,
                 record_binding,
-                journal,
+                journal.expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL),
                 state_database,
                 installation,
                 boot_candidate,
@@ -527,7 +527,7 @@ fn advance_archive_completion_record(
     let successor_binding =
         coordinator
             .identity
-            .journal
+            .retained_journal()
             .advance_record_binding(&cast, predecessor_binding, &successor)?;
     coordinator.record = successor;
     require_same_store_record_binding(&coordinator, authority, &successor_binding)?;
@@ -623,7 +623,7 @@ impl PreviousArchivedCoordinator {
             ..
         } = identity;
         Ok(NewStateNoBootCommitDecisionHandoff {
-            journal,
+            journal: journal.expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL),
             state_database,
             installation,
             record,

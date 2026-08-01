@@ -135,7 +135,11 @@ impl UsrExchangeIntentCoordinator {
                 },
             });
         }
-        if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &complete) {
+        if let Err(source) = coordinator
+            .identity
+            .retained_journal()
+            .advance(&coordinator.record, &complete)
+        {
             return Err(UsrExchangeEffectFailure::CompletionPersistence {
                 transition_id,
                 source: source.into(),

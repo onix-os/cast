@@ -530,7 +530,8 @@ std::thread_local! {
 /// durable-prefix coordinator consumes this guard when it creates a journal.
 #[derive(Debug)]
 pub(crate) struct StatefulTreeIdentity {
-    journal: TransitionJournalStore,
+    /// `None` on a recovery identity — see [`Self::retained_journal`].
+    journal: Option<TransitionJournalStore>,
     state_database: db::state::Database,
     candidate: RetainedIdentity,
     candidate_state_id: candidate_state_authority::RetainedCandidateStateId,
@@ -570,14 +571,41 @@ impl StatefulTreeIdentity {
     }
 
     fn require_no_journal(&self) -> Result<(), Error> {
-        if let Some(record) = self.journal.load()? {
+        // A recovery identity holds no handle to inspect, and demanding journal
+        // *absence* of it would be contradictory: it exists because a durable
+        // record exists. The guard's job — stopping a legacy effect from
+        // running across an unreconciled crash — is already done by
+        // `PreviousRestoreRecoverySeal`, which only the dispatcher that proved
+        // the exact record can mint, and which is required to construct one.
+        let Some(journal) = self.journal.as_ref() else {
+            return Ok(());
+        };
+        if let Some(record) = journal.load()? {
             return Err(Error::JournalAppeared {
                 transition: record.transition_id.as_str().to_owned(),
             });
         }
         Ok(())
     }
+
+    /// The journal handle this identity opened.
+    ///
+    /// A **recovery** identity deliberately opens none: the rollback
+    /// dispatcher that selected the recovery already holds the canonical lock,
+    /// and a second acquisition deadlocks against it. Callers of this accessor
+    /// are the forward coordinator, legacy boot repair, staging-wrapper
+    /// rotation, and the archived-state prune — none of which a recovery
+    /// identity can be handed to, because the only constructor that produces
+    /// one is `prepare_previous_restore_recovery`. The soft case,
+    /// `require_no_journal`, reads the field directly instead.
+    fn retained_journal(&self) -> &TransitionJournalStore {
+        self.journal.as_ref().expect(COORDINATED_IDENTITY_OPENED_ITS_JOURNAL)
+    }
 }
+
+/// Why unwrapping [`StatefulTreeIdentity::journal`] is sound on these paths.
+pub(crate) const COORDINATED_IDENTITY_OPENED_ITS_JOURNAL: &str =
+    "only a recovery identity has no journal handle, and it reaches none of these paths";
 
 impl RetainedDirectory {
     fn open_beneath(root: &std::fs::File, relative: &CStr, path: PathBuf) -> Result<Self, Error> {

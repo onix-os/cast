@@ -540,7 +540,7 @@ impl StatefulTreeIdentity {
             source,
         };
         let state = expected.id;
-        super::require_clean_baseline(&self.journal, state_db).map_err(|source| {
+        super::require_clean_baseline(self.retained_journal(), state_db).map_err(|source| {
             not_applied(identity(
                 "check transition baseline before active-reblit reservation",
                 source,
@@ -643,7 +643,7 @@ impl StatefulTreeIdentity {
             outcome: RetainedStagingWrapperRotationOutcome::NotApplied,
             source,
         };
-        super::require_clean_baseline(&self.journal, state_db).map_err(|source| {
+        super::require_clean_baseline(self.retained_journal(), state_db).map_err(|source| {
             not_applied(identity(
                 "check transition baseline before active-reblit cleanup",
                 source,
@@ -698,7 +698,7 @@ impl StatefulTreeIdentity {
             outcome: RetainedStagingWrapperRotationOutcome::Applied,
             source,
         };
-        super::require_clean_baseline(&self.journal, state_db).map_err(|source| {
+        super::require_clean_baseline(self.retained_journal(), state_db).map_err(|source| {
             applied(identity(
                 "recheck transition baseline after active-reblit cleanup",
                 source,
@@ -865,7 +865,7 @@ impl StatefulTreeIdentity {
         expected: &State,
         location: ActiveReblitTreeLocation,
     ) -> Result<(), super::Error> {
-        super::require_clean_baseline(&self.journal, state_db)?;
+        super::require_clean_baseline(self.retained_journal(), state_db)?;
         let actual = state_db
             .get(expected.id)
             .map_err(|source| super::Error::ActiveReblitStateLookup {

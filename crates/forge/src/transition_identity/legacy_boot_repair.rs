@@ -46,7 +46,7 @@ impl LegacyBootRepairAuthority<'_> {
 
         installation.revalidate_mutable_namespace()?;
         let cast = installation.retained_mutable_cast_directory()?;
-        let record = self.identity.journal.load_revalidated_retained_cast(cast);
+        let record = self.identity.retained_journal().load_revalidated_retained_cast(cast);
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         let record = record?;
@@ -63,7 +63,7 @@ impl LegacyBootRepairAuthority<'_> {
         // Repeat public binding and absence last: the installation namespace
         // does not itself retain the public journal child or its lock inode.
         let cast = installation.retained_mutable_cast_directory()?;
-        let trailing_record = self.identity.journal.load_revalidated_retained_cast(cast);
+        let trailing_record = self.identity.retained_journal().load_revalidated_retained_cast(cast);
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         let trailing_record = trailing_record?;

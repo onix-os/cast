@@ -21,9 +21,8 @@ use crate::{
 
 use super::super::{CandidateMetadataError, CandidateMetadataOutputs, StatefulTreeIdentity};
 use super::{
-    NewStatePrevious, PreparedStatefulTransitionCoordinator, StatefulTransitionRequest,
-    PreviousArchivedCoordinator, SystemTriggersCompleteCoordinator,
-    system_triggers::StatefulSystemTriggerAuthority,
+    NewStatePrevious, PreparedStatefulTransitionCoordinator, PreviousArchivedCoordinator, StatefulTransitionRequest,
+    SystemTriggersCompleteCoordinator, system_triggers::StatefulSystemTriggerAuthority,
     transaction_triggers::StatefulTransactionTriggerAuthority,
 };
 

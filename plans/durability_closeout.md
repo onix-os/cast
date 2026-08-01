@@ -734,39 +734,81 @@ rather than `FreshDbInvalidated` — because that is the first phase whose plan
 routes to `BootRepairRequired`, and the walk now asks there. Same stall, earlier
 and more accurate detection.
 
-### PR1-BLOCKED 2026-08-01 — the stack is built; one seam stops it running
+### PR2-BLOCKED 2026-08-01 — the restore runs, and leaves residue the capture refuses
 
-The whole previous-restore stack exists, compiles, and its admission is exact —
-the chain-walk asserts that the gate accepts the plans the journal builds for
-this phase. **It is deliberately not reachable from `startup_gate` yet**, behind
-`PREVIOUS_RESTORE_DISPATCH_IS_WIRED = false`, for one measured reason:
+With PR1 fixed the effect actually executes: the predecessor moves out of its
+archived slot and back into staging. The reconciliation then reads the namespace
+to decide the outcome — and gets:
+
+    PR-DIAG ambiguous layout=Capture(UnexpectedRootName {
+        name: ".previous-slot-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-0" })
+
+**The restore leaves the emptied parking wrapper behind in the roots
+directory**, and `capture_snapshot` rejects it as an unexpected root entry. So
+the reconciliation classifies a move that *did* happen as `Ambiguous` and
+refuses to record it — which is the correct conservative answer to the evidence
+it is given, and the wrong outcome.
+
+The archive direction already has the counterpart:
+`finish_not_applied_previous_archive` "retires an exact inert state slot …
+moved back to a non-state parking name rather than deleted, so ambient,
+replaced, moved, or populated directories are preserved". The restore direction
+has no such retirement. Either it grows one, or the phase's namespace policy
+has to tolerate an inert parking wrapper — and the first is almost certainly
+right, because leaving it means every subsequent capture at every later phase
+trips on the same entry.
+
+Note the identity round-trip test never saw this: it asserts the inode landed
+in staging and never captures the namespace. Same shape as the lock seam — the
+primitive is proven, its *surroundings* are not.
+
+The gate is therefore back off behind `PREVIOUS_RESTORE_DISPATCH_IS_WIRED`.
+
+### PR1-FIXED 2026-08-01 — the recovery identity no longer fights its own lock
+
+The first blocker was:
 
     PR-DIAG attempt=Restore(Journal(AcquireLock { WouldBlock })) layout=LayoutChanged
 
-`prepare_previous_restore_recovery` opens **its own** journal handle through
+`prepare_previous_restore_recovery` opened **its own** journal handle through
 `JournalAcquisition::RecoveryNonblocking`, which `try_open`s the canonical lock.
 The dispatcher is already holding that lock — it must, because the exact record
-binding is what authorizes the effect. So the recovery identity cannot be built
-from inside the dispatcher, and every previous-restore rollback would become a
-hard startup error instead of a stall.
+binding is what authorizes the effect.
 
 `previous-restore-recovery-identity.md` predicted this exactly and nobody acted
 on it: *"journal ← already held by the recovery dispatcher; must **not**
 re-acquire"*. The seam was written down and then built the other way.
 
-**The fix is in the identity layer, not the client.** `RecoveryNonblocking` has
-to take the store the dispatcher already owns rather than opening one, which
-means `prepare_candidate` accepting a borrowed store for the recovery case
-instead of retaining an owned one. That is real work in the most safety-critical
-module in the crate and should not be rushed — the same judgement `A` and `B`
-got.
+**The handle turned out to be pure overhead on that path.** It exists only to
+prove a clean baseline, and recovery skips that proof by design — so it was
+opened, locked, and dropped unread. `StatefulTreeIdentity::journal` is now
+`Option`, recovery stores `None`, and `retained_journal()` unwraps for the
+forward-coordinator and legacy paths, none of which a recovery identity reaches.
 
-Wiring it on is then a one-constant change plus un-pinning three entries.
+**Two more bugs fell out of the same read.**
 
-Until then the four pinned stalls stand, and the two `PreviousRestoreIntent`
-ones are *not* closed. The walk asserts the admission is exact and still reports
-them stranded, because nothing in production consumes the phase — saying
-otherwise would be the `_ => true` mistake with extra steps.
+The *second* `require_clean_baseline`, at the end of `prepare_candidate`, ran
+unconditionally including for recovery — so that path could only ever have
+succeeded with no journal record present, which is to say only in tests. Now
+conditional like the first.
+
+And `verify_previous_for_recovery` / `verify_candidate_for_recovery` — functions
+whose names say recovery — called `require_no_journal`, demanding the absence of
+the very record that makes recovery necessary. `require_no_journal` now returns
+`Ok` when there is no handle to inspect: the guard exists to stop a *legacy*
+effect running across an unreconciled crash, and for recovery that job is done
+by `PreviousRestoreRecoverySeal`, which only the dispatcher that proved the exact
+record can mint and which is required to construct the identity at all.
+
+The first attempt made that case a panic — "a recovery identity reaches none of
+these paths" — and two tests immediately proved it wrong by reaching one through
+the legacy `restore_previous`. The claim was never checked before it was
+asserted; the tests were.
+
+Until PR2 the four pinned stalls stand, and the two `PreviousRestoreIntent` ones
+are *not* closed. The walk asserts the admission is exact and still reports them
+stranded, because nothing in production consumes the phase — saying otherwise
+would be the `_ => true` mistake with extra steps.
 
     activation_namespace/rollback_previous_restore_proof.rs   namespace typestate
     usr_rollback_previous_restore_authority.rs                sealed admission
@@ -959,6 +1001,15 @@ A hard-coded value silently encoding structure:
   described the pre-archived-staging chain, duplicating
   `expected_forward_generation`. Nothing noticed because the route it governed
   had no callers.
+- **The full-suite-only failure cluster is still unexplained, and it grew.**
+  `receipt_promotion::completion` (`Timeout`) has been joined by
+  `boot_sync_complete_startup_storage_faults` (`AcquireLock WouldBlock` on
+  reopen) and `boot_asset_snapshots::failed_batch_drops_prior_snapshots`
+  (`EBADF`). All pass in isolation; all appear only under full-suite
+  parallelism, and more of them appear when the machine is *less* loaded and
+  more tests run concurrently. That points at shared-resource contention —
+  descriptors and the journal flock — not at a durability defect. It is not
+  diagnosed, and calling it a flake is not a diagnosis.
 - **Test-side deadlines that do not scale with load** look like durability
   failures. `timeout_policy::tests::the_test_build_actually_scales_budgets`
   guards the production budgets.
@@ -1008,6 +1059,11 @@ A hard-coded value silently encoding structure:
   blocks until the deadline and looks exactly like a hang. Drop the previous
   entry's result — and the clean startup itself — before asserting against the
   same root.
+- **"This case is unreachable" is a claim, not a comment.** Writing it as an
+  `expect` made a recovery identity panic the moment a test took the legacy
+  entry point it supposedly could not reach. If a case is genuinely structural,
+  make the type forbid it; if it is merely believed, return an error and find
+  out.
 - **A plan that records a constraint does not enforce it.**
   `previous-restore-recovery-identity.md` wrote "journal ← already held by the
   recovery dispatcher; must **not** re-acquire", and the identity layer was

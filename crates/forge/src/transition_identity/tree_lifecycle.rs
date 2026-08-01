@@ -1,6 +1,6 @@
 use super::candidate_state_authority::CandidateStatePreparation;
-use super::*;
 use super::previous_tree_move::PreviousRestoreRecoverySeal;
+use super::*;
 
 #[derive(Clone, Copy)]
 enum ExchangeJournalGuard<'authority> {
@@ -433,16 +433,25 @@ impl StatefulTreeIdentity {
         installation.revalidate_mutable_namespace()?;
         let cast = installation.retained_mutable_cast_directory()?;
         after_candidate_mutable_namespace_preflight();
-        let journal = journal_acquisition.open(cast, root);
+        // The handle exists only to prove a clean baseline, and recovery
+        // deliberately skips that proof: it runs *because* a durable record
+        // exists, so demanding an empty journal would refuse every case the
+        // dispatcher was built for.
+        //
+        // So recovery must not open one either. It used to, and the handle was
+        // then dropped unread — but acquiring it takes the canonical lock, and
+        // the rollback dispatcher that selected this recovery is already
+        // holding that lock. The result was a previous-restore that failed
+        // `WouldBlock` against itself, measured 2026-08-01.
+        let journal = journal_acquisition
+            .requires_clean_baseline()
+            .then(|| journal_acquisition.open(cast, root));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
-        let journal = journal?;
-        // Recovery deliberately skips this: it runs because a durable record
-        // exists, so demanding a clean baseline would refuse every case the
-        // dispatcher was built for.
-        let baseline = journal_acquisition
-            .requires_clean_baseline()
-            .then(|| require_clean_baseline(&journal, state_db));
+        let journal = journal.transpose()?;
+        let baseline = journal
+            .as_ref()
+            .map(|journal| require_clean_baseline(journal, state_db));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
         if let Some(baseline) = baseline {
@@ -502,13 +511,14 @@ impl StatefulTreeIdentity {
             PreviousPreparation::LiveUsr => {
                 require_named_live_usr(installation, previous_store.retained_directory(), &previous_path)
             }
-            PreviousPreparation::ArchivedSlot(_) => {
-                installation.revalidate_root_directory().map_err(Error::from).and_then(|()| {
+            PreviousPreparation::ArchivedSlot(_) => installation
+                .revalidate_root_directory()
+                .map_err(Error::from)
+                .and_then(|()| {
                     TreeMarkerStore::open_path(previous_path.clone())
                         .map_err(Error::from)
                         .and_then(|named| previous_store.require_same_directory(&named).map_err(Error::from))
-                })
-            }
+                }),
         };
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
@@ -568,10 +578,18 @@ impl StatefulTreeIdentity {
         // A cooperating writer cannot pass either held flock. Repeating the
         // evidence audit after marker publication also makes the ordering an
         // executable invariant rather than a comment.
-        let baseline = require_clean_baseline(&journal, state_db);
+        // Skipped for recovery for the same reason as the first: a durable
+        // record is exactly why this identity is being built. Running it
+        // unconditionally meant the recovery path could only ever succeed with
+        // no record present — which is to say, only in tests.
+        let baseline = journal
+            .as_ref()
+            .map(|journal| require_clean_baseline(journal, state_db));
         let namespace = installation.revalidate_mutable_namespace();
         namespace?;
-        baseline?;
+        if let Some(baseline) = baseline {
+            baseline?;
+        }
 
         Ok(Self {
             journal,

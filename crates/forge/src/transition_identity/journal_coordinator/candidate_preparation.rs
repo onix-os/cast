@@ -279,7 +279,7 @@ impl StatefulTransitionCoordinator {
     }
 
     pub(super) fn require_canonical_record(&self) -> Result<(), StatefulTransitionCoordinatorError> {
-        let actual = self.identity.journal.load()?;
+        let actual = self.identity.retained_journal().load()?;
         if actual.as_ref() == Some(&self.record) {
             Ok(())
         } else {

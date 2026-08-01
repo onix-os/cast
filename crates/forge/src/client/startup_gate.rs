@@ -518,21 +518,22 @@ impl CleanSystemStartup {
                 return Err(Error::RecoveryPending(pending));
             }
 
-            // NOT REACHED YET — see `plans/durability_closeout.md` PR1-BLOCKED.
+            // NOT REACHED YET — see `plans/durability_closeout.md` PR2-BLOCKED.
             //
             // This belongs before the reverse exchange, because that is the
             // order the rollback chain itself uses: an archived predecessor
             // comes back to staging first, and only then is the exchange
-            // reversed onto it. The whole stack is built and its admission is
-            // exact, but the effect cannot run from here yet:
-            // `prepare_previous_restore_recovery` opens its own journal handle
-            // through `JournalAcquisition::RecoveryNonblocking`, which
-            // `try_open`s the lock this dispatcher is already holding and
-            // fails `WouldBlock`. Measured, not inferred.
+            // reversed onto it. The lock seam that blocked it first is fixed;
+            // the effect now runs and moves the predecessor back. What it
+            // leaves behind is an empty `.previous-slot-*` parking wrapper in
+            // the roots directory, which `capture_snapshot` rejects as an
+            // unexpected root name — so the reconciliation reads `Ambiguous`
+            // and refuses to record an effect that did happen. Measured, not
+            // inferred.
             //
-            // Wiring it before that seam is closed turns every previous-restore
-            // rollback into a hard startup error, so the capture is gated off
-            // rather than left live.
+            // Wiring it before the restore retires that wrapper turns every
+            // previous-restore rollback into a hard startup error, so the
+            // capture is gated off rather than left live.
             const PREVIOUS_RESTORE_DISPATCH_IS_WIRED: bool = false;
             let previous_restore_seal = UsrRollbackPreviousRestoreSeal::new();
             let previous_restore = startup_reconciliation::UsrRollbackPreviousRestoreAuthority::capture(

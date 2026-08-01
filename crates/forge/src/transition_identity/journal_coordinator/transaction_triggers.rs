@@ -199,7 +199,11 @@ impl PreparedTransactionTriggerCoordinator {
             return Err(StatefulTransactionTriggerFailure::Preflight { transition_id, source });
         }
 
-        if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &started) {
+        if let Err(source) = coordinator
+            .identity
+            .retained_journal()
+            .advance(&coordinator.record, &started)
+        {
             return Err(StatefulTransactionTriggerFailure::IntentPersistence {
                 transition_id,
                 source: source.into(),
@@ -250,7 +254,11 @@ impl PreparedTransactionTriggerCoordinator {
                 },
             });
         }
-        if let Err(source) = coordinator.identity.journal.advance(&coordinator.record, &complete) {
+        if let Err(source) = coordinator
+            .identity
+            .retained_journal()
+            .advance(&coordinator.record, &complete)
+        {
             return Err(StatefulTransactionTriggerFailure::CompletionPersistence {
                 transition_id,
                 source: source.into(),

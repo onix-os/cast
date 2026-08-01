@@ -312,12 +312,12 @@ impl StatefulTreeIdentity {
         // Only after the move is known applied: the candidate now answers to
         // the staging name, and proving that is what adopting it requires.
         let staged = installation.staging_path("usr");
-        self.candidate.rebind_moved_pathname(staged).map_err(|source| {
-            RetainedArchivedCandidateMoveFailure {
+        self.candidate
+            .rebind_moved_pathname(staged)
+            .map_err(|source| RetainedArchivedCandidateMoveFailure {
                 outcome: RetainedArchivedCandidateMoveOutcome::Applied,
                 source: identity("rebind candidate pathname after archived staging move", source),
-            }
-        })
+            })
     }
 
     pub(crate) fn rearchive_archived_candidate(
@@ -641,18 +641,16 @@ impl StatefulTreeIdentity {
                 },
                 source: primary,
             }),
-            Ok(layout) if layout == direction.after() => {
-                self.finish_move(installation, attempt, direction, guard).map_err(|finish| {
-                    RetainedArchivedCandidateMoveFailure {
-                        outcome: RetainedArchivedCandidateMoveOutcome::Applied,
-                        source: ArchivedCandidateError::AppliedAfterPreflightFailure {
-                            direction: direction.as_str(),
-                            primary: Box::new(primary),
-                            finish: Box::new(finish),
-                        },
-                    }
-                })
-            }
+            Ok(layout) if layout == direction.after() => self
+                .finish_move(installation, attempt, direction, guard)
+                .map_err(|finish| RetainedArchivedCandidateMoveFailure {
+                    outcome: RetainedArchivedCandidateMoveOutcome::Applied,
+                    source: ArchivedCandidateError::AppliedAfterPreflightFailure {
+                        direction: direction.as_str(),
+                        primary: Box::new(primary),
+                        finish: Box::new(finish),
+                    },
+                }),
             Ok(layout) => Err(RetainedArchivedCandidateMoveFailure {
                 outcome: RetainedArchivedCandidateMoveOutcome::Ambiguous,
                 source: ArchivedCandidateError::UnexpectedLayout {

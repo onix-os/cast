@@ -1,8 +1,8 @@
 use super::*;
 use std::ffi::CString;
 
-use crate::transition_journal::{PreviousArchiveSlot, QuarantineName};
 use super::reusable_previous_slot::ReusablePreviousStateSlot;
+use crate::transition_journal::{PreviousArchiveSlot, QuarantineName};
 
 /// Re-validate a namespace name through the journal model's newtype.
 ///
@@ -10,8 +10,7 @@ use super::reusable_previous_slot::ReusablePreviousStateSlot;
 /// this cannot widen what is accepted; it re-establishes the bound at the
 /// journal boundary rather than trusting the caller.
 fn quarantine_name_of(name: &CStr) -> Result<QuarantineName, Error> {
-    QuarantineName::parse(name.to_string_lossy().as_ref())
-        .map_err(Error::InvalidReusableArchivedCandidateParkingName)
+    QuarantineName::parse(name.to_string_lossy().as_ref()).map_err(Error::InvalidReusableArchivedCandidateParkingName)
 }
 
 /// Proof that a physical previous-tree restore is being driven by the startup
@@ -97,7 +96,12 @@ impl StatefulTreeIdentity {
         seal: &journal_coordinator::PreviousArchiveEffectSeal,
         recorded: &PreviousArchiveSlot,
     ) -> Result<(), RetainedPreviousMoveFailure> {
-        self.archive_previous_guarded(installation, state, ArchiveJournalGuard::Coordinator(seal), Some(recorded))
+        self.archive_previous_guarded(
+            installation,
+            state,
+            ArchiveJournalGuard::Coordinator(seal),
+            Some(recorded),
+        )
     }
 
     fn archive_previous_guarded(
@@ -511,17 +515,17 @@ impl StatefulTreeIdentity {
         // with the record.
         let name = canonical_state_name(state)?;
         let slot_path = roots_path.join(name.to_string_lossy().as_ref());
-        let slot = roots
-            .open_optional_child(&name, slot_path.clone())?
-            .ok_or(Error::PreviousArchiveSlotRecordUnusable {
+        let slot =
+            roots
+                .open_optional_child(&name, slot_path.clone())?
+                .ok_or(Error::PreviousArchiveSlotRecordUnusable {
+                    state: i32::from(state),
+                })?;
+
+        let parking_name =
+            CString::new(recorded.parking_name.as_str()).map_err(|_| Error::PreviousArchiveSlotRecordUnusable {
                 state: i32::from(state),
             })?;
-
-        let parking_name = CString::new(recorded.parking_name.as_str()).map_err(|_| {
-            Error::PreviousArchiveSlotRecordUnusable {
-                state: i32::from(state),
-            }
-        })?;
         // The parking name must be free — publication consumed it. If something
         // occupies it, retirement would collide and this is not a namespace the
         // record describes.
@@ -532,7 +536,11 @@ impl StatefulTreeIdentity {
         }
 
         let state_slot_marker = if recorded.reused_wrapper {
-            Some(state_slot_marker::RetainedStateSlotMarker::open_expected(&slot, state, &self.previous.marker)?)
+            Some(state_slot_marker::RetainedStateSlotMarker::open_expected(
+                &slot,
+                state,
+                &self.previous.marker,
+            )?)
         } else {
             None
         };
@@ -586,8 +594,8 @@ impl StatefulTreeIdentity {
         // with the record, and the record is what a later rollback trusts
         // (`plans/previous-restore-recovery-identity.md`, D-PR1).
         if let Some(recorded) = recorded {
-            let expected = CString::new(recorded.parking_name.as_str())
-                .map_err(|_| Error::PreviousArchiveSlotRecordUnusable {
+            let expected =
+                CString::new(recorded.parking_name.as_str()).map_err(|_| Error::PreviousArchiveSlotRecordUnusable {
                     state: i32::from(state),
                 })?;
             return self.create_recorded_previous_archive_attempt(
@@ -667,11 +675,11 @@ impl StatefulTreeIdentity {
         let (slot, state_slot_marker) = if reused_wrapper {
             // The record says a wrapper was reused, so one must still be there
             // under exactly that name.
-            let reusable = reusable.filter(|found| found.parking_name.as_c_str() == parking_name).ok_or(
-                Error::PreviousArchiveSlotRecordUnusable {
+            let reusable = reusable
+                .filter(|found| found.parking_name.as_c_str() == parking_name)
+                .ok_or(Error::PreviousArchiveSlotRecordUnusable {
                     state: i32::from(state),
-                },
-            )?;
+                })?;
             (reusable.slot, Some(reusable.marker))
         } else {
             if roots.child_name_exists(parking_name, parking_path.clone())? {
