@@ -893,11 +893,21 @@ the previous one — and that arm was never revisited. My guess that the
 difference was the archived-candidate *move path* was wrong; the difference is
 one arm of the wrapper check, in the code I had just edited.
 
-**Next:** give `ArchivedCandidateParking` the same narrow treatment — the slot
-must belong to this record's own candidate and the rollback must have reached
-the phase that vacates it — rather than widening either arm to "any wrapper is
-fine". Then re-run; the DIAG channel and the reproduction are both in place, so
-this is one round trip.
+**Attempted and reverted 2026-08-02.** The mirror helper
+(`is_own_archived_candidate_parking`: operation `ActivateArchived`, candidate
+origin `Archived`, matching state *and* tree token) did not clear the guest
+stall, and it broke an exclusion test —
+`startup_candidate_preserve_refuses_unmodeled_parking_for_new_and_archived_states`.
+Both facts point the same way: the archived arm is **not** a straight mirror of
+the previous one, and the refusal it encodes is load-bearing in a way the
+previous arm's was not. Reverted rather than pushed; an unproven relaxation of a
+namespace check is what this epic exists to undo.
+
+**Read the exclusion test first.** It names the exact shapes that must stay
+refused, which is the specification the fix has to satisfy. Then re-instrument
+and confirm whether the guest is still failing on this arm at all — the DIAG
+block was empty on the last run only because the prints had been reverted, so
+the current cause is *unconfirmed*, not known.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
