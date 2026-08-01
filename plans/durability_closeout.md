@@ -763,8 +763,43 @@ for both operations:
     NewState         @ BootSyncStarted -> CandidatePreserved
     ActivateArchived @ BootSyncStarted -> CandidatePreserved
 
-Still outstanding: the 41-second `install -> remove -> activate` cell on a guest,
-and §A4's reboot matrix. In-process green is not a measurement.
+### PR3 MEASURED 2026-08-01 — the restore runs on a real guest
+
+`OPS=(activate) CUTS=(control)` against a `cast` built from this work:
+
+    before (2026-07-31):
+      driver=stalled-at-PreviousArchived        state=absent
+      requires BeginRollback { source: PreviousArchived }
+
+    now:
+      PHASE-1: PreviousRestoreIntent
+      PHASE-2: PreviousRestoredToStaging
+      driver=stalled-at-PreviousRestoredToStaging  state=absent
+      requires ResumeRollback { phase: PreviousRestoredToStaging }
+
+**The chain advanced two phases and the predecessor came out of its slot on real
+hardware.** That is the acceptance test for the effect, and it passes. Nothing
+here is in-process any more.
+
+**And it exposed the next gap immediately.**
+`UsrRollbackResumeRouteAuthority::capture` admits
+`matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored)`.
+`PreviousRestoredToStaging` is a routing phase like those two — it carries no
+outcome and exists to select the next intent — but it is not in the list, so
+once the restore completes nothing carries the rollback onward.
+
+**The in-process walk did not catch this, and the reason is embarrassing:** the
+walk has no arm for `PreviousRestoredToStaging`, so it fell through `_ => true`.
+The same catch-all mistake this plan already recorded as a standing hazard, made
+again in the test written to enforce it. Enumerate the arm.
+
+The fix is small and should be done together: add `PreviousRestoredToStaging` to
+the resume route's admitted phases with its own `route_evidence_is_exact` arm
+(the plan at that phase carries `previous_archive` resolved and `usr_exchange`
+still `Pending`, layout `Post`), and add the matching arm to the walk so it
+cannot fall through again.
+
+Still outstanding after that: re-run this cell, and §A4's reboot matrix.
 
 ### PR2, as it was first diagnosed — kept because the first two readings were wrong
 
