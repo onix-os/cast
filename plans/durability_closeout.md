@@ -819,10 +819,29 @@ at `PreviousArchived` having done nothing at all.
 `CandidatePreserveIntent` with `requires ResumeRollback { phase:
 CandidatePreserveIntent }`, i.e. the candidate-preserve authority defers.
 `usr_rollback_activate_archived::dispatch` does handle this phase, so this is a
-*deferral* — evidence the gate refuses — not a missing consumer. Find which
-clause: the plan predicate, the on-chain check, or the archived-candidate
-namespace topology. Do not guess; the cell reproduces it in ~40s with no crash
-injection, so instrument the refusal directly.
+*deferral* — evidence the gate refuses — not a missing consumer.
+
+**The harness cannot show you which clause, and that is the first thing to
+fix.** `eprintln!` diagnostics were added at every deferral point in
+`UsrRollbackCandidatePreserveAuthority::capture`, staged to the guest, and run:
+**none of them appeared**, including one placed unconditionally. They were never
+missing — the driver loop is
+
+    DRV=$(cast -D /mnt/root -y install bash-completion 2>&1)
+
+so every line cast writes goes into `$DRV`, and the only thing echoed on a stall
+is `tail -1 | cut -c1-200`. Anything a diagnostic prints is captured and thrown
+away.
+
+So before diagnosing this deferral, teach the harness to surface it: on stall,
+`echo "$DRV" | grep -a '<prefix>'` alongside the existing one-line summary. The
+`CAST_CRASH_AT_PHASE_WITNESS` file mechanism is the other option and survives a
+power cut, which the variable does not.
+
+That is the third time this epic that an instrument was installed and read as
+evidence of absence when it was really absence of a channel — the `/tmp` witness
+on tmpfs, the mount that silently failed, and now this. **Prove the channel
+carries a known-present line before trusting a missing one.**
 
 Still outstanding after that: the rest of the chain to `RollbackComplete`, and
 §A4's reboot matrix.
