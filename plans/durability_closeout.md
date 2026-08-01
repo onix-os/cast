@@ -749,14 +749,29 @@ the reconciliation classifies a move that *did* happen as `Ambiguous` and
 refuses to record it — which is the correct conservative answer to the evidence
 it is given, and the wrong outcome.
 
-The archive direction already has the counterpart:
-`finish_not_applied_previous_archive` "retires an exact inert state slot …
-moved back to a non-state parking name rather than deleted, so ambient,
-replaced, moved, or populated directories are preserved". The restore direction
-has no such retirement. Either it grows one, or the phase's namespace policy
-has to tolerate an inert parking wrapper — and the first is almost certainly
-right, because leaving it means every subsequent capture at every later phase
-trips on the same entry.
+**First conclusion, and it was wrong.** I read
+`finish_not_applied_previous_archive` — "retires an exact inert state slot …
+moved back to a non-state parking name rather than deleted" — as the missing
+counterpart, and wired it into the restore direction. It changed nothing,
+because **retirement *produces* the parking name; it does not remove it.** It
+renames `<state-id>` to `.previous-slot-<id>-<token>-<n>`, and when the slot is
+already parked (which it is after adoption) it does nothing at all.
+
+So the parked wrapper is not residue at all — it is the **intended** end state
+of both directions, kept deliberately so ambient, replaced, moved, or populated
+directories survive. The gap is on the other side: `capture_snapshot` does not
+know that a `.previous-slot-*` entry in the roots directory is legitimate, and
+reports it as `UnexpectedRootName`.
+
+**So the fix is in the namespace capture, not the move.** That is a change to
+the evidence model — which root entries are legal at which phase — and it is
+the most security-sensitive classification in the crate, so it needs the
+deliberate treatment, not a quick widening. The obvious shape is: a parking
+name matching the record's own `previous_archive_slot` is expected at
+`PreviousRestoreIntent` and after; anything else still is not.
+
+The speculative retirement call has been reverted — it was a no-op that only
+added a failure path.
 
 Note the identity round-trip test never saw this: it asserts the inode landed
 in staging and never captures the namespace. Same shape as the lock seam — the
