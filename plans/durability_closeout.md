@@ -833,10 +833,43 @@ so every line cast writes goes into `$DRV`, and the only thing echoed on a stall
 is `tail -1 | cut -c1-200`. Anything a diagnostic prints is captured and thrown
 away.
 
-So before diagnosing this deferral, teach the harness to surface it: on stall,
-`echo "$DRV" | grep -a '<prefix>'` alongside the existing one-line summary. The
-`CAST_CRASH_AT_PHASE_WITNESS` file mechanism is the other option and survives a
-power cut, which the variable does not.
+**The harness now surfaces it** — on stall it prints a `DIAG-BEGIN`/`DIAG-END`
+block containing every `$DRV` line matching `$DIAG_GREP` (default `-DIAG`). The
+markers are unconditional, so "no matches" is distinguishable from "output was
+eaten". With that in place the deferral named itself on the first run:
+
+    CP-DIAG reached-capture phase=CandidatePreserveIntent
+    CP-DIAG namespace-begin UnexpectedParkingWrapper
+
+### PR5 DIAGNOSED 2026-08-01 — the parking wrapper, one phase later
+
+`candidate_preserve_topology_after_phase` refuses any snapshot that still holds
+a `PreviousParking` (or `ArchivedCandidateParking`) wrapper, for every operation
+except `ActiveReblit`:
+
+    if record.operation != Operation::ActiveReblit
+        && snapshot.wrappers().any(|w| matches!(w.role,
+            ArchivedCandidateParking { .. } | PreviousParking { .. }))
+    { return Err(UnexpectedParkingWrapper) }
+
+That rule predates the previous-restore path and encodes an assumption that is
+no longer true: **after a restore, a `PreviousParking` wrapper is exactly what
+the namespace is supposed to contain.** The restore vacates the slot and leaves
+it parked — deliberately, so ambient, replaced, moved, or populated directories
+survive — and `classify_root_name` already treats it as a legal root entry. This
+gate is the one place that still calls it unexpected.
+
+This is the same residue PR2 chased, resurfacing one phase later, exactly as
+predicted: *"leaving it means every subsequent capture at every later phase
+trips on the same entry."* That prediction was right; the conclusion drawn from
+it (retire the wrapper) was wrong. The wrapper stays; the gates learn it.
+
+**The fix, and it needs care rather than a quick widening.** The rule exists to
+stop a rollback preserving a candidate while stale parking residue is still
+around. It should distinguish *the wrapper this record's own rollback just
+vacated* — matching `record.previous_archive_slot`, at a phase after
+`PreviousRestoredToStaging` — from an arbitrary one. Widening it to "any
+`PreviousParking` is fine" would drop a real check for every operation.
 
 That is the third time this epic that an instrument was installed and read as
 evidence of absence when it was really absence of a channel — the `/tmp` witness

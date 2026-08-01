@@ -285,7 +285,22 @@ else
         PHASE=$(echo "$DRV" | grep -oE 'at [A-Za-z]+ requires' | head -1 | awk '{print $2}')
         if [ "$PHASE" = "$PREV_PHASE" ]; then
             STALL=$((STALL + 1))
-            if [ "$STALL" -ge "${STALL_LIMIT:-5}" ]; then D=stalled-at-${PHASE:-unknown}; echo "STALL: $(echo "$DRV" | tail -1 | cut -c1-200)"; break; fi
+            if [ "$STALL" -ge "${STALL_LIMIT:-5}" ]; then
+                D=stalled-at-${PHASE:-unknown}
+                echo "STALL: $(echo "$DRV" | tail -1 | cut -c1-200)"
+                # Everything cast writes lands in `$DRV`, and the summary above
+                # keeps only 200 characters of its last line. Diagnostics added
+                # to chase a stall are therefore captured and discarded, which
+                # reads as "the code path never ran" — that cost a whole round
+                # trip on 2026-08-01. Surface anything tagged with DIAG_GREP
+                # (default `-DIAG`) so an instrumented binary can actually say
+                # why it refused. Always emit the marker line, so a run with no
+                # matches is distinguishable from a run whose output was eaten.
+                echo "DIAG-BEGIN ${DIAG_GREP:--DIAG}"
+                echo "$DRV" | grep -a -- "${DIAG_GREP:--DIAG}" | head -20 || true
+                echo "DIAG-END"
+                break
+            fi
         else
             STALL=0
             echo "PHASE-$attempt: ${PHASE:-?}"
