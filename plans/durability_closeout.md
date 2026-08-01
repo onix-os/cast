@@ -793,13 +793,39 @@ walk has no arm for `PreviousRestoredToStaging`, so it fell through `_ => true`.
 The same catch-all mistake this plan already recorded as a standing hazard, made
 again in the test written to enforce it. Enumerate the arm.
 
-The fix is small and should be done together: add `PreviousRestoredToStaging` to
-the resume route's admitted phases with its own `route_evidence_is_exact` arm
-(the plan at that phase carries `previous_archive` resolved and `usr_exchange`
-still `Pending`, layout `Post`), and add the matching arm to the walk so it
-cannot fall through again.
+### PR4 FIXED + MEASURED 2026-08-01 — five phases on a guest
 
-Still outstanding after that: re-run this cell, and §A4's reboot matrix.
+`PreviousRestoredToStaging` is now admitted by the resume route with its own
+`route_evidence_is_exact` arm (`usr_exchange: Pending`, layout `Post` — the
+restore is done, the exchange is not), and the walk has an explicit arm for it
+instead of the catch-all.
+
+That one routing phase was holding back **two** effects, not one. Re-running the
+same cell:
+
+    PHASE-1: PreviousRestoreIntent
+    PHASE-2: PreviousRestoredToStaging
+    PHASE-3: ReverseExchangeIntent
+    PHASE-4: UsrRestored
+    PHASE-5: CandidatePreserveIntent
+    driver=stalled-at-CandidatePreserveIntent  state=absent
+
+So on real hardware the rollback now un-archives the predecessor, routes, and
+**reverses the `/usr` exchange onto it** — `previous_archive: Applied,
+usr_exchange: Applied`. Where this started the morning of 2026-07-31 it stalled
+at `PreviousArchived` having done nothing at all.
+
+**Next, and it is a fresh finding, not a known gap:** it stalls at
+`CandidatePreserveIntent` with `requires ResumeRollback { phase:
+CandidatePreserveIntent }`, i.e. the candidate-preserve authority defers.
+`usr_rollback_activate_archived::dispatch` does handle this phase, so this is a
+*deferral* — evidence the gate refuses — not a missing consumer. Find which
+clause: the plan predicate, the on-chain check, or the archived-candidate
+namespace topology. Do not guess; the cell reproduces it in ~40s with no crash
+injection, so instrument the refusal directly.
+
+Still outstanding after that: the rest of the chain to `RollbackComplete`, and
+§A4's reboot matrix.
 
 ### PR2, as it was first diagnosed — kept because the first two readings were wrong
 

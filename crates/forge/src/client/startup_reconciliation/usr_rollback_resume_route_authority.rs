@@ -46,8 +46,10 @@ impl<'reservation> UsrRollbackResumeRouteAuthority<'reservation> {
         record: &TransitionRecord,
         initial_in_flight: Option<db::state::InFlightTransition>,
     ) -> Result<UsrRollbackResumeRouteAdmission<'reservation>, UsrRollbackResumeRouteAuthorityError> {
-        if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored)
-            || !is_usr_exchange_rollback_source(record)
+        if !matches!(
+            record.phase,
+            Phase::RollbackDecided | Phase::PreviousRestoredToStaging | Phase::UsrRestored
+        ) || !is_usr_exchange_rollback_source(record)
         {
             return Ok(UsrRollbackResumeRouteAdmission::NotApplicable);
         }
@@ -224,6 +226,15 @@ fn route_evidence_is_exact(record: &TransitionRecord, layout: UsrExchangeLayout)
                     // namespace must still be pre-exchange to prove it.
                     | (RollbackAction::NotRequired, UsrExchangeLayout::Pre)
             ),
+            // The restore is done and the exchange is not: the candidate is
+            // still live and the predecessor is back in staging, waiting for
+            // the reverse exchange this phase routes to. Measured on a guest
+            // 2026-08-01 — omitting this phase stalled the rollback here with
+            // the restore already applied.
+            Phase::PreviousRestoredToStaging => matches!(
+                (rollback.usr_exchange, layout),
+                (RollbackAction::Pending, UsrExchangeLayout::Post)
+            ),
             Phase::UsrRestored => matches!(
                 (rollback.usr_exchange, layout),
                 (
@@ -248,7 +259,10 @@ pub(in crate::client) fn usr_rollback_resume_route_plan_is_exact_for_test(
     record: &TransitionRecord,
     layout_is_post_exchange: bool,
 ) -> bool {
-    if !matches!(record.phase, Phase::RollbackDecided | Phase::UsrRestored) {
+    if !matches!(
+        record.phase,
+        Phase::RollbackDecided | Phase::PreviousRestoredToStaging | Phase::UsrRestored
+    ) {
         return false;
     }
     let layout = if layout_is_post_exchange {

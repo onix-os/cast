@@ -91,8 +91,12 @@ fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
         .canonical_record()
         .rollback
         .expect("a rollback plan was persisted");
+    // Both undone: the predecessor is back in staging and the exchange that put
+    // the candidate live has been reversed onto it. The candidate and its fresh
+    // row are still outstanding, which is what keeps this a chain.
     assert_eq!(plan.previous_archive, RollbackAction::Applied, "plan={plan:?}");
-    assert_eq!(plan.usr_exchange, RollbackAction::Pending, "plan={plan:?}");
+    assert_eq!(plan.usr_exchange, RollbackAction::Applied, "plan={plan:?}");
+    assert_eq!(plan.candidate.action, RollbackAction::Pending, "plan={plan:?}");
     assert_eq!(plan.fresh_db, RollbackAction::Pending, "plan={plan:?}");
 }
 

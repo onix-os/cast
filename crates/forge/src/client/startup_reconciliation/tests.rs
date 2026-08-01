@@ -1380,6 +1380,14 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
                 };
                 let consumed = match successor.phase {
                     Phase::PreviousRestoreIntent => usr_rollback_previous_restore_plan_is_exact_for_test(&successor),
+                    // Enumerated, not defaulted. This phase fell through the
+                    // `_ => true` arm below, so the walk reported a clean chain
+                    // while a real guest stalled here with the restore already
+                    // applied — the catch-all hazard, in the test written to
+                    // enforce it.
+                    Phase::PreviousRestoredToStaging => {
+                        usr_rollback_resume_route_plan_is_exact_for_test(&successor, true)
+                    }
                     Phase::CandidatePreserveIntent => {
                         usr_rollback_candidate_preserve_plan_is_exact_for_test(&successor)
                     }
