@@ -924,16 +924,30 @@ already accepts the second (`state: 2` matches `prev_id`, `previous_archive` is
 `Applied`). That fix is doing its job.
 
 The remaining one is the candidate's own archived slot, state 1, still parked
-after the whole forward activation *and* four rollback phases. So the real
-question is not "should the gate accept it" — the exclusion test answers no —
-but **why a completed `ActivateArchived` staging leaves its source slot at a
-parking name at all.** Either the forward staging is expected to retire it and
-does not, or the rollback's rearchive is expected to consume it and has not run
-yet (it is the very step being refused, so that would be circular).
+after the whole forward activation and four rollback phases.
 
-Start at `select_archived_candidate_slot` / the staging move in
-`archived_candidate.rs` and establish what the slot is *supposed* to be named
-after a successful forward staging. Do not touch the gate until that is known.
+**The forward staging is not broken.** `MoveDirection::Stage::marker_after()` is
+`MarkerLocation::Displaced`: a successful archived-candidate staging *parks* the
+slot on purpose, so the canonical state name is free while the candidate is
+live. A parked `ArchivedCandidateParking` wrapper during an in-flight
+`ActivateArchived` is the modelled state, not residue. There is nothing to fix
+on that path — and the instinct to go fix it was the fourth iteration of the
+same error this section keeps recording.
+
+**The two observations only look contradictory because the topologies differ.**
+The exclusion test builds the archived-staged shape at its **canonical** slot
+(`create_archived_staged_topology`) and then adds a parking directory *on top* —
+canonical *plus* a stray parking name, which is genuine residue and must stay
+refused. The guest has **only** the parked slot and no canonical one, which is
+what a live activation looks like. The gate treats both as "any parking wrapper
+present" and so cannot tell them apart.
+
+**So the fix is in the gate after all, but keyed on the pair, not the presence.**
+`ArchivedStagedWithCanonicalSlot` is already a named topology, which says the
+canonical case is the modelled one; the parked-without-canonical case needs the
+same treatment. Verify first that the guest really has no canonical `1/` entry
+alongside the parking name — one more DIAG line over the snapshot's roles proves
+or kills this in a single run — and only then change the predicate.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
