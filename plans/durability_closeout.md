@@ -1092,6 +1092,14 @@ print, then fix.
 
 ---
 
-## Loose end
+## Loose ends
 
 `develop` is ~139 commits ahead of `origin/develop` and unpushed.
+
+**The tree is not `cargo fmt`-clean.** `rustfmt.toml` sets `max_width = 120`,
+but a good deal of committed code is wrapped at the default 100 — including
+files nothing in this epic touched, such as `fixed_staging.rs`. Running
+`rustfmt` over a file therefore reflows unrelated lines, and today's commits
+carry some of that churn in `transition_identity`. Either run `cargo fmt` once
+across the crate as its own commit, or stop formatting whole files by hand;
+doing neither means every future diff mixes real changes with reflow.
