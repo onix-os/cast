@@ -56,6 +56,7 @@ mod usr_rollback_decision_authority;
 mod usr_rollback_finalization_authority;
 mod usr_rollback_fresh_db_invalidation_authority;
 mod usr_rollback_fresh_db_invalidation_route_authority;
+mod usr_rollback_previous_restore_authority;
 mod usr_rollback_resume_route_authority;
 mod usr_rollback_reverse_authority;
 
@@ -213,6 +214,13 @@ pub(in crate::client) use usr_exchanged_root_abi_authority::{
     UsrExchangedRootAbiDurabilityAuthority, UsrExchangedRootAbiNormalizationAdmission,
     UsrExchangedRootAbiNormalizationAuthority, UsrExchangedRootAbiNormalizationAuthorityError,
 };
+pub(in crate::client) use usr_rollback_previous_restore_authority::{
+    UsrRollbackPreviousRestoreAdmission, UsrRollbackPreviousRestoreApplyAuthority,
+    UsrRollbackPreviousRestoreApplyReconciliation, UsrRollbackPreviousRestoreAuthority,
+    UsrRollbackPreviousRestoreAuthorityError, UsrRollbackPreviousRestoreDurableEffectAuthority,
+    UsrRollbackPreviousRestoreFinishAuthority, UsrRollbackPreviousRestoreRecordAdvanceError,
+};
+
 pub(in crate::client) use usr_rollback_reverse_authority::{
     UsrRollbackReverseAdmission, UsrRollbackReverseAlreadySatisfiedEffectAuthority,
     UsrRollbackReverseAppliedEffectAuthority, UsrRollbackReverseApplyAuthority, UsrRollbackReverseApplyReconciliation,
@@ -221,9 +229,10 @@ pub(in crate::client) use usr_rollback_reverse_authority::{
 };
 
 use activation_namespace::{
-    ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, UsrExchangeLayout,
-    UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError, UsrExchangedRootAbiNamespaceInspection,
-    UsrExchangedRootAbiNamespaceProof, UsrRollbackActivateArchivedCompleteRouteNamespaceError,
+    ActivationNamespaceEvidence, ActivationNamespaceInspection, ActivationNamespaceStability, PreviousRestoreLayout,
+    UsrExchangeLayout, UsrExchangedRootAbiNamespaceAdmission, UsrExchangedRootAbiNamespaceError,
+    UsrExchangedRootAbiNamespaceInspection, UsrExchangedRootAbiNamespaceProof,
+    UsrRollbackActivateArchivedCompleteRouteNamespaceError,
     UsrRollbackActivateArchivedCompleteRouteNamespaceInspection,
     UsrRollbackActivateArchivedCompleteRouteNamespaceProof, UsrRollbackActivateArchivedFinalizationNamespaceError,
     UsrRollbackActivateArchivedFinalizationNamespaceInspection, UsrRollbackActivateArchivedFinalizationNamespaceProof,
@@ -249,6 +258,8 @@ use activation_namespace::{
     UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
     UsrRollbackFreshDbInvalidationRouteNamespaceProof, UsrRollbackNewStateCandidatePreserveNamespaceEffectEvidence,
     UsrRollbackNewStateTargetCreateNamespaceEvidence, UsrRollbackNewStateTargetNormalizeNamespaceEvidence,
+    UsrRollbackPreviousRestoreNamespaceEffectEvidence, UsrRollbackPreviousRestoreNamespaceError,
+    UsrRollbackPreviousRestoreNamespaceInspection, UsrRollbackPreviousRestoreNamespaceProof,
     UsrRollbackResumeRouteNamespaceError, UsrRollbackResumeRouteNamespaceInspection,
     UsrRollbackResumeRouteNamespaceProof, UsrRollbackReverseNamespaceEffectEvidence, UsrRollbackReverseNamespaceError,
     UsrRollbackReverseNamespaceInspection, UsrRollbackReverseNamespaceProof,

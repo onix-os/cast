@@ -491,13 +491,12 @@ impl StatefulTreeIdentity {
         self.adopt_previous_archive_attempt(installation, state, recorded)
     }
 
-    // Forward scaffolding: the recovery primitives are proven by
-    // `stateful_previous_tree_recovery` but have no production caller until the
-    // PreviousRestore rollback dispatcher is built. NOT dead — confirm with
-    // `cargo build -p forge --tests` before deleting
-    // (`plans/previous-restore-recovery-identity.md`).
-    #[allow(dead_code)]
-    pub(super) fn adopt_previous_archive_attempt(
+    /// Rebuild the archive attempt from the parking name the journal recorded.
+    ///
+    /// `pub(crate)` because its production caller is the `PreviousRestore`
+    /// rollback dispatcher in the `client` layer above this module, exactly as
+    /// [`PreviousRestoreRecoverySeal`] documents.
+    pub(crate) fn adopt_previous_archive_attempt(
         &self,
         installation: &Installation,
         state: state::Id,

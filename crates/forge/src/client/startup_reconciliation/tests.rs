@@ -1379,11 +1379,20 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
                     break;
                 };
                 let consumed = match successor.phase {
-                    // No consumer exists. Not "the gate refuses this record" —
-                    // there is no gate. Hard-coded `false` rather than a call,
-                    // because there is nothing to call; this arm disappears
-                    // when the effect is implemented.
-                    Phase::PreviousRestoreIntent => false,
+                    // The authority, dispatcher, and persistence boundary all
+                    // exist and its admission is exact — assert that much —
+                    // but `startup_gate` does not reach them yet
+                    // (PR1-BLOCKED: the identity layer re-opens the journal
+                    // lock this dispatcher holds). Until it does, nothing in
+                    // production consumes this phase, and saying otherwise
+                    // here would be the `_ => true` mistake again.
+                    Phase::PreviousRestoreIntent => {
+                        assert!(
+                            usr_rollback_previous_restore_plan_is_exact_for_test(&successor),
+                            "the previous-restore gate refuses a plan the journal built: {successor:?}"
+                        );
+                        false
+                    }
                     Phase::CandidatePreserveIntent => {
                         usr_rollback_candidate_preserve_plan_is_exact_for_test(&successor)
                     }
@@ -1447,17 +1456,19 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
     // implementation behind it at all, so there is nothing to derive — the
     // code has to be written.
     //
-    // - `PreviousRestoreIntent` has no authority, dispatcher, or persistence
-    //   boundary. `ActivateArchived` archives the state it replaces, so any
-    //   cut after that archive routes here and stops.
-    // - A plan with boot repair outstanding routes to `BootRepairRequired`,
-    //   whose authorities exist for `ActiveReblit` alone (§B). A `NewState` or
-    //   `ActivateArchived` cut during boot sync reaches the first phase that
-    //   would route there and has nowhere to go.
+    // A plan with boot repair outstanding routes to `BootRepairRequired`,
+    // whose authorities exist for `ActiveReblit` alone (§B). A `NewState` or
+    // `ActivateArchived` cut during boot sync reaches the first phase that
+    // would route there and has nowhere to go.
     //
-    // Shorten this list only when the effect exists and a crash-matrix cell
-    // shows it running. Widening a predicate cannot close any of them, and
-    // trying would only move the stall one phase later.
+    // The `PreviousRestoreIntent` entries are one step from closing: the whole
+    // stack exists and admits these exact plans (asserted in the walk above),
+    // but `startup_gate` cannot reach it until the identity layer stops
+    // re-opening the journal lock the dispatcher holds — PR1-BLOCKED.
+    //
+    // Shorten this list only when the effect runs and a crash-matrix cell
+    // shows it. Widening a predicate cannot close any of them, and trying
+    // would only move the stall one phase later.
     let known_post_exchange_stalls: Vec<(Operation, Phase, Phase)> = vec![
         (Operation::NewState, Phase::BootSyncStarted, Phase::CandidatePreserved),
         (

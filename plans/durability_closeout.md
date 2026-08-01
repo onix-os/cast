@@ -675,15 +675,19 @@ now admit them at the layout each phase implies and refuse the other; the
 sibling gap that genuinely remains is the boot-repair tail, and it is pinned
 below rather than disguised as a refusal there.
 
-Four stalls remain, pinned, and **none of them is a predicate**:
+Four stalls remain, pinned, and **none of them is a predicate** — two missing
+effects, not four bugs:
 
     NewState         @ BootSyncStarted       -> CandidatePreserved
     ActivateArchived @ PreviousArchiveIntent -> PreviousRestoreIntent
     ActivateArchived @ PreviousArchived      -> PreviousRestoreIntent
     ActivateArchived @ BootSyncStarted       -> PreviousRestoreIntent
 
-Two missing effects, not four bugs: the previous-restore dispatcher (below) and
-sibling boot repair (§B).
+The first is §B: `BootRepairRequired` and everything past it has authorities for
+`ActiveReblit` alone, so a `NewState` or `ActivateArchived` cut during boot sync
+reaches the first phase that would route there and has nowhere to go. The other
+three are the previous-restore dispatcher, which is now built but not reachable
+— PR1-BLOCKED, below.
 
 ### A3c 2026-08-01 — the four per-operation terminal gates
 
@@ -730,7 +734,75 @@ rather than `FreshDbInvalidated` — because that is the first phase whose plan
 routes to `BootRepairRequired`, and the walk now asks there. Same stall, earlier
 and more accurate detection.
 
-### The previous-restore effect does not exist — confirmed by grep, not by inference
+### PR1-BLOCKED 2026-08-01 — the stack is built; one seam stops it running
+
+The whole previous-restore stack exists, compiles, and its admission is exact —
+the chain-walk asserts that the gate accepts the plans the journal builds for
+this phase. **It is deliberately not reachable from `startup_gate` yet**, behind
+`PREVIOUS_RESTORE_DISPATCH_IS_WIRED = false`, for one measured reason:
+
+    PR-DIAG attempt=Restore(Journal(AcquireLock { WouldBlock })) layout=LayoutChanged
+
+`prepare_previous_restore_recovery` opens **its own** journal handle through
+`JournalAcquisition::RecoveryNonblocking`, which `try_open`s the canonical lock.
+The dispatcher is already holding that lock — it must, because the exact record
+binding is what authorizes the effect. So the recovery identity cannot be built
+from inside the dispatcher, and every previous-restore rollback would become a
+hard startup error instead of a stall.
+
+`previous-restore-recovery-identity.md` predicted this exactly and nobody acted
+on it: *"journal ← already held by the recovery dispatcher; must **not**
+re-acquire"*. The seam was written down and then built the other way.
+
+**The fix is in the identity layer, not the client.** `RecoveryNonblocking` has
+to take the store the dispatcher already owns rather than opening one, which
+means `prepare_candidate` accepting a borrowed store for the recovery case
+instead of retaining an owned one. That is real work in the most safety-critical
+module in the crate and should not be rushed — the same judgement `A` and `B`
+got.
+
+Wiring it on is then a one-constant change plus un-pinning three entries.
+
+Until then the four pinned stalls stand, and the two `PreviousRestoreIntent`
+ones are *not* closed. The walk asserts the admission is exact and still reports
+them stranded, because nothing in production consumes the phase — saying
+otherwise would be the `_ => true` mistake with extra steps.
+
+    activation_namespace/rollback_previous_restore_proof.rs   namespace typestate
+    usr_rollback_previous_restore_authority.rs                sealed admission
+      + effect_reconciliation.rs                              the one-shot move
+    startup_recovery/usr_rollback_previous_restore_dispatch.rs
+    startup_recovery/usr_rollback_previous_restore_persistence.rs
+    startup_gate.rs                                           before the reverse step
+
+`policy.rs` already named the two legal layouts for the phase, so the admission
+is a typestate rather than a boolean: `PREVIOUS_ARCHIVED` is `Apply` (the
+compensating move still has to run) and `POST_EXCHANGE` is `Finish` (it already
+did). The `Apply` path drives the sequence the retired
+`previous-restore-recovery-identity.md` built and proved in-process —
+`prepare_previous_restore_recovery` -> `adopt_previous_archive_attempt` ->
+`restore_previous_with_journal` — and `adopt_previous_archive_attempt` finally
+has the `pub(crate)` production caller its doc comment named.
+
+**The namespace decides, not the syscall.** A move that reports failure but
+left the predecessor in staging is `Applied`; one that reports success while the
+namespace disagrees is `Ambiguous` and returns no retry capability.
+
+**One accepted limitation, stated rather than hidden.** The `Finish` path
+completes the journal with `AlreadySatisfied` and does *not* run the
+parent-sync suffix a completed move normally runs: that suffix needs the
+retained archive attempt, which died with the identity that made the move, and
+adoption needs the archived slot this layout no longer has. It is covered by the
+next action in the chain — the reverse exchange's durability boundary syncs the
+staging parent and the installation root before it persists. If that ordering
+ever changes, this becomes a real gap.
+
+**Not yet proven on a guest, and not yet reachable.** The 41-second
+`install -> remove -> activate` cell is the acceptance test and cannot run
+against this code until the lock seam above is closed; §A4's reboot matrix is
+still outstanding after that. An empty pinned entry is not a measurement.
+
+### The gap, as it was found (kept for the method)
 
 `PreviousRestoreIntent` is fully supported by the journal: `next_rollback_phase`
 routes into it, `rollback_successor` records its outcome, `policy.rs` knows its
@@ -936,6 +1008,12 @@ A hard-coded value silently encoding structure:
   blocks until the deadline and looks exactly like a hang. Drop the previous
   entry's result — and the clean startup itself — before asserting against the
   same root.
+- **A plan that records a constraint does not enforce it.**
+  `previous-restore-recovery-identity.md` wrote "journal ← already held by the
+  recovery dispatcher; must **not** re-acquire", and the identity layer was
+  then built to open its own. Nothing caught it for a week, because the only
+  callers were tests that hold no lock. A constraint about *who holds what* has
+  to be a type or a test, not a bullet point.
 - **A catch-all arm in an invariant walk is an exemption list you cannot see.**
   Four terminal gates kept every hard-coded rule the shared tail had shed,
   purely because `_ => true` covered them. Replacing it with a real dispatch

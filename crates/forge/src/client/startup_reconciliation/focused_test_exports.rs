@@ -15,6 +15,10 @@ pub(in crate::client) use super::usr_rollback_candidate_preserve_authority::{
 #[allow(unused_imports)] // exported for focused rollback-decision race contracts
 pub(in crate::client) use super::usr_rollback_decision_authority::arm_between_usr_rollback_decision_database_captures;
 pub(in crate::client) use super::usr_rollback_decision_authority::usr_rollback_decision_source_is_supported_for_test;
+#[allow(unused_imports)] // exported for the focused previous-restore race contracts
+pub(in crate::client) use super::usr_rollback_previous_restore_authority::{
+    arm_between_usr_rollback_previous_restore_database_captures, usr_rollback_previous_restore_plan_is_exact_for_test,
+};
 pub(in crate::client) use super::usr_rollback_resume_route_authority::usr_rollback_resume_route_plan_is_exact_for_test;
 pub(in crate::client) use super::usr_rollback_reverse_authority::{
     UsrRollbackReverseApplyEffectLease, UsrRollbackReverseFinishEffectLease,

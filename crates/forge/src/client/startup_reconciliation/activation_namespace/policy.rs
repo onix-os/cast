@@ -96,7 +96,31 @@ pub(in crate::client::startup_reconciliation) enum UsrExchangeLayout {
     Post,
 }
 
+/// Where the predecessor sits while a `PreviousRestoreIntent` is outstanding.
+///
+/// These are exactly the two alternatives `rollback_layouts` already names for
+/// that phase, given their own type so the admission gate can be a typestate
+/// rather than a boolean: `Archived` still has the restore to perform,
+/// `Restored` has only the journal completion left.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::client::startup_reconciliation) enum PreviousRestoreLayout {
+    Archived,
+    Restored,
+}
+
 impl LayoutAlternative {
+    /// The previous-restore reading of a layout, or `None` when the namespace
+    /// is in neither state this phase permits.
+    pub(super) fn previous_restore_layout(self) -> Option<PreviousRestoreLayout> {
+        if self == PREVIOUS_ARCHIVED {
+            Some(PreviousRestoreLayout::Archived)
+        } else if self == POST_EXCHANGE {
+            Some(PreviousRestoreLayout::Restored)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn usr_exchange_layout(self) -> Option<UsrExchangeLayout> {
         if self == PRE_EXCHANGE {
             Some(UsrExchangeLayout::Pre)

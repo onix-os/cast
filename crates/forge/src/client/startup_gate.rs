@@ -204,6 +204,23 @@ impl UsrRollbackResumeRouteSeal {
     }
 }
 
+/// Unforgeable safe-code token limiting previous-restore authority capture to
+/// this writer-first startup gate.
+pub(in crate::client) struct UsrRollbackPreviousRestoreSeal {
+    _private: (),
+}
+
+impl UsrRollbackPreviousRestoreSeal {
+    fn new() -> Self {
+        Self { _private: () }
+    }
+
+    #[cfg(test)]
+    pub(in crate::client) fn new_for_test() -> Self {
+        Self::new()
+    }
+}
+
 /// Unforgeable safe-code token limiting rollback-reverse authority capture to
 /// this writer-first startup gate.
 pub(in crate::client) struct UsrRollbackReverseSeal {
@@ -489,6 +506,67 @@ impl CleanSystemStartup {
             if let startup_reconciliation::UsrRollbackResumeRouteAdmission::Ready(authority) = route {
                 let (journal, record) =
                     super::startup_recovery::persist_usr_rollback_resume_route_and_reopen(journal, authority)?;
+                let in_flight = state_db.audit_in_flight_transition()?;
+                let pending = startup_reconciliation::PendingSystemTransition::inspect(
+                    installation,
+                    state_db,
+                    journal,
+                    record,
+                    in_flight,
+                )
+                .map_err(map_reconciliation_error)?;
+                return Err(Error::RecoveryPending(pending));
+            }
+
+            // NOT REACHED YET — see `plans/durability_closeout.md` PR1-BLOCKED.
+            //
+            // This belongs before the reverse exchange, because that is the
+            // order the rollback chain itself uses: an archived predecessor
+            // comes back to staging first, and only then is the exchange
+            // reversed onto it. The whole stack is built and its admission is
+            // exact, but the effect cannot run from here yet:
+            // `prepare_previous_restore_recovery` opens its own journal handle
+            // through `JournalAcquisition::RecoveryNonblocking`, which
+            // `try_open`s the lock this dispatcher is already holding and
+            // fails `WouldBlock`. Measured, not inferred.
+            //
+            // Wiring it before that seam is closed turns every previous-restore
+            // rollback into a hard startup error, so the capture is gated off
+            // rather than left live.
+            const PREVIOUS_RESTORE_DISPATCH_IS_WIRED: bool = false;
+            let previous_restore_seal = UsrRollbackPreviousRestoreSeal::new();
+            let previous_restore = startup_reconciliation::UsrRollbackPreviousRestoreAuthority::capture(
+                &previous_restore_seal,
+                installation,
+                &journal,
+                state_db,
+                active_state_reservation,
+                &record,
+                in_flight.clone(),
+            )?;
+            let ready = match previous_restore {
+                startup_reconciliation::UsrRollbackPreviousRestoreAdmission::Apply(authority)
+                    if PREVIOUS_RESTORE_DISPATCH_IS_WIRED =>
+                {
+                    Some(super::startup_recovery::UsrRollbackPreviousRestoreReady::Apply(
+                        authority,
+                    ))
+                }
+                startup_reconciliation::UsrRollbackPreviousRestoreAdmission::Finish(authority)
+                    if PREVIOUS_RESTORE_DISPATCH_IS_WIRED =>
+                {
+                    Some(super::startup_recovery::UsrRollbackPreviousRestoreReady::Finish(
+                        authority,
+                    ))
+                }
+                startup_reconciliation::UsrRollbackPreviousRestoreAdmission::Apply(_)
+                | startup_reconciliation::UsrRollbackPreviousRestoreAdmission::Finish(_)
+                | startup_reconciliation::UsrRollbackPreviousRestoreAdmission::NotApplicable
+                | startup_reconciliation::UsrRollbackPreviousRestoreAdmission::Deferred => None,
+            };
+            if let Some(ready) = ready {
+                let (journal, record) =
+                    super::startup_recovery::dispatch_usr_rollback_previous_restore_and_reopen(journal, ready)?;
                 let in_flight = state_db.audit_in_flight_transition()?;
                 let pending = startup_reconciliation::PendingSystemTransition::inspect(
                     installation,
@@ -823,6 +901,10 @@ pub(super) enum Error {
     UsrRollbackResumeRouteAuthority(#[from] startup_reconciliation::UsrRollbackResumeRouteAuthorityError),
     #[error("persist and reconcile the exact startup /usr rollback-resume route")]
     UsrRollbackResumeRoutePersistence(#[from] super::startup_recovery::UsrRollbackResumeRoutePersistenceError),
+    #[error("capture exact startup previous-restore authority")]
+    UsrRollbackPreviousRestoreAuthority(#[from] startup_reconciliation::UsrRollbackPreviousRestoreAuthorityError),
+    #[error("execute and persist one exact startup previous-restore phase")]
+    UsrRollbackPreviousRestoreDispatch(#[from] super::startup_recovery::UsrRollbackPreviousRestoreDispatchError),
     #[error("capture exact startup /usr rollback-reverse authority")]
     UsrRollbackReverseAuthority(#[from] startup_reconciliation::UsrRollbackReverseAuthorityError),
     #[error("execute and persist one exact startup /usr rollback-reverse phase")]

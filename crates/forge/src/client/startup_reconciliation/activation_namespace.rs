@@ -37,6 +37,7 @@ mod resume_route_proof;
 mod rollback_complete_route_proof;
 #[allow(dead_code)] // checkpoint A remains sealed from production dispatch
 mod rollback_finalization_proof;
+mod rollback_previous_restore_proof;
 mod rollback_reverse_proof;
 mod usr_exchanged_root_abi_proof;
 
@@ -261,8 +262,8 @@ pub(super) use fresh_db_invalidation_route_proof::{
     UsrRollbackFreshDbInvalidationRouteNamespaceError, UsrRollbackFreshDbInvalidationRouteNamespaceInspection,
     UsrRollbackFreshDbInvalidationRouteNamespaceProof,
 };
-pub(super) use policy::UsrExchangeLayout;
 use policy::{LayoutAlternative, NamespacePolicyConflict, assess_snapshot_layout};
+pub(super) use policy::{PreviousRestoreLayout, UsrExchangeLayout};
 #[cfg(test)]
 pub(in crate::client) use resume_route_proof::arm_before_usr_rollback_resume_route_fresh_namespace_capture;
 pub(super) use resume_route_proof::{
@@ -280,6 +281,13 @@ pub(in crate::client) use rollback_finalization_proof::arm_before_usr_rollback_f
 pub(super) use rollback_finalization_proof::{
     UsrRollbackFinalizationNamespaceError, UsrRollbackFinalizationNamespaceInspection,
     UsrRollbackFinalizationNamespaceProof,
+};
+#[cfg(test)]
+#[allow(unused_imports)] // exported for the focused previous-restore race contracts
+pub(in crate::client) use rollback_previous_restore_proof::arm_before_usr_rollback_previous_restore_fresh_namespace_capture;
+pub(super) use rollback_previous_restore_proof::{
+    UsrRollbackPreviousRestoreNamespaceEffectEvidence, UsrRollbackPreviousRestoreNamespaceError,
+    UsrRollbackPreviousRestoreNamespaceInspection, UsrRollbackPreviousRestoreNamespaceProof,
 };
 pub(super) use rollback_reverse_proof::{
     UsrRollbackReverseAlreadySatisfiedNamespace, UsrRollbackReverseAppliedNamespace,

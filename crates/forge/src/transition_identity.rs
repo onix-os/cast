@@ -338,6 +338,13 @@ impl RetainedPreviousMoveFailure {
         self.outcome
     }
 
+    /// Take the underlying cause. The recovery dispatcher decides applied vs
+    /// not-applied from the namespace, not from this report, so it keeps only
+    /// the diagnostic.
+    pub(crate) fn into_source(self) -> Error {
+        self.source
+    }
+
     fn with_abort_cleanup(self, cleanup: Error) -> Self {
         Self {
             outcome: self.outcome,
