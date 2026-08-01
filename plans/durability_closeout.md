@@ -734,7 +734,39 @@ rather than `FreshDbInvalidated` — because that is the first phase whose plan
 routes to `BootRepairRequired`, and the walk now asks there. Same stall, earlier
 and more accurate detection.
 
-### PR2-BLOCKED 2026-08-01 — the restore runs, and leaves residue the capture refuses
+### PR2-FIXED 2026-08-01 — it was the fixture's parking name all along
+
+`classify_root_name` **already** accepts `.previous-slot-<state>-<token>-<index>`.
+It requires the token to be the record's own predecessor token, which is exactly
+how `select_previous_archive_slot` builds the name in production. The fixture
+did not: `fixture_previous_archive_slot()` hard-coded `"a".repeat(32)`. So the
+recorded slot named a directory the capture could never classify, and a restore
+that worked perfectly reconciled as `Ambiguous`.
+
+Same class as the two generation-incoherent fixtures §A3b turned up: **a fixture
+fabricating a value that production derives, and a test suite that never
+compared them.** Third one this epic.
+
+The fixture now takes both the state and the token from the record. Nothing in
+production changed.
+
+**The dispatcher is wired on.** `PREVIOUS_RESTORE_DISPATCH_IS_WIRED` is `true`,
+and `startup_new_state_previous_archived_fails_safe_pending_not_bricked` — the
+test `previous-restore-recovery-identity.md` named in its exit criteria — now
+watches the chain go `RollbackDecided -> PreviousRestoreIntent ->
+PreviousRestoredToStaging` with the plan recording `previous_archive: Applied`.
+The predecessor really comes back out of its slot.
+
+**Two of the four pinned post-exchange stalls are closed.** What remains is §B
+for both operations:
+
+    NewState         @ BootSyncStarted -> CandidatePreserved
+    ActivateArchived @ BootSyncStarted -> CandidatePreserved
+
+Still outstanding: the 41-second `install -> remove -> activate` cell on a guest,
+and §A4's reboot matrix. In-process green is not a measurement.
+
+### PR2, as it was first diagnosed — kept because the first two readings were wrong
 
 With PR1 fixed the effect actually executes: the predecessor moves out of its
 archived slot and back into staging. The reconciliation then reads the namespace
@@ -763,15 +795,17 @@ directories survive. The gap is on the other side: `capture_snapshot` does not
 know that a `.previous-slot-*` entry in the roots directory is legitimate, and
 reports it as `UnexpectedRootName`.
 
-**So the fix is in the namespace capture, not the move.** That is a change to
-the evidence model — which root entries are legal at which phase — and it is
-the most security-sensitive classification in the crate, so it needs the
-deliberate treatment, not a quick widening. The obvious shape is: a parking
-name matching the record's own `previous_archive_slot` is expected at
-`PreviousRestoreIntent` and after; anything else still is not.
+**Second conclusion, also wrong**, though closer: "the fix is in the namespace
+capture, which does not know the parked wrapper is legitimate." It does know —
+see PR2-FIXED above. What it does not accept is a parking name whose token is
+not the record's, and only the fixture ever produced one of those.
 
-The speculative retirement call has been reverted — it was a no-op that only
-added a failure path.
+The speculative retirement call was reverted — it was a no-op that only added a
+failure path.
+
+**Both wrong readings came from the same habit:** seeing a rejection and asking
+what production should do differently, instead of asking whether the evidence
+was real. The rejection was correct every time.
 
 Note the identity round-trip test never saw this: it asserts the inode landed
 in staging and never captures the namespace. Same shape as the lock seam — the
@@ -1074,6 +1108,11 @@ A hard-coded value silently encoding structure:
   blocks until the deadline and looks exactly like a hang. Drop the previous
   entry's result — and the clean startup itself — before asserting against the
   same root.
+- **When a gate refuses, suspect the evidence before the gate.** Three times
+  this epic a fixture fabricated a value production derives — two generations,
+  one archive parking name — and each time the first instinct was to work out
+  what production should do differently. The gate was right every time. Ask
+  "could a real run produce this record?" before touching the predicate.
 - **"This case is unreachable" is a claim, not a comment.** Writing it as an
   `expect` made a recovery identity panic the moment a test took the legacy
   entry point it supposedly could not reach. If a case is genuinely structural,

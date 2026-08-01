@@ -613,11 +613,23 @@ pub(super) fn exchange_usr_layout(root: &Path) {
 }
 
 /// The parking name a real archive would have recorded before consuming it.
-fn fixture_previous_archive_slot() -> crate::transition_journal::PreviousArchiveSlot {
+///
+/// The state and token are taken from the record rather than invented.
+/// `classify_root_name` only recognises `.previous-slot-<state>-<token>-<index>`
+/// when the token is the record's own predecessor token — which is how
+/// `select_previous_archive_slot` builds it — so a fabricated token produces a
+/// parking directory the namespace capture rejects as an unexpected root name,
+/// and every later capture on that installation fails.
+fn fixture_previous_archive_slot(record: &TransitionRecord) -> crate::transition_journal::PreviousArchiveSlot {
+    let state = record
+        .previous
+        .id
+        .expect("a record that archives its predecessor names it");
     crate::transition_journal::PreviousArchiveSlot {
-        parking_name: crate::transition_journal::QuarantineName::parse(
-            ".previous-slot-1-".to_owned() + &"a".repeat(32) + "-0",
-        )
+        parking_name: crate::transition_journal::QuarantineName::parse(format!(
+            ".previous-slot-{state}-{}-0",
+            record.previous.tree_token.as_str()
+        ))
         .expect("fixture parking name is a valid quarantine name"),
         reused_wrapper: false,
     }
@@ -638,7 +650,7 @@ fn persist_source_record(
         let next = match record.forward_successor(allocated) {
             Ok(next) => next,
             Err(CodecError::ExplicitPreviousArchiveIntentSuccessorRequired) => record
-                .previous_archive_intent_successor(fixture_previous_archive_slot())
+                .previous_archive_intent_successor(fixture_previous_archive_slot(&record))
                 .unwrap(),
             Err(CodecError::ExplicitBootSyncStartedSuccessorRequired) => {
                 let receipts = stage_test_boot_publication_receipts(database, &record.transition_id, historical);

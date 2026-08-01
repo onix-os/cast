@@ -534,7 +534,7 @@ impl CleanSystemStartup {
             // Wiring it before the restore retires that wrapper turns every
             // previous-restore rollback into a hard startup error, so the
             // capture is gated off rather than left live.
-            const PREVIOUS_RESTORE_DISPATCH_IS_WIRED: bool = false;
+            const PREVIOUS_RESTORE_DISPATCH_IS_WIRED: bool = true;
             let previous_restore_seal = UsrRollbackPreviousRestoreSeal::new();
             let previous_restore = startup_reconciliation::UsrRollbackPreviousRestoreAuthority::capture(
                 &previous_restore_seal,

@@ -73,20 +73,25 @@ fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
             break;
         }
     }
-    // Startup admits the archive rollback and routes it to restore the archived
-    // predecessor first: RollbackDecided → PreviousRestoreIntent. The
-    // predecessor-restore dispatcher lands next; until then it holds fail-safe at
-    // PreviousRestoreIntent (record + plan intact) — never a brick.
+    // Startup admits the archive rollback, routes it to restore the archived
+    // predecessor first (RollbackDecided → PreviousRestoreIntent), and the
+    // dispatcher carries that restore out: the predecessor comes back to
+    // staging and the plan records it `Applied`. Everything after it is still
+    // outstanding, which is what makes this a chain rather than one step.
     assert_eq!(phases.first(), Some(&Phase::RollbackDecided), "phases={phases:?}");
     assert!(
         phases.contains(&Phase::PreviousRestoreIntent),
         "recovery did not route to the predecessor restore intent: {phases:?}"
     );
+    assert!(
+        phases.contains(&Phase::PreviousRestoredToStaging),
+        "the predecessor restore was routed to but never carried out: {phases:?}"
+    );
     let plan = fixture
         .canonical_record()
         .rollback
         .expect("a rollback plan was persisted");
-    assert_eq!(plan.previous_archive, RollbackAction::Pending, "plan={plan:?}");
+    assert_eq!(plan.previous_archive, RollbackAction::Applied, "plan={plan:?}");
     assert_eq!(plan.usr_exchange, RollbackAction::Pending, "plan={plan:?}");
     assert_eq!(plan.fresh_db, RollbackAction::Pending, "plan={plan:?}");
 }

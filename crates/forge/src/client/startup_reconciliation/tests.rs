@@ -1379,20 +1379,7 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
                     break;
                 };
                 let consumed = match successor.phase {
-                    // The authority, dispatcher, and persistence boundary all
-                    // exist and its admission is exact — assert that much —
-                    // but `startup_gate` does not reach them yet
-                    // (PR1-BLOCKED: the identity layer re-opens the journal
-                    // lock this dispatcher holds). Until it does, nothing in
-                    // production consumes this phase, and saying otherwise
-                    // here would be the `_ => true` mistake again.
-                    Phase::PreviousRestoreIntent => {
-                        assert!(
-                            usr_rollback_previous_restore_plan_is_exact_for_test(&successor),
-                            "the previous-restore gate refuses a plan the journal built: {successor:?}"
-                        );
-                        false
-                    }
+                    Phase::PreviousRestoreIntent => usr_rollback_previous_restore_plan_is_exact_for_test(&successor),
                     Phase::CandidatePreserveIntent => {
                         usr_rollback_candidate_preserve_plan_is_exact_for_test(&successor)
                     }
@@ -1461,30 +1448,23 @@ fn admitted_post_exchange_rollback_routes_always_have_a_consuming_successor() {
     // `ActivateArchived` cut during boot sync reaches the first phase that
     // would route there and has nowhere to go.
     //
-    // The `PreviousRestoreIntent` entries are one step from closing: the whole
-    // stack exists and admits these exact plans (asserted in the walk above),
-    // but `startup_gate` cannot reach it until the identity layer stops
-    // re-opening the journal lock the dispatcher holds — PR1-BLOCKED.
+    // The three `PreviousRestoreIntent` entries are closed: the authority,
+    // dispatcher, and persistence boundary exist and `startup_gate` reaches
+    // them, so an `ActivateArchived` rollback that has to un-archive its
+    // predecessor now walks its whole chain.
     //
-    // Shorten this list only when the effect runs and a crash-matrix cell
-    // shows it. Widening a predicate cannot close any of them, and trying
-    // would only move the stall one phase later.
+    // What is left is §B. A plan with boot repair outstanding routes to
+    // `BootRepairRequired`, whose authorities exist for `ActiveReblit` alone,
+    // so a `NewState` or `ActivateArchived` cut during boot sync reaches the
+    // first phase that would route there and has nowhere to go. Widening a
+    // predicate cannot close either, and trying would only move the stall one
+    // phase later.
     let known_post_exchange_stalls: Vec<(Operation, Phase, Phase)> = vec![
         (Operation::NewState, Phase::BootSyncStarted, Phase::CandidatePreserved),
         (
             Operation::ActivateArchived,
-            Phase::PreviousArchiveIntent,
-            Phase::PreviousRestoreIntent,
-        ),
-        (
-            Operation::ActivateArchived,
-            Phase::PreviousArchived,
-            Phase::PreviousRestoreIntent,
-        ),
-        (
-            Operation::ActivateArchived,
             Phase::BootSyncStarted,
-            Phase::PreviousRestoreIntent,
+            Phase::CandidatePreserved,
         ),
     ];
     assert_eq!(
