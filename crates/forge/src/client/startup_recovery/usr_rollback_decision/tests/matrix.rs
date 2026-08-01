@@ -96,7 +96,7 @@ fn startup_new_state_previous_archived_fails_safe_pending_not_bricked() {
     // row are still outstanding, which is what keeps this a chain.
     assert_eq!(plan.previous_archive, RollbackAction::Applied, "plan={plan:?}");
     assert_eq!(plan.usr_exchange, RollbackAction::Applied, "plan={plan:?}");
-    assert_eq!(plan.candidate.action, RollbackAction::Pending, "plan={plan:?}");
+    assert_eq!(plan.candidate.action, RollbackAction::Applied, "plan={plan:?}");
     assert_eq!(plan.fresh_db, RollbackAction::Pending, "plan={plan:?}");
 }
 

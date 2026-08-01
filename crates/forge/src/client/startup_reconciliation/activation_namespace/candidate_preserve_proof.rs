@@ -557,17 +557,40 @@ pub(in crate::client::startup_reconciliation::activation_namespace) fn require_e
     }
 }
 
+/// Whether a parked previous slot is the one this record's own rollback just
+/// vacated, rather than arbitrary residue.
+///
+/// A completed previous-restore *leaves* its slot parked — deliberately, so
+/// ambient, replaced, moved, or populated directories survive — and
+/// `classify_root_name` already treats that name as a legal root entry. Before
+/// the previous-restore dispatcher existed nothing could produce one here, so
+/// this gate refused every parking wrapper outright; with the dispatcher live
+/// that refusal stalled an `ActivateArchived` rollback at
+/// `CandidatePreserveIntent` on a real guest (2026-08-01).
+///
+/// Deliberately narrow rather than "any `PreviousParking` is fine": the slot
+/// must belong to this record's predecessor, the record must carry the archive
+/// slot that makes the restore reversible at all, and the restore must actually
+/// be settled. Stale parking residue from anything else is still refused.
+fn is_own_vacated_previous_parking(record: &TransitionRecord, state: i32) -> bool {
+    record.previous.id == Some(state)
+        && record.previous_archive_slot.is_some()
+        && record
+            .rollback
+            .as_ref()
+            .is_some_and(|rollback| rollback.previous_archive.resolved())
+}
+
 fn candidate_preserve_topology_after_phase(
     record: &TransitionRecord,
     snapshot: &NamespaceSnapshot,
 ) -> Result<UsrRollbackCandidatePreserveTopology, UsrRollbackCandidatePreserveNamespaceError> {
     assess_snapshot_layout(record, snapshot)?;
     if record.operation != Operation::ActiveReblit
-        && snapshot.wrappers().any(|wrapper| {
-            matches!(
-                wrapper.role,
-                TreeLocation::ArchivedCandidateParking { .. } | TreeLocation::PreviousParking { .. }
-            )
+        && snapshot.wrappers().any(|wrapper| match wrapper.role {
+            TreeLocation::ArchivedCandidateParking { .. } => true,
+            TreeLocation::PreviousParking { state, .. } => !is_own_vacated_previous_parking(record, state),
+            _ => false,
         })
     {
         return Err(UsrRollbackCandidatePreserveNamespaceError::UnexpectedParkingWrapper);

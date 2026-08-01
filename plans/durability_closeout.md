@@ -864,12 +864,45 @@ predicted: *"leaving it means every subsequent capture at every later phase
 trips on the same entry."* That prediction was right; the conclusion drawn from
 it (retire the wrapper) was wrong. The wrapper stays; the gates learn it.
 
-**The fix, and it needs care rather than a quick widening.** The rule exists to
-stop a rollback preserving a candidate while stale parking residue is still
-around. It should distinguish *the wrapper this record's own rollback just
-vacated* — matching `record.previous_archive_slot`, at a phase after
-`PreviousRestoredToStaging` — from an arbitrary one. Widening it to "any
-`PreviousParking` is fine" would drop a real check for every operation.
+**Fixed narrowly, not widened.** `is_own_vacated_previous_parking` accepts a
+parked slot only when all three hold: it belongs to this record's predecessor,
+the record carries the `previous_archive_slot` that makes the restore reversible
+at all, and the restore is settled. Stale residue from anything else is still
+refused, and `ArchivedCandidateParking` is untouched.
+
+**In-process the chain then ran further than expected**: not just past the
+wrapper check but through candidate preservation itself —
+`previous_archive: Applied, usr_exchange: Applied, candidate.action: Applied`,
+with only `fresh_db` outstanding. One namespace clause was gating three effects.
+
+**On the guest it still stalls at `CandidatePreserveIntent`**, and
+re-instrumenting said why in one run:
+
+    CP-DIAG reached op=ActivateArchived phase=CandidatePreserveIntent
+    CP-DIAG ns-begin UnexpectedParkingWrapper
+
+**Same error, different wrapper.** That one `match` returns
+`UnexpectedParkingWrapper` for *two* roles, and the fix only relaxed one:
+
+    TreeLocation::ArchivedCandidateParking { .. } => true,   // still unconditional
+    TreeLocation::PreviousParking { state, .. } => !is_own_vacated_previous_parking(..),
+
+`ActivateArchived` takes its candidate *from* an archived slot, so its rollback
+leaves an `ArchivedCandidateParking` wrapper by the same mechanism that leaves
+the previous one — and that arm was never revisited. My guess that the
+difference was the archived-candidate *move path* was wrong; the difference is
+one arm of the wrapper check, in the code I had just edited.
+
+**Next:** give `ArchivedCandidateParking` the same narrow treatment — the slot
+must belong to this record's own candidate and the rollback must have reached
+the phase that vacates it — rather than widening either arm to "any wrapper is
+fine". Then re-run; the DIAG channel and the reproduction are both in place, so
+this is one round trip.
+
+Worth noting the shape: **the fix was one line from complete and I re-ran
+without re-reading the branch I had just changed.** The diagnostic caught it in
+40 seconds, which is the argument for instrumenting before theorising, not
+after.
 
 That is the third time this epic that an instrument was installed and read as
 evidence of absence when it was really absence of a channel — the `/tmp` witness
