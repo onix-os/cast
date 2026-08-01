@@ -903,11 +903,37 @@ the previous one, and the refusal it encodes is load-bearing in a way the
 previous arm's was not. Reverted rather than pushed; an unproven relaxation of a
 namespace check is what this epic exists to undo.
 
-**Read the exclusion test first.** It names the exact shapes that must stay
-refused, which is the specification the fix has to satisfy. Then re-instrument
-and confirm whether the guest is still failing on this arm at all — the DIAG
-block was empty on the last run only because the prints had been reverted, so
-the current cause is *unconfirmed*, not known.
+**The exclusion test is the specification, and it is deliberate.** It creates
+`.archived-candidate-slot-<candidate_state>-<candidate_token>-0` using **this
+record's own** candidate state and token, and requires `Deferred`. So the
+refusal is not a stale operation-name check like the sixteen before it: at
+candidate preservation a *parking* name for the archived candidate means an
+abandoned staging move, because a rearchived candidate belongs at its canonical
+state name (`ArchivedStagedWithCanonicalSlot`). The mirror was wrong on the
+merits, not merely untested.
+
+**Re-instrumented, and the namespace is now known rather than assumed:**
+
+    CP-DIAG offending-wrapper ArchivedCandidateParking { state: 1, token: "9d85…", index: 0 }
+                              prev_id=Some(2) prev_archive=Some(Applied)
+    CP-DIAG offending-wrapper PreviousParking { state: 2, index: 0 }
+                              prev_id=Some(2) prev_archive=Some(Applied)
+
+Two wrappers, and **only the first is the blocker** — `is_own_vacated_previous_parking`
+already accepts the second (`state: 2` matches `prev_id`, `previous_archive` is
+`Applied`). That fix is doing its job.
+
+The remaining one is the candidate's own archived slot, state 1, still parked
+after the whole forward activation *and* four rollback phases. So the real
+question is not "should the gate accept it" — the exclusion test answers no —
+but **why a completed `ActivateArchived` staging leaves its source slot at a
+parking name at all.** Either the forward staging is expected to retire it and
+does not, or the rollback's rearchive is expected to consume it and has not run
+yet (it is the very step being refused, so that would be circular).
+
+Start at `select_archived_candidate_slot` / the staging move in
+`archived_candidate.rs` and establish what the slot is *supposed* to be named
+after a successful forward staging. Do not touch the gate until that is known.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
