@@ -177,3 +177,122 @@ fn coordinated_active_reblit_refuses_a_broken_live_state_id_without_moving_anyth
         }
     }
 }
+
+/// Driver variant that lets the caller mutate during the transaction trigger,
+/// the coordinated stand-in for the legacy `AfterTransactionTriggers`
+/// checkpoint.
+fn run_active_reblit_with_transaction(
+    fixture: &CoordinatorFixture,
+    identity: StatefulTreeIdentity,
+    authority: JournalUsrExchangeAuthority,
+    transaction: impl FnOnce(),
+) -> Result<SystemTriggersCompleteCoordinator, ActiveReblitForwardError> {
+    execute_active_reblit_forward(
+        identity,
+        authority,
+        fixture.candidate_state,
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| {
+            transaction();
+            Ok::<(), TriggerEffectError>(())
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+}
+
+// Ported from `active_reblit_rejects_same_inode_state_id_rewrite_before_exchange`
+// and `active_reblit_rejects_same_content_new_state_id_inode`.
+//
+// The candidate's published state ID is retained by descriptor, so neither a
+// rewrite through the same inode nor a same-bytes replacement at a new inode
+// may pass. The two shapes exist because they defeat different naive checks: a
+// content comparison misses the rewrite, an inode comparison misses nothing but
+// a path comparison misses the substitution.
+#[test]
+fn coordinated_active_reblit_rejects_candidate_state_id_substitution() {
+    for shape in ["same-inode-rewrite", "new-inode-same-content"] {
+        let (fixture, identity, authority) =
+            fixture_with_exchange_authority(CandidateKind::ActiveReblit, PreviousKind::Active);
+        let live = fixture.installation.root.join("usr");
+        let live_inode = fs::symlink_metadata(&live).unwrap().ino();
+        let candidate = fixture.candidate_path.join(".stateID");
+        let displaced = fixture.candidate_path.join(".stateID.retained");
+
+        let error = run_active_reblit_with_transaction(&fixture, identity, authority, move || match shape {
+            "same-inode-rewrite" => fs::write(&candidate, b"9").unwrap(),
+            _ => {
+                let contents = fs::read(&candidate).unwrap();
+                fs::rename(&candidate, &displaced).unwrap();
+                write_canonical_file(&candidate, &contents);
+            }
+        })
+        .err()
+        .expect("a substituted candidate state ID must fail the transition");
+
+        // Caught as post-effect evidence: the trigger ran, and the coordinator
+        // refused to advance over what it did.
+        assert_eq!(error.stage(), "transaction triggers", "{shape}: {error:#?}");
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("PostEffectEvidence") && rendered.contains("revalidate retained state ID"),
+            "{shape} was not caught by retained state-ID revalidation: {error:#?}"
+        );
+
+        // The refusal is before the exchange, so the old tree is still live.
+        assert_eq!(fs::symlink_metadata(&live).unwrap().ino(), live_inode);
+        for wrapper in wrapper_quarantines(&fixture) {
+            assert_eq!(fs::read_dir(&wrapper).unwrap().count(), 0, "{shape} rotated a tree");
+        }
+    }
+}
+
+// Ported from `active_reblit_exchange_preflight_rejects_last_moment_state_id_replacement`.
+//
+// The same substitution, but armed to land in the window immediately before the
+// retained exchange rename — after every earlier check has already passed. The
+// distinguishing evidence is `outcome: NotApplied`: the exchange syscall did
+// not happen, so the old tree is live because it was never replaced, not
+// because something put it back.
+#[test]
+fn coordinated_active_reblit_exchange_refuses_a_last_moment_state_id_replacement() {
+    let (fixture, identity, authority) =
+        fixture_with_exchange_authority(CandidateKind::ActiveReblit, PreviousKind::Active);
+    let live = fixture.installation.root.join("usr");
+    let live_inode = fs::symlink_metadata(&live).unwrap().ino();
+    let candidate = fixture.candidate_path.join(".stateID");
+    let displaced = fixture.candidate_path.join(".stateID.original");
+    let witness = displaced.clone();
+
+    arm_before_retained_exchange_rename(move || {
+        let contents = fs::read(&candidate).unwrap();
+        fs::rename(&candidate, &displaced).unwrap();
+        write_canonical_file(&candidate, &contents);
+    });
+
+    let error = run_active_reblit(&fixture, identity, authority)
+        .err()
+        .expect("a last-moment state-ID replacement must fail the exchange");
+
+    assert_eq!(error.stage(), "/usr exchange", "{error:#?}");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("NotApplied"),
+        "the exchange must report NotApplied, not an applied-then-reversed outcome: {error:#?}"
+    );
+    assert!(
+        rendered.contains("revalidate retained state ID"),
+        "the exchange was not refused by retained state-ID revalidation: {error:#?}"
+    );
+
+    // Never exchanged: the original inode is still live.
+    assert_eq!(fs::symlink_metadata(&live).unwrap().ino(), live_inode);
+    // The hook did run — otherwise this test would prove nothing.
+    assert!(witness.is_file(), "the substitution hook never fired");
+}
