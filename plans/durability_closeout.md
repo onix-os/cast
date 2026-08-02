@@ -942,12 +942,45 @@ refused. The guest has **only** the parked slot and no canonical one, which is
 what a live activation looks like. The gate treats both as "any parking wrapper
 present" and so cannot tell them apart.
 
-**So the fix is in the gate after all, but keyed on the pair, not the presence.**
-`ArchivedStagedWithCanonicalSlot` is already a named topology, which says the
-canonical case is the modelled one; the parked-without-canonical case needs the
-same treatment. Verify first that the guest really has no canonical `1/` entry
-alongside the parking name — one more DIAG line over the snapshot's roles proves
-or kills this in a single run — and only then change the predicate.
+**Verified before changing anything, and the roles were exactly as predicted:**
+
+    CP-DIAG role ArchivedCandidateParking { state: 1, token: "3e46…", index: 0 }
+    CP-DIAG role PreviousParking { state: 2, index: 0 }
+    CP-DIAG role AmbientQuarantine("isolation")
+    CP-DIAG role Staging
+    CP-DIAG candidate_id=Some(1) previous_id=Some(2)
+
+No `State(1)`. So `is_own_displaced_candidate_slot` now keys the refusal on the
+*pair* — a parking name is residue only when a canonical slot for the same state
+sits beside it — and the exclusion test still passes.
+
+### PR6 2026-08-02 — past the wrapper, into the topology
+
+Re-instrumenting **every** deferral point (not just the wrapper site) named the
+next one in a single run:
+
+    CP-DIAG d3-ns-begin CandidateWrapperMissing
+
+So the parking-wrapper refusal really is behind us, and the block has moved to
+`candidate_preserve_topology_*`, which cannot classify this namespace at all:
+it looks for the candidate's wrapper and there is none, because the slot is
+*parked*, not canonical.
+
+**This is the same premise one level up.** The archived rollback topology is
+`ArchivedStagedWithCanonicalSlot` — it models a candidate whose state slot is at
+its canonical name. A coordinated `ActivateArchived` never presents that shape:
+`MoveDirection::Stage` displaces the slot on purpose, and the rearchive
+(`marker_after() == Candidate`) is what would restore the canonical name — the
+very step being refused. The topology enum has no variant for "archived
+candidate live, slot displaced", which is precisely the state every activation
+rollback starts from.
+
+**Next:** decide whether that is a missing topology variant or whether
+`ArchivedStagedWithCanonicalSlot` should be defined over the displaced slot.
+Read `candidate_preserve_topology_*` around the `CandidateWrapperMissing` site
+(`candidate_preserve_proof.rs:726`) and the archived effect's expectations in
+`archived_effect.rs` together — the effect is what consumes whichever variant is
+chosen, so picking one without reading it would just move the stall again.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
