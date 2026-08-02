@@ -1610,6 +1610,25 @@ two tests that drive it directly had to be ported too, not left behind.
 
 Remaining order: port the other 26 sites across 6 files, then the deletions.
 
+### Next target sized 2026-08-02: `active_reblit_tests.rs`
+
+Highest leverage of what is left — 2 call sites, but 26 tests funnel through one
+`run` helper, the same shape that made this pilot cheap. **It is probably mostly
+deletion, not porting.** Its assertions split by quarantine-name prefix:
+
+- `replaced-active-reblit-wrapper-` is **live coordinated production code**
+  (`activation_namespace/capture/active_reblit_candidate_preserve.rs:366`,
+  `active_reblit_commit_cleanup.rs:387`,
+  `transition_identity/active_reblit_replacement_recovery.rs:29`) and is already
+  asserted in ~20 files including six `usr_rollback_active_reblit` suites. That
+  coverage exists; it does not need porting.
+- `failed-active-reblit-` appears **nowhere outside `active_reblit_tests.rs`**.
+  It is the legacy route's own failure disposition and dies with it.
+
+So size that file per test against the existing coordinated suites before
+porting anything — the pilot's lesson is that the expensive assumption is
+"this needs porting" when the coverage is already somewhere else.
+
 The 9 fault-injecting sites need re-expressing as journal-phase fault-hook tests,
 because the coordinated route has no checkpoint mechanism — the same port the
 archived-activation tests already went through.
