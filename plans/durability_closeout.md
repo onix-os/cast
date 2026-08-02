@@ -975,12 +975,36 @@ very step being refused. The topology enum has no variant for "archived
 candidate live, slot displaced", which is precisely the state every activation
 rollback starts from.
 
-**Next:** decide whether that is a missing topology variant or whether
-`ArchivedStagedWithCanonicalSlot` should be defined over the displaced slot.
-Read `candidate_preserve_topology_*` around the `CandidateWrapperMissing` site
-(`candidate_preserve_proof.rs:726`) and the archived effect's expectations in
-`archived_effect.rs` together — the effect is what consumes whichever variant is
-chosen, so picking one without reading it would just move the stall again.
+**Fixed without a new variant.** `archived_topology` looked the slot up strictly
+by `TreeLocation::State(state)`; it now accepts either that or
+`ArchivedCandidateParking { state, .. }`, because those are the slot's two
+modelled names and `Stage`/`Rearchive` move it between them. Every other check
+is unchanged — `slot_identity` must still match state *and* token, the slot must
+still be empty, staging must still contain the candidate — and `one_wrapper`
+still requires exactly one match, so canonical *plus* parking remains the
+conflict the refusal suite pins. No topology variant was added because the shape
+is the same shape; only the name differed.
+
+### PR7 2026-08-02 — admission clears, the effect does not
+
+    PHASE-5: CandidatePreserveIntent
+    PHASE-6: ?
+    STALL: dispatch the exact startup ActivateArchived candidate-preservation
+           checkpoint: dispatch exact startup ActivateArchived candidate preserv…
+
+The rollback now gets *past* candidate-preservation admission — six phases — and
+fails inside the dispatch instead. That is a different layer: the authority was
+issued, so the namespace proof and plan predicate both passed.
+
+**The message is truncated at 200 characters by the harness's `cut -c1-200`, so
+the actual cause is unread.** Do not theorise from the prefix. Either widen that
+cut, or — better, since it composes with everything else — emit the dispatch
+error through the `DIAG` channel that already works. Then read it.
+
+Note `driver=stalled-at-unknown`: the phase regex only matches
+`at <Phase> requires`, which a dispatch error does not contain, so the verdict
+column degrades. Worth fixing at the same time so a dispatch failure is not
+reported as an unknown phase.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in

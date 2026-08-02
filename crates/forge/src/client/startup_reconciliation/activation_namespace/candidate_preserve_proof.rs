@@ -722,8 +722,23 @@ fn archived_topology(
         .candidate
         .id
         .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateStateMissing)?;
-    let canonical = one_wrapper(snapshot, |wrapper| wrapper.role == TreeLocation::State(state))?
-        .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateWrapperMissing)?;
+    // The slot answers to one of two names, and both are modelled states rather
+    // than alternatives to tolerate. `MoveDirection::Stage` sets its marker to
+    // `Displaced` on success — that is what frees the canonical state name for
+    // the live candidate — and the rearchive restores it. So a rollback that
+    // begins while the activation is still in flight finds the slot parked, and
+    // demanding the canonical name refused every such rollback with
+    // `CandidateWrapperMissing` (measured on a guest 2026-08-02).
+    //
+    // `one_wrapper` still requires exactly one match, so a canonical slot *and*
+    // a parking name for the same state remains a conflict, which is the
+    // residue shape the topology-refusal suite pins.
+    let slot = one_wrapper(snapshot, |wrapper| match wrapper.role {
+        TreeLocation::State(canonical) => canonical == state,
+        TreeLocation::ArchivedCandidateParking { state: parked, .. } => parked == state,
+        _ => false,
+    })?
+    .ok_or(UsrRollbackCandidatePreserveNamespaceError::CandidateWrapperMissing)?;
     let exact_slot = |wrapper: &WrapperFingerprint| {
         wrapper
             .slot_identity()
@@ -731,14 +746,14 @@ fn archived_topology(
     };
 
     if candidate.location == TreeLocation::Staging && wrapper_contains(staging, candidate) {
-        if staging.slot_identity().is_none() && canonical.usr.is_none() && exact_slot(canonical) {
+        if staging.slot_identity().is_none() && slot.usr.is_none() && exact_slot(slot) {
             return Ok(UsrRollbackCandidatePreserveTopology::ArchivedStagedWithCanonicalSlot);
         }
     }
     if candidate.location == TreeLocation::State(state)
         && wrapper_is_empty(staging)
-        && wrapper_contains(canonical, candidate)
-        && exact_slot(canonical)
+        && wrapper_contains(slot, candidate)
+        && exact_slot(slot)
     {
         return Ok(UsrRollbackCandidatePreserveTopology::ArchivedPreserved);
     }
