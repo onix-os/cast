@@ -465,7 +465,16 @@ impl RetainedArchivedCandidatePreserveParents {
         let target_name =
             CString::new(state.to_string()).map_err(|_| ArchivedCandidatePreserveCaptureError::InvalidTargetName)?;
         let staging_path = snapshot.roots_path.join("staging");
-        let target_path = snapshot.roots_path.join(state.to_string());
+        // The slot's *current* name, which is the parking name while the
+        // activation is in flight. `target_name` above stays canonical because
+        // that is what the slot is called by the time the child move runs —
+        // `Rearchive` unparks it first — but the descriptor has to be pinned
+        // where the directory is *now*, or the capture fails with
+        // `No such file or directory` on `.cast/root/<state>` (guest,
+        // 2026-08-02).
+        let target_path = snapshot
+            .roots_path
+            .join(String::from_utf8_lossy(&target.fingerprint.name).as_ref());
         let identity = MoveParentIdentity::from_witnesses(staging.fingerprint.witness, target.fingerprint.witness)?;
         let candidate = exact_retained_candidate(snapshot, record.candidate.tree_token.as_str())?;
         let candidate = TreeMarkerStore::open(

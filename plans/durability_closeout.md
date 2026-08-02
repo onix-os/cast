@@ -1069,8 +1069,31 @@ canonical.** `target_path = roots_path.join(state.to_string())` is what needs to
 follow the wrapper; `target_name` stays `state.to_string()` because that is what
 the slot will be called when the move happens.
 
-Check whether `RetainedWrapper` already carries its own path — if it does this
-is a one-line change; if not, thread it from the snapshot entry that matched.
+`WrapperFingerprint` carries its own `name`, so this was a one-line change:
+`target_path` now follows the matched wrapper. And the result is the most
+useful failure of the sequence:
+
+    pin activation-namespace directory at
+    `/mnt/root/.cast/root/.archived-candidate-slot-1-6df27ea4…-0`:
+    No such file or directory (os error 2)
+
+**Neither name works, because the name is not stable.** The slot is at the
+parking name when the capture pins it and at the canonical name after
+`Rearchive` unparks it, so *any* path recorded at capture time is wrong by the
+time `revalidate_value_identity` re-pins it. Chasing the right string is the
+wrong shape of fix.
+
+**The retained descriptor is the answer, not a path.** `RetainedWrapper` already
+holds `directory: File`; a rename does not change the inode, so the fd stays
+valid across the unpark while every path spelling does not. The capture should
+revalidate through that descriptor — `openat`-style from the retained roots fd,
+or simply trusting the retained fd plus its `InodeWitness` — and keep paths for
+diagnostics only.
+
+That is a real change to how this capture proves identity, and it is the same
+principle the rest of the crate already follows ("never reopen by path what you
+can revalidate by descriptor"). Worth doing properly rather than threading a
+fourth spelling of the name.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
