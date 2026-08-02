@@ -1111,10 +1111,22 @@ The predecessor is Live (restored), so the suspect is `CandidatePlace::Destinati
 `ArchivedCandidateParking` instead — the same canonical-name assumption, now in
 `policy.rs` rather than the capture.
 
-**Check first whether the move completed**: `ExactNamespaceInventoryRequired`
-alongside the other two suggests the inventory is being refused outright rather
-than merely misclassified. One DIAG line printing the post-move roles
-distinguishes "moved, unmodelled" from "did not move".
+**Measured, and it is *not* `candidate_destination`.** A DIAG on the
+`PhaseLayout` branch of `assess_snapshot_layout` — the only place that reports a
+candidate at an unexpected location — printed **nothing**. So the refusal
+happens before layout selection is ever reached, which rules out the obvious
+suspect and the whole "fifth copy of the canonical-name assumption" theory with
+it.
+
+What runs earlier, in order: `capture_snapshot` itself (the
+`ExactNamespaceInventoryRequired` blocker points here), then
+`CandidateCount != 1`, then `expected_layouts`, then `PreviousCount`. The
+candidate token appearing at zero or two locations after the child move is the
+most likely of those and would explain all three blockers at once.
+
+**Next probe, and keep it in this order:** instrument the `capture_snapshot`
+error path first, then `CandidateCount`/`PreviousCount` with their actual
+counts. Do not add a DIAG to the layout branch again — it is proven silent.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
