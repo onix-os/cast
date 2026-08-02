@@ -68,13 +68,13 @@ struct CoordinatorFixture {
     candidate_path: PathBuf,
 }
 
-fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (CoordinatorFixture, StatefulTreeIdentity) {
+pub(crate) fn fixture(candidate_kind: CandidateKind, previous_kind: PreviousKind) -> (CoordinatorFixture, StatefulTreeIdentity) {
     let (fixture, identity, authority) = fixture_parts(candidate_kind, previous_kind, false, false);
     assert!(authority.is_none());
     (fixture, identity)
 }
 
-fn fixture_with_exchange_authority(
+pub(crate) fn fixture_with_exchange_authority(
     candidate_kind: CandidateKind,
     previous_kind: PreviousKind,
 ) -> (CoordinatorFixture, StatefulTreeIdentity, JournalUsrExchangeAuthority) {
@@ -86,7 +86,7 @@ fn fixture_with_exchange_authority(
     )
 }
 
-fn fixture_with_exchange_authority_and_previous_slot()
+pub(crate) fn fixture_with_exchange_authority_and_previous_slot()
 -> (CoordinatorFixture, StatefulTreeIdentity, JournalUsrExchangeAuthority) {
     let (fixture, identity, authority) = fixture_parts(CandidateKind::ActiveReblit, PreviousKind::Active, true, true);
     (
@@ -96,7 +96,7 @@ fn fixture_with_exchange_authority_and_previous_slot()
     )
 }
 
-fn fixture_parts(
+pub(crate) fn fixture_parts(
     candidate_kind: CandidateKind,
     previous_kind: PreviousKind,
     retain_exchange_authority: bool,

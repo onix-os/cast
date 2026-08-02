@@ -32,7 +32,7 @@ mod usr_exchange_effect;
 mod usr_exchange_intent;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub(crate) use active_reblit_forward::{
     ActiveReblitForwardError, ActiveReblitSystemTriggerView, ActiveReblitTransactionTriggerView,
