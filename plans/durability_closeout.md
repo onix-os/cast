@@ -1136,10 +1136,35 @@ That puts the failure entirely inside `capture_snapshot`, which is exactly what
 Every remaining theory about layouts, dispositions, and canonical names is
 therefore dead for this stall.
 
-**Next probe:** instrument `capture_snapshot`'s own error returns in
-`capture/mod.rs` — root-entry classification, wrapper capture, and the
-tree/marker reads — with one unconditional line at entry as the control. The
-answer is a `CaptureError` variant and it will name itself.
+**Third probe named it, as predicted, in one run.** Wrapping `capture_snapshot`
+rather than instrumenting each `?`:
+
+    CAP-DIAG enter phase=CandidatePreserveIntent
+    CAP-DIAG error phase=CandidatePreserveIntent ParkingWrapperContainsTree {
+      path: "…/.cast/root/.archived-candidate-slot-1-cfef1642…-0" }
+
+### PR11 — the rearchive moves the candidate into a *parked* slot
+
+`wrappers.rs:498` refuses any `ArchivedCandidateParking` or `PreviousParking`
+wrapper that contains a `usr` tree: a parking name is assumed inert. After the
+rollback's rearchive it is not — the candidate has been moved **into** the slot
+while the slot still carries its parking name.
+
+That is worth pausing on, because it contradicts the reading in PR8: the
+ordering there said `MoveDirection::Rearchive` calls
+`restore_displaced_slot_if_parked` *first*, so the slot should have been
+canonical before the child move. The namespace says otherwise. **One of the two
+is wrong, and the namespace is the evidence.** Either the unpark did not run on
+this path, or it ran and something re-parked the slot, or the rollback's
+rearchive is a different code path from the one whose ordering was read.
+
+**Establish which before touching `wrappers.rs`.** Widening the emptiness rule
+would make a genuinely inconsistent namespace look acceptable if the unpark is
+simply missing — and the unpark is what makes the state slot canonical again, so
+skipping it would leave the system with no `<state>/` directory at all. Print
+the slot's marker location and `attempt.rearchive_preparation_applied` around
+the child move; that separates "unpark never ran" from "unpark ran, then the
+move re-parked".
 
 Note for whoever runs it: `DIAG_GREP` does **not** reach the guest.
 `crash-matrix-run.sh` reconstructs the driver with `bash -c "$(declare -f run)"`,
