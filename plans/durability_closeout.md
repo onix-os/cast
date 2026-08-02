@@ -1671,12 +1671,27 @@ a completed transition; only the disposition moved.
   #15 needs a *second* identity+authority against the same installation, which
   `fixture_with_exchange_authority` cannot produce — it builds a fresh
   installation each call. Needs a re-acquire helper over `fixture.installation`.
-- **#16–#25** previous-slot parking. Check each against
-  `journal_coordinator/tests/active_reblit_reservation.rs` (8 tests) first —
-  `handles_one_link_and_parks_two_link_previous`,
-  `reports_ambiguous_replacement_stage`, `preserves_foreign_name_exhaustion`,
-  and `reports_applied_slot_after_durable_replacement` look like direct
-  counterparts to #16, #11, #13 and #10 respectively.
+- **#16–#25** previous-slot parking.
+
+### Duplicate check against `active_reblit_reservation.rs` — done 2026-08-02
+
+I claimed four of the eight reservation tests "look like direct counterparts"
+to legacy #16, #11, #13 and #10. **Checked, and exactly one is.** The general
+error: the reservation tests operate on the *reservation unit*
+(`reserve_for_transaction_triggers`), while the legacy tests drive the *whole
+transition* and assert end-state namespace properties. Same vocabulary,
+different scope.
+
+| legacy | coordinated | verdict |
+|---|---|---|
+| #13 `staging_wrapper_name_exhaustion_*` | `preserves_foreign_name_exhaustion` | **DUPLICATE — delete.** The coordinated test is a strict superset: it exhausts all 256 names for *both* the replacement wrapper and the parked slot, asserts `NotApplied` for each, and byte-checks every occupant. Legacy only does the wrapper half. Its one extra assertion is `failed_usr_quarantines(...) == 1`, and `failed-active-reblit-` is the legacy route's own disposition, which dies with it. |
+| #10 `queued_applied_suffix_faults_never_exchange_the_wrapper_twice` | `reports_applied_slot_after_durable_replacement` | **NOT a duplicate.** Both use the doubled-fault pattern, but on different subjects: coordinated doubles `SlotFaultPoint::RootsPostSync` (previous-slot parking), legacy doubles `OriginalPostSync`/`FinalRevalidation` (staging-wrapper rotation). The wrapper's never-apply-twice property is uncovered. |
+| #11 `staging_wrapper_substitution_is_ambiguous_and_never_retried` | `reports_ambiguous_replacement_stage` | **NOT a duplicate.** Legacy substitutes the whole **staging directory**; coordinated renames the **replacement path**. Different injection subject, different error (`outcome: "ambiguous"` at commit cleanup vs `EvidenceSandwich`). |
+| #16 `preserves_authorized_two_link_previous_marker_pair` | `handles_one_link_and_parks_two_link_previous` | **NOT a duplicate — half of it is.** The parking assertions overlap. But legacy then runs a *second, NewState* transition and asserts the parked slot's marker inode and `nlink == 2` survive it. That cross-transition durability claim has no coordinated equivalent. |
+
+Net: 1 deletion, 3 still need porting. The lesson is the same one the pilot
+taught — "looks like a counterpart" from a name match is not evidence, and the
+error has consistently run toward assuming coverage exists.
 
 **The governing fact for the remaining 24 — measured, and it is not obvious:**
 `execute_active_reblit_forward` is *not* the whole transition. At
