@@ -1500,10 +1500,21 @@ smaller one hiding inside it.
 
 The 34 call sites and their per-file split are unchanged and still exact.
 
-**`candidate_quarantine.rs` no longer exists** — the deletion list below names a
-file that is already gone, so re-check each target before removing it rather
-than working from the list. `stateful_recovery.rs` and `legacy_boot_repair.rs`
-are both still present.
+**Correction 2026-08-02 (second pass): `candidate_quarantine.rs` *does* exist**,
+at `transition_identity/candidate_quarantine.rs` (9.5K). The earlier note here
+claiming it was already gone was wrong — it searched the wrong directory.
+`stateful_recovery.rs` and `legacy_boot_repair.rs` are also present. Re-check
+each deletion target against the tree; do not work from the list alone.
+
+**Quarantine does not die with the legacy route.** Only the
+`quarantine_candidate` *helper* is legacy-only (one non-test caller,
+`stateful_recovery.rs:370`, gated behind `require_no_journal()`). The quarantine
+**directory** is live coordinated production code —
+`startup_reconciliation.rs:909` and
+`startup_reconciliation/activation_namespace/capture/mod.rs:245` both write to
+it. So `tests/stateful_quarantine_recovery.rs` (7 sites) cannot be blanket-
+deleted as "legacy-only"; each test needs checking against the coordinated
+capture path before it is dropped or ported.
 
 ### The blocker: two test helpers
 
