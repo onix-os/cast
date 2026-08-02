@@ -1045,8 +1045,32 @@ slot should target the canonical name (because `Rearchive`'s `marker_after()` is
 Getting that wrong moves a real `/usr` to the wrong place, which is the worst
 class of change in this crate.
 
-Read `MoveDirection::Rearchive` in `archived_candidate.rs` and establish which
-name the slot has *at the moment of the child move* before touching line 448.
+**The ordering is settled.** `move_archived_candidate` calls
+`restore_displaced_slot_if_parked` as the **first** step of a `Rearchive`, so
+the slot is back at its canonical name *before* the child move. The destination
+name was therefore always right; only the lookup ran too early. Fixed with
+`exact_retained_wrapper_matching`, which finds the wrapper at either name and
+still demands exactly one — a rename does not change the inode, so the retained
+descriptor is the same one either way.
+
+### PR9 — the pin, not the name
+
+    capture or reconcile an exact archived candidate child-move effect:
+    pin activation-namespace directory at `/mnt/root/.cast/root/1`:
+    No such file or directory (os error 2)
+
+The wrapper is found now, but the capture still *pins* the retained parent at
+the canonical **path**, which does not exist yet — the slot is parked at capture
+time and only becomes `1/` when the rearchive unparks it.
+
+So the two must be separated, and this is the distinction the whole PR8/PR9 pair
+turns on: **pin at the slot's current path, keep the destination name
+canonical.** `target_path = roots_path.join(state.to_string())` is what needs to
+follow the wrapper; `target_name` stays `state.to_string()` because that is what
+the slot will be called when the move happens.
+
+Check whether `RetainedWrapper` already carries its own path — if it does this
+is a one-line change; if not, thread it from the snapshot entry that matched.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
