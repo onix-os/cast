@@ -9,7 +9,11 @@ mod effect;
 mod post_move_durability;
 mod target_durability;
 
-use std::{ffi::CString, fs::File, path::PathBuf};
+use std::{
+    ffi::{CStr, CString},
+    fs::File,
+    path::PathBuf,
+};
 
 use crate::{
     Installation,
@@ -503,6 +507,21 @@ impl RetainedArchivedCandidatePreserveParents {
             roots_witness: snapshot.fingerprint.roots,
             identity,
         })
+    }
+
+    /// The roots directory the slot lives in.
+    pub(super) fn roots(&self) -> &File {
+        &self.roots
+    }
+
+    /// The slot's current name, which is its parking name while an activation
+    /// is in flight.
+    pub(super) fn slot_name(&self) -> &CStr {
+        &self.target_name
+    }
+
+    pub(super) fn slot_path(&self) -> &std::path::Path {
+        &self.target_path
     }
 
     pub(in crate::client::startup_reconciliation::activation_namespace) fn revalidate_value_identity(

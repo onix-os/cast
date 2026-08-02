@@ -1183,12 +1183,39 @@ to its canonical `<state>` name, as the legacy path does — otherwise a rolled-
 activation leaves the system with no canonical state directory at all, which is
 worse than the stall it replaces.
 
-**Where to put it:** the slot rename is a namespace effect with its own
-durability, so it belongs beside the child move in
-`archived_candidate_preserve/target_durability.rs`, ordered *before* the
-`renameat2` so a crash between them leaves a parked-and-empty slot (already a
-modelled state) rather than a parked slot holding a tree (not modelled). Reuse
-`slot_lifecycle`'s restore rather than open-coding a second rename.
+**Done, and the chain completes.** `restore_canonical_slot_name` runs in
+`attempt_move_once`, immediately before the `renameat2` and after the final
+exact-PRE revalidation. It is a no-op when the slot is already canonical, so
+every path that never parked is untouched, and the retained `target` descriptor
+survives the rename — same inode — so all later revalidation through it holds.
+
+    activate  control
+      PHASE-1: PreviousRestoreIntent
+      PHASE-2: PreviousRestoredToStaging
+      PHASE-3: ReverseExchangeIntent
+      PHASE-4: UsrRestored
+      PHASE-5: CandidatePreserveIntent
+      PHASE-6: dispatch-ActivateArchived
+      PHASE-7: CandidatePreserved
+      PHASE-8: RollbackComplete
+      recovery=PENDING  driver=recovered-at-9  state=installed
+
+## §A ACTIVATION ROLLBACK RECOVERS — 2026-08-02, on a guest
+
+    2026-07-31:  driver=stalled-at-PreviousArchived   state=absent
+    2026-08-02:  driver=recovered-at-9                state=installed
+
+The `ActivateArchived` rollback now un-archives its predecessor, reverses the
+`/usr` exchange, preserves the candidate, finalizes, **and the machine goes on
+to install successfully** — `state=installed`, not merely "no longer stalled".
+That is the first end-to-end activation-rollback recovery this epic has
+measured, against 26 consecutive frozen attempts with nothing installed when it
+started.
+
+Eleven distinct defects stood between those two lines, and every one of them was
+found by printing what was on disk rather than by reasoning about which
+predicate looked wrong. Four times a conclusion drawn from reading code was
+contradicted by the namespace; the namespace was right every time.
 
 Note for whoever runs it: `DIAG_GREP` does **not** reach the guest.
 `crash-matrix-run.sh` reconstructs the driver with `bash -c "$(declare -f run)"`,

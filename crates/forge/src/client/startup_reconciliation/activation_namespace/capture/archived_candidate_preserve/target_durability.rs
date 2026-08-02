@@ -1,6 +1,6 @@
 //! Ordered exact-PRE durability before one archived-candidate child move.
 
-use std::{fs::File, io};
+use std::{ffi::CString, fs::File, io};
 
 use crate::{Installation, linux_fs::renameat2_noreplace_once, transition_journal::TransitionRecord};
 
@@ -184,6 +184,19 @@ impl TargetDurableArchivedCandidatePreservePre {
             final_pre,
             final_pre_projection,
         } = self;
+        // Restore the slot to its canonical `<state>` name before the child
+        // move, never after. A crash between the two then leaves a parked-and-
+        // empty slot, which is a modelled state; the other order would leave a
+        // parking name holding a tree, which `capture_snapshot` refuses
+        // outright (`ParkingWrapperContainsTree`) and no later phase can
+        // classify.
+        //
+        // The legacy `rearchive_archived_candidate` unparks through
+        // `restore_displaced_slot_if_parked`; this coordinated path had no
+        // equivalent, so a rolled-back activation moved its candidate into the
+        // still-parked slot and stalled at `CandidatePreserveIntent` for good
+        // (guest, 2026-08-02).
+        restore_canonical_slot_name(&parents, record)?;
         let raw_report = attempt_raw_move_once(&parents.staging, &parents.target);
         Ok(PendingArchivedCandidatePreserveMoveReconciliation::new(
             parents,
@@ -215,6 +228,32 @@ fn require_exact_pre(
     }
     installation.revalidate_mutable_namespace()?;
     Ok(())
+}
+
+/// Rename the archived-candidate slot from its parking name back to `<state>`.
+///
+/// A no-op when the slot is already canonical, which is the case for every
+/// path that did not park it. The retained `target` descriptor is unaffected by
+/// the rename — same inode — so all later revalidation through it still holds.
+fn restore_canonical_slot_name(
+    parents: &RetainedArchivedCandidatePreserveParents,
+    record: &TransitionRecord,
+) -> Result<(), ArchivedCandidatePreserveTargetDurabilityError> {
+    let state = record
+        .candidate
+        .id
+        .ok_or(ArchivedCandidatePreserveTargetDurabilityError::PreEvidenceChanged)?;
+    let canonical = CString::new(state.to_string())
+        .map_err(|_| ArchivedCandidatePreserveTargetDurabilityError::PreEvidenceChanged)?;
+    if parents.slot_name() == canonical.as_c_str() {
+        return Ok(());
+    }
+    renameat2_noreplace_once(parents.roots(), parents.slot_name(), parents.roots(), &canonical).map_err(|source| {
+        ArchivedCandidatePreserveTargetDurabilityError::SlotRestore {
+            path: parents.slot_path().to_owned(),
+            source,
+        }
+    })
 }
 
 /// Private raw boundary: diagnostic status never classifies the namespace.
@@ -570,6 +609,12 @@ pub(in crate::client::startup_reconciliation::activation_namespace) enum Archive
     Installation(#[from] crate::installation::Error),
     #[error("authenticated archived candidate evidence is no longer exact PRE")]
     PreEvidenceChanged,
+    #[error("restore the archived-candidate slot to its canonical name at `{}`", path.display())]
+    SlotRestore {
+        path: std::path::PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("sync archived candidate tree at `{}`", path.display())]
     CandidateSync {
         path: std::path::PathBuf,
