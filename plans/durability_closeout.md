@@ -1640,6 +1640,36 @@ So size that file per test against the existing coordinated suites before
 porting anything — the pilot's lesson is that the expensive assumption is
 "this needs porting" when the coverage is already somewhere else.
 
+**Started 2026-08-02.** Driver landed
+(`journal_coordinator/tests/active_reblit_forward.rs`) plus the first two ports:
+a clean-run record proof and
+`active_reblit_rotates_the_whole_old_wrapper_and_leaves_exact_empty_staging`.
+
+**The governing fact for the remaining 24 — measured, and it is not obvious:**
+`execute_active_reblit_forward` is *not* the whole transition. At
+`SystemTriggersComplete` (g10) the namespace is in a deliberately intermediate
+state:
+
+| | at `SystemTriggersComplete` | after `complete_active_reblit_without_boot` |
+|---|---|---|
+| old live tree | in **staging** (`staging/usr`, original inode) | inside the quarantine wrapper |
+| quarantine wrapper | present but **empty** — a reserved name | holds `usr` |
+| staging | contains `usr` | **empty** |
+
+So a legacy assertion ported against the forward prefix alone fails, and the
+prefix's own state must not be asserted as if it were final — it is a
+half-finished namespace by design. Every remaining port needs
+`.complete_active_reblit_without_boot()` (or the boot-sync handoff) driven
+before the legacy end-state assertions apply.
+
+I first read this intermediate state as "the coordinated topology is different
+from the legacy one." It is not — it is the same end state reached in two
+steps, and the difference was that I had only driven one of them.
+
+`SystemTriggersCompleteCoordinator` has no `record()`; the continuations are
+`complete_active_reblit_without_boot`, `into_active_reblit_boot_sync_handoff`,
+`archive_previous_tree`, and the NewState pair.
+
 The 9 fault-injecting sites need re-expressing as journal-phase fault-hook tests,
 because the coordinated route has no checkpoint mechanism — the same port the
 archived-activation tests already went through.
