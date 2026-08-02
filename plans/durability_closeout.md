@@ -1217,6 +1217,17 @@ found by printing what was on disk rather than by reasoning about which
 predicate looked wrong. Four times a conclusion drawn from reading code was
 contradicted by the namespace; the namespace was right every time.
 
+Full suite green alongside it: **2755 passed, 0 failed**, zero production
+warnings — including the `receipt_promotion` cluster that had been failing
+intermittently under full-suite parallelism.
+
+**What this cell does and does not prove.** It is a `control` cut: a plain
+`install → remove → activate` with no crash injection, so it exercises the
+rollback that a *clean* activation failure produces. It does not exercise a
+power cut mid-phase. The phase-targeted cells (§A2) are what cover that, and
+they run against the same code now that the chain completes — start with
+`CUTS=(phase:ActivateArchived.CandidatePrepared)`.
+
 Note for whoever runs it: `DIAG_GREP` does **not** reach the guest.
 `crash-matrix-run.sh` reconstructs the driver with `bash -c "$(declare -f run)"`,
 so host environment does not propagate; the default `-DIAG` pattern is what
