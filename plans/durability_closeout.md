@@ -1484,12 +1484,26 @@ through `apply_stateful_blit_with_checkpoint` / `_with_capability`:
 | `active_reblit_tests.rs` | 2 |
 | `tests/stateful_candidate_metadata.rs` | 1 |
 
-**That search is done — there are no more free deletions.** Checked
-2026-07-31: `commit_stateful_staging` (8 uses), `require_no_journal` (19),
-`quarantine_candidate` (1, production, `stateful_recovery.rs:370`), and
-`apply_stateful_blit_with_capability` (1, from the `_with_checkpoint` wrapper)
-are all genuinely reached. Nothing else collapses without the test ports first,
-so the remaining job is the real one below, not a smaller one hiding inside it.
+**That search is done — there are no more free deletions.** Nothing collapses
+without the test ports first, so the remaining job is the real one below, not a
+smaller one hiding inside it.
+
+**Re-measured 2026-08-02, and §C had drifted — trust these numbers, not the
+2026-07-31 ones:**
+
+| symbol | then | now |
+|---|---|---|
+| `commit_stateful_staging` | 8 | 9 refs / 7 files |
+| `require_no_journal` | 19 | 21 refs / 8 files |
+| `quarantine_candidate` | 1 | 2 refs / 2 files |
+| `apply_stateful_blit_with_capability` | 1 | 2 refs / 1 file |
+
+The 34 call sites and their per-file split are unchanged and still exact.
+
+**`candidate_quarantine.rs` no longer exists** — the deletion list below names a
+file that is already gone, so re-check each target before removing it rather
+than working from the list. `stateful_recovery.rs` and `legacy_boot_repair.rs`
+are both still present.
 
 ### The blocker: two test helpers
 
