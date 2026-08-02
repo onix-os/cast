@@ -1221,12 +1221,22 @@ Full suite green alongside it: **2755 passed, 0 failed**, zero production
 warnings — including the `receipt_promotion` cluster that had been failing
 intermittently under full-suite parallelism.
 
-**What this cell does and does not prove.** It is a `control` cut: a plain
-`install → remove → activate` with no crash injection, so it exercises the
-rollback that a *clean* activation failure produces. It does not exercise a
-power cut mid-phase. The phase-targeted cells (§A2) are what cover that, and
-they run against the same code now that the chain completes — start with
-`CUTS=(phase:ActivateArchived.CandidatePrepared)`.
+**And the phase-targeted cut recovers as well**, so this is not limited to a
+clean activation failure:
+
+    activate  phase:ActivateArchived.CandidatePrepared
+      PHASE-1: CandidatePreserveIntent
+      PHASE-2: CandidatePreserved
+      PHASE-3: RollbackComplete
+      driver=recovered-at-4  state=installed
+
+A real power cut inside the transition, parked at `CandidatePrepared`, now
+rolls back and installs. Two cells, two cut modes, both `state=installed`.
+
+**Still unproven and worth naming precisely:** the other `OPS` (`install`,
+active-reblit), the other cut phases, `NewState`/`ActivateArchived` boot-sync
+sources (§B — the two pinned stalls that remain), and §A4's cross-reboot matrix.
+Two green cells are two green cells, not a matrix.
 
 Note for whoever runs it: `DIAG_GREP` does **not** reach the guest.
 `crash-matrix-run.sh` reconstructs the driver with `bash -c "$(declare -f run)"`,
