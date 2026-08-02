@@ -1608,6 +1608,17 @@ Three things the port established that reading alone would not have:
 (`core/stateful_transition.rs:126`), so it dies with the legacy route and the
 two tests that drive it directly had to be ported too, not left behind.
 
+**The ninth test is not in that table and is not yet ported.**
+`owned_metadata_proof_outlives_source_identity_and_rejects_named_substitution`
+makes two claims. The substitution half is covered — by the new `substitute`
+shape and by the existing `park_and_replace_metadata` tests in
+`metadata_proof.rs`. The other half is that the proof stays valid after its
+**source identity is dropped** (`drop(identity); proof.revalidate()`), which no
+coordinated test asserts, because the coordinator owns the proof for its whole
+lifetime and never exposes that seam. Judged structurally guaranteed rather than
+demonstrated — that judgement is untested and should be revisited before the
+file is deleted, not treated as settled.
+
 Remaining order: port the other 26 sites across 6 files, then the deletions.
 
 ### Next target sized 2026-08-02: `active_reblit_tests.rs`
