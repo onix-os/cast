@@ -220,3 +220,87 @@ fn coordinated_candidate_metadata_final_name_races_are_no_replace() {
         assert_eq!(inode_identity(&lib.join(output)), external_identity);
     }
 }
+
+// The retained metadata proof must reject every shape of post-trigger mutation,
+// not only the rename-and-replace the substitution proofs already cover. A
+// rewrite in particular keeps the inode, so it is the shape most likely to slip
+// past an identity-only revalidation.
+#[test]
+fn coordinated_retained_metadata_proof_rejects_every_post_trigger_mutation() {
+    for mutation in ["rewrite", "delete", "replace", "hardlink", "substitute"] {
+        let (fixture, identity, authority) =
+            fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+        let output = fixture.candidate_path.join("lib/system-model.glu");
+        let external = fixture.installation.root.join(format!("external-proof-{mutation}"));
+        let ran = std::cell::Cell::new(false);
+
+        let error = execute_new_state_forward(
+            identity,
+            authority,
+            &fixture.database,
+            NewStatePrevious::Active(fixture.previous_state),
+            &[],
+            "post-trigger mutation slice",
+            false,
+            |_| {
+                crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                    COORDINATOR_OS_RELEASE,
+                    crate::system_model::snapshot_authorities(),
+                    COORDINATOR_SYSTEM_SNAPSHOT,
+                )
+            },
+            |_view| {
+                ran.set(true);
+                match mutation {
+                    // Rewritten in place: same inode, same mode, same link
+                    // count. Only content-bound evidence can catch this one.
+                    "rewrite" => fs::write(&output, b"rewritten-after-trigger").unwrap(),
+                    "delete" => fs::remove_file(&output).unwrap(),
+                    // The replacement is written canonically so the refusal
+                    // must come from its identity, not from a stray mode.
+                    "replace" => {
+                        write_canonical_file(&external, b"replacement-after-trigger");
+                        fs::remove_file(&output).unwrap();
+                        fs::hard_link(&external, &output).unwrap();
+                    }
+                    "hardlink" => fs::hard_link(&output, &external).unwrap(),
+                    // A fresh canonical file at the canonical name: singly
+                    // linked, correctly moded, only the inode differs. Neither
+                    // the mode nor the link-count guard can see this one.
+                    "substitute" => {
+                        let bytes = fs::read(&output).unwrap();
+                        fs::remove_file(&output).unwrap();
+                        write_canonical_file(&output, &bytes);
+                    }
+                    _ => unreachable!(),
+                }
+                Ok::<(), TriggerEffectError>(())
+            },
+            |_view| Ok::<(), TriggerEffectError>(()),
+        )
+        .expect_err("post-trigger metadata mutation must fail the forward prefix");
+
+        assert!(ran.get(), "transaction trigger did not run for {mutation}");
+        assert_eq!(
+            error.stage(),
+            "transaction triggers",
+            "{mutation} must be caught as post-effect evidence: {error:#?}"
+        );
+        // Which guard catches each shape is part of the proof: a shape caught
+        // only by an incidental mode or link-count check would still pass a
+        // "did it fail" assertion while leaving the identity guard untested.
+        let expected = match mutation {
+            // Content-bound evidence: the inode is unchanged for `rewrite`, and
+            // the mode and link count are canonical for `substitute`.
+            "rewrite" | "delete" | "substitute" => "FileChanged",
+            // Both reach outside the candidate, so both raise the link count.
+            "replace" | "hardlink" => "UnexpectedHardlink",
+            _ => unreachable!(),
+        };
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("PostEffectEvidence") && rendered.contains(expected),
+            "{mutation} was not refused by `{expected}`: {error:#?}"
+        );
+    }
+}
