@@ -1641,9 +1641,42 @@ porting anything — the pilot's lesson is that the expensive assumption is
 "this needs porting" when the coverage is already somewhere else.
 
 **Started 2026-08-02.** Driver landed
-(`journal_coordinator/tests/active_reblit_forward.rs`) plus the first two ports:
-a clean-run record proof and
-`active_reblit_rotates_the_whole_old_wrapper_and_leaves_exact_empty_staging`.
+(`journal_coordinator/tests/active_reblit_forward.rs`) with three variants —
+plain, `_with_transaction`, `_with_system` — plus **6 of 25** legacy tests
+ported, all stressed 12–30× for flakiness before commit:
+
+| # | legacy test | coordinated stage of refusal |
+|---|---|---|
+| 1 | `rotates_the_whole_old_wrapper_and_leaves_exact_empty_staging` | success + `complete_active_reblit_without_boot` |
+| 2 | `refuses_missing_or_malformed_live_state_id_*` | `/usr exchange`, `LiveActiveStateProof` |
+| 3 | `rejects_same_inode_state_id_rewrite_before_exchange` | `transaction triggers`, `PostEffectEvidence` |
+| 4 | `rejects_same_content_new_state_id_inode` | same as #3 (folded into one test) |
+| 5 | `exchange_preflight_rejects_last_moment_state_id_replacement` | `/usr exchange`, **`outcome: NotApplied`** |
+| 6 | `system_boundary_corruption_reverses_and_preserves_bad_candidate` | `system triggers`, `PostEffectEvidence` |
+
+Plus a clean-run record proof (g10) with no legacy ancestor.
+
+**#6 changed meaning and the test says so.** Legacy self-reversed the exchange
+and reported `StatefulTransitionUsrRestored`. The coordinated forward prefix
+does not self-reverse — it refuses to record `SystemTriggersComplete` and parks
+the journal for recovery. Both routes agree a corrupted live tree never becomes
+a completed transition; only the disposition moved.
+
+**Remaining 19, and what each needs:**
+
+- **#7** `pre_boot_checkpoint_state_id_mutation_is_rejected_before_boot` — needs
+  `run_boot_sync: true` and `into_active_reblit_boot_sync_handoff`; the current
+  drivers all pass `false`.
+- **#8–#15** staging-wrapper faults, scan, exhaustion, and two-reblits-one-client.
+  #15 needs a *second* identity+authority against the same installation, which
+  `fixture_with_exchange_authority` cannot produce — it builds a fresh
+  installation each call. Needs a re-acquire helper over `fixture.installation`.
+- **#16–#25** previous-slot parking. Check each against
+  `journal_coordinator/tests/active_reblit_reservation.rs` (8 tests) first —
+  `handles_one_link_and_parks_two_link_previous`,
+  `reports_ambiguous_replacement_stage`, `preserves_foreign_name_exhaustion`,
+  and `reports_applied_slot_after_durable_replacement` look like direct
+  counterparts to #16, #11, #13 and #10 respectively.
 
 **The governing fact for the remaining 24 — measured, and it is not obvious:**
 `execute_active_reblit_forward` is *not* the whole transition. At
