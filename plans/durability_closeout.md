@@ -996,15 +996,41 @@ The rollback now gets *past* candidate-preservation admission — six phases —
 fails inside the dispatch instead. That is a different layer: the authority was
 issued, so the namespace proof and plan predicate both passed.
 
-**The message is truncated at 200 characters by the harness's `cut -c1-200`, so
-the actual cause is unread.** Do not theorise from the prefix. Either widen that
-cut, or — better, since it composes with everything else — emit the dispatch
-error through the `DIAG` channel that already works. Then read it.
+**The harness was hiding the answer twice over, and both are fixed.** The
+`cut -c1-200` kept the summary tidy and discarded the end of every error chain —
+which is exactly where the cause lives, because these errors nest source-last.
+It now prints the whole line, folded. And the phase regex only matched
+`at <Phase> requires`, which a dispatcher error never contains, so the verdict
+degraded to the one reading that says nothing; it now falls back to naming the
+layer (`dispatch-ActivateArchived`).
 
-Note `driver=stalled-at-unknown`: the phase regex only matches
-`at <Phase> requires`, which a dispatch error does not contain, so the verdict
-column degrades. Worth fixing at the same time so a dispatch failure is not
-reported as an unknown phase.
+With that, one run gave the whole chain:
+
+    Error: install: establish clean system-client startup baseline:
+      dispatch the exact startup ActivateArchived candidate-preservation checkpoint:
+      dispatch exact startup ActivateArchived candidate preservation:
+      consume and reconcile exact operation-specific candidate-preservation authority:
+      revalidate the independent candidate-preservation namespace proof:
+      capture or reconcile an exact archived candidate child-move effect:
+      **the retained canonical archived candidate wrapper occurs 0 times**
+
+### PR8 — the same canonical assumption, one layer down
+
+The *effect* capture has its own lookup for "the retained **canonical** archived
+candidate wrapper", and it is the identical assumption just fixed in
+`archived_topology`: the slot is parked, not canonical, so the count is zero.
+One rule, two copies, fixed one at a time — the shape this plan has recorded
+sixteen times.
+
+**Fix in the archived child-move capture** (`capture/archived_candidate_preserve.rs`
+and its consumer in `usr_rollback_candidate_preserve_authority/archived_effect.rs`),
+the same way: accept the slot at either `State(state)` or
+`ArchivedCandidateParking { state, .. }`, keep every identity check, and keep
+requiring exactly one match so canonical-plus-parking stays a conflict.
+
+**Then grep for the rest of them before re-running.** Two copies have surfaced
+one run apart; assume a third. `rg 'TreeLocation::State\('` across
+`activation_namespace/` is the cheap check.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in

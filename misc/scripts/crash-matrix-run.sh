@@ -282,12 +282,25 @@ else
         # so there is nothing to install and nothing to recover. That is not a
         # durability outcome and must not be reported as a stall.
         case "$DRV" in *"no package found"*) D=nothing-staged; break ;; esac
+        # A phase name only appears when startup *refused* a phase. A failure
+        # inside a dispatcher has no `at <Phase> requires` text at all, so this
+        # came out empty and the verdict degraded to `stalled-at-unknown` — the
+        # one reading that tells you nothing. Name the layer instead.
         PHASE=$(echo "$DRV" | grep -oE 'at [A-Za-z]+ requires' | head -1 | awk '{print $2}')
+        if [ -z "$PHASE" ]; then
+            PHASE=$(echo "$DRV" | grep -oE 'dispatch the exact startup [A-Za-z]+' | head -1 | awk '{print "dispatch-" $NF}')
+        fi
         if [ "$PHASE" = "$PREV_PHASE" ]; then
             STALL=$((STALL + 1))
             if [ "$STALL" -ge "${STALL_LIMIT:-5}" ]; then
                 D=stalled-at-${PHASE:-unknown}
-                echo "STALL: $(echo "$DRV" | tail -1 | cut -c1-200)"
+                # The 200-character cut kept the summary readable and threw away
+                # the end of every error chain — which is where the cause lives,
+                # since these errors nest source-first. Print the whole last
+                # line, wrapped, rather than a prefix that always stops just
+                # before the answer (2026-08-02).
+                echo "STALL:"
+                echo "$DRV" | tail -1 | fold -w 160
                 # Everything cast writes lands in `$DRV`, and the summary above
                 # keeps only 200 characters of its last line. Diagnostics added
                 # to chase a stall are therefore captured and discarded, which
