@@ -433,6 +433,7 @@ include!("new_state_forward.rs");
 include!("failure_evidence.rs");
 include!("transaction_triggers.rs");
 include!("metadata_proof.rs");
+include!("candidate_metadata_escapes.rs");
 include!("usr_exchange_intent.rs");
 include!("usr_exchange_effect.rs");
 include!("root_abi_publication_support.rs");
