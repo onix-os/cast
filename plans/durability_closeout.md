@@ -1670,6 +1670,33 @@ steps, and the difference was that I had only driven one of them.
 `complete_active_reblit_without_boot`, `into_active_reblit_boot_sync_handoff`,
 `archive_previous_tree`, and the NewState pair.
 
+**Two more behavioural differences, both found by porting rather than reading.**
+
+1. **The wrapper name is reserved *before* validation.** The legacy route
+   validated the live tree first and reserved nothing on refusal, so its tests
+   assert `wrapper_quarantines(&fixture).is_empty()`. The coordinated route
+   reserves the wrapper during the forward prefix and refuses later, at the
+   `/usr exchange` stage — so a refused transition **does** leave a wrapper.
+   The invariant that survives is that the reserved wrapper is **empty**: a
+   reserved name is inert, a populated one would mean a tree was rotated out
+   from under a transition that then failed. Any ported test asserting "no
+   wrapper" must be rewritten this way, not deleted and not left as-is.
+
+2. **An unlinked live `.stateID` is covered by two guards that race.**
+   `validate live state-ID inode policy` sees `links=0`; `revalidate live
+   active-state snapshot` sees the retained metadata change. Which reports
+   first is timing-dependent — **measured 2/25 runs** taking the other branch,
+   in isolation, on an otherwise idle tree. Both are `LiveActiveStateProof`
+   refusals and the transition stops either way, so this is benign, but any
+   test that pins the specific guard for the *missing* case is flaky by
+   construction. The *malformed* case is deterministic (a rewritten `.stateID`
+   is well-formed at a new inode, so only snapshot revalidation can catch it)
+   and is safe to pin. 0/30 after relaxing only the missing case.
+
+   This is a distinct phenomenon from the known
+   `receipt_promotion::completion` full-suite-only cluster — it reproduces in
+   isolation and now has an explanation.
+
 The 9 fault-injecting sites need re-expressing as journal-phase fault-hook tests,
 because the coordinated route has no checkpoint mechanism — the same port the
 archived-activation tests already went through.
