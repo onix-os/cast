@@ -1028,9 +1028,25 @@ the same way: accept the slot at either `State(state)` or
 `ArchivedCandidateParking { state, .. }`, keep every identity check, and keep
 requiring exactly one match so canonical-plus-parking stays a conflict.
 
-**Then grep for the rest of them before re-running.** Two copies have surfaced
-one run apart; assume a third. `rg 'TreeLocation::State\('` across
-`activation_namespace/` is the cheap check.
+**The grep was run first this time, and it found a third.** Fixing the
+fingerprint capture (`exact_wrapper`, plus the `other_root_wrappers` filter that
+must exclude the same slot) moved the failure straight to
+`exact_retained_wrapper` at `archived_candidate_preserve.rs:448` — visible only
+because the two produce slightly different messages (`the retained canonical…`
+became `retained canonical…`).
+
+**The third copy is not a mechanical repeat, and was deliberately left.** It
+builds the move's retained parents, and derives both `target_name` and
+`target_path` from `state.to_string()` — the *canonical* name — so it is not
+just a lookup but the rename **destination**. Whether a rearchive from a parked
+slot should target the canonical name (because `Rearchive`'s `marker_after()` is
+`Candidate`, so the identity layer renames the slot back) or the parking name
+(and let the marker move afterwards) decides where a tree physically lands.
+Getting that wrong moves a real `/usr` to the wrong place, which is the worst
+class of change in this crate.
+
+Read `MoveDirection::Rearchive` in `archived_candidate.rs` and establish which
+name the slot has *at the moment of the child move* before touching line 448.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in

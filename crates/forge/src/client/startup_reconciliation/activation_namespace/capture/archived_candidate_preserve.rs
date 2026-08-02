@@ -194,11 +194,22 @@ impl ProjectedArchivedCandidatePreserveNamespace {
             |wrapper| wrapper.role == TreeLocation::Staging,
             "staging",
         )?;
-        let target = exact_wrapper(
-            &fingerprint.roots_entries,
-            |wrapper| wrapper.role == TreeLocation::State(state),
-            "canonical archived candidate",
-        )?;
+        // The slot answers to two modelled names: `MoveDirection::Stage` parks
+        // it so the canonical state name is free for the live candidate, and
+        // the rearchive restores it. Matching only the canonical name made this
+        // capture report "occurs 0 times" for every rollback that begins while
+        // an activation is in flight — the same assumption already corrected in
+        // `archived_topology`, one layer up (guest, 2026-08-02).
+        //
+        // `exact_wrapper` still demands exactly one match, so a canonical slot
+        // *and* a parking name for the same state stays the conflict the
+        // topology-refusal suite pins.
+        let is_candidate_slot = |wrapper: &WrapperFingerprint| match wrapper.role {
+            TreeLocation::State(canonical) => canonical == state,
+            TreeLocation::ArchivedCandidateParking { state: parked, .. } => parked == state,
+            _ => false,
+        };
+        let target = exact_wrapper(&fingerprint.roots_entries, is_candidate_slot, "archived candidate slot")?;
         let slot = target
             .slot
             .as_ref()
@@ -225,7 +236,7 @@ impl ProjectedArchivedCandidatePreserveNamespace {
         let other_root_wrappers = fingerprint
             .roots_entries
             .iter()
-            .filter(|wrapper| wrapper.role != TreeLocation::Staging && wrapper.role != TreeLocation::State(state))
+            .filter(|wrapper| wrapper.role != TreeLocation::Staging && !is_candidate_slot(wrapper))
             .cloned()
             .collect();
         Ok(Self {
