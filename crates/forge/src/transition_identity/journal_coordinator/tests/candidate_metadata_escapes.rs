@@ -364,3 +364,76 @@ fn coordinated_retained_metadata_proof_rejects_post_system_trigger_mutation() {
         11,
     );
 }
+
+// Whole-tree substitution: the candidate directory is renamed away and a
+// foreign directory takes its name in the window before the runtime proof. The
+// identity is descriptor-bound, so the substitution must be refused outright —
+// and, critically, neither tree may be decorated. Decorating the replacement
+// would write this transition's metadata into an attacker's directory;
+// decorating the displaced original would leave metadata on a tree the journal
+// no longer names.
+#[test]
+fn coordinated_candidate_substitution_before_metadata_decorates_neither_tree() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let live_identity = inode_identity(&fixture.installation.root.join("usr"));
+    let candidate = fixture.candidate_path.clone();
+    let displaced = fixture.installation.root.join("displaced-metadata-candidate");
+
+    let hook_candidate = candidate.clone();
+    let hook_displaced = displaced.clone();
+    arm_before_finish_candidate_runtime_proof(move || {
+        fs::rename(&hook_candidate, &hook_displaced).unwrap();
+        create_canonical_directory(&hook_candidate);
+        write_canonical_file(&hook_candidate.join("foreign"), b"replacement-candidate");
+    });
+
+    let error = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        NewStatePrevious::Active(fixture.previous_state),
+        &[],
+        "candidate substitution slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+    .expect_err("whole-tree candidate substitution must fail the forward prefix");
+
+    // The retained directory descriptor no longer resolves to the name it was
+    // taken at, which is what a whole-tree rename looks like from the inside.
+    assert_eq!(error.stage(), "candidate metadata publication", "{error:#?}");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("TreeMarker") && rendered.contains("DirectoryChanged"),
+        "substitution was not caught by the descriptor-bound marker: {error:#?}"
+    );
+
+    // Neither tree carries this transition's metadata.
+    assert!(!displaced.join("lib").exists(), "the displaced original was decorated");
+    assert!(!candidate.join("lib").exists(), "the replacement was decorated");
+    assert_eq!(
+        fs::read(candidate.join("foreign")).unwrap(),
+        b"replacement-candidate",
+        "the replacement tree was mutated"
+    );
+    // The displaced original is still intact and still the real candidate.
+    assert_eq!(
+        fs::read(displaced.join("payload-sentinel")).unwrap(),
+        NEW_STATE_PAYLOAD_SENTINEL
+    );
+    assert_eq!(inode_identity(&fixture.installation.root.join("usr")), live_identity);
+    assert_record_prefix(
+        &read_canonical(&fixture.installation.root),
+        Operation::NewState,
+        Phase::CandidatePrepareStarted,
+        4,
+    );
+}
