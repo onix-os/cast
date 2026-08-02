@@ -462,16 +462,18 @@ impl RetainedArchivedCandidatePreserveParents {
             },
             "archived candidate slot",
         )?;
-        let target_name =
-            CString::new(state.to_string()).map_err(|_| ArchivedCandidatePreserveCaptureError::InvalidTargetName)?;
+        // The slot's *current* name, not the canonical one. This is used for a
+        // single purpose — reopening the slot by name and proving it is still
+        // the retained descriptor — so it has to say where the directory is
+        // now. Nothing renames by it; `MoveDirection::Rearchive` unparks the
+        // slot itself before the child move.
+        //
+        // Holding it canonical made that proof open `.cast/root/<state>`, which
+        // does not exist while the activation is in flight, and the whole
+        // rollback stalled on `No such file or directory` (guest, 2026-08-02).
+        let target_name = CString::new(target.fingerprint.name.clone())
+            .map_err(|_| ArchivedCandidatePreserveCaptureError::InvalidTargetName)?;
         let staging_path = snapshot.roots_path.join("staging");
-        // The slot's *current* name, which is the parking name while the
-        // activation is in flight. `target_name` above stays canonical because
-        // that is what the slot is called by the time the child move runs —
-        // `Rearchive` unparks it first — but the descriptor has to be pinned
-        // where the directory is *now*, or the capture fails with
-        // `No such file or directory` on `.cast/root/<state>` (guest,
-        // 2026-08-02).
         let target_path = snapshot
             .roots_path
             .join(String::from_utf8_lossy(&target.fingerprint.name).as_ref());

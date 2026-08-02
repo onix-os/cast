@@ -1083,17 +1083,38 @@ parking name when the capture pins it and at the canonical name after
 time `revalidate_value_identity` re-pins it. Chasing the right string is the
 wrong shape of fix.
 
-**The retained descriptor is the answer, not a path.** `RetainedWrapper` already
-holds `directory: File`; a rename does not change the inode, so the fd stays
-valid across the unpark while every path spelling does not. The capture should
-revalidate through that descriptor — `openat`-style from the retained roots fd,
-or simply trusting the retained fd plus its `InodeWitness` — and keep paths for
-diagnostics only.
+**Reading what actually pins settled it in one pass.** `clone_descriptor` is a
+`try_clone` and `controlled_directory_witness` reads the fd — both take a path
+only for the error message. The single by-path reopen is
+`open_directory(&self.roots, &self.target_name, …)`, and its job is exactly one
+proof: *the retained descriptor is still the directory reachable at this name*.
+`target_name` had no other use — nothing renames by it — so holding it canonical
+was simply wrong. Both name and path now follow the matched wrapper.
 
-That is a real change to how this capture proves identity, and it is the same
-principle the rest of the crate already follows ("never reopen by path what you
-can revalidate by descriptor"). Worth doing properly rather than threading a
-fourth spelling of the name.
+### PR10 — seven phases, and the effect ran
+
+    PHASE-6: dispatch-ActivateArchived
+    PHASE-7: CandidatePreserveIntent
+    … at CandidatePreserveIntent requires ResumeRollback { … }; recovery effects
+      remain blocked by [ActivationNamespaceRejected, PhaseNamespaceConflict,
+      ExactNamespaceInventoryRequired]
+
+The capture cleared, the child move dispatched, and the record came back to
+`CandidatePreserveIntent` — so this is no longer a dispatch failure but a
+namespace the *policy* will not classify afterwards.
+
+`rollback_layouts` gives `CandidatePreserveIntent` two alternatives:
+`PRE_EXCHANGE` and `preserved = { candidate: Destination, previous: Live }`.
+The predecessor is Live (restored), so the suspect is `CandidatePlace::Destination`:
+`candidate_destination` almost certainly expects the candidate at
+`TreeLocation::State(n)`, and if the slot is still parked the candidate sits at
+`ArchivedCandidateParking` instead — the same canonical-name assumption, now in
+`policy.rs` rather than the capture.
+
+**Check first whether the move completed**: `ExactNamespaceInventoryRequired`
+alongside the other two suggests the inventory is being refused outright rather
+than merely misclassified. One DIAG line printing the post-move roles
+distinguishes "moved, unmodelled" from "did not move".
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
