@@ -503,3 +503,52 @@ fn coordinated_published_candidate_metadata_is_sealed() {
         assert_eq!(metadata.nlink(), 1, "{output} link count");
     }
 }
+
+// Ordering proof: the candidate `usr` clone is taken before anything is
+// written, so a clone that fails must leave the candidate tree exactly as it
+// was found. If decoration ran first, a failed clone would strand a half-built
+// `lib` on a tree the transition then abandons.
+#[test]
+fn coordinated_candidate_clone_failure_precedes_all_metadata_decoration() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let candidate = fixture.candidate_path.clone();
+    crate::transition_identity::arm_candidate_usr_clone_fault();
+
+    let error = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        NewStatePrevious::Active(fixture.previous_state),
+        &[],
+        "clone fault slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| Ok::<(), TriggerEffectError>(()),
+    )
+    .expect_err("a failed candidate clone must fail the forward prefix");
+
+    crate::transition_identity::assert_candidate_usr_clone_fault_consumed();
+    assert_eq!(error.stage(), "candidate metadata publication", "{error:#?}");
+    // Not even the containing directory is created before the clone succeeds.
+    assert!(!candidate.join("lib").exists(), "a failed clone still created `lib`");
+    assert!(!candidate.join("lib/os-release").exists());
+    assert!(!candidate.join("lib/system-model.glu").exists());
+    // The untouched candidate payload is still the one the fixture staged.
+    assert_eq!(
+        fs::read(candidate.join("payload-sentinel")).unwrap(),
+        NEW_STATE_PAYLOAD_SENTINEL
+    );
+    assert_record_prefix(
+        &read_canonical(&fixture.installation.root),
+        Operation::NewState,
+        Phase::CandidatePrepareStarted,
+        4,
+    );
+}
