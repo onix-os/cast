@@ -1158,13 +1158,37 @@ is wrong, and the namespace is the evidence.** Either the unpark did not run on
 this path, or it ran and something re-parked the slot, or the rollback's
 rearchive is a different code path from the one whose ordering was read.
 
-**Establish which before touching `wrappers.rs`.** Widening the emptiness rule
-would make a genuinely inconsistent namespace look acceptable if the unpark is
-simply missing — and the unpark is what makes the state slot canonical again, so
-skipping it would leave the system with no `<state>/` directory at all. Print
-the slot's marker location and `attempt.rearchive_preparation_applied` around
-the child move; that separates "unpark never ran" from "unpark ran, then the
-move re-parked".
+**Established by reading the callers, and it is the third possibility: two
+different rearchive paths.**
+
+`rearchive_archived_candidate` — the primitive whose ordering PR8 quoted, the
+one that calls `restore_displaced_slot_if_parked` first — has exactly two
+callers: the **legacy** `stateful_recovery.rs` and its tests. The coordinated
+rollback never touches it. Its move is
+`capture/archived_candidate_preserve/target_durability.rs`, which does
+
+    renameat2_noreplace_once(staging, c"usr", target, c"usr")
+
+against the retained `target` descriptor — the slot as captured, i.e. **still
+parked**. There is no unpark anywhere on that path.
+
+So PR8's ordering was correct about the primitive it read and irrelevant to the
+path that actually runs. That is the fourth time this section has recorded a
+conclusion drawn from the wrong copy of a routine.
+
+**The fix is not in `wrappers.rs`.** The emptiness rule is right: a parking name
+is inert, and a tree inside one means the namespace is genuinely inconsistent.
+What is missing is the unpark. The coordinated rearchive has to restore the slot
+to its canonical `<state>` name, as the legacy path does — otherwise a rolled-back
+activation leaves the system with no canonical state directory at all, which is
+worse than the stall it replaces.
+
+**Where to put it:** the slot rename is a namespace effect with its own
+durability, so it belongs beside the child move in
+`archived_candidate_preserve/target_durability.rs`, ordered *before* the
+`renameat2` so a crash between them leaves a parked-and-empty slot (already a
+modelled state) rather than a parked slot holding a tree (not modelled). Reuse
+`slot_lifecycle`'s restore rather than open-coding a second rename.
 
 Note for whoever runs it: `DIAG_GREP` does **not** reach the guest.
 `crash-matrix-run.sh` reconstructs the driver with `bash -c "$(declare -f run)"`,
