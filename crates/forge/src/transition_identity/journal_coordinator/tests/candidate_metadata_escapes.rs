@@ -304,3 +304,63 @@ fn coordinated_retained_metadata_proof_rejects_every_post_trigger_mutation() {
         );
     }
 }
+
+// System triggers run after the usr exchange, so by then the candidate tree is
+// the live tree and a trigger that mutates its own metadata is mutating what
+// the retained proof is bound to. The forward prefix must refuse to record
+// SystemTriggersComplete over it, leaving the journal parked for recovery to
+// reverse rather than committing a tree whose metadata no longer matches.
+#[test]
+fn coordinated_retained_metadata_proof_rejects_post_system_trigger_mutation() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let live_release = fixture.installation.root.join("usr/lib/os-release");
+    let ran = std::cell::Cell::new(false);
+
+    let error = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        NewStatePrevious::Active(fixture.previous_state),
+        &[],
+        "post-system-trigger mutation slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| {
+            ran.set(true);
+            fs::write(&live_release, b"rewritten-after-system-trigger").unwrap();
+            Ok::<(), TriggerEffectError>(())
+        },
+    )
+    .expect_err("post-system-trigger metadata mutation must fail the forward prefix");
+
+    assert!(ran.get(), "system trigger did not run");
+    assert_eq!(error.stage(), "system triggers", "{error:#?}");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("PostEffectEvidence") && rendered.contains("FileChanged"),
+        "post-system-trigger mutation was not caught by the retained proof: {error:#?}"
+    );
+    // The proof is descriptor-bound, so it names the staging path it was taken
+    // at even though the write went to the live path. That the write was seen
+    // at all is itself the evidence that the exchange already happened and the
+    // two names are one inode.
+    assert!(
+        rendered.contains("staging/usr/lib/os-release"),
+        "refusal did not name the retained candidate path: {error:#?}"
+    );
+    // The journal is left parked at the started phase, not advanced over the
+    // mutation, so recovery owns the reversal.
+    assert_record_prefix(
+        &read_canonical(&fixture.installation.root),
+        Operation::NewState,
+        Phase::SystemTriggersStarted,
+        11,
+    );
+}
