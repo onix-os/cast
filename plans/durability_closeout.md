@@ -1517,6 +1517,31 @@ helpers take a `vfs` tree and blit it, while the coordinated entries take an
 already-materialized `fixed_staging::StatefulCandidate`. Every site needs a
 materialization step.
 
+**Measured 2026-08-02, and the gap is wider than that.** Compare the two entry
+points directly:
+
+    // legacy — one call does everything
+    apply_stateful_blit_with_checkpoint(fstree: vfs::Tree<PendingFile>,
+        state: &State, old_state: Option<state::Id>,
+        system_snapshot: SystemModel, checkpoint: F)
+
+    // coordinated
+    execute_new_state_forward(identity: StatefulTreeIdentity,
+        authority: JournalUsrExchangeAuthority, database: &db::state::Database,
+        previous: NewStatePrevious, selections: &[Selection], summary: &str,
+        run_boot_sync: bool, derive_metadata, transaction_trigger, system_trigger)
+
+A ported site does not just materialize a candidate — it has to construct a
+`StatefulTreeIdentity`, obtain a `JournalUsrExchangeAuthority`, and supply the
+three trigger closures the coordinator drives. That is fixture-building, not
+call-site rewriting, and it is the same for all 34 sites rather than only the
+9 fault-injecting ones.
+
+**So the E:M estimate on this section is wrong.** Budget it as its own piece of
+work with a shared test harness built first — one helper that turns a
+`StatefulTransitionFixture` into `(identity, authority, previous)` — and port
+against that, or the 34 sites become 34 hand-rolled coordinator setups.
+
 The 9 fault-injecting sites need re-expressing as journal-phase fault-hook tests,
 because the coordinated route has no checkpoint mechanism — the same port the
 archived-activation tests already went through.
