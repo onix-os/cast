@@ -437,3 +437,69 @@ fn coordinated_candidate_substitution_before_metadata_decorates_neither_tree() {
         4,
     );
 }
+
+// The success counterpart to the refusals above. Published metadata is not
+// merely present with the right bytes — it is sealed: a regular file owned by
+// the running user, canonically moded, and singly linked. Each of those is a
+// property some refusal above depends on, so a regression that published a
+// group-writable or multiply-linked output would quietly weaken every one of
+// them while leaving the byte assertions green.
+#[test]
+fn coordinated_published_candidate_metadata_is_sealed() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority(CandidateKind::NewState, PreviousKind::Active);
+    let scopes = std::cell::RefCell::new(Vec::new());
+
+    let (complete, allocated) = execute_new_state_forward(
+        identity,
+        authority,
+        &fixture.database,
+        NewStatePrevious::Active(fixture.previous_state),
+        &[],
+        "sealed metadata slice",
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| {
+            scopes.borrow_mut().push("transaction");
+            Ok::<(), TriggerEffectError>(())
+        },
+        |_view| {
+            scopes.borrow_mut().push("system");
+            Ok::<(), TriggerEffectError>(())
+        },
+    )
+    .expect("clean candidate reaches system-triggers complete");
+
+    assert_eq!(*scopes.borrow(), ["transaction", "system"]);
+    assert_record_prefix(
+        complete.record(),
+        Operation::NewState,
+        Phase::SystemTriggersComplete,
+        12,
+    );
+
+    // Published past the exchange, so the outputs are asserted on the live tree.
+    let live_lib = fixture.installation.root.join("usr/lib");
+    assert_eq!(fs::read(live_lib.join("os-release")).unwrap(), COORDINATOR_OS_RELEASE);
+    assert_eq!(
+        fs::read(live_lib.join("system-model.glu")).unwrap(),
+        COORDINATOR_SYSTEM_SNAPSHOT
+    );
+    assert_eq!(
+        fs::read(fixture.installation.root.join("usr/.stateID")).unwrap(),
+        allocated.to_string().as_bytes()
+    );
+
+    for output in ["os-release", "system-model.glu"] {
+        let metadata = fs::symlink_metadata(live_lib.join(output)).unwrap();
+        assert!(metadata.file_type().is_file(), "{output} is not a regular file");
+        assert_eq!(metadata.uid(), unsafe { nix::libc::geteuid() }, "{output} owner");
+        assert_eq!(metadata.permissions().mode() & 0o7777, 0o644, "{output} mode");
+        assert_eq!(metadata.nlink(), 1, "{output} link count");
+    }
+}
