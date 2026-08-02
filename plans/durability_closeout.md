@@ -1124,9 +1124,28 @@ What runs earlier, in order: `capture_snapshot` itself (the
 candidate token appearing at zero or two locations after the child move is the
 most likely of those and would explain all three blockers at once.
 
-**Next probe, and keep it in this order:** instrument the `capture_snapshot`
-error path first, then `CandidateCount`/`PreviousCount` with their actual
-counts. Do not add a DIAG to the layout branch again — it is proven silent.
+**Second probe, and it narrows further: `assess_snapshot_layout` is never
+called.** An *unconditional* print at the very top of that function — before any
+branch — produced nothing either. The channel was live (the harness default
+pattern `-DIAG` matches `NS-DIAG` as a substring, which is how the earlier
+`CP-DIAG` lines came through), so this is absence of a call, not absence of
+output.
+
+That puts the failure entirely inside `capture_snapshot`, which is exactly what
+`ExactNamespaceInventoryRequired` says and which no policy predicate can affect.
+Every remaining theory about layouts, dispositions, and canonical names is
+therefore dead for this stall.
+
+**Next probe:** instrument `capture_snapshot`'s own error returns in
+`capture/mod.rs` — root-entry classification, wrapper capture, and the
+tree/marker reads — with one unconditional line at entry as the control. The
+answer is a `CaptureError` variant and it will name itself.
+
+Note for whoever runs it: `DIAG_GREP` does **not** reach the guest.
+`crash-matrix-run.sh` reconstructs the driver with `bash -c "$(declare -f run)"`,
+so host environment does not propagate; the default `-DIAG` pattern is what
+actually applies. Either tag every diagnostic with a `-DIAG` suffix, as these
+did, or thread the variable through the `bash -c` line.
 
 Worth noting the shape: **the fix was one line from complete and I re-ran
 without re-reading the branch I had just changed.** The diagnostic caught it in
