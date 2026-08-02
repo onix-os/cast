@@ -296,3 +296,76 @@ fn coordinated_active_reblit_exchange_refuses_a_last_moment_state_id_replacement
     // The hook did run — otherwise this test would prove nothing.
     assert!(witness.is_file(), "the substitution hook never fired");
 }
+
+/// Driver variant whose hook runs during the *system* trigger — after the usr
+/// exchange, so the live tree and the candidate are the same inode by then.
+fn run_active_reblit_with_system(
+    fixture: &CoordinatorFixture,
+    identity: StatefulTreeIdentity,
+    authority: JournalUsrExchangeAuthority,
+    system: impl FnOnce(),
+) -> Result<SystemTriggersCompleteCoordinator, ActiveReblitForwardError> {
+    execute_active_reblit_forward(
+        identity,
+        authority,
+        fixture.candidate_state,
+        false,
+        |_| {
+            crate::transition_identity::CandidateMetadataOutputs::from_policy(
+                COORDINATOR_OS_RELEASE,
+                crate::system_model::snapshot_authorities(),
+                COORDINATOR_SYSTEM_SNAPSHOT,
+            )
+        },
+        |_view| Ok::<(), TriggerEffectError>(()),
+        |_view| {
+            system();
+            Ok::<(), TriggerEffectError>(())
+        },
+    )
+}
+
+// Ported from
+// `active_reblit_system_boundary_corruption_reverses_and_preserves_bad_candidate`.
+//
+// System triggers run after the exchange, so a trigger that corrupts the live
+// `.stateID` is corrupting the tree this transition just published. The legacy
+// route reversed the exchange itself and reported `StatefulTransitionUsrRestored`.
+// The coordinated route does not self-reverse in the forward prefix: it refuses
+// to record `SystemTriggersComplete` and parks the journal, leaving the
+// reversal to recovery. What both routes agree on is that a corrupted live tree
+// is never allowed to become a completed transition.
+#[test]
+fn coordinated_active_reblit_refuses_a_system_trigger_that_corrupts_the_live_state_id() {
+    for mutation in ["rewrite", "remove", "replace"] {
+        let (fixture, identity, authority) =
+            fixture_with_exchange_authority(CandidateKind::ActiveReblit, PreviousKind::Active);
+        let live = fixture.installation.root.join("usr/.stateID");
+        let retained = fixture.installation.root.join("usr/.stateID.retained");
+        let ran = std::cell::Cell::new(false);
+
+        let error = run_active_reblit_with_system(&fixture, identity, authority, || {
+            ran.set(true);
+            match mutation {
+                "rewrite" => fs::write(&live, b"9").unwrap(),
+                "remove" => fs::remove_file(&live).unwrap(),
+                "replace" => {
+                    let contents = fs::read(&live).unwrap();
+                    fs::rename(&live, &retained).unwrap();
+                    write_canonical_file(&live, &contents);
+                }
+                _ => unreachable!(),
+            }
+        })
+        .err()
+        .expect("a corrupted live state ID must fail the transition");
+
+        assert!(ran.get(), "{mutation}: the system trigger never ran");
+        assert_eq!(error.stage(), "system triggers", "{mutation}: {error:#?}");
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("PostEffectEvidence"),
+            "{mutation} was not caught as post-effect evidence: {error:#?}"
+        );
+    }
+}
