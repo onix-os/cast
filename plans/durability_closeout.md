@@ -1552,13 +1552,52 @@ private to `journal_coordinator::tests`, and the 34 sites live in
 can reach, or `#[path]`-include them the way the existing suites already share
 `startup_recovery/test_support.rs`.
 
-`client/tests/stateful_journal_and_identity_preflight.rs` — the file with the
-most sites (8) — already references `JournalUsrExchangeAuthority`, so it is the
-natural first port and will show whether the include route is enough.
+**Corrected 2026-08-02.** `stateful_journal_and_identity_preflight.rs` was
+called the natural pilot because it "already references
+`JournalUsrExchangeAuthority`". It does not — it references
+`JournalUsrExchangeAuthorityError`, asserting on error *types*. That was a grep
+match read as a fact, and it is not a reason to pick that file.
 
-Revised order: expose the existing fixture helpers to `client/tests/`, port
-`stateful_journal_and_identity_preflight.rs` (8) against them as the pilot, then
-the remaining 26, then the deletions.
+### Pilot: `stateful_candidate_metadata.rs` — DONE 2026-08-02
+
+Picked instead because its 9 tests funnel through **one** legacy call site
+(`apply_fresh_candidate`), so porting the helper ports the whole file. Landed as
+8 coordinated tests in
+`journal_coordinator/tests/candidate_metadata_escapes.rs`:
+
+| legacy test | coordinated port | refusal observed |
+|---|---|---|
+| `never_follows_lib_or_os_info_symlinks` | same | `UnsafeDirectory`/`UnsafeInput` (symlink) |
+| `never_follows_output_symlinks` | same | `DestinationExists` (symlink) |
+| `preserves_existing_output_inodes` | `never_replaces_existing_output_inodes` | `DestinationExists` (regular-file) |
+| `final_name_races_are_no_replace` | same | `PublicationCollision` (EEXIST) |
+| `rejects_post_trigger_mutation` (4 shapes) | `rejects_every_post_trigger_mutation` (**5**) | `FileChanged` / `UnexpectedHardlink` |
+| `rejects_post_system_trigger_mutation` | same | `FileChanged` at `SystemTriggersStarted` |
+| `candidate_usr_substitution_before_metadata` | `candidate_substitution_before_metadata_decorates_neither_tree` | `TreeMarker(DirectoryChanged)` |
+| `candidate_usr_clone_failure_precedes_decoration` | same | fault consumed, no `lib` created |
+| `successful_stateful_metadata_is_sealed_*` | `published_candidate_metadata_is_sealed` | mode/uid/nlink asserted |
+
+Three things the port established that reading alone would not have:
+
+1. **Every refusal is asserted by variant, not just by stage.** The first draft
+   asserted only "it failed at metadata publication" — which the wrong failure
+   would also satisfy. Printing the actual errors showed all five shapes were
+   discriminated correctly, and the assertions now pin that.
+2. **The `replace` shape was being caught by the wrong guard.** With
+   `fs::write` the replacement landed at mode 0o664 and tripped `UnsafeMode` —
+   the identity check never ran. Made canonical, it fell through to
+   `UnexpectedHardlink`. A fifth **`substitute`** shape was added (fresh file,
+   canonical mode, single link) so the pure-identity path is exercised; it is
+   caught by `FileChanged`. That shape had no legacy ancestor.
+3. **System triggers run after the exchange** — confirmed observationally, not
+   from the phase table: a write to the *live* path was refused naming the
+   *staging* path, which is only possible if they are one inode by then.
+
+`decorate_stateful` has exactly one non-test caller
+(`core/stateful_transition.rs:126`), so it dies with the legacy route and the
+two tests that drive it directly had to be ported too, not left behind.
+
+Remaining order: port the other 26 sites across 6 files, then the deletions.
 
 The 9 fault-injecting sites need re-expressing as journal-phase fault-hook tests,
 because the coordinated route has no checkpoint mechanism — the same port the
