@@ -1537,10 +1537,28 @@ three trigger closures the coordinator drives. That is fixture-building, not
 call-site rewriting, and it is the same for all 34 sites rather than only the
 9 fault-injecting ones.
 
-**So the E:M estimate on this section is wrong.** Budget it as its own piece of
-work with a shared test harness built first — one helper that turns a
-`StatefulTransitionFixture` into `(identity, authority, previous)` — and port
-against that, or the 34 sites become 34 hand-rolled coordinator setups.
+**But the harness does not need building — it already exists.**
+`transition_identity/journal_coordinator/tests/mod.rs` has `CoordinatorFixture`
+plus `fixture()`, `fixture_with_exchange_authority()`,
+`fixture_with_exchange_authority_and_previous_slot()`, `fixture_parts()` and
+`fixture_parts_with_root_abi_mask()` — exactly the
+`(identity, authority, previous)` construction each port needs, already used by
+`new_state_forward.rs`, `usr_exchange_effect.rs` and
+`root_abi_publication_persistence.rs`.
+
+So the real first step is **visibility, not construction**: those helpers are
+private to `journal_coordinator::tests`, and the 34 sites live in
+`client/tests/`. Either lift them into a shared test-support module both trees
+can reach, or `#[path]`-include them the way the existing suites already share
+`startup_recovery/test_support.rs`.
+
+`client/tests/stateful_journal_and_identity_preflight.rs` — the file with the
+most sites (8) — already references `JournalUsrExchangeAuthority`, so it is the
+natural first port and will show whether the include route is enough.
+
+Revised order: expose the existing fixture helpers to `client/tests/`, port
+`stateful_journal_and_identity_preflight.rs` (8) against them as the pilot, then
+the remaining 26, then the deletions.
 
 The 9 fault-injecting sites need re-expressing as journal-phase fault-hook tests,
 because the coordinated route has no checkpoint mechanism — the same port the
