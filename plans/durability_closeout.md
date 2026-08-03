@@ -1689,9 +1689,49 @@ different scope.
 | #11 `staging_wrapper_substitution_is_ambiguous_and_never_retried` | `reports_ambiguous_replacement_stage` | **NOT a duplicate.** Legacy substitutes the whole **staging directory**; coordinated renames the **replacement path**. Different injection subject, different error (`outcome: "ambiguous"` at commit cleanup vs `EvidenceSandwich`). |
 | #16 `preserves_authorized_two_link_previous_marker_pair` | `handles_one_link_and_parks_two_link_previous` | **NOT a duplicate — half of it is.** The parking assertions overlap. But legacy then runs a *second, NewState* transition and asserts the parked slot's marker inode and `nlink == 2` survive it. That cross-transition durability claim has no coordinated equivalent. |
 
-Net: 1 deletion, 3 still need porting. The lesson is the same one the pilot
-taught — "looks like a counterpart" from a name match is not evidence, and the
-error has consistently run toward assuming coverage exists.
+Net from that pass: 1 deletion, 3 still need porting. The lesson is the same one
+the pilot taught — "looks like a counterpart" from a name match is not evidence,
+and the error has consistently run toward assuming coverage exists.
+
+### Then #10 and #11 turned out to be deletions anyway — for a better reason
+
+Attempting to port them, all three injected faults **succeeded**, which read as
+"the coordinated route is more robust." It is not. Adding
+`staging_wrapper_rotation_faults_remaining()` (new, `fault_injection.rs`) showed
+`unconsumed=3/3` and the before-exchange hook never firing: **the code path is
+not taken at all.** A clean run under injected faults means nothing until you
+prove the fault fired — the same trap as the `/tmp`-on-tmpfs and swallowed-`$DRV`
+episodes earlier in this epic.
+
+Confirmed structurally: `rotate_active_reblit_staging` has **exactly one
+caller**, `client/core/stateful_transition.rs:531` — the legacy route. So
+`staging_wrapper_rotation/legacy_lifecycle.rs::rotate` and its fault points
+(`OriginalPostSync`, `FinalRevalidation`, `BeforeExchange`, `AfterExchange`,
+the `*PreSync`/`*PostSync` family) are legacy-only and die with the route.
+
+The split inside `staging_wrapper_rotation` is therefore:
+
+| shared with the coordinated route | legacy-only |
+|---|---|
+| `reserve_with_journal`, `finish_preparation_with_journal` — reaching `ReplacementPreparationSync`, `FinalPreparationRevalidation` | `rotate` — the whole exchange, and `before_exchange()` |
+
+**Revised verdict for the staging-wrapper tests (#8–#11): delete, do not port.**
+Their preparation-point coverage already exists coordinated
+(`retries_one_durability_unproven_fault`,
+`reports_durable_final_checkpoint_failure`); their exchange-point coverage tests
+code being deleted. #8 spans both halves — only its preparation points matter,
+and those are covered.
+
+A boundary regression guard is now in
+`active_reblit_forward.rs::coordinated_active_reblit_never_reaches_the_legacy_rotation_exchange`;
+it arms three exchange faults and asserts all three stay unconsumed. Delete it
+together with `legacy_lifecycle::rotate`.
+
+**#16–#25 are a different story** — they use `SlotFaultPoint` (active previous
+slot parking), and the coordinated reservation *does* reach those
+(`reports_applied_slot_after_durable_replacement` arms
+`SlotFaultPoint::RootsPostSync`). Those need the same fired-or-not check per
+test, not an assumption either way.
 
 **The governing fact for the remaining 24 — measured, and it is not obvious:**
 `execute_active_reblit_forward` is *not* the whole transition. At
