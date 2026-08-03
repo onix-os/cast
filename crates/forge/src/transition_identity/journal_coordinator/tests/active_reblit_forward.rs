@@ -369,3 +369,46 @@ fn coordinated_active_reblit_refuses_a_system_trigger_that_corrupts_the_live_sta
         );
     }
 }
+
+// Boundary proof: the coordinated route uses the staging-wrapper *reservation*
+// but never the legacy rotation *exchange*.
+//
+// This is the fact that decides whether the legacy rotation tests get ported or
+// deleted, so it is asserted rather than left as a note. `rotate_active_reblit_
+// staging` has exactly one caller — `client/core/stateful_transition.rs`, the
+// legacy route — and the fault points inside it are therefore unreachable here.
+//
+// If someone later wires the rotation exchange into the coordinated path, this
+// test fails and says so. It is expected to be deleted along with
+// `legacy_lifecycle::rotate` itself.
+#[test]
+fn coordinated_active_reblit_never_reaches_the_legacy_rotation_exchange() {
+    let (fixture, identity, authority) =
+        fixture_with_exchange_authority(CandidateKind::ActiveReblit, PreviousKind::Active);
+    let exchanged = std::rc::Rc::new(std::cell::Cell::new(false));
+    let hook = std::rc::Rc::clone(&exchanged);
+    crate::transition_identity::staging_wrapper_rotation::arm_before_staging_wrapper_exchange(move || {
+        hook.set(true);
+    });
+    arm_staging_wrapper_rotation_faults([
+        WrapperFaultPoint::OriginalPostSync,
+        WrapperFaultPoint::FinalRevalidation,
+        WrapperFaultPoint::BeforeExchange,
+    ]);
+
+    run_active_reblit(&fixture, identity, authority)
+        .expect("forward prefix")
+        .complete_active_reblit_without_boot()
+        .expect("no-boot completion");
+
+    let remaining = crate::transition_identity::staging_wrapper_rotation::staging_wrapper_rotation_faults_remaining();
+    arm_staging_wrapper_rotation_faults([]);
+
+    // Every armed fault is still armed, and the exchange hook never ran: a
+    // clean run here means the code path was not taken, not that it coped.
+    assert_eq!(
+        remaining, 3,
+        "the coordinated route entered the legacy rotation exchange"
+    );
+    assert!(!exchanged.get(), "the legacy before-exchange hook fired");
+}
