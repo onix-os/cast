@@ -1782,11 +1782,31 @@ FIFO kinds were not. Two things it turned up:
 
 ### Running tally for the 25
 
-- **Ported (9 legacy → 10 coordinated tests):** #1–#6, #17, #19, plus a
-  clean-run record proof and the rotation-boundary guard.
+- **Ported (15 legacy → 15 coordinated tests):** #1–#6, #12, #14, #17, #19,
+  #21–#25, plus a clean-run record proof and the rotation-boundary guard.
 - **Confirmed deletions (7):** #8–#11 (legacy rotation exchange), #13, #18, #20
   (superseded by the reservation suite).
-- **Remaining (9):** #7, #12, #14, #15, #16, #21–#25.
+- **Remaining (3), each blocked on missing test infrastructure:**
+
+| # | legacy test | what it needs |
+|---|---|---|
+| 7 | `pre_boot_checkpoint_state_id_mutation_is_rejected_before_boot` | a driver with `run_boot_sync: true` plus `into_active_reblit_boot_sync_handoff`; all three current drivers pass `false`, so the pre-boot checkpoint is never reached |
+| 15 | `two_successful_active_reblits_on_one_client_use_distinct_wrapper_slots` | a *second* identity+authority against the same installation. `fixture_with_exchange_authority*` builds a fresh installation per call, and the candidate staging tree is consumed by the first run — needs a re-acquire helper over `fixture.installation` that re-stages a candidate |
+| 16 | `preserves_authorized_two_link_previous_marker_pair` | its parking half duplicates `handles_one_link_and_parks_two_link_previous`; the unique half runs a *subsequent NewState transition* and asserts the parked slot's marker inode and `nlink == 2` survive it — a cross-transition fixture the coordinator tests have no shape for yet |
+
+Notes from the later ports:
+
+- **#14's hook is reachable.** `arm_before_quarantine_slot_reopen` fires via
+  `create_private_child`, which the coordinated reservation does call. The
+  ported test asserts the hook fired before asserting anything else, for the
+  same reason as the parking matrix.
+- **#12 and #19 are the same proof on two namespaces** — wrapper quarantine and
+  previous-slot parking. Both scans step over file/symlink/FIFO/directory
+  occupants and take the first free index. Only the wrong-mode directory case
+  existed coordinated (`keeps_wrong_wrapper_mode_untouched`).
+- **#24/#25 folded into one test** over both trigger boundaries: the parked slot
+  moved back to canonical is caught as `PostEffectEvidence` at whichever
+  boundary the un-move happens on.
 
 **The governing fact for the remaining 24 — measured, and it is not obvious:**
 `execute_active_reblit_forward` is *not* the whole transition. At
