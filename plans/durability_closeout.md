@@ -1782,17 +1782,44 @@ FIFO kinds were not. Two things it turned up:
 
 ### Running tally for the 25
 
-- **Ported (16 legacy → 16 coordinated tests):** #1–#7, #12, #14, #17, #19,
+- **Ported (18 legacy → 18 coordinated tests):** #1–#7, #12, #14–#17, #19,
   #21–#25, plus a clean-run record proof and the rotation-boundary guard.
 - **Confirmed deletions (7):** #8–#11 (legacy rotation exchange), #13, #18, #20
   (superseded by the reservation suite).
-- **Remaining (2), each blocked on missing test infrastructure:**
+- **Remaining: none.** For the record, the two that looked blocked:
 
 | # | legacy test | what it needs |
 |---|---|---|
 | ~~7~~ | ~~`pre_boot_checkpoint_state_id_mutation_is_rejected_before_boot`~~ | **DONE** — see below |
-| 15 | `two_successful_active_reblits_on_one_client_use_distinct_wrapper_slots` | a *second* identity+authority against the same installation. `fixture_with_exchange_authority*` builds a fresh installation per call, and the candidate staging tree is consumed by the first run — needs a re-acquire helper over `fixture.installation` that re-stages a candidate |
-| 16 | `preserves_authorized_two_link_previous_marker_pair` | its parking half duplicates `handles_one_link_and_parks_two_link_previous`; the unique half runs a *subsequent NewState transition* and asserts the parked slot's marker inode and `nlink == 2` survive it — a cross-transition fixture the coordinator tests have no shape for yet |
+| ~~15~~ | ~~`two_successful_active_reblits_on_one_client_use_distinct_wrapper_slots`~~ | **DONE** |
+| ~~16~~ | ~~`preserves_authorized_two_link_previous_marker_pair`~~ | **DONE** |
+
+### #15 and #16: two re-acquire helpers closed both
+
+The blocker was real but small — both needed a *second* transition over an
+installation that had already run one, which `fixture_with_exchange_authority*`
+cannot give (fresh installation per call, staging candidate consumed by the
+first run). Two helpers cover it:
+
+- `reacquire_active_reblit(&fixture)` — re-stages `staging/usr`, re-acquires the
+  pre-journal authority, calls `prepare_active_reblit_identity`.
+- `reacquire_new_state(&fixture)` — same, with the `payload-sentinel` the
+  NewState fixture writes, via `prepare_unallocated_candidate`.
+
+**#15** then asserts what the indexed wrapper naming is actually for: two
+successive reblits land in *distinct* slots, and each wrapper holds the tree
+that was live when its own transition started. A second run reusing index 0
+would overwrite the first transition's preserved tree — the only copy of it.
+
+**#16**'s parking half is asserted only as a precondition (it duplicates
+`handles_one_link_and_parks_two_link_previous`). The unique claim is
+cross-transition: the parked marker is a two-link pair shared with the tree it
+names, and an unrelated later NewState transition must leave both links intact.
+A successor that unlinked or re-created it would silently break the parked
+slot's binding to its tree, and no single-transition test would notice.
+
+**`active_reblit_tests.rs` is fully accounted for: 18 ported, 7 deletions, 0
+remaining.**
 
 Notes from the later ports:
 
