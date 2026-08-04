@@ -2860,3 +2860,44 @@ passes, is no longer `#[ignore]`d, and asserts the full claim: journal absent,
 previous live at its original identity, candidate rearchived into its slot, and
 a fresh transition acquirable afterwards. Legacy original deleted. 6x161
 stress-clean; suite **2735 passed, 0 failed, 6 ignored**.
+
+## Candidate-preserve deferrals now carry a reason — 2026-08-05 (task #30)
+
+`UsrRollbackCandidatePreserveAdmission::Deferred` was a unit variant; four of
+the five sites that produced it discarded the underlying error with `Err(_)`.
+The gate turns a deferral into `Dispatch::Unhandled` — a recovery-pending
+result with no blocker — so a *permanent* deferral was invisible: every restart
+looked identical and named nothing.
+
+`Deferred` now carries `UsrRollbackCandidatePreserveDeferral`:
+
+| variant | site |
+|---|---|
+| `RollbackPlanAbsent` | record has no rollback plan |
+| `NamespaceInspectionBegin(String)` | inspection could not start (topology, binding) |
+| `DatabaseIncompatibleOrPlanInexact` | database disagrees with the record |
+| `DatabaseChangedDuringCapture` | database moved between the two passes |
+| `NamespaceInspectionFinish(String)` | namespace moved, or failed topology, during capture |
+
+The two that previously swallowed an error now render it into the payload. All
+three gates (`usr_rollback_activate_archived`, `usr_rollback_active_reblit`,
+`usr_rollback_new_state`) log it at `warn` before returning `Unhandled`.
+
+**The existing deferral tests were strengthened rather than merely repaired.**
+They asserted "some deferral"; they now pin *which*, and all four predictions
+held on the first run — a database-clear hook yields
+`DatabaseChangedDuringCapture`, a namespace-change hook yields
+`NamespaceInspectionFinish`, and both topology refusals yield
+`NamespaceInspectionBegin`. That mapping is now executable documentation of
+which guard owns which failure.
+
+This is the change that would have prevented the task-#29 detour: the stall
+reported nothing, so a fixture ordering error read as a product liveness bug.
+A deferral naming "candidate marker has 1 link, expected 2" ends that in
+minutes.
+
+**Suite: 2734 passed, 1 failed, 6 ignored.** The single failure
+(`workflow_registry_reads_reject_a_sibling_transition_after_public_preflight`)
+is **pre-existing and not caused by this change** — a stashed baseline fails
+with the identical count, and the test passes 3/3 in isolation. It belongs with
+the known full-suite-only nondeterministic cluster, still unexplained.
