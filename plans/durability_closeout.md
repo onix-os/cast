@@ -1848,18 +1848,56 @@ conflicts late, after triggers" — a wrong claim about production behaviour. Th
 entry has to be planted before the lease is taken;
 `prejournal_authority_over_root_entry()` in `tests/mod.rs` does that.
 
-**Remaining 3, not yet sized against the coordinated suite:**
+### Sizing the remaining 3 — done, and the guesses were wrong again
 
-| # | legacy test | likely coordinated counterpart — UNVERIFIED |
-|---|---|---|
-| 2 | `retained_live_root_abi_rejects_replacement_at_the_exchange_boundary` | `root_links_complete_retained_namespace_binding_races_fail_stop`, `..._authenticates_exact_eexist_at_every_publisher_index` |
-| 3 | `retained_absent_root_abi_rejects_appearance_at_the_exchange_boundary` | same pair |
-| 4 | `post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry` | `..._rejects_foreign_eexist_at_every_publisher_index_without_replacement`; the "reverses usr" half is legacy disposition — coordinated defers to recovery |
+**My guessed counterpart for #2/#3 was wrong.**
+`root_links_complete_retained_namespace_binding_races_fail_stop` mutates the
+*journal's own namespace bindings* — `root`, `.cast`, `journal`,
+`state-transition.lock` — and fires at `publish_root_abi`, **post-exchange**.
+Legacy #2/#3 mutate a **root-ABI link entry** (`bin`) at the **pre-exchange**
+boundary against a retained present/absent expectation. Different subject,
+different side of the exchange. The EEXIST-at-publisher-index tests are
+publication-time too, so they are not counterparts either.
 
-Those mappings are **guesses from names and have not been checked**. Every time
-that shortcut has been taken in this epic it has been wrong — 1 of 4 real in the
-reservation pass, and the staging-wrapper verdict reversed entirely. Read both
-sides before deleting or porting any of the three.
+**Where the pre-exchange check lives.** `live_root_abi.revalidate()` appears
+only in `client/core/stateful_transition.rs` (lines 147, 281, 384 — the legacy
+route) plus `ephemeral_transition.rs` and `external_materialization.rs`. The
+coordinated route's root-ABI evidence is `require_published_root_abi_sandwich`,
+at publication.
+
+**What the coordinated route actually does with this mutation** — measured, by
+rewriting `bin` inside `arm_before_retained_exchange_rename`:
+
+    stage "/usr exchange", outcome: NotApplied
+    RetainedExchangeCoordinatorEvidence(UsrExchangeAuthority(Client(
+      LiveActiveStateProof { "revalidate live active-state snapshot",
+        "installation-root metadata changed during retained active-state lease" })))
+    foreign entry preserved verbatim
+
+So the **safety property #2/#3 assert does hold**: the exchange is not applied,
+the live tree is untouched, the foreign entry is preserved. But it is enforced
+by the *root-lease* guard — any mutation of the installation root during the
+lease — rather than by a root-ABI-specific comparison. That guard strictly
+subsumes the root-ABI case, since replacing a root-ABI entry necessarily
+changes root metadata.
+
+**Caveat on that measurement, stated because it limits the conclusion:** the
+`present=true` arm of the probe was invalid — `install_root_abi_subset` with
+mask `0x1F` did not create `bin` (`existed_before=false`), so both arms actually
+exercised the *absent* case. #3 is covered by the above; **#2 (retained
+*present*, then replaced) is not yet measured.** It needs a fixture whose mask
+genuinely installs the link before the lease.
+
+Also note the mask is asserted to be exactly five bits — `0xFF` panics in
+`root_abi_publication_support.rs:20`.
+
+**Verdicts:**
+
+| # | verdict |
+|---|---|
+| 2 | **UNRESOLVED** — needs a fixture that really installs the `bin` link pre-lease, then the same boundary mutation. Do not delete on the strength of #3's result. |
+| 3 | **Covered by the root-lease guard**, not by a root-ABI check. Port as a *lease* proof (exchange NotApplied, foreign preserved) or delete as subsumed — but say which and why in the commit. |
+| 4 | `post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry` — still unsized. Its "preserves foreign entry" half plausibly maps to `rejects_foreign_eexist_at_every_publisher_index_without_replacement`; its "reverses usr" half is legacy disposition, since coordinated defers reversal to recovery. **Unverified — check both sides.** |
 
 Notes from the later ports:
 
