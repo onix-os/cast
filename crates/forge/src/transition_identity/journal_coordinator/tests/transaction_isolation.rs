@@ -56,6 +56,9 @@ fn journal_coordinator_transaction_isolation_foreign_entry_prevents_trigger_auth
     let prepared = isolation.record().clone();
     let foreign = fixture.installation.isolation_path("bin");
     write_canonical_file(&foreign, b"foreign isolation occupant");
+    // Pin the inode, not just the bytes: an occupant replaced by an identical
+    // file would satisfy a content check while still having been destroyed.
+    let occupant = fs::symlink_metadata(&foreign).unwrap().ino();
 
     let failure = isolation
         .prepare_for_transaction_triggers(&fixture.installation)
@@ -69,6 +72,7 @@ fn journal_coordinator_transaction_isolation_foreign_entry_prevents_trigger_auth
         } if path == foreign
     ));
     assert_eq!(fs::read(&foreign).unwrap(), b"foreign isolation occupant");
+    assert_eq!(fs::symlink_metadata(&foreign).unwrap().ino(), occupant);
     assert!(!fixture.installation.isolation_path("sbin").exists());
     assert_eq!(reopen_record(&fixture.installation.root), prepared);
 

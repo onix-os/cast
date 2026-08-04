@@ -1113,3 +1113,41 @@ fn journal_coordinator_reverse_exchange_refuses_a_whole_directory_same_token_sub
     );
     assert!(displaced.is_dir(), "the retained tree must survive untouched");
 }
+
+/// A previous tree that vanishes between preparation and the exchange must
+/// stop the transition, never be synthesized.
+///
+/// The synthesize path is legitimate for a first install, where
+/// `installation.active_state` is `None`. The hazard is an *active* previous
+/// whose tree has gone missing: silently synthesizing an empty one there would
+/// exchange the candidate over nothing and strand the real predecessor under a
+/// name the record no longer describes.
+#[test]
+fn journal_coordinator_usr_exchange_never_synthesizes_a_missing_active_previous() {
+    let (fixture, intent, authority) = coordinator_ready_for_usr_exchange_effect(CandidateKind::Archived);
+    let intent_record = intent.record().clone();
+    let live = fixture.installation.root.join("usr");
+    let displaced = fixture.installation.root.join("displaced-previous-usr");
+    let previous = directory_identity(&live);
+    let candidate = directory_identity(&fixture.candidate_path);
+    assert!(fixture.installation.active_state.is_some());
+    fs::rename(&live, &displaced).unwrap();
+    reset_retained_exchange_syscall_count();
+
+    let failure = intent.execute_usr_exchange(authority).unwrap_err();
+
+    assert!(
+        matches!(failure, UsrExchangeEffectFailure::Preflight { .. }),
+        "expected a preflight refusal, got {failure:?}"
+    );
+    assert_eq!(retained_exchange_syscall_count(), 0, "no exchange may be attempted");
+    // `exists()` follows symlinks and would read a dangling link as absent.
+    assert_state_metadata_name_absent(&live);
+    assert_eq!(
+        directory_identity(&displaced),
+        previous,
+        "the displaced previous tree must be left exactly where it went"
+    );
+    assert_eq!(directory_identity(&fixture.candidate_path), candidate);
+    assert_eq!(read_canonical(&fixture.installation.root), intent_record);
+}
