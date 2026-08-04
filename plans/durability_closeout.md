@@ -1727,11 +1727,43 @@ A boundary regression guard is now in
 it arms three exchange faults and asserts all three stay unconsumed. Delete it
 together with `legacy_lifecycle::rotate`.
 
-**#16–#25 are a different story** — they use `SlotFaultPoint` (active previous
-slot parking), and the coordinated reservation *does* reach those
-(`reports_applied_slot_after_durable_replacement` arms
-`SlotFaultPoint::RootsPostSync`). Those need the same fired-or-not check per
-test, not an assumption either way.
+**#16–#25 are a different story — measured, and the opposite result.** Added
+`active_previous_slot_parking_faults_remaining()` and probed all nine
+`SlotFaultPoint`s through `fixture_with_exchange_authority_and_previous_slot()`
++ forward + completion:
+
+    MarkerPreSync WrapperPreSync RootsPreSync BeforeRename AfterRename
+    MarkerPostSync WrapperPostSync RootsPostSync FinalRevalidation
+    → all nine  fired=true  =>  completed
+
+Every point is reached **and** the transition resumes through it. That is the
+real "resumed without a second move" property, and unlike the wrapper case the
+green run means something. **#17 ported** as
+`coordinated_active_reblit_resumes_every_previous_slot_parking_fault_without_a_second_move`,
+asserting `remaining == 0` per point before anything else, then the structural
+once-only claim: canonical gone, exactly one parked slot, exactly one entry in
+it, and that entry is the original marker inode.
+
+The contrast is the whole lesson of this section:
+
+| | faults fire? | clean run means |
+|---|---|---|
+| staging-wrapper rotation | **no** — 3/3 unconsumed | the path was never taken → delete the tests |
+| previous-slot parking | **yes** — 9/9 consumed | the path resumed correctly → port the tests |
+
+Same surface symptom (transition succeeds under injected faults), opposite
+conclusions. Only the consumed-count told them apart.
+
+Note `installation.root_path(x)` resolves under `.cast/root`, **not** under the
+live root — a scan of `installation.root` for parked slots finds nothing.
+
+### Running tally for the 25
+
+- **Ported (7 legacy → 8 coordinated tests):** #1–#6, #17, plus a clean-run
+  record proof and the rotation-boundary guard.
+- **Confirmed deletions (5):** #8–#11 (legacy rotation exchange), #13
+  (superseded by `preserves_foreign_name_exhaustion`).
+- **Remaining (13):** #7, #12, #14, #15, #16, #18–#25.
 
 **The governing fact for the remaining 24 — measured, and it is not obvious:**
 `execute_active_reblit_forward` is *not* the whole transition. At
