@@ -2455,6 +2455,37 @@ It returns the reason rendered because `startup_gate::Error` is private to the
 client facade — the same shape `prejournal_authority_over_root_entry` already
 uses.
 
+#### The two first-install tests — resolved 2026-08-04
+
+`first_install_synthesizes_syncs_marks_and_exchanges_an_empty_previous_usr` —
+the *exchange* half was already covered by
+`journal_coordinator_new_state_synthesized_empty_exchange_applies_once_and_retains_empty_previous`.
+The **synthesis shape** was not, which is the "synthesizes, syncs, marks" half
+of the legacy name. Added to that test: the synthesized previous is a directory
+at 0o755 owned by the effective uid, containing *exactly* `.cast-tree-id`, and
+its token differs from the candidate's. A synthesized tree sharing the
+candidate's token would make the two indistinguishable to every later identity
+check.
+
+`failed_first_install_can_retry_the_exact_marker_only_previous_baseline` —
+ported as `a_first_install_retry_adopts_the_exact_marker_only_synthesized_baseline`
+in `identity_preflight_guards.rs`.
+
+The legacy test reached its second preparation by injecting a failure before the
+exchange, but the failure was only its *mechanism* for getting two preparations
+in a row against one installation. On the coordinated route that mechanism does
+not transfer — a failed transition leaves a durable record, so a literal retry
+would have to run the whole rollback chain to clean first, and the test would be
+measuring recovery rather than the claim. Preparing twice directly (via
+`reacquire_new_state` after re-staging) isolates the actual claim: what the
+*second* preparation does with an existing marker-only `/usr`. A fresh token
+there would orphan the durable baseline the first attempt committed to.
+
+**Generalizable point:** when a legacy test injects a failure, check whether the
+failure is the claim or just the setup. Twice in this file it was only setup,
+and reproducing it on the coordinated route would have cost far more and tested
+something else.
+
 #### Group A: the apparent coverage is a same-name-different-type false match
 
 `DuplicateTreeToken` appears in `active_reblit_boot_state_roots_tests/runtime_and_identity.rs:28`
