@@ -1821,6 +1821,46 @@ slot's binding to its tree, and no single-transition test would notice.
 **`active_reblit_tests.rs` is fully accounted for: 18 ported, 7 deletions, 0
 remaining.**
 
+## Next file: `tests/root_abi_preflight.rs` (4 sites / 4 tests)
+
+**1 of 4 ported.** `every_live_root_abi_conflict_precedes_candidate_trigger_and_exchange_mutation`
+→ `coordinated_root_abi_conflicts_are_refused_before_any_authority_is_taken`.
+
+**The coordinated bound is tighter than the legacy one.** Legacy asserts the
+conflict precedes candidate triggers and exchange mutation. Coordinated refuses
+at `acquire_prejournal_for_test` — before a journal exists, before any trigger,
+before the candidate is prepared. There is no transition to unwind because none
+was created. Same two error shapes as legacy: `RootAbiLinkTypeConflict` for the
+canonical name, `RootAbiStagingConflict` for the `.next` staging name.
+
+**A trap worth recording, because it nearly produced a false finding.** Planting
+the foreign entry *after* the fixture returns does not test root-ABI handling at
+all. Creating an entry in the installation root changes the root directory's own
+metadata, and the retained active-state lease revalidates that — so the run
+fails with:
+
+    LiveActiveStateProof { operation: "revalidate live active-state snapshot",
+      error: "installation-root metadata changed during retained active-state lease" }
+
+at the `/usr exchange` stage, *after* the transaction trigger has run. Read
+truncated, that looks exactly like "the coordinated route catches root-ABI
+conflicts late, after triggers" — a wrong claim about production behaviour. The
+entry has to be planted before the lease is taken;
+`prejournal_authority_over_root_entry()` in `tests/mod.rs` does that.
+
+**Remaining 3, not yet sized against the coordinated suite:**
+
+| # | legacy test | likely coordinated counterpart — UNVERIFIED |
+|---|---|---|
+| 2 | `retained_live_root_abi_rejects_replacement_at_the_exchange_boundary` | `root_links_complete_retained_namespace_binding_races_fail_stop`, `..._authenticates_exact_eexist_at_every_publisher_index` |
+| 3 | `retained_absent_root_abi_rejects_appearance_at_the_exchange_boundary` | same pair |
+| 4 | `post_exchange_root_abi_publication_conflict_reverses_usr_and_preserves_foreign_entry` | `..._rejects_foreign_eexist_at_every_publisher_index_without_replacement`; the "reverses usr" half is legacy disposition — coordinated defers to recovery |
+
+Those mappings are **guesses from names and have not been checked**. Every time
+that shortcut has been taken in this epic it has been wrong — 1 of 4 real in the
+reservation pass, and the staging-wrapper verdict reversed entirely. Read both
+sides before deleting or porting any of the three.
+
 Notes from the later ports:
 
 - **#14's hook is reachable.** `arm_before_quarantine_slot_reopen` fires via
