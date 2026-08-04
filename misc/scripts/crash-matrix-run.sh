@@ -242,11 +242,22 @@ if [ "$MODE" = write ]; then
     # separate diagnoses blamed the hook, the cmdline parsing, and install
     # throughput before anyone read this line.
     #
-    # Filtered rather than unredirected so the serial console is not flooded,
-    # and line-buffered so the marker appears the instant it is written.
+    # Unfiltered, deliberately. The guest runs BusyBox, whose grep supports
+    # neither `-a` nor `--line-buffered`; piping through it made the operation
+    # die instantly with a usage message, so the install never ran and every
+    # cell reported "TIMED-OUT ... the operation had not finished" about a guest
+    # that had done nothing. That filter was added in `fe529969` — the same
+    # commit that recorded the last end-to-end success — so every cell run after
+    # it measured nothing.
+    #
+    # A flooded serial console is cosmetic. This harness has now produced four
+    # wrong diagnoses (hook route, cmdline parsing, install throughput,
+    # `>/dev/null`), and the console is what settles them, so it stays whole.
+    # The runner greps `$W/o1` for the marker anyway; nothing needed filtering
+    # in the guest.
     case "$OP" in
-        activate) stage_and_activate 2>&1 | grep -a --line-buffered "CAST-AT-PHASE" ;;
-        *) stage_and_install 2>&1 | grep -a --line-buffered "CAST-AT-PHASE" ;;
+        activate) stage_and_activate 2>&1 ;;
+        *) stage_and_install 2>&1 ;;
     esac
     echo "CELL-OP-DONE"
     while :; do sleep 1; done
