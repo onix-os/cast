@@ -2352,7 +2352,7 @@ path, already covered by
 **`stateful_activation_recovery.rs` is now fully accounted for: 2 ported, 5
 deletions.**
 
-### `stateful_journal_and_identity_preflight.rs` (9, 3 ported / 6 left) — sized 2026-08-04
+### `stateful_journal_and_identity_preflight.rs` (9, 5 resolved / 4 left) — sized 2026-08-04
 
 **Correction 2026-08-04 — do NOT delete this file.** An earlier note here said
 the whole file gets deleted once the 9 resolve. That is wrong: the file holds
@@ -2412,6 +2412,48 @@ The isolation-root-ABI one is a likely sibling of the already-ported
 asserts no error and needs reading in full. First-install is the D1.5 path that
 opens this plan, so check whether the coordinated first-install work already
 covers it.
+
+#### The two `recovery_rejects_*` tests — resolved 2026-08-04
+
+Ported into `usr_exchange_effect.rs` as **three** tests, because measuring the
+coordinated route split the legacy pair's single claim into a real boundary.
+
+New driver `reverse_exchange_intent_after_applied_exchange` takes an applied-
+but-faulted exchange (`RetainedExchangeFaultPoint::FinalRevalidation`) through
+pending-reverse and rollback routing to the exact `ReverseExchangeIntent`, then
+hands back the fixture plus both directory identities. The existing recovery
+tests all take that route to prove it *advances*; these take it to prove it
+*stops*.
+
+| substitution planted at the live tree | coordinated route |
+|---|---|
+| whole directory swapped, same marker frame + same `.stateID` | **refuses** |
+| marker replaced by a hardlink to an outside file, same bytes | **refuses** |
+| marker rewritten with identical bytes at a new inode, `nlink=1` | **accepts, reverses** |
+
+**The third row is a deliberate difference from the legacy route, not a gap.**
+The durable record identifies the previous tree by `usr_runtime_identity` — the
+*directory's* `(st_dev, inode, mount_id)` (`transition_journal/model.rs:340`) —
+plus `tree_token`. An inert marker rewrite changes neither, so no durable
+evidence distinguishes it and the reverse exchange has what it needs to be
+correct. The legacy refusal came from holding a live descriptor on the marker
+across the whole transition and revalidating by inode; **crash recovery cannot
+hold one**, because it starts in a fresh process after a reboot. That
+strictness was not portable, and what it caught here was an inert rewrite
+rather than a hazard. The hardlink row is the case that *does* matter — the
+tree's identity becomes writable from outside the tree — and it is refused.
+
+So the legacy `recovery_rejects_same_content_marker_name_substitution_without_repair`
+is a **legacy-route artifact**: delete it with the other 8, and do not treat its
+refusal as a requirement on the coordinated route.
+
+Required a new non-asserting entry point,
+`reverse_exchange_intent_refusal_reason`, in
+`startup_recovery/forward_origin_test_support.rs`. All five existing helpers
+there assert an *advance* to a hard-coded phase and cannot express a refusal.
+It returns the reason rendered because `startup_gate::Error` is private to the
+client facade — the same shape `prejournal_authority_over_root_entry` already
+uses.
 
 #### Group A: the apparent coverage is a same-name-different-type false match
 
