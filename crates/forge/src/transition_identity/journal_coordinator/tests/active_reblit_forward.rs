@@ -562,3 +562,164 @@ fn coordinated_active_reblit_slot_scan_skips_every_foreign_occupant_kind() {
         marker_inode
     );
 }
+
+/// The tree token, read back off the canonical slot the two-link fixture
+/// planted. It cannot be recovered by re-adopting the live marker: that marker
+/// is already at `links=2` here and `adopt_or_create_before_journal` refuses it.
+fn previous_slot_token(fixture: &CoordinatorFixture) -> String {
+    let canonical = fixture.installation.root_path(fixture.previous_state.to_string());
+    fs::read_dir(&canonical)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .find_map(|name| {
+            name.strip_prefix(&format!(".cast-state-slot-{}-", fixture.previous_state))
+                .map(str::to_owned)
+        })
+        .expect("the two-link fixture planted a canonical previous slot")
+}
+
+fn parked_slot_path(fixture: &CoordinatorFixture, token: &str, index: usize) -> PathBuf {
+    fixture.installation.root_path(format!(
+        ".archived-candidate-slot-{}-{token}-{index}",
+        fixture.previous_state
+    ))
+}
+
+fn slot_marker_path(wrapper: &Path, fixture: &CoordinatorFixture, token: &str) -> PathBuf {
+    wrapper.join(format!(".cast-state-slot-{}-{token}", fixture.previous_state))
+}
+
+// Ported from `active_previous_slot_substitution_never_moves_or_adopts_the_foreign_wrapper`.
+//
+// The canonical slot is renamed away and a stranger's directory takes its name
+// in the window before the parking rename. The parking must neither move the
+// stranger nor adopt it as its own slot — the two failure modes that a
+// path-keyed (rather than descriptor-keyed) parking would fall into.
+#[test]
+fn coordinated_active_reblit_refuses_a_substituted_previous_slot() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+    let token = previous_slot_token(&fixture);
+    let canonical = fixture.installation.root_path(fixture.previous_state.to_string());
+    let displaced = fixture.installation.root_path("retained-active-slot-race");
+    let marker_inode = fs::symlink_metadata(slot_marker_path(&canonical, &fixture, &token))
+        .unwrap()
+        .ino();
+    let (hook_canonical, hook_displaced) = (canonical.clone(), displaced.clone());
+
+    crate::transition_identity::arm_before_active_previous_slot_parking_rename(move || {
+        fs::rename(&hook_canonical, &hook_displaced).unwrap();
+        fs::create_dir(&hook_canonical).unwrap();
+        fs::set_permissions(&hook_canonical, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::write(hook_canonical.join("foreign"), b"racing wrapper").unwrap();
+    });
+
+    let error = run_active_reblit(&fixture, identity, authority)
+        .err()
+        .expect("a substituted previous slot must refuse the reservation");
+
+    assert_eq!(error.stage(), "ActiveReblit reservation", "{error:#?}");
+    let rendered = format!("{error:?}");
+    // `Ambiguous` is the honest outcome: the parking cannot prove whether its
+    // move happened, so it refuses rather than guessing in either direction.
+    assert!(
+        rendered.contains("Ambiguous") && rendered.contains("NamespaceMismatch"),
+        "substitution was not refused as an ambiguous namespace mismatch: {error:#?}"
+    );
+
+    // The stranger is untouched and was never adopted.
+    assert_eq!(fs::read(canonical.join("foreign")).unwrap(), b"racing wrapper");
+    assert!(
+        !parked_slot_path(&fixture, &token, 0).exists(),
+        "the foreign wrapper was parked as this transition's slot"
+    );
+    // The real slot is intact wherever the race left it.
+    assert_eq!(
+        fs::symlink_metadata(slot_marker_path(&displaced, &fixture, &token))
+            .unwrap()
+            .ino(),
+        marker_inode
+    );
+}
+
+// Ported from `active_previous_slot_parking_adopts_an_exact_externally_applied_move`.
+//
+// The counterpart to the refusal above: when the racing move is *exactly* the
+// one the parking intended, it must be adopted rather than refused or repeated.
+// This is what makes the parking crash-safe — a move that landed before the
+// crash is indistinguishable from one an external actor performed, and both
+// must resume forward.
+#[test]
+fn coordinated_active_reblit_adopts_an_exact_externally_applied_slot_move() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+    let token = previous_slot_token(&fixture);
+    let canonical = fixture.installation.root_path(fixture.previous_state.to_string());
+    let parked = parked_slot_path(&fixture, &token, 0);
+    let marker_inode = fs::symlink_metadata(slot_marker_path(&canonical, &fixture, &token))
+        .unwrap()
+        .ino();
+    let (hook_canonical, hook_parked) = (canonical.clone(), parked.clone());
+
+    crate::transition_identity::arm_before_active_previous_slot_parking_rename(move || {
+        fs::rename(hook_canonical, hook_parked).unwrap();
+    });
+
+    run_active_reblit(&fixture, identity, authority)
+        .expect("an exact external move is adopted, not refused")
+        .complete_active_reblit_without_boot()
+        .expect("completion proceeds over the adopted move");
+
+    assert!(!canonical.exists(), "the canonical slot survived adoption");
+    assert_eq!(
+        fs::symlink_metadata(slot_marker_path(&parked, &fixture, &token))
+            .unwrap()
+            .ino(),
+        marker_inode,
+        "the adopted slot does not hold the original marker"
+    );
+    // Adopted, not repeated: no second slot at the next index.
+    assert!(
+        !parked_slot_path(&fixture, &token, 1).exists(),
+        "the parking moved a second time after adopting"
+    );
+}
+
+// Ported from `already_parked_previous_slot_with_foreign_canonical_name_fails_closed`.
+//
+// The slot is already parked *and* a stranger occupies the canonical name. That
+// is not the adoptable case above — the namespace carries evidence of two
+// different actors — so the reservation must fail closed rather than pick a
+// reading.
+#[test]
+fn coordinated_active_reblit_fails_closed_on_a_parked_slot_with_a_foreign_canonical() {
+    let (fixture, identity, authority) = fixture_with_exchange_authority_and_previous_slot();
+    let token = previous_slot_token(&fixture);
+    let canonical = fixture.installation.root_path(fixture.previous_state.to_string());
+    let parked = parked_slot_path(&fixture, &token, 0);
+    let marker_inode = fs::symlink_metadata(slot_marker_path(&canonical, &fixture, &token))
+        .unwrap()
+        .ino();
+
+    fs::rename(&canonical, &parked).unwrap();
+    fs::create_dir(&canonical).unwrap();
+    fs::set_permissions(&canonical, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(canonical.join("foreign"), b"canonical occupant").unwrap();
+
+    let error = run_active_reblit(&fixture, identity, authority)
+        .err()
+        .expect("a parked slot with a foreign canonical must fail closed");
+
+    assert_eq!(error.stage(), "ActiveReblit reservation", "{error:#?}");
+    assert!(
+        format!("{error:?}").contains("NamespaceMismatch"),
+        "the ambiguous namespace was not reported as a mismatch: {error:#?}"
+    );
+
+    // Neither the stranger nor the real parked slot was disturbed.
+    assert_eq!(fs::read(canonical.join("foreign")).unwrap(), b"canonical occupant");
+    assert_eq!(
+        fs::symlink_metadata(slot_marker_path(&parked, &fixture, &token))
+            .unwrap()
+            .ino(),
+        marker_inode
+    );
+}
